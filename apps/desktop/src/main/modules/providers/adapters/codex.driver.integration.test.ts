@@ -28,11 +28,20 @@ vi.mock("../../runs/user-input-broker", () => ({
   }),
 }));
 
-import { createCodexDriver } from "./codex.driver";
+import {
+  CODEX_APP_SERVER_PROTOCOL_VERSION,
+  createCodexDriver,
+} from "./codex.driver";
 
 const fixtureBinary = path.resolve(
   __dirname,
   "../../../../test/fixtures/fake-codex-app-server.mjs",
+);
+
+/** One minor above the tested schema — the "forward-compatible" branch. */
+const NEWER_THAN_TESTED = CODEX_APP_SERVER_PROTOCOL_VERSION.replace(
+  /^(\d+)\.(\d+)\./,
+  (_match, major, minor) => `${major}.${Number(minor) + 1}.`,
 );
 
 const drivers: Array<ReturnType<typeof createCodexDriver>> = [];
@@ -110,6 +119,7 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE;
   delete process.env.MAINS_CODEX_FIXTURE_PLUGINS_ENABLED;
   delete process.env.MAINS_CODEX_FIXTURE_ACCOUNT;
+  delete process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -216,12 +226,12 @@ describe("codex.driver / app-server protocol", () => {
       outdated: true,
       compatibility: "unsupported",
       minimumVersion: "0.147.0",
-      testedProtocolVersion: "0.147.0",
+      testedProtocolVersion: CODEX_APP_SERVER_PROTOCOL_VERSION,
     });
   });
 
   it("allows a newer CLI in forward-compatible mode and reports a warning", async () => {
-    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.148.0";
+    process.env.MAINS_CODEX_FIXTURE_VERSION = NEWER_THAN_TESTED;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const driver = createCodexDriver({
@@ -233,15 +243,15 @@ describe("codex.driver / app-server protocol", () => {
     const accountInfo = await driver.getAccountInfo?.();
 
     expect(accountInfo?.cli).toMatchObject({
-      version: "0.148.0",
+      version: NEWER_THAN_TESTED,
       outdated: false,
       compatibility: "newer",
-      testedProtocolVersion: "0.147.0",
+      testedProtocolVersion: CODEX_APP_SERVER_PROTOCOL_VERSION,
     });
     expect(warn).toHaveBeenCalledWith(
       "[CodexDriver]",
       expect.stringContaining(
-        "newer than Mains' tested app-server schema 0.147.0",
+        `newer than Mains' tested app-server schema ${CODEX_APP_SERVER_PROTOCOL_VERSION}`,
       ),
     );
     warn.mockRestore();
@@ -289,7 +299,7 @@ describe("codex.driver / app-server protocol", () => {
     await expect(
       driver.createSession(request("run-legacy-initialize")),
     ).rejects.toThrow(
-      "Codex app-server initialize response is incompatible with protocol 0.147.0",
+      `Codex app-server initialize response is incompatible with protocol ${CODEX_APP_SERVER_PROTOCOL_VERSION}`,
     );
   });
 
@@ -661,6 +671,97 @@ describe("codex.driver / app-server protocol", () => {
     expect(log.some((message) => message.method === "thread/goal/set")).toBe(true);
   });
 
+  it("uses the app-server response model to pin create, resume, and fork modes when the catalog is empty", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS = "1";
+
+    const driver = createCodexDriver({
+      binary: fixtureBinary,
+      timeout: 500,
+      planMode: true,
+    });
+    drivers.push(driver);
+
+    const created = await driver.createSession(
+      request("run-response-model-source"),
+    );
+    await driver.executePrompt(
+      created.session,
+      created.prompt,
+      async () => undefined,
+      new AbortController().signal,
+    );
+    expect(
+      readProtocolLog(logPath)
+        .filter((message) => message.method === "turn/start")
+        .at(-1)?.params,
+    ).toMatchObject({
+      model: "gpt-fixture-codex",
+      collaborationMode: {
+        mode: "plan",
+        settings: { model: "gpt-fixture-codex" },
+      },
+    });
+
+    const resumed = await driver.resumeSession?.({
+      runId: "run-response-model-source",
+      accountId: "account-1",
+      execution: { workspaceId: "workspace-1", cwd: process.cwd() },
+      message: "Resume outside plan mode",
+      mode: "work",
+      configSnapshot: { planMode: false },
+    });
+    expect(resumed).toBeDefined();
+    await driver.executePrompt(
+      resumed!.session,
+      resumed!.prompt,
+      async () => undefined,
+      new AbortController().signal,
+    );
+    expect(
+      readProtocolLog(logPath)
+        .filter((message) => message.method === "turn/start")
+        .at(-1)?.params,
+    ).toMatchObject({
+      model: "gpt-fixture-codex",
+      collaborationMode: {
+        mode: "default",
+        settings: { model: "gpt-fixture-codex" },
+      },
+    });
+
+    const forked = await driver.forkSession?.({
+      runId: "run-response-model-fork",
+      sourceRunId: "run-response-model-source",
+      accountId: "account-1",
+      execution: { workspaceId: "workspace-1", cwd: process.cwd() },
+      message: "Fork outside plan mode",
+      mode: "work",
+      configSnapshot: { planMode: false },
+    });
+    expect(forked).toBeDefined();
+    await driver.executePrompt(
+      forked!.session,
+      forked!.prompt,
+      async () => undefined,
+      new AbortController().signal,
+    );
+    expect(
+      readProtocolLog(logPath)
+        .filter((message) => message.method === "turn/start")
+        .at(-1)?.params,
+    ).toMatchObject({
+      model: "gpt-fixture-codex",
+      collaborationMode: {
+        mode: "default",
+        settings: { model: "gpt-fixture-codex" },
+      },
+    });
+  });
+
   it("keeps a resumed run out of plan mode when its snapshot says so", async () => {
     // Resume used to read `config.planMode` straight off the provider row,
     // so the pin only held for the first turn of a Work/Chat run.
@@ -699,6 +800,13 @@ describe("codex.driver / app-server protocol", () => {
     );
 
     const log = readProtocolLog(logPath);
+    const resumeRequest = log.find(
+      (message) => message.method === "thread/resume",
+    );
+    expect(resumeRequest?.params).toMatchObject({
+      threadId: "thread-1",
+      excludeTurns: true,
+    });
     const turnStart = log.find((message) => message.method === "turn/start");
     // forceReset on continue: an explicit "default", never "plan".
     expect(turnStart?.params).toMatchObject({
@@ -797,6 +905,7 @@ describe("codex.driver / app-server protocol", () => {
     expect(forkRequest?.params).toMatchObject({
       threadId: "thread-1",
       model: "gpt-5.4",
+      excludeTurns: true,
     });
     expect(forkRequest?.params).not.toHaveProperty("personality");
 

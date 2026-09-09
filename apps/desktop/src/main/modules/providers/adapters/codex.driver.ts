@@ -74,7 +74,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.147.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.153.4";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.147.0";
 

@@ -29,6 +29,10 @@ function respond(id, result) {
   send({ jsonrpc: "2.0", id, result });
 }
 
+function fixtureResponseModel(params) {
+  return params.model ?? "gpt-fixture-codex";
+}
+
 function notify(method, params) {
   send({ jsonrpc: "2.0", method, params });
 }
@@ -133,6 +137,7 @@ input.on("line", (line) => {
     case "thread/start": {
       const threadId = `thread-${nextThreadId++}`;
       respond(id, {
+        model: fixtureResponseModel(params),
         thread: {
           id: threadId,
           preview: "",
@@ -159,6 +164,7 @@ input.on("line", (line) => {
 
     case "thread/resume":
       respond(id, {
+        model: fixtureResponseModel(params),
         thread: {
           id: params.threadId,
           preview: "",
@@ -185,6 +191,7 @@ input.on("line", (line) => {
     case "thread/fork": {
       const threadId = `${params.threadId}-fork`;
       respond(id, {
+        model: fixtureResponseModel(params),
         thread: {
           id: threadId,
           preview: "",
@@ -668,7 +675,7 @@ input.on("line", (line) => {
 
     case "model/list":
       respond(id, {
-        data: [{
+        data: process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS === "1" ? [] : [{
           id: "gpt-fixture-codex",
           model: "gpt-fixture-codex",
           upgrade: null,

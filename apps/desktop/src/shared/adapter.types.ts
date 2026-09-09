@@ -135,6 +135,8 @@ export interface WorkRunToolCallEvent {
   input?: Record<string, unknown>;
   output?: unknown;
   error?: string;
+  /** Explicit terminal status when absence of an error does not mean success. */
+  terminalStatus?: "done" | "error" | "canceled";
   startedAt?: number;
   endedAt?: number;
   metadata?: Record<string, unknown>;

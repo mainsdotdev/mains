@@ -8,7 +8,7 @@ import process from "node:process";
 import readline from "node:readline";
 
 const codexBinary = process.env.CODEX_BINARY || "codex";
-const minimumVersion = "0.146.0";
+const minimumVersion = "0.147.0";
 const temporaryRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "mains-codex-smoke-"),
 );
@@ -134,6 +134,32 @@ async function smokeRuntime() {
     if (!Array.isArray(skills?.data)) {
       throw new Error("skills/list did not return data[]");
     }
+
+    const models = await request("model/list", {});
+    if (!Array.isArray(models?.data)) {
+      throw new Error("model/list did not return data[]");
+    }
+
+    const started = await request("thread/start", {
+      cwd: process.cwd(),
+      ephemeral: true,
+      dynamicTools: [{
+        type: "function",
+        name: "mains_ci_smoke",
+        description: "Validates the experimental dynamic-tool contract.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+      }],
+    });
+    if (
+      typeof started?.thread?.id !== "string" ||
+      typeof started?.model !== "string"
+    ) {
+      throw new Error("thread/start did not return thread.id and model");
+    }
   } finally {
     output.close();
     child.kill("SIGTERM");
@@ -152,7 +178,13 @@ try {
 
   execFileSync(
     codexBinary,
-    ["app-server", "generate-ts", "--out", temporaryRoot],
+    [
+      "app-server",
+      "generate-ts",
+      "--experimental",
+      "--out",
+      temporaryRoot,
+    ],
     { stdio: "inherit" },
   );
   assertContains("InitializeCapabilities.ts", [
@@ -174,6 +206,18 @@ try {
   assertContains("v2/GetAccountRateLimitsResponse.ts", [
     "rateLimitsByLimitId:",
     "rateLimitResetCredits:",
+  ]);
+  assertContains("v2/ThreadStartParams.ts", [
+    "dynamicTools?: Array<DynamicToolSpec>",
+  ]);
+  assertContains("v2/DynamicToolSpec.ts", ['"type": "function"']);
+  assertContains("v2/TurnStartParams.ts", [
+    "collaborationMode?: CollaborationMode",
+  ]);
+  assertContains("Settings.ts", [
+    "model: string",
+    "reasoning_effort: ReasoningEffort | null",
+    "developer_instructions: string | null",
   ]);
 
   await smokeRuntime();

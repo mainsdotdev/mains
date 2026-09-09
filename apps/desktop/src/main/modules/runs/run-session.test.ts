@@ -335,6 +335,26 @@ describe("RunSession", () => {
       expect(calls[0].status).toBe("done");
     });
 
+    it("persists an explicitly canceled tool completion as canceled", async () => {
+      const session = makeSession();
+      await flushBackground();
+
+      await session.project({
+        type: "tool_call",
+        toolName: "spawnAgent",
+        metadata: { phase: "start", toolCallId: "tc-interrupted" },
+      } as any);
+      await session.project({
+        type: "tool_call",
+        toolName: "spawnAgent",
+        terminalStatus: "canceled",
+        metadata: { phase: "complete", toolCallId: "tc-interrupted" },
+      } as any);
+
+      const calls = await runsRepo.findToolCallsByRun("r1");
+      expect(calls[0].status).toBe("canceled");
+    });
+
     it("silently drops tool_call/end with no matching start", async () => {
       const session = makeSession();
       await flushBackground();

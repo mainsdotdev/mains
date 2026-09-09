@@ -622,7 +622,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         const latencyMs =
           event.startedAt && event.endedAt ? event.endedAt - event.startedAt : undefined;
         await runsRepo.updateToolCall(toolCallId, {
-          status: event.error ? "error" : "done",
+          status: event.terminalStatus ?? (event.error ? "error" : "done"),
           input: event.input as Record<string, unknown> | undefined,
           output: event.output,
           error: event.error,

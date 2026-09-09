@@ -19,6 +19,8 @@
 
 import { z } from "zod";
 import { PROVIDER_IDS, type ProviderId } from "../../../../shared/provider-ids";
+import type { JsonValue } from "./codex-app-server-protocol/generated/serde_json/JsonValue";
+import type { DynamicToolSpec } from "./codex-app-server-protocol/generated/v2/DynamicToolSpec";
 import { DEFAULT_MODE_ID, type ModeId } from "../../../../shared/modes";
 import {
   TOOL_DESCRIPTIONS,
@@ -216,11 +218,23 @@ export function toMcpToolDefs(mode: ModeId = DEFAULT_MODE_ID): McpToolDef[] {
   }));
 }
 
-/** Codex dynamic tools — same JSON-Schema shape as the MCP defs. */
-export function toCodexDynamicTools(mode: ModeId = DEFAULT_MODE_ID): McpToolDef[] {
+/**
+ * Codex dynamic tools — the MCP JSON-Schema shape plus the `"function"` tag.
+ *
+ * `DynamicToolSpec` is a tagged union (`function` | `namespace`). The tag is
+ * required by the schema; the app-server's deserializer happens to fall back
+ * to the `function` variant when it is absent, but that is an implementation
+ * detail of serde, not a contract. Name it.
+ */
+export function toCodexDynamicTools(
+  mode: ModeId = DEFAULT_MODE_ID,
+): DynamicToolSpec[] {
   return forProvider(PROVIDER_IDS.codex, mode).map((t) => ({
+    type: "function" as const,
     name: t.name,
     description: t.description,
-    inputSchema: toJsonSchema(t.schema),
+    // `toJsonSchema` is typed loosely for the three renderers that share it;
+    // its output is a sanitized JSON Schema, so it is JSON by construction.
+    inputSchema: toJsonSchema(t.schema) as JsonValue,
   }));
 }

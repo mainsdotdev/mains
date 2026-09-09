@@ -18,6 +18,7 @@ import {
   type AdapterLogger,
 } from "./adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
+import type { CollaborationMode } from "./codex-app-server-protocol/generated/CollaborationMode";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import type { MainsToolContext } from "./mains-tools.core";
 import { toCodexDynamicTools } from "./mains-tools.registry";
@@ -42,16 +43,11 @@ type CodexOutputSchema = Exclude<
   CodexAppServerParams<"turn/start">["outputSchema"],
   null | undefined
 >;
-type CodexThreadStartParams =
-  CodexAppServerParams<"thread/start"> & {
-    // Rendered per session, not at module scope — the mains tool set is
-    // mode-filtered, so it must be recomputed for each run's mode.
-    dynamicTools?: ReturnType<typeof toCodexDynamicTools>;
-  };
-type CodexTurnStartParams =
-  CodexAppServerParams<"turn/start"> & {
-    collaborationMode?: Record<string, unknown>;
-  };
+// `dynamicTools` and `collaborationMode` are experimental fields, present in
+// the generated snapshot because it is generated with `--experimental` and the
+// driver negotiates `experimentalApi: true`. No local widening needed.
+type CodexThreadStartParams = CodexAppServerParams<"thread/start">;
+type CodexTurnStartParams = CodexAppServerParams<"turn/start">;
 type TurnInput = CodexAppServerParams<"turn/start">["input"];
 
 interface TurnInputRequest {
@@ -186,15 +182,19 @@ export function buildCollaborationMode(
   model: string | undefined,
   effort: string | undefined,
   forceReset = false,
-): Record<string, unknown> | undefined {
+): CollaborationMode | undefined {
   if (!planEnabled && !forceReset) return undefined;
+  // `settings.model` is required, and there is no way to spell "leave it
+  // alone": blanking it fails the turn with "The '' model is not supported",
+  // and omitting it fails the whole request with `Invalid request: missing
+  // field \`model\``. With no model to name, the only valid request is one
+  // that carries no collaboration block at all — which leaves a fork on the
+  // thread's own mode, the outcome the absent model was reaching for.
+  if (!model) return undefined;
   return {
     mode: planEnabled ? "plan" : "default",
     settings: {
-      // Omitted rather than blanked when unknown: `model: ""` is not "leave it
-      // alone", it is a model name, and Codex answers a request for the ''
-      // model with a 400. A fork with no model of its own keeps the thread's.
-      ...(model ? { model } : {}),
+      model,
       reasoning_effort:
         effort ?? (planEnabled ? "medium" : null),
       developer_instructions: null,
@@ -379,6 +379,20 @@ export function createCodexSessionAcquisition(
   // (`ProviderDriver.updateConfig`).
   const timeout = () => config.timeout ?? 3_600_000;
 
+  function resolveSessionModel(
+    requestedModel: string | undefined,
+    responseModel: string | null | undefined,
+    operation: "thread/start" | "thread/resume" | "thread/fork",
+  ): string | undefined {
+    const model = responseModel || requestedModel || undefined;
+    if (!model) {
+      logger.warn(
+        `${operation} returned no model; continuing without an explicit turn model or collaboration-mode pin`,
+      );
+    }
+    return model;
+  }
+
   async function effectiveModel(
     requestedModel: string | null | undefined,
   ): Promise<string | undefined> {
@@ -456,7 +470,7 @@ export function createCodexSessionAcquisition(
     request: WorkRunRequest,
   ): Promise<AcquiredSession> {
     const { runId } = request;
-    const model = await effectiveModel(request.model);
+    let model = await effectiveModel(request.model);
     const server = await ensureServer();
     const overrides = (
       request.configSnapshot ?? {}
@@ -490,6 +504,7 @@ export function createCodexSessionAcquisition(
       "thread/start",
       threadStartParams,
     );
+    model = resolveSessionModel(model, threadResult.model, "thread/start");
     const threadId = threadResult.thread.id;
     if (threadId) {
       runCoordinator.attachThread(runId, threadId);
@@ -542,7 +557,7 @@ export function createCodexSessionAcquisition(
     request: WorkRunContinueRequest,
   ): Promise<AcquiredSession> {
     const { runId, message } = request;
-    const model = await effectiveModel(request.model);
+    let model = await effectiveModel(request.model);
     const server = await ensureServer();
     let threadId =
       runCoordinator.getSessionThread(runId) ??
@@ -563,13 +578,19 @@ export function createCodexSessionAcquisition(
     ) as Record<string, unknown>;
     const settings = threadSettingsFor(resumeOverrides);
     try {
-      await server.sendRequest("thread/resume", {
+      const resumeResult = await server.sendRequest("thread/resume", {
         threadId,
+        excludeTurns: true,
         cwd: request.execution.cwd,
         ...settings,
         ...(model ? { model } : {}),
         ...buildDeveloperInstructionsParam(request.extraInstructions),
       });
+      model = resolveSessionModel(
+        model,
+        resumeResult.model,
+        "thread/resume",
+      );
     } catch (resumeError) {
       if (isCodexArchivedThreadError(resumeError)) {
         throw normalizeCodexResumeError(resumeError);
@@ -590,6 +611,11 @@ export function createCodexSessionAcquisition(
       const threadResult = await server.sendRequest(
         "thread/start",
         threadStartParams,
+      );
+      model = resolveSessionModel(
+        model,
+        threadResult.model,
+        "thread/start",
       );
       threadId = threadResult.thread.id;
       runCoordinator.attachThread(runId, threadId);
@@ -657,7 +683,7 @@ export function createCodexSessionAcquisition(
     request: WorkRunForkRequest,
   ): Promise<AcquiredSession> {
     const { runId, sourceRunId, message } = request;
-    const model = await effectiveModel(request.model);
+    let model = await effectiveModel(request.model);
     logger.info(
       `Forking session from run ${sourceRunId} into new run ${runId}`,
     );
@@ -680,6 +706,7 @@ export function createCodexSessionAcquisition(
     const settings = threadSettingsFor(forkOverrides);
     const forkResult = await server.sendRequest("thread/fork", {
       threadId: sourceThreadId,
+      excludeTurns: true,
       cwd: request.execution.cwd,
       approvalPolicy: settings.approvalPolicy,
       sandbox: settings.sandbox,
@@ -687,6 +714,7 @@ export function createCodexSessionAcquisition(
       ...buildDeveloperInstructionsParam(request.extraInstructions),
       config: settings.config,
     });
+    model = resolveSessionModel(model, forkResult.model, "thread/fork");
     const forkedThreadId = forkResult.thread.id;
     runCoordinator.attachThread(runId, forkedThreadId);
     const forkToggles = runTogglesFor(forkOverrides);
@@ -739,7 +767,7 @@ export function createCodexSessionAcquisition(
   ): Promise<AcquiredSession> {
     const { runId } = request;
     const target = buildCodexReviewTarget(request.target);
-    const model = await effectiveModel(request.model);
+    let model = await effectiveModel(request.model);
     const server = await ensureServer();
     const settings = threadSettingsFor();
     const threadStartParams: CodexThreadStartParams = {
@@ -756,6 +784,7 @@ export function createCodexSessionAcquisition(
       "thread/start",
       threadStartParams,
     );
+    model = resolveSessionModel(model, threadResult.model, "thread/start");
     const threadId = threadResult.thread.id;
     runCoordinator.registerRun({
       runId,

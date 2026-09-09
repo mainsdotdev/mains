@@ -21,6 +21,36 @@ export type CodexThreadItemPhase = "start" | "update" | "complete";
 type ThreadItem = CodexThreadItem;
 type ThreadItemPhase = CodexThreadItemPhase;
 
+interface CodexAsyncQuestion {
+  title: string;
+  options: string[] | null;
+}
+
+function normalizeAsyncQuestions(value: unknown): CodexAsyncQuestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const question = entry as Record<string, unknown>;
+    const title = typeof question.title === "string"
+      ? question.title.trim()
+      : "";
+    if (!title) return [];
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((option) =>
+          typeof option === "string" && option.trim() ? [option.trim()] : [])
+      : null;
+    return [{ title, options }];
+  });
+}
+
+function formatAsyncQuestions(questions: CodexAsyncQuestion[]): string {
+  return questions.map((question) => {
+    const title = `**${question.title}**`;
+    if (!question.options?.length) return title;
+    return `${title}\n${question.options.map((option) => `- ${option}`).join("\n")}`;
+  }).join("\n\n");
+}
+
 /**
  * Sub-thread item types that surface as child tool calls of the spawning
  * collabAgentToolCall (via `metadata.parentToolUseId`), so the session panel
@@ -140,6 +170,10 @@ export interface CodexEventRunState {
   turnId: string | null;
   currentMessageItemId: string | null;
   agentMessageBuffer: string;
+  /** Prevents completed-item replay from duplicating persisted assistant text. */
+  emittedAgentMessageItemIds: Set<string>;
+  /** Questions can arrive after a message's text was flushed by a competing item. */
+  emittedAsyncQuestionItemIds: Set<string>;
   pendingFlush: WorkRunEvent[];
   mainsCtx: MainsToolContext;
   fileChangeBuffers: Map<string, string>;
@@ -179,10 +213,10 @@ export interface CodexSubAgentRunMeta {
   /** Prevents duplicate `running` lifecycle events for one child turn. */
   lastRunningTurnId?: string;
   /**
-   * multi_agent v1 (`subAgentActivity` items) has no terminal activity
-   * kind — a v1 agent is done when its own turn completes, so its
-   * registration opts into settling there. v2 collab agents are
-   * multi-turn (wait/sendInput) and settle from agentsStates instead.
+   * multi_agent v1 (`subAgentActivity` items) now has an explicit completed
+   * kind, but older servers and interrupted event streams may omit it. Its
+   * registration therefore keeps the child turn as a terminal fallback.
+   * v2 collab agents are multi-turn and settle from agentsStates instead.
    */
   settleOnTurnEnd?: boolean;
   /**
@@ -204,6 +238,8 @@ export function createCodexEventRunState(
     turnId: null,
     currentMessageItemId: null,
     agentMessageBuffer: "",
+    emittedAgentMessageItemIds: new Set(),
+    emittedAsyncQuestionItemIds: new Set(),
     pendingFlush: [],
     mainsCtx,
     fileChangeBuffers: new Map(),
@@ -991,9 +1027,9 @@ export function createCodexEventMapper(
           tcParentRs?.threadId &&
           tcThreadId !== tcParentRs.threadId
         ) {
-          // A v1 sub-agent (subAgentActivity) has no terminal marker of its
-          // own — its turn's outcome IS its outcome: a failed or interrupted
-          // turn must not read as success.
+          // A v1 sub-agent may emit an explicit completed activity, but its
+          // own turn remains the compatibility fallback. A failed or
+          // interrupted turn must not read as success.
           const subMeta = tcParentRs.subAgents.get(tcThreadId);
           if (subMeta?.settleOnTurnEnd) {
             const phase =
@@ -1053,12 +1089,16 @@ export function createCodexEventMapper(
             runState.agentMessageBuffer,
           ).trim();
           if (messageText) {
+            const messageItemId = runState.currentMessageItemId;
             events.push({
               type: "artifact",
               kind: "report",
               content: messageText,
-              metadata: { source: "agent_message", itemId: runState.currentMessageItemId },
+              metadata: { source: "agent_message", itemId: messageItemId },
             });
+            if (messageItemId) {
+              runState.emittedAgentMessageItemIds.add(messageItemId);
+            }
             // The agent's closing summary is the most reliable reference to a
             // generated document (e.g. "Done: report.docx") — surface it as a
             // document artifact card even when the .png previews it produced
@@ -1126,26 +1166,44 @@ export function createCodexEventMapper(
               typeof item?.text === "string"
                 ? stripAnnotationMarkers(item.text).trim()
                 : "";
+            const subQuestions = normalizeAsyncQuestions(item?.questions);
             if (
               meta &&
               method === "item/completed" &&
               (item?.type === "agentMessage" || item?.type === "agent_message") &&
-              subMessage
+              (subMessage || subQuestions.length > 0)
             ) {
-              meta.lastMessage = subMessage;
+              if (subMessage) meta.lastMessage = subMessage;
               if (meta.spawnItemId) {
-                events.push({
-                  type: "artifact",
-                  kind: "report",
-                  content: meta.lastMessage,
-                  metadata: {
-                    source: "codex_subagent_message",
-                    isFromSubagent: true,
-                    parentToolUseId: meta.spawnItemId,
-                    subThreadId: eventThreadId,
-                    itemId: item.id,
-                  },
-                });
+                if (subMessage) {
+                  events.push({
+                    type: "artifact",
+                    kind: "report",
+                    content: subMessage,
+                    metadata: {
+                      source: "codex_subagent_message",
+                      isFromSubagent: true,
+                      parentToolUseId: meta.spawnItemId,
+                      subThreadId: eventThreadId,
+                      itemId: item.id,
+                    },
+                  });
+                }
+                if (subQuestions.length > 0) {
+                  events.push({
+                    type: "artifact",
+                    kind: "report",
+                    content: formatAsyncQuestions(subQuestions),
+                    metadata: {
+                      source: "codex_async_questions",
+                      isFromSubagent: true,
+                      parentToolUseId: meta.spawnItemId,
+                      subThreadId: eventThreadId,
+                      itemId: item.id,
+                      questions: subQuestions,
+                    },
+                  });
+                }
               }
             }
 
@@ -1194,22 +1252,31 @@ export function createCodexEventMapper(
         const rsItem = parentRs;
         const incomingId = (item?.id ?? null) as string | null;
         const incomingType = item?.type as string | undefined;
+        const isAsyncDelivery = item?.delivery === "async";
         const isCompetingAgentMessage =
           rsItem?.currentMessageItemId !== null &&
           rsItem?.currentMessageItemId !== undefined &&
           incomingId !== rsItem.currentMessageItemId &&
-          (incomingType === "agentMessage" || incomingType === "agent_message");
+          (incomingType === "agentMessage" || incomingType === "agent_message") &&
+          // Async messages may complete out of order while a foreground
+          // response is still streaming. They are standalone deliveries, not
+          // evidence that the foreground buffer ended.
+          !isAsyncDelivery;
 
         const competingText = rsItem
           ? stripAnnotationMarkers(rsItem.agentMessageBuffer).trim()
           : "";
         if (rsItem && competingText && isCompetingAgentMessage) {
+          const completedItemId = rsItem.currentMessageItemId;
           events.push({
             type: "artifact",
             kind: "report",
             content: competingText,
-            metadata: { source: "agent_message", itemId: rsItem.currentMessageItemId },
+            metadata: { source: "agent_message", itemId: completedItemId },
           });
+          if (completedItemId) {
+            rsItem.emittedAgentMessageItemIds.add(completedItemId);
+          }
           rsItem.agentMessageBuffer = "";
           rsItem.currentMessageItemId = null;
         }
@@ -1247,12 +1314,14 @@ export function createCodexEventMapper(
                 runState.agentMessageBuffer,
               ).trim();
               if (text) {
+                const completedItemId = runState.currentMessageItemId;
                 runState.pendingFlush.push({
                   type: "artifact",
                   kind: "report",
                   content: text,
-                  metadata: { source: "agent_message", itemId: runState.currentMessageItemId },
+                  metadata: { source: "agent_message", itemId: completedItemId },
                 });
+                runState.emittedAgentMessageItemIds.add(completedItemId);
               }
               runState.agentMessageBuffer = "";
             }
@@ -1802,31 +1871,82 @@ export function createCodexEventMapper(
         // Deltas accumulate into runState.agentMessageBuffer; flush here on
         // completion so the message is persisted as a single artifact instead
         // of waiting for turn/completed (which would let an unrelated next
-        // item arrive first and split ordering).
+        // item arrive first and split ordering). Async deliveries are only
+        // guaranteed as completed items, so fall back to the item's full text
+        // when there was no delta stream.
         if (phase === "complete" && runId) {
           const rs = getRunState(runId);
-          const messageText = rs
-            ? stripAnnotationMarkers(rs.agentMessageBuffer).trim()
-            : "";
-          if (rs && rs.currentMessageItemId === item.id && messageText) {
-            events.push({
-              type: "artifact",
-              kind: "report",
-              content: messageText,
-              metadata: { source: "agent_message", itemId: rs.currentMessageItemId },
-            });
-            // The agent's closing summary is the most reliable reference to a
-            // generated document (e.g. "Done: report.docx") — surface it as a
-            // document artifact card.
-            emitDocumentArtifactsFromText(events, runId, messageText, ts);
-            rs.agentMessageBuffer = "";
-            rs.currentMessageItemId = null;
+          if (rs) {
+            const ownsBuffer = rs.currentMessageItemId === item.id;
+            const bufferedText = ownsBuffer
+              ? stripAnnotationMarkers(rs.agentMessageBuffer).trim()
+              : "";
+            const itemText = typeof item.text === "string"
+              ? stripAnnotationMarkers(item.text).trim()
+              : "";
+            const messageText = bufferedText || itemText;
+            const questions = normalizeAsyncQuestions(item.questions);
+            const messagePhase = typeof item.phase === "string"
+              ? item.phase
+              : undefined;
+            const delivery = typeof item.delivery === "string"
+              ? item.delivery
+              : undefined;
+
+            if (messageText && !rs.emittedAgentMessageItemIds.has(item.id)) {
+              events.push({
+                type: "artifact",
+                kind: "report",
+                content: messageText,
+                metadata: {
+                  source: "agent_message",
+                  itemId: item.id,
+                  ...(messagePhase ? { messagePhase } : {}),
+                  ...(delivery ? { delivery } : {}),
+                  ...(questions.length > 0 ? { questions } : {}),
+                },
+              });
+              // The agent's closing summary is the most reliable reference to a
+              // generated document (e.g. "Done: report.docx") — surface it as a
+              // document artifact card.
+              emitDocumentArtifactsFromText(events, runId, messageText, ts);
+              rs.emittedAgentMessageItemIds.add(item.id);
+            }
+            if (
+              questions.length > 0 &&
+              !rs.emittedAsyncQuestionItemIds.has(item.id)
+            ) {
+              events.push({
+                type: "artifact",
+                kind: "report",
+                content: formatAsyncQuestions(questions),
+                metadata: {
+                  source: "codex_async_questions",
+                  itemId: item.id,
+                  ...(delivery ? { delivery } : {}),
+                  questions,
+                },
+              });
+              rs.emittedAsyncQuestionItemIds.add(item.id);
+            }
+            if (ownsBuffer) {
+              rs.agentMessageBuffer = "";
+              rs.currentMessageItemId = null;
+            }
           }
         }
         break;
       }
       case "userMessage":
         // Internal — no UI event needed.
+        break;
+
+      case "function_call_output":
+      case "functionCallOutput":
+        // This is the response-side echo of a tool result, not a new tool
+        // invocation. The originating command/MCP/dynamic-tool lifecycle is
+        // already projected, so emitting the body here would duplicate it and
+        // can expose a large output as a generic raw log.
         break;
 
       case "image_generation":
@@ -2242,11 +2362,11 @@ export function createCodexEventMapper(
         // multi_agent v1 (feature `multi_agent`, the stable default) surfaces
         // spawned agents as bare activity markers instead of v2's
         // collabAgentToolCall items:
-        //   { id: "call_…", kind: "started" | "interacted" | "interrupted",
-        //     agentThreadId, agentPath: "/root/security_review" }
-        // There is no terminal kind — completion is derived from the
-        // sub-thread's own turn/completed (see `settleOnTurnEnd`) with the
-        // parent's turn/completed as the backstop.
+        //   { id: "call_…", kind: "started" | "interacted" | "interrupted" |
+        //     "completed", agentThreadId, agentPath: "/root/security_review" }
+        // Newer servers emit the explicit completed marker. The sub-thread's
+        // own turn/completed and the parent's turn/completed remain fallbacks;
+        // settleSubAgent deduplicates whichever terminal signal arrives last.
         if (phase !== "complete" || !runId) break;
         const runStateV1 = getRunState(runId);
         const agentThreadId = (item.agentThreadId ?? item.agent_thread_id) as
@@ -2330,6 +2450,15 @@ export function createCodexEventMapper(
               },
             );
           if (settled) events.push(settled);
+        } else if (kind === "completed") {
+          const meta = runStateV1.subAgents.get(agentThreadId);
+          const settled =
+            meta &&
+            settleSubAgent(meta, agentThreadId, "completed", ts, {
+              result: meta.lastMessage,
+              extraMetadata: { activityKind: "completed" },
+            });
+          if (settled) events.push(settled);
         }
         // "interacted" is parent↔agent traffic, not a state change — ignore.
         break;
@@ -2337,12 +2466,16 @@ export function createCodexEventMapper(
 
       case "collab_agent_tool_call":
       case "collabAgentToolCall": {
-        // Codex AgentControl emits collab tool calls in 5 variants:
+        // Codex AgentControl emits collab tool calls in 9 variants:
         //   spawnAgent  → start a new sub-agent thread
         //   sendInput   → push user input into a running sub-agent
         //   wait        → block until sub-agent(s) complete a turn
         //   closeAgent  → terminate sub-agent thread(s)
         //   resumeAgent → reactivate a closed sub-agent
+        //   sendMessage → message a running sub-agent
+        //   followupTask → assign another turn to an existing sub-agent
+        //   interruptAgent → interrupt a sub-agent's active turn
+        //   listAgents → inspect the current agent tree
         // Each carries the same shape (sender, receiver_thread_ids, prompt,
         // agents_states). We surface every variant so the timeline mirrors
         // the parent's actual state transitions ("Spawned X", "Finished
@@ -2379,6 +2512,10 @@ export function createCodexEventMapper(
           wait: "waitCollabAgent",
           closeAgent: "closeCollabAgent",
           resumeAgent: "resumeCollabAgent",
+          sendMessage: "sendCollabMessage",
+          followupTask: "followupCollabTask",
+          interruptAgent: "interruptCollabAgent",
+          listAgents: "listCollabAgents",
         };
         const toolName = toolNameByVariant[tool] ?? tool;
 
@@ -2387,17 +2524,24 @@ export function createCodexEventMapper(
           itemId: item.id,
           codexItemType: "collab_agent_tool_call" as const,
           collabTool: tool,
+          collabStatus: status,
           senderThreadId,
         };
 
         // Skip the in-flight `start` for wait/sendInput/close — they're noisy
         // (lots of repeat updates while the parent waits), and only the
         // completed state carries a useful sub-agent snapshot. SpawnAgent and
-        // resumeAgent keep the start: users see "Spawning agent…" right away,
+        // resumeAgent/followupTask keep the start: users see the lifecycle
+        // transition right away,
         // and the projection layer only persists calls whose start it saw —
         // both variants must exist as rows to anchor subagent lifecycle
         // patches and child tool calls.
-        if (phase === "start" && (tool === "spawnAgent" || tool === "resumeAgent")) {
+        if (
+          phase === "start" &&
+          (tool === "spawnAgent" ||
+            tool === "resumeAgent" ||
+            tool === "followupTask")
+        ) {
           events.push({
             type: "tool_call",
             toolName,
@@ -2412,6 +2556,10 @@ export function createCodexEventMapper(
             wait: "Wait failed",
             closeAgent: "Close agent failed",
             resumeAgent: "Resume agent failed",
+            sendMessage: "Send message failed",
+            followupTask: "Follow-up task failed",
+            interruptAgent: "Interrupt agent failed",
+            listAgents: "List agents failed",
           };
           events.push({
             type: "tool_call",
@@ -2419,6 +2567,12 @@ export function createCodexEventMapper(
             input: { prompt, model: collabModel, receiverThreadIds },
             output: { subAgents, prompt, model: collabModel, collabTool: tool },
             error: status === "failed" ? (errorByVariant[tool] ?? "Collab tool failed") : undefined,
+            terminalStatus:
+              status === "interrupted"
+                ? "canceled"
+                : status === "failed"
+                  ? "error"
+                  : "done",
             endedAt: ts,
             metadata: { phase: "complete", ...collabMeta },
           });
@@ -2431,15 +2585,21 @@ export function createCodexEventMapper(
           // sub-agent; terminal agentsStates snapshots from any variant
           // settle it.
           if (runStateCollab) {
-            const anchorVariant = tool === "spawnAgent" || tool === "resumeAgent";
-            if (anchorVariant && status !== "failed") {
+            const anchorVariant =
+              tool === "spawnAgent" ||
+              tool === "resumeAgent" ||
+              tool === "followupTask";
+            if (anchorVariant && status === "completed") {
               for (const threadId of receiverThreadIds) {
                 const existing = runStateCollab.subAgents.get(threadId);
                 if (existing?.spawnItemId) {
                   // Resuming an agent that already settled this run re-arms
                   // its lifecycle on the ORIGINAL anchor: the row flips back
                   // to running and may settle again exactly once.
-                  if (tool === "resumeAgent" && existing.terminalEmitted) {
+                  if (
+                    (tool === "resumeAgent" || tool === "followupTask") &&
+                    existing.terminalEmitted
+                  ) {
                     existing.terminalEmitted = false;
                     existing.terminalPhase = undefined;
                     events.push({

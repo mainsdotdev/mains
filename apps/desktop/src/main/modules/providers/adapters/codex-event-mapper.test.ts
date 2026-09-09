@@ -19,6 +19,8 @@ function createRunState(
     turnId: null,
     currentMessageItemId: null,
     agentMessageBuffer: "",
+    emittedAgentMessageItemIds: new Set(),
+    emittedAsyncQuestionItemIds: new Set(),
     pendingFlush: [],
     mainsCtx: {
       workspaceId: "workspace-1",
@@ -179,6 +181,140 @@ describe("Codex event mapper", () => {
         metadata: { source: "agent_message", itemId: "message-1" },
       }),
     );
+  });
+
+  it("surfaces a completed async agent message and its questions without deltas", () => {
+    const { mapper } = createHarness();
+    const notification = {
+      threadId: "thread-parent",
+      item: {
+        id: "message-async",
+        type: "agentMessage",
+        text: "Background review finished.",
+        phase: "final_answer",
+        delivery: "async",
+        questions: [
+          {
+            title: "Which environment?",
+            options: ["Staging", "Production"],
+          },
+          { title: "Anything else?", options: null },
+        ],
+      },
+    };
+
+    const events = mapper.mapNotification(
+      "item/completed",
+      notification,
+      "run-1",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "artifact",
+        kind: "report",
+        content: "Background review finished.",
+        metadata: expect.objectContaining({
+          source: "agent_message",
+          itemId: "message-async",
+          messagePhase: "final_answer",
+          delivery: "async",
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "artifact",
+        kind: "report",
+        content:
+          "**Which environment?**\n- Staging\n- Production\n\n**Anything else?**",
+        metadata: {
+          source: "codex_async_questions",
+          itemId: "message-async",
+          delivery: "async",
+          questions: notification.item.questions,
+        },
+      }),
+    );
+
+    expect(
+      mapper.mapNotification("item/completed", notification, "run-1"),
+    ).toEqual([]);
+  });
+
+  it("keeps late async questions after a competing message flushed the text", () => {
+    const { mapper, state } = createHarness();
+    mapper.mapNotification(
+      "item/agentMessage/delta",
+      {
+        threadId: "thread-parent",
+        itemId: "message-async",
+        delta: "Background review finished.",
+      },
+      "run-1",
+    );
+    mapper.mapNotification(
+      "item/agentMessage/delta",
+      {
+        threadId: "thread-parent",
+        itemId: "message-next",
+        delta: "Next message.",
+      },
+      "run-1",
+    );
+
+    const events = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "message-async",
+          type: "agentMessage",
+          text: "Background review finished.",
+          delivery: "async",
+          questions: [{ title: "Continue?", options: ["Yes", "No"] }],
+        },
+      },
+      "run-1",
+    );
+
+    expect(state.pendingFlush).toContainEqual(
+      expect.objectContaining({ content: "Background review finished." }),
+    );
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "artifact",
+        content: "**Continue?**\n- Yes\n- No",
+        metadata: expect.objectContaining({ source: "codex_async_questions" }),
+      }),
+    ]);
+  });
+
+  it.each([
+    "plain output",
+    [
+      { type: "input_text", text: "structured output" },
+      { type: "input_image", image_url: "data:image/png;base64,AAAA" },
+    ],
+  ])("does not duplicate a functionCallOutput as a raw log (%j)", (output) => {
+    const { mapper } = createHarness();
+
+    const events = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "function-output-1",
+          type: "functionCallOutput",
+          name: "CheckPackage",
+          namespace: null,
+          output,
+        },
+      },
+      "run-1",
+    );
+
+    expect(events).toEqual([]);
   });
 
   it("deduplicates live usage snapshots for the same turn", () => {
@@ -601,6 +737,91 @@ describe("Codex subagent lifecycle projection", () => {
     expect(state.subAgents.get("thread-sub")?.spawnItemId).toBe("item-spawn");
   });
 
+  it.each([
+    ["sendMessage", "sendCollabMessage"],
+    ["followupTask", "followupCollabTask"],
+    ["interruptAgent", "interruptCollabAgent"],
+    ["listAgents", "listCollabAgents"],
+  ])("maps the %s variant to %s", (tool, toolName) => {
+    const { mapper } = createHarness();
+
+    const events = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: `item-${tool}`,
+          type: "collabAgentToolCall",
+          tool,
+          status: "completed",
+          receiverThreadIds: [],
+        },
+      },
+      "run-1",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_call",
+        toolName,
+        metadata: expect.objectContaining({
+          collabTool: tool,
+          collabStatus: "completed",
+        }),
+      }),
+    );
+  });
+
+  it("marks an interrupted collab call canceled without anchoring a spawn", () => {
+    const { mapper, state } = createHarness();
+    state.subAgents.set("thread-sub", {
+      threadId: "thread-sub",
+      nickname: "Ada",
+    });
+
+    mapper.mapNotification(
+      "item/started",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "item-spawn",
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "inProgress",
+          receiverThreadIds: ["thread-sub"],
+        },
+      },
+      "run-1",
+    );
+    const events = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "item-spawn",
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "interrupted",
+          receiverThreadIds: ["thread-sub"],
+        },
+      },
+      "run-1",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_call",
+        toolName: "spawnAgent",
+        terminalStatus: "canceled",
+        metadata: expect.objectContaining({ collabStatus: "interrupted" }),
+      }),
+    );
+    expect(
+      events.filter((event) => event.type === "subagent"),
+    ).toHaveLength(0);
+    expect(state.subAgents.get("thread-sub")?.spawnItemId).toBeUndefined();
+  });
+
   it("maps a sub-thread tool item to a child tool call of the spawn", () => {
     const { mapper } = createHarness();
     spawnComplete(mapper);
@@ -816,6 +1037,40 @@ describe("Codex multi_agent v1 (subAgentActivity) projection", () => {
     );
   });
 
+  it("keeps async questions from a sub-thread in the subagent flow", () => {
+    const { mapper } = createHarness();
+    startedActivity(mapper);
+
+    const events = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-sub",
+        item: {
+          id: "item-question",
+          type: "agentMessage",
+          text: "I need one choice.",
+          delivery: "async",
+          questions: [{ title: "Which branch?", options: ["main", "release"] }],
+        },
+      },
+      "run-1",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "artifact",
+        kind: "report",
+        content: "**Which branch?**\n- main\n- release",
+        metadata: expect.objectContaining({
+          source: "codex_async_questions",
+          isFromSubagent: true,
+          parentToolUseId: "call_1",
+          subThreadId: "thread-sub",
+        }),
+      }),
+    );
+  });
+
   it("carries the sub-thread's final message as the settle result", () => {
     const { mapper } = createHarness();
     startedActivity(mapper);
@@ -845,6 +1100,58 @@ describe("Codex multi_agent v1 (subAgentActivity) projection", () => {
         result: "No security findings. Nothing actionable in the diff.",
       }),
     );
+  });
+
+  it("settles an agent from an explicit completed activity exactly once", () => {
+    const { mapper } = createHarness();
+    startedActivity(mapper);
+
+    mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-sub",
+        item: {
+          id: "item-msg",
+          type: "agentMessage",
+          text: "Security review complete.",
+        },
+      },
+      "run-1",
+    );
+    const events = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "call-completed",
+          type: "subAgentActivity",
+          kind: "completed",
+          agentThreadId: "thread-sub",
+          agentPath: "/root/security_review",
+        },
+      },
+      "run-1",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "subagent",
+        phase: "completed",
+        agentId: "thread-sub",
+        parentToolUseId: "call_1",
+        result: "Security review complete.",
+        metadata: expect.objectContaining({ activityKind: "completed" }),
+      }),
+    );
+
+    const duplicate = mapper.mapNotification(
+      "turn/completed",
+      { threadId: "thread-sub", turn: { id: "turn-sub", status: "completed" } },
+      "run-1",
+    );
+    expect(
+      duplicate.filter((event) => event.type === "subagent"),
+    ).toHaveLength(0);
   });
 
   it("settles a v1 agent when its own turn completes", () => {
@@ -1238,55 +1545,65 @@ describe("Codex turn-status settlement", () => {
   });
 });
 
-describe("Codex resumeAgent re-arm", () => {
-  it("flips a settled agent back to running and lets it settle again once", () => {
-    const { mapper, state } = createHarness();
-    state.subAgents.set("thread-sub", { threadId: "thread-sub", nickname: "Ada" });
+describe("Codex existing-agent re-arm", () => {
+  it.each(["resumeAgent", "followupTask"])(
+    "%s flips a settled agent back to running and lets it settle again once",
+    (reactivateTool) => {
+      const { mapper, state } = createHarness();
+      state.subAgents.set("thread-sub", {
+        threadId: "thread-sub",
+        nickname: "Ada",
+      });
 
-    const collab = (id: string, tool: string, agentStatus?: string) =>
-      mapper.mapNotification(
-        "item/completed",
-        {
-          threadId: "thread-parent",
-          item: {
-            id,
-            type: "collabAgentToolCall",
-            tool,
-            status: "completed",
-            receiverThreadIds: ["thread-sub"],
-            ...(agentStatus
-              ? { agentsStates: { "thread-sub": { status: agentStatus, message: null } } }
-              : {}),
+      const collab = (id: string, tool: string, agentStatus?: string) =>
+        mapper.mapNotification(
+          "item/completed",
+          {
+            threadId: "thread-parent",
+            item: {
+              id,
+              type: "collabAgentToolCall",
+              tool,
+              status: "completed",
+              receiverThreadIds: ["thread-sub"],
+              ...(agentStatus
+                ? {
+                    agentsStates: {
+                      "thread-sub": { status: agentStatus, message: null },
+                    },
+                  }
+                : {}),
+            },
           },
-        },
-        "run-1",
+          "run-1",
+        );
+
+      collab("item-spawn", "spawnAgent");
+      collab("item-close", "closeAgent", "shutdown"); // settled as completed
+      expect(state.subAgents.get("thread-sub")?.terminalPhase).toBe("completed");
+
+      const resumed = collab("item-reactivate", reactivateTool);
+      expect(resumed).toContainEqual(
+        expect.objectContaining({
+          type: "subagent",
+          phase: "running",
+          // Re-armed on the ORIGINAL anchor, not the resume call.
+          parentToolUseId: "item-spawn",
+        }),
       );
+      expect(state.subAgents.get("thread-sub")?.terminalEmitted).toBe(false);
+      expect(state.subAgents.get("thread-sub")?.terminalPhase).toBeUndefined();
 
-    collab("item-spawn", "spawnAgent");
-    collab("item-close", "closeAgent", "shutdown"); // settled as completed
-    expect(state.subAgents.get("thread-sub")?.terminalPhase).toBe("completed");
-
-    const resumed = collab("item-resume", "resumeAgent");
-    expect(resumed).toContainEqual(
-      expect.objectContaining({
-        type: "subagent",
-        phase: "running",
-        // Re-armed on the ORIGINAL anchor, not the resume call.
-        parentToolUseId: "item-spawn",
-      }),
-    );
-    expect(state.subAgents.get("thread-sub")?.terminalEmitted).toBe(false);
-    expect(state.subAgents.get("thread-sub")?.terminalPhase).toBeUndefined();
-
-    const settledAgain = collab("item-close-2", "closeAgent", "completed");
-    expect(settledAgain).toContainEqual(
-      expect.objectContaining({
-        type: "subagent",
-        phase: "completed",
-        parentToolUseId: "item-spawn",
-      }),
-    );
-  });
+      const settledAgain = collab("item-close-2", "closeAgent", "completed");
+      expect(settledAgain).toContainEqual(
+        expect.objectContaining({
+          type: "subagent",
+          phase: "completed",
+          parentToolUseId: "item-spawn",
+        }),
+      );
+    },
+  );
 });
 
 // Drift guard: every type in the sub-thread allowlist must have a

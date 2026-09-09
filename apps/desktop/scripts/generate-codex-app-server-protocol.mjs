@@ -18,8 +18,8 @@ const temporaryRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "mains-codex-protocol-"),
 );
 
-// Keep this list focused on the stable protocol surfaces consumed as typed
-// data by codex.driver.ts. Transitive imports are discovered automatically.
+// Keep this list focused on the protocol surfaces consumed as typed data by
+// the Codex adapter. Transitive imports are discovered automatically.
 const roots = [
   "InitializeParams.ts",
   "InitializeResponse.ts",
@@ -95,7 +95,12 @@ function importedFiles(relativePath) {
 try {
   execFileSync(
     codexBinary,
-    ["app-server", "generate-ts", "--out", temporaryRoot],
+    // `--experimental` is required: `collaborationMode` (turn/start) and
+    // `dynamicTools` (thread/start) are experimental fields, absent from the
+    // stable schema. The driver declares `experimentalApi: true` at
+    // initialize and sends both, so it must be typed against the same
+    // surface it negotiates.
+    ["app-server", "generate-ts", "--experimental", "--out", temporaryRoot],
     { stdio: "inherit" },
   );
 

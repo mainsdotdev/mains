@@ -526,12 +526,13 @@ describe("codex.driver / buildCollaborationMode", () => {
       });
     });
 
-    it("omits the model when there is none to name", () => {
-      // `model: ""` is not "unset" — Codex reads it as a model name and answers
-      // "The '' model is not supported", which is how forking used to fail.
-      const result = buildCollaborationMode(true, undefined, "low");
-      expect(result?.settings).not.toHaveProperty("model");
-      expect(result?.settings).toMatchObject({ reasoning_effort: "low" });
+    it("sends no collaboration block when there is no model to name", () => {
+      // `settings.model` is required by the app-server. `model: ""` is read as
+      // a model name ("The '' model is not supported"), and an absent one is
+      // rejected outright ("Invalid request: missing field `model`") — which
+      // fails the entire turn/start, not just the mode. Plan mode is dropped
+      // for this turn rather than taking the run down with it.
+      expect(buildCollaborationMode(true, undefined, "low")).toBeUndefined();
     });
   });
 
@@ -552,11 +553,13 @@ describe("codex.driver / buildCollaborationMode", () => {
       expect(result?.settings).toMatchObject({ reasoning_effort: null });
     });
 
-    it("sends no model on a fork that carries none", () => {
-      // The fork path always builds this block (forceReset), so it is the one
-      // that hits an absent model in practice — the thread keeps its own.
-      const result = buildCollaborationMode(false, undefined, undefined, true);
-      expect(result?.settings).not.toHaveProperty("model");
+    it("sends no collaboration block on a fork that carries no model", () => {
+      // The fork path always asks for this block (forceReset), so it is the one
+      // that hits an absent model in practice. Sending none leaves the forked
+      // thread on its parent's collaboration mode, which is the intent.
+      expect(
+        buildCollaborationMode(false, undefined, undefined, true),
+      ).toBeUndefined();
     });
   });
 });

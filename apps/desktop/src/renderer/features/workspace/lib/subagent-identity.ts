@@ -54,6 +54,10 @@ export const CODEX_COLLAB_TOOLS: ReadonlySet<string> = new Set([
   "waitcollabagent",
   "closecollabagent",
   "resumecollabagent",
+  "sendcollabmessage",
+  "followupcollabtask",
+  "interruptcollabagent",
+  "listcollabagents",
 ]);
 
 /** Claude's SendMessage — continues an existing (background) agent. */
