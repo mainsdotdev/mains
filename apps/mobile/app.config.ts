@@ -41,7 +41,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     name: variant.appName,
     slug: "mains",
     owner: "okanbilal",
-    version: "0.1.0",
+    version: "1.0.0",
     platforms: ["ios"],
     orientation: "portrait",
     icon: "./assets/images/icon.png",
