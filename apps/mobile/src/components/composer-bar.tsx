@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ActionSheetIOS, Pressable, TextInput, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -43,6 +43,12 @@ export interface ComposerContext {
   onSkillsChange: (skills: PromptSkill[]) => void;
 }
 
+/** Window coordinates where a sent bubble should emerge from the text field. */
+export interface ComposerSendOrigin {
+  x: number;
+  y: number;
+}
+
 /**
  * The floating glass composer, in two rows like the Claude app's: the text on
  * top; below it the attach button, the model pill (model + effort) and the
@@ -68,7 +74,7 @@ export function ComposerBar({
 }: {
   value: string;
   onChangeText: (text: string) => void;
-  onSend: () => void;
+  onSend: (origin: ComposerSendOrigin | null) => void;
   placeholder: string;
   disabled?: boolean;
   sending?: boolean;
@@ -97,7 +103,28 @@ export function ComposerBar({
 }) {
   const accent = useProviderAccent(providerId);
   const canSend = !disabled && !sending && value.trim().length > 0;
+  const inputRef = useRef<TextInput>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+
+  const sendFromInput = () => {
+    const input = inputRef.current;
+    if (!input) {
+      onSend(null);
+      return;
+    }
+    input.measureInWindow((x, y, width, height) => {
+      if (width <= 0 || height <= 0) {
+        onSend(null);
+        return;
+      }
+      // Align the flying bubble's text with the input's text, accounting for
+      // the two surfaces' different internal padding.
+      onSend({
+        x: x + spacing.xs - spacing.md,
+        y: y + spacing.xs - spacing.ms,
+      });
+    });
+  };
 
   // Plugins remain behind the inline context triggers, as on the desktop;
   // the toolbar's attachment control is reserved for images/documents.
@@ -240,6 +267,7 @@ export function ComposerBar({
         }}
       >
         <TextInput
+          ref={inputRef}
           accessibilityLabel="Message"
           editable={!disabled && !sending}
           multiline
@@ -308,7 +336,7 @@ export function ComposerBar({
             // Stopping stays available while the composer itself is disabled —
             // a run in flight is exactly when the field is closed for typing.
             disabled={onStop ? false : !canSend}
-            onPress={onStop ?? onSend}
+            onPress={onStop ?? sendFromInput}
             style={({ pressed }) => ({
               width: 36,
               height: 36,

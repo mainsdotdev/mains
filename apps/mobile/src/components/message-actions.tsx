@@ -28,11 +28,14 @@ export const FORK_MESSAGE = "Continue from where this session left off.";
 export function MessageActions({
   text,
   onFork,
+  forkDisabled = false,
 }: {
   /** The message, as written — the copy is the raw markdown, not the render. */
   text: string;
-  /** Omitted wherever a fork can't start: mid-transcript, live, or offline. */
+  /** Omitted wherever a fork can't start: mid-transcript or offline. */
   onFork?: () => Promise<void>;
+  /** Keeps the settled fork point visible, but inert, while its next turn runs. */
+  forkDisabled?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [forking, setForking] = useState(false);
@@ -51,7 +54,7 @@ export function MessageActions({
   };
 
   const fork = async () => {
-    if (!onFork || forking) return;
+    if (!onFork || forkDisabled || forking) return;
     setForking(true);
     try {
       await onFork();
@@ -73,6 +76,7 @@ export function MessageActions({
         <ActionButton
           accessibilityLabel="Fork run from here"
           busy={forking}
+          disabled={forkDisabled}
           onPress={() => void fork()}
         >
           <ForkIcon size={20} color={colors.secondaryLabel} />
@@ -87,18 +91,22 @@ function ActionButton({
   children,
   accessibilityLabel,
   busy = false,
+  disabled = false,
   onPress,
 }: {
   children: React.ReactNode;
   accessibilityLabel: string;
   busy?: boolean;
+  disabled?: boolean;
   onPress: () => void;
 }) {
+  const unavailable = busy || disabled;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      disabled={busy}
+      accessibilityState={{ disabled: unavailable }}
+      disabled={unavailable}
       onPress={onPress}
       hitSlop={spacing.sm}
       style={({ pressed }) => ({
@@ -110,7 +118,7 @@ function ActionButton({
         borderRadius: radius.full,
         borderCurve: "continuous",
         backgroundColor: pressed ? colors.fill : "transparent",
-        opacity: busy ? 0.5 : 1,
+        opacity: unavailable ? 0.5 : 1,
       })}
     >
       {children}

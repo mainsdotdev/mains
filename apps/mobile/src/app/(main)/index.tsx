@@ -14,7 +14,11 @@ import { startDemo } from "@/backend/demo/start";
 import { DEMO_BACKEND_ID } from "@/backend/demo/transport";
 import { useAiDataConsent } from "@/components/ai-data-consent-provider";
 import { Button } from "@/components/button";
-import { ComposerBar, composerBottomPadding } from "@/components/composer-bar";
+import {
+  ComposerBar,
+  composerBottomPadding,
+  type ComposerSendOrigin,
+} from "@/components/composer-bar";
 import { GlassSurface } from "@/components/glass-surface";
 import { attachedSkills, composeGoal } from "@/lib/context-picker";
 import {
@@ -40,6 +44,8 @@ import { colors, radius, shadows, spacing, useProviderAccentPair } from "@/theme
 
 /** The round glass buttons' size, and the pills' height, along the top. */
 const CONTROL_HEIGHT = 46;
+/** Two 44-point targets plus the capsule's horizontal padding. */
+const RUN_TOOLBAR_WIDTH = 44 * 2 + spacing.xs * 2;
 /** The connection pill under them, shown while the Mac is out of reach. */
 const PILL_HEIGHT = 30;
 
@@ -167,7 +173,7 @@ export default function NewRunScreen() {
     }
   };
 
-  const send = async () => {
+  const send = async (origin: ComposerSendOrigin | null) => {
     // What was typed plus a token per attached skill — the chips never put one
     // in the input, but the transcript needs it to draw them back.
     const goal = composeGoal(draft, contextSkills);
@@ -188,7 +194,7 @@ export default function NewRunScreen() {
       // before the Mac has answered, and the transcript fills in under it once
       // it has. A refusal takes the bubble back down and leaves the draft as it
       // was, with the reason under it.
-      homeRun.start({ text: goal, skills });
+      homeRun.start({ text: goal, sourceText: draft, skills, origin });
       const result = await backendSession.startRun({
         goal,
         workspaceId: workspace?.id ?? null,
@@ -391,7 +397,7 @@ export default function NewRunScreen() {
               setDraft(text);
               if (hint) setHint(null);
             }}
-            onSend={() => void send()}
+            onSend={(origin) => void send(origin)}
             sending={sending}
             attachments={attachments}
             onAttachmentsChange={setAttachments}
@@ -466,6 +472,7 @@ function RunToolbar({ onNewRun }: { onNewRun: () => void }) {
     <GlassSurface
       interactive
       style={{
+        width: RUN_TOOLBAR_WIDTH,
         height: CONTROL_HEIGHT,
         borderRadius: radius.full,
         flexDirection: "row",
