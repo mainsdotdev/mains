@@ -1,5 +1,13 @@
-import { useRef, useState } from "react";
-import { ActionSheetIOS, Pressable, TextInput, View, useWindowDimensions } from "react-native";
+import * as Haptics from "expo-haptics";
+import { useEffect, useRef, useState } from "react";
+import { Pressable, TextInput, View, useWindowDimensions } from "react-native";
+import Animated, {
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
@@ -12,11 +20,10 @@ import {
 } from "@/lib/context-picker";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import {
-  clipboardHasImage,
   mergeComposerAttachments,
-  pasteComposerImage,
   pickComposerDocuments,
   pickComposerImages,
+  takeComposerPhoto,
   type ComposerAttachment,
 } from "@/lib/composer-attachments";
 import type { PromptSkill } from "@/lib/prompt-chips";
@@ -24,6 +31,13 @@ import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { colors, radius, spacing, type, useProviderAccent } from "@/theme";
 
 import { ContextPicker } from "./context-picker";
+import {
+  COMPOSER_ATTACHMENT_MENU_COLLAPSE_MS,
+  COMPOSER_ATTACHMENT_MENU_CLOSE_MS,
+  ComposerAttachmentMenu,
+  type ComposerAttachmentMenuAnchor,
+  type ComposerAttachmentSource,
+} from "./composer-attachment-menu";
 import { ComposerAttachmentStrip } from "./composer-attachment-strip";
 import { GlassSurface } from "./glass-surface";
 import { SFSymbol } from "./sf-symbol";
@@ -48,6 +62,8 @@ export interface ComposerSendOrigin {
   x: number;
   y: number;
 }
+
+const ATTACHMENT_BUTTON_REVEAL_MS = 80;
 
 /**
  * The floating glass composer, in two rows like the Claude app's: the text on
@@ -104,7 +120,29 @@ export function ComposerBar({
   const accent = useProviderAccent(providerId);
   const canSend = !disabled && !sending && value.trim().length > 0;
   const inputRef = useRef<TextInput>(null);
+  const attachmentButtonRef = useRef<View>(null);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [attachmentMenuVisible, setAttachmentMenuVisible] = useState(false);
+  const [attachmentMenuAnchor, setAttachmentMenuAnchor] =
+    useState<ComposerAttachmentMenuAnchor | null>(null);
+  const attachmentMenuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const attachmentSourceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const attachmentButtonOpacity = useSharedValue(1);
+  const attachmentButtonAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: attachmentButtonOpacity.value,
+  }));
+
+  useEffect(
+    () => () => {
+      if (attachmentMenuCloseTimerRef.current) {
+        clearTimeout(attachmentMenuCloseTimerRef.current);
+      }
+      if (attachmentSourceTimerRef.current) {
+        clearTimeout(attachmentSourceTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const sendFromInput = () => {
     const input = inputRef.current;
@@ -197,16 +235,11 @@ export function ComposerBar({
     }
   };
 
-  const pasteImage = async () => {
+  const takePhoto = async () => {
     try {
-      const pasted = await pasteComposerImage();
-      if (pasted.length === 0) {
-        setAttachmentError("There is no image on the clipboard.");
-        return;
-      }
-      addPicked(pasted);
+      addPicked(await takeComposerPhoto());
     } catch (caught) {
-      setAttachmentError(caught instanceof Error ? caught.message : "Could not paste that image");
+      setAttachmentError(caught instanceof Error ? caught.message : "Could not open the camera");
     }
   };
 
@@ -218,32 +251,60 @@ export function ComposerBar({
     }
   };
 
-  const openAttachments = async () => {
+  const openAttachments = () => {
     if (!onAttachmentsChange) return;
-    setAttachmentError(null);
-    // Paste is offered only when there is an image to paste; checking costs no
-    // permission, while reading the clipboard would raise the system prompt.
-    const canPaste = await clipboardHasImage().catch(() => false);
-    // Codex takes images only, so with an empty clipboard there is nothing to
-    // choose between and the picker opens straight away.
-    const documents = providerId !== PROVIDER_IDS.codex;
-    if (!canPaste && !documents) {
-      void pickImages();
+    if (attachmentMenuVisible) {
+      closeAttachmentMenu();
       return;
     }
-    const actions: { label: string; run: () => void }[] = [
-      { label: "Images", run: () => void pickImages() },
-      ...(documents ? [{ label: "Documents", run: () => void pickDocuments() }] : []),
-      ...(canPaste ? [{ label: "Paste image", run: () => void pasteImage() }] : []),
-    ];
-    ActionSheetIOS.showActionSheetWithOptions(
-      {
-        title: "Add attachment",
-        options: [...actions.map((a) => a.label), "Cancel"],
-        cancelButtonIndex: actions.length,
-      },
-      (index) => actions[index]?.run(),
+    setAttachmentError(null);
+    const button = attachmentButtonRef.current;
+    if (!button) return;
+    button.measureInWindow((x, y, width, height) => {
+      if (attachmentMenuCloseTimerRef.current) {
+        clearTimeout(attachmentMenuCloseTimerRef.current);
+        attachmentMenuCloseTimerRef.current = null;
+      }
+      if (attachmentSourceTimerRef.current) {
+        clearTimeout(attachmentSourceTimerRef.current);
+        attachmentSourceTimerRef.current = null;
+      }
+      setAttachmentMenuAnchor({ x, y, width, height });
+      cancelAnimation(attachmentButtonOpacity);
+      attachmentButtonOpacity.set(0);
+      setAttachmentMenuVisible(true);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    });
+  };
+
+  const closeAttachmentMenu = () => {
+    setAttachmentMenuVisible(false);
+    cancelAnimation(attachmentButtonOpacity);
+    attachmentButtonOpacity.set(
+      withDelay(
+        COMPOSER_ATTACHMENT_MENU_COLLAPSE_MS - ATTACHMENT_BUTTON_REVEAL_MS,
+        withTiming(1, { duration: ATTACHMENT_BUTTON_REVEAL_MS }),
+      ),
     );
+    if (attachmentMenuCloseTimerRef.current) {
+      clearTimeout(attachmentMenuCloseTimerRef.current);
+    }
+    attachmentMenuCloseTimerRef.current = setTimeout(() => {
+      setAttachmentMenuAnchor(null);
+      attachmentMenuCloseTimerRef.current = null;
+    }, COMPOSER_ATTACHMENT_MENU_CLOSE_MS);
+  };
+
+  const chooseAttachmentSource = (source: ComposerAttachmentSource) => {
+    // Let the glass collapse back into the + before iOS presents a native
+    // picker over it; otherwise the first frame of the picker catches the menu.
+    closeAttachmentMenu();
+    attachmentSourceTimerRef.current = setTimeout(() => {
+      attachmentSourceTimerRef.current = null;
+      if (source === "camera") void takePhoto();
+      if (source === "photos") void pickImages();
+      if (source === "files") void pickDocuments();
+    }, COMPOSER_ATTACHMENT_MENU_CLOSE_MS);
   };
 
   return (
@@ -296,13 +357,20 @@ export function ComposerBar({
         />
 
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-          <RoundControl
-            label={providerId === PROVIDER_IDS.codex ? "Upload image" : "Upload file or photo"}
-            onPress={() => void openAttachments()}
-            disabled={!onAttachmentsChange}
+          <Animated.View
+            accessibilityElementsHidden={attachmentMenuAnchor !== null}
+            pointerEvents={attachmentMenuAnchor ? "none" : "auto"}
+            style={attachmentButtonAnimatedStyle}
           >
-            <SFSymbol name="plus" size={18} tint={colors.label} />
-          </RoundControl>
+            <RoundControl
+              label={providerId === PROVIDER_IDS.codex ? "Upload image" : "Upload file or photo"}
+              controlRef={attachmentButtonRef}
+              onPress={openAttachments}
+              disabled={!onAttachmentsChange}
+            >
+              <SFSymbol name="plus" size={18} tint={colors.label} />
+            </RoundControl>
+          </Animated.View>
 
           {model ? (
             <Pill
@@ -359,6 +427,14 @@ export function ComposerBar({
         </View>
       </GlassSurface>
 
+      <ComposerAttachmentMenu
+        visible={attachmentMenuVisible}
+        anchor={attachmentMenuAnchor}
+        includeFiles={providerId !== PROVIDER_IDS.codex}
+        onDismiss={() => closeAttachmentMenu()}
+        onSelect={chooseAttachmentSource}
+      />
+
       {context ? (
         <ContextPicker
           visible={menuVisible}
@@ -410,15 +486,18 @@ function RoundControl({
   label,
   onPress,
   disabled = false,
+  controlRef,
   children,
 }: {
   label: string;
   onPress?: () => void;
   disabled?: boolean;
+  controlRef?: React.Ref<View>;
   children: React.ReactNode;
 }) {
   return (
     <Pressable
+      ref={controlRef}
       accessibilityRole="button"
       accessibilityLabel={label}
       disabled={disabled}

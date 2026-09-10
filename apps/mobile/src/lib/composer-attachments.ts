@@ -43,6 +43,25 @@ function extensionForImageMime(mimeType: string): string {
   return mimeType.split("/")[1]?.replace("jpeg", "jpg") || "jpg";
 }
 
+function imageAttachment(
+  asset: ImagePicker.ImagePickerAsset,
+  index: number,
+  fallbackPrefix: "image" | "photo",
+): ComposerAttachment {
+  const fallbackMimeType = imageMimeType("image.jpg", asset.mimeType);
+  const name =
+    asset.fileName?.trim() ||
+    `${fallbackPrefix}-${Date.now()}-${index + 1}.${extensionForImageMime(fallbackMimeType)}`;
+  return {
+    id: `image:${asset.assetId ?? asset.uri}`,
+    name,
+    type: "image",
+    uri: asset.uri,
+    mimeType: imageMimeType(name, asset.mimeType),
+    size: asset.fileSize,
+  };
+}
+
 /** Pick phone-local images, matching the desktop's image attachment source. */
 export async function pickComposerImages(): Promise<ComposerAttachment[]> {
   // PHPicker presents the photo library without granting the app blanket
@@ -57,20 +76,23 @@ export async function pickComposerImages(): Promise<ComposerAttachment[]> {
   });
   if (result.canceled) return [];
 
-  return result.assets.map((asset, index) => {
-    const fallbackMimeType = imageMimeType("image.jpg", asset.mimeType);
-    const name =
-      asset.fileName?.trim() ||
-      `image-${Date.now()}-${index + 1}.${extensionForImageMime(fallbackMimeType)}`;
-    return {
-      id: `image:${asset.assetId ?? asset.uri}`,
-      name,
-      type: "image" as const,
-      uri: asset.uri,
-      mimeType: imageMimeType(name, asset.mimeType),
-      size: asset.fileSize,
-    };
+  return result.assets.map((asset, index) => imageAttachment(asset, index, "image"));
+}
+
+/** Take a single photo and return it in the same shape as library images. */
+export async function takeComposerPhoto(): Promise<ComposerAttachment[]> {
+  const permission = await ImagePicker.requestCameraPermissionsAsync();
+  if (!permission.granted) {
+    throw new Error("Camera access is required to take a photo.");
+  }
+
+  const result = await ImagePicker.launchCameraAsync({
+    mediaTypes: "images",
+    allowsEditing: false,
+    quality: 1,
   });
+  if (result.canceled || result.assets.length === 0) return [];
+  return [imageAttachment(result.assets[0], 0, "photo")];
 }
 
 /** Pick the same document families the desktop composer accepts. */
