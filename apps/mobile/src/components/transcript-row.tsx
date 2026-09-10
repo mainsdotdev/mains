@@ -1,5 +1,6 @@
+import { Image } from "expo-image";
 import { useEffect, useRef } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, View, useWindowDimensions } from "react-native";
 import Animated, {
   Extrapolation,
   FadeIn,
@@ -11,10 +12,11 @@ import Animated, {
   withSpring,
   withTiming,
   type EntryExitAnimationFunction,
+  type SharedValue,
 } from "react-native-reanimated";
 
 import { parsePromptContent } from "@/lib/prompt-chips";
-import type { TranscriptItem } from "@/lib/transcript";
+import type { PromptImage, TranscriptItem } from "@/lib/transcript";
 import { colors, motion, radius, spacing, useProviderAccent } from "@/theme";
 
 import { ImageGallery } from "./artifact-image";
@@ -59,10 +61,20 @@ export interface PromptBubbleRect {
   height: number;
 }
 
-/** Start and destination coordinates relative to the RunView root. */
-export interface PromptFlight {
-  from: Pick<PromptBubbleRect, "x" | "y">;
+export interface PromptMessageRect extends PromptBubbleRect {
+  text: PromptBubbleRect | null;
+  images: PromptBubbleRect[];
+}
+
+export interface PromptFlightElement {
+  from: PromptBubbleRect;
   to: PromptBubbleRect;
+}
+
+/** Source and destination coordinates relative to the RunView root. */
+export interface PromptFlight {
+  text: PromptFlightElement | null;
+  images: PromptFlightElement[];
 }
 
 /** Space between a transcript row boundary and its prompt bubble surface. */
@@ -93,8 +105,8 @@ export function TranscriptRow({
   animatePromptEntry?: boolean;
   /** Holds the transcript destination open while its flying copy is visible. */
   promptHidden?: boolean;
-  /** Window coordinates of the rendered prompt surface. */
-  onPromptMeasure?: (rect: PromptBubbleRect) => void;
+  /** Window coordinates of the rendered prompt text and image surfaces. */
+  onPromptMeasure?: (rect: PromptMessageRect) => void;
 }) {
   switch (item.kind) {
     case "prompt":
@@ -184,6 +196,38 @@ const PROMPT_BUBBLE_ENTER: EntryExitAnimationFunction = () => {
 /** Reduced Motion keeps the send acknowledgement without moving the bubble. */
 const PROMPT_BUBBLE_FADE = FadeIn.duration(motion.fast);
 
+const PROMPT_IMAGE_MAX_WIDTH = 296;
+const PROMPT_IMAGE_SINGLE_ASPECT = 4 / 3;
+
+function promptHasText(item: Extract<TranscriptItem, { kind: "prompt" }>): boolean {
+  return item.text.trim().length > 0;
+}
+
+function measureView(view: View | null): Promise<PromptBubbleRect | null> {
+  return new Promise((resolve) => {
+    if (!view) {
+      resolve(null);
+      return;
+    }
+    view.measureInWindow((x, y, width, height) => {
+      resolve(width > 0 && height > 0 ? { x, y, width, height } : null);
+    });
+  });
+}
+
+function messageBounds(
+  text: PromptBubbleRect | null,
+  images: PromptBubbleRect[],
+): PromptMessageRect | null {
+  const elements = [...images, ...(text ? [text] : [])];
+  if (elements.length === 0) return null;
+  const x = Math.min(...elements.map((element) => element.x));
+  const y = Math.min(...elements.map((element) => element.y));
+  const right = Math.max(...elements.map((element) => element.x + element.width));
+  const bottom = Math.max(...elements.map((element) => element.y + element.height));
+  return { x, y, width: right - x, height: bottom - y, text, images };
+}
+
 function PromptBubble({
   item,
   providerId,
@@ -195,11 +239,13 @@ function PromptBubble({
   providerId?: string | null;
   animateEntry: boolean;
   hidden: boolean;
-  onMeasure?: (rect: PromptBubbleRect) => void;
+  onMeasure?: (rect: PromptMessageRect) => void;
 }) {
   const accent = useProviderAccent(providerId);
   const reduceMotion = useReducedMotion();
-  const bubbleRef = useRef<View>(null);
+  const textRef = useRef<View>(null);
+  const imageRefs = useRef(new Map<string, View>());
+  const hasText = promptHasText(item);
 
   useEffect(() => {
     if (!onMeasure) return;
@@ -215,17 +261,23 @@ function PromptBubble({
           sample();
           return;
         }
-        bubbleRef.current?.measureInWindow((x, y, width, height) => {
+        void Promise.all([
+          hasText ? measureView(textRef.current) : Promise.resolve(null),
+          ...item.images.map((image) => measureView(imageRefs.current.get(image.key) ?? null)),
+        ]).then(([text, ...measuredImages]) => {
           if (cancelled) return;
           attempts++;
-          if (width <= 0 || height <= 0) {
+          if ((hasText && !text) || measuredImages.some((image) => !image)) {
             if (attempts < 12) sample();
             return;
           }
-
-          const current = { x, y, width, height };
+          const current = messageBounds(
+            text,
+            measuredImages.filter((image): image is PromptBubbleRect => image !== null),
+          );
+          if (!current) return;
           // The run view projects this live coordinate through any remaining
-          // scroll distance, so the phrase and transcript can move together.
+          // scroll distance, so the media and phrase move as one message.
           onMeasure(current);
         });
       });
@@ -236,7 +288,7 @@ function PromptBubble({
       cancelled = true;
       if (frame !== null) cancelAnimationFrame(frame);
     };
-  }, [onMeasure]);
+  }, [hasText, item.images, onMeasure]);
 
   return (
     <Animated.View
@@ -253,19 +305,34 @@ function PromptBubble({
         opacity: hidden ? 0 : 1,
       }}
     >
-      <PromptBubbleSurface
-        ref={bubbleRef}
-        item={item}
-        accent={accent}
-      />
+      {item.images.length > 0 ? (
+        <View style={{ alignItems: "flex-end", gap: spacing.xs }}>
+          <PromptImageGrid
+            images={item.images}
+            onImageRef={(key, view) => {
+              if (view) imageRefs.current.set(key, view);
+              else imageRefs.current.delete(key);
+            }}
+          />
+          {hasText ? (
+            <PromptBubbleSurface
+              ref={textRef}
+              item={item}
+              accent={accent}
+              maxWidth="100%"
+            />
+          ) : null}
+        </View>
+      ) : hasText ? (
+        <PromptBubbleSurface ref={textRef} item={item} accent={accent} />
+      ) : null}
     </Animated.View>
   );
 }
 
 /**
- * A visual copy that leaves the input's text position and lands exactly over
- * the hidden transcript bubble. The horizontal and vertical springs are kept
- * independent so the diagonal path stays smooth on every message length.
+ * Visual copies of the composer's text and images. They share one critically
+ * damped progress value, so every piece leaves and lands on the same frames.
  */
 export function FlyingPromptBubble({
   item,
@@ -280,71 +347,157 @@ export function FlyingPromptBubble({
 }) {
   const accent = useProviderAccent(providerId);
   const reduceMotion = useReducedMotion();
-  const initialX = flight.from.x - flight.to.x;
-  const initialY = flight.from.y - flight.to.y;
-  const initialDistance = Math.max(1, Math.sqrt(initialX ** 2 + initialY ** 2));
-  const translateX = useSharedValue(reduceMotion ? 0 : initialX);
-  const translateY = useSharedValue(reduceMotion ? 0 : initialY);
-  const backgroundOpacity = useSharedValue(0);
-  const bubbleRadius = promptBubbleRadius(item);
+  const progress = useSharedValue(0);
 
   useEffect(() => {
-    if (reduceMotion) {
-      backgroundOpacity.value = withTiming(1, { duration: motion.base }, (finished) => {
-        if (finished) runOnJS(onLanded)();
-      });
-      return;
-    }
+    progress.value = reduceMotion
+      ? withTiming(1, { duration: motion.base }, (finished) => {
+          if (finished) runOnJS(onLanded)();
+        })
+      : withSpring(1, { duration: motion.slow, dampingRatio: 1 }, (finished) => {
+          if (finished) runOnJS(onLanded)();
+        });
+  }, [onLanded, progress, reduceMotion]);
 
-    // Duration is perceptual; Reanimated lets the critically damped spring
-    // spend a little longer physically settling. The phrase stays fully
-    // legible while the material forms behind it over the same journey.
-    const spring = { duration: motion.slow, dampingRatio: 1 };
-    translateX.value = withSpring(0, spring);
-    translateY.value = withSpring(0, spring, (finished) => {
-      if (finished) runOnJS(onLanded)();
-    });
-  }, [backgroundOpacity, onLanded, reduceMotion, translateX, translateY]);
+  return (
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { zIndex: 4 }]}>
+      {flight.images.map((element, index) => {
+        const image = item.images[index];
+        return image ? (
+          <FlyingPromptImage
+            key={image.key}
+            image={image}
+            element={element}
+            progress={progress}
+            reduceMotion={reduceMotion}
+          />
+        ) : null;
+      })}
+      {flight.text ? (
+        <FlyingPromptText
+          item={item}
+          accent={accent}
+          element={flight.text}
+          progress={progress}
+          reduceMotion={reduceMotion}
+        />
+      ) : null}
+    </View>
+  );
+}
 
-  const flightStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: translateX.value },
-      { translateY: translateY.value },
-    ],
-  }));
-  const backgroundStyle = useAnimatedStyle(() => {
-    if (reduceMotion) return { opacity: backgroundOpacity.value, transform: [{ scale: 1 }] };
-    const remaining = Math.sqrt(translateX.value ** 2 + translateY.value ** 2);
-    const progress = 1 - remaining / initialDistance;
+function FlyingPromptImage({
+  image,
+  element,
+  progress,
+  reduceMotion,
+}: {
+  image: PromptImage;
+  element: PromptFlightElement;
+  progress: SharedValue<number>;
+  reduceMotion: boolean;
+}) {
+  const animatedStyle = useAnimatedStyle(() => {
+    const value = progress.value;
     return {
-      // Text owns the transition from its first frame. The material waits a
-      // beat, then forms in direct proportion to distance travelled.
-      opacity: interpolate(progress, [0, 0.12, 1], [0, 0, 1], Extrapolation.CLAMP),
-      transform: [
-        {
-          scale: interpolate(progress, [0, 1], [0.98, 1], Extrapolation.CLAMP),
-        },
-      ],
+      left: reduceMotion ? element.to.x : interpolate(value, [0, 1], [element.from.x, element.to.x]),
+      top: reduceMotion ? element.to.y : interpolate(value, [0, 1], [element.from.y, element.to.y]),
+      width: reduceMotion
+        ? element.to.width
+        : interpolate(value, [0, 1], [element.from.width, element.to.width]),
+      height: reduceMotion
+        ? element.to.height
+        : interpolate(value, [0, 1], [element.from.height, element.to.height]),
+      opacity: reduceMotion ? value : 1,
+      borderRadius: interpolate(value, [0, 1], [radius.lg, radius.xl], Extrapolation.CLAMP),
     };
   });
 
   return (
     <Animated.View
-      pointerEvents="none"
       style={[
         {
           position: "absolute",
-          left: flight.to.x,
-          top: flight.to.y,
-          width: flight.to.width,
-          zIndex: 4,
+          borderCurve: "continuous",
+          overflow: "hidden",
+          backgroundColor: colors.fill,
+        },
+        animatedStyle,
+      ]}
+    >
+      <Image
+        source={{ uri: image.uri }}
+        contentFit="cover"
+        style={
+          image.previewCropBottom
+            ? {
+                position: "absolute",
+                left: 0,
+                top: 0,
+                width: "100%",
+                height: `${100 / (1 - image.previewCropBottom)}%` as `${number}%`,
+              }
+            : StyleSheet.absoluteFill
+        }
+      />
+    </Animated.View>
+  );
+}
+
+function FlyingPromptText({
+  item,
+  accent,
+  element,
+  progress,
+  reduceMotion,
+}: {
+  item: Extract<TranscriptItem, { kind: "prompt" }>;
+  accent: string;
+  element: PromptFlightElement;
+  progress: SharedValue<number>;
+  reduceMotion: boolean;
+}) {
+  const initialX = element.from.x - element.to.x;
+  const initialY = element.from.y - element.to.y;
+  const flightStyle = useAnimatedStyle(() => ({
+    opacity: reduceMotion ? progress.value : 1,
+    transform: [
+      {
+        translateX: reduceMotion
+          ? 0
+          : interpolate(progress.value, [0, 1], [initialX, 0]),
+      },
+      {
+        translateY: reduceMotion
+          ? 0
+          : interpolate(progress.value, [0, 1], [initialY, 0]),
+      },
+    ],
+  }));
+  const backgroundStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(progress.value, [0, 0.12, 1], [0, 0, 1], Extrapolation.CLAMP),
+    transform: [
+      {
+        scale: interpolate(progress.value, [0, 1], [0.98, 1], Extrapolation.CLAMP),
+      },
+    ],
+  }));
+
+  return (
+    <Animated.View
+      style={[
+        {
+          position: "absolute",
+          left: element.to.x,
+          top: element.to.y,
+          width: element.to.width,
         },
         flightStyle,
       ]}
     >
       <View
         style={{
-          width: flight.to.width,
+          width: element.to.width,
           position: "relative",
           paddingHorizontal: spacing.md,
           paddingVertical: spacing.ms,
@@ -354,7 +507,7 @@ export function FlyingPromptBubble({
           style={[
             StyleSheet.absoluteFill,
             {
-              borderRadius: bubbleRadius,
+              borderRadius: promptBubbleRadius(item),
               borderCurve: "continuous",
               backgroundColor: accent,
             },
@@ -364,6 +517,66 @@ export function FlyingPromptBubble({
         <PromptBubbleText item={item} />
       </View>
     </Animated.View>
+  );
+}
+
+function PromptImageGrid({
+  images,
+  onImageRef,
+}: {
+  images: PromptImage[];
+  onImageRef?: (key: string, view: View | null) => void;
+}) {
+  const { width: windowWidth } = useWindowDimensions();
+  const gridWidth = Math.min(PROMPT_IMAGE_MAX_WIDTH, windowWidth * 0.84);
+  const tileWidth =
+    images.length === 1 ? gridWidth : (gridWidth - spacing.xs) / 2;
+  const tileHeight =
+    images.length === 1 ? tileWidth / PROMPT_IMAGE_SINGLE_ASPECT : tileWidth;
+
+  return (
+    <View
+      style={{
+        width: gridWidth,
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: spacing.xs,
+      }}
+    >
+      {images.map((image) => (
+        <View
+          key={image.key}
+          ref={(view) => onImageRef?.(image.key, view)}
+          style={{
+            width: tileWidth,
+            height: tileHeight,
+            borderRadius: radius.xl,
+            borderCurve: "continuous",
+            overflow: "hidden",
+            backgroundColor: colors.fill,
+          }}
+        >
+          <Image
+            accessible
+            accessibilityLabel={image.name}
+            source={{ uri: image.uri }}
+            contentFit="cover"
+            transition={motion.fast}
+            style={
+              image.previewCropBottom
+                ? {
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    width: tileWidth,
+                    height: tileHeight / (1 - image.previewCropBottom),
+                  }
+                : { flex: 1 }
+            }
+          />
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -391,17 +604,19 @@ function PromptBubbleSurface({
   item,
   accent,
   width,
+  maxWidth = "84%",
 }: {
   ref?: React.Ref<View>;
   item: Extract<TranscriptItem, { kind: "prompt" }>;
   accent: string;
   width?: number;
+  maxWidth?: `${number}%`;
 }) {
   return (
     <View
       ref={ref}
       style={{
-        ...(width === undefined ? { maxWidth: "84%" as const } : { width }),
+        ...(width === undefined ? { maxWidth } : { width }),
         paddingHorizontal: spacing.md,
         paddingVertical: spacing.ms,
         borderRadius: promptBubbleRadius(item),

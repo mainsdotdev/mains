@@ -80,7 +80,9 @@ export function ComposerAttachmentMenu({
   onDismiss: () => void;
   onCameraDismiss: () => void;
   onSelect: (source: ComposerAttachmentSource) => void;
-  onCameraCapture: (capture: ComposerCameraCapture) => void;
+  onCameraCapture: (
+    capture: ComposerCameraCapture,
+  ) => Promise<ComposerCameraFrame | null>;
   onError: (message: string) => void;
 }) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -206,7 +208,11 @@ export function ComposerAttachmentMenu({
         <Animated.View
           accessibilityElementsHidden={cameraOpen}
           entering={entering}
-          exiting={exiting}
+          // The menu stays mounted, but hidden, behind the camera so the back
+          // control can restore it. A direct camera dismissal must not run the
+          // menu's reverse morph: that exit animation starts at opacity 1 and
+          // would flash the menu before collapsing it into the + button.
+          exiting={cameraOpen ? undefined : exiting}
           importantForAccessibility={cameraOpen ? "no-hide-descendants" : "auto"}
           style={{
             position: "absolute",

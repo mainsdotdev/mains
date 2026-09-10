@@ -177,24 +177,31 @@ export default function NewRunScreen() {
     // What was typed plus a token per attached skill — the chips never put one
     // in the input, but the transcript needs it to draw them back.
     const goal = composeGoal(draft, contextSkills);
-    if (!goal || !space || !connected || sending) return;
+    if ((!goal && attachments.length === 0) || !space || !connected || sending) return;
     if (isCode && !workspace) {
       setHint("Pick a workspace for this Code run first.");
       return;
     }
     const skills = attachedSkills(draft, contextSkills);
+    const sentAttachments = attachments;
     setSending(true);
     setHint(null);
     try {
       const allowed = await requestConsent(backendId, space.providerId);
       if (!allowed) return;
-      const serializedAttachments = await serializeComposerAttachments(attachments);
+      const serializedAttachments = await serializeComposerAttachments(sentAttachments);
 
       // The conversation starts here and now: the prompt goes up as a bubble
       // before the Mac has answered, and the transcript fills in under it once
       // it has. A refusal takes the bubble back down and leaves the draft as it
       // was, with the reason under it.
-      homeRun.start({ text: goal, sourceText: draft, skills, origin });
+      homeRun.start({
+        text: goal,
+        sourceText: draft,
+        skills,
+        origin,
+        attachments: sentAttachments,
+      });
       const result = await backendSession.startRun({
         goal,
         workspaceId: workspace?.id ?? null,

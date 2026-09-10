@@ -1,5 +1,6 @@
 import { type CameraType, CameraView } from "expo-camera";
 import * as Haptics from "expo-haptics";
+import { Image } from "expo-image";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import Animated, {
@@ -39,7 +40,9 @@ export function ComposerCameraPanel({
 }: {
   source: ComposerCameraFrame;
   target: ComposerCameraFrame;
-  onCapture: (capture: ComposerCameraCapture) => void;
+  onCapture: (
+    capture: ComposerCameraCapture,
+  ) => Promise<ComposerCameraFrame | null>;
   onReturnToMenu: () => void;
   onClose: () => void;
   onError: (message: string) => void;
@@ -49,6 +52,7 @@ export function ComposerCameraPanel({
   const [facing, setFacing] = useState<CameraType>("back");
   const [flashEnabled, setFlashEnabled] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const [capturedPhoto, setCapturedPhoto] = useState<ComposerCameraCapture | null>(null);
   const reduceMotion = useReducedMotion();
   const left = useSharedValue(reduceMotion ? target.left : source.left);
   const top = useSharedValue(reduceMotion ? target.top : source.top);
@@ -56,12 +60,14 @@ export function ComposerCameraPanel({
   const height = useSharedValue(reduceMotion ? target.height : source.height);
   const controlsOpacity = useSharedValue(0);
   const surfaceOpacity = useSharedValue(1);
+  const cornerRadius = useSharedValue(radius.xl + 10);
 
   const frameStyle = useAnimatedStyle(() => ({
     left: left.value,
     top: top.value,
     width: width.value,
     height: height.value,
+    borderRadius: cornerRadius.value,
   }));
   const controlsStyle = useAnimatedStyle(() => ({ opacity: controlsOpacity.value }));
   const surfaceStyle = useAnimatedStyle(() => ({ opacity: surfaceOpacity.value }));
@@ -76,6 +82,7 @@ export function ComposerCameraPanel({
       return () => {
         cancelAnimation(controlsOpacity);
         cancelAnimation(surfaceOpacity);
+        cancelAnimation(cornerRadius);
       };
     }
 
@@ -93,9 +100,11 @@ export function ComposerCameraPanel({
       cancelAnimation(height);
       cancelAnimation(controlsOpacity);
       cancelAnimation(surfaceOpacity);
+      cancelAnimation(cornerRadius);
     };
   }, [
     controlsOpacity,
+    cornerRadius,
     height,
     left,
     reduceMotion,
@@ -135,6 +144,7 @@ export function ComposerCameraPanel({
         if (finished) runOnJS(finishCollapse)();
       }),
     );
+    cornerRadius.set(withSpring(radius.xl + 8, spring));
   };
 
   const dismiss = (completion: () => void) => {
@@ -148,6 +158,26 @@ export function ComposerCameraPanel({
     );
   };
 
+  const landPhoto = (destination: ComposerCameraFrame) => {
+    if (reduceMotion) {
+      dismiss(onClose);
+      return;
+    }
+    if (collapseCompletionRef.current) return;
+    collapseCompletionRef.current = onClose;
+    const spring = { duration: 340, dampingRatio: 1 };
+    controlsOpacity.set(withTiming(0, { duration: motion.fast }));
+    left.set(withSpring(destination.left, spring));
+    top.set(withSpring(destination.top, spring));
+    width.set(withSpring(destination.width, spring));
+    height.set(
+      withSpring(destination.height, spring, (finished) => {
+        if (finished) runOnJS(finishCollapse)();
+      }),
+    );
+    cornerRadius.set(withSpring(radius.lg, spring));
+  };
+
   const closeFromCamera = () => {
     dismiss(onClose);
   };
@@ -158,8 +188,15 @@ export function ComposerCameraPanel({
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.9 });
-      onCapture({ uri: photo.uri, width: photo.width, height: photo.height });
-      closeFromCamera();
+      const capture = { uri: photo.uri, width: photo.width, height: photo.height };
+      setCapturedPhoto(capture);
+      controlsOpacity.set(withTiming(0, { duration: motion.fast }));
+      const destination = await onCapture(capture);
+      if (destination) {
+        landPhoto(destination);
+      } else {
+        closeFromCamera();
+      }
     } catch (caught) {
       setCapturing(false);
       onError(caught instanceof Error ? caught.message : "Could not take that photo");
@@ -184,7 +221,7 @@ export function ComposerCameraPanel({
     >
       <CameraView
         ref={cameraRef}
-        active
+        active={!capturedPhoto}
         animateShutter
         facing={facing}
         flash={flashEnabled ? "on" : "off"}
@@ -195,7 +232,28 @@ export function ComposerCameraPanel({
         style={{ flex: 1 }}
       />
 
-      <Animated.View pointerEvents="box-none" style={[{ position: "absolute", inset: 0 }, controlsStyle]}>
+      {capturedPhoto ? (
+        <Image
+          source={{ uri: capturedPhoto.uri }}
+          contentFit="cover"
+          style={
+            capturedPhoto.width === 200 && capturedPhoto.height === 200
+              ? {
+                  position: "absolute",
+                  left: 0,
+                  top: 0,
+                  width: "100%",
+                  height: "125%",
+                }
+              : { position: "absolute", inset: 0 }
+          }
+        />
+      ) : null}
+
+      <Animated.View
+        pointerEvents={capturing ? "none" : "box-none"}
+        style={[{ position: "absolute", inset: 0 }, controlsStyle]}
+      >
         <CameraControl
           label="Back to attachment menu"
           icon="chevron.left"

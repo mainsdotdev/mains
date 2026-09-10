@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, TextInput, View, useWindowDimensions } from "react-native";
 import Animated, {
   cancelAnimation,
+  LinearTransition,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withTiming,
@@ -39,7 +41,10 @@ import {
   type ComposerAttachmentMenuAnchor,
   type ComposerAttachmentSource,
 } from "./composer-attachment-menu";
-import { ComposerAttachmentStrip } from "./composer-attachment-strip";
+import {
+  ComposerAttachmentStrip,
+  type ComposerAttachmentPreviewFrame,
+} from "./composer-attachment-strip";
 import { GlassSurface } from "./glass-surface";
 import { SFSymbol } from "./sf-symbol";
 import { ThemedText } from "./themed-text";
@@ -62,9 +67,41 @@ export interface ComposerContext {
 export interface ComposerSendOrigin {
   x: number;
   y: number;
+  /** Window coordinates of image thumbnails, in composer order. */
+  images: ComposerSendImageOrigin[];
+}
+
+export interface ComposerSendImageOrigin {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 const ATTACHMENT_BUTTON_REVEAL_MS = 80;
+const CAMERA_ATTACHMENT_TARGET_TIMEOUT_MS = 700;
+const COMPOSER_LAYOUT_TRANSITION = LinearTransition.springify()
+  .duration(340)
+  .dampingRatio(1);
+
+interface WindowMeasurable {
+  measureInWindow(callback: (x: number, y: number, width: number, height: number) => void): void;
+}
+
+function measureComposerView(
+  view: WindowMeasurable | null,
+): Promise<Omit<ComposerSendImageOrigin, "id"> | null> {
+  return new Promise((resolve) => {
+    if (!view) {
+      resolve(null);
+      return;
+    }
+    view.measureInWindow((x, y, width, height) => {
+      resolve(width > 0 && height > 0 ? { x, y, width, height } : null);
+    });
+  });
+}
 
 /**
  * The floating glass composer, in two rows like the Claude app's: the text on
@@ -119,15 +156,24 @@ export function ComposerBar({
   reservedTop?: number;
 }) {
   const accent = useProviderAccent(providerId);
-  const canSend = !disabled && !sending && value.trim().length > 0;
+  const canSend =
+    !disabled && !sending && (value.trim().length > 0 || attachments.length > 0);
   const inputRef = useRef<TextInput>(null);
   const attachmentButtonRef = useRef<View>(null);
+  const attachmentImageRefsRef = useRef(new Map<string, View>());
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [attachmentMenuVisible, setAttachmentMenuVisible] = useState(false);
   const [attachmentMenuAnchor, setAttachmentMenuAnchor] =
     useState<ComposerAttachmentMenuAnchor | null>(null);
   const attachmentMenuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attachmentSourceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cameraLandingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cameraLandingResolverRef = useRef<
+    ((frame: ComposerAttachmentPreviewFrame | null) => void) | null
+  >(null);
+  const [transitioningCameraAttachmentId, setTransitioningCameraAttachmentId] =
+    useState<string | null>(null);
+  const reduceMotion = useReducedMotion();
   const attachmentButtonOpacity = useSharedValue(1);
   const attachmentButtonAnimatedStyle = useAnimatedStyle(() => ({
     opacity: attachmentButtonOpacity.value,
@@ -141,6 +187,11 @@ export function ComposerBar({
       if (attachmentSourceTimerRef.current) {
         clearTimeout(attachmentSourceTimerRef.current);
       }
+      if (cameraLandingTimerRef.current) {
+        clearTimeout(cameraLandingTimerRef.current);
+      }
+      cameraLandingResolverRef.current?.(null);
+      cameraLandingResolverRef.current = null;
     },
     [],
   );
@@ -151,16 +202,25 @@ export function ComposerBar({
       onSend(null);
       return;
     }
-    input.measureInWindow((x, y, width, height) => {
-      if (width <= 0 || height <= 0) {
+    const imageAttachments = attachments.filter((attachment) => attachment.type === "image");
+    void Promise.all([
+      measureComposerView(input),
+      ...imageAttachments.map((attachment) =>
+        measureComposerView(attachmentImageRefsRef.current.get(attachment.id) ?? null),
+      ),
+    ]).then(([inputRect, ...imageRects]) => {
+      if (!inputRect) {
         onSend(null);
         return;
       }
       // Align the flying bubble's text with the input's text, accounting for
       // the two surfaces' different internal padding.
       onSend({
-        x: x + spacing.xs - spacing.md,
-        y: y + spacing.xs - spacing.ms,
+        x: inputRect.x + spacing.xs - spacing.md,
+        y: inputRect.y + spacing.xs - spacing.ms,
+        images: imageRects.flatMap((rect, index) =>
+          rect ? [{ id: imageAttachments[index].id, ...rect }] : [],
+        ),
       });
     });
   };
@@ -236,8 +296,41 @@ export function ComposerBar({
     }
   };
 
-  const addCameraPhoto = (capture: ComposerCameraCapture) => {
-    addPicked([composerAttachmentFromCamera(capture)]);
+  const resolveCameraLanding = (
+    frame: ComposerAttachmentPreviewFrame | null,
+  ) => {
+    if (cameraLandingTimerRef.current) {
+      clearTimeout(cameraLandingTimerRef.current);
+      cameraLandingTimerRef.current = null;
+    }
+    const resolve = cameraLandingResolverRef.current;
+    cameraLandingResolverRef.current = null;
+    resolve?.(frame);
+  };
+
+  const addCameraPhoto = (
+    capture: ComposerCameraCapture,
+  ): Promise<ComposerAttachmentPreviewFrame | null> => {
+    if (!onAttachmentsChange) return Promise.resolve(null);
+    const attachment = composerAttachmentFromCamera(capture);
+    resolveCameraLanding(null);
+
+    return new Promise((resolve) => {
+      cameraLandingResolverRef.current = resolve;
+      setTransitioningCameraAttachmentId(attachment.id);
+      onAttachmentsChange(mergeComposerAttachments(attachments, [attachment]));
+      setAttachmentError(null);
+      cameraLandingTimerRef.current = setTimeout(
+        () => resolveCameraLanding(null),
+        CAMERA_ATTACHMENT_TARGET_TIMEOUT_MS,
+      );
+    });
+  };
+
+  const finishCameraDismiss = () => {
+    resolveCameraLanding(null);
+    setTransitioningCameraAttachmentId(null);
+    closeAttachmentMenu(true);
   };
 
   const pickDocuments = async () => {
@@ -306,7 +399,8 @@ export function ComposerBar({
   };
 
   return (
-    <View
+    <Animated.View
+      layout={reduceMotion ? undefined : COMPOSER_LAYOUT_TRANSITION}
       style={{ paddingHorizontal: spacing.ms, gap: spacing.xs }}
       onLayout={(event) => setBarHeight(event.nativeEvent.layout.height)}
     >
@@ -327,8 +421,20 @@ export function ComposerBar({
       >
         <ComposerAttachmentStrip
           attachments={attachments}
+          onImageRef={(id, view) => {
+            if (view) attachmentImageRefsRef.current.set(id, view);
+            else attachmentImageRefsRef.current.delete(id);
+          }}
+          transitioningImageId={transitioningCameraAttachmentId}
+          onTransitioningImageLayout={(id, frame) => {
+            if (id === transitioningCameraAttachmentId) {
+              resolveCameraLanding(frame);
+            }
+          }}
           onRemove={(id) =>
-            onAttachmentsChange?.(attachments.filter((attachment) => attachment.id !== id))
+            onAttachmentsChange?.(
+              attachments.filter((attachment) => attachment.id !== id),
+            )
           }
         />
 
@@ -430,7 +536,7 @@ export function ComposerBar({
         anchor={attachmentMenuAnchor}
         includeFiles={providerId !== PROVIDER_IDS.codex}
         onDismiss={() => closeAttachmentMenu()}
-        onCameraDismiss={() => closeAttachmentMenu(true)}
+        onCameraDismiss={finishCameraDismiss}
         onSelect={chooseAttachmentSource}
         onCameraCapture={addCameraPhoto}
         onError={setAttachmentError}
@@ -449,7 +555,7 @@ export function ComposerBar({
           onClose={closeMenu}
         />
       ) : null}
-    </View>
+    </Animated.View>
   );
 }
 

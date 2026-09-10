@@ -30,6 +30,8 @@ export type TranscriptItem =
       /** Structured context the prompt carried — what its chips are drawn from. */
       skills: PromptSkill[];
       files: PromptFile[];
+      /** Image attachments shown above the user's text bubble. */
+      images: PromptImage[];
     }
   | { key: string; kind: "response"; text: string; at: number }
   | { key: string; kind: "tools"; calls: ToolCallRow[]; at: number }
@@ -40,6 +42,15 @@ export type TranscriptItem =
 export interface TranscriptImage {
   artifactId: number;
   fileName: string;
+}
+
+/** One image the user attached to a prompt, already reachable on this phone. */
+export interface PromptImage {
+  key: string;
+  name: string;
+  uri: string;
+  /** Presentation-only crop used by the camera's simulator fallback. */
+  previewCropBottom?: number;
 }
 
 /** Pre-fold shape: one entry per tool call or image, before consecutive ones merge. */
@@ -54,6 +65,7 @@ interface ArtifactMetadata {
   /** Present on a user prompt: the skills and files the composer attached. */
   skills?: unknown;
   files?: unknown;
+  attachments?: unknown;
   /** Present on an image: the file's own name, for a caption. */
   fileName?: unknown;
 }
@@ -90,17 +102,20 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
     case "thinking":
     case "prompt_suggestion":
       return null;
-    case "user-prompt":
-      return artifact.content
+    case "user-prompt": {
+      const images = promptImages(meta);
+      return artifact.content || images.length > 0
         ? {
             key,
             kind: "prompt",
-            text: artifact.content,
+            text: artifact.content ?? "",
             at,
             skills: promptSkills(meta),
             files: promptFiles(meta),
+            images,
           }
         : null;
+    }
     case "image": {
       const fileName =
         typeof meta.fileName === "string" && meta.fileName
@@ -132,6 +147,37 @@ function promptFiles(meta: ArtifactMetadata): PromptFile[] {
     if (!entry || typeof entry !== "object") continue;
     const path = (entry as { path?: unknown }).path;
     if (typeof path === "string" && path) out.push(promptFileFromPath(path));
+  }
+  return out;
+}
+
+/** Phone uploads return through prompt metadata as safe, self-contained data URLs. */
+function promptImages(meta: ArtifactMetadata): PromptImage[] {
+  if (!Array.isArray(meta.attachments)) return [];
+  const out: PromptImage[] = [];
+  for (const [index, entry] of meta.attachments.entries()) {
+    if (!entry || typeof entry !== "object") continue;
+    const attachment = entry as {
+      name?: unknown;
+      type?: unknown;
+      dataUrl?: unknown;
+    };
+    if (
+      attachment.type !== "image" ||
+      typeof attachment.dataUrl !== "string" ||
+      !attachment.dataUrl.startsWith("data:image/")
+    ) {
+      continue;
+    }
+    const name =
+      typeof attachment.name === "string" && attachment.name
+        ? attachment.name
+        : `image-${index + 1}`;
+    out.push({
+      key: `prompt-image:${index}:${name}`,
+      name,
+      uri: attachment.dataUrl,
+    });
   }
   return out;
 }

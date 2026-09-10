@@ -18,7 +18,11 @@ import {
 import { attachedSkills, composeGoal } from "@/lib/context-picker";
 import { projectedPromptLandingY } from "@/lib/prompt-flight";
 import type { PromptSkill } from "@/lib/prompt-chips";
-import { buildTranscript, type TranscriptItem } from "@/lib/transcript";
+import {
+  buildTranscript,
+  type PromptImage,
+  type TranscriptItem,
+} from "@/lib/transcript";
 import { transcriptActionState } from "@/lib/transcript-actions";
 import { buildTurnRows } from "@/lib/transcript-rows";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
@@ -41,6 +45,7 @@ import {
   TranscriptRow,
   type PromptBubbleRect,
   type PromptFlight,
+  type PromptMessageRect,
   type TranscriptActions,
 } from "./transcript-row";
 import { TranscriptTurn } from "./transcript-turn";
@@ -61,6 +66,8 @@ export interface PendingPrompt {
   skills: PromptSkill[];
   /** Where the text sat in the composer when Send was pressed. */
   origin?: ComposerSendOrigin | null;
+  /** Local sources keep image previews continuous until the Mac's copy arrives. */
+  attachments?: ComposerAttachment[];
 }
 
 /** A continuation drawn locally until the Mac's persisted prompt arrives. */
@@ -88,6 +95,17 @@ function nextPromptIndex(items: TranscriptItem[], count: number): number {
     seen++;
   }
   return -1;
+}
+
+function optimisticPromptImages(attachments: ComposerAttachment[] | undefined): PromptImage[] {
+  return (attachments ?? [])
+    .filter((attachment) => attachment.type === "image")
+    .map((attachment) => ({
+      key: attachment.id,
+      name: attachment.name,
+      uri: attachment.uri,
+      previewCropBottom: attachment.previewCropBottom,
+    }));
 }
 
 /**
@@ -209,7 +227,9 @@ export function RunView({
     pending?.origin ? (pending.sourceText ?? pending.text) : "",
   );
   const [contextSkills, setContextSkills] = useState<PromptSkill[]>([]);
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>(() =>
+    pending?.origin ? (pending.attachments ?? []) : [],
+  );
   const [sending, setSending] = useState(false);
   const [pendingContinuation, setPendingContinuation] = useState<PendingContinuation | null>(null);
   const [promptLaunch, setPromptLaunch] = useState<PromptLaunch | null>(() =>
@@ -241,7 +261,15 @@ export function RunView({
   const pendingItem = useMemo<Extract<TranscriptItem, { kind: "prompt" }> | null>(() => {
     const heldForLaunch = launchInProgress && promptLaunch?.key === "pending-prompt";
     if (!pending || (promptCount > 0 && !heldForLaunch)) return null;
-    return { key: "pending-prompt", kind: "prompt", text: pending.text, at: 0, skills: pending.skills, files: [] };
+    return {
+      key: "pending-prompt",
+      kind: "prompt",
+      text: pending.text,
+      at: 0,
+      skills: pending.skills,
+      files: [],
+      images: optimisticPromptImages(pending.attachments),
+    };
   }, [launchInProgress, pending, promptCount, promptLaunch?.key]);
 
   const thinking = useMemo(() => latestThinking(artifactQuery.data), [artifactQuery.data]);
@@ -267,6 +295,7 @@ export function RunView({
       at: Number.MAX_SAFE_INTEGER,
       skills: pendingContinuation.skills,
       files: [],
+      images: optimisticPromptImages(pendingContinuation.attachments),
     };
   }, [launchInProgress, pendingContinuation, promptCount, promptLaunch?.key, runId]);
 
@@ -289,7 +318,7 @@ export function RunView({
     setContextSkills([]);
     setAttachments([]);
   }, []);
-  const measurePromptDestination = (target: PromptBubbleRect) => {
+  const measurePromptDestination = (target: PromptMessageRect) => {
     const root = rootRef.current;
     if (!root) {
       clearComposerSource();
@@ -322,17 +351,50 @@ export function RunView({
           finalScrollOffset,
           reservedTop: reservedTargetTop,
         });
+        const projectedDeltaY = targetY - target.y;
+        const relativeTarget = (rect: PromptBubbleRect): PromptBubbleRect => ({
+          x: rect.x - rootX,
+          y: rect.y - rootY + projectedDeltaY,
+          width: rect.width,
+          height: rect.height,
+        });
         return {
           ...current,
           phase: "flying",
           flight: {
-            from: { x: current.origin.x - rootX, y: current.origin.y - rootY },
-            to: {
-              x: target.x - rootX,
-              y: targetY,
-              width: target.width,
-              height: target.height,
-            },
+            text: target.text
+              ? {
+                  from: {
+                    x: current.origin.x - rootX,
+                    y: current.origin.y - rootY,
+                    width: target.text.width,
+                    height: target.text.height,
+                  },
+                  to: relativeTarget(target.text),
+                }
+              : null,
+            images: target.images.map((imageTarget, index) => {
+              // Origins created before this media-aware send flow (for
+              // example during Fast Refresh) have no image list. Falling
+              // back to the text origin still completes the handoff.
+              const source = current.origin.images?.[index];
+              return {
+                from: source
+                  ? {
+                      x: source.x - rootX,
+                      y: source.y - rootY,
+                      width: source.width,
+                      height: source.height,
+                    }
+                  : {
+                      x: current.origin.x - rootX,
+                      y: current.origin.y - rootY,
+                      width: imageTarget.width,
+                      height: imageTarget.height,
+                    },
+                to: relativeTarget(imageTarget),
+              };
+            }),
           },
         };
       });
@@ -360,7 +422,15 @@ export function RunView({
 
   const send = async (origin: ComposerSendOrigin | null) => {
     const message = composeGoal(draft, contextSkills);
-    if (!message || !run || runIsLive || !connected || sending) return;
+    if (
+      (!message && attachments.length === 0) ||
+      !run ||
+      runIsLive ||
+      !connected ||
+      sending
+    ) {
+      return;
+    }
     const sentDraft = draft;
     const sentContextSkills = contextSkills;
     const sentSkills = attachedSkills(sentDraft, sentContextSkills);
@@ -378,13 +448,14 @@ export function RunView({
     try {
       const allowed = await requestConsent(backendId, run.providerId);
       if (!allowed) return;
-      const serializedAttachments = await serializeComposerAttachments(attachments);
+      const serializedAttachments = await serializeComposerAttachments(sentAttachments);
       setPendingContinuation({
         runId,
         text: message,
         sourceText: sentDraft,
         skills: sentSkills,
         origin,
+        attachments: sentAttachments,
         afterPromptCount: promptCount,
       });
       setPromptLaunch(
