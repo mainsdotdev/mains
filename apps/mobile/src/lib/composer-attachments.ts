@@ -18,6 +18,14 @@ export interface ComposerAttachment {
   uri: string;
   mimeType: string;
   size?: number;
+  /** Presentation-only crop for generated previews; never sent over the wire. */
+  previewCropBottom?: number;
+}
+
+export interface ComposerCameraCapture {
+  uri: string;
+  width: number;
+  height: number;
 }
 
 function imageMimeType(name: string, reportedType?: string | null): string {
@@ -79,20 +87,23 @@ export async function pickComposerImages(): Promise<ComposerAttachment[]> {
   return result.assets.map((asset, index) => imageAttachment(asset, index, "image"));
 }
 
-/** Take a single photo and return it in the same shape as library images. */
-export async function takeComposerPhoto(): Promise<ComposerAttachment[]> {
-  const permission = await ImagePicker.requestCameraPermissionsAsync();
-  if (!permission.granted) {
-    throw new Error("Camera access is required to take a photo.");
-  }
-
-  const result = await ImagePicker.launchCameraAsync({
-    mediaTypes: "images",
-    allowsEditing: false,
-    quality: 1,
-  });
-  if (result.canceled || result.assets.length === 0) return [];
-  return [imageAttachment(result.assets[0], 0, "photo")];
+/** Turn a photo captured by the inline camera into a composer attachment. */
+export function composerAttachmentFromCamera(
+  capture: ComposerCameraCapture,
+): ComposerAttachment {
+  const name = `photo-${Date.now()}.jpg`;
+  // expo-camera generates a 200×200 black test image with an orange timestamp
+  // when iOS Simulator has no video device. Crop that generated footer only;
+  // real camera captures keep their complete preview.
+  const isSimulatorFallback = capture.width === 200 && capture.height === 200;
+  return {
+    id: `image:${capture.uri}`,
+    name,
+    type: "image",
+    uri: capture.uri,
+    mimeType: "image/jpeg",
+    previewCropBottom: isSimulatorFallback ? 0.2 : undefined,
+  };
 }
 
 /** Pick the same document families the desktop composer accepts. */

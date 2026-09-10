@@ -1,5 +1,15 @@
+import { Camera } from "expo-camera";
 import * as Haptics from "expo-haptics";
-import { Modal, Platform, Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
+import { useRef, useState } from "react";
+import {
+  Keyboard,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import Animated, {
   FadeIn,
   FadeOut,
@@ -8,11 +18,14 @@ import Animated, {
   withTiming,
   type EntryExitAnimationFunction,
 } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { FullWindowOverlay } from "react-native-screens";
 
 import { colors, motion, radius, shadows, spacing } from "@/theme";
+import type { ComposerCameraCapture } from "@/lib/composer-attachments";
 
 import { GlassSurface } from "./glass-surface";
+import { ComposerCameraPanel, type ComposerCameraFrame } from "./composer-camera-panel";
 import { SFSymbol } from "./sf-symbol";
 import { ThemedText } from "./themed-text";
 
@@ -56,16 +69,25 @@ export function ComposerAttachmentMenu({
   anchor,
   includeFiles,
   onDismiss,
+  onCameraDismiss,
   onSelect,
+  onCameraCapture,
+  onError,
 }: {
   visible: boolean;
   anchor: ComposerAttachmentMenuAnchor | null;
   includeFiles: boolean;
   onDismiss: () => void;
+  onCameraDismiss: () => void;
   onSelect: (source: ComposerAttachmentSource) => void;
+  onCameraCapture: (capture: ComposerCameraCapture) => void;
+  onError: (message: string) => void;
 }) {
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const reduceMotion = useReducedMotion();
+  const openingCameraRef = useRef(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   if (!anchor) return null;
 
   const actions = includeFiles ? ALL_ACTIONS : ALL_ACTIONS.slice(0, 2);
@@ -78,6 +100,25 @@ export function ComposerAttachmentMenu({
   // control remain visibly underneath the glass instead of reading as a
   // detached popover above it.
   const top = anchor.y + anchor.height - height;
+  const menuFrame: ComposerCameraFrame = {
+    left,
+    top,
+    width: MENU_WIDTH,
+    height,
+  };
+  const cameraHorizontalInset = spacing.ms;
+  const cameraBottom = Math.max(insets.bottom, spacing.ms);
+  const cameraWidth = windowWidth - cameraHorizontalInset * 2;
+  const cameraHeight = Math.min(
+    cameraWidth * 1.32,
+    windowHeight - insets.top - cameraBottom - spacing.xl,
+  );
+  const cameraFrame: ComposerCameraFrame = {
+    left: cameraHorizontalInset,
+    top: windowHeight - cameraBottom - cameraHeight,
+    width: cameraWidth,
+    height: cameraHeight,
+  };
   const originX = anchor.x + anchor.width / 2 - left;
   const originY = anchor.y + anchor.height / 2 - top;
   const collapsedScaleX = anchor.width / MENU_WIDTH;
@@ -123,6 +164,29 @@ export function ComposerAttachmentMenu({
     ? FadeOut.duration(motion.fast)
     : collapseIntoButton;
 
+  const openCamera = async () => {
+    if (openingCameraRef.current) return;
+    openingCameraRef.current = true;
+    try {
+      const currentPermission = await Camera.getCameraPermissionsAsync();
+      const permission = currentPermission.granted
+        ? currentPermission
+        : await Camera.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        onError("Camera access is required to take a photo");
+        onDismiss();
+        return;
+      }
+      Keyboard.dismiss();
+      setCameraOpen(true);
+    } catch (caught) {
+      onError(caught instanceof Error ? caught.message : "Could not open the camera");
+      onDismiss();
+    } finally {
+      openingCameraRef.current = false;
+    }
+  };
+
   const content = (
     <View
       pointerEvents={visible ? "auto" : "none"}
@@ -133,14 +197,17 @@ export function ComposerAttachmentMenu({
         <Pressable
           accessibilityLabel="Close attachment menu"
           accessibilityRole="button"
+          disabled={cameraOpen}
           onPress={() => onDismiss()}
           style={StyleSheet.absoluteFill}
         />
       ) : null}
       {visible ? (
         <Animated.View
+          accessibilityElementsHidden={cameraOpen}
           entering={entering}
           exiting={exiting}
+          importantForAccessibility={cameraOpen ? "no-hide-descendants" : "auto"}
           style={{
             position: "absolute",
             zIndex: 1,
@@ -152,7 +219,9 @@ export function ComposerAttachmentMenu({
             borderCurve: "continuous",
             transformOrigin: [originX, originY, 0],
             boxShadow: shadows.overlay,
+            opacity: cameraOpen ? 0 : 1,
           }}
+          pointerEvents={cameraOpen ? "none" : "auto"}
         >
           <View
             style={{
@@ -192,7 +261,11 @@ export function ComposerAttachmentMenu({
                   accessibilityLabel={action.label}
                   onPress={() => {
                     void Haptics.selectionAsync();
-                    onSelect(action.id);
+                    if (action.id === "camera") {
+                      void openCamera();
+                    } else {
+                      onSelect(action.id);
+                    }
                   }}
                   style={({ pressed }) => ({
                     height: ROW_HEIGHT,
@@ -221,6 +294,16 @@ export function ComposerAttachmentMenu({
             </View>
           </View>
         </Animated.View>
+      ) : null}
+      {visible && cameraOpen ? (
+        <ComposerCameraPanel
+          source={menuFrame}
+          target={cameraFrame}
+          onCapture={onCameraCapture}
+          onReturnToMenu={() => setCameraOpen(false)}
+          onClose={onCameraDismiss}
+          onError={onError}
+        />
       ) : null}
     </View>
   );

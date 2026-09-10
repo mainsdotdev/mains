@@ -20,11 +20,12 @@ import {
 } from "@/lib/context-picker";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import {
+  composerAttachmentFromCamera,
   mergeComposerAttachments,
   pickComposerDocuments,
   pickComposerImages,
-  takeComposerPhoto,
   type ComposerAttachment,
+  type ComposerCameraCapture,
 } from "@/lib/composer-attachments";
 import type { PromptSkill } from "@/lib/prompt-chips";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
@@ -235,12 +236,8 @@ export function ComposerBar({
     }
   };
 
-  const takePhoto = async () => {
-    try {
-      addPicked(await takeComposerPhoto());
-    } catch (caught) {
-      setAttachmentError(caught instanceof Error ? caught.message : "Could not open the camera");
-    }
+  const addCameraPhoto = (capture: ComposerCameraCapture) => {
+    addPicked([composerAttachmentFromCamera(capture)]);
   };
 
   const pickDocuments = async () => {
@@ -277,12 +274,14 @@ export function ComposerBar({
     });
   };
 
-  const closeAttachmentMenu = () => {
+  const closeAttachmentMenu = (direct = false) => {
     setAttachmentMenuVisible(false);
     cancelAnimation(attachmentButtonOpacity);
     attachmentButtonOpacity.set(
       withDelay(
-        COMPOSER_ATTACHMENT_MENU_COLLAPSE_MS - ATTACHMENT_BUTTON_REVEAL_MS,
+        direct
+          ? 0
+          : COMPOSER_ATTACHMENT_MENU_COLLAPSE_MS - ATTACHMENT_BUTTON_REVEAL_MS,
         withTiming(1, { duration: ATTACHMENT_BUTTON_REVEAL_MS }),
       ),
     );
@@ -292,7 +291,7 @@ export function ComposerBar({
     attachmentMenuCloseTimerRef.current = setTimeout(() => {
       setAttachmentMenuAnchor(null);
       attachmentMenuCloseTimerRef.current = null;
-    }, COMPOSER_ATTACHMENT_MENU_CLOSE_MS);
+    }, direct ? ATTACHMENT_BUTTON_REVEAL_MS : COMPOSER_ATTACHMENT_MENU_CLOSE_MS);
   };
 
   const chooseAttachmentSource = (source: ComposerAttachmentSource) => {
@@ -301,7 +300,6 @@ export function ComposerBar({
     closeAttachmentMenu();
     attachmentSourceTimerRef.current = setTimeout(() => {
       attachmentSourceTimerRef.current = null;
-      if (source === "camera") void takePhoto();
       if (source === "photos") void pickImages();
       if (source === "files") void pickDocuments();
     }, COMPOSER_ATTACHMENT_MENU_CLOSE_MS);
@@ -327,6 +325,13 @@ export function ComposerBar({
           gap: spacing.sm,
         }}
       >
+        <ComposerAttachmentStrip
+          attachments={attachments}
+          onRemove={(id) =>
+            onAttachmentsChange?.(attachments.filter((attachment) => attachment.id !== id))
+          }
+        />
+
         <TextInput
           ref={inputRef}
           accessibilityLabel="Message"
@@ -347,13 +352,6 @@ export function ComposerBar({
             },
           ]}
           value={value}
-        />
-
-        <ComposerAttachmentStrip
-          attachments={attachments}
-          onRemove={(id) =>
-            onAttachmentsChange?.(attachments.filter((attachment) => attachment.id !== id))
-          }
         />
 
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
@@ -432,7 +430,10 @@ export function ComposerBar({
         anchor={attachmentMenuAnchor}
         includeFiles={providerId !== PROVIDER_IDS.codex}
         onDismiss={() => closeAttachmentMenu()}
+        onCameraDismiss={() => closeAttachmentMenu(true)}
         onSelect={chooseAttachmentSource}
+        onCameraCapture={addCameraPhoto}
+        onError={setAttachmentError}
       />
 
       {context ? (

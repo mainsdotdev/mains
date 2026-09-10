@@ -3,7 +3,7 @@ import type { ConfigContext, ExpoConfig } from "expo/config";
 type AppVariant = "development" | "preview" | "production";
 
 const CAMERA_PERMISSION =
-  "Mains uses the camera to scan a pairing code shown on your Mac.";
+  "Mains uses the camera to scan pairing codes and attach photos to your runs.";
 
 const VARIANTS: Record<
   AppVariant,
