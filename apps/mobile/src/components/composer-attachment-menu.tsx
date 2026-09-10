@@ -23,6 +23,7 @@ import { FullWindowOverlay } from "react-native-screens";
 
 import { colors, motion, radius, shadows, spacing } from "@/theme";
 import type { ComposerCameraCapture } from "@/lib/composer-attachments";
+import { dismissKeyboardAndWait } from "@/lib/keyboard-transition";
 
 import { GlassSurface } from "./glass-surface";
 import { ComposerCameraPanel, type ComposerCameraFrame } from "./composer-camera-panel";
@@ -170,6 +171,10 @@ export function ComposerAttachmentMenu({
     if (openingCameraRef.current) return;
     openingCameraRef.current = true;
     try {
+      // `Keyboard.dismiss()` only starts iOS's dismissal animation. Wait for
+      // its completion before mounting the bottom-anchored camera, otherwise
+      // both surfaces occupy the screen for the first camera frames.
+      await dismissKeyboardAndWait(Keyboard);
       const currentPermission = await Camera.getCameraPermissionsAsync();
       const permission = currentPermission.granted
         ? currentPermission
@@ -179,7 +184,6 @@ export function ComposerAttachmentMenu({
         onDismiss();
         return;
       }
-      Keyboard.dismiss();
       setCameraOpen(true);
     } catch (caught) {
       onError(caught instanceof Error ? caught.message : "Could not open the camera");
