@@ -1,5 +1,6 @@
 import { Camera } from "expo-camera";
 import * as Haptics from "expo-haptics";
+import * as MediaLibrary from "expo-media-library";
 import { useRef, useState } from "react";
 import {
   Keyboard,
@@ -11,7 +12,6 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Animated, {
-  FadeIn,
   FadeOut,
   useReducedMotion,
   withSpring,
@@ -27,6 +27,7 @@ import { dismissKeyboardAndWait } from "@/lib/keyboard-transition";
 
 import { GlassSurface } from "./glass-surface";
 import { ComposerCameraPanel, type ComposerCameraFrame } from "./composer-camera-panel";
+import { ComposerPhotosPanel } from "./composer-photos-panel";
 import { SFSymbol } from "./sf-symbol";
 import { ThemedText } from "./themed-text";
 
@@ -68,30 +69,58 @@ const ALL_ACTIONS: {
 export function ComposerAttachmentMenu({
   visible,
   anchor,
+  accent,
   includeFiles,
   onDismiss,
   onCameraDismiss,
+  onPanelDismiss,
   onSelect,
   onCameraCapture,
+  onPhotosAdd,
   onError,
 }: {
   visible: boolean;
   anchor: ComposerAttachmentMenuAnchor | null;
+  /** Tints the photo grid's selection, as it tints the send button. */
+  accent: string;
   includeFiles: boolean;
   onDismiss: () => void;
   onCameraDismiss: () => void;
+  /** Closes the menu outright, with no reverse morph, after a panel is done. */
+  onPanelDismiss: () => void;
   onSelect: (source: ComposerAttachmentSource) => void;
   onCameraCapture: (
     capture: ComposerCameraCapture,
   ) => Promise<ComposerCameraFrame | null>;
+  onPhotosAdd: (assetIds: string[]) => Promise<void>;
   onError: (message: string) => void;
 }) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const reduceMotion = useReducedMotion();
   const openingCameraRef = useRef(false);
+  const openingPhotosRef = useRef(false);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [photosOpen, setPhotosOpen] = useState(false);
+
+  // A panel that dismissed the whole menu never gets to unset its own flag —
+  // the menu is only ever hidden, not unmounted, so without this the next tap
+  // on the + would reopen straight into the camera or the grid. Reset while
+  // rendering rather than in an effect: React re-runs this pass before it
+  // paints, so the menu is never shown for a frame with a stale panel over it.
+  const [wasVisible, setWasVisible] = useState(visible);
+  if (wasVisible !== visible) {
+    setWasVisible(visible);
+    if (!visible) {
+      setCameraOpen(false);
+      setPhotosOpen(false);
+    }
+  }
+
   if (!anchor) return null;
+
+  /** Either expanded panel: the menu itself is put away for both. */
+  const panelOpen = cameraOpen || photosOpen;
 
   const actions = includeFiles ? ALL_ACTIONS : ALL_ACTIONS.slice(0, 2);
   const height = actions.length * ROW_HEIGHT + MENU_PADDING * 2;
@@ -109,33 +138,36 @@ export function ComposerAttachmentMenu({
     width: MENU_WIDTH,
     height,
   };
-  const cameraHorizontalInset = spacing.ms;
-  const cameraBottom = Math.max(insets.bottom, spacing.ms);
-  const cameraWidth = windowWidth - cameraHorizontalInset * 2;
-  const cameraHeight = Math.min(
-    cameraWidth * 1.32,
-    windowHeight - insets.top - cameraBottom - spacing.xl,
+  const panelHorizontalInset = spacing.ms;
+  const panelBottom = Math.max(insets.bottom, spacing.ms);
+  const panelWidth = windowWidth - panelHorizontalInset * 2;
+  const panelHeight = Math.min(
+    panelWidth * 1.32,
+    windowHeight - insets.top - panelBottom - spacing.xl,
   );
-  const cameraFrame: ComposerCameraFrame = {
-    left: cameraHorizontalInset,
-    top: windowHeight - cameraBottom - cameraHeight,
-    width: cameraWidth,
-    height: cameraHeight,
+  const panelFrame: ComposerCameraFrame = {
+    left: panelHorizontalInset,
+    top: windowHeight - panelBottom - panelHeight,
+    width: panelWidth,
+    height: panelHeight,
   };
   const originX = anchor.x + anchor.width / 2 - left;
   const originY = anchor.y + anchor.height / 2 - top;
   const collapsedScaleX = anchor.width / MENU_WIDTH;
   const collapsedScaleY = anchor.height / height;
+  // Deliberately scale-only. Any alpha below 1 makes UIKit composite the
+  // subtree offscreen, and the native glass inside it loses its backdrop for
+  // the life of the surface rather than for the length of the animation — the
+  // panel then stays see-through until it is unmounted. The exit below may
+  // still fade, because that view is torn down the moment it finishes.
   const expandFromButton: EntryExitAnimationFunction = () => {
     "worklet";
     const spring = { duration: 230, dampingRatio: 1 };
     return {
       initialValues: {
-        opacity: 0.5,
         transform: [{ scaleX: collapsedScaleX }, { scaleY: collapsedScaleY }],
       },
       animations: {
-        opacity: withTiming(1, { duration: motion.fast }),
         transform: [
           { scaleX: withSpring(1, spring) },
           { scaleY: withSpring(1, spring) },
@@ -160,9 +192,11 @@ export function ComposerAttachmentMenu({
       },
     };
   };
-  const entering = reduceMotion
-    ? FadeIn.duration(motion.fast)
-    : expandFromButton;
+  // Reduce Motion gets no entrance rather than a cross-fade: a fade that
+  // starts at opacity 0 is the one case expo-glass-effect calls out as leaving
+  // the glass unrendered, and an instant menu is the more literal reading of
+  // the setting anyway. The exit still fades — that view is going away.
+  const entering = reduceMotion ? undefined : expandFromButton;
   const exiting = reduceMotion
     ? FadeOut.duration(motion.fast)
     : collapseIntoButton;
@@ -193,6 +227,33 @@ export function ComposerAttachmentMenu({
     }
   };
 
+  const openPhotos = async () => {
+    if (openingPhotosRef.current) return;
+    openingPhotosRef.current = true;
+    try {
+      await dismissKeyboardAndWait(Keyboard);
+      const currentPermission = await MediaLibrary.getPermissionsAsync();
+      const permission = currentPermission.granted
+        ? currentPermission
+        : await MediaLibrary.requestPermissionsAsync();
+      // Refusing library access is not a dead end. The system picker runs out
+      // of process and needs no permission at all, so a "no" here falls back
+      // to it rather than leaving the row inert.
+      if (!permission.granted) {
+        onSelect("photos");
+        return;
+      }
+      // `limited` is left as it is: the grid then shows only the photos iOS
+      // shared, and the panel's own All Photos control reaches the rest.
+      setPhotosOpen(true);
+    } catch (caught) {
+      onError(caught instanceof Error ? caught.message : "Could not open your photos");
+      onSelect("photos");
+    } finally {
+      openingPhotosRef.current = false;
+    }
+  };
+
   const content = (
     <View
       pointerEvents={visible ? "auto" : "none"}
@@ -203,21 +264,22 @@ export function ComposerAttachmentMenu({
         <Pressable
           accessibilityLabel="Close attachment menu"
           accessibilityRole="button"
-          disabled={cameraOpen}
+          disabled={panelOpen}
           onPress={() => onDismiss()}
           style={StyleSheet.absoluteFill}
         />
       ) : null}
       {visible ? (
         <Animated.View
-          accessibilityElementsHidden={cameraOpen}
+          accessibilityElementsHidden={panelOpen}
           entering={entering}
-          // The menu stays mounted, but hidden, behind the camera so the back
-          // control can restore it. A direct camera dismissal must not run the
-          // menu's reverse morph: that exit animation starts at opacity 1 and
-          // would flash the menu before collapsing it into the + button.
-          exiting={cameraOpen ? undefined : exiting}
-          importantForAccessibility={cameraOpen ? "no-hide-descendants" : "auto"}
+          // The frame stays mounted, without its material, behind the camera
+          // so the back control can restore it. A direct camera dismissal must
+          // not run the menu's reverse morph: that exit animation starts at
+          // opacity 1 and would flash the menu before collapsing it into the
+          // + button.
+          exiting={panelOpen ? undefined : exiting}
+          importantForAccessibility={panelOpen ? "no-hide-descendants" : "auto"}
           style={{
             position: "absolute",
             zIndex: 1,
@@ -228,90 +290,109 @@ export function ComposerAttachmentMenu({
             borderRadius: radius.xl + 8,
             borderCurve: "continuous",
             transformOrigin: [originX, originY, 0],
-            boxShadow: shadows.overlay,
-            opacity: cameraOpen ? 0 : 1,
+            // The material below is unmounted while the camera is up, so the
+            // shadow is all that would still draw. Hiding the panel with
+            // `opacity: 0` instead would cost it its glass permanently.
+            boxShadow: panelOpen ? undefined : shadows.overlay,
           }}
-          pointerEvents={cameraOpen ? "none" : "auto"}
+          pointerEvents={panelOpen ? "none" : "auto"}
         >
-          <View
-            style={{
-              flex: 1,
-              borderRadius: radius.xl + 8,
-              borderCurve: "continuous",
-              overflow: "hidden",
-            }}
-          >
-            {/* Native Liquid Glass can briefly miss its backdrop when a new
-                window-overlay surface is scaled on its mounting frame. This
-                adaptive material backing keeps the panel legible while the
-                native refraction layer initializes (and if it ever drops a
-                compositor frame). */}
+          {panelOpen ? null : (
             <View
-              pointerEvents="none"
-              style={[
-                StyleSheet.absoluteFill,
-                { backgroundColor: colors.secondarySystemBackground, opacity: 0.72 },
-              ]}
-            />
-            <GlassSurface
-              effect="regular"
-              style={[
-                StyleSheet.absoluteFill,
-                {
-                  borderRadius: radius.xl + 8,
-                  borderCurve: "continuous",
-                },
-              ]}
-            />
-            <View style={{ paddingVertical: MENU_PADDING }}>
-              {actions.map((action) => (
-                <Pressable
-                  key={action.id}
-                  accessibilityRole="button"
-                  accessibilityLabel={action.label}
-                  onPress={() => {
-                    void Haptics.selectionAsync();
-                    if (action.id === "camera") {
-                      void openCamera();
-                    } else {
-                      onSelect(action.id);
-                    }
-                  }}
-                  style={({ pressed }) => ({
-                    height: ROW_HEIGHT,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: spacing.ms,
-                    paddingHorizontal: spacing.md,
-                    backgroundColor: pressed ? colors.fill : "transparent",
-                  })}
-                >
-                  <View
-                    style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: radius.full,
-                      backgroundColor: colors.fill,
-                      alignItems: "center",
-                      justifyContent: "center",
+              style={{
+                flex: 1,
+                borderRadius: radius.xl + 8,
+                borderCurve: "continuous",
+                overflow: "hidden",
+              }}
+            >
+              {/* The panel never leans on the native glass for its coverage.
+                  Liquid Glass has no backdrop to refract inside a window overlay
+                  until it initializes, and gives one up for good the moment an
+                  ancestor is composited at less than full opacity, so an opaque
+                  material sits below it: the worst case is then a flat card
+                  rather than a transparent one. */}
+              <View
+                pointerEvents="none"
+                style={[
+                  StyleSheet.absoluteFill,
+                  { backgroundColor: colors.secondarySystemBackground },
+                ]}
+              />
+              <GlassSurface
+                effect="regular"
+                style={[
+                  StyleSheet.absoluteFill,
+                  {
+                    borderRadius: radius.xl + 8,
+                    borderCurve: "continuous",
+                  },
+                ]}
+              />
+              <View style={{ paddingVertical: MENU_PADDING }}>
+                {actions.map((action) => (
+                  <Pressable
+                    key={action.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={action.label}
+                    onPress={() => {
+                      void Haptics.selectionAsync();
+                      if (action.id === "camera") {
+                        void openCamera();
+                      } else if (action.id === "photos") {
+                        void openPhotos();
+                      } else {
+                        onSelect(action.id);
+                      }
                     }}
+                    style={({ pressed }) => ({
+                      height: ROW_HEIGHT,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: spacing.ms,
+                      paddingHorizontal: spacing.md,
+                      backgroundColor: pressed ? colors.fill : "transparent",
+                    })}
                   >
-                    <SFSymbol name={action.icon} size={20} tint={colors.label} />
-                  </View>
-                  <ThemedText variant="body">{action.label}</ThemedText>
-                </Pressable>
-              ))}
+                    <View
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: radius.full,
+                        backgroundColor: colors.fill,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <SFSymbol name={action.icon} size={20} tint={colors.label} />
+                    </View>
+                    <ThemedText variant="body">{action.label}</ThemedText>
+                  </Pressable>
+                ))}
+              </View>
             </View>
-          </View>
+          )}
         </Animated.View>
       ) : null}
       {visible && cameraOpen ? (
         <ComposerCameraPanel
           source={menuFrame}
-          target={cameraFrame}
+          target={panelFrame}
           onCapture={onCameraCapture}
           onReturnToMenu={() => setCameraOpen(false)}
           onClose={onCameraDismiss}
+          onError={onError}
+        />
+      ) : null}
+      {visible && photosOpen ? (
+        <ComposerPhotosPanel
+          source={menuFrame}
+          target={panelFrame}
+          accent={accent}
+          onAdd={onPhotosAdd}
+          onOpenSystemPicker={() => onSelect("photos")}
+          onReturnToMenu={() => setPhotosOpen(false)}
+          onClose={onPanelDismiss}
           onError={onError}
         />
       ) : null}

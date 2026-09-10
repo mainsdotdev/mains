@@ -5,6 +5,11 @@ type AppVariant = "development" | "preview" | "production";
 const CAMERA_PERMISSION =
   "Mains uses the camera to scan pairing codes and attach photos to your runs.";
 
+// expo-image-picker and expo-media-library both write
+// `NSPhotoLibraryUsageDescription`; whichever plugin runs last wins, so they
+// share one string rather than racing to describe the same prompt differently.
+const PHOTOS_PERMISSION = "Mains lets you select photos to attach to a run.";
+
 const VARIANTS: Record<
   AppVariant,
   { appName: string; identifier: string; scheme: string }
@@ -74,10 +79,21 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-image-picker",
         {
-          photosPermission:
-            "Mains lets you select photos to attach to a run.",
+          photosPermission: PHOTOS_PERMISSION,
           cameraPermission: CAMERA_PERMISSION,
           microphonePermission: false,
+        },
+      ],
+      [
+        "expo-media-library",
+        {
+          photosPermission: PHOTOS_PERMISSION,
+          // Nothing in the app writes to the library.
+          savePhotosPermission: false,
+          // The composer's own grid carries an "All Photos" control that opens
+          // the system picker, so limited access is never a dead end and iOS
+          // does not need to raise its own alert about it on every launch.
+          preventAutomaticLimitedAccessAlert: true,
         },
       ],
       [

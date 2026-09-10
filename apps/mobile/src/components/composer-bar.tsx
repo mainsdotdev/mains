@@ -23,6 +23,7 @@ import {
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import {
   composerAttachmentFromCamera,
+  composerAttachmentsFromLibrary,
   mergeComposerAttachments,
   pickComposerDocuments,
   pickComposerImages,
@@ -288,6 +289,10 @@ export function ComposerBar({
     setAttachmentError(null);
   };
 
+  const addLibraryPhotos = async (assetIds: string[]) => {
+    addPicked(await composerAttachmentsFromLibrary(assetIds));
+  };
+
   const pickImages = async () => {
     try {
       addPicked(await pickComposerImages());
@@ -534,11 +539,14 @@ export function ComposerBar({
       <ComposerAttachmentMenu
         visible={attachmentMenuVisible}
         anchor={attachmentMenuAnchor}
+        accent={accent}
         includeFiles={providerId !== PROVIDER_IDS.codex}
         onDismiss={() => closeAttachmentMenu()}
         onCameraDismiss={finishCameraDismiss}
+        onPanelDismiss={() => closeAttachmentMenu(true)}
         onSelect={chooseAttachmentSource}
         onCameraCapture={addCameraPhoto}
+        onPhotosAdd={addLibraryPhotos}
         onError={setAttachmentError}
       />
 

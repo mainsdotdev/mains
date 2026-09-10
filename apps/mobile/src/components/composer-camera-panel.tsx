@@ -15,10 +15,9 @@ import Animated, {
 } from "react-native-reanimated";
 
 import type { ComposerCameraCapture } from "@/lib/composer-attachments";
-import { colors, motion, radius, shadows, spacing } from "@/theme";
+import { motion, radius, shadows, spacing } from "@/theme";
 
-import { GlassSurface } from "./glass-surface";
-import { SFSymbol } from "./sf-symbol";
+import { ComposerPanelControl } from "./composer-panel-control";
 
 export interface ComposerCameraFrame {
   left: number;
@@ -254,13 +253,13 @@ export function ComposerCameraPanel({
         pointerEvents={capturing ? "none" : "box-none"}
         style={[{ position: "absolute", inset: 0 }, controlsStyle]}
       >
-        <CameraControl
+        <ComposerPanelControl
           label="Back to attachment menu"
           icon="chevron.left"
           onPress={() => collapse(onReturnToMenu)}
           style={{ left: spacing.md, bottom: spacing.md }}
         />
-        <CameraControl
+        <ComposerPanelControl
           label={flashEnabled ? "Turn flash off" : "Turn flash on"}
           icon={flashEnabled ? "bolt.fill" : "bolt.slash.fill"}
           onPress={() => {
@@ -269,7 +268,7 @@ export function ComposerCameraPanel({
           }}
           style={{ right: spacing.md, bottom: 168 }}
         />
-        <CameraControl
+        <ComposerPanelControl
           label="Flip camera"
           icon="arrow.triangle.2.circlepath"
           onPress={() => {
@@ -278,7 +277,7 @@ export function ComposerCameraPanel({
           }}
           style={{ right: spacing.md, bottom: 92 }}
         />
-        <CameraControl
+        <ComposerPanelControl
           label="Close camera"
           icon="xmark"
           onPress={closeFromCamera}
@@ -317,47 +316,5 @@ export function ComposerCameraPanel({
         </Pressable>
       </Animated.View>
     </Animated.View>
-  );
-}
-
-function CameraControl({
-  label,
-  icon,
-  onPress,
-  style,
-}: {
-  label: string;
-  icon: string;
-  onPress: () => void;
-  style: { left?: number; right?: number; bottom: number };
-}) {
-  return (
-    <GlassSurface
-      effect="clear"
-      interactive
-      style={{
-        position: "absolute",
-        ...style,
-        width: 56,
-        height: 56,
-        borderRadius: radius.full,
-        overflow: "hidden",
-        backgroundColor: "rgba(0, 0, 0, 0.28)",
-      }}
-    >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={onPress}
-        style={({ pressed }) => ({
-          flex: 1,
-          alignItems: "center",
-          justifyContent: "center",
-          opacity: pressed ? 0.65 : 1,
-        })}
-      >
-        <SFSymbol name={icon} size={23} tint={colors.onTint} />
-      </Pressable>
-    </GlassSurface>
   );
 }

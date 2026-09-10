@@ -1,6 +1,7 @@
 import * as Clipboard from "expo-clipboard";
 import { File, Paths } from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
+import { Asset as MediaLibraryAsset } from "expo-media-library";
 
 import type { FileAttachment } from "@mains/contracts/runs";
 
@@ -85,6 +86,46 @@ export async function pickComposerImages(): Promise<ComposerAttachment[]> {
   if (result.canceled) return [];
 
   return result.assets.map((asset, index) => imageAttachment(asset, index, "image"));
+}
+
+/**
+ * Turn photos chosen in the composer's own grid into attachments.
+ *
+ * The grid works in `ph://` ids; `getInfo()` is what resolves one to a real
+ * file, pulling the iCloud original down first when the phone only holds a
+ * thumbnail. That URL points inside the Photos container and is promised only
+ * for as long as the content-editing input behind it lives, while attachments
+ * are read at send time — minutes later — so each photo is copied into the
+ * cache first, leaving the pipeline the app-owned file it already gets from
+ * the system picker.
+ */
+export async function composerAttachmentsFromLibrary(
+  assetIds: string[],
+): Promise<ComposerAttachment[]> {
+  return Promise.all(
+    assetIds.map(async (assetId, index) => {
+      const info = await new MediaLibraryAsset(assetId).getInfo();
+      // `ImagePicker` reports the same photo as a bare local identifier, so the
+      // scheme comes off here: picking one photo from both the grid and the
+      // system picker then merges into a single attachment rather than two.
+      const localIdentifier = assetId.replace(/^ph:\/\//, "");
+      const name =
+        info.filename?.trim() || `photo-${Date.now()}-${index + 1}.jpg`;
+      const cached = new File(
+        Paths.cache,
+        `library-${localIdentifier.replace(/[^A-Za-z0-9._-]/g, "-")}-${name}`,
+      );
+      if (!cached.exists) await new File(info.uri).copy(cached);
+      return {
+        id: `image:${localIdentifier}`,
+        name,
+        type: "image" as const,
+        uri: cached.uri,
+        mimeType: imageMimeType(name),
+        size: cached.size ?? undefined,
+      };
+    }),
+  );
 }
 
 /** Turn a photo captured by the inline camera into a composer attachment. */
