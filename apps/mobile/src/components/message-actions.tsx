@@ -64,7 +64,7 @@ export function MessageActions({
   };
 
   return (
-    <View style={{ flexDirection: "row", alignItems: "center",}}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.ms }}>
       <ActionButton accessibilityLabel="Copy to clipboard" onPress={() => void copy()}>
         {copied ? (
           <CheckIcon size={18} color={colors.secondaryLabel} />
@@ -113,11 +113,9 @@ function ActionButton({
         flexDirection: "row",
         alignItems: "center",
         gap: spacing.xs,
-        paddingVertical: spacing.sm,
-        paddingHorizontal: spacing.sm,
-        borderRadius: radius.full,
+        paddingVertical: spacing.xs + 2,
+        borderRadius: radius.md,
         borderCurve: "continuous",
-        backgroundColor: pressed ? colors.fill : "transparent",
         opacity: unavailable ? 0.5 : 1,
       })}
     >

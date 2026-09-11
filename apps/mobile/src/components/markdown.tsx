@@ -8,8 +8,10 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { parseMarkdown, type Block, type Inline, type ListItem } from "@/lib/markdown";
+import { prepareMathMarkdown } from "@/lib/math-markdown";
 import { colors, motion, radius, spacing, useBrandColors } from "@/theme";
 
+import MathMarkdown from "./math-markdown";
 import { SFSymbol } from "./sf-symbol";
 import { ThemedText } from "./themed-text";
 
@@ -29,6 +31,11 @@ export function Markdown({
   /** Fade only the word currently being revealed by a live response. */
   animateTail?: boolean;
 }) {
+  const preparedMath = prepareMathMarkdown(source);
+  if (preparedMath.hasMath) {
+    return <MathMarkdown source={preparedMath.source} />;
+  }
+
   const blocks = parseMarkdown(source);
   const tailNode = animateTail ? lastInlineLeafOfLastBlock(blocks) : null;
   return <BlockList blocks={blocks} tailNode={tailNode} />;

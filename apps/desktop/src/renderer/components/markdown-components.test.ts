@@ -3,10 +3,9 @@
 import { createElement } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, it, expect, vi } from "vitest";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
-import { isRemoteImageSrc, markdownComponents } from "./markdown-components";
+import { AgentMarkdown } from "./agent-markdown";
+import { isRemoteImageSrc } from "./markdown-components";
 
 vi.mock("@/features/workspace/hooks/use-open-file-in-editor", () => ({
   useOpenFileInEditor: () => vi.fn(),
@@ -15,13 +14,7 @@ vi.mock("@/features/workspace/hooks/use-open-file-in-editor", () => ({
 afterEach(cleanup);
 
 function renderMarkdown(source: string) {
-  return render(
-    createElement(ReactMarkdown, {
-      remarkPlugins: [remarkGfm],
-      components: markdownComponents,
-      children: source,
-    } as never),
-  );
+  return render(createElement(AgentMarkdown, null, source));
 }
 
 // Only network URLs can act as exfiltration beacons — everything else
@@ -81,6 +74,44 @@ describe("markdownComponents / code", () => {
     expect(code.tagName).toBe("CODE");
     expect(code.closest("pre")).toBeNull();
     expect(code.className).toContain("rounded");
+  });
+});
+
+describe("assistant markdown / math", () => {
+  it("typesets bracket-delimited display LaTeX instead of exposing its source", () => {
+    const { container } = renderMarkdown(
+      String.raw`\[\rho\left(\frac{\partial \mathbf{u}}{\partial t}\right)=-\nabla p\]`,
+    );
+
+    const displayMath = container.querySelector(".katex-display");
+    expect(displayMath).not.toBeNull();
+    expect(container.querySelector(".katex-html")?.textContent).toContain("ρ");
+    expect(displayMath?.parentElement?.classList.contains("text-primary-900")).toBe(true);
+    expect(displayMath?.parentElement?.classList.contains("dark:text-primary-100")).toBe(true);
+  });
+
+  it("typesets parenthesis-delimited inline LaTeX inside prose", () => {
+    const { container } = renderMarkdown(
+      String.raw`Velocity \(\mathbf{u}\) and density \(\rho\).`,
+    );
+
+    expect(container.querySelectorAll(".katex")).toHaveLength(2);
+    expect(container.querySelector(".katex-display")).toBeNull();
+  });
+
+  it("leaves LaTeX delimiters literal inside code", () => {
+    const { container } = renderMarkdown(
+      [
+        "Inline `" + String.raw`\(x\)` + "` and fenced:",
+        "",
+        "```",
+        String.raw`\[y\]`,
+        "```",
+      ].join("\n"),
+    );
+
+    expect(container.querySelector(".katex")).toBeNull();
+    expect(container.querySelector("pre code")?.textContent).toContain("\\[y\\]");
   });
 });
 

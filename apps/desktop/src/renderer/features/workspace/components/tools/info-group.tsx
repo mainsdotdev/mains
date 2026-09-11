@@ -1,7 +1,5 @@
 import { memo, useMemo, useState, useEffect, useRef, type MouseEvent } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { markdownComponents } from "@/components/markdown-components";
+import { AgentMarkdown } from "@/components/agent-markdown";
 import type { EventGroup } from "../../lib/group-events";
 import { Code } from "@/components/ui/icons/space";
 import {
@@ -677,14 +675,9 @@ function ArtifactBody({
   return (
     <div className="overflow-hidden">
       <div className="prose prose-sm dark:prose-invert max-w-none relative">
-        <div className={isStreaming ? "streaming-text" : undefined}>
-          <ReactMarkdown
-            components={markdownComponents}
-            remarkPlugins={[remarkGfm]}
-          >
-            {displayContent}
-          </ReactMarkdown>
-        </div>
+        <AgentMarkdown className={isStreaming ? "streaming-text" : undefined}>
+          {displayContent}
+        </AgentMarkdown>
       </div>
       {visibleImages.length > 0 && (
         <div className="mt-3 flex flex-col gap-3">

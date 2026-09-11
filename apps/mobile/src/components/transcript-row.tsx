@@ -17,6 +17,7 @@ import Animated, {
 
 import { parsePromptContent } from "@/lib/prompt-chips";
 import type { PromptImage, TranscriptItem } from "@/lib/transcript";
+import { useSmoothText } from "@/lib/use-smooth-text";
 import { colors, motion, radius, spacing, useProviderAccent } from "@/theme";
 
 import { ImageGallery } from "./artifact-image";
@@ -155,7 +156,7 @@ function AgentMessage({
 
   return (
     <View style={{ gap: spacing.xs }}>
-      <Markdown source={item.text} />
+      {isLiveResponse ? <StreamingMarkdown source={item.text} /> : <Markdown source={item.text} />}
       {showActions ? (
         <MessageActions
           text={turn?.text ?? item.text}
@@ -165,6 +166,12 @@ function AgentMessage({
       ) : null}
     </View>
   );
+}
+
+/** Mounted only for the live response, so settled history never replays the reveal. */
+function StreamingMarkdown({ source }: { source: string }) {
+  const displayedText = useSmoothText(source);
+  return <Markdown source={displayedText} animateTail />;
 }
 
 /** Up to this many characters, a prompt's bubble is too narrow for the full radius. */

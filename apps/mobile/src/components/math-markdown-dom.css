@@ -1,0 +1,141 @@
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+body {
+  overflow: hidden;
+}
+
+.math-markdown {
+  color: #000;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-weight: 400;
+  letter-spacing: -0.01875em;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-text-size-adjust: 100%;
+}
+
+.math-markdown.dark {
+  color: #fff;
+}
+
+.math-markdown > :first-child {
+  margin-top: 0;
+}
+
+.math-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+p {
+  margin: 0 0 0.75em;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  line-height: 1.25;
+  margin: 0.8em 0 0.4em;
+}
+
+h1 {
+  font-size: 1.25em;
+}
+
+h2 {
+  font-size: 1.0625em;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: 1em;
+}
+
+ul,
+ol {
+  margin: 0 0 0.75em;
+  padding-left: 1.5em;
+}
+
+li {
+  margin: 0.2em 0;
+  padding-left: 0.15em;
+}
+
+blockquote {
+  border-left: 3px solid rgba(127, 127, 127, 0.55);
+  color: rgba(60, 60, 67, 0.75);
+  margin: 0 0 0.75em;
+  padding-left: 0.75em;
+}
+
+.dark blockquote {
+  color: rgba(235, 235, 245, 0.72);
+}
+
+pre {
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 10px;
+  overflow-x: auto;
+  padding: 0.75em;
+}
+
+code {
+  font-family: Menlo, ui-monospace, monospace;
+  font-size: 0.82em;
+}
+
+a {
+  color: #007aff;
+}
+
+.dark a {
+  color: #0a84ff;
+}
+
+table {
+  border-collapse: collapse;
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border-bottom: 1px solid rgba(127, 127, 127, 0.35);
+  padding: 0.45em 0.7em 0.45em 0;
+  text-align: left;
+}
+
+.katex-display {
+  margin: 0.75em 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+  text-align: left;
+}
+
+.katex-display > .katex {
+  text-align: left;
+}
+
+.blocked-image {
+  color: rgba(127, 127, 127, 0.8);
+  font-size: 0.85em;
+}

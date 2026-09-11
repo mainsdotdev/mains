@@ -965,6 +965,20 @@ html.mains-web.dark #root {
   animation: stream-block-in 0.3s ease-out both;
 }
 
+/* Keep long display equations inside the transcript column. KaTeX remains
+   selectable, and only the equation itself scrolls when it cannot wrap. */
+.katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.25rem;
+  text-align: left;
+}
+
+.katex-display > .katex {
+  text-align: left;
+}
+
 /* ── Image generation ── */
 @keyframes image-generation-atmosphere {
   0%, 100% { opacity: 0.35; transform: scale(0.92); }
