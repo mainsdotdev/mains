@@ -3,7 +3,12 @@ import { useLiveQuery } from "drizzle-orm/expo-sqlite";
 import { useFocusEffect, useRouter, type Href } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, View, type NativeScrollEvent } from "react-native";
-import Animated, { useAnimatedKeyboard, useAnimatedStyle } from "react-native-reanimated";
+import Animated, {
+  FadeIn,
+  FadeOut,
+  useAnimatedKeyboard,
+  useAnimatedStyle,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { backendSession, useSession } from "@/backend/backend-session";
@@ -33,7 +38,7 @@ import { buildTurnRows } from "@/lib/transcript-rows";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { useModelSelection } from "@/lib/use-model-selection";
 import { useNow } from "@/lib/use-now";
-import { colors, radius, shadows, spacing } from "@/theme";
+import { colors, motion, radius, shadows, spacing } from "@/theme";
 
 import { AsciiLoader, latestThinking } from "./ascii-loader";
 import {
@@ -43,6 +48,7 @@ import {
 } from "./composer-bar";
 import { FORK_MESSAGE } from "./message-actions";
 import { PendingApprovalCard } from "./pending-approval-card";
+import { RoundGlassButton } from "./round-glass-button";
 import { ThemedText } from "./themed-text";
 import {
   FlyingPromptBubble,
@@ -61,6 +67,14 @@ import { TranscriptTurn } from "./transcript-turn";
  * allows about a composer's height of drift before the chase lets go.
  */
 const PIN_DISTANCE = 80;
+
+/**
+ * How far above the end the reader has to be before the way back down is
+ * offered. Further than the chase threshold, so that letting go just shy of
+ * the end — where the list still follows on its own — does not flash a button
+ * for the one thing already happening.
+ */
+const JUMP_DISTANCE = 220;
 
 /** A prompt as it was sent, drawn before the Mac's own copy of it arrives. */
 export interface PendingPrompt {
@@ -607,6 +621,18 @@ export function RunView({
   // stays where it is, a long one can still be scrolled clear of the keys.
   const keyboardInset = useKeyboardInset();
   const composerHeight = 72 + insets.bottom;
+  /**
+   * Where the scroll indicator runs: the strip of list the reader can actually
+   * see. iOS already keeps it clear of the header and the home indicator; these
+   * add what floats over the list on top of that — the controls under the
+   * title, the composer over the end. Without them the indicator spanned the
+   * whole screen, behind the composer, reading as one bar the height of the
+   * phone.
+   */
+  const indicatorInsets = {
+    top: topPadding,
+    bottom: composerHeight - insets.bottom + keyboardInset,
+  };
 
   /**
    * Where the transcript sits, in a chat's terms: it opens on its last message
@@ -623,6 +649,16 @@ export function RunView({
   const metrics = useRef({ frame: 0, content: 0, offset: null as number | null });
   /** Following the end: cleared by a drag, restored by letting go near it. */
   const pinned = useRef(true);
+  /** Whether the way back down is on screen; the ref keeps `onScroll` cheap. */
+  const [awayFromEnd, setAwayFromEnd] = useState(false);
+  const away = useRef(false);
+  /**
+   * The height of everything pinned to the bottom — the composer and the room
+   * left under it. Measured rather than assumed, because the bar grows with a
+   * long draft, an error line, or a strip of attachments, and the button that
+   * floats over it has to know where its top edge ended up.
+   */
+  const [composerBox, setComposerBox] = useState(0);
   /** Set a beat after the transcript first lands; only moves after that animate. */
   const placed = useRef(false);
   const placedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -636,8 +672,18 @@ export function RunView({
   const restOffset = process.env.EXPO_OS === "ios" ? -topInset : 0;
   const bottomInset = process.env.EXPO_OS === "ios" ? insets.bottom : 0;
 
-  /** Move to wherever the transcript should be, if that is somewhere else. */
-  const place = (animated = placed.current) => {
+  /** Whether the reader is far enough above the end to be offered a way back. */
+  const reviewJump = () => {
+    const { frame, content, offset } = metrics.current;
+    if (frame === 0 || content === 0 || offset === null) return;
+    const next = content - frame + bottomInset - offset > JUMP_DISTANCE;
+    if (next === away.current) return;
+    away.current = next;
+    setAwayFromEnd(next);
+  };
+
+  /** The scroll itself. Everything else that has to follow it lives in `place`. */
+  const scrollIntoPlace = (animated: boolean) => {
     const { frame, content, offset } = metrics.current;
     if (frame === 0 || content === 0) return;
     const end = content - frame + bottomInset;
@@ -659,6 +705,21 @@ export function RunView({
     const shouldAnimate = animated && current !== null;
     listRef.current?.scrollTo({ y: max, animated: shouldAnimate });
     if (!shouldAnimate) metrics.current.offset = max;
+  };
+
+  /** Move to wherever the transcript should be, if that is somewhere else. */
+  const place = (animated = placed.current) => {
+    scrollIntoPlace(animated);
+    // Every path through the scroll leaves the button's answer possibly stale:
+    // an unpinned list whose content shrank under the reader never moves, and
+    // an unanimated landing reports no scroll of its own.
+    reviewJump();
+  };
+
+  /** The way back down: start following the end again, then go to it. */
+  const jumpToEnd = () => {
+    pinned.current = true;
+    place(true);
   };
 
   /** Re-read whether the reader is at the end once a scroll comes to rest. */
@@ -705,6 +766,7 @@ export function RunView({
         ref={listRef}
         contentInsetAdjustmentBehavior="automatic"
         scrollToOverflowEnabled
+        scrollIndicatorInsets={indicatorInsets}
         scrollEventThrottle={16}
         keyboardDismissMode="interactive"
         contentContainerStyle={{
@@ -734,6 +796,7 @@ export function RunView({
         }}
         onScroll={(event) => {
           metrics.current.offset = event.nativeEvent.contentOffset.y;
+          reviewJump();
         }}
         onScrollBeginDrag={() => {
           pinned.current = false;
@@ -848,6 +911,7 @@ export function RunView({
           },
           lift,
         ]}
+        onLayout={(event) => setComposerBox(event.nativeEvent.layout.height)}
       >
         <ComposerBar
           reservedTop={topInset + topPadding + spacing.sm}
@@ -890,6 +954,35 @@ export function RunView({
               : null
           }
         />
+
+        {/*
+          The way back down, over the composer and riding the keyboard with it.
+          Placed against this bar's measured height — a percentage of it cannot
+          be resolved, the bar having no height of its own but what its content
+          gives it, and the button landed behind the composer instead of above
+          it. Last in the tree so it draws over the glass either way.
+        */}
+        {awayFromEnd && composerBox > 0 ? (
+          <Animated.View
+            entering={FadeIn.duration(motion.fast)}
+            exiting={FadeOut.duration(motion.fast)}
+            pointerEvents="box-none"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: composerBox + spacing.sm,
+              alignItems: "center",
+            }}
+          >
+            <RoundGlassButton
+              icon="arrow.down"
+              label="Jump to the latest"
+              size={34}
+              onPress={jumpToEnd}
+            />
+          </Animated.View>
+        ) : null}
       </Animated.View>
 
       {promptLaunch?.phase === "flying" && promptLaunch.flight && flyingPromptItem ? (

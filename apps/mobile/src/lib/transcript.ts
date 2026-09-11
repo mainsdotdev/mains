@@ -1,6 +1,7 @@
 import type { RunArtifactRow, ToolCallRow } from "@/db/schema";
 
 import { promptFileFromPath, type PromptFile, type PromptSkill } from "./prompt-chips";
+import { partitionSubagentCalls, type SessionSubagent } from "./subagents";
 
 /**
  * The phone's transcript layout — a port of the rules in the desktop's
@@ -35,6 +36,13 @@ export type TranscriptItem =
     }
   | { key: string; kind: "response"; text: string; at: number }
   | { key: string; kind: "tools"; calls: ToolCallRow[]; at: number }
+  | {
+      key: string;
+      kind: "subagents";
+      runId: string;
+      agents: SessionSubagent[];
+      at: number;
+    }
   | { key: string; kind: "images"; images: TranscriptImage[]; at: number }
   | { key: string; kind: "note"; text: string; at: number };
 
@@ -62,6 +70,7 @@ type FlatItem =
 interface ArtifactMetadata {
   level?: unknown;
   isFromSubagent?: unknown;
+  parentToolUseId?: unknown;
   /** Present on a user prompt: the skills and files the composer attached. */
   skills?: unknown;
   files?: unknown;
@@ -85,7 +94,7 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
   const at = artifact.createdAt.getTime();
   const key = `artifact-${artifact.id}`;
 
-  if (meta.isFromSubagent) return null;
+  if (meta.isFromSubagent || typeof meta.parentToolUseId === "string") return null;
 
   // The `kind` *column* is the discriminator, not anything inside the metadata
   // blob. The desktop reads `metadata.kind` only because its event mapper
@@ -191,8 +200,25 @@ export function buildTranscript(
     const item = artifactItem(artifact);
     if (item) flat.push(item);
   }
-  for (const call of calls) {
+  const subagentPartition = partitionSubagentCalls(calls);
+  for (const call of subagentPartition.visibleCalls) {
     flat.push({ key: `tool-${call.id}`, kind: "tool", call, at: call.createdAt.getTime() });
+  }
+  if (
+    subagentPartition.agents.length > 0 &&
+    subagentPartition.firstAt !== null &&
+    subagentPartition.firstId !== null
+  ) {
+    const first = calls.find((call) => call.id === subagentPartition.firstId);
+    if (first) {
+      flat.push({
+        key: `subagents-${first.id}`,
+        kind: "subagents",
+        runId: first.runId,
+        agents: subagentPartition.agents,
+        at: subagentPartition.firstAt,
+      });
+    }
   }
 
   // Same tie-break as the desktop: on equal timestamps artifacts come before

@@ -260,10 +260,16 @@ export const toolCalls = sqliteTable(
     runId: text("run_id").notNull(),
     /** The Mac's row id — stable across syncs, so it doubles as our key. */
     id: integer("id").notNull(),
+    /** Provider-side tool-use id, used as the parent anchor for subagent work. */
+    toolId: text("tool_id"),
+    /** Provider tool-use id of the call that spawned this child call. */
+    parentToolCallId: text("parent_tool_call_id"),
     toolName: text("tool_name").notNull(),
     status: text("status").notNull(),
     inputJson: text("input_json"),
     outputJson: text("output_json"),
+    /** Lifecycle metadata, including `subagent` and `task`. */
+    metadataJson: text("metadata_json"),
     error: text("error"),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     endedAt: integer("ended_at", { mode: "timestamp_ms" }),
@@ -273,6 +279,7 @@ export const toolCalls = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.backendId, t.runId, t.id] }),
     index("idx_tool_calls_run").on(t.backendId, t.runId, t.createdAt),
+    index("idx_tool_calls_parent").on(t.backendId, t.runId, t.parentToolCallId),
   ],
 );
 

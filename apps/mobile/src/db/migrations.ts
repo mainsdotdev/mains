@@ -251,4 +251,12 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (backend_id, provider_id)
   );
   `,
+  // v13 — subagent identity, parent linkage and lifecycle metadata on tool calls
+  `
+  ALTER TABLE tool_calls ADD COLUMN tool_id TEXT;
+  ALTER TABLE tool_calls ADD COLUMN parent_tool_call_id TEXT;
+  ALTER TABLE tool_calls ADD COLUMN metadata_json TEXT;
+  CREATE INDEX idx_tool_calls_parent ON tool_calls (backend_id, run_id, parent_tool_call_id);
+  UPDATE sync_cursors SET tool_updated_at = NULL;
+  `,
 ];

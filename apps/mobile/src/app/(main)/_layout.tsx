@@ -99,6 +99,16 @@ export default function MainLayout() {
             }}
           />
           <Stack.Screen
+            name="subagents"
+            options={{
+              presentation: "formSheet",
+              headerShown: false,
+              sheetGrabberVisible: true,
+              sheetAllowedDetents: [0.52, 1],
+              contentStyle: { backgroundColor: "transparent" },
+            }}
+          />
+          <Stack.Screen
             name="ai-data-consent"
             options={{
               presentation: "formSheet",

@@ -24,6 +24,7 @@ import { ImageGallery } from "./artifact-image";
 import { Markdown } from "./markdown";
 import { MessageActions } from "./message-actions";
 import { PromptSegmentView } from "./prompt-chips";
+import { SubagentSummaryRow } from "./subagent-summary-row";
 import { ThemedText } from "./themed-text";
 import { ToolBlock } from "./tools/tool-block";
 
@@ -122,6 +123,8 @@ export function TranscriptRow({
       );
     case "tools":
       return <ToolBlock calls={item.calls} />;
+    case "subagents":
+      return <SubagentSummaryRow runId={item.runId} agents={item.agents} />;
     case "images":
       return <ImageGallery images={item.images} />;
     case "note":

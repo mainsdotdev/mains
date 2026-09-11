@@ -192,10 +192,13 @@ function upsertTurn(backendId: string, turn: RunTurnResponse): void {
 
 function upsertToolCall(backendId: string, runId: string, call: ToolCallResponse): void {
   const set = {
+    toolId: call.toolId,
+    parentToolCallId: call.parentToolCallId,
     toolName: call.toolName,
     status: call.status,
     inputJson: toJson(call.input),
     outputJson: toJson(call.output),
+    metadataJson: toJson(call.metadata),
     error: call.error,
     startedAt: toDate(call.startedAt),
     endedAt: toDate(call.endedAt),

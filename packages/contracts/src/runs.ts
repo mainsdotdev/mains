@@ -62,6 +62,10 @@ export interface RunTurnResponse {
 export interface ToolCallResponse {
   id: number;
   runId: string | null;
+  /** Provider-side tool-use id, stable within the run. */
+  toolId: string | null;
+  /** Provider tool-use id of the call that spawned this one. */
+  parentToolCallId: string | null;
   toolName: string;
   status: ToolCallStatus;
   input: Record<string, unknown> | null;
@@ -69,6 +73,8 @@ export interface ToolCallResponse {
   error: string | null;
   startedAt: Date | null;
   endedAt: Date | null;
+  /** Provider lifecycle data, including `subagent` and `task`. */
+  metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
 }

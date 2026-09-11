@@ -1,7 +1,7 @@
 import { Pressable, View } from "react-native";
 
 import type { WorkspaceRow as WorkspaceRecord } from "@/db/schema";
-import { relativeTime, workspaceStatusLabel } from "@/lib/format";
+import { workspaceStatusLabel } from "@/lib/format";
 import { colors, radius, spacing, type } from "@/theme";
 
 import { ProjectIcon } from "./project-icon";
@@ -15,8 +15,7 @@ const DELETIONS = "#ff4436";
 /**
  * One workspace in the Code sidebar, as the desktop's workspace item: its
  * project's icon and name on the first line; the status glyph and current
- * branch on the second; the last diff's size on the right, or when it last
- * moved if there is no diff yet.
+ * branch on the second; and the last diff's size on the right when available.
  */
 export function WorkspaceRow({
   workspace,
@@ -89,11 +88,7 @@ export function WorkspaceRow({
             </ThemedText>
           )}
         </View>
-      ) : (
-        <ThemedText variant="caption" style={{ fontVariant: ["tabular-nums"] }}>
-          {relativeTime(workspace.updatedAt)}
-        </ThemedText>
-      )}
+      ) : null}
     </Pressable>
   );
 }

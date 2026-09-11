@@ -146,8 +146,12 @@ export function buildTurnRows(items: TranscriptItem[]): TurnRow[] {
     ];
     const last = expand(items, segments[segments.length - 1]);
 
-    const breakout = previousAll.filter((item) => item.kind === "note" || item.kind === "images");
-    const previous = previousAll.filter((item) => item.kind !== "note" && item.kind !== "images");
+    const breakout = previousAll.filter(
+      (item) => item.kind === "note" || item.kind === "images" || item.kind === "subagents",
+    );
+    const previous = previousAll.filter(
+      (item) => item.kind !== "note" && item.kind !== "images" && item.kind !== "subagents",
+    );
 
     // Everything before the last segment was a note — there is nothing left to
     // collapse, so the turn is flat after all.

@@ -2,17 +2,18 @@ import type { ColorValue } from "react-native";
 import Svg, { Circle, Path } from "react-native-svg";
 
 /**
- * Three glyphs carried over from the desktop, path for path.
+ * Glyphs carried over from the desktop, path for path.
  *
  * Everywhere else the phone reaches for an SF Symbol, which keeps it native and
- * costs nothing. These three are the exception because they sit on an agent's
- * *answer*, next to the desktop's own — the same affordance in two places
- * should not be two different marks. `arrow.triangle.branch` in particular is
- * not the desktop's fork at all; its Fork is git's branch glyph.
+ * costs nothing. These are the exception because they sit on an agent's *work*
+ * — its answer, and the subagents it spawned — next to the desktop's own marks
+ * for the same things; one affordance in two places should not be two
+ * different glyphs.
  *
- * Copied from `components/ui/icons/{fork,clipboard,check}.tsx`, all on the same
- * 24-unit grid and stroked rather than filled — which is why they don't belong
- * in `@mains/icons`, whose shapes are fill-only paths for the icon registry.
+ * Copied from `components/ui/icons/{fork,clipboard,check,bot}.tsx`, all on the
+ * same 24-unit grid. They are chrome rather than registry shapes, which is why
+ * they don't belong in `@mains/icons`, whose fill-only paths are the icons a
+ * space or project is drawn with.
  */
 
 interface GlyphProps {
@@ -76,6 +77,19 @@ export function CheckIcon({ size = 16, color }: GlyphProps) {
         strokeWidth={2}
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+/** The agent mark — the desktop's `Bot`, and the one filled glyph here. */
+export function BotIcon({ size = 16, color }: GlyphProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        fill={color}
+        fillRule="nonzero"
+        d="M17.753 14a2.25 2.25 0 0 1 2.25 2.25v.905A3.75 3.75 0 0 1 18.696 20C17.13 21.344 14.89 22.001 12 22.001c-2.89 0-5.128-.657-6.691-2a3.75 3.75 0 0 1-1.305-2.844v-.907A2.25 2.25 0 0 1 6.254 14h11.5Zm0 1.5h-11.5a.75.75 0 0 0-.75.75v.907c0 .656.287 1.279.784 1.706C7.545 19.945 9.44 20.501 12 20.501c2.56 0 4.458-.556 5.719-1.639a2.25 2.25 0 0 0 .784-1.707v-.905a.75.75 0 0 0-.75-.75ZM11.9 2.007 12 2a.75.75 0 0 1 .743.649l.007.101v.75h3.5a2.25 2.25 0 0 1 2.25 2.25v4.505a2.25 2.25 0 0 1-2.25 2.25h-8.5a2.25 2.25 0 0 1-2.25-2.25V5.75A2.25 2.25 0 0 1 7.75 3.5h3.5v-.75a.75.75 0 0 1 .649-.743L12 2l-.101.007ZM16.25 5h-8.5a.75.75 0 0 0-.75.75v4.505c0 .414.336.75.75.75h8.5a.75.75 0 0 0 .75-.75V5.75a.75.75 0 0 0-.75-.75Zm-6.5 1.5a1.25 1.25 0 1 1 0 2.499 1.25 1.25 0 0 1 0-2.499Zm4.492 0a1.25 1.25 0 1 1 0 2.499 1.25 1.25 0 0 1 0-2.499Z"
       />
     </Svg>
   );
