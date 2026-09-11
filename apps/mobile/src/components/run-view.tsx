@@ -7,6 +7,11 @@ import Animated, { useAnimatedKeyboard, useAnimatedStyle } from "react-native-re
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { backendSession, useSession } from "@/backend/backend-session";
+import {
+  clearStreamingMessages,
+  reconcileStreamingMessages,
+  useStreamingMessages,
+} from "@/backend/streaming-messages";
 import { useAiDataConsent } from "@/components/ai-data-consent-provider";
 import { db } from "@/db/client";
 import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
@@ -215,6 +220,36 @@ export function RunView({
     () => buildTranscript(artifactQuery.data, callQuery.data),
     [artifactQuery.data, callQuery.data],
   );
+  const streamingMessages = useStreamingMessages(runId);
+  const persistedResponseContents = useMemo(
+    () =>
+      new Set(
+        items
+          .filter((item): item is Extract<TranscriptItem, { kind: "response" }> =>
+            item.kind === "response",
+          )
+          .map((item) => item.text.trim()),
+      ),
+    [items],
+  );
+  const streamingItems = useMemo<TranscriptItem[]>(
+    () =>
+      streamingMessages
+        .filter((message) => !persistedResponseContents.has(message.text.trim()))
+        .map((message) => ({
+          key: message.key,
+          kind: "response" as const,
+          text: message.text,
+          at: message.at,
+        })),
+    [persistedResponseContents, streamingMessages],
+  );
+  useEffect(() => {
+    reconcileStreamingMessages(runId, persistedResponseContents);
+  }, [persistedResponseContents, runId]);
+  useEffect(() => {
+    if (run && !runIsLive) clearStreamingMessages(runId);
+  }, [run, runId, runIsLive]);
   const promptCount = useMemo(
     () => items.filter((item) => item.kind === "prompt").length,
     [items],
@@ -254,7 +289,6 @@ export function RunView({
     const acknowledgedAt = nextPromptIndex(items, promptLaunch.afterPromptCount);
     return acknowledgedAt < 0 ? items : items.slice(0, acknowledgedAt);
   }, [items, launchInProgress, promptLaunch]);
-  const rows = useMemo(() => buildTurnRows(displayItems), [displayItems]);
 
   // The prompt as sent stands in for the Mac's copy only until that arrives;
   // while it is flying, it also remains the measured landing target.
@@ -299,16 +333,42 @@ export function RunView({
     };
   }, [launchInProgress, pendingContinuation, promptCount, promptLaunch?.key, runId]);
 
+  // A continuation may start streaming before the persisted copy of its prompt
+  // reaches SQLite. Keep that answer after the optimistic prompt until the two
+  // prompt copies swap; once acknowledged it joins the normal turn plan.
+  const streamingFollowsPendingContinuation = pendingContinuationItem !== null;
+  const renderedItems = useMemo(
+    () =>
+      streamingFollowsPendingContinuation
+        ? displayItems
+        : [...displayItems, ...streamingItems],
+    [displayItems, streamingFollowsPendingContinuation, streamingItems],
+  );
+  const rows = useMemo(() => buildTurnRows(renderedItems), [renderedItems]);
+  const trailingStreamingRows = useMemo(
+    () =>
+      streamingFollowsPendingContinuation ? buildTurnRows(streamingItems) : [],
+    [streamingFollowsPendingContinuation, streamingItems],
+  );
+  const actionItems = useMemo(
+    () =>
+      pendingContinuationItem
+        ? [...displayItems, pendingContinuationItem, ...streamingItems]
+        : renderedItems,
+    [displayItems, pendingContinuationItem, renderedItems, streamingItems],
+  );
+
   // Keep the previous answer's action row structurally stable during a
   // continuation. Only a response that is actually streaming loses its row;
   // the previous fork remains visible (and disabled) until the run settles.
   const actionState = useMemo(
     () =>
-      transcriptActionState(displayItems, {
+      transcriptActionState(actionItems, {
         runIsLive: Boolean(runIsLive),
-        hasLocalContinuation: pendingContinuationItem !== null,
+        hasLocalContinuation:
+          pendingContinuationItem !== null && streamingItems.length === 0,
       }),
-    [displayItems, pendingContinuationItem, runIsLive],
+    [actionItems, pendingContinuationItem, runIsLive, streamingItems.length],
   );
   const turnIsActive = Boolean(runIsLive || pendingContinuationItem);
 
@@ -726,6 +786,15 @@ export function RunView({
             }
           />
         ) : null}
+        {trailingStreamingRows.map((row) => (
+          <TranscriptTurn
+            key={row.key}
+            row={row}
+            providerId={providerId}
+            isRunInProgress={Boolean(runIsLive)}
+            actions={actions}
+          />
+        ))}
         <View style={{ gap: spacing.md }}>
           {runIsLive || starting || pendingContinuationItem ? (
             <AsciiLoader mode={mode} thinkingText={thinking} />

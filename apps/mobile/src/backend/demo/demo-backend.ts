@@ -84,6 +84,9 @@ const snapshot = rawSnapshot as unknown as DemoSnapshot;
 
 /** Between replayed items — slow enough to watch, fast enough for a reviewer. */
 const REPLAY_STEP_MS = 700;
+/** Demo typing cadence; two word-like tokens per frame keeps the sample legible. */
+const STREAM_STEP_MS = 32;
+const STREAM_TOKENS_PER_STEP = 2;
 /** An ignored approval answers itself, so the demo never wedges. */
 const APPROVAL_AUTO_RESOLVE_MS = 15_000;
 const RUN_LIST_DEFAULT = 50;
@@ -374,8 +377,8 @@ export class DemoBackend implements DemoHandler {
   /**
    * Play a curated scenario onto `run`. The reviewer's own prompt is always
    * the subject, and the transcript explicitly says that bundled sample data
-   * is being used. Every step is still a real `eventPersisted` push, so the
-   * phone exercises the same projection and UI as a paired Mac.
+   * is being used. Agent text takes the ephemeral stream path before its real
+   * `eventPersisted` push, so the phone exercises both halves of a paired run.
    */
   private startReplay(
     run: DemoRun,
@@ -402,8 +405,9 @@ export class DemoBackend implements DemoHandler {
         run.updatedAt = now();
         this.push(CHANNELS.runs.updated, { runId: run.id, ts: Date.now() });
       }
-      this.appendArtifact(run, "report", scenario.intro(prompt));
-      this.playInspection(run, scenario, prompt, 0);
+      this.streamReport(run, scenario.intro(prompt), () => {
+        this.playInspection(run, scenario, prompt, 0);
+      });
     });
   }
 
@@ -491,6 +495,35 @@ export class DemoBackend implements DemoHandler {
     this.push(CHANNELS.runs.eventPersisted, { runId: run.id, ts: Date.now() });
   }
 
+  /** Exercise the same transient WebSocket path as a paired Mac before persisting. */
+  private streamReport(run: DemoRun, content: string, onComplete: () => void): void {
+    const tokens = content.match(/\S+\s*/g) ?? [content];
+    const streamId = `demo-msg-${run.id}-${this.nextId++}`;
+    let count = 0;
+    const step = () => {
+      if (run.status !== "running") return;
+      count = Math.min(tokens.length, count + STREAM_TOKENS_PER_STEP);
+      this.push(CHANNELS.runs.ephemeralEvent, {
+        runId: run.id,
+        event: {
+          type: "artifact",
+          kind: "report",
+          content: tokens.slice(0, count).join(""),
+          metadata: { source: "agent_message_streaming" },
+          streamId,
+        },
+        ts: Date.now(),
+      });
+      if (count < tokens.length) {
+        this.later(run.id, STREAM_STEP_MS, step);
+        return;
+      }
+      this.appendArtifact(run, "report", content);
+      onComplete();
+    };
+    step();
+  }
+
   private appendToolCall(run: DemoRun, tool: DemoToolSpec): void {
     const calls = this.toolCalls.get(run.id) ?? [];
     this.toolCalls.set(run.id, calls);
@@ -515,8 +548,9 @@ export class DemoBackend implements DemoHandler {
   private finishAfterReport(run: DemoRun, report: string): void {
     this.later(run.id, REPLAY_STEP_MS, () => {
       if (run.status !== "running") return;
-      this.appendArtifact(run, "report", report);
-      this.later(run.id, REPLAY_STEP_MS, () => this.finishRun(run));
+      this.streamReport(run, report, () => {
+        this.later(run.id, REPLAY_STEP_MS, () => this.finishRun(run));
+      });
     });
   }
 

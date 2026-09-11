@@ -333,6 +333,7 @@ describe("PAIRED_DEVICE_EVENTS", () => {
     expect([...PAIRED_DEVICE_EVENTS].sort()).toEqual([
       "providers:modelsUpdated",
       "runs:diffUpdated",
+      "runs:ephemeralEvent",
       "runs:eventPersisted",
       "runs:statusChanged",
       "runs:toolApprovalRequest",

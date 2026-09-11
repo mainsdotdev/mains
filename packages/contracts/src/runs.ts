@@ -311,6 +311,23 @@ export interface RunEventPersistedEvent {
   ts: number;
 }
 
+/**
+ * `runs:ephemeralEvent` push — an in-memory artifact snapshot used while an
+ * agent message is still being written. It is never persisted or replayed;
+ * clients recover from the normal run snapshot after reconnecting.
+ */
+export interface RunEphemeralEvent {
+  runId: string;
+  event: {
+    type: "artifact";
+    kind: string;
+    content?: string;
+    metadata?: Record<string, unknown>;
+    streamId?: string;
+  };
+  ts: number;
+}
+
 export interface RunUpdatedEvent {
   runId: string;
   ts: number;

@@ -19,6 +19,7 @@ import type {
   ToolApprovalResponse,
   UpdateRunSettingsPayload,
   ArtifactImage,
+  RunEphemeralEvent,
 } from "@mains/contracts/runs";
 import { db } from "@/db/client";
 import { runs, spaces } from "@/db/schema";
@@ -59,6 +60,11 @@ import {
   readArtifactImage,
 } from "./sync";
 import { isConnectionLoss, WsTransport, type CloseInfo } from "./ws-transport";
+import {
+  clearAllStreamingMessages,
+  clearStreamingMessages,
+  receiveStreamingMessage,
+} from "./streaming-messages";
 import {
   createDemoTransport,
   DEMO_BACKEND_ID,
@@ -226,9 +232,14 @@ class BackendSession {
         const detachRuns = attachRunEvents(transport, backend.backendId, {
           isViewing: (runId) => runId === this.viewingRunId,
         });
+        const detachStreaming = transport.subscribe(CHANNELS.runs.ephemeralEvent, (payload) => {
+          const event = payload as RunEphemeralEvent;
+          if (event.runId === this.viewingRunId) receiveStreamingMessage(event);
+        });
         const detachTargets = attachTargetEvents(transport, backend.backendId);
         this.detachEvents = () => {
           detachRuns();
+          detachStreaming();
           detachTargets();
         };
         if (this.viewingRunId) {
@@ -246,6 +257,7 @@ class BackendSession {
   }
 
   stop(): void {
+    clearAllStreamingMessages();
     this.detachEvents?.();
     this.detachEvents = null;
     this.unsubscribeSupervisor?.();
@@ -549,6 +561,9 @@ class BackendSession {
 
   /** The transcript on screen — its events trigger refetches; others wait. */
   openRun(runId: string): void {
+    if (this.viewingRunId && this.viewingRunId !== runId) {
+      clearStreamingMessages(this.viewingRunId);
+    }
     this.viewingRunId = runId;
     const backendId = this.snapshot.backend?.backendId;
     if (this.isConnected() && this.transport && backendId) {
@@ -557,7 +572,10 @@ class BackendSession {
   }
 
   closeRun(runId: string): void {
-    if (this.viewingRunId === runId) this.viewingRunId = null;
+    if (this.viewingRunId === runId) {
+      this.viewingRunId = null;
+      clearStreamingMessages(runId);
+    }
   }
 
   /**

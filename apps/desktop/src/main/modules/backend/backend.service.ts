@@ -99,6 +99,7 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
 export const PAIRED_DEVICE_EVENTS: ReadonlySet<string> = new Set([
   CHANNELS.runs.statusChanged,
   CHANNELS.runs.updated,
+  CHANNELS.runs.ephemeralEvent,
   CHANNELS.runs.eventPersisted,
   CHANNELS.runs.toolApprovalRequest,
   CHANNELS.runs.toolApprovalResolved,
