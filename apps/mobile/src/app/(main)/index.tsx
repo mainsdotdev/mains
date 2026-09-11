@@ -5,7 +5,9 @@ import { useNavigation, useRouter, type Href } from "expo-router";
 import { DrawerActions } from "expo-router/react-navigation";
 import { useState, type ComponentProps } from "react";
 import { Keyboard, Pressable, View } from "react-native";
-import Animated, { useAnimatedKeyboard, useAnimatedStyle } from "react-native-reanimated";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+// Not Reanimated's: its own hook is deprecated (iOS bugs) and points here.
+import { useAnimatedKeyboard } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { backendSession, useSession } from "@/backend/backend-session";

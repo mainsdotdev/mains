@@ -3,7 +3,9 @@ import { useLiveQuery } from "drizzle-orm/expo-sqlite";
 import { useRouter, type Href } from "expo-router";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, TextInput, View } from "react-native";
-import Animated, { useAnimatedKeyboard, useAnimatedStyle } from "react-native-reanimated";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+// Not Reanimated's: its own hook is deprecated (iOS bugs) and points here.
+import { useAnimatedKeyboard } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useSession } from "@/backend/backend-session";

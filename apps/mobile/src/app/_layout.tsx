@@ -4,6 +4,7 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { useColorScheme } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 
 import { backendSession } from "@/backend/backend-session";
 import { Sidebar } from "@/components/sidebar";
@@ -31,23 +32,32 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.systemBackground }}>
-      <ThemeProvider value={theme}>
-        <Drawer
-          drawerContent={(props) => <Sidebar navigation={props.navigation} />}
-          screenOptions={{
-            headerShown: false,
-            drawerType: "slide",
-            drawerStyle: { width: "82%", backgroundColor: colors.systemBackground },
-            // The scene card dims itself (SceneCard); the drawer's own overlay stays clear.
-            overlayColor: "transparent",
-            sceneStyle: { backgroundColor: "transparent" },
-            swipeEdgeWidth: 48,
-          }}
-        >
-          <Drawer.Screen name="(main)" />
-        </Drawer>
-        <StatusBar style="auto" />
-      </ThemeProvider>
+      {/*
+        Every screen that follows the keyboard reads it from here. Reanimated's
+        own `useAnimatedKeyboard` was deprecated in 4.2 over iOS bugs and points
+        at this library instead; the two must not both be watching the keyboard,
+        so this provider is the single source and no screen may import that hook
+        from `react-native-reanimated` again.
+      */}
+      <KeyboardProvider>
+        <ThemeProvider value={theme}>
+          <Drawer
+            drawerContent={(props) => <Sidebar navigation={props.navigation} />}
+            screenOptions={{
+              headerShown: false,
+              drawerType: "slide",
+              drawerStyle: { width: "82%", backgroundColor: colors.systemBackground },
+              // The scene card dims itself (SceneCard); the drawer's own overlay stays clear.
+              overlayColor: "transparent",
+              sceneStyle: { backgroundColor: "transparent" },
+              swipeEdgeWidth: 48,
+            }}
+          >
+            <Drawer.Screen name="(main)" />
+          </Drawer>
+          <StatusBar style="auto" />
+        </ThemeProvider>
+      </KeyboardProvider>
     </GestureHandlerRootView>
   );
 }
