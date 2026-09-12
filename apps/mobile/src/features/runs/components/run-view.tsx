@@ -1,6 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
-import { useFocusEffect, useRouter, type Href } from "expo-router";
+import { useRouter, type Href } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, View, type NativeScrollEvent } from "react-native";
 import Animated, { FadeIn, FadeOut, useAnimatedStyle } from "react-native-reanimated";
@@ -8,16 +6,8 @@ import Animated, { FadeIn, FadeOut, useAnimatedStyle } from "react-native-reanim
 import { useAnimatedKeyboard } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { backendSession, useSession } from "@/backend/backend-session";
-import {
-  clearStreamingMessages,
-  reconcileStreamingMessages,
-  useStreamingMessages,
-} from "@/backend/streaming-messages";
+import { backendSession } from "@/backend/backend-session";
 import { RoundGlassButton, ThemedText } from "@/components/ui";
-import { db } from "@/db/client";
-import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
-import { isModeId, DEFAULT_MODE_ID } from "@mains/contracts/modes";
 import {
   serializeComposerAttachments,
   type ComposerAttachment,
@@ -25,21 +15,16 @@ import {
 import { attachedSkills, composeGoal } from "@/lib/context-picker";
 import { projectedPromptLandingY } from "@/lib/prompt-flight";
 import type { PromptSkill } from "@/lib/prompt-chips";
-import {
-  buildTranscript,
-  type PromptImage,
-  type TranscriptItem,
-} from "@/lib/transcript";
+import { type PromptImage, type TranscriptItem } from "@/lib/transcript";
 import { transcriptActionState } from "@/lib/transcript-actions";
 import { buildTurnRows } from "@/lib/transcript-rows";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
-import { useModelSelection } from "@/lib/use-model-selection";
-import { useNow } from "@/lib/use-now";
 import { colors, motion, radius, shadows, spacing } from "@/theme";
 import { useAiDataConsent } from "@/features/ai-data-consent";
 import type { ComposerSendOrigin, PendingPrompt } from "../types";
+import { useRunData } from "../hooks/use-run-data";
 
-import { AsciiLoader, latestThinking } from "./ascii-loader";
+import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
 import { PendingApprovalCard } from "./approvals/pending-approval-card";
 import { FORK_MESSAGE } from "./transcript/message-actions";
@@ -135,9 +120,7 @@ export function RunView({
   /** Content padding beneath that inset, for controls floating over the list. */
   topPadding?: number;
 }) {
-  const session = useSession();
   const { requestConsent } = useAiDataConsent();
-  const backendId = session.backend?.backendId ?? "";
   const insets = useSafeAreaInsets();
   const router = useRouter();
   // Two sheets behind the composer's two chips: the model (and its effort)
@@ -147,107 +130,15 @@ export function RunView({
   const openRunOptions = (providerId: string) =>
     router.push({ pathname: "/run-options", params: { providerId } } as Href);
 
-  // While this transcript is on screen its events trigger refetches.
-  useFocusEffect(
-    useCallback(() => {
-      if (!runId) return;
-      backendSession.openRun(runId);
-      return () => backendSession.closeRun(runId);
-    }, [runId]),
-  );
-
-  const runQuery = useLiveQuery(
-    db.select().from(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).limit(1),
-    [backendId, runId],
-  );
-  const artifactQuery = useLiveQuery(
-    db
-      .select()
-      .from(runArtifacts)
-      .where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId)))
-      .orderBy(asc(runArtifacts.createdAt), asc(runArtifacts.id)),
-    [backendId, runId],
-  );
-  const callQuery = useLiveQuery(
-    db
-      .select()
-      .from(toolCalls)
-      .where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId)))
-      .orderBy(asc(toolCalls.createdAt), asc(toolCalls.id)),
-    [backendId, runId],
-  );
-  const approvalQuery = useLiveQuery(
-    db
-      .select()
-      .from(pendingApprovals)
-      .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId)))
-      .orderBy(asc(pendingApprovals.requestedAt)),
-    [backendId, runId],
-  );
-  const now = useNow(1000, approvalQuery.data.length > 0);
-  const waiting = useMemo(
-    () => approvalQuery.data.filter((a) => a.expiresAt.getTime() > now),
-    [approvalQuery.data, now],
-  );
-
-  const run = runQuery.data[0];
-  // Until the run row lands, the provider is the one the send was aimed at:
-  // the bubble's tint and the composer's chips must not flicker in later.
-  const providerId = run?.providerId ?? expectedProviderId ?? "";
-  // A run's workspace scopes what its provider lists behind `@` / `$`.
-  const workspaceQuery = useLiveQuery(
-    db
-      .select({ rootPath: workspaces.rootPath })
-      .from(workspaces)
-      .where(and(eq(workspaces.backendId, backendId), eq(workspaces.id, run?.workspaceId ?? "")))
-      .limit(1),
-    [backendId, run?.workspaceId],
-  );
-  const modelSelection = useModelSelection(backendId, providerId);
-  const runIsLive = run?.status === "running" || run?.status === "queued";
+  const {
+    backend: { id: backendId, connected },
+    run: { record: run, isLive: runIsLive, providerId, mode, workspacePath },
+    transcript: { items, streamingItems, promptCount, thinking },
+    approvals: { waiting, now },
+    modelSelection,
+  } = useRunData(runId, expectedProviderId);
   /** Sent, but the Mac has yet to answer with a run. */
   const starting = pending !== null && !run;
-  const connected = session.connection.kind === "connected";
-  // Two passes, as on the desktop: the transcript's items, then the plan for
-  // how a turn's items collapse into rows.
-  const items = useMemo(
-    () => buildTranscript(artifactQuery.data, callQuery.data),
-    [artifactQuery.data, callQuery.data],
-  );
-  const streamingMessages = useStreamingMessages(runId);
-  const persistedResponseContents = useMemo(
-    () =>
-      new Set(
-        items
-          .filter((item): item is Extract<TranscriptItem, { kind: "response" }> =>
-            item.kind === "response",
-          )
-          .map((item) => item.text.trim()),
-      ),
-    [items],
-  );
-  const streamingItems = useMemo<TranscriptItem[]>(
-    () =>
-      streamingMessages
-        .filter((message) => !persistedResponseContents.has(message.text.trim()))
-        .map((message) => ({
-          key: message.key,
-          kind: "response" as const,
-          text: message.text,
-          at: message.at,
-        })),
-    [persistedResponseContents, streamingMessages],
-  );
-  useEffect(() => {
-    reconcileStreamingMessages(runId, persistedResponseContents);
-  }, [persistedResponseContents, runId]);
-  useEffect(() => {
-    if (run && !runIsLive) clearStreamingMessages(runId);
-  }, [run, runId, runIsLive]);
-  const promptCount = useMemo(
-    () => items.filter((item) => item.kind === "prompt").length,
-    [items],
-  );
 
   // On home's first send this is a newly mounted composer. Repeating the
   // source text here keeps it continuously visible until the flying layer is
@@ -299,9 +190,6 @@ export function RunView({
       images: optimisticPromptImages(pending.attachments),
     };
   }, [launchInProgress, pending, promptCount, promptLaunch?.key]);
-
-  const thinking = useMemo(() => latestThinking(artifactQuery.data), [artifactQuery.data]);
-  const mode = isModeId(run?.mode) ? run.mode : DEFAULT_MODE_ID;
 
   // A successful continuation is replaced by the first new prompt synced from
   // the Mac. A flight keeps the local twin around until it visibly lands.
@@ -927,7 +815,7 @@ export function RunView({
               ? {
                   backendId,
                   providerId,
-                  workspacePath: workspaceQuery.data[0]?.rootPath ?? null,
+                  workspacePath,
                   skills: contextSkills,
                   onSkillsChange: setContextSkills,
                 }
