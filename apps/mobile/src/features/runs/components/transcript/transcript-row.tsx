@@ -20,6 +20,12 @@ import type { PromptImage, TranscriptItem } from "@/lib/transcript";
 import { useSmoothText } from "@/lib/use-smooth-text";
 import { colors, motion, radius, spacing, useProviderAccent } from "@/theme";
 import { ThemedText } from "@/components/ui";
+import type {
+  PromptBubbleRect,
+  PromptFlight,
+  PromptFlightElement,
+  PromptMessageRect,
+} from "../../types";
 
 import { ImageGallery } from "./artifact-image";
 import { Markdown } from "./markdown";
@@ -54,29 +60,6 @@ export interface TurnActions {
   lastResponseKey: string | null;
   /** Every agent message of the turn, in order, a blank line between. */
   text: string;
-}
-
-export interface PromptBubbleRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface PromptMessageRect extends PromptBubbleRect {
-  text: PromptBubbleRect | null;
-  images: PromptBubbleRect[];
-}
-
-export interface PromptFlightElement {
-  from: PromptBubbleRect;
-  to: PromptBubbleRect;
-}
-
-/** Source and destination coordinates relative to the RunView root. */
-export interface PromptFlight {
-  text: PromptFlightElement | null;
-  images: PromptFlightElement[];
 }
 
 /** Space between a transcript row boundary and its prompt bubble surface. */

@@ -11,13 +11,16 @@ import { RoundGlassButton, ThemedText } from "@/components/ui";
 import type { ComposerAttachment } from "@/lib/composer-attachments";
 import { projectedPromptLandingY } from "@/lib/prompt-flight";
 import type { PromptSkill } from "@/lib/prompt-chips";
-import { type PromptImage, type TranscriptItem } from "@/lib/transcript";
-import { transcriptActionState } from "@/lib/transcript-actions";
-import { buildTurnRows } from "@/lib/transcript-rows";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { colors, motion, radius, shadows, spacing } from "@/theme";
-import type { ComposerSendOrigin, PendingPrompt } from "../types";
+import type {
+  ComposerSendOrigin,
+  PendingPrompt,
+  PromptBubbleRect,
+  PromptMessageRect,
+} from "../types";
 import { useRunData } from "../hooks/use-run-data";
+import { useOptimisticPrompt } from "../hooks/use-optimistic-prompt";
 import { useRunOperations } from "../hooks/use-run-operations";
 
 import { AsciiLoader } from "./ascii-loader";
@@ -27,9 +30,6 @@ import {
   FlyingPromptBubble,
   PROMPT_BUBBLE_ROW_PADDING,
   TranscriptRow,
-  type PromptBubbleRect,
-  type PromptFlight,
-  type PromptMessageRect,
   type TranscriptActions,
 } from "./transcript/transcript-row";
 import { TranscriptTurn } from "./transcript/transcript-turn";
@@ -48,44 +48,6 @@ const PIN_DISTANCE = 80;
  * for the one thing already happening.
  */
 const JUMP_DISTANCE = 220;
-
-/** A continuation drawn locally until the Mac's persisted prompt arrives. */
-interface PendingContinuation extends PendingPrompt {
-  runId: string;
-  /** Number of persisted prompts before this send; the next one acknowledges it. */
-  afterPromptCount: number;
-}
-
-interface PromptLaunch {
-  key: "pending-prompt" | "pending-continuation";
-  origin: ComposerSendOrigin;
-  /** Persisted prompts before this send; the next prompt is this one's twin. */
-  afterPromptCount: number;
-  phase: "measuring" | "flying" | "landed";
-  flight?: PromptFlight;
-}
-
-/** Index of the prompt that follows `count` existing prompts. */
-function nextPromptIndex(items: TranscriptItem[], count: number): number {
-  let seen = 0;
-  for (let index = 0; index < items.length; index++) {
-    if (items[index].kind !== "prompt") continue;
-    if (seen === count) return index;
-    seen++;
-  }
-  return -1;
-}
-
-function optimisticPromptImages(attachments: ComposerAttachment[] | undefined): PromptImage[] {
-  return (attachments ?? [])
-    .filter((attachment) => attachment.type === "image")
-    .map((attachment) => ({
-      key: attachment.id,
-      name: attachment.name,
-      uri: attachment.uri,
-      previewCropBottom: attachment.previewCropBottom,
-    }));
-}
 
 /**
  * A run's conversation: its transcript, the agent's progress, any approval it
@@ -127,7 +89,7 @@ export function RunView({
   const {
     backend: { id: backendId, connected },
     run: { record: run, isLive: runIsLive, providerId, mode, workspacePath },
-    transcript: { items, streamingItems, promptCount, thinking },
+    transcript: { items, streamingItems, thinking },
     approvals: { waiting, now },
     modelSelection,
   } = useRunData(runId, expectedProviderId);
@@ -144,107 +106,6 @@ export function RunView({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(() =>
     pending?.origin ? (pending.attachments ?? []) : [],
   );
-  const [pendingContinuation, setPendingContinuation] = useState<PendingContinuation | null>(null);
-  const [promptLaunch, setPromptLaunch] = useState<PromptLaunch | null>(() =>
-    pending?.origin
-      ? {
-          key: "pending-prompt",
-          origin: pending.origin,
-          afterPromptCount: 0,
-          phase: "measuring",
-        }
-      : null,
-  );
-  const launchInProgress = promptLaunch !== null && promptLaunch.phase !== "landed";
-
-  // If the Mac's copy wins the race against the flight, hold it (and anything
-  // after it) out of the transcript for a few frames. The optimistic target
-  // occupies the same row, so landing and swapping copies stays invisible.
-  const displayItems = useMemo(() => {
-    if (!launchInProgress || !promptLaunch) return items;
-    const acknowledgedAt = nextPromptIndex(items, promptLaunch.afterPromptCount);
-    return acknowledgedAt < 0 ? items : items.slice(0, acknowledgedAt);
-  }, [items, launchInProgress, promptLaunch]);
-
-  // The prompt as sent stands in for the Mac's copy only until that arrives;
-  // while it is flying, it also remains the measured landing target.
-  const pendingItem = useMemo<Extract<TranscriptItem, { kind: "prompt" }> | null>(() => {
-    const heldForLaunch = launchInProgress && promptLaunch?.key === "pending-prompt";
-    if (!pending || (promptCount > 0 && !heldForLaunch)) return null;
-    return {
-      key: "pending-prompt",
-      kind: "prompt",
-      text: pending.text,
-      at: 0,
-      skills: pending.skills,
-      files: [],
-      images: optimisticPromptImages(pending.attachments),
-    };
-  }, [launchInProgress, pending, promptCount, promptLaunch?.key]);
-
-  // A successful continuation is replaced by the first new prompt synced from
-  // the Mac. A flight keeps the local twin around until it visibly lands.
-  const pendingContinuationItem = useMemo<
-    Extract<TranscriptItem, { kind: "prompt" }> | null
-  >(() => {
-    const heldForLaunch = launchInProgress && promptLaunch?.key === "pending-continuation";
-    if (
-      !pendingContinuation ||
-      pendingContinuation.runId !== runId ||
-      (promptCount > pendingContinuation.afterPromptCount && !heldForLaunch)
-    ) {
-      return null;
-    }
-    return {
-      key: "pending-continuation",
-      kind: "prompt",
-      text: pendingContinuation.text,
-      at: Number.MAX_SAFE_INTEGER,
-      skills: pendingContinuation.skills,
-      files: [],
-      images: optimisticPromptImages(pendingContinuation.attachments),
-    };
-  }, [launchInProgress, pendingContinuation, promptCount, promptLaunch?.key, runId]);
-
-  // A continuation may start streaming before the persisted copy of its prompt
-  // reaches SQLite. Keep that answer after the optimistic prompt until the two
-  // prompt copies swap; once acknowledged it joins the normal turn plan.
-  const streamingFollowsPendingContinuation = pendingContinuationItem !== null;
-  const renderedItems = useMemo(
-    () =>
-      streamingFollowsPendingContinuation
-        ? displayItems
-        : [...displayItems, ...streamingItems],
-    [displayItems, streamingFollowsPendingContinuation, streamingItems],
-  );
-  const rows = useMemo(() => buildTurnRows(renderedItems), [renderedItems]);
-  const trailingStreamingRows = useMemo(
-    () =>
-      streamingFollowsPendingContinuation ? buildTurnRows(streamingItems) : [],
-    [streamingFollowsPendingContinuation, streamingItems],
-  );
-  const actionItems = useMemo(
-    () =>
-      pendingContinuationItem
-        ? [...displayItems, pendingContinuationItem, ...streamingItems]
-        : renderedItems,
-    [displayItems, pendingContinuationItem, renderedItems, streamingItems],
-  );
-
-  // Keep the previous answer's action row structurally stable during a
-  // continuation. Only a response that is actually streaming loses its row;
-  // the previous fork remains visible (and disabled) until the run settles.
-  const actionState = useMemo(
-    () =>
-      transcriptActionState(actionItems, {
-        runIsLive: Boolean(runIsLive),
-        hasLocalContinuation:
-          pendingContinuationItem !== null && streamingItems.length === 0,
-      }),
-    [actionItems, pendingContinuationItem, runIsLive, streamingItems.length],
-  );
-  const turnIsActive = Boolean(runIsLive || pendingContinuationItem);
-
   const rootRef = useRef<View>(null);
   /** Following the end: cleared by a drag, restored by letting go near it. */
   const pinned = useRef(true);
@@ -253,107 +114,99 @@ export function RunView({
     setContextSkills([]);
     setAttachments([]);
   }, []);
+  const {
+    transcript: { rows, trailingStreamingRows, actionState, turnIsActive },
+    initialPresentation,
+    continuationPresentation,
+    measuringLaunch,
+    flyingPrompt,
+    startContinuation,
+    rollbackContinuation,
+    resolveMeasurement,
+    failMeasurement,
+    landFlight,
+  } = useOptimisticPrompt({
+    runId,
+    initialPrompt: pending,
+    durableItems: items,
+    streamingItems,
+    runIsLive: Boolean(runIsLive),
+    releaseComposerSource: clearComposerSource,
+  });
+
   const measurePromptDestination = (target: PromptMessageRect) => {
+    if (!measuringLaunch) return;
+    const { id: launchId, origin } = measuringLaunch;
     const root = rootRef.current;
     if (!root) {
-      clearComposerSource();
-      setPromptLaunch((current) =>
-        current?.phase === "measuring" ? { ...current, phase: "landed" } : current,
-      );
+      failMeasurement(launchId);
       return;
     }
     root.measureInWindow((rootX, rootY) => {
-      clearComposerSource();
-      setPromptLaunch((current) => {
-        if (!current || current.phase !== "measuring") return current;
-        // A transparent header does not participate in Yoga layout. Even if
-        // iOS reports the list's first rest offset a frame late, never let the
-        // measured landing point enter the header/toolbar's reserved region.
-        const reservedTargetTop =
-          topPadding +
-          spacing.sm +
-          PROMPT_BUBBLE_ROW_PADDING +
-          (process.env.EXPO_OS === "ios" ? topInset : 0);
-        const { frame, content, offset } = metrics.current;
-        const finalScrollOffset = Math.max(
-          process.env.EXPO_OS === "ios" ? -topInset : 0,
-          content - frame + (process.env.EXPO_OS === "ios" ? insets.bottom : 0),
-        );
-        const targetY = projectedPromptLandingY({
-          measuredWindowY: target.y,
-          rootWindowY: rootY,
-          currentScrollOffset: offset,
-          finalScrollOffset,
-          reservedTop: reservedTargetTop,
-        });
-        const projectedDeltaY = targetY - target.y;
-        const relativeTarget = (rect: PromptBubbleRect): PromptBubbleRect => ({
-          x: rect.x - rootX,
-          y: rect.y - rootY + projectedDeltaY,
-          width: rect.width,
-          height: rect.height,
-        });
-        return {
-          ...current,
-          phase: "flying",
-          flight: {
-            text: target.text
+      // A transparent header does not participate in Yoga layout. Even if
+      // iOS reports the list's first rest offset a frame late, never let the
+      // measured landing point enter the header/toolbar's reserved region.
+      const reservedTargetTop =
+        topPadding +
+        spacing.sm +
+        PROMPT_BUBBLE_ROW_PADDING +
+        (process.env.EXPO_OS === "ios" ? topInset : 0);
+      const { frame, content, offset } = metrics.current;
+      const finalScrollOffset = Math.max(
+        process.env.EXPO_OS === "ios" ? -topInset : 0,
+        content - frame + (process.env.EXPO_OS === "ios" ? insets.bottom : 0),
+      );
+      const targetY = projectedPromptLandingY({
+        measuredWindowY: target.y,
+        rootWindowY: rootY,
+        currentScrollOffset: offset,
+        finalScrollOffset,
+        reservedTop: reservedTargetTop,
+      });
+      const projectedDeltaY = targetY - target.y;
+      const relativeTarget = (rect: PromptBubbleRect): PromptBubbleRect => ({
+        x: rect.x - rootX,
+        y: rect.y - rootY + projectedDeltaY,
+        width: rect.width,
+        height: rect.height,
+      });
+      resolveMeasurement(launchId, {
+        text: target.text
+          ? {
+              from: {
+                x: origin.x - rootX,
+                y: origin.y - rootY,
+                width: target.text.width,
+                height: target.text.height,
+              },
+              to: relativeTarget(target.text),
+            }
+          : null,
+        images: target.images.map((imageTarget, index) => {
+          // Origins created before this media-aware send flow (for example
+          // during Fast Refresh) have no image list. Falling back to the text
+          // origin still completes the handoff.
+          const source = origin.images?.[index];
+          return {
+            from: source
               ? {
-                  from: {
-                    x: current.origin.x - rootX,
-                    y: current.origin.y - rootY,
-                    width: target.text.width,
-                    height: target.text.height,
-                  },
-                  to: relativeTarget(target.text),
+                  x: source.x - rootX,
+                  y: source.y - rootY,
+                  width: source.width,
+                  height: source.height,
                 }
-              : null,
-            images: target.images.map((imageTarget, index) => {
-              // Origins created before this media-aware send flow (for
-              // example during Fast Refresh) have no image list. Falling
-              // back to the text origin still completes the handoff.
-              const source = current.origin.images?.[index];
-              return {
-                from: source
-                  ? {
-                      x: source.x - rootX,
-                      y: source.y - rootY,
-                      width: source.width,
-                      height: source.height,
-                    }
-                  : {
-                      x: current.origin.x - rootX,
-                      y: current.origin.y - rootY,
-                      width: imageTarget.width,
-                      height: imageTarget.height,
-                    },
-                to: relativeTarget(imageTarget),
-              };
-            }),
-          },
-        };
+              : {
+                  x: origin.x - rootX,
+                  y: origin.y - rootY,
+                  width: imageTarget.width,
+                  height: imageTarget.height,
+                },
+            to: relativeTarget(imageTarget),
+          };
+        }),
       });
     });
   };
-
-  const landPrompt = useCallback(() => {
-    setPromptLaunch((current) =>
-      current?.phase === "flying" ? { ...current, phase: "landed" } : current,
-    );
-  }, []);
-
-  // Measurement normally stabilizes in a few frames. Never leave the source
-  // text stranded in the composer if a native view declines coordinates.
-  useEffect(() => {
-    if (promptLaunch?.phase !== "measuring") return;
-    const fallback = setTimeout(() => {
-      clearComposerSource();
-      setPromptLaunch((current) =>
-        current?.phase === "measuring" ? { ...current, phase: "landed" } : current,
-      );
-    }, 300);
-    return () => clearTimeout(fallback);
-  }, [clearComposerSource, promptLaunch?.key, promptLaunch?.phase]);
 
   const {
     continueRun,
@@ -380,32 +233,17 @@ export function RunView({
       },
       {
         onOptimisticStart: ({ message, skills }) => {
-          setPendingContinuation({
-            runId,
+          startContinuation({
             text: message,
             sourceText: sentDraft,
             skills,
             origin,
             attachments: sentAttachments,
-            afterPromptCount: promptCount,
           });
-          setPromptLaunch(
-            origin
-              ? {
-                  key: "pending-continuation",
-                  origin,
-                  afterPromptCount: promptCount,
-                  phase: "measuring",
-                }
-              : null,
-          );
           pinned.current = true;
-          // Without coordinates there is no visual handoff to wait for.
-          if (!origin) clearComposerSource();
         },
         onOptimisticRollback: () => {
-          setPendingContinuation(null);
-          setPromptLaunch(null);
+          rollbackContinuation();
           setDraft(sentDraft);
           setContextSkills(sentContextSkills);
           setAttachments(sentAttachments);
@@ -569,9 +407,6 @@ export function RunView({
           ? "Starting the run…"
           : "Loading run…"
         : "Continue this run…";
-  const flyingPromptItem =
-    promptLaunch?.key === "pending-prompt" ? pendingItem : pendingContinuationItem;
-
   return (
     <View ref={rootRef} collapsable={false} style={{ flex: 1 }}>
       {/*
@@ -603,11 +438,11 @@ export function RunView({
           // Existing rows and the outgoing phrase move as one continuous
           // transition. The phrase projects its destination through whatever
           // distance remains in this native scroll.
-          place(placed.current || pendingContinuationItem !== null);
+          place(placed.current || continuationPresentation !== null);
           // The first rows land in one piece and without animation; from a
           // beat later on, growth — a streaming answer, the keyboard's room —
           // is followed with one.
-          if ((rows.length > 0 || pendingItem !== null) && placedTimer.current === null) {
+          if ((rows.length > 0 || initialPresentation !== null) && placedTimer.current === null) {
             placedTimer.current = setTimeout(() => {
               placed.current = true;
             }, 300);
@@ -623,20 +458,18 @@ export function RunView({
         onScrollEndDrag={(event) => settle(event.nativeEvent)}
         onMomentumScrollEnd={(event) => settle(event.nativeEvent)}
       >
-        {pendingItem ? (
+        {initialPresentation ? (
           <TranscriptRow
-            item={pendingItem}
+            item={initialPresentation.item}
             providerId={providerId}
-            animatePromptEntry={!pending?.origin}
-            promptHidden={launchInProgress && promptLaunch?.key === "pending-prompt"}
+            animatePromptEntry={initialPresentation.animateEntry}
+            promptHidden={initialPresentation.hidden}
             onPromptMeasure={
-              promptLaunch?.key === "pending-prompt" && promptLaunch.phase === "measuring"
-                ? measurePromptDestination
-                : undefined
+              initialPresentation.shouldMeasure ? measurePromptDestination : undefined
             }
           />
         ) : null}
-        {rows.length === 0 && !pendingItem ? (
+        {rows.length === 0 && !initialPresentation ? (
           <ThemedText variant="subhead" style={{ paddingVertical: spacing.xl, textAlign: "center" }}>
             {run ? "Nothing in this run yet." : "Loading run…"}
           </ThemedText>
@@ -649,22 +482,20 @@ export function RunView({
               // A local continuation already owns the new turn. Do not mark
               // the previous persisted turn live while that prompt flies in.
               isRunInProgress={
-                Boolean(runIsLive) && !pendingContinuationItem && index === rows.length - 1
+                Boolean(runIsLive) && !continuationPresentation && index === rows.length - 1
               }
               actions={actions}
             />
           ))
         )}
-        {pendingContinuationItem ? (
+        {continuationPresentation ? (
           <TranscriptRow
-            item={pendingContinuationItem}
+            item={continuationPresentation.item}
             providerId={providerId}
-            animatePromptEntry={!pendingContinuation?.origin}
-            promptHidden={launchInProgress && promptLaunch?.key === "pending-continuation"}
+            animatePromptEntry={continuationPresentation.animateEntry}
+            promptHidden={continuationPresentation.hidden}
             onPromptMeasure={
-              promptLaunch?.key === "pending-continuation" && promptLaunch.phase === "measuring"
-                ? measurePromptDestination
-                : undefined
+              continuationPresentation.shouldMeasure ? measurePromptDestination : undefined
             }
           />
         ) : null}
@@ -678,7 +509,7 @@ export function RunView({
           />
         ))}
         <View style={{ gap: spacing.md }}>
-          {runIsLive || starting || pendingContinuationItem ? (
+          {runIsLive || starting || continuationPresentation ? (
             <AsciiLoader mode={mode} thinkingText={thinking} />
           ) : null}
           {waiting.map((approval) => (
@@ -804,12 +635,12 @@ export function RunView({
         ) : null}
       </Animated.View>
 
-      {promptLaunch?.phase === "flying" && promptLaunch.flight && flyingPromptItem ? (
+      {flyingPrompt ? (
         <FlyingPromptBubble
-          item={flyingPromptItem}
+          item={flyingPrompt.item}
           providerId={providerId}
-          flight={promptLaunch.flight}
-          onLanded={landPrompt}
+          flight={flyingPrompt.flight}
+          onLanded={() => landFlight(flyingPrompt.launchId)}
         />
       ) : null}
     </View>

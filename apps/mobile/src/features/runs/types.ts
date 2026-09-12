@@ -28,6 +28,31 @@ export interface ComposerSendImageOrigin {
   height: number;
 }
 
+/** Window-space rectangle used while a prompt leaves the composer. */
+export interface PromptBubbleRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Measured bounds of a prompt and each independently flying surface in it. */
+export interface PromptMessageRect extends PromptBubbleRect {
+  text: PromptBubbleRect | null;
+  images: PromptBubbleRect[];
+}
+
+export interface PromptFlightElement {
+  from: PromptBubbleRect;
+  to: PromptBubbleRect;
+}
+
+/** Source and destination coordinates relative to the RunView root. */
+export interface PromptFlight {
+  text: PromptFlightElement | null;
+  images: PromptFlightElement[];
+}
+
 /** A prompt as it was sent, drawn before the Mac's own copy of it arrives. */
 export interface PendingPrompt {
   /** The composed goal — what was typed plus a token per attached skill. */
