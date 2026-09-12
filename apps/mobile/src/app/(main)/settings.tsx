@@ -9,6 +9,7 @@ import { Alert, ScrollView, View } from "react-native";
 import { backendSession, useSession, type SessionSnapshot } from "@/backend/backend-session";
 import type { ConnectionState } from "@/backend/connection-supervisor";
 import { AsciiSpinner, Card, Row, ThemedText } from "@/components/ui";
+import { AppearanceCard } from "@/features/appearance";
 import { ConnectionBadge } from "@/features/connection";
 import { goHome } from "@/features/runs";
 import { endpointHost } from "@mains/contracts/backend";
@@ -257,6 +258,13 @@ export default function SettingsScreen() {
             />
           </Card>
         )}
+      </View>
+
+      <View style={{ gap: spacing.sm }}>
+        <ThemedText variant="title3" style={{ paddingHorizontal: spacing.xs }}>
+          Appearance
+        </ThemedText>
+        <AppearanceCard />
       </View>
 
       <View style={{ gap: spacing.sm }}>

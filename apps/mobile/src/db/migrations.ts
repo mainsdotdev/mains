@@ -259,4 +259,11 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX idx_tool_calls_parent ON tool_calls (backend_id, run_id, parent_tool_call_id);
   UPDATE sync_cursors SET tool_updated_at = NULL;
   `,
+  // v14 — this phone's own settings (appearance), never written by sync
+  `
+  CREATE TABLE preferences (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+  );
+  `,
 ];

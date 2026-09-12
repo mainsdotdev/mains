@@ -2,13 +2,9 @@ import { Pressable, View } from "react-native";
 
 import type { WorkspaceRow as WorkspaceRecord } from "@/db/schema";
 import { workspaceStatusLabel } from "@/lib/format";
-import { colors, radius, spacing, type } from "@/theme";
+import { colors, radius, spacing, type, useWorkspaceColors } from "@/theme";
 
 import { ProjectIcon, ThemedText, WorkspaceStatusIcon } from "@/components/ui";
-
-/** The desktop's diff colors (`text-success` / `text-danger`). */
-const ADDITIONS = "#22C55E";
-const DELETIONS = "#ff4436";
 
 /**
  * One workspace in the Code sidebar, as the desktop's workspace item: its
@@ -26,6 +22,7 @@ export function WorkspaceRow({
   selected?: boolean;
   onPress: () => void;
 }) {
+  const { success: additions, danger: deletions } = useWorkspaceColors();
   const detail = !workspace.pathExists
     ? "Folder missing"
     : (workspace.branch ?? workspaceStatusLabel(workspace.status) ?? null);
@@ -66,7 +63,7 @@ export function WorkspaceRow({
             <ThemedText
               variant="footnote"
               numberOfLines={1}
-              style={{ flex: 1, color: workspace.pathExists ? colors.secondaryLabel : DELETIONS }}
+              style={{ flex: 1, color: workspace.pathExists ? colors.secondaryLabel : deletions }}
             >
               {detail}
             </ThemedText>
@@ -76,12 +73,12 @@ export function WorkspaceRow({
       {hasDiff ? (
         <View style={{ flexDirection: "row", gap: spacing.xs }}>
           {workspace.diffAdditions !== null && (
-            <ThemedText variant="caption" style={[type.mono, { color: ADDITIONS, fontVariant: ["tabular-nums"] }]}>
+            <ThemedText variant="caption" style={[type.mono, { color: additions, fontVariant: ["tabular-nums"] }]}>
               +{workspace.diffAdditions}
             </ThemedText>
           )}
           {workspace.diffDeletions !== null && (
-            <ThemedText variant="caption" style={[type.mono, { color: DELETIONS, fontVariant: ["tabular-nums"] }]}>
+            <ThemedText variant="caption" style={[type.mono, { color: deletions, fontVariant: ["tabular-nums"] }]}>
               −{workspace.diffDeletions}
             </ThemedText>
           )}

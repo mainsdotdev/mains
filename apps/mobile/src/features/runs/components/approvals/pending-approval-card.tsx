@@ -5,7 +5,16 @@ import { Pressable, TextInput, View } from "react-native";
 
 import type { PendingApprovalRow } from "@/db/schema";
 import { toolInputPreview } from "@/lib/format";
-import { colors, radius, shadows, spacing, type, useProviderAccentPair } from "@/theme";
+import {
+  colors,
+  radius,
+  shadows,
+  spacing,
+  type,
+  useProviderAccentPair,
+  useSoftTint,
+  useSystemHues,
+} from "@/theme";
 
 import { Button, SFSymbol, ThemedText } from "@/components/ui";
 
@@ -131,14 +140,23 @@ function toolApprovalDisplay(inputJson: string | null, toolName: string): ToolAp
   }
 }
 
-function riskColors(level: NonNullable<ToolApprovalDisplay["riskLevel"]>) {
+/**
+ * A risk level's badge. The text keeps the platform color, which follows the
+ * phone's contrast settings; only the wash behind it needs the hue spelled out,
+ * since a `PlatformColor` cannot be drawn at an opacity.
+ */
+function riskColors(
+  level: NonNullable<ToolApprovalDisplay["riskLevel"]>,
+  hues: ReturnType<typeof useSystemHues>,
+  soft: (color: string) => string,
+) {
   switch (level) {
     case "high":
-      return { foreground: colors.systemRed, background: "rgba(255, 59, 48, 0.14)" };
+      return { foreground: colors.systemRed, background: soft(hues.red) };
     case "medium":
-      return { foreground: colors.systemOrange, background: "rgba(255, 149, 0, 0.14)" };
+      return { foreground: colors.systemOrange, background: soft(hues.orange) };
     case "low":
-      return { foreground: colors.systemGreen, background: "rgba(52, 199, 89, 0.14)" };
+      return { foreground: colors.systemGreen, background: soft(hues.green) };
   }
 }
 
@@ -204,6 +222,8 @@ export function PendingApprovalCard({
   onRespond?: (decision: ApprovalDecision) => Promise<void>;
 }) {
   const provider = useProviderAccentPair(providerId);
+  const hues = useSystemHues();
+  const soft = useSoftTint();
   const [selected, setSelected] = useState<string[]>([]);
   const [freeText, setFreeText] = useState("");
   const [allowForRun, setAllowForRun] = useState(false);
@@ -267,6 +287,8 @@ export function PendingApprovalCard({
         ? "Open the run to answer"
         : "The Mac denies this if unanswered.";
 
+  const risk = toolDisplay.riskLevel ? riskColors(toolDisplay.riskLevel, hues, soft) : null;
+
   const body = (
     <View
       style={{
@@ -301,19 +323,19 @@ export function PendingApprovalCard({
           </View>
         )}
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
-          {toolDisplay.riskLevel ? (
+          {risk ? (
             <View
               style={{
                 paddingHorizontal: spacing.sm,
                 paddingVertical: spacing.xxs + 1,
                 borderRadius: radius.full,
-                backgroundColor: riskColors(toolDisplay.riskLevel).background,
+                backgroundColor: risk.background,
               }}
             >
               <ThemedText
                 variant="caption2"
                 style={{
-                  color: riskColors(toolDisplay.riskLevel).foreground,
+                  color: risk.foreground,
                   fontWeight: "600",
                   textTransform: "capitalize",
                 }}

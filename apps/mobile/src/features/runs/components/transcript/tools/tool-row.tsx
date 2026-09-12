@@ -4,7 +4,7 @@ import { Pressable, ScrollView, View } from "react-native";
 import { AsciiSpinner, SFSymbol, ThemedText } from "@/components/ui";
 import { toPresentTense } from "@/lib/tool-registry";
 import { type DiffLine } from "@/lib/tool-output";
-import { colors, radius, spacing, useStatusColors } from "@/theme";
+import { colors, radius, spacing, useSoftTint, useStatusColors, useSystemHues } from "@/theme";
 
 /**
  * The shell every tool display sits in — the phone's answer to the desktop's
@@ -202,6 +202,8 @@ export function ToolTextBody({ text }: { text: string }) {
  * which it cannot do inside a horizontal scroller.
  */
 export function ToolDiffBody({ lines }: { lines: DiffLine[] }) {
+  const hues = useSystemHues();
+  const soft = useSoftTint();
   const shown = lines.slice(0, MAX_BODY_LINES);
   const hidden = lines.length - shown.length;
 
@@ -214,9 +216,9 @@ export function ToolDiffBody({ lines }: { lines: DiffLine[] }) {
             paddingHorizontal: spacing.ms,
             backgroundColor:
               line.type === "add"
-                ? "rgba(52, 199, 89, 0.16)"
+                ? soft(hues.green)
                 : line.type === "remove"
-                  ? "rgba(255, 59, 48, 0.16)"
+                  ? soft(hues.red)
                   : "transparent",
           }}
         >

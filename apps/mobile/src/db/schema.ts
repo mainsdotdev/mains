@@ -357,6 +357,16 @@ export const syncCursors = sqliteTable(
   (t) => [primaryKey({ columns: [t.backendId, t.runId] })],
 );
 
+/**
+ * This phone's own settings — the one table that is not a projection of
+ * anything on the Mac, and that sync never writes. Key/value so a new
+ * preference costs no migration.
+ */
+export const preferences = sqliteTable("preferences", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
 export type BackendRow = typeof backends.$inferSelect;
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;

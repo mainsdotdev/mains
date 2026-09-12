@@ -51,7 +51,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: variant.scheme,
-    userInterfaceStyle: "dark",
+    // The app follows the phone, and Settings can override it for itself
+    // (`src/lib/appearance.ts`); pinning this to "dark" would make the OS
+    // report dark to every semantic color and lock that override out.
+    userInterfaceStyle: "automatic",
     runtimeVersion: {
       policy: "fingerprint",
     },
@@ -99,13 +102,19 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-splash-screen",
         {
-          // The icon is a flat #000000 square with no alpha, and the app opens
-          // on iOS's dark `systemBackground` — also pure black. Anything else
-          // here draws the icon's own square as a visible tile on launch and
-          // then jumps colour as the app takes over.
-          backgroundColor: "#000000",
-          image: "./assets/images/icon.png",
+          // Both icons are flat squares with no alpha, so each one's
+          // background has to match the scheme it launches into exactly or the
+          // square shows as a tile and then jumps colour as the app takes
+          // over: black on iOS's dark `systemBackground`, white on its light
+          // one. `splash-icon-light.png` is `icon.png` inverted, which is the
+          // whole of the difference between them.
+          backgroundColor: "#ffffff",
+          image: "./assets/images/splash-icon-light.png",
           imageWidth: 160,
+          dark: {
+            backgroundColor: "#000000",
+            image: "./assets/images/icon.png",
+          },
         },
       ],
       [

@@ -174,7 +174,7 @@ export default function WorkspaceScreen() {
             paddingHorizontal: spacing.md,
           }}
         >
-          <SFSymbol name="magnifyingglass" size={18} tint={colors.onTint} />
+          <SFSymbol name="magnifyingglass" size={18} tint={colors.secondaryLabel} />
           <TextInput
             ref={searchRef}
             accessibilityLabel="Search runs"

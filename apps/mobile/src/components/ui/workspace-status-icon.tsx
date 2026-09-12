@@ -1,30 +1,22 @@
 import type { ColorValue } from "react-native";
 import Svg, { Circle, Defs, Mask, Path } from "react-native-svg";
 
-import { colors, useBrandColors } from "@/theme";
-
-/**
- * Status colors, borrowed from the desktop (`workspace-status.ts` over
- * `index.css`): warning / success / danger are its literal values so a
- * workspace reads the same on both screens.
- */
-const WARNING = "#F59E0B";
-const SUCCESS = "#22C55E";
-const DANGER = "#ff4436";
+import { colors, useBrandColors, useWorkspaceColors } from "@/theme";
 
 /** The desktop's status glyphs (`components/ui/icons/status-*.tsx`), on a 16-unit grid. */
 export function WorkspaceStatusIcon({ status, size = 16 }: { status: string | null | undefined; size?: number }) {
   const brand = useBrandColors();
+  const workspace = useWorkspaceColors();
   const tint: ColorValue = (() => {
     switch (status) {
       case "in_progress":
-        return WARNING;
+        return workspace.warning;
       case "in_review":
-        return SUCCESS;
+        return workspace.success;
       case "done":
         return brand.accent;
       case "canceled":
-        return DANGER;
+        return workspace.danger;
       case "duplicate":
         return colors.secondaryLabel;
       default:

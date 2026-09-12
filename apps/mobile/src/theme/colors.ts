@@ -155,3 +155,51 @@ export function withAlpha(hex: string, alpha: number): string {
   const value = parseInt(match[1], 16);
   return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
 }
+
+/**
+ * iOS's red / orange / green as literal values, for the one thing a
+ * `PlatformColor` cannot do: be drawn at an opacity. `withAlpha` needs a hex
+ * string, so a wash under `colors.systemRed` text has to spell the hue out —
+ * the text itself stays the platform color, which also follows the phone's
+ * contrast and colour-filter settings.
+ */
+const systemHues = {
+  light: { red: "#FF3B30", orange: "#FF9500", green: "#34C759" },
+  dark: { red: "#FF453A", orange: "#FF9F0A", green: "#30D158" },
+} as const;
+
+export function useSystemHues() {
+  const scheme = useColorScheme();
+  return systemHues[scheme === "dark" ? "dark" : "light"];
+}
+
+/**
+ * The wash a tinted surface wears under text in a given color — a risk badge,
+ * a diff line, a chip. One depth for the whole app: the same opacities as the
+ * brand's `accentSoft`, a little stronger in dark, where a wash has to lift
+ * off black, than in light, where it has to stay under the text it carries.
+ */
+export function useSoftTint(): (color: string) => string {
+  const scheme = useColorScheme();
+  const alpha = scheme === "dark" ? 0.18 : 0.12;
+  return (color: string) => withAlpha(color, alpha);
+}
+
+/**
+ * The desktop's workspace hues (`index.css`: `--color-success`, `--color-danger`,
+ * `--color-warning`), borrowed so a workspace's status glyph and diff counts
+ * read the same on both screens.
+ *
+ * The desktop only ever draws them on its dark ground. On white, green-500
+ * lands at 2.3:1 — unreadable as a diff count — so light mode steps each hue
+ * down the same ramp to clear 4.5:1 while staying recognisably the same color.
+ */
+const workspacePalette = {
+  light: { success: "#15803D", danger: "#C62A20", warning: "#B45309" },
+  dark: { success: "#22C55E", danger: "#FF4436", warning: "#F59E0B" },
+} as const;
+
+export function useWorkspaceColors() {
+  const scheme = useColorScheme();
+  return workspacePalette[scheme === "dark" ? "dark" : "light"];
+}
