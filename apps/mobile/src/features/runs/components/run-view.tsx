@@ -8,11 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { backendSession } from "@/backend/backend-session";
 import { RoundGlassButton, ThemedText } from "@/components/ui";
-import {
-  serializeComposerAttachments,
-  type ComposerAttachment,
-} from "@/lib/composer-attachments";
-import { attachedSkills, composeGoal } from "@/lib/context-picker";
+import type { ComposerAttachment } from "@/lib/composer-attachments";
 import { projectedPromptLandingY } from "@/lib/prompt-flight";
 import type { PromptSkill } from "@/lib/prompt-chips";
 import { type PromptImage, type TranscriptItem } from "@/lib/transcript";
@@ -20,14 +16,13 @@ import { transcriptActionState } from "@/lib/transcript-actions";
 import { buildTurnRows } from "@/lib/transcript-rows";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { colors, motion, radius, shadows, spacing } from "@/theme";
-import { useAiDataConsent } from "@/features/ai-data-consent";
 import type { ComposerSendOrigin, PendingPrompt } from "../types";
 import { useRunData } from "../hooks/use-run-data";
+import { useRunOperations } from "../hooks/use-run-operations";
 
 import { AsciiLoader } from "./ascii-loader";
 import { ComposerBar, composerBottomPadding } from "./composer/composer-bar";
 import { PendingApprovalCard } from "./approvals/pending-approval-card";
-import { FORK_MESSAGE } from "./transcript/message-actions";
 import {
   FlyingPromptBubble,
   PROMPT_BUBBLE_ROW_PADDING,
@@ -120,7 +115,6 @@ export function RunView({
   /** Content padding beneath that inset, for controls floating over the list. */
   topPadding?: number;
 }) {
-  const { requestConsent } = useAiDataConsent();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   // Two sheets behind the composer's two chips: the model (and its effort)
@@ -150,7 +144,6 @@ export function RunView({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(() =>
     pending?.origin ? (pending.attachments ?? []) : [],
   );
-  const [sending, setSending] = useState(false);
   const [pendingContinuation, setPendingContinuation] = useState<PendingContinuation | null>(null);
   const [promptLaunch, setPromptLaunch] = useState<PromptLaunch | null>(() =>
     pending?.origin
@@ -162,8 +155,6 @@ export function RunView({
         }
       : null,
   );
-  const [forking, setForking] = useState(false);
-  const [sendError, setSendError] = useState<string | null>(null);
   const launchInProgress = promptLaunch !== null && promptLaunch.phase !== "landed";
 
   // If the Mac's copy wins the race against the flight, hold it (and anything
@@ -255,6 +246,8 @@ export function RunView({
   const turnIsActive = Boolean(runIsLive || pendingContinuationItem);
 
   const rootRef = useRef<View>(null);
+  /** Following the end: cleared by a drag, restored by letting go near it. */
+  const pinned = useRef(true);
   const clearComposerSource = useCallback(() => {
     setDraft("");
     setContextSkills([]);
@@ -362,104 +355,72 @@ export function RunView({
     return () => clearTimeout(fallback);
   }, [clearComposerSource, promptLaunch?.key, promptLaunch?.phase]);
 
-  const send = async (origin: ComposerSendOrigin | null) => {
-    const message = composeGoal(draft, contextSkills);
-    if (
-      (!message && attachments.length === 0) ||
-      !run ||
-      runIsLive ||
-      !connected ||
-      sending
-    ) {
-      return;
-    }
+  const {
+    continueRun,
+    forkRun,
+    stopRun,
+    sending,
+    forking,
+    error: sendError,
+  } = useRunOperations({
+    run: run ?? null,
+    turnIsActive,
+    modelId: modelSelection.selected?.id ?? null,
+  });
+
+  const send = (origin: ComposerSendOrigin | null) => {
     const sentDraft = draft;
     const sentContextSkills = contextSkills;
-    const sentSkills = attachedSkills(sentDraft, sentContextSkills);
     const sentAttachments = attachments;
-    let lifted = false;
-    const restoreComposer = () => {
-      setPendingContinuation(null);
-      setPromptLaunch(null);
-      setDraft(sentDraft);
-      setContextSkills(sentContextSkills);
-      setAttachments(sentAttachments);
-    };
-    setSending(true);
-    setSendError(null);
-    try {
-      const allowed = await requestConsent(backendId, run.providerId);
-      if (!allowed) return;
-      const serializedAttachments = await serializeComposerAttachments(sentAttachments);
-      setPendingContinuation({
-        runId,
-        text: message,
+    void continueRun(
+      {
         sourceText: sentDraft,
-        skills: sentSkills,
-        origin,
+        contextSkills: sentContextSkills,
         attachments: sentAttachments,
-        afterPromptCount: promptCount,
-      });
-      setPromptLaunch(
-        origin
-          ? {
-              key: "pending-continuation",
-              origin,
-              afterPromptCount: promptCount,
-              phase: "measuring",
-            }
-          : null,
-      );
-      pinned.current = true;
-      // Without coordinates there is no visual handoff to wait for.
-      if (!origin) {
-        setDraft("");
-        setContextSkills([]);
-        setAttachments([]);
-      }
-      lifted = true;
-      const result = await backendSession.continueRun(
-        runId,
-        message,
-        sentSkills,
-        modelSelection.selected?.id ?? null,
-        serializedAttachments,
-      );
-      if (!result.success) {
-        restoreComposer();
-        setSendError(result.error);
-        return;
-      }
-    } catch (caught) {
-      if (lifted) restoreComposer();
-      setSendError(caught instanceof Error ? caught.message : "Could not send");
-    } finally {
-      setSending(false);
-    }
+      },
+      {
+        onOptimisticStart: ({ message, skills }) => {
+          setPendingContinuation({
+            runId,
+            text: message,
+            sourceText: sentDraft,
+            skills,
+            origin,
+            attachments: sentAttachments,
+            afterPromptCount: promptCount,
+          });
+          setPromptLaunch(
+            origin
+              ? {
+                  key: "pending-continuation",
+                  origin,
+                  afterPromptCount: promptCount,
+                  phase: "measuring",
+                }
+              : null,
+          );
+          pinned.current = true;
+          // Without coordinates there is no visual handoff to wait for.
+          if (!origin) clearComposerSource();
+        },
+        onOptimisticRollback: () => {
+          setPendingContinuation(null);
+          setPromptLaunch(null);
+          setDraft(sentDraft);
+          setContextSkills(sentContextSkills);
+          setAttachments(sentAttachments);
+        },
+      },
+    );
   };
 
   // Forking branches this run's session into a new one and opens it. The Mac
   // inherits everything else from the source, so the phone sends only the
   // opening line — the desktop's, word for word.
   const fork = useCallback(async () => {
-    if (!run || forking || turnIsActive) return;
-    setForking(true);
-    setSendError(null);
-    try {
-      const allowed = await requestConsent(backendId, run.providerId);
-      if (!allowed) return;
-      const result = await backendSession.forkRun(runId, FORK_MESSAGE);
-      if (!result.success) {
-        setSendError(result.error);
-        return;
-      }
-      router.push(`/run/${result.data.runId}` as Href);
-    } catch (caught) {
-      setSendError(caught instanceof Error ? caught.message : "Could not fork this run");
-    } finally {
-      setForking(false);
-    }
-  }, [backendId, forking, requestConsent, run, runId, router, turnIsActive]);
+    const nextRunId = await forkRun();
+    if (nextRunId) router.push(`/run/${nextRunId}` as Href);
+  }, [forkRun, router]);
 
   const actions = useMemo<TranscriptActions | undefined>(
     () =>
@@ -474,14 +435,6 @@ export function RunView({
         : undefined,
     [actionState, connected, fork, forking, run, turnIsActive],
   );
-
-  // Stop, the desktop's verb: `runs:abort`, what its composer's stop button
-  // calls. The Mac settles the run's status and pushes it back.
-  const stop = async () => {
-    setSendError(null);
-    const result = await backendSession.abortRun(runId);
-    if (!result.success) setSendError(result.error);
-  };
 
   const listRef = useRef<ScrollView>(null);
 
@@ -515,8 +468,6 @@ export function RunView({
    * through.
    */
   const metrics = useRef({ frame: 0, content: 0, offset: null as number | null });
-  /** Following the end: cleared by a drag, restored by letting go near it. */
-  const pinned = useRef(true);
   /** Whether the way back down is on screen; the ref keeps `onScroll` cheap. */
   const [awayFromEnd, setAwayFromEnd] = useState(false);
   const away = useRef(false);
@@ -788,7 +739,7 @@ export function RunView({
           onSend={(origin) => void send(origin)}
           // Only offered while there is something to stop, and only when the
           // Mac is reachable to hear it.
-          onStop={runIsLive && connected ? () => void stop() : undefined}
+          onStop={runIsLive && connected ? () => void stopRun() : undefined}
           sending={sending}
           disabled={!connected || turnIsActive || !run}
           error={sendError}

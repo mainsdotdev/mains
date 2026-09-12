@@ -10,9 +10,6 @@ import { CheckIcon, ClipboardIcon, ForkIcon } from "@/components/ui";
 /** How long the copy button stays acknowledged before it reads "Copy" again. */
 const COPIED_FOR_MS = 2000;
 
-/** The desktop's opening line for a fork — kept word for word (`workspace-events.tsx`). */
-export const FORK_MESSAGE = "Continue from where this session left off.";
-
 /**
  * The two things an answer affords once it is written: take it with you, or
  * branch off it. The desktop hangs the same pair off the end of a session in
