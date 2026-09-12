@@ -14,30 +14,33 @@ import { backendSession, useSession } from "@/backend/backend-session";
 import { DEMO_SUGGESTED_PROMPT } from "@/backend/demo/demo-scenarios";
 import { startDemo } from "@/backend/demo/start";
 import { DEMO_BACKEND_ID } from "@/backend/demo/transport";
-import { useAiDataConsent } from "@/components/ai-data-consent-provider";
-import { Button } from "@/components/button";
+import {
+  Button,
+  GlassSurface,
+  ProjectIcon,
+  RoundGlassButton,
+  SFSymbol,
+  SidebarIcon,
+  ThemedText,
+} from "@/components/ui";
+import { ConnectionBadge } from "@/features/connection";
+import { useAiDataConsent } from "@/features/ai-data-consent";
 import {
   ComposerBar,
+  RunView,
   composerBottomPadding,
+  homeRun,
+  useHomeRun,
   type ComposerSendOrigin,
-} from "@/components/composer-bar";
-import { GlassSurface } from "@/components/glass-surface";
+} from "@/features/runs";
+import { ModeMenu } from "@/features/spaces";
 import { attachedSkills, composeGoal } from "@/lib/context-picker";
 import {
   serializeComposerAttachments,
   type ComposerAttachment,
 } from "@/lib/composer-attachments";
 import type { PromptSkill } from "@/lib/prompt-chips";
-import { ModeMenu } from "@/components/mode-menu";
-import { ProjectIcon } from "@/components/project-icon";
-import { RoundGlassButton } from "@/components/round-glass-button";
-import { RunView } from "@/components/run-view";
-import { SFSymbol } from "@/components/sf-symbol";
-import { SidebarIcon } from "@/components/sidebar-icon";
-import { ConnectionBadge } from "@/components/status";
-import { ThemedText } from "@/components/themed-text";
 import { providerModes, type ModeId } from "@mains/contracts/runs";
-import { homeRun, useHomeRun } from "@/lib/home-run";
 import { useModelSelection } from "@/lib/use-model-selection";
 import { useRunTitle } from "@/lib/use-run-title";
 import { db } from "@/db/client";

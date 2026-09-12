@@ -4,8 +4,7 @@ import { ScrollView } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
 import { setModelChoice } from "@/backend/sync";
-import { Card, Row, SheetHeader, SheetHint, sheetContentStyle } from "@/components/sheet-rows";
-import { ThemedText } from "@/components/themed-text";
+import { Card, Row, SheetHeader, SheetHint, ThemedText, sheetContentStyle } from "@/components/ui";
 import {
   effortOffAllowed,
   formatEffortLevel,

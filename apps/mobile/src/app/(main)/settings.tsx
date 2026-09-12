@@ -8,14 +8,12 @@ import { Alert, ScrollView, View } from "react-native";
 
 import { backendSession, useSession, type SessionSnapshot } from "@/backend/backend-session";
 import type { ConnectionState } from "@/backend/connection-supervisor";
-import { AsciiSpinner } from "@/components/ascii-spinner";
-import { Card, Row } from "@/components/sheet-rows";
-import { ConnectionBadge } from "@/components/status";
-import { ThemedText } from "@/components/themed-text";
+import { AsciiSpinner, Card, Row, ThemedText } from "@/components/ui";
+import { ConnectionBadge } from "@/features/connection";
+import { goHome } from "@/features/runs";
 import { endpointHost } from "@mains/contracts/backend";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { connectionDetail, connectionLabel, relativeTime } from "@/lib/format";
-import { goHome } from "@/lib/home-run";
 import { colors, spacing } from "@/theme";
 
 /** How long "Copied" stays on the diagnostics row. */

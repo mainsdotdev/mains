@@ -3,8 +3,7 @@ import { useHeaderHeight } from "expo-router/react-navigation";
 import { View } from "react-native";
 
 import { backendSession } from "@/backend/backend-session";
-import { RunView } from "@/components/run-view";
-import { goHome } from "@/lib/home-run";
+import { RunView, goHome } from "@/features/runs";
 import { useRunTitle } from "@/lib/use-run-title";
 
 /** One run under a navigation bar: opened from a list, a search, or a fork. */

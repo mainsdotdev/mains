@@ -19,9 +19,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { loadImage } from "@/components/artifact-image";
-import { SFSymbol } from "@/components/sf-symbol";
-import { ThemedText } from "@/components/themed-text";
+import { SFSymbol, ThemedText } from "@/components/ui";
+import { loadImage } from "@/features/runs";
 import type { ArtifactImage } from "@mains/contracts/runs";
 import { spacing } from "@/theme";
 

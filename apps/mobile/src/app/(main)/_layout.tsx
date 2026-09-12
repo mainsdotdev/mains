@@ -4,7 +4,7 @@ import { StyleSheet, useColorScheme } from "react-native";
 import { useDrawerProgress } from "react-native-drawer-layout";
 import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated";
 
-import { AiDataConsentProvider } from "@/components/ai-data-consent-provider";
+import { AiDataConsentProvider } from "@/features/ai-data-consent";
 import { colors, shadows, useBrandColors } from "@/theme";
 
 /** Corner radius the main screen rounds into as the sidebar opens (≈ the device's). */

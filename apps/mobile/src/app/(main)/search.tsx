@@ -9,10 +9,7 @@ import { useAnimatedKeyboard } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useSession } from "@/backend/backend-session";
-import { GlassSurface } from "@/components/glass-surface";
-import { SFSymbol } from "@/components/sf-symbol";
-import { ThemedText } from "@/components/themed-text";
-import { WorkspaceRow } from "@/components/workspace-row";
+import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
 import { db } from "@/db/client";
 import { collections, projects, runs, workspaces, type RunRow as RunRecord } from "@/db/schema";
 import { isModeId } from "@mains/contracts/modes";
@@ -20,6 +17,7 @@ import { modeLabel } from "@mains/contracts/runs";
 import { relativeTime, runStatusLabel } from "@/lib/format";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { colors, radius, spacing, type } from "@/theme";
+import { WorkspaceRow } from "@/features/workspaces";
 
 /** The bar's controls share one height with the workspace screen's. */
 const BAR_HEIGHT = 52;

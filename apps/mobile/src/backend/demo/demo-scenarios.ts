@@ -97,7 +97,7 @@ const issueInvestigation: DemoScenario = {
         path: "/Users/demo/Desktop/work/demo-org/mains/apps/mobile/src",
       },
       output:
-        "src/backend/backend-session.ts: attachRunEvents(...)\nsrc/backend/sync.ts: syncPendingApprovals(...)\nsrc/components/run-view.tsx: isRunLive",
+        "src/backend/backend-session.ts: attachRunEvents(...)\nsrc/backend/sync.ts: syncPendingApprovals(...)\nsrc/features/runs/components/run-view.tsx: isRunLive",
     },
     {
       toolName: "Read",
@@ -138,7 +138,7 @@ const workspaceReview: DemoScenario = {
         path: "/Users/demo/Desktop/work/demo-org/mains",
       },
       output:
-        "apps/mobile/src/app/(main)/index.tsx\napps/mobile/src/backend/backend-session.ts\napps/mobile/src/backend/sync.ts\napps/mobile/src/components/run-view.tsx",
+        "apps/mobile/src/app/(main)/index.tsx\napps/mobile/src/backend/backend-session.ts\napps/mobile/src/backend/sync.ts\napps/mobile/src/features/runs/components/run-view.tsx",
     },
     {
       toolName: "Read",

@@ -3,16 +3,16 @@ import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, View } from "react-native";
 
-import { useAiDataConsent } from "@/components/ai-data-consent-provider";
-import { Button } from "@/components/button";
 import {
+  Button,
   Card,
   Row,
   SheetHeader,
   SheetHint,
+  ThemedText,
   sheetContentStyle,
-} from "@/components/sheet-rows";
-import { ThemedText } from "@/components/themed-text";
+} from "@/components/ui";
+import { useAiDataConsent } from "@/features/ai-data-consent";
 import { colors, spacing, useBrandColors, useProviderAccent } from "@/theme";
 
 const MAINS_PRIVACY_URL = "https://mains.dev/privacy";

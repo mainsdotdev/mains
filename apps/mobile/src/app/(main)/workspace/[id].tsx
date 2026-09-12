@@ -10,13 +10,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useSession } from "@/backend/backend-session";
 import { setSpaceTarget } from "@/backend/sync";
-import { GlassSurface } from "@/components/glass-surface";
-import { SFSymbol } from "@/components/sf-symbol";
-import { ThemedText } from "@/components/themed-text";
+import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
 import { db } from "@/db/client";
 import { runs, spaceTargets, spaces, workspaces, type RunRow as RunRecord } from "@/db/schema";
 import { relativeTime, runStatusLabel } from "@/lib/format";
-import { goHome } from "@/lib/home-run";
+import { goHome } from "@/features/runs";
 import { useKeyboardInset } from "@/lib/use-keyboard-inset";
 import { colors, radius, spacing, type, useBrandColors } from "@/theme";
 

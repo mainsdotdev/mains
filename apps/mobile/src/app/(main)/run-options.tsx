@@ -2,8 +2,16 @@ import { useLocalSearchParams } from "expo-router";
 import { ScrollView } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
-import { Card, Row, SectionTitle, SheetHeader, SheetHint, Toggle, sheetContentStyle } from "@/components/sheet-rows";
-import { ThemedText } from "@/components/themed-text";
+import {
+  Card,
+  Row,
+  SectionTitle,
+  SheetHeader,
+  SheetHint,
+  ThemedText,
+  Toggle,
+  sheetContentStyle,
+} from "@/components/ui";
 import { useModelSelection } from "@/lib/use-model-selection";
 import { useRunSettings } from "@/lib/use-run-settings";
 import { spacing } from "@/theme";

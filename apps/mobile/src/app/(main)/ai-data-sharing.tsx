@@ -3,8 +3,7 @@ import { useLiveQuery } from "drizzle-orm/expo-sqlite";
 import { Alert, ScrollView, View } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
-import { Card, Row } from "@/components/sheet-rows";
-import { ThemedText } from "@/components/themed-text";
+import { Card, Row, ThemedText } from "@/components/ui";
 import { db } from "@/db/client";
 import { aiDataConsents } from "@/db/schema";
 import {

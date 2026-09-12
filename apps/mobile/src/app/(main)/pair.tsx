@@ -9,8 +9,7 @@ import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react
 import { backendSession } from "@/backend/backend-session";
 import { pairWithBackend } from "@/backend/pair-device";
 import { savePairedBackend } from "@/backend/paired-backend-store";
-import { Button } from "@/components/button";
-import { ThemedText } from "@/components/themed-text";
+import { Button, ThemedText } from "@/components/ui";
 import {
   endpointHost,
   parsePairingLink,
@@ -18,7 +17,7 @@ import {
   type PairingLink,
 } from "@mains/contracts/backend";
 import { startDemo } from "@/backend/demo/start";
-import { goHome } from "@/lib/home-run";
+import { goHome } from "@/features/runs";
 import { colors, radius, shadows, spacing, type, useBrandColors } from "@/theme";
 
 type ScanState =

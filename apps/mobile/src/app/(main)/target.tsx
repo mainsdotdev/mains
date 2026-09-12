@@ -5,9 +5,7 @@ import { Pressable, ScrollView, View } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
 import { setSpaceTarget } from "@/backend/sync";
-import { ProjectIcon } from "@/components/project-icon";
-import { SFSymbol } from "@/components/sf-symbol";
-import { ThemedText } from "@/components/themed-text";
+import { ProjectIcon, SFSymbol, ThemedText } from "@/components/ui";
 import { db } from "@/db/client";
 import { collections, spaceTargets, spaces, workspaces } from "@/db/schema";
 import { colors, radius, shadows, spacing, useBrandColors } from "@/theme";
