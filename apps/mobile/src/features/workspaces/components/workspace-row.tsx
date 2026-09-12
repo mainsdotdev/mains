@@ -51,7 +51,7 @@ export function WorkspaceRow({
           <View style={{ width: 18, alignItems: "center" }}>
             <ProjectIcon icon={projectIcon} size={14} color={colors.secondaryLabel} />
           </View>
-          <ThemedText variant="body" numberOfLines={1} style={{ flex: 1, fontWeight: "400" }}>
+          <ThemedText variant="body" numberOfLines={1} style={{ flex: 1, fontWeight: "500" }}>
             {workspace.name}
           </ThemedText>
         </View>
@@ -61,7 +61,7 @@ export function WorkspaceRow({
               <WorkspaceStatusIcon status={workspace.status} size={12} />
             </View>
             <ThemedText
-              variant="footnote"
+              variant="caption"
               numberOfLines={1}
               style={{ flex: 1, color: workspace.pathExists ? colors.secondaryLabel : deletions }}
             >

@@ -9,6 +9,7 @@ import {
   Pressable,
   StyleSheet,
   View,
+  useColorScheme,
   useWindowDimensions,
 } from "react-native";
 import Animated, {
@@ -45,6 +46,22 @@ export interface ComposerAttachmentMenuAnchor {
 const MENU_WIDTH = 260;
 const ROW_HEIGHT = 64;
 const MENU_PADDING = spacing.xs;
+
+/**
+ * Insurance under the glass, not the menu's own surface — see where it is
+ * drawn for why something has to be there at all. Opaque, it hid the material
+ * completely and the menu read as a flat card; at this alpha the glass shows
+ * through and a failure degrades to a dim card instead of floating text.
+ *
+ * It can be this light because of what is actually behind the menu: the app's
+ * own flat background and the composer's glass, never a photo. `withAlpha`
+ * needs a hex string and these system colors are `PlatformColor`s, so the two
+ * schemes are spelled out — `secondarySystemBackground`'s own values.
+ */
+const BACKING = {
+  light: "rgba(242, 242, 247, 0.38)",
+  dark: "rgba(28, 28, 30, 0.38)",
+} as const;
 
 const ALL_ACTIONS: {
   id: ComposerAttachmentSource;
@@ -95,6 +112,7 @@ export function ComposerAttachmentMenu({
 }) {
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const scheme = useColorScheme();
   const reduceMotion = useReducedMotion();
   const openingCameraRef = useRef(false);
   const openingPhotosRef = useRef(false);
@@ -304,17 +322,18 @@ export function ComposerAttachmentMenu({
                 overflow: "hidden",
               }}
             >
-              {/* The panel never leans on the native glass for its coverage.
-                  Liquid Glass has no backdrop to refract inside a window overlay
-                  until it initializes, and gives one up for good the moment an
-                  ancestor is composited at less than full opacity, so an opaque
-                  material sits below it: the worst case is then a flat card
-                  rather than a transparent one. */}
+              {/* The glass carries the menu, but it cannot carry it alone:
+                  Liquid Glass has no backdrop to refract inside a window
+                  overlay until it initializes, and gives one up for good the
+                  moment an ancestor is composited at less than full opacity.
+                  So a translucent `BACKING` sits below it — enough that a
+                  surface which never gets its material is still a readable
+                  card, light enough that the one which does reads as glass. */}
               <View
                 pointerEvents="none"
                 style={[
                   StyleSheet.absoluteFill,
-                  { backgroundColor: colors.secondarySystemBackground },
+                  { backgroundColor: scheme === "dark" ? BACKING.dark : BACKING.light },
                 ]}
               />
               <GlassSurface

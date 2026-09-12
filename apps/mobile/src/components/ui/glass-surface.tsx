@@ -1,7 +1,7 @@
 import { BlurView } from "expo-blur";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import type { ReactNode } from "react";
-import { type StyleProp, View, type ViewStyle } from "react-native";
+import { StyleSheet, type StyleProp, View, type ViewStyle } from "react-native";
 
 import { colors } from "@/theme";
 
@@ -22,7 +22,7 @@ export function GlassSurface({
   style?: StyleProp<ViewStyle>;
   interactive?: boolean;
   effect?: "regular" | "clear";
-  /** A wash over the glass (a translucent color); ignored by the fallbacks. */
+  /** A wash over the glass (a translucent color). */
   tintColor?: string;
 }) {
   if (process.env.EXPO_OS === "ios") {
@@ -33,13 +33,28 @@ export function GlassSurface({
         </GlassView>
       );
     }
+    // The tint rides on the blur as a translucent background rather than being
+    // dropped, so `tintColor` means the same thing on every branch and a
+    // tinted pill does not lose its wash on iOS below 26.
     return (
-      <BlurView tint="systemMaterial" intensity={90} style={[{ overflow: "hidden" }, style]}>
+      <BlurView
+        tint="systemMaterial"
+        intensity={90}
+        style={[{ overflow: "hidden" }, style, tintColor ? { backgroundColor: tintColor } : null]}
+      >
         {children}
       </BlurView>
     );
   }
   return (
-    <View style={[{ backgroundColor: colors.secondarySystemBackground }, style]}>{children}</View>
+    <View style={[{ backgroundColor: colors.secondarySystemBackground }, style]}>
+      {tintColor ? (
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: tintColor }]}
+        />
+      ) : null}
+      {children}
+    </View>
   );
 }

@@ -549,32 +549,48 @@ function TargetChip({
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        gap: spacing.xs + 2,
-        paddingLeft: spacing.ms,
-        paddingRight: spacing.sm,
-        height: 34,
-        borderRadius: radius.full,
-        backgroundColor: emphasized ? provider.soft : colors.fill,
-        opacity: pressed ? 0.7 : 1,
-        maxWidth: "70%",
-      })}
+      style={{ maxWidth: "70%" }}
     >
-      {icon ? (
-        <ProjectIcon icon={icon} size={14} color={tint} />
-      ) : (
-        <SFSymbol name={fallbackSymbol} size={14} tint={tint} />
+      {({ pressed }) => (
+        // The press dims a plain wrapper, never the glass itself: a
+        // translucent glass view stops rendering as glass.
+        <View style={{ opacity: pressed ? 0.7 : 1 }}>
+          <GlassSurface
+            interactive
+            // Emphasis is a wash over the glass rather than a fill under it,
+            // so the chip is the same material whether or not it is waiting
+            // to be chosen.
+            tintColor={emphasized ? provider.soft : undefined}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: spacing.xs + 2,
+              paddingLeft: spacing.ms,
+              paddingRight: spacing.sm,
+              height: 34,
+              borderRadius: radius.full,
+            }}
+          >
+            {icon ? (
+              <ProjectIcon icon={icon} size={14} color={tint} />
+            ) : (
+              <SFSymbol name={fallbackSymbol} size={14} tint={tint} />
+            )}
+            <ThemedText
+              variant="footnote"
+              numberOfLines={1}
+              style={{ color: emphasized ? provider.accent : colors.label, fontWeight: "600" }}
+            >
+              {label}
+            </ThemedText>
+            <SFSymbol
+              name="chevron.down"
+              size={11}
+              tint={emphasized ? provider.accent : colors.tertiaryLabel}
+            />
+          </GlassSurface>
+        </View>
       )}
-      <ThemedText
-        variant="footnote"
-        numberOfLines={1}
-        style={{ color: emphasized ? provider.accent : colors.label, fontWeight: "600" }}
-      >
-        {label}
-      </ThemedText>
-      <SFSymbol name="chevron.down" size={11} tint={emphasized ? provider.accent : colors.tertiaryLabel} />
     </Pressable>
   );
 }

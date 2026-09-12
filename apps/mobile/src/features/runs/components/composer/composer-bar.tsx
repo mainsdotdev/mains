@@ -569,6 +569,12 @@ function Pill({
   );
 }
 
+/**
+ * A glyph in the composer's bottom row, on no surface of its own — the same
+ * bare treatment as the `Pill`s beside it, so the row reads as one strip of
+ * controls on the glass and the only filled thing in it is Send. Still a full
+ * 36pt target; only the fill is gone.
+ */
 function RoundControl({
   label,
   onPress,
@@ -595,7 +601,6 @@ function RoundControl({
         borderRadius: 18,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: colors.fill,
         opacity: pressed ? 0.7 : 1,
       })}
     >

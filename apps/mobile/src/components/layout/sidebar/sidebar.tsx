@@ -21,7 +21,13 @@ import {
 } from "@/db/schema";
 import { goHome } from "@/features/runs";
 import { colors, radius, spacing } from "@/theme";
-import { ProjectIcon, RoundGlassButton, SFSymbol, ThemedText } from "@/components/ui";
+import {
+  ProjectIcon,
+  RoundGlassButton,
+  SFSymbol,
+  ThemedText,
+  useProjectNameColor,
+} from "@/components/ui";
 import { SpaceGlyph } from "@/features/spaces";
 import { WorkspaceRow } from "@/features/workspaces";
 
@@ -325,6 +331,7 @@ function GroupHeader({
   open: boolean;
   onPress: () => void;
 }) {
+  const nameColor = useProjectNameColor(collection.icon);
   return (
     <Pressable
       accessibilityRole="button"
@@ -345,7 +352,11 @@ function GroupHeader({
       <View style={{ width: 22, alignItems: "center" }}>
         <ProjectIcon icon={collection.icon} size={16} color={colors.secondaryLabel} />
       </View>
-      <ThemedText variant="body" numberOfLines={1} style={{ flex: 1, fontWeight: "600" }}>
+      <ThemedText
+        variant="body"
+        numberOfLines={1}
+        style={{ flex: 1, fontWeight: "600", color: nameColor }}
+      >
         {collection.name}
       </ThemedText>
       {count > 0 && (

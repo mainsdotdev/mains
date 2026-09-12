@@ -3,7 +3,7 @@ export type { AsciiSpinnerKind } from "./ascii-spinner";
 export { Button } from "./button";
 export { BotIcon, CheckIcon, ClipboardIcon, ForkIcon } from "./desktop-icons";
 export { GlassSurface } from "./glass-surface";
-export { ProjectIcon } from "./project-icon";
+export { ProjectIcon, useProjectNameColor } from "./project-icon";
 export { RegistryIcon } from "./registry-icon";
 export { RoundGlassButton } from "./round-glass-button";
 export { SFSymbol } from "./sf-symbol";

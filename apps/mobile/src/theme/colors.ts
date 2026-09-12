@@ -150,10 +150,35 @@ export function useProviderAccentPair(providerId: string | null | undefined): {
 
 /** `#rrggbb` at an opacity, as `rgba()`. Anything else is returned untouched. */
 export function withAlpha(hex: string, alpha: number): string {
+  const channels = parseHex(hex);
+  if (!channels) return hex;
+  const [red, green, blue] = channels;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+/**
+ * `#rrggbb` moved `amount` of the way toward another `#rrggbb` — 0 is the
+ * colour itself, 1 is the target. Unlike `withAlpha` this stays opaque, so it
+ * is what to reach for when a colour has to soften against a background it
+ * cannot actually see (an SVG fill, a glyph over glass).
+ *
+ * Anything that is not a 6-digit hex is returned untouched, as above.
+ */
+export function mixToward(hex: string, target: string, amount: number): string {
+  const from = parseHex(hex);
+  const to = parseHex(target);
+  if (!from || !to) return hex;
+  const mixed = from.map((channel, index) =>
+    Math.round(channel + (to[index] - channel) * amount),
+  );
+  return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function parseHex(hex: string): [number, number, number] | null {
   const match = /^#([0-9a-f]{6})$/i.exec(hex);
-  if (!match) return hex;
+  if (!match) return null;
   const value = parseInt(match[1], 16);
-  return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
 }
 
 /**
