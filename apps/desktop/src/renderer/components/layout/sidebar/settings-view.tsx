@@ -148,7 +148,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
           tooltipPosition="top-right"
           onClick={onClose}
           fullWidth
-          className="shrink-0 max-w-18 justify-start  glass-outline rounded-full flex items-center cursor-pointer px-2 py-1 gap-1 bg-transparent dark:bg-transparent transition-transform duration-200"
+          className="shrink-0 max-w-18 justify-start  rounded-full flex items-center cursor-pointer px-2 py-1 gap-1 bg-transparent dark:bg-transparent transition-transform duration-200"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <ChevronUp className="size-4 rotate-270 text-primary-900 dark:text-primary-100" />
