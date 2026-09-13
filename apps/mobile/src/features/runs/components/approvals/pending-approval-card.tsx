@@ -292,7 +292,7 @@ export function PendingApprovalCard({
   const body = (
     <View
       style={{
-        backgroundColor: colors.groupedCell,
+        backgroundColor: colors.cardSurface,
         borderRadius: radius.lg,
         borderCurve: "continuous",
         boxShadow: shadows.card,

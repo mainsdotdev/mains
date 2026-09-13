@@ -136,6 +136,7 @@ export function ComposerBar({
   const attachmentImageRefsRef = useRef(new Map<string, View>());
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [attachmentMenuVisible, setAttachmentMenuVisible] = useState(false);
+  const [pluginPickerVisible, setPluginPickerVisible] = useState(false);
   const [attachmentMenuAnchor, setAttachmentMenuAnchor] =
     useState<ComposerAttachmentMenuAnchor | null>(null);
   const attachmentMenuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,9 +199,6 @@ export function ComposerBar({
     });
   };
 
-  // Plugins remain behind the inline context triggers, as on the desktop;
-  // the toolbar's attachment control is reserved for images/documents.
-
   // The picker opens upward from the bar and may grow until it meets whatever
   // floats at the top of the screen — no further, or on a small phone with
   // the keyboard up its header ended up under the screen's controls. The bar's
@@ -219,14 +217,19 @@ export function ComposerBar({
       spacing.xs -
       (reservedTop ?? insets.top + spacing.sm),
   );
+  const pluginPickerMaxHeight = Math.min(pickerMaxHeight, windowHeight * 0.46);
+  const pluginPickerOverlayBottom =
+    keyboardInset + composerBottomPadding(insets.bottom) + barHeight + spacing.xs;
   const typed = context ? detectTrigger(value) : null;
   const trigger: ContextTrigger = typed?.trigger ?? "@";
-  const menuVisible = Boolean(context) && typed !== null;
+  const menuVisible = Boolean(context) && (typed !== null || pluginPickerVisible);
+  const pickerBucket = typed ? null : pluginPickerVisible ? "plugins" : null;
 
   const closeMenu = () => {
     // A typed trigger keeps the menu open on its own, so dismissing means
     // dropping the token — otherwise the sheet reopens on the next render.
     if (typed) onChangeText(replaceTrigger(value, typed, ""));
+    setPluginPickerVisible(false);
   };
 
   const pick = (row: PickerRow) => {
@@ -253,6 +256,7 @@ export function ComposerBar({
           : `${value}${value && !/\s$/.test(value) ? " " : ""}${replacement} `,
       );
     }
+    setPluginPickerVisible(false);
   };
 
   const addPicked = (picked: ComposerAttachment[]) => {
@@ -319,11 +323,12 @@ export function ComposerBar({
   };
 
   const openAttachments = () => {
-    if (!onAttachmentsChange) return;
+    if (!onAttachmentsChange && !context) return;
     if (attachmentMenuVisible) {
       closeAttachmentMenu();
       return;
     }
+    setPluginPickerVisible(false);
     setAttachmentError(null);
     const button = attachmentButtonRef.current;
     if (!button) return;
@@ -372,6 +377,7 @@ export function ComposerBar({
       attachmentSourceTimerRef.current = null;
       if (source === "photos") void pickImages();
       if (source === "files") void pickDocuments();
+      if (source === "plugins") setPluginPickerVisible(true);
     }, COMPOSER_ATTACHMENT_MENU_CLOSE_MS);
   };
 
@@ -444,10 +450,16 @@ export function ComposerBar({
             style={attachmentButtonAnimatedStyle}
           >
             <RoundControl
-              label={providerId === PROVIDER_IDS.codex ? "Upload image" : "Upload file or photo"}
+              label={
+                context
+                  ? "Add attachment or plugin"
+                  : providerId === PROVIDER_IDS.codex
+                    ? "Upload image"
+                    : "Upload file or photo"
+              }
               controlRef={attachmentButtonRef}
               onPress={openAttachments}
-              disabled={!onAttachmentsChange}
+              disabled={!onAttachmentsChange && !context}
             >
               <SFSymbol name="plus" size={18} tint={colors.label} />
             </RoundControl>
@@ -513,6 +525,7 @@ export function ComposerBar({
         anchor={attachmentMenuAnchor}
         accent={accent}
         includeFiles={providerId !== PROVIDER_IDS.codex}
+        includePlugins={Boolean(context)}
         onDismiss={() => closeAttachmentMenu()}
         onCameraDismiss={finishCameraDismiss}
         onPanelDismiss={() => closeAttachmentMenu(true)}
@@ -529,8 +542,10 @@ export function ComposerBar({
           providerId={context.providerId}
           workspacePath={context.workspacePath}
           trigger={trigger}
+          bucket={pickerBucket}
           filter={typed?.filter ?? ""}
-          maxHeight={pickerMaxHeight}
+          maxHeight={pickerBucket === "plugins" ? pluginPickerMaxHeight : pickerMaxHeight}
+          overlayBottom={pickerBucket === "plugins" ? pluginPickerOverlayBottom : null}
           onSelect={pick}
           onClose={closeMenu}
         />

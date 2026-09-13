@@ -1,5 +1,5 @@
 import { Color } from "expo-router";
-import { Platform, useColorScheme } from "react-native";
+import { DynamicColorIOS, Platform, useColorScheme } from "react-native";
 
 /**
  * Platform semantic colors — resolved on-device, adapt to light/dark and
@@ -51,6 +51,16 @@ export const colors = {
     ios: Color.ios.secondarySystemGroupedBackground,
     android: Color.android.dynamic.surfaceContainer,
     default: "#ffffff",
+  })!,
+  /**
+   * App cards sit on the main system background rather than iOS's grouped
+   * page background. A barely warm light surface preserves their shape
+   * without making them look elevated; dark mode keeps the native cell tone.
+   */
+  cardSurface: Platform.select({
+    ios: DynamicColorIOS({ light: "#F7F7F8", dark: "#1C1C1E" }),
+    android: Color.android.dynamic.surfaceContainer,
+    default: "#f7f7f8",
   })!,
   fill: Platform.select({
     ios: Color.ios.systemFill,

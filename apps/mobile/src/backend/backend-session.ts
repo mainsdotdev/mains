@@ -19,6 +19,7 @@ import type {
   ToolApprovalResponse,
   UpdateRunSettingsPayload,
   ArtifactImage,
+  RunTextFile,
   RunEphemeralEvent,
 } from "@mains/contracts/runs";
 import { db } from "@/db/client";
@@ -58,6 +59,7 @@ import {
   syncTargets,
   upsertBackend,
   readArtifactImage,
+  readRunTextFile,
 } from "./sync";
 import { isConnectionLoss, WsTransport, type CloseInfo } from "./ws-transport";
 import {
@@ -557,6 +559,14 @@ class BackendSession {
       return Promise.reject(new Error("Connect to your Mac to load this image"));
     }
     return readArtifactImage(this.transport, artifactId);
+  }
+
+  /** A Markdown file linked from one Work/Chat transcript. */
+  readRunTextFile(runId: string, filePath: string): Promise<RunTextFile> {
+    if (!this.isConnected() || !this.transport) {
+      return Promise.reject(new Error("Connect to your Mac to load this document"));
+    }
+    return readRunTextFile(this.transport, runId, filePath);
   }
 
   /** The transcript on screen — its events trigger refetches; others wait. */

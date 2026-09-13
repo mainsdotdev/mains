@@ -12,7 +12,7 @@ import { prepareMathMarkdown } from "@/lib/math-markdown";
 import { colors, motion, radius, spacing, useBrandColors } from "@/theme";
 
 import MathMarkdown from "./math-markdown";
-import { SFSymbol, ThemedText } from "@/components/ui";
+import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
 
 /**
  * Agent prose, rendered onto the app's own type ramp.
@@ -25,10 +25,16 @@ import { SFSymbol, ThemedText } from "@/components/ui";
 export function Markdown({
   source,
   animateTail = false,
+  onOpenFile,
+  presentation = "transcript",
 }: {
   source: string;
   /** Fade only the word currently being revealed by a live response. */
   animateTail?: boolean;
+  /** Opens a run-local Markdown link in the native document screen. */
+  onOpenFile?: (filePath: string) => void;
+  /** Documents get a roomier reading layout; transcript messages stay compact. */
+  presentation?: MarkdownPresentation;
 }) {
   const preparedMath = prepareMathMarkdown(source);
   if (preparedMath.hasMath) {
@@ -37,9 +43,17 @@ export function Markdown({
 
   const blocks = parseMarkdown(source);
   const tailNode = animateTail ? lastInlineLeafOfLastBlock(blocks) : null;
-  return <BlockList blocks={blocks} tailNode={tailNode} />;
+  return (
+    <BlockList
+      blocks={blocks}
+      tailNode={tailNode}
+      onOpenFile={onOpenFile}
+      presentation={presentation}
+    />
+  );
 }
 
+type MarkdownPresentation = "transcript" | "document";
 type InlineTextLeaf = Extract<Inline, { type: "text" | "code" }>;
 
 function lastInlineLeaf(nodes: Inline[]): InlineTextLeaf | null {
@@ -78,11 +92,27 @@ function lastInlineLeafOfLastBlock(blocks: Block[]): InlineTextLeaf | null {
   }
 }
 
-function BlockList({ blocks, tailNode }: { blocks: Block[]; tailNode: InlineTextLeaf | null }) {
+function BlockList({
+  blocks,
+  tailNode,
+  onOpenFile,
+  presentation,
+}: {
+  blocks: Block[];
+  tailNode: InlineTextLeaf | null;
+  onOpenFile?: (filePath: string) => void;
+  presentation: MarkdownPresentation;
+}) {
   return (
-    <View style={{ gap: spacing.sm }}>
+    <View style={{ gap: presentation === "document" ? spacing.ms : spacing.sm }}>
       {blocks.map((block, i) => (
-        <BlockView key={i} block={block} tailNode={tailNode} />
+        <BlockView
+          key={i}
+          block={block}
+          tailNode={tailNode}
+          onOpenFile={onOpenFile}
+          presentation={presentation}
+        />
       ))}
     </View>
   );
@@ -96,47 +126,104 @@ const PROSE = "prose" as const;
 
 /** Heading level → a step on the ramp. Levels past four all read as level four. */
 const HEADING_VARIANTS = ["title3", "headline", "callout", "subhead"] as const;
+const DOCUMENT_HEADING_VARIANTS = ["title", "title2", "title3", "headline"] as const;
+const DOCUMENT_HEADING_LINE_HEIGHTS = [34, 29, 26, 24] as const;
+const DOCUMENT_PROSE_STYLE = {
+  fontSize: 17,
+  lineHeight: 27,
+  letterSpacing: -0.3,
+} as const;
 
-function BlockView({ block, tailNode }: { block: Block; tailNode: InlineTextLeaf | null }) {
+function BlockView({
+  block,
+  tailNode,
+  onOpenFile,
+  presentation,
+}: {
+  block: Block;
+  tailNode: InlineTextLeaf | null;
+  onOpenFile?: (filePath: string) => void;
+  presentation: MarkdownPresentation;
+}) {
+  const brand = useBrandColors();
+  const isDocument = presentation === "document";
+
   switch (block.type) {
     case "heading": {
-      const variant = HEADING_VARIANTS[Math.min(block.level, 4) - 1];
+      const levelIndex = Math.min(block.level, 4) - 1;
+      const variant = isDocument
+        ? DOCUMENT_HEADING_VARIANTS[levelIndex]
+        : HEADING_VARIANTS[levelIndex];
       return (
         <ThemedText
           variant={variant}
           selectable
-          style={{ color: colors.label, fontWeight: "700", marginTop: spacing.xs }}
+          style={{
+            color: colors.label,
+            fontWeight: "700",
+            lineHeight: isDocument ? DOCUMENT_HEADING_LINE_HEIGHTS[levelIndex] : undefined,
+            marginTop: isDocument && block.level > 1 ? spacing.ms : spacing.xs,
+          }}
         >
-          <InlineRun nodes={block.inline} tailNode={tailNode} />
+          <InlineRun nodes={block.inline} tailNode={tailNode} onOpenFile={onOpenFile} />
         </ThemedText>
       );
     }
 
     case "paragraph":
       return (
-        <ThemedText variant={PROSE} selectable>
-          <InlineRun nodes={block.inline} tailNode={tailNode} />
+        <ThemedText variant={PROSE} selectable style={isDocument ? DOCUMENT_PROSE_STYLE : undefined}>
+          <InlineRun nodes={block.inline} tailNode={tailNode} onOpenFile={onOpenFile} />
         </ThemedText>
       );
 
     case "list":
       return (
-        <View style={{ gap: spacing.xs }}>
+        <View style={{ gap: isDocument ? spacing.sm : spacing.xs }}>
           {block.items.map((item, i) => (
             <ListRow
               key={i}
               item={item}
               marker={block.ordered ? `${block.start + i}.` : "•"}
               tailNode={tailNode}
+              onOpenFile={onOpenFile}
+              presentation={presentation}
             />
           ))}
         </View>
       );
 
     case "code":
-      return <CodeBlock text={block.text} />;
+      return <CodeBlock text={block.text} lang={block.lang} presentation={presentation} />;
 
     case "quote":
+      if (isDocument) {
+        return (
+          <GlassSurface
+            effect="clear"
+            tintColor={brand.accentSoft}
+            style={{
+              borderRadius: radius.lg,
+              borderCurve: "continuous",
+              overflow: "hidden",
+            }}
+          >
+            <View
+              style={{
+
+                padding: spacing.ms,
+              }}
+            >
+              <BlockList
+                blocks={block.blocks}
+                tailNode={tailNode}
+                onOpenFile={onOpenFile}
+                presentation={presentation}
+              />
+            </View>
+          </GlassSurface>
+        );
+      }
       return (
         <View
           style={{
@@ -146,15 +233,36 @@ function BlockView({ block, tailNode }: { block: Block; tailNode: InlineTextLeaf
             gap: spacing.sm,
           }}
         >
-          <BlockList blocks={block.blocks} tailNode={tailNode} />
+          <BlockList
+            blocks={block.blocks}
+            tailNode={tailNode}
+            onOpenFile={onOpenFile}
+            presentation={presentation}
+          />
         </View>
       );
 
     case "table":
-      return <Table header={block.header} rows={block.rows} tailNode={tailNode} />;
+      return (
+        <Table
+          header={block.header}
+          rows={block.rows}
+          tailNode={tailNode}
+          onOpenFile={onOpenFile}
+          presentation={presentation}
+        />
+      );
 
     case "rule":
-      return <View style={{ height: 1, backgroundColor: colors.separator, marginVertical: spacing.xs }} />;
+      return (
+        <View
+          style={{
+            height: 1,
+            backgroundColor: colors.separator,
+            marginVertical: isDocument ? spacing.sm : spacing.xs,
+          }}
+        />
+      );
   }
 }
 
@@ -163,16 +271,27 @@ function ListRow({
   item,
   marker,
   tailNode,
+  onOpenFile,
+  presentation,
 }: {
   item: ListItem;
   marker: string;
   tailNode: InlineTextLeaf | null;
+  onOpenFile?: (filePath: string) => void;
+  presentation: MarkdownPresentation;
 }) {
+  const isDocument = presentation === "document";
   return (
     <View style={{ flexDirection: "row", gap: spacing.sm }}>
       <View style={{ minWidth: 18, alignItems: "flex-end", paddingTop: item.checked === undefined ? 0 : 3 }}>
         {item.checked === undefined ? (
-          <ThemedText variant={PROSE} style={{ color: colors.secondaryLabel }}>
+          <ThemedText
+            variant={PROSE}
+            style={{
+              color: colors.secondaryLabel,
+              ...(isDocument ? DOCUMENT_PROSE_STYLE : null),
+            }}
+          >
             {marker}
           </ThemedText>
         ) : (
@@ -184,26 +303,59 @@ function ListRow({
         )}
       </View>
       <View style={{ flex: 1, gap: spacing.xs }}>
-        <BlockList blocks={item.blocks} tailNode={tailNode} />
+        <BlockList
+          blocks={item.blocks}
+          tailNode={tailNode}
+          onOpenFile={onOpenFile}
+          presentation={presentation}
+        />
       </View>
     </View>
   );
 }
 
 /** A fenced block: monospaced, scrolled sideways so indentation survives. */
-function CodeBlock({ text }: { text: string }) {
+function CodeBlock({
+  text,
+  lang,
+  presentation,
+}: {
+  text: string;
+  lang: string | null;
+  presentation: MarkdownPresentation;
+}) {
+  const isDocument = presentation === "document";
   return (
     <View
       style={{
         backgroundColor: colors.secondarySystemBackground,
         borderRadius: radius.md,
         borderCurve: "continuous",
-        paddingVertical: spacing.sm,
+        borderWidth: isDocument ? 1 : 0,
+        borderColor: colors.separator,
         overflow: "hidden",
       }}
     >
+      {isDocument && lang ? (
+        <View
+          style={{
+            paddingHorizontal: spacing.ms,
+            paddingVertical: spacing.sm,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.separator,
+          }}
+        >
+          <ThemedText
+            variant="caption2"
+            selectable
+            style={{ color: colors.secondaryLabel, textTransform: "uppercase", fontWeight: "600" }}
+          >
+            {lang}
+          </ThemedText>
+        </View>
+      ) : null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <View style={{ paddingHorizontal: spacing.ms }}>
+        <View style={{ paddingHorizontal: spacing.ms, paddingVertical: spacing.sm }}>
           {text.split("\n").map((line, i) => (
             <ThemedText key={i} variant="mono" selectable style={{ color: colors.label }}>
               {line || " "}
@@ -220,12 +372,27 @@ function Table({
   header,
   rows,
   tailNode,
+  onOpenFile,
+  presentation,
 }: {
   header: Inline[][];
   rows: Inline[][][];
   tailNode: InlineTextLeaf | null;
+  onOpenFile?: (filePath: string) => void;
+  presentation: MarkdownPresentation;
 }) {
   const columns = Math.max(header.length, ...rows.map((r) => r.length), 1);
+
+  if (presentation === "document" && columns === 2) {
+    return (
+      <DocumentTable
+        header={header}
+        rows={rows}
+        tailNode={tailNode}
+        onOpenFile={onOpenFile}
+      />
+    );
+  }
 
   const cells = (row: Inline[][], head: boolean) => (
     <View style={{ flexDirection: "row" }}>
@@ -244,7 +411,7 @@ function Table({
             selectable
             style={{ color: colors.label, fontWeight: head ? "600" : "400" }}
           >
-            <InlineRun nodes={row[c] ?? []} tailNode={tailNode} />
+            <InlineRun nodes={row[c] ?? []} tailNode={tailNode} onOpenFile={onOpenFile} />
           </ThemedText>
         </View>
       ))}
@@ -273,6 +440,76 @@ function Table({
   );
 }
 
+/** Two-column document tables become readable key/value cards on a phone. */
+function DocumentTable({
+  header,
+  rows,
+  tailNode,
+  onOpenFile,
+}: {
+  header: Inline[][];
+  rows: Inline[][][];
+  tailNode: InlineTextLeaf | null;
+  onOpenFile?: (filePath: string) => void;
+}) {
+  return (
+    <GlassSurface
+      effect="regular"
+      style={{
+        borderRadius: radius.lg,
+        borderCurve: "continuous",
+        overflow: "hidden",
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: spacing.sm,
+          paddingHorizontal: spacing.ms,
+          paddingVertical: spacing.sm,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.separator,
+        }}
+      >
+        <ThemedText
+          variant="caption2"
+          selectable
+          style={{ color: colors.tertiaryLabel, fontWeight: "600", textTransform: "uppercase" }}
+        >
+          <InlineRun nodes={header[0] ?? []} tailNode={tailNode} onOpenFile={onOpenFile} />
+        </ThemedText>
+        <SFSymbol name="arrow.right" size={10} tint={colors.tertiaryLabel} />
+        <ThemedText
+          variant="caption2"
+          selectable
+          style={{ color: colors.tertiaryLabel, fontWeight: "600", textTransform: "uppercase" }}
+        >
+          <InlineRun nodes={header[1] ?? []} tailNode={tailNode} onOpenFile={onOpenFile} />
+        </ThemedText>
+      </View>
+      {rows.map((row, i) => (
+        <View
+          key={i}
+          style={{
+            gap: spacing.xs,
+            padding: spacing.ms,
+            borderBottomWidth: i === rows.length - 1 ? 0 : 1,
+            borderBottomColor: colors.separator,
+          }}
+        >
+          <ThemedText variant="subhead" selectable style={{ color: colors.secondaryLabel }}>
+            <InlineRun nodes={row[0] ?? []} tailNode={tailNode} onOpenFile={onOpenFile} />
+          </ThemedText>
+          <ThemedText variant="headline" selectable>
+            <InlineRun nodes={row[1] ?? []} tailNode={tailNode} onOpenFile={onOpenFile} />
+          </ThemedText>
+        </View>
+      ))}
+    </GlassSurface>
+  );
+}
+
 /**
  * Inline runs, as nested `Text`.
  *
@@ -285,14 +522,26 @@ function Table({
 function InlineRun({
   nodes,
   tailNode,
+  onOpenFile,
 }: {
   nodes: Inline[];
   tailNode: InlineTextLeaf | null;
+  onOpenFile?: (filePath: string) => void;
 }): ReactNode {
-  return nodes.map((node, i) => <InlineNode key={i} node={node} tailNode={tailNode} />);
+  return nodes.map((node, i) => (
+    <InlineNode key={i} node={node} tailNode={tailNode} onOpenFile={onOpenFile} />
+  ));
 }
 
-function InlineNode({ node, tailNode }: { node: Inline; tailNode: InlineTextLeaf | null }) {
+function InlineNode({
+  node,
+  tailNode,
+  onOpenFile,
+}: {
+  node: Inline;
+  tailNode: InlineTextLeaf | null;
+  onOpenFile?: (filePath: string) => void;
+}) {
   const brand = useBrandColors();
 
   switch (node.type) {
@@ -302,21 +551,21 @@ function InlineNode({ node, tailNode }: { node: Inline; tailNode: InlineTextLeaf
     case "strong":
       return (
         <Text style={{ fontWeight: "700" }}>
-          <InlineRun nodes={node.children} tailNode={tailNode} />
+          <InlineRun nodes={node.children} tailNode={tailNode} onOpenFile={onOpenFile} />
         </Text>
       );
 
     case "em":
       return (
         <Text style={{ fontStyle: "italic" }}>
-          <InlineRun nodes={node.children} tailNode={tailNode} />
+          <InlineRun nodes={node.children} tailNode={tailNode} onOpenFile={onOpenFile} />
         </Text>
       );
 
     case "strike":
       return (
         <Text style={{ textDecorationLine: "line-through", color: colors.secondaryLabel }}>
-          <InlineRun nodes={node.children} tailNode={tailNode} />
+          <InlineRun nodes={node.children} tailNode={tailNode} onOpenFile={onOpenFile} />
         </Text>
       );
 
@@ -330,18 +579,33 @@ function InlineNode({ node, tailNode }: { node: Inline; tailNode: InlineTextLeaf
         </Text>
       );
 
-    case "link":
+    case "link": {
+      const localFile = onOpenFile && isMarkdownFileHref(node.href);
       return (
         <Text
           style={{ color: brand.accent }}
           onPress={() => {
-            void Linking.openURL(node.href).catch(() => {});
+            if (localFile) onOpenFile(node.href);
+            else void Linking.openURL(node.href).catch(() => {});
           }}
         >
-          <InlineRun nodes={node.children} tailNode={tailNode} />
+          <InlineRun nodes={node.children} tailNode={tailNode} onOpenFile={onOpenFile} />
         </Text>
       );
+    }
   }
+}
+
+/** A scheme-less Markdown path, matching the desktop's local-file link rule. */
+function isMarkdownFileHref(href: string): boolean {
+  if (!href || href.startsWith("#") || href.startsWith("//")) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
+  const withoutLocator = href
+    .replace(/#L\d+(?:-\d+)?$/, "")
+    .replace(/:\d+(?::\d+)?$/, "")
+    .split(/[?#]/)[0]
+    .toLowerCase();
+  return withoutLocator.endsWith(".md") || withoutLocator.endsWith(".markdown");
 }
 
 /** A quiet tail: enough contrast to feel fluid, without making prose pulse. */

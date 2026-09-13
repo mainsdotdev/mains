@@ -6,6 +6,8 @@ import type {
   ForkRunPayload,
   PendingApproval,
   ReadArtifactImagePayload,
+  ReadRunTextFilePayload,
+  RunTextFile,
   SkillSummary,
   SpaceModePayload,
   StartRunPayload,
@@ -82,6 +84,226 @@ interface DemoSnapshot {
 
 const snapshot = rawSnapshot as unknown as DemoSnapshot;
 
+/**
+ * Keep the offline Codex demo representative even when its exported snapshot
+ * predates plugin discovery. These rows mirror the plugin cards the real
+ * backend exposes; matching snapshot skills are replaced instead of duplicated.
+ */
+const DEMO_CODEX_PLUGINS: SkillSummary[] = [
+  {
+    name: "documents:documents",
+    displayName: "Documents",
+    shortDescription: "Create and edit documents",
+    scope: "plugin",
+    brandColor: "#2563EB",
+    userInvokable: true,
+  },
+  {
+    name: "pdf:pdf",
+    displayName: "PDF",
+    shortDescription: "Read, create, and verify PDFs",
+    scope: "plugin",
+    brandColor: "#FF002B",
+    userInvokable: true,
+  },
+  {
+    name: "spreadsheets:Spreadsheets",
+    displayName: "Spreadsheets",
+    shortDescription: "Create and edit spreadsheets",
+    scope: "plugin",
+    brandColor: "#009F57",
+    userInvokable: true,
+  },
+  {
+    name: "presentations:Presentations",
+    displayName: "Presentations",
+    shortDescription: "Create and edit presentations",
+    scope: "plugin",
+    brandColor: "#F04400",
+    userInvokable: true,
+  },
+  {
+    name: "template-creator:template-creator",
+    displayName: "Template Creator",
+    shortDescription: "Create reusable templates from reference content",
+    scope: "plugin",
+    brandColor: "#00A98F",
+    userInvokable: true,
+  },
+  {
+    name: "codex-app-tools",
+    displayName: "codex-app-tools",
+    scope: "plugin",
+    brandColor: "#4B4B52",
+    userInvokable: true,
+  },
+  {
+    name: "sites:sites-building",
+    displayName: "Sites",
+    shortDescription: "Build and deploy websites",
+    scope: "plugin",
+    brandColor: "#087DDB",
+    userInvokable: true,
+  },
+  {
+    name: "browser:control-in-app-browser",
+    displayName: "Browser",
+    shortDescription: "Control the in-app browser",
+    scope: "plugin",
+    brandColor: "#0058A8",
+    userInvokable: true,
+  },
+  {
+    name: "unified-computer-use",
+    displayName: "unified-computer-use",
+    scope: "plugin",
+    brandColor: "#4B4B52",
+    userInvokable: true,
+  },
+  {
+    name: "chrome:control-chrome",
+    displayName: "Chrome",
+    shortDescription: "Control Chrome with ChatGPT",
+    scope: "plugin",
+    brandColor: "#00A98F",
+    userInvokable: true,
+  },
+  {
+    name: "computer-use:computer-use",
+    displayName: "Computer Use",
+    shortDescription: "Control Mac apps from ChatGPT",
+    scope: "plugin",
+    brandColor: "#071A3A",
+    userInvokable: true,
+  },
+  {
+    name: "github",
+    displayName: "GitHub",
+    shortDescription: "Review pull requests, issues, and checks",
+    scope: "plugin",
+    brandColor: "#24292F",
+    userInvokable: true,
+  },
+  {
+    name: "imagegen",
+    displayName: "Image Generation",
+    shortDescription: "Create and edit images",
+    scope: "plugin",
+    brandColor: "#7C3AED",
+    userInvokable: true,
+  },
+  {
+    name: "gmail",
+    displayName: "Gmail",
+    shortDescription: "Read, search, and draft emails",
+    scope: "plugin",
+    brandColor: "#EA4335",
+    userInvokable: true,
+  },
+  {
+    name: "figma",
+    displayName: "Figma",
+    shortDescription: "Explore and work with Figma designs",
+    scope: "plugin",
+    brandColor: "#A259FF",
+    userInvokable: true,
+  },
+  {
+    name: "expo",
+    displayName: "Expo",
+    shortDescription: "Build and ship native apps",
+    scope: "plugin",
+    brandColor: "#4630EB",
+    userInvokable: true,
+  },
+  {
+    name: "messages",
+    displayName: "Messages",
+    shortDescription: "Read and send messages",
+    scope: "plugin",
+    brandColor: "#34C759",
+    userInvokable: true,
+  },
+  {
+    name: "notion",
+    displayName: "Notion",
+    shortDescription: "Search and update your workspace",
+    scope: "plugin",
+    brandColor: "#333333",
+    userInvokable: true,
+  },
+  {
+    name: "google-calendar",
+    displayName: "Google Calendar",
+    shortDescription: "View and manage your calendar",
+    scope: "plugin",
+    brandColor: "#4285F4",
+    userInvokable: true,
+  },
+  {
+    name: "asana",
+    displayName: "Asana",
+    shortDescription: "Plan and manage your work",
+    scope: "plugin",
+    brandColor: "#F06A6A",
+    userInvokable: true,
+  },
+  {
+    name: "linear",
+    displayName: "Linear",
+    shortDescription: "Track projects and issues",
+    scope: "plugin",
+    brandColor: "#5E6AD2",
+    userInvokable: true,
+  },
+];
+
+/**
+ * The first picker viewport should contain plugins with purpose-built replay
+ * scenarios. The remaining rows still work through the generic demo fallback,
+ * but come later so a reviewer reaches the strongest examples first.
+ */
+const DEMO_FEATURED_PLUGIN_ORDER = [
+  "imagegen",
+  "gmail",
+  "google-calendar",
+  "figma",
+  "github",
+  "linear",
+  "notion",
+  "expo",
+  "messages",
+  "asana",
+] as const;
+
+function demoSkillsForProvider(providerId: string): (Json | SkillSummary)[] {
+  const discovered = snapshot.skills[providerId] ?? [];
+  if (providerId !== "codex") return discovered;
+
+  const pluginNames = new Set(DEMO_CODEX_PLUGINS.map((plugin) => plugin.name));
+  const featuredOrder = new Map<string, number>(
+    DEMO_FEATURED_PLUGIN_ORDER.map((name, index) => [name, index]),
+  );
+  const orderedPlugins = DEMO_CODEX_PLUGINS.map((plugin, sourceIndex) => ({
+    plugin,
+    sourceIndex,
+  }))
+    .sort((a, b) => {
+      const aFeatured = featuredOrder.get(a.plugin.name);
+      const bFeatured = featuredOrder.get(b.plugin.name);
+      if (aFeatured !== undefined || bFeatured !== undefined) {
+        return (aFeatured ?? Number.MAX_SAFE_INTEGER) -
+          (bFeatured ?? Number.MAX_SAFE_INTEGER);
+      }
+      return a.sourceIndex - b.sourceIndex;
+    })
+    .map(({ plugin }) => plugin);
+  return [
+    ...orderedPlugins,
+    ...discovered.filter((skill) => !pluginNames.has(String(skill.name))),
+  ];
+}
+
 /** Between replayed items — slow enough to watch, fast enough for a reviewer. */
 const REPLAY_STEP_MS = 700;
 /** Demo typing cadence; two word-like tokens per frame keeps the sample legible. */
@@ -102,6 +324,12 @@ export class DemoBackend implements DemoHandler {
     Object.entries(snapshot.toolCalls).map(([runId, list]) => [
       runId,
       list.map((call) => ({ ...call })) as DemoToolCall[],
+    ]),
+  );
+  private readonly images = new Map<number, ArtifactImage>(
+    Object.entries(snapshot.images).map(([artifactId, image]) => [
+      Number(artifactId),
+      image,
     ]),
   );
   private readonly turns = new Map<string, (Json & { id: number })[]>(
@@ -182,7 +410,7 @@ export class DemoBackend implements DemoHandler {
       case CHANNELS.providers.getModels:
         return snapshot.models[String(args[0])] ?? [];
       case CHANNELS.providers.getSkills:
-        return snapshot.skills[String(args[0])] ?? [];
+        return demoSkillsForProvider(String(args[0]));
       case CHANNELS.providers.getCommands:
         return snapshot.commands[String(args[0])] ?? [];
       case CHANNELS.providers.updateRunSettings:
@@ -218,9 +446,18 @@ export class DemoBackend implements DemoHandler {
       }
       case CHANNELS.runArtifacts.readImage: {
         const { artifactId } = args[0] as ReadArtifactImagePayload;
-        const image = snapshot.images[String(artifactId)];
+        const image = this.images.get(artifactId);
         if (!image) throw new Error("Image file is missing");
         return image;
+      }
+      case CHANNELS.runs.readTextFile: {
+        const { filePath } = args[0] as ReadRunTextFilePayload;
+        const fileName = filePath.split("/").pop() || "document.md";
+        return {
+          fileName,
+          relativePath: fileName,
+          content: `# ${fileName}\n\nMarkdown documents open here when the demo Mac is active.`,
+        } satisfies RunTextFile;
       }
       case CHANNELS.runs.execute:
         return this.execute(args[0] as StartRunPayload);
@@ -386,7 +623,7 @@ export class DemoBackend implements DemoHandler {
     attachments?: FileAttachment[],
     contextSkills?: SkillSummary[],
   ): void {
-    const scenario = demoScenarioForPrompt(prompt);
+    const scenario = demoScenarioForPrompt(prompt, contextSkills);
     this.push(CHANNELS.runs.statusChanged, { runId: run.id, status: "running", ts: Date.now() });
 
     const files = (attachments ?? []).map((attachment) => ({
@@ -421,6 +658,13 @@ export class DemoBackend implements DemoHandler {
       if (run.status !== "running") return;
       const tool = scenario.inspectionTools[index];
       if (!tool) {
+        if (scenario.resultImage) {
+          this.appendImageArtifact(run, scenario.resultImage);
+        }
+        if (!scenario.approval) {
+          this.finishAfterReport(run, scenario.approvedResult(prompt));
+          return;
+        }
         this.askApproval(run, scenario, prompt);
         return;
       }
@@ -435,15 +679,20 @@ export class DemoBackend implements DemoHandler {
     scenario: DemoScenario,
     prompt: string,
   ): void {
+    const approvalSpec = scenario.approval;
+    if (!approvalSpec) {
+      this.finishAfterReport(run, scenario.approvedResult(prompt));
+      return;
+    }
     const requestId = `demo-approval-${Date.now()}-${this.nextId++}`;
     const approval: PendingApproval = {
       requestId,
       runId: run.id,
       toolName: "Bash",
-      toolInput: { command: scenario.approval.command },
+      toolInput: { command: approvalSpec.command },
       kind: "tool_approval",
-      header: scenario.approval.header,
-      question: scenario.approval.question,
+      header: approvalSpec.header,
+      question: approvalSpec.question,
       timestamp: Date.now(),
       expiresAt: Date.now() + APPROVAL_AUTO_RESOLVE_MS,
     };
@@ -455,16 +704,20 @@ export class DemoBackend implements DemoHandler {
         this.appendToolCall(run, {
           toolName: "Bash",
           input: {
-            command: scenario.approval.command,
+            command: approvalSpec.command,
             description: "Validate the sample mobile workspace",
           },
-          output: scenario.approval.output,
+          output: approvalSpec.output,
         });
         this.finishAfterReport(run, scenario.approvedResult(prompt));
       },
       deny: () => {
         if (run.status !== "running") return;
-        this.finishAfterReport(run, scenario.deniedResult(prompt));
+        this.finishAfterReport(
+          run,
+          scenario.deniedResult?.(prompt) ??
+            "The demo action was skipped because approval was declined.",
+        );
       },
     });
     this.push(CHANNELS.runs.toolApprovalRequest, approval);
@@ -542,6 +795,34 @@ export class DemoBackend implements DemoHandler {
       updatedAt: timestamp,
     });
     run.updatedAt = timestamp;
+    this.push(CHANNELS.runs.eventPersisted, { runId: run.id, ts: Date.now() });
+  }
+
+  private appendImageArtifact(
+    run: DemoRun,
+    imageSpec: NonNullable<DemoScenario["resultImage"]>,
+  ): void {
+    const image = this.images.get(imageSpec.sourceArtifactId);
+    if (!image) return;
+
+    const artifactId = this.nextId++;
+    this.images.set(artifactId, image);
+    const list = this.artifacts.get(run.id) ?? [];
+    this.artifacts.set(run.id, list);
+    list.push({
+      id: artifactId,
+      runId: run.id,
+      kind: "image",
+      content: "",
+      path: null,
+      metadata: {
+        kind: "image",
+        fileName: imageSpec.fileName,
+        source: "bundled-demo",
+      },
+      createdAt: now(),
+    });
+    run.updatedAt = now();
     this.push(CHANNELS.runs.eventPersisted, { runId: run.id, ts: Date.now() });
   }
 

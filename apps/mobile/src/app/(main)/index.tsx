@@ -324,7 +324,7 @@ export default function NewRunScreen() {
                 padding: spacing.md,
                 borderRadius: radius.lg,
                 borderCurve: "continuous",
-                backgroundColor: colors.groupedCell,
+                backgroundColor: colors.cardSurface,
                 boxShadow: shadows.card,
                 gap: spacing.sm,
               }}

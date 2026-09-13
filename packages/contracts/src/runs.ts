@@ -127,6 +127,23 @@ export interface ArtifactImage {
   height: number | null;
 }
 
+/**
+ * `runs:readTextFile` — one Markdown link resolved inside a Work/Chat run's
+ * managed directory. The paired device never receives general filesystem
+ * access; the Mac validates the run, extension, containment, size and bytes.
+ */
+export interface ReadRunTextFilePayload {
+  runId: string;
+  filePath: string;
+}
+
+export interface RunTextFile {
+  fileName: string;
+  /** Path relative to the run directory, useful for resolving another local link. */
+  relativePath: string;
+  content: string;
+}
+
 /** `space:getAll` row — a run's home: it pins the provider and the mode. */
 export interface SpaceRecord {
   id: string;
@@ -204,9 +221,11 @@ export interface CollectionResponse {
  * desktop's `SkillInfo`: what the composer's picker needs to list a skill and
  * echo it back as context, and nothing else.
  *
- * `iconSmall` / `iconLarge` are absolute paths on the Mac — a device cannot
- * read them, and carries them only so the value round-trips into the prompt's
- * artifact metadata untouched.
+ * `iconSmall` / `iconLarge` are, for a plugin, its artwork inlined as a data
+ * URL (or a remote https URL), which a device draws as is. For any other skill
+ * they are absolute paths on the Mac — a device cannot read those, and carries
+ * them only so the value round-trips into the prompt's artifact metadata
+ * untouched.
  */
 export interface SkillSummary {
   name: string;

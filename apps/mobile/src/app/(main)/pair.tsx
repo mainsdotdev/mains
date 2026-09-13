@@ -281,7 +281,7 @@ function StatusPanel({
     padding: spacing.md,
     borderRadius: radius.lg,
     borderCurve: "continuous" as const,
-    backgroundColor: colors.groupedCell,
+    backgroundColor: colors.cardSurface,
     boxShadow: shadows.card,
     gap: spacing.sm,
   };

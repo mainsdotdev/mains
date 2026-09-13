@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  mkdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "fs";
 import { createTestDb } from "../../../test/setup-db";
 import {
   createAccount,
@@ -1405,6 +1412,79 @@ describe("runsService", () => {
     it("returns error when repo throws", async () => {
       vi.spyOn(runsRepo, "findArtifactsByRun").mockRejectedValueOnce(new Error("db error"));
       await expect(runsService.getArtifactsByRun("r1")).rejects.toThrow("db error");
+    });
+  });
+
+  describe("readTextFile", () => {
+    it("finds a Markdown file by basename inside its Work run", async () => {
+      createRun(db, {
+        id: "run-markdown",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      const root = managedRunDir("run-markdown", "work");
+      const outputs = `${root}/outputs`;
+      mkdirSync(outputs, { recursive: true });
+      writeFileSync(`${outputs}/report.md`, "# Report\n\nReady.");
+
+      try {
+        await expect(
+          runsService.readTextFile({ runId: "run-markdown", filePath: "report.md:2" }),
+        ).resolves.toEqual({
+          fileName: "report.md",
+          relativePath: "outputs/report.md",
+          content: "# Report\n\nReady.",
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("does not follow a run-local symlink outside the run", async () => {
+      createRun(db, {
+        id: "run-markdown-link",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      const root = managedRunDir("run-markdown-link", "work");
+      const outside = "/tmp/mains-markdown-outside.md";
+      mkdirSync(root, { recursive: true });
+      writeFileSync(outside, "secret");
+      symlinkSync(outside, `${root}/linked.md`);
+
+      try {
+        await expect(
+          runsService.readTextFile({ runId: "run-markdown-link", filePath: "linked.md" }),
+        ).rejects.toThrow("File not found: linked.md");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+        rmSync(outside, { force: true });
+      }
+    });
+
+    it("rejects non-Markdown paths and Developer runs", async () => {
+      createRun(db, {
+        id: "run-text",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      createWorkspace(db, { id: "ws-markdown" });
+      createRun(db, {
+        id: "run-developer-markdown",
+        providerId: "claude_code",
+        mode: "developer",
+        workspaceId: "ws-markdown",
+      });
+
+      await expect(
+        runsService.readTextFile({ runId: "run-text", filePath: "notes.txt" }),
+      ).rejects.toThrow("Only Markdown files");
+      await expect(
+        runsService.readTextFile({
+          runId: "run-developer-markdown",
+          filePath: "README.md",
+        }),
+      ).rejects.toThrow("only available for Work and Chat");
     });
   });
 

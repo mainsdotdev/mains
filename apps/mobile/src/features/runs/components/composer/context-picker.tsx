@@ -1,7 +1,9 @@
 import { and, asc, eq } from "drizzle-orm";
 import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { Image } from "expo-image";
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { FullWindowOverlay } from "react-native-screens";
 
 import { backendSession } from "@/backend/backend-session";
 import type { ContextSourcesResult } from "@/backend/sync";
@@ -15,7 +17,7 @@ import {
   type PickerRow,
 } from "@/lib/context-picker";
 import type { CommandRow, SkillRow } from "@/db/schema";
-import { colors, radius, shadows, spacing } from "@/theme";
+import { colors, radius, shadows, spacing, useSoftTint } from "@/theme";
 
 import { SFSymbol, ThemedText } from "@/components/ui";
 
@@ -39,6 +41,7 @@ export function ContextPicker({
   bucket = null,
   filter,
   maxHeight,
+  overlayBottom = null,
   onSelect,
   onClose,
 }: {
@@ -52,6 +55,12 @@ export function ContextPicker({
   filter: string;
   /** As tall as the room above the bar allows (the bar works this out). */
   maxHeight: number;
+  /**
+   * Presents the picker in a full-window dismiss layer at this distance from
+   * the screen bottom. Used by the + menu's plugin-only picker; inline typed
+   * triggers stay local so the keyboard keeps focus while filtering.
+   */
+  overlayBottom?: number | null;
   onSelect: (row: PickerRow) => void;
   onClose: () => void;
 }) {
@@ -125,17 +134,17 @@ export function ContextPicker({
 
   if (!visible) return null;
 
-  return (
+  const panel = (
     <View
       style={{
         position: "absolute",
-        bottom: "100%",
+        bottom: overlayBottom ?? "100%",
         // Absolute children measure from the parent's border box, so the
         // composer's own horizontal padding has to be repeated here for the
         // panel to line up with the glass bar under it.
         left: spacing.ms,
         right: spacing.ms,
-        marginBottom: spacing.xs,
+        marginBottom: overlayBottom === null ? spacing.xs : 0,
         maxHeight,
         borderRadius: radius.lg,
         borderCurve: "continuous",
@@ -202,6 +211,43 @@ export function ContextPicker({
       )}
     </View>
   );
+
+  if (overlayBottom === null) return panel;
+
+  const overlay = (
+    <View
+      accessibilityViewIsModal
+      style={StyleSheet.absoluteFill}
+    >
+      <Pressable
+        accessibilityLabel="Close plugins"
+        accessibilityRole="button"
+        onPress={onClose}
+        style={StyleSheet.absoluteFill}
+      />
+      {panel}
+    </View>
+  );
+
+  if (Platform.OS === "ios") {
+    return (
+      <FullWindowOverlay unstable_accessibilityContainerViewIsModal>
+        {overlay}
+      </FullWindowOverlay>
+    );
+  }
+
+  return (
+    <Modal
+      animationType="none"
+      onRequestClose={onClose}
+      presentationStyle="overFullScreen"
+      transparent
+      visible
+    >
+      {overlay}
+    </Modal>
+  );
 }
 
 function RowButton({ row, onPress }: { row: PickerRow; onPress: () => void }) {
@@ -224,30 +270,61 @@ function RowButton({ row, onPress }: { row: PickerRow; onPress: () => void }) {
 }
 
 /**
- * A skill's artwork lives on the Mac (`iconSmall` is an absolute path there),
- * so the row wears the same fallback the chips do: the brand color behind a
- * sparkle.
+ * Artwork a phone can load itself. The Mac inlines a plugin's icons as data
+ * URLs (or leaves them remote); a plain skill's are absolute paths on its disk.
  */
+const LOADABLE_ICON = /^(data:image\/|https:)/i;
+
+const SKILL_ICON_SIZE = 26;
+
+/**
+ * The desktop's row icon: the plugin's artwork over a soft wash of its brand
+ * color, the large one first — it is usually a PNG, where the small one is
+ * often an SVG iOS's decoder can refuse. Whatever fails to load falls through
+ * to the next, and last to a sparkle.
+ */
+function SkillIcon({ skill }: { skill: SkillRow }) {
+  const [failed, setFailed] = useState<string[]>([]);
+  const softTint = useSoftTint();
+  const wash = skill.brandColor ? softTint(skill.brandColor) : colors.fill;
+  const source = [skill.iconLarge, skill.iconSmall].find(
+    (icon): icon is string => !!icon && LOADABLE_ICON.test(icon) && !failed.includes(icon),
+  );
+
+  return (
+    <View
+      style={{
+        width: SKILL_ICON_SIZE,
+        height: SKILL_ICON_SIZE,
+        borderRadius: 7,
+        borderCurve: "continuous",
+        overflow: "hidden",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: wash,
+      }}
+    >
+      {source ? (
+        <Image
+          source={{ uri: source }}
+          contentFit="contain"
+          onError={() => setFailed((previous) => [...previous, source])}
+          style={{ width: SKILL_ICON_SIZE, height: SKILL_ICON_SIZE }}
+        />
+      ) : (
+        <SFSymbol name="sparkles" size={14} tint={colors.secondaryLabel} />
+      )}
+    </View>
+  );
+}
+
 function SkillRowBody({ skill }: { skill: SkillRow }) {
-  const brand = skill.brandColor ?? undefined;
   const badge = scopeLabel(skill.scope);
   const description = skill.shortDescription ?? skill.description;
 
   return (
     <>
-      <View
-        style={{
-          width: 26,
-          height: 26,
-          borderRadius: 7,
-          borderCurve: "continuous",
-          alignItems: "center",
-          justifyContent: "center",
-          backgroundColor: brand ?? colors.fill,
-        }}
-      >
-        <SFSymbol name="sparkles" size={14} tint={brand ? "#ffffff" : colors.secondaryLabel} />
-      </View>
+      <SkillIcon skill={skill} />
 
       <View style={{ flex: 1, gap: spacing.xxs }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>

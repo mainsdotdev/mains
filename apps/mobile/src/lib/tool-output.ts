@@ -198,15 +198,24 @@ export function parseGlobOutput(output: unknown): { files: string[]; truncated: 
 export interface DiffLine {
   type: "add" | "remove" | "context";
   text: string;
+  /** Position before the change; null on an added line, or when the source names no positions. */
+  oldNo: number | null;
+  /** Position after the change; null on a removed line, or when the source names no positions. */
+  newNo: number | null;
+}
+
+/** One contiguous stretch of a patch; the lines between two hunks were left out. */
+export interface DiffHunk {
+  lines: DiffLine[];
 }
 
 export interface Diff {
-  lines: DiffLine[];
+  hunks: DiffHunk[];
   added: number;
   removed: number;
 }
 
-const EMPTY_DIFF: Diff = { lines: [], added: 0, removed: 0 };
+const EMPTY_DIFF: Diff = { hunks: [], added: 0, removed: 0 };
 
 /**
  * The diff an Edit / Write / apply_patch produced. Four sources, in the order
@@ -215,93 +224,173 @@ const EMPTY_DIFF: Diff = { lines: [], added: 0, removed: 0 };
  * input, and finally the tool's own `old_string` / `new_string` params.
  */
 export function parseDiff(output: unknown, params: Record<string, unknown>): Diff {
-  const structured = extractStructuredPatch(output);
-  if (structured.length > 0) return classify(structured);
+  const structured = structuredPatchDiff(output);
+  if (structured) return structured;
 
-  const unified = extractUnifiedDiff(output);
-  if (unified.length > 0) return classify(unified);
+  const unified = unifiedDiff(output);
+  if (unified) return unified;
 
   const envelope = str(params._raw) ?? str(params.patch) ?? str(params.input);
   if (envelope && envelope.includes("*** Begin Patch")) {
-    return classify(patchEnvelopeLines(envelope));
+    return patchEnvelopeDiff(envelope) ?? EMPTY_DIFF;
   }
 
   const before = str(params.old_string) ?? str(params.old_str);
   const after = str(params.new_string) ?? str(params.new_str);
   if (before || after) {
-    const lines: DiffLine[] = [
-      ...(before ? before.split("\n").map((text) => ({ type: "remove" as const, text })) : []),
-      ...(after ? after.split("\n").map((text) => ({ type: "add" as const, text })) : []),
-    ];
-    return {
-      lines,
-      added: after ? after.split("\n").length : 0,
-      removed: before ? before.split("\n").length : 0,
-    };
+    // The params say what changed but not where, so the lines stay unnumbered.
+    const diff = createDiffBuilder();
+    if (before) diff.push(`-${before}`);
+    if (after) diff.push(`+${after}`);
+    return diff.finish() ?? EMPTY_DIFF;
   }
 
   return EMPTY_DIFF;
 }
 
-function extractStructuredPatch(output: unknown): string[] {
-  if (!output || typeof output !== "object") return [];
-  const sp = (output as Record<string, unknown>).structuredPatch;
-  if (!Array.isArray(sp)) return [];
-  const lines: string[] = [];
-  for (const hunk of sp) {
-    if (hunk && typeof hunk === "object" && Array.isArray((hunk as Record<string, unknown>).lines)) {
-      lines.push(...((hunk as Record<string, unknown>).lines as string[]));
-    }
-  }
-  return lines;
+/** A file written from nothing: every line an addition, numbered from 1. */
+export function newFileDiff(content: string): Diff {
+  const diff = createDiffBuilder();
+  diff.startHunk(0, 1);
+  for (const line of splitLines(content)) diff.push(`+${line}`);
+  return diff.finish() ?? EMPTY_DIFF;
 }
 
-function extractUnifiedDiff(output: unknown): string[] {
-  if (!output || typeof output !== "object") return [];
+/**
+ * How many lines a patch left out between two hunks, or null when the hunks
+ * carry no positions to tell.
+ */
+export function linesBetween(previous: DiffHunk, next: DiffHunk): number | null {
+  for (const key of ["newNo", "oldNo"] as const) {
+    let end: number | null = null;
+    for (const line of previous.lines) end = line[key] ?? end;
+    const start = next.lines.find((line) => line[key] !== null)?.[key] ?? null;
+    if (end !== null && start !== null) return Math.max(0, start - end - 1);
+  }
+  return null;
+}
+
+/**
+ * Accumulates prefixed patch lines (`+`, `-`, ` `) into numbered hunks. A hunk
+ * started without positions keeps its lines unnumbered rather than counting
+ * from a made-up 1.
+ */
+function createDiffBuilder() {
+  const hunks: DiffHunk[] = [];
+  let current: DiffHunk | null = null;
+  let oldNo: number | null = null;
+  let newNo: number | null = null;
+  let added = 0;
+  let removed = 0;
+
+  const startHunk = (oldStart: number | null, newStart: number | null): DiffHunk => {
+    current = { lines: [] };
+    hunks.push(current);
+    oldNo = oldStart;
+    newNo = newStart;
+    return current;
+  };
+
+  const push = (raw: string) => {
+    // `\ No newline at end of file` annotates the line before it; it is not content.
+    if (raw.startsWith("\\")) return;
+    const hunk = current ?? startHunk(null, null);
+    const prefix = raw[0];
+    const type = prefix === "+" ? "add" : prefix === "-" ? "remove" : "context";
+    const body = prefix === "+" || prefix === "-" || prefix === " " ? raw.slice(1) : raw;
+    // One entry can carry several physical lines (Claude's structuredPatch,
+    // old_string); each one is its own row.
+    for (const text of body.split("\n")) {
+      hunk.lines.push({
+        type,
+        text,
+        oldNo: type === "add" ? null : oldNo,
+        newNo: type === "remove" ? null : newNo,
+      });
+      if (type !== "add" && oldNo !== null) oldNo++;
+      if (type !== "remove" && newNo !== null) newNo++;
+      if (type === "add") added++;
+      else if (type === "remove") removed++;
+    }
+  };
+
+  const finish = (): Diff | null => {
+    const filled = hunks.filter((hunk) => hunk.lines.length > 0);
+    return filled.length > 0 ? { hunks: filled, added, removed } : null;
+  };
+
+  return { startHunk, push, finish };
+}
+
+function structuredPatchDiff(output: unknown): Diff | null {
+  if (!output || typeof output !== "object") return null;
+  const sp = (output as Record<string, unknown>).structuredPatch;
+  if (!Array.isArray(sp)) return null;
+  const diff = createDiffBuilder();
+  for (const entry of sp) {
+    if (!entry || typeof entry !== "object") continue;
+    const hunk = entry as Record<string, unknown>;
+    if (!Array.isArray(hunk.lines)) continue;
+    diff.startHunk(lineNumber(hunk.oldStart), lineNumber(hunk.newStart));
+    for (const line of hunk.lines) diff.push(typeof line === "string" ? line : String(line));
+  }
+  return diff.finish();
+}
+
+function unifiedDiff(output: unknown): Diff | null {
+  if (!output || typeof output !== "object") return null;
   const content = str((output as Record<string, unknown>).detailedContent);
-  if (!content) return [];
+  if (!content) return null;
 
   const looksUnified =
     content.startsWith("--- ") || content.startsWith("diff ") || content.startsWith("@@");
-  if (!looksUnified) {
-    // A whole new file — every line is an addition.
-    return content.split("\n").filter((l) => l !== "").map((l) => `+${l}`);
+  // A whole new file — every line is an addition.
+  if (!looksUnified) return newFileDiff(content);
+
+  const diff = createDiffBuilder();
+  let inHunk = false;
+  for (const line of splitLines(content)) {
+    if (line.startsWith("@@")) {
+      const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      diff.startHunk(header ? Number(header[1]) : null, header ? Number(header[2]) : null);
+      inHunk = true;
+      continue;
+    }
+    if (line.startsWith("diff ")) {
+      inHunk = false;
+      continue;
+    }
+    // File headers only precede a hunk; inside one, `--- x` is a removed `-- x`.
+    if (!inHunk && (line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ "))) {
+      continue;
+    }
+    diff.push(line);
   }
-  return content.split("\n").filter((l) => {
-    if (l === "") return false;
-    return !(
-      l.startsWith("diff ") ||
-      l.startsWith("index ") ||
-      l.startsWith("--- ") ||
-      l.startsWith("+++ ") ||
-      l.startsWith("@@")
-    );
-  });
+  return diff.finish();
 }
 
-/** Keep only the body lines of a `*** Begin Patch … *** End Patch` envelope. */
-function patchEnvelopeLines(envelope: string): string[] {
-  return envelope
-    .split("\n")
-    .filter((l) => !l.startsWith("***") && !l.startsWith("@@") && l !== "");
-}
-
-function classify(raw: string[]): Diff {
-  const lines: DiffLine[] = [];
-  let added = 0;
-  let removed = 0;
-  for (const line of raw) {
-    if (line.startsWith("+")) {
-      lines.push({ type: "add", text: line.slice(1) });
-      added++;
-    } else if (line.startsWith("-")) {
-      lines.push({ type: "remove", text: line.slice(1) });
-      removed++;
-    } else {
-      lines.push({ type: "context", text: line.startsWith(" ") ? line.slice(1) : line });
+/** The body of a `*** Begin Patch … *** End Patch` envelope. It names no positions. */
+function patchEnvelopeDiff(envelope: string): Diff | null {
+  const diff = createDiffBuilder();
+  for (const line of envelope.split("\n")) {
+    if (line.startsWith("***") || line.startsWith("@@")) {
+      diff.startHunk(null, null);
+    } else if (line !== "") {
+      diff.push(line);
     }
   }
-  return { lines, added, removed };
+  return diff.finish();
+}
+
+/** Lines of a text body, without the empty one a trailing newline leaves. */
+function splitLines(content: string): string[] {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+function lineNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 /** The file a file-touching tool acted on, under any provider's param name. */

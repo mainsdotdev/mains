@@ -28,7 +28,8 @@ import {
   type WorkspaceDiffSummary,
   type WorkspaceGitState,
   type WorkspaceResponse,
-  ArtifactImage,
+  type ArtifactImage,
+  type RunTextFile,
 } from "@mains/contracts/runs";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 import { db } from "@/db/client";
@@ -767,6 +768,17 @@ const ARTIFACT_IMAGE_SIDE = 1200;
 export function readArtifactImage(transport: WsTransport, artifactId: number): Promise<ArtifactImage> {
   return invoke<ArtifactImage>(transport, CHANNELS.runArtifacts.readImage, [
     { artifactId, maxSide: ARTIFACT_IMAGE_SIDE },
+  ]);
+}
+
+/** One Markdown file, resolved and guarded by its Work/Chat run on the Mac. */
+export function readRunTextFile(
+  transport: WsTransport,
+  runId: string,
+  filePath: string,
+): Promise<RunTextFile> {
+  return invoke<RunTextFile>(transport, CHANNELS.runs.readTextFile, [
+    { runId, filePath },
   ]);
 }
 

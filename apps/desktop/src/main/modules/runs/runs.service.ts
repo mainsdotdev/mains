@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import * as fs from "fs";
+import * as path from "path";
 
 import { PROVIDER_IDS } from "../../../shared/provider-ids";
 import { runsRepo } from "./runs.repo";
@@ -10,7 +11,12 @@ import { workspaceService, assertWorkspacePathExists } from "../workspace";
 import { spaceService } from "../space";
 import { appSettingsService } from "../appSettings";
 import { DEFAULT_MODE_ID, type ModeId } from "../../../shared/modes";
-import type { ArtifactImage, ReadArtifactImagePayload } from "@mains/contracts/runs";
+import type {
+  ArtifactImage,
+  ReadArtifactImagePayload,
+  ReadRunTextFilePayload,
+  RunTextFile,
+} from "@mains/contracts/runs";
 import {
   composeConfigSnapshot,
   composeExtraInstructions,
@@ -30,21 +36,6 @@ import {
   resolveRunExecution,
 } from "./run-execution";
 import { materializeCollectionSourceContext } from "./run-collection-sources";
-
-/** Longest side an image artifact is sent at — more than any phone shows. */
-const ARTIFACT_IMAGE_MAX_SIDE = 1600;
-/** A file sent as it is (a format the Mac can't scale) must fit in one message. */
-const ARTIFACT_IMAGE_RAW_LIMIT = 8 * 1024 * 1024;
-/** Image types the phone decodes on its own, by extension — `nativeImage` reads only PNG and JPEG. */
-const RAW_IMAGE_MIMES: Record<string, string> = {
-  webp: "image/webp",
-  gif: "image/gif",
-  heic: "image/heic",
-  heif: "image/heif",
-  avif: "image/avif",
-  bmp: "image/bmp",
-  svg: "image/svg+xml",
-};
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
 import type {
@@ -77,6 +68,114 @@ import type {
   RunTurnResponse,
 } from "./runs.dto";
 
+/** Longest side an image artifact is sent at — more than any phone shows. */
+const ARTIFACT_IMAGE_MAX_SIDE = 1600;
+/** A file sent as it is (a format the Mac can't scale) must fit in one message. */
+const ARTIFACT_IMAGE_RAW_LIMIT = 8 * 1024 * 1024;
+/** Keep one document response comfortably below the WebSocket message ceiling. */
+const RUN_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024;
+/** A basename fallback is bounded so one malformed run directory cannot stall the host. */
+const RUN_TEXT_SEARCH_MAX_ENTRIES = 10_000;
+const RUN_TEXT_SEARCH_MAX_DEPTH = 12;
+const RUN_TEXT_SEARCH_EXCLUDES = new Set([".git", "node_modules"]);
+/** Image types the phone decodes on its own, by extension — `nativeImage` reads only PNG and JPEG. */
+const RAW_IMAGE_MIMES: Record<string, string> = {
+  webp: "image/webp",
+  gif: "image/gif",
+  heic: "image/heic",
+  heif: "image/heif",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  svg: "image/svg+xml",
+};
+
+function isWithin(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/** Agent prose may append an editor line locator; it is not part of the path. */
+function stripTextFileLocator(filePath: string): string {
+  const hash = filePath.match(/^(.*?)#L\d+(?:-\d+)?$/);
+  if (hash) return hash[1];
+  const colon = filePath.match(/^(.*?):\d+(?::\d+)?$/);
+  return colon ? colon[1] : filePath;
+}
+
+function decodeFileReference(filePath: string): string {
+  try {
+    return decodeURIComponent(filePath);
+  } catch {
+    return filePath;
+  }
+}
+
+function isMarkdownPath(filePath: string): boolean {
+  const extension = path.extname(filePath).toLowerCase();
+  return extension === ".md" || extension === ".markdown";
+}
+
+function findMarkdownByBasename(root: string, reference: string): string | null {
+  const wantedName = path.basename(reference);
+  const wantedSuffix = reference.replace(/^\.\//, "").split(path.sep).join("/");
+  const matches: string[] = [];
+  let seen = 0;
+
+  const visit = (directory: string, depth: number) => {
+    if (depth > RUN_TEXT_SEARCH_MAX_DEPTH || seen >= RUN_TEXT_SEARCH_MAX_ENTRIES) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (++seen > RUN_TEXT_SEARCH_MAX_ENTRIES) return;
+      if (entry.isSymbolicLink()) continue;
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!RUN_TEXT_SEARCH_EXCLUDES.has(entry.name)) visit(candidate, depth + 1);
+      } else if (entry.isFile() && entry.name === wantedName) {
+        matches.push(candidate);
+      }
+    }
+  };
+
+  visit(root, 0);
+  return (
+    matches.find((candidate) =>
+      path.relative(root, candidate).split(path.sep).join("/").endsWith(wantedSuffix),
+    ) ??
+    matches[0] ??
+    null
+  );
+}
+
+function readMarkdownWithinRoot(root: string, candidate: string): RunTextFile | null {
+  const resolvedCandidate = path.resolve(candidate);
+  if (!isWithin(root, resolvedCandidate)) return null;
+
+  let realCandidate: string;
+  try {
+    realCandidate = fs.realpathSync(resolvedCandidate);
+  } catch {
+    return null;
+  }
+  // Check again after following links. A symlink inside the run must not escape it.
+  if (!isWithin(root, realCandidate)) return null;
+
+  const stats = fs.lstatSync(realCandidate);
+  if (!stats.isFile()) throw new Error("Cannot read non-regular file");
+  if (stats.size > RUN_TEXT_FILE_MAX_BYTES) throw new Error("Markdown file is too large");
+
+  const bytes = fs.readFileSync(realCandidate);
+  if (bytes.subarray(0, 8192).includes(0)) throw new Error("This file isn't text");
+  return {
+    fileName: path.basename(realCandidate),
+    relativePath: path.relative(root, realCandidate).split(path.sep).join("/"),
+    content: bytes.toString("utf8"),
+  };
+}
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
@@ -446,6 +545,51 @@ export const runsService = {
     }
     if (run.mode === "developer") return null;
     return managedRunDir(run.id, run.mode);
+  },
+
+  /**
+   * Resolve one Markdown file named in agent prose. Paired devices get this
+   * narrow read instead of fileExplorer access: only Work/Chat, only the
+   * selected run's managed directory, and only bounded text files.
+   */
+  async readTextFile(payload: ReadRunTextFilePayload): Promise<RunTextFile> {
+    const runId = payload.runId?.trim();
+    const rawReference = payload.filePath?.trim();
+    if (!runId) throw new Error("Run id is required");
+    if (!rawReference) throw new Error("File path is required");
+    if (rawReference.length > 4096 || rawReference.includes("\0")) {
+      throw new Error("Invalid file path");
+    }
+
+    const run = await runsRepo.findRunById(runId);
+    if (!run) throw new Error("Run not found");
+    if (run.mode === "developer") {
+      throw new Error("Markdown preview is only available for Work and Chat runs");
+    }
+
+    const reference = stripTextFileLocator(decodeFileReference(rawReference));
+    if (!isMarkdownPath(reference)) throw new Error("Only Markdown files can be previewed");
+
+    const runRoot = managedRunDir(run.id, run.mode);
+    let realRoot: string;
+    try {
+      realRoot = fs.realpathSync(runRoot);
+    } catch {
+      throw new Error("Run files are no longer available");
+    }
+
+    const direct = path.isAbsolute(reference)
+      ? path.resolve(reference)
+      : path.resolve(realRoot, reference.replace(/^\.\//, ""));
+    const directlyRead = readMarkdownWithinRoot(realRoot, direct);
+    if (directlyRead) return directlyRead;
+
+    // Agent-written references can be bare names or carry a stale directory
+    // prefix. Mirror the desktop's user-facing fallback inside this run only.
+    const located = findMarkdownByBasename(realRoot, reference);
+    const fallback = located ? readMarkdownWithinRoot(realRoot, located) : null;
+    if (fallback) return fallback;
+    throw new Error(`File not found: ${path.basename(reference)}`);
   },
 
   async getRunsByAccount(

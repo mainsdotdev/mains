@@ -260,6 +260,13 @@ export function RunView({
     if (nextRunId) router.push(`/run/${nextRunId}` as Href);
   }, [forkRun, router]);
 
+  const openTextFile = useCallback(
+    (filePath: string) => {
+      router.push({ pathname: "/document", params: { runId, filePath } } as Href);
+    },
+    [router, runId],
+  );
+
   const actions = useMemo<TranscriptActions | undefined>(
     () =>
       run
@@ -269,9 +276,10 @@ export function RunView({
             // A fork starts a run on the Mac; without one in reach, the button
             // has nothing to offer, so it stays off the row entirely.
             onFork: connected ? fork : undefined,
+            onOpenFile: mode !== "developer" ? openTextFile : undefined,
           }
         : undefined,
-    [actionState, connected, fork, forking, run, turnIsActive],
+    [actionState, connected, fork, forking, mode, openTextFile, run, turnIsActive],
   );
 
   const listRef = useRef<ScrollView>(null);
@@ -534,7 +542,7 @@ export function RunView({
                 padding: spacing.md,
                 borderRadius: radius.lg,
                 borderCurve: "continuous",
-                backgroundColor: colors.groupedCell,
+                backgroundColor: colors.cardSurface,
                 boxShadow: shadows.card,
                 gap: spacing.xs,
               }}

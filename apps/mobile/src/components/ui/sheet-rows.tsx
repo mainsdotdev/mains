@@ -79,7 +79,7 @@ export function Card({ children }: { children: React.ReactNode }) {
       style={{
         borderRadius: radius.lg,
         borderCurve: "continuous",
-        backgroundColor: colors.groupedCell,
+        backgroundColor: colors.cardSurface,
         boxShadow: shadows.card,
         overflow: "hidden",
       }}

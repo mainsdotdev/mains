@@ -146,6 +146,7 @@ describe("backendService", () => {
       }
       expect(PAIRED_DEVICE_CHANNELS.has("backend:describe")).toBe(true);
       expect(PAIRED_DEVICE_CHANNELS.has("runs:getAll")).toBe(true);
+      expect(PAIRED_DEVICE_CHANNELS.has("runs:readTextFile")).toBe(true);
     });
   });
 

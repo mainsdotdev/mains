@@ -13,16 +13,14 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Animated, {
-  FadeOut,
   useReducedMotion,
   withSpring,
-  withTiming,
   type EntryExitAnimationFunction,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { FullWindowOverlay } from "react-native-screens";
 
-import { colors, motion, radius, shadows, spacing } from "@/theme";
+import { colors, radius, shadows, spacing } from "@/theme";
 import type { ComposerCameraCapture } from "@/lib/composer-attachments";
 import { dismissKeyboardAndWait } from "@/lib/keyboard-transition";
 
@@ -30,7 +28,7 @@ import { GlassSurface, SFSymbol, ThemedText } from "@/components/ui";
 import { ComposerCameraPanel, type ComposerCameraFrame } from "./composer-camera-panel";
 import { ComposerPhotosPanel } from "./composer-photos-panel";
 
-export type ComposerAttachmentSource = "camera" | "photos" | "files";
+export type ComposerAttachmentSource = "camera" | "photos" | "files" | "plugins";
 
 export const COMPOSER_ATTACHMENT_MENU_COLLAPSE_MS = 180;
 /** Keeps the window overlay alive a frame beyond the perceptual collapse. */
@@ -53,14 +51,15 @@ const MENU_PADDING = spacing.xs;
  * completely and the menu read as a flat card; at this alpha the glass shows
  * through and a failure degrades to a dim card instead of floating text.
  *
- * It can be this light because of what is actually behind the menu: the app's
- * own flat background and the composer's glass, never a photo. `withAlpha`
- * needs a hex string and these system colors are `PlatformColor`s, so the two
- * schemes are spelled out — `secondarySystemBackground`'s own values.
+ * `GlassView` can occasionally mount without its material inside a separate
+ * window overlay. This backing is therefore deliberately close to opaque: the
+ * native glass still paints its edge and highlight when it succeeds, while a
+ * missed compositing pass remains a stable, readable system surface instead
+ * of exposing the composer below it.
  */
 const BACKING = {
-  light: "rgba(242, 242, 247, 0.38)",
-  dark: "rgba(28, 28, 30, 0.38)",
+  light: "rgba(242, 242, 247, 0.90)",
+  dark: "rgba(44, 44, 46, 0.90)",
 } as const;
 
 const ALL_ACTIONS: {
@@ -71,6 +70,7 @@ const ALL_ACTIONS: {
   { id: "camera", label: "Camera", icon: "camera" },
   { id: "photos", label: "Photos", icon: "photo" },
   { id: "files", label: "Files", icon: "paperclip" },
+  { id: "plugins", label: "Plugins", icon: "puzzlepiece.extension" },
 ];
 
 /**
@@ -86,6 +86,7 @@ export function ComposerAttachmentMenu({
   anchor,
   accent,
   includeFiles,
+  includePlugins,
   onDismiss,
   onCameraDismiss,
   onPanelDismiss,
@@ -99,6 +100,7 @@ export function ComposerAttachmentMenu({
   /** Tints the photo grid's selection, as it tints the send button. */
   accent: string;
   includeFiles: boolean;
+  includePlugins: boolean;
   onDismiss: () => void;
   onCameraDismiss: () => void;
   /** Closes the menu outright, with no reverse morph, after a panel is done. */
@@ -138,7 +140,11 @@ export function ComposerAttachmentMenu({
   /** Either expanded panel: the menu itself is put away for both. */
   const panelOpen = cameraOpen || photosOpen;
 
-  const actions = includeFiles ? ALL_ACTIONS : ALL_ACTIONS.slice(0, 2);
+  const actions = ALL_ACTIONS.filter(
+    (action) =>
+      (action.id !== "files" || includeFiles) &&
+      (action.id !== "plugins" || includePlugins),
+  );
   const height = actions.length * ROW_HEIGHT + MENU_PADDING * 2;
   const left = Math.max(
     spacing.ms,
@@ -196,11 +202,9 @@ export function ComposerAttachmentMenu({
     const spring = { duration: COMPOSER_ATTACHMENT_MENU_COLLAPSE_MS, dampingRatio: 1 };
     return {
       initialValues: {
-        opacity: 1,
         transform: [{ scaleX: 1 }, { scaleY: 1 }],
       },
       animations: {
-        opacity: withTiming(0.4, { duration: motion.fast }),
         transform: [
           { scaleX: withSpring(collapsedScaleX, spring) },
           { scaleY: withSpring(collapsedScaleY, spring) },
@@ -208,14 +212,11 @@ export function ComposerAttachmentMenu({
       },
     };
   };
-  // Reduce Motion gets no entrance rather than a cross-fade: a fade that
-  // starts at opacity 0 is the one case expo-glass-effect calls out as leaving
-  // the glass unrendered, and an instant menu is the more literal reading of
-  // the setting anyway. The exit still fades — that view is going away.
+  // Never animate opacity on this view: expo-glass-effect documents that any
+  // parent opacity below 1 can prevent native glass from rendering. Reduce
+  // Motion therefore gets an immediate entrance and exit.
   const entering = reduceMotion ? undefined : expandFromButton;
-  const exiting = reduceMotion
-    ? FadeOut.duration(motion.fast)
-    : collapseIntoButton;
+  const exiting = reduceMotion ? undefined : collapseIntoButton;
 
   const openCamera = async () => {
     if (openingCameraRef.current) return;
@@ -326,9 +327,9 @@ export function ComposerAttachmentMenu({
                   Liquid Glass has no backdrop to refract inside a window
                   overlay until it initializes, and gives one up for good the
                   moment an ancestor is composited at less than full opacity.
-                  So a translucent `BACKING` sits below it — enough that a
-                  surface which never gets its material is still a readable
-                  card, light enough that the one which does reads as glass. */}
+                  So a near-opaque `BACKING` sits below it: a failed material
+                  still reads as a system card, and successful glass adds its
+                  native edge and highlight above that surface. */}
               <View
                 pointerEvents="none"
                 style={[

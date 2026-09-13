@@ -1,10 +1,11 @@
 import { type ReactNode } from "react";
-import { View } from "react-native";
+import { Pressable, View } from "react-native";
 
 import { ThemedText } from "@/components/ui";
 import type { ToolCallRow } from "@/db/schema";
 import {
   coerceToolOutput,
+  newFileDiff,
   parseDiff,
   parseGlobOutput,
   parseGrepOutput,
@@ -32,11 +33,17 @@ import { DiffStat, ToolCodeBody, ToolDetail, ToolDiffBody, ToolRow, ToolTextBody
  * link, and a syntax-highlighted diff; on the phone a row is a symbol, a line
  * of text, and a card — so the whole table fits in one file.
  */
-export function ToolCallDisplay({ call }: { call: ToolCallRow }) {
+export function ToolCallDisplay({
+  call,
+  onOpenFile,
+}: {
+  call: ToolCallRow;
+  onOpenFile?: (filePath: string) => void;
+}) {
   const tool = resolveTool(call.toolName);
   const params = parseToolInput(call.inputJson);
   const output = coerceToolOutput(call.outputJson);
-  const view = buildView(tool.kind, params, output);
+  const view = buildView(tool.kind, params, output, onOpenFile);
 
   return (
     <ToolRow
@@ -62,6 +69,7 @@ function buildView(
   kind: ReturnType<typeof resolveTool>["kind"],
   params: Record<string, unknown>,
   output: unknown,
+  onOpenFile?: (filePath: string) => void,
 ): RowView {
   switch (kind) {
     case "bash": {
@@ -74,8 +82,9 @@ function buildView(
 
     case "read": {
       const { content, numLines } = parseReadOutput(output);
+      const filePath = toolFilePath(params);
       return {
-        detail: <FileDetail path={toolFilePath(params)} />,
+        detail: <FileDetail path={filePath} onOpen={markdownFileOpener(filePath, onOpenFile)} />,
         stat: numLines > 0 ? `${numLines} lines` : undefined,
         body: content ? <ToolCodeBody text={content} /> : undefined,
       };
@@ -83,27 +92,26 @@ function buildView(
 
     case "edit": {
       const diff = parseDiff(output, params);
+      const filePath = toolFilePath(params);
       return {
-        detail: <FileDetail path={toolFilePath(params)} />,
-        stat: diff.lines.length > 0 ? <DiffStat added={diff.added} removed={diff.removed} /> : undefined,
-        body: diff.lines.length > 0 ? <ToolDiffBody lines={diff.lines} /> : undefined,
+        detail: <FileDetail path={filePath} onOpen={markdownFileOpener(filePath, onOpenFile)} />,
+        stat: diff.hunks.length > 0 ? <DiffStat added={diff.added} removed={diff.removed} /> : undefined,
+        body: diff.hunks.length > 0 ? <ToolDiffBody diff={diff} /> : undefined,
       };
     }
 
     case "write": {
-      // A write's own content is the truth; fall back to whatever diff the
-      // provider reported when the params carry no body (Copilot's create).
+      // Same order as the desktop: an overwrite's reported patch (Claude's
+      // structuredPatch) wins; otherwise the write's own body is the whole new
+      // file, all additions. Copilot's create carries its body only in output.
       const content = text(params.content) || text(params.contents) || text(params.file_text);
-      const diff = content ? null : parseDiff(output, params);
-      const lineCount = content ? content.split("\n").length : 0;
+      const reported = parseDiff(output, params);
+      const diff = reported.hunks.length > 0 || !content ? reported : newFileDiff(content);
+      const filePath = toolFilePath(params);
       return {
-        detail: <FileDetail path={toolFilePath(params)} />,
-        stat: lineCount > 0 ? `${lineCount} lines` : undefined,
-        body: content ? (
-          <ToolCodeBody text={content} />
-        ) : diff && diff.lines.length > 0 ? (
-          <ToolDiffBody lines={diff.lines} />
-        ) : undefined,
+        detail: <FileDetail path={filePath} onOpen={markdownFileOpener(filePath, onOpenFile)} />,
+        stat: diff.hunks.length > 0 ? <DiffStat added={diff.added} removed={diff.removed} /> : undefined,
+        body: diff.hunks.length > 0 ? <ToolDiffBody diff={diff} /> : undefined,
       };
     }
 
@@ -222,9 +230,43 @@ function buildView(
 }
 
 /** A file path: the name alone, since a phone row has no room for the rest. */
-function FileDetail({ path }: { path: string }) {
+function FileDetail({ path, onOpen }: { path: string; onOpen?: () => void }) {
   if (!path) return <ToolDetail>{""}</ToolDetail>;
-  return <ToolDetail>{shortFileName(path)}</ToolDetail>;
+  const fileName = shortFileName(path);
+  if (!onOpen) return <ToolDetail>{fileName}</ToolDetail>;
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={`Open ${fileName}`}
+      hitSlop={6}
+      onPress={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      style={({ pressed }) => ({ opacity: pressed ? 0.55 : 1 })}
+    >
+      <ToolDetail>{fileName}</ToolDetail>
+    </Pressable>
+  );
+}
+
+/** Only the document viewer's supported local files become tool-row links. */
+function markdownFileOpener(
+  filePath: string,
+  onOpenFile?: (filePath: string) => void,
+): (() => void) | undefined {
+  if (!onOpenFile || !isMarkdownFilePath(filePath)) return undefined;
+  return () => onOpenFile(filePath);
+}
+
+function isMarkdownFilePath(filePath: string): boolean {
+  const withoutLocator = filePath
+    .trim()
+    .replace(/#L\d+(?:-\d+)?$/i, "")
+    .replace(/:\d+(?::\d+)?$/, "")
+    .split(/[?#]/)[0]
+    .toLowerCase();
+  return withoutLocator.endsWith(".md") || withoutLocator.endsWith(".markdown");
 }
 
 interface Todo {

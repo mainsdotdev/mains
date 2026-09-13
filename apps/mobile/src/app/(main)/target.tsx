@@ -78,7 +78,7 @@ export default function TargetSheet() {
         style={{
           borderRadius: radius.lg,
           borderCurve: "continuous",
-          backgroundColor: colors.groupedCell,
+          backgroundColor: colors.cardSurface,
           boxShadow: shadows.card,
           overflow: "hidden",
         }}

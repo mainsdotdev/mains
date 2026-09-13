@@ -7,7 +7,13 @@ import {
   type AssetMetadata,
 } from "expo-media-library";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, View } from "react-native";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  useColorScheme,
+  View,
+} from "react-native";
 import Animated, {
   cancelAnimation,
   runOnJS,
@@ -65,6 +71,7 @@ export function ComposerPhotosPanel({
   const [assets, setAssets] = useState<AssetMetadata[] | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
+  const isDark = useColorScheme() === "dark";
   const reduceMotion = useReducedMotion();
   const left = useSharedValue(reduceMotion ? target.left : source.left);
   const top = useSharedValue(reduceMotion ? target.top : source.top);
@@ -256,7 +263,7 @@ export function ComposerPhotosPanel({
           borderRadius: radius.xl + 10,
           borderCurve: "continuous",
           overflow: "hidden",
-          backgroundColor: "#000000",
+          backgroundColor: isDark ? "#000000" : colors.groupedBackground,
           boxShadow: shadows.overlay,
         },
         frameStyle,
@@ -265,7 +272,7 @@ export function ComposerPhotosPanel({
     >
       {assets === null ? (
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color={colors.onTint} />
+          <ActivityIndicator color={isDark ? colors.onTint : colors.secondaryLabel} />
         </View>
       ) : assets.length === 0 ? (
         <View
@@ -276,11 +283,13 @@ export function ComposerPhotosPanel({
             paddingHorizontal: spacing.xl,
           }}
         >
-          {/* The surface is fixed black in both themes, so the semantic
-              label colors would invert out of legibility here. */}
           <ThemedText
             variant="subhead"
-            style={{ textAlign: "center", color: colors.onTint, opacity: 0.7 }}
+            style={{
+              textAlign: "center",
+              color: isDark ? colors.onTint : colors.secondaryLabel,
+              opacity: isDark ? 0.7 : 1,
+            }}
           >
             No photos here yet. Open All Photos to browse your whole library.
           </ThemedText>

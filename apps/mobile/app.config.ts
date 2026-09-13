@@ -123,7 +123,14 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           cameraPermission: CAMERA_PERMISSION,
         },
       ],
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          // The pairing token uses the Keychain without biometric gating.
+          // Avoid advertising a Face ID permission the app never requests.
+          faceIDPermission: false,
+        },
+      ],
       "expo-sqlite",
       "./plugins/with-ios-scene-lifecycle.cjs",
     ],

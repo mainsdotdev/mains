@@ -2,7 +2,7 @@ import { useRouter, type Href } from "expo-router";
 import { Pressable, View } from "react-native";
 
 import type { RunRow as RunRecord } from "@/db/schema";
-import { relativeTime, runStatusLabel } from "@/lib/format";
+import { runStatusLabel } from "@/lib/format";
 import { colors, radius, spacing } from "@/theme";
 
 import { ThemedText } from "@/components/ui";
@@ -47,7 +47,7 @@ export function RunRow({
 
       </View>
       <ThemedText variant="caption" style={{ fontVariant: ["tabular-nums"] }}>
-        {live ? runStatusLabel(run.status) : relativeTime(run.updatedAt)}
+        {live ? runStatusLabel(run.status) : null}
       </ThemedText>
     </Pressable>
   );

@@ -58,7 +58,7 @@ export function SubagentSummaryRow({
         paddingVertical: spacing.ms,
         borderRadius: radius.md,
         borderCurve: "continuous",
-        backgroundColor: pressed ? colors.fill : colors.groupedCell,
+        backgroundColor: pressed ? colors.fill : colors.cardSurface,
         boxShadow: shadows.card,
       })}
     >

@@ -19,7 +19,7 @@ export interface PromptSkill {
   displayName?: string;
   shortDescription?: string;
   description?: string;
-  /** Absolute path on the Mac — unreadable here; see `PromptSkillChip`. */
+  /** A plugin's data/https URL, or an absolute path on the Mac; see `SkillSummary`. */
   iconSmall?: string;
   iconLarge?: string;
   brandColor?: string;

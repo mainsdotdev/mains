@@ -17,13 +17,27 @@ import { ToolCallDisplay } from "./tool-call-display";
  * reads as progress rather than as a closed drawer — the same rule as the
  * desktop's turn accordion, which force-opens the running turn.
  */
-export function ToolBlock({ calls }: { calls: ToolCallRow[] }) {
+export function ToolBlock({
+  calls,
+  onOpenFile,
+}: {
+  calls: ToolCallRow[];
+  onOpenFile?: (filePath: string) => void;
+}) {
   const merged = mergeToolCalls(calls);
-  if (merged.length === 1) return <ToolCallDisplay call={merged[0]} />;
-  return <Block calls={merged} />;
+  if (merged.length === 1) {
+    return <ToolCallDisplay call={merged[0]} onOpenFile={onOpenFile} />;
+  }
+  return <Block calls={merged} onOpenFile={onOpenFile} />;
 }
 
-function Block({ calls }: { calls: ToolCallRow[] }) {
+function Block({
+  calls,
+  onOpenFile,
+}: {
+  calls: ToolCallRow[];
+  onOpenFile?: (filePath: string) => void;
+}) {
   const summary = summarizeToolBlock(calls);
   const statusColors = useStatusColors();
   // Null until the user decides for themselves; then their choice sticks. Until
@@ -82,7 +96,7 @@ function Block({ calls }: { calls: ToolCallRow[] }) {
           }}
         >
           {calls.map((call) => (
-            <ToolCallDisplay key={call.id} call={call} />
+            <ToolCallDisplay key={call.id} call={call} onOpenFile={onOpenFile} />
           ))}
         </View>
       ) : null}

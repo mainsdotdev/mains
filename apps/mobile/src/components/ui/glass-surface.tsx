@@ -7,9 +7,9 @@ import { colors } from "@/theme";
 
 /**
  * A floating layer over content: Liquid Glass on iOS 26+, system-material blur
- * on older iOS, a plain surface elsewhere. Used only for things that float —
- * the composer bar, round buttons, pills — never for content cards. On a flat
- * background it reads as the soft grey disc the ChatGPT sidebar uses.
+ * on older iOS, a plain surface elsewhere. Most callers are floating controls;
+ * explicitly glass-styled document cards use it for the same native material
+ * and fallback behavior.
  */
 export function GlassSurface({
   children,

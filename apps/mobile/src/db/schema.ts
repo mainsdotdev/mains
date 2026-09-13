@@ -125,7 +125,11 @@ export const skills = sqliteTable(
     description: text("description"),
     shortDescription: text("short_description"),
     argumentHint: text("argument_hint"),
-    /** Absolute paths on the Mac: unreadable here, kept so context round-trips. */
+    /**
+     * A plugin's artwork as a data or https URL, drawn by the picker; for other
+     * skills, absolute paths on the Mac — unreadable here, kept so context
+     * round-trips.
+     */
     iconSmall: text("icon_small"),
     iconLarge: text("icon_large"),
     brandColor: text("brand_color"),

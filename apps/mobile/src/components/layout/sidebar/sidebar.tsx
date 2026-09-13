@@ -355,7 +355,7 @@ function GroupHeader({
       <ThemedText
         variant="body"
         numberOfLines={1}
-        style={{ flex: 1, fontWeight: "600", color: nameColor }}
+        style={{ flex: 1, fontWeight: "500", color: nameColor }}
       >
         {collection.name}
       </ThemedText>

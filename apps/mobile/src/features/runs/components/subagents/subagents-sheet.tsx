@@ -170,7 +170,7 @@ export function SubagentsSheet() {
           style={{
             borderRadius: radius.lg,
             borderCurve: "continuous",
-            backgroundColor: colors.groupedCell,
+            backgroundColor: colors.cardSurface,
             boxShadow: shadows.card,
             overflow: "hidden",
           }}
@@ -303,7 +303,7 @@ function SubagentDetail({
             padding: spacing.ms,
             borderRadius: radius.md,
             borderCurve: "continuous",
-            backgroundColor: colors.groupedCell,
+            backgroundColor: colors.cardSurface,
             boxShadow: shadows.card,
           }}
         >

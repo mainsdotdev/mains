@@ -48,6 +48,8 @@ export interface TranscriptActions {
   onFork?: () => Promise<void>;
   /** A continuation is running, so preserve the fork button without accepting taps. */
   forkDisabled: boolean;
+  /** A Work/Chat Markdown link opens on its own native screen. */
+  onOpenFile?: (filePath: string) => void;
 }
 
 /**
@@ -105,7 +107,7 @@ export function TranscriptRow({
         />
       );
     case "tools":
-      return <ToolBlock calls={item.calls} />;
+      return <ToolBlock calls={item.calls} onOpenFile={actions?.onOpenFile} />;
     case "subagents":
       return <SubagentSummaryRow runId={item.runId} agents={item.agents} />;
     case "images":
@@ -142,7 +144,11 @@ function AgentMessage({
 
   return (
     <View style={{ gap: spacing.xs }}>
-      {isLiveResponse ? <StreamingMarkdown source={item.text} /> : <Markdown source={item.text} />}
+      {isLiveResponse ? (
+        <StreamingMarkdown source={item.text} onOpenFile={actions?.onOpenFile} />
+      ) : (
+        <Markdown source={item.text} onOpenFile={actions?.onOpenFile} />
+      )}
       {showActions ? (
         <MessageActions
           text={turn?.text ?? item.text}
@@ -155,9 +161,15 @@ function AgentMessage({
 }
 
 /** Mounted only for the live response, so settled history never replays the reveal. */
-function StreamingMarkdown({ source }: { source: string }) {
+function StreamingMarkdown({
+  source,
+  onOpenFile,
+}: {
+  source: string;
+  onOpenFile?: (filePath: string) => void;
+}) {
   const displayedText = useSmoothText(source);
-  return <Markdown source={displayedText} animateTail />;
+  return <Markdown source={displayedText} animateTail onOpenFile={onOpenFile} />;
 }
 
 /** Up to this many characters, a prompt's bubble is too narrow for the full radius. */
