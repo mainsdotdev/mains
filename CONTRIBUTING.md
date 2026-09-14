@@ -12,7 +12,7 @@ npm run db:push
 npm start
 ```
 
-**Requirements:** Node.js 20.19+, Git
+**Requirements:** Node.js 22.12+, Git
 
 ## Project Structure
 

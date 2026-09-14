@@ -48,9 +48,13 @@ jobs:
           Automated forward-merge. `main` has commits `dev` does not — a stable
           release bump, a hotfix, or both.
 
-          **Merge this with a merge commit, not a squash.** Squashing rewrites the
-          commits under a new hash, so the two branches keep diverging and every
-          later promotion re-surfaces the same conflicts.
+          **After a promotion** (`dev → main` squash): do not merge this. Reset
+          `dev` to `main` instead — `git checkout dev && git reset --hard origin/main
+          && git push --force origin dev` — and this PR closes itself.
+
+          **After a hotfix:** merge this **with a merge commit, not a squash**, the
+          same day. Squashed, `dev` would still lack `main`'s commit and the next
+          promotion would silently revert the hotfix.
 
           Opened by `.github/workflows/sync-main-to-dev.yml`.
           BODY

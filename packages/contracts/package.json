@@ -1,0 +1,10 @@
+{
+  "name": "@mains/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The wire contract shared by the Mains apps: IPC channel names, the WebSocket protocol, provider ids, modes, run settings, and the device-facing DTO types. Plain TypeScript source — both apps compile it themselves, so there is no build step.",
+  "license": "MIT",
+  "exports": {
+    "./*": "./src/*.ts"
+  }
+}
