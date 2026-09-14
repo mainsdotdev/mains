@@ -50,6 +50,16 @@ export function registerLocalBackendIpc() {
     },
   );
 
+  ipcMain.handle(CHANNELS.localBackend.rotateToken, async () => {
+    try {
+      return ok(await localBackendService.rotateToken());
+    } catch (error) {
+      return fail(
+        error instanceof Error ? error.message : "Failed to rotate token",
+      );
+    }
+  });
+
   // Phone pairing rides on the exposure above, so it is local-only for the same
   // reason: a remote client must not be able to mint codes or revoke devices.
   ipcMain.handle(CHANNELS.localBackend.createPairingCode, async () => {
@@ -92,6 +102,7 @@ export function unregisterLocalBackendIpc() {
   ipcMain.removeHandler(CHANNELS.localBackend.setRemoteAccess);
   ipcMain.removeHandler(CHANNELS.localBackend.setLanAccess);
   ipcMain.removeHandler(CHANNELS.localBackend.setTailscaleHttps);
+  ipcMain.removeHandler(CHANNELS.localBackend.rotateToken);
   ipcMain.removeHandler(CHANNELS.localBackend.createPairingCode);
   ipcMain.removeHandler(CHANNELS.localBackend.listPairedDevices);
   ipcMain.removeHandler(CHANNELS.localBackend.revokePairedDevice);

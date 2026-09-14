@@ -164,6 +164,9 @@ async function reconcileHost(): Promise<void> {
       wsHost = null;
       bindHost = null;
     }
+    // No exposure left: forget the token so the next start mints a fresh one.
+    // Turning access off is how a user expects to invalidate a leaked token.
+    sessionToken = null;
     return;
   }
   if (wsHost && bindHost !== desiredBind) {
@@ -286,6 +289,24 @@ export const localBackendService = {
       await reconcileHost();
     }
     persist();
+    return buildStatus();
+  },
+
+  /**
+   * Replace the shared session token. A running host is restarted on the same
+   * port with the new one — the token is only checked at the WS handshake, so
+   * a restart is what actually drops clients that authenticated with the old
+   * token. Paired phones hold their own device tokens and simply reconnect;
+   * Tailscale Serve keeps proxying to the same port.
+   */
+  async rotateToken(): Promise<LocalBackendStatus> {
+    sessionToken = generateToken();
+    if (wsHost) {
+      await wsHost.close().catch(() => {});
+      wsHost = null;
+      bindHost = null;
+    }
+    await reconcileHost();
     return buildStatus();
   },
 

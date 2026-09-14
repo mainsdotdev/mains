@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import {
   Alert,
   Body,
+  Button,
   Caption,
   CopyButton as UiCopyButton,
   Input,
   Toggle,
   toast,
 } from "@/components/ui";
+import { Eye, EyeClosed, Refresh } from "@/components/ui/icons";
 import {
   SettingsSection,
   SettingsDivider,
@@ -33,13 +35,44 @@ interface Status {
   webUiAvailable: boolean;
 }
 
-type Busy = "remote" | "lan" | "tailscale" | null;
+type Busy = "remote" | "lan" | "tailscale" | "rotate" | null;
 
 const valueInputCls = "flex-1 min-w-0 font-mono text-xs";
 
 /** Read-only value field — copyable but never edited. */
 function ValueField({ value }: { value: string }) {
   return <Input value={value} readOnly className={valueInputCls} />;
+}
+
+/**
+ * Read-only secret — masked until the field is clicked or the eye toggled, so
+ * a screen share or screenshot doesn't leak it. Copying works while masked.
+ */
+function SecretField({ value, label }: { value: string; label: string }) {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <>
+      <Input
+        type={revealed ? "text" : "password"}
+        value={value}
+        readOnly
+        autoComplete="off"
+        aria-label={label}
+        onClick={() => setRevealed(true)}
+        className={`${valueInputCls} ${revealed ? "" : "cursor-pointer"}`}
+      />
+      <Button
+        type="button"
+        variant="bare"
+        tooltip={revealed ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+        aria-pressed={revealed}
+        onClick={() => setRevealed((v) => !v)}
+        className="text-primary-900 dark:text-primary-100"
+      >
+        {revealed ? <EyeClosed className="size-3.5" /> : <Eye className="size-3.5" />}
+      </Button>
+    </>
+  );
 }
 
 /** Icon-only copy button with a brief check on success. */
@@ -66,6 +99,7 @@ export function LocalBackendShare() {
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [confirmLan, setConfirmLan] = useState(false);
+  const [confirmRotate, setConfirmRotate] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -137,10 +171,40 @@ export function LocalBackendShare() {
           {status.token && (
             <div className="flex items-center gap-2">
               <Caption className="w-28 shrink-0">Pairing token</Caption>
-              <ValueField value={status.token} />
+              {/* Keyed by the token so a rotated token starts masked again. */}
+              <SecretField key={status.token} value={status.token} label="Pairing token" />
               <CopyButton value={status.token} tooltip="Copy token" />
+              <Button
+                type="button"
+                variant="bare"
+                tooltip="Rotate token"
+                aria-label="Rotate pairing token"
+                onClick={() => setConfirmRotate(true)}
+                disabled={busy !== null}
+                className="text-primary-900 dark:text-primary-100"
+              >
+                <Refresh className="size-3.5" />
+              </Button>
             </div>
           )}
+
+          <Alert
+            isOpen={confirmRotate}
+            title="Rotate pairing token?"
+            description="Browsers, SSH tunnels and other mains apps using the current token are disconnected and need the new one. Paired phones use their own tokens and reconnect on their own."
+            primaryButtonText="Rotate"
+            secondaryButtonText="Cancel"
+            primaryButtonVariant="danger"
+            isPrimaryLoading={busy === "rotate"}
+            onPrimary={() =>
+              void run(
+                "rotate",
+                window.api.localBackend.rotateToken(),
+                "Pairing token rotated",
+              ).finally(() => setConfirmRotate(false))
+            }
+            onSecondary={() => setConfirmRotate(false)}
+          />
           {!status.webUiAvailable && (
             <Caption tone="warning" className="block">
               Web UI not built — run <code>npm run build:web</code> once so
@@ -213,7 +277,8 @@ export function LocalBackendShare() {
 
       {tailscaleOn && status?.tailscaleWebUrl && (
         <div className="flex items-center gap-2 pb-3">
-          <ValueField value={status.tailscaleWebUrl} />
+          {/* Shown without its `?token=` query — the copy button still copies the full link. */}
+          <ValueField value={status.tailscaleWebUrl.split("?")[0]} />
           <CopyButton value={status.tailscaleWebUrl} tooltip="Copy browser link" />
           {/* {status.tailscaleWsUrl && (
             <CopyButton value={status.tailscaleWsUrl} tooltip="Copy ws:// URL" />

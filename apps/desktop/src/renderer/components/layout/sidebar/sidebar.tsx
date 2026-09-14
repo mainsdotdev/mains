@@ -413,15 +413,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 >
                   Relay
                 </Text>
-                <span
-                  className={`shrink-0 text-t -mr-1 uppercase px-1.5 py-px rounded-md ${
-                    isRelayRoute
-                      ? "bg-primary-400/20 text-primary-800 dark:bg-primary/5 dark:text-primary-200"
-                      : "bg-primary-400/20 text-primary-800 dark:bg-primary/5 dark:text-primary-200"
-                  }`}
-                >
-                  Beta
-                </span>
+
               </Button>
             </div>
             <SidebarContent

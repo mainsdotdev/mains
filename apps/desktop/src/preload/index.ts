@@ -162,6 +162,8 @@ const api = {
         enabled,
         httpsPort,
       ),
+    // Replace the shared token; clients using the old one are disconnected
+    rotateToken: () => ipcRenderer.invoke(CHANNELS.localBackend.rotateToken),
     // Phone pairing — mint a QR code, list/revoke the phones that used one
     createPairingCode: () =>
       ipcRenderer.invoke(CHANNELS.localBackend.createPairingCode),
