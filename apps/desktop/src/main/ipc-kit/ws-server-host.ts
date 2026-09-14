@@ -38,6 +38,12 @@ export interface WsHost {
   readonly sink: WebSocketSink;
   /** The actual listening port (resolved even when started with port 0). */
   readonly port: number;
+  /**
+   * Drop every live connection authenticated as this paired device. Device
+   * tokens are checked only at the handshake, so revoking one without this
+   * leaves an already-open socket working. Returns how many were dropped.
+   */
+  disconnectDevice(deviceId: string): number;
   close(): Promise<void>;
 }
 
@@ -359,8 +365,12 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       : undefined,
   });
 
+  // Which paired device each open socket belongs to, for disconnectDevice.
+  const socketDevices = new WeakMap<WebSocket, string>();
   wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
-    serveConnection(adaptSocket(socket, authenticatedDevices.get(req)), sink, {
+    const device = authenticatedDevices.get(req);
+    if (device) socketDevices.set(socket, device.deviceId);
+    serveConnection(adaptSocket(socket, device), sink, {
       commandReceipts: options.commandReceipts,
     });
   });
@@ -374,6 +384,17 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       resolve({
         sink,
         port,
+        disconnectDevice: (deviceId) => {
+          let dropped = 0;
+          for (const client of wss.clients) {
+            if (socketDevices.get(client) !== deviceId) continue;
+            // terminate, not close: a close handshake leaves the socket readable
+            // until the peer answers, and a revoked device need not answer.
+            client.terminate();
+            dropped++;
+          }
+          return dropped;
+        },
         close: () =>
           new Promise<void>((res) => {
             unregisterSink();

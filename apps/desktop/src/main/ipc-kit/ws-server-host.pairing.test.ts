@@ -163,6 +163,30 @@ describe("startWsHost — paired devices and POST /pair", () => {
     expect(await whoAmI(client)).toEqual({ clientId: expect.any(String) });
   });
 
+  it("disconnectDevice drops that device's live sockets and nobody else's", async () => {
+    // Revoking is a DB write and device tokens are checked only at the
+    // handshake, so without this an already-open socket keeps working.
+    host = await startWsHost({
+      port: 0,
+      host: "127.0.0.1",
+      token: SHARED_TOKEN,
+      verifyDeviceToken,
+    });
+    registerHandler("who:ami", async (ctx) => ({ success: true, data: ctx }));
+
+    const phone = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols(DEVICE_TOKEN));
+    client = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols(SHARED_TOKEN));
+    await Promise.all([opened(phone), opened(client)]);
+
+    const phoneClosed = new Promise<void>((resolve) => phone.once("close", () => resolve()));
+    expect(host.disconnectDevice("someone-else")).toBe(0);
+    expect(host.disconnectDevice("d1")).toBe(1);
+    await phoneClosed;
+
+    expect(client.readyState).toBe(WebSocket.OPEN);
+    expect(await whoAmI(client)).toEqual({ clientId: expect.any(String) });
+  });
+
   describe("commands (idempotent mutations)", () => {
     function memoryReceipts() {
       const rows = new Map<string, string>();

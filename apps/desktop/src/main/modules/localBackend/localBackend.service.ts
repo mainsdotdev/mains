@@ -328,6 +328,9 @@ export const localBackendService = {
 
   async revokePairedDevice(id: string): Promise<void> {
     await backendService.revokePairedDevice(id);
+    // The token is checked only at the handshake: drop the sockets the device
+    // already holds, or it keeps working until it happens to reconnect.
+    wsHost?.disconnectDevice(id);
     notifyPairedDevicesChanged();
   },
 
