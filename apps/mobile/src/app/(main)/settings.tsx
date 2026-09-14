@@ -48,7 +48,7 @@ function connectionHint(state: ConnectionState): string | null {
     case "unreachable":
       return "Make sure Mains is open on the Mac and this phone can reach it — the same Wi‑Fi, or Tailscale on both.";
     case "authBlocked":
-      return "The Mac no longer accepts this phone's pairing. Pair again from Mains › Devices on the Mac.";
+      return "The Mac no longer accepts this phone's pairing. Pair again from Relay › This machine on the Mac.";
     case "incompatible":
       return "One side is on an older Mains. Update the phone app or the Mac, then try again.";
     case "offline":
