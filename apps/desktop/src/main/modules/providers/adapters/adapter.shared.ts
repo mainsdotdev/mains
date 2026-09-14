@@ -189,7 +189,13 @@ export function saveAttachments(
   const inlineTexts: string[] = [];
 
   for (const attachment of attachments) {
-    const filePath = path.join(uploadDir, attachment.name);
+    // runs.service validates attachments before a run starts; this is the
+    // write itself refusing to leave the upload directory regardless.
+    const filePath = path.join(uploadDir, path.basename(attachment.name));
+    if (path.dirname(filePath) !== uploadDir) {
+      console.warn("[adapter.shared] skipped attachment with an unusable name:", attachment.name);
+      continue;
+    }
     const ext = path.extname(attachment.name).toLowerCase();
     const hasSource = typeof attachment.sourcePath === "string" && attachment.sourcePath.length > 0;
 

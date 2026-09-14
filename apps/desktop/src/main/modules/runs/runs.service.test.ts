@@ -891,6 +891,99 @@ describe("runsService", () => {
     });
   });
 
+  // ─────────────────────────────────────────────────────────────
+  // Attachments arrive from WebSocket clients and paired phones too: a name
+  // reaches the adapter as a filename only, and an off-limits sourcePath is
+  // refused before anything runs — an existing run is left as it was.
+  // ─────────────────────────────────────────────────────────────
+  describe("run attachments", () => {
+    it("hands the adapter filenames, not paths", async () => {
+      createSpace(db, {
+        id: "sp-attach",
+        accountId: "default",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun } as any);
+
+      await runsService.executeRun({
+        accountId: "default",
+        spaceId: "sp-attach",
+        providerId: "claude_code",
+        goal: "read this",
+        attachments: [
+          {
+            name: "../../../../Users/me/.zshrc",
+            type: "document",
+            mimeType: "text/plain",
+            data: "eA==",
+          },
+        ],
+      });
+      await flushBackground();
+
+      expect(startRun.mock.calls[0][0].attachments).toEqual([
+        { name: ".zshrc", type: "document", mimeType: "text/plain", data: "eA==" },
+      ]);
+    });
+
+    it("refuses a sourcePath outside browser captures before the adapter runs", async () => {
+      createSpace(db, {
+        id: "sp-attach-src",
+        accountId: "default",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun } as any);
+
+      await expect(
+        runsService.executeRun({
+          accountId: "default",
+          spaceId: "sp-attach-src",
+          providerId: "claude_code",
+          goal: "read this",
+          attachments: [
+            { name: "shot.png", type: "image", mimeType: "image/png", sourcePath: "/etc/passwd" },
+          ],
+        }),
+      ).rejects.toThrow("browser capture");
+      expect(startRun).not.toHaveBeenCalled();
+    });
+
+    it("refuses a bad attachment on continue without failing the existing run", async () => {
+      createWorkspace(db, { id: "ws-attach", accountId: "default" });
+      createRun(db, {
+        id: "run-attach",
+        accountId: "default",
+        workspaceId: "ws-attach",
+        providerId: "claude_code",
+        mode: "work",
+        status: "succeeded",
+        sessionId: "sess-attach",
+      });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({
+        continueRun,
+        canResumeSession: vi.fn().mockResolvedValue(true),
+      } as any);
+
+      await expect(
+        runsService.continueRun({
+          runId: "run-attach",
+          accountId: "default",
+          message: "read this",
+          attachments: [
+            { name: "key.png", type: "image", mimeType: "image/png", sourcePath: "/Users/me/.ssh/id_ed25519" },
+          ],
+        }),
+      ).rejects.toThrow("browser capture");
+      expect(continueRun).not.toHaveBeenCalled();
+      expect((await runsService.getRunById("run-attach"))?.status).toBe("succeeded");
+    });
+  });
+
   describe("listRecentRuns", () => {
     it("filters by account/provider/mode and skips archived runs", async () => {
       createProject(db, { id: "proj-1", accountId: "default", name: "Life" });

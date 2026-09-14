@@ -1,5 +1,10 @@
+import { randomUUID } from "crypto";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { describe, it, expect, vi } from "vitest";
 import {
+  saveAttachments,
   adoptConfig,
   createLogger,
   safeJson,
@@ -13,6 +18,28 @@ import {
   DEFAULT_ALLOWED_TOOLS,
   ALLOWED_TOOLS_SET,
 } from "./adapter.shared";
+
+describe("saveAttachments", () => {
+  it("never writes outside the run's upload directory", () => {
+    const runId = `test-${randomUUID()}`;
+    const uploadDir = path.join(os.tmpdir(), "mains-uploads", runId);
+    const escaped = path.join(os.tmpdir(), "mains-uploads", `${runId}-escaped.png`);
+    try {
+      const { savedPaths } = saveAttachments(
+        [
+          { name: `../${runId}-escaped.png`, type: "image", mimeType: "image/png", data: "eA==" },
+          { name: "..", type: "image", mimeType: "image/png", data: "eA==" },
+        ],
+        runId,
+      );
+      expect(savedPaths).toEqual([path.join(uploadDir, `${runId}-escaped.png`)]);
+      expect(fs.existsSync(escaped)).toBe(false);
+    } finally {
+      fs.rmSync(uploadDir, { recursive: true, force: true });
+      fs.rmSync(escaped, { force: true });
+    }
+  });
+});
 
 describe("resolveCatalogDefaultId", () => {
   const catalog = ["auto", "gpt-6", "claude-sonnet-9"];

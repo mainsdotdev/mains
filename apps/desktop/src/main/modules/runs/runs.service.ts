@@ -36,6 +36,7 @@ import {
   resolveRunExecution,
 } from "./run-execution";
 import { materializeCollectionSourceContext } from "./run-collection-sources";
+import { sanitizeRunAttachments } from "./run-attachments";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
 import type {
@@ -92,6 +93,16 @@ const RAW_IMAGE_MIMES: Record<string, string> = {
 function isWithin(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Where the browser inspector writes its screenshots — the one directory a run
+ * attachment's `sourcePath` may point into (see run-attachments.ts).
+ */
+async function browserCaptureDir(): Promise<string> {
+  // Loaded here rather than at the top: the service also runs outside Electron (tests).
+  const { app } = await import("electron");
+  return path.join(app.getPath("userData"), "browser-captures");
 }
 
 /** Agent prose may append an editor line locator; it is not part of the path. */
@@ -843,6 +854,8 @@ export const runsService = {
    * The session owns the lifecycle from here on; this method returns immediately.
    */
   async executeRun(payload: StartRunPayload): Promise<StartRunResponse> {
+    // Before anything is written: a refused attachment must leave no run behind.
+    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
     const runId = generateRunId();
     try {
       const provider = await providersService.getById(payload.providerId);
@@ -966,7 +979,7 @@ export const runsService = {
               : undefined,
           toolPolicy,
           configSnapshot,
-          attachments: payload.attachments,
+          attachments,
           contextIssues: payload.contextIssues,
           contextSignals: payload.contextSignals,
           contextFiles: payload.contextFiles,
@@ -1116,6 +1129,8 @@ export const runsService = {
    */
   async continueRun(payload: ContinueRunPayload): Promise<ContinueRunResponse> {
     const { runId, accountId, message, additionalContext } = payload;
+    // Outside the try: its failure path would mark this existing run failed.
+    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
     try {
       const run = await runsRepo.findRunById(runId);
       if (!run) throw new Error("Run not found");
@@ -1241,7 +1256,7 @@ export const runsService = {
             effectiveAdditionalContext.length > 0
               ? effectiveAdditionalContext
               : undefined,
-          attachments: payload.attachments,
+          attachments,
           contextIssues: payload.contextIssues,
           contextSignals: payload.contextSignals,
           contextFiles: payload.contextFiles,
@@ -1268,6 +1283,7 @@ export const runsService = {
    */
   async forkRun(payload: ForkRunPayload): Promise<ForkRunResponse> {
     const { sourceRunId, accountId, message } = payload;
+    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
     const newRunId = generateRunId();
     try {
       const sourceRun = await runsRepo.findRunById(sourceRunId);
@@ -1401,7 +1417,7 @@ export const runsService = {
             effectiveAdditionalContext.length > 0
               ? effectiveAdditionalContext
               : undefined,
-          attachments: payload.attachments,
+          attachments,
         },
         (event: WorkRunEvent) =>
           session.project(event).catch((err) =>
