@@ -1,0 +1,1075 @@
+@import "@xterm/xterm/css/xterm.css";
+@import "tailwindcss";
+
+/* Inter ships as one variable font per style rather than eighteen static
+   instances. Same 4.001 build and the same metrics (2048 upem, 1984 ascender,
+   -494 descender), so nothing reflows — but the `opsz` axis is live now,
+   driven by the `font-optical-sizing` below. Every static instance was pinned
+   at opsz 14, Inter's body-text optical size, which left headings spaced for
+   14px copy. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/InterVariable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/InterVariable-Italic.woff2') format('woff2');
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Suppress all animations/transitions until the app signals readiness, so
+   opens/closes during the launch churn are instant instead of stuttery.
+   `.app-ready` is added to <html> by main.tsx once fonts are loaded and the
+   main thread has gone idle after the startup mount/query storm (time-bounded
+   to ~2.5s) — see markAppReady() in lib/app-ready.ts. */
+html:not(.app-ready) *,
+html:not(.app-ready) *::before,
+html:not(.app-ready) *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+:root {
+  --background: #ffffff;
+  --foreground: #100f0f;
+}
+
+@theme inline {
+  --text-xt: 0.5625rem;
+  --text-xt--line-height: calc(1.25 / 0.5625);
+  --text-t: 0.625rem;
+  --text-t--line-height: calc(1 / 0.625);
+  --text-xxs: 0.6875rem;
+  --text-xxs--line-height: calc(1.25 / 0.6875);
+  --text-xs: 0.75rem;
+  --text-xs--line-height: calc(1 / 0.75);
+  --text-s: 0.8125rem;
+  --text-s--line-height: calc(1.25 / 0.8125);
+  --text-sm: 0.875rem;
+  --text-sm--line-height: calc(1.25 / 0.875);
+  --text-base: 1rem;
+  --text-base--line-height: calc(1.5 / 1);
+  --text-lg: 1.125rem;
+  --text-lg--line-height: calc(1.75 / 1.125);
+  --text-xl: 1.25rem;
+  --text-xl--line-height: calc(1.75 / 1.25);
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: calc(2 / 1.5);
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: calc(2.25 / 1.875);
+  --text-4xl: 2.25rem;
+  --text-4xl--line-height: calc(2.5 / 2.25);
+  --text-5xl: 3rem;
+  --text-5xl--line-height: 1;
+  --text-6xl: 3.75rem;
+  --text-6xl--line-height: 1;
+  --text-7xl: 4.5rem;
+  --text-7xl--line-height: 1;
+  --text-8xl: 6rem;
+  --text-8xl--line-height: 1;
+  --text-9xl: 8rem;
+  --text-9xl--line-height: 1;
+
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-primary: #ffffff;
+  --color-primary-50: #efeeee;
+  --color-primary-100: #f7f7f6;
+  --color-primary-200: #d3d3d3;
+  --color-primary-300: #b5b5b5;
+  --color-primary-400: #a09d95;
+  --color-primary-500: #878580;
+  --color-primary-600: #6f6e69;
+  --color-primary-700: #575653;
+  --color-primary-800: #262625;
+  --color-primary-900: #141414;
+  --color-primary-950: #0c0c0c;
+
+
+  --color-danger: #ff4436;
+  --color-danger-hover: #e33221;
+  --color-success: #22C55E;
+  --color-warning: #F59E0B;
+  --color-accent: #2563eb;
+  --color-claude: #D97757;
+  --color-copilot: #8534F3;
+  --color-codex: #0169CC;
+  --color-cursor: #727272;
+
+  /* Z-index layers */
+  --z-base: 10;
+  --z-sidebar: 30;
+  --z-panel: 40;
+  --z-overlay: 50;
+  --z-panel-toggle: 60;
+  --z-dropdown: 100;
+  --z-dropdown-sub: 101;
+  --z-modal: 9999;
+  --z-modal-critical: 10000;
+
+
+  /* Layout */
+  --sidebar-width: 18rem;
+  --panel-width: 22rem;
+  --browser-panel-width: 38rem;
+  --session-panel-width: 21rem;
+  --drag-region-height: 1rem;
+  --dropdown-min-width: 140px;
+
+  /* Shadows */
+  --shadow-inset-subtle: inset 0 0.5px 0 rgba(0, 0, 0, 0.03);
+  --shadow-inset-subtle-dark: inset 0 0.5px 0 rgba(255, 255, 255, 0.03);
+  --shadow-inset-toggle: inset 0 0.5px 2px rgba(0, 0, 0, 0.1);
+  --shadow-inset-toggle-dark: inset 0 0.5px 2px rgba(0, 0, 0, 0.3);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
+
+}
+
+*:focus {
+  outline: none !important;
+}
+
+/* * {
+  user-select: none;
+} */
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* Ties Inter's `opsz` axis to the used font size. It is the browser default,
+     but stated here because it is the whole reason the variable font replaced
+     the static instances — without it every size would render at opsz 14. */
+  font-optical-sizing: auto;
+  /* cv05 = lower-case l with a tail, cv08 = upper-case I with serifs. Branch
+     names, file paths, and package names all render in the sans face, where a
+     bare `l`, `I`, and `1` are otherwise the same vertical stroke. Digits are
+     left alone: the fuller `ss02` set also slashes the zero, which reads as a
+     glyph error in ordinary counts. */
+  font-feature-settings: "cv05" 1, "cv08" 1;
+}
+
+/* While a layout handle is being dragged, suspend the sidebar/main width &
+   margin transitions so the resize tracks the pointer 1:1 instead of lagging. */
+body[data-resizing] {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+body[data-resizing] aside,
+body[data-resizing] main,
+body[data-resizing] [data-layout-toggle] {
+  transition: none !important;
+}
+body[data-resizing] iframe {
+  pointer-events: none !important;
+}
+
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-fade-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-from-bottom {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-to-bottom {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(100%); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes dropdown-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  70% {
+    opacity: 1;
+    transform: scale(1.008);
+    animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-dropdown-in {
+  animation: dropdown-in 250ms both;
+  transform-origin: top;
+  will-change: transform, opacity;
+  contain: layout style paint;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+.animate-dropdown-sub-in {
+  animation: dropdown-in 250ms both;
+  transform-origin: top left ;
+  will-change: transform, opacity;
+  contain: layout style paint;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+/* Closed-state pre-warm: keep the layer allocated so the first open is smooth */
+.dropdown-prewarm {
+  opacity: 0;
+  transform: scale(0.85) translateZ(0);
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+  contain: layout style paint;
+  pointer-events: none;
+}
+
+@keyframes modal-in {
+  0% {
+    opacity: 0;
+    transform: translateY(100%) scale(0.96);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(0) scale(1.005);
+  }
+  100% {
+    opacity: 1;
+
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes modal-out {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(100%) scale(0.95);
+  }
+}
+
+.animate-modal-in {
+  animation: modal-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: bottom;
+  will-change: transform, opacity;
+  contain: layout style paint;
+}
+
+.animate-modal-out {
+  animation: modal-out 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  transform-origin: bottom;
+  will-change: transform, opacity;
+  contain: layout style paint;
+}
+
+/* Toasts use transitions (not keyframes) so rapid add/dismiss retargets from
+   the current state instead of restarting from zero; entry via @starting-style. */
+.toast-item {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  transform-origin: top;
+  transition:
+    transform 250ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 250ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+  contain: layout style paint;
+}
+
+@starting-style {
+  .toast-item {
+    opacity: 0;
+    transform: scale(0.95) translateY(-8px);
+  }
+}
+
+.toast-item[data-exiting] {
+  opacity: 0;
+  transform: scale(0.95) translateY(0);
+  transition-duration: 200ms;
+}
+
+
+@keyframes blur-reveal {
+  from { opacity: 0.4; }
+  to { opacity: 1; }
+}
+
+@keyframes fresh-blur-in {
+  from { filter: blur(4px); opacity: 0.4; }
+  to { filter: blur(0); opacity: 1; }
+}
+
+@keyframes shine {
+  0% { background-position: 200% 0%; }
+  100% { background-position: -200% 0%; }
+}
+
+@keyframes marquee-left {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes copilotIdleAnimation {
+  from { transform: translateY(0); }
+  to { transform: translateY(calc(-100% + var(--frame-height, 32px))); }
+}
+.animate-slide-in {
+  animation: slide-fade-down 0.15s ease-out both;
+}
+
+@keyframes slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-6px) scale(0.90);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.1s ease-out both;
+}
+
+@keyframes claudePulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.85);
+  }
+}
+
+.animate-claude-pulse {
+  animation: claudePulse 2s ease-in-out infinite;
+}
+
+@keyframes spinSlow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spinSlow 2s linear infinite;
+}
+
+@keyframes rotate3dY {
+  0% { transform: rotate3d(1, 1, 0, 0deg); }
+  100% { transform: rotate3d(1, 1, 0, 360deg); }
+}
+
+.animate-rotate-3d {
+  animation: rotate3dY 1.8s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+/*
+ * Tool status loader — a 4×4 grid of squares. Each square carries two
+ * overlapping pulses (::before / ::after) that peak once per cycle. Their
+ * per-cell delays are set inline so the lit squares sweep diagonally: the
+ * ::before layer rides the top-left → bottom-right anti-diagonal during the
+ * first half of the cycle, the ::after layer rides the bottom-left → top-right
+ * diagonal during the second half. The two passes give the smooth, faintly
+ * random "squares sliding across" feel. Color is inherited via currentColor.
+ */
+@keyframes toolSquarePulse {
+  0%, 100% { opacity: 0; transform: scale(0.02); }
+  24%      { opacity: 1;   transform: scale(1); }
+  48%      { opacity: 0; transform: scale(0.02); }
+}
+
+.tool-square {
+  position: relative;
+}
+
+.tool-square::before,
+.tool-square::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0;
+  /* ease-in-out-sine: zero velocity at the peak and at the dim landings, so the
+     brighten/dim fades stay silky with no hard corners. */
+  animation: toolSquarePulse 2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+.tool-square::before { animation-delay: var(--tsq-d1, 0ms); }
+.tool-square::after  { animation-delay: var(--tsq-d2, 0ms); }
+
+/*
+ * Generate spinner: each tiny square twinkles independently at a random phase
+ * and tempo (per-cell vars set in generate-spinner.tsx), giving a soft
+ * "generative sparkle" rather than the tool spinner's diagonal sweeps. Same
+ * ease-in-out-sine as toolSquarePulse so the fades stay silky.
+ */
+@keyframes generateSquareTwinkle {
+  0%, 100% { opacity: 0.08; transform: scale(0.4); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
+.generate-square {
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.08;
+  animation: generateSquareTwinkle var(--gsq-dur, 1400ms)
+    cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation-delay: var(--gsq-delay, 0ms);
+}
+
+/*
+ * Agent glyph accent. --agent-hue is hashed from the agent's seed in
+ * agent-glyph.tsx; lightness and chroma are fixed here so the hue is the only
+ * axis that varies and every agent reads at the same weight — which is what
+ * lets neighbouring hues stay tellable apart at size-3.5.
+ *
+ * Not Tailwind classes: those cap the palette at the 17 hue families, and a
+ * runtime hue can't be a scanned class name anyway. Chroma is deliberately
+ * past what yellows and greens can hold at these lightnesses — the browser
+ * gamut-maps chroma down while holding the hue we asked for, which is exactly
+ * the fallback we want (a duller yellow, never a shifted one).
+ */
+.agent-glyph {
+  color: oklch(0.57 0.18 var(--agent-hue, 0));
+}
+
+.dark .agent-glyph {
+  color: oklch(0.78 0.16 var(--agent-hue, 0));
+}
+
+/*
+ * Circle spinner: the classic rotating ring in the square-spinner family's
+ * language — tiny squares on a circle, each pulsing in turn (per-dot phase set
+ * in circle-spinner.tsx) so the bright spot chases clockwise with a comet
+ * tail. Duration must match DUR_MS in circle-spinner.tsx; same
+ * ease-in-out-sine as the other spinners so the fades stay silky.
+ */
+@keyframes circleDotPulse {
+  0%, 100% { opacity: 0.12; transform: translate(-50%, -50%) scale(0.6); }
+  18%      { opacity: 1;    transform: translate(-50%, -50%) scale(1); }
+  60%      { opacity: 0.12; transform: translate(-50%, -50%) scale(0.6); }
+}
+
+.circle-dot {
+  position: absolute;
+  width: 24%;
+  height: 24%;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.12;
+  transform: translate(-50%, -50%) scale(0.6);
+  animation: circleDotPulse 900ms cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation-delay: var(--cd-delay, 0ms);
+}
+
+@keyframes wizardModalIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.015);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes wizardStepFade {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+
+
+.metallic-button {
+  padding: 4px;
+  border: none;
+  outline: none;
+  color: var(--color-primary-950);
+  background: linear-gradient(
+    45deg,
+    var(--color-primary-500) 5%,
+    var(--color-primary-50) 10%,
+    var(--color-primary-200) 30%,
+    var(--color-primary-200) 50%,
+    var(--color-primary-200) 70%,
+    var(--color-primary-50) 80%,
+    var(--color-primary-500) 95%
+  );
+  text-shadow: 1px 1px 2px #f8f4ee80;
+  border-radius: 999px;
+  box-shadow: 0 2px 5px #100f0f4d;
+  cursor: pointer;
+  transition: transform 160ms ease-out, box-shadow 160ms ease-out;
+
+  &:hover { transform: translateY(-2px); }
+  &:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px #100f0f4d;
+  }
+}
+
+.shine-text {
+  color: transparent;
+  background-clip: text !important;
+  animation: shine 2s linear infinite;
+  background:
+    radial-gradient(circle at center, var(--color-primary-900), transparent) -200% 50% / 200% 100% no-repeat,
+    var(--color-primary-400);
+
+  .dark & {
+    background:
+      radial-gradient(circle at center, var(--color-primary-100), transparent) -200% 50% / 200% 100% no-repeat,
+      var(--color-primary-700);
+  }
+}
+
+.typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  margin-left: 2px;
+  background-color: var(--color-primary-600);
+  animation: blink 1s step-end infinite;
+  vertical-align: middle;
+
+  .dark & { background-color: var(--color-primary-400); }
+}
+
+input[type="range"].slider {
+  -webkit-appearance: none;
+  appearance: none;
+
+  &::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--color-primary-700);
+    cursor: pointer;
+    transition: background 0.2s ease;
+
+    &:hover { background: var(--color-primary-800); }
+  }
+
+  &::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--color-primary-700);
+    cursor: pointer;
+    border: none;
+    transition: background 0.2s ease;
+
+    &:hover { background: var(--color-primary-800); }
+  }
+
+  @media (prefers-color-scheme: dark) {
+    &::-webkit-slider-thumb {
+      background: var(--color-primary-200);
+      &:hover { background: var(--color-primary-100); }
+    }
+
+    &::-moz-range-thumb {
+      background: var(--color-primary-200);
+      &:hover { background: var(--color-primary-100); }
+    }
+  }
+}
+
+.marquee-container {
+  overflow: hidden;
+  position: relative;
+}
+
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee-left 30s linear infinite;
+
+  &:hover { animation-play-state: paused; }
+}
+
+.marquee-fade {
+  -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+}
+
+
+/*
+ * Web mode (served by `mains serve` to a browser): the page is NOT a transparent
+ * Electron window, so `html,body,#root { background: transparent }` (set in
+ * index.html for the Electron vibrancy) exposes the browser's white in the
+ * margins and translucent areas. Paint a solid app-base background instead.
+ * Higher specificity + !important overrides the index.html rule.
+ */
+html.mains-web,
+html.mains-web body,
+html.mains-web #root {
+  background: var(--color-primary) !important;
+}
+html.mains-web.dark,
+html.mains-web.dark body,
+html.mains-web.dark #root {
+  background: var(--color-primary-900) !important;
+}
+
+/* ── Glass surfaces ──────────────────────────────────────────────────────
+   One utility for every glass surface. `glass-<name>` paints the fill on
+   padding-box plus the rim gradients on border-box (the lit-edge illusion).
+
+   Adding a surface = adding ONE token below; `glass-<name>` then exists as
+   a class. Optional companions, both looked up by the same <name>:
+     --glass-hover-<name>  fill while hovered (omit = no hover change)
+     --glass-edge-<name>   rim color override (omit = inherits --glass-rim)
+
+   Rules of use:
+   - Exactly one glass-* class per element. Two of them fight over
+     --glass-fill and the winner is whichever Tailwind emits last.
+   - Never pair with a bg-* or hover:bg-* utility: those set background-color,
+     which the `background` shorthand here overrides — and hover:bg-* wins on
+     specificity, wiping the rim on hover. Use the tokens instead, or
+     `hover:[--glass-tint:<color>]` for a genuine one-off. */
+@theme {
+  --glass-fill-surface: var(--color-primary-100);
+  --glass-fill-card: rgba(255, 255, 255, 0.98);
+  --glass-fill-input: rgba(255, 255, 255, 1);
+  --glass-fill-toggle: rgba(216, 216, 216, 1);
+  --glass-fill-button: rgba(255, 255, 255, 0.72);
+  --glass-fill-primary: rgba(240, 240, 240, 0.72);
+  --glass-fill-secondary: rgba(12, 12, 12, 0.42);
+  --glass-fill-submit: rgba(43, 127, 255, 0.9);
+  --glass-fill-danger: rgba(255, 68, 54, 0.9);
+  --glass-fill-success: rgba(13, 197, 94, 0.9);
+
+  --glass-hover-button: rgba(255, 255, 255, 0.9);
+  --glass-hover-primary: var(--color-primary-200);
+  --glass-hover-submit: #2563eb;
+  --glass-hover-danger: var(--color-danger-hover);
+
+  /* Saturated fills swallow a dark rim — light them from the other side. */
+  --glass-edge-submit: rgba(255, 255, 255, 0.42);
+  --glass-edge-danger: rgba(255, 255, 255, 0.42);
+}
+
+:root {
+  --glass-rim: rgba(0, 0, 0, 0.08);
+  --glass-rim-shadow: rgba(255, 255, 255, 0);
+  --glass-outline-rim: rgba(0, 0, 0, 0.1);
+  /* Half-strength rim for large decorative surfaces, where the full one reads
+     as a drawn box rather than a lit edge. Selected via `glass-outline-soft`. */
+  --glass-outline-rim-soft: rgba(0, 0, 0, 0.045);
+
+  /* Categorical data-viz slots — identity only (which series), assigned in this
+     fixed order and never cycled or generated past the last slot; a longer tail
+     folds into a neutral "other" row. The ORDER is the colorblind-safety
+     mechanism, not cosmetic: adjacent pairs are what touch in a stacked bar.
+     Validated as a set against the tooltip surfaces (#f7f7f6 / #141414):
+     worst adjacent CVD ΔE 9.1 light / 8.4 dark, normal-vision 19.6 / 19.3.
+     Light steps sit under 3:1 on the light surface, so anything painted with
+     them must also carry a visible text label. Never reuse these for status. */
+  --viz-cat-1: #2a78d6;
+  --viz-cat-2: #eb6834;
+  --viz-cat-3: #1baf7a;
+  --viz-cat-4: #eda100;
+  --viz-cat-5: #e87ba4;
+}
+
+/* Dark mode is a token swap — the utility itself never forks. */
+.dark {
+  --glass-rim: rgba(255, 255, 255, 0.08);
+  --glass-rim-shadow: rgba(0, 0, 0, 0);
+  --glass-outline-rim: rgba(255, 255, 255, 0.1);
+  --glass-outline-rim-soft: rgba(255, 255, 255, 0.045);
+
+  /* Same five hues, re-stepped for the dark surface — not an automatic flip. */
+  --viz-cat-1: #3987e5;
+  --viz-cat-2: #d95926;
+  --viz-cat-3: #199e70;
+  --viz-cat-4: #c98500;
+  --viz-cat-5: #d55181;
+
+  --glass-fill-surface: var(--color-primary-900);
+  --glass-fill-card: rgba(24, 24, 24, 0.98);
+  --glass-fill-input: rgba(14, 14, 14, 1);
+  --glass-fill-toggle: rgba(14, 14, 14, 1);
+  --glass-fill-button: rgba(36, 36, 36, 0.72);
+  --glass-fill-primary: rgba(36, 36, 36, 0.72);
+  --glass-fill-secondary: rgba(120, 120, 120, 0.42);
+
+  --glass-hover-button: rgba(48, 48, 48, 0.85);
+  --glass-hover-primary: rgba(38, 38, 37, 0.6);
+}
+
+@utility glass-* {
+  --glass-fill: --value(--glass-fill-*);
+  --glass-hover: --value(--glass-hover-*);
+  --glass-rim: --value(--glass-edge-*);
+  /* Indirection so :hover can retint without a var() cycle. */
+  --glass-tint: var(--glass-fill);
+
+  background:
+    linear-gradient(to bottom, var(--glass-tint), var(--glass-tint)) padding-box,
+    radial-gradient(
+      130% 120% at 8% -10%,
+      var(--glass-rim) 0 18%,
+      transparent 48%
+    ) border-box,
+    radial-gradient(
+      100% 90% at 104% 100%,
+      var(--glass-rim) 0 12%,
+      transparent 46%
+    ) border-box,
+    linear-gradient(
+      135deg,
+      var(--glass-rim) 0%,
+      var(--glass-rim) 25%,
+      transparent 47%,
+      var(--glass-rim-shadow) 70%,
+      var(--glass-rim) 88%,
+      var(--glass-rim) 100%
+    ) border-box;
+  border: 0.5px solid transparent;
+
+  &:hover {
+    --glass-tint: var(--glass-hover, var(--glass-fill));
+  }
+}
+
+/*
+ * Keeps clear of the session box, which floats over the top-right of the
+ * content. The app shell sets `--content-inset-right` on the content wrapper
+ * while the box shares the layout; regions the box can't reach (the bottom
+ * terminal) simply don't carry this class and stay full width.
+ *
+ * Duration mirrors LAYOUT_PANEL_ANIM_MS in lib/layout.ts — CSS can't read it.
+ *
+ * Never put this on the same element as `px-*` or `pr-*`: it declares
+ * `padding-right` too and wins the cascade, so the sibling utility's right
+ * padding silently collapses to the inset (0px with nothing docked) while its
+ * left padding stays. Wrap instead — `content-inset` outside, padding inside.
+ */
+@utility content-inset {
+  padding-right: var(--content-inset-right, 0px);
+  transition: padding-right 150ms ease-out;
+}
+
+@utility glass-outline {
+  position: relative;
+  background: none;
+  border: 0;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        130% 120% at 8% -10%,
+        var(--glass-outline-rim) 0 18%,
+        transparent 48%
+      ),
+      radial-gradient(
+        100% 90% at 104% 100%,
+        var(--glass-outline-rim) 0 12%,
+        transparent 46%
+      ),
+      linear-gradient(
+        135deg,
+        var(--glass-outline-rim) 0%,
+        var(--glass-outline-rim) 25%,
+        transparent 47%,
+        var(--glass-rim-shadow) 70%,
+        var(--glass-outline-rim) 88%,
+        var(--glass-outline-rim) 100%
+      );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+}
+
+/*
+ * Companion to `glass-outline`, never a replacement: it only swaps the rim
+ * colour the outline already reads, so the gradient stack stays defined once.
+ * Use it on big surfaces (the onboarding feature cards) where the standard rim
+ * traces a visible box instead of catching light. Apply alongside:
+ * `glass-outline glass-outline-soft`.
+ */
+@utility glass-outline-soft {
+  --glass-outline-rim: var(--glass-outline-rim-soft);
+}
+
+.copilot-icon-container {
+  display: block;
+  overflow: hidden;
+  position: relative;
+}
+
+.copilot-icon-sprite {
+  display: block;
+  will-change: transform;
+
+  &[data-animation-state="running"] {
+    animation: copilotIdleAnimation 3s steps(53) infinite;
+  }
+}
+
+.fresh-text-blur {
+  display: inline;
+  animation: fresh-blur-in 0.35s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}
+
+.animate-blur-reveal {
+  animation: blur-reveal 150ms ease-out forwards;
+}
+
+.noscrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar { display: none; }
+}
+
+/* Shooting star border effect */
+@keyframes shooting-star-flip {
+  to { rotate: 360deg; }
+}
+
+@keyframes shooting-star-rotate {
+  to { transform: rotate(90deg); }
+}
+
+.shooting-star-border {
+  --spark-speed: 3s;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.shooting-star-border .spark {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  rotate: 0deg;
+  overflow: hidden;
+  mask: linear-gradient(white, transparent 50%);
+  animation: shooting-star-flip calc(var(--spark-speed) * 2) infinite steps(2, end);
+}
+
+.shooting-star-border .spark::before {
+  content: "";
+  position: absolute;
+  width: 200%;
+  aspect-ratio: 1;
+  inset: 0 auto auto 50%;
+  z-index: -1;
+  translate: -50% -15%;
+  rotate: 0;
+  transform: rotate(-90deg);
+  opacity: 0.75;
+  background: conic-gradient(from 0deg, transparent 0 340deg, var(--color-primary-400) 360deg);
+  animation: shooting-star-rotate var(--spark-speed) linear infinite both;
+}
+
+.dark .shooting-star-border .spark::before {
+  background: conic-gradient(from 0deg, transparent 0 340deg, var(--color-primary-300) 360deg);
+}
+
+.shooting-star-border .spark-backdrop {
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  background: var(--color-primary-50);
+  transition: background 0.2s;
+}
+
+.dark .shooting-star-border .spark-backdrop {
+  background: var(--color-primary-900);
+}
+
+.shooting-star-border:hover .spark-backdrop {
+  background: var(--color-primary-100);
+}
+
+.dark .shooting-star-border:hover .spark-backdrop {
+  background: var(--color-primary-900);
+}
+
+/* ── Streaming text ── */
+/* Soft fade for blocks as they mount; the per-character reveal that makes
+   appended text flow lives in useSmoothText. Children must keep their
+   natural display so the streaming layout matches the final layout —
+   forcing them inline made paragraphs run together and the whole message
+   reflow when the stream completed. */
+@keyframes stream-block-in {
+  from { opacity: 0; filter: blur(2px); }
+  to { opacity: 1; filter: blur(0); }
+}
+
+.streaming-text > * {
+  animation: stream-block-in 0.3s ease-out both;
+}
+
+/* Keep long display equations inside the transcript column. KaTeX remains
+   selectable, and only the equation itself scrolls when it cannot wrap. */
+.katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.25rem;
+  text-align: left;
+}
+
+.katex-display > .katex {
+  text-align: left;
+}
+
+/* ── Image generation ── */
+@keyframes image-generation-atmosphere {
+  0%, 100% { opacity: 0.35; transform: scale(0.92); }
+  50% { opacity: 0.72; transform: scale(1.08); }
+}
+
+@keyframes image-generation-dot-pulse {
+  0%, 100% {
+    opacity: var(--image-dot-dim-opacity);
+    transform: scale(0.72);
+  }
+  48% {
+    opacity: var(--image-dot-opacity);
+    transform: scale(1.28);
+  }
+}
+
+@keyframes image-generation-stage-in {
+  from { opacity: 0; filter: blur(2px); }
+  to { opacity: 1; filter: blur(0); }
+}
+
+.image-generation-card::before {
+  content: "";
+  position: absolute;
+  inset: 18% 9%;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--color-primary-400) 18%, transparent), transparent 58%);
+  filter: blur(28px);
+  animation: image-generation-atmosphere 5.2s ease-in-out infinite;
+}
+
+.dark .image-generation-card::before {
+  background:
+    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--color-primary-300) 13%, transparent), transparent 58%);
+}
+
+.image-generation-dot {
+  opacity: var(--image-dot-opacity);
+  animation-name: image-generation-dot-pulse;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  will-change: transform, opacity;
+}
+
+.image-generation-stage {
+  animation: image-generation-stage-in 240ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-text > * {
+    animation: none;
+  }
+
+  /* Gentler, not zero: entrances keep a quick fade (state indication) but drop
+     movement. Spinners stay — they convey loading state. Decorative loops stop. */
+  .animate-dropdown-in,
+  .animate-dropdown-sub-in,
+  .animate-modal-in,
+  .animate-slide-in,
+  .animate-slide-in-left,
+  .fresh-text-blur {
+    animation: fade 120ms ease-out both;
+  }
+
+  .animate-modal-out {
+    animation: fade 120ms ease-out reverse both;
+  }
+
+  .toast-item,
+  .toast-item[data-exiting] {
+    transition-property: opacity;
+    transition-duration: 120ms;
+  }
+
+  .marquee-track {
+    animation-play-state: paused;
+  }
+
+  .image-generation-card::before,
+  .image-generation-dot,
+  .image-generation-stage {
+    animation: none;
+  }
+
+  .shine-text,
+  .shooting-star-border .spark,
+  .shooting-star-border .spark::before,
+  .animate-claude-pulse,
+  .animate-rotate-3d {
+    animation: none;
+  }
+}

@@ -1,0 +1,60 @@
+import { BlurView } from "expo-blur";
+import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
+import type { ReactNode } from "react";
+import { StyleSheet, type StyleProp, View, type ViewStyle } from "react-native";
+
+import { colors } from "@/theme";
+
+/**
+ * A floating layer over content: Liquid Glass on iOS 26+, system-material blur
+ * on older iOS, a plain surface elsewhere. Most callers are floating controls;
+ * explicitly glass-styled document cards use it for the same native material
+ * and fallback behavior.
+ */
+export function GlassSurface({
+  children,
+  style,
+  interactive = false,
+  effect = "regular",
+  tintColor,
+}: {
+  children?: ReactNode;
+  style?: StyleProp<ViewStyle>;
+  interactive?: boolean;
+  effect?: "regular" | "clear";
+  /** A wash over the glass (a translucent color). */
+  tintColor?: string;
+}) {
+  if (process.env.EXPO_OS === "ios") {
+    if (isLiquidGlassAvailable()) {
+      return (
+        <GlassView glassEffectStyle={effect} isInteractive={interactive} tintColor={tintColor} style={style}>
+          {children}
+        </GlassView>
+      );
+    }
+    // The tint rides on the blur as a translucent background rather than being
+    // dropped, so `tintColor` means the same thing on every branch and a
+    // tinted pill does not lose its wash on iOS below 26.
+    return (
+      <BlurView
+        tint="systemMaterial"
+        intensity={90}
+        style={[{ overflow: "hidden" }, style, tintColor ? { backgroundColor: tintColor } : null]}
+      >
+        {children}
+      </BlurView>
+    );
+  }
+  return (
+    <View style={[{ backgroundColor: colors.secondarySystemBackground }, style]}>
+      {tintColor ? (
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: tintColor }]}
+        />
+      ) : null}
+      {children}
+    </View>
+  );
+}

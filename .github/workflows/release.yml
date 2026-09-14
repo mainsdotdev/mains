@@ -9,6 +9,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
+# The desktop app lives in apps/desktop; every npm command runs there.
+defaults:
+  run:
+    working-directory: apps/desktop
+
 jobs:
   release:
     name: Build & Publish (${{ matrix.arch }})
@@ -63,8 +68,9 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
 
       - run: npm ci
 

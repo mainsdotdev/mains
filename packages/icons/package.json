@@ -1,0 +1,13 @@
+{
+  "name": "@mains/icons",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Mains icon registry as data: every registry icon's SVG shape (generated from the desktop app's components) plus the parse/tint helpers, for any surface that has to draw a space or project icon the way the desktop does.",
+  "license": "MIT",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "generate": "node scripts/generate-shapes.mjs"
+  }
+}

@@ -1,52 +1,11 @@
-# Dependencies
+# Repo-level ignores; each app carries its own .gitignore.
 node_modules/
-
-# Build output
-.vite/
-out/
-dist/
-dist-web/
-
-# Database
-.data/
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
-
-# Environment
-.env
-.env.local
-.env.test
-.env.*.local
-.cursorrules.md
-
-# OS
 .DS_Store
-Thumbs.db
-
-# Editor
-.idea/
-.claude/
-.vscode/
-*.swp
-*.swo
-*~
-/docs*
-
-# Coverage
-coverage/
-*.lcov
-.nyc_output/
-
-# Logs
 *.log
-npm-debug.log*
-
-# TypeScript
-*.tsbuildinfo
-
-# Misc
-*.tgz
-.cache/
-.eslintcache
+.claude/
+.cursor/
+.vscode/
+.idea/
+/docs*
+.env
+.env.*
