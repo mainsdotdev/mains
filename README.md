@@ -70,7 +70,7 @@ npm start
 
 **Platform:** macOS only (Apple Silicon and Intel). Windows and Linux are not supported yet. 
 
-**Prerequisites:** [Node.js](https://nodejs.org/) 20.19+, Git
+**Prerequisites:** [Node.js](https://nodejs.org/) 22.12+, Git
 
 ```bash
 git clone https://github.com/mainsdotdev/mains.git
