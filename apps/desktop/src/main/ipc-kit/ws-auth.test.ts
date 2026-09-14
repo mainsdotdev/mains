@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   generateToken,
   hashToken,
-  isLoopbackHost,
   tokensMatch,
 } from "./ws-auth";
 
@@ -16,20 +15,6 @@ describe("tokensMatch", () => {
     expect(tokensMatch("s3cret", null)).toBe(false);
     expect(tokensMatch("s3cret", "")).toBe(false);
     expect(tokensMatch("s3cret", "s3cret-longer")).toBe(false);
-  });
-});
-
-describe("isLoopbackHost", () => {
-  it("treats loopback / unset hosts as loopback", () => {
-    for (const host of [undefined, null, "127.0.0.1", "::1", "localhost"]) {
-      expect(isLoopbackHost(host)).toBe(true);
-    }
-  });
-
-  it("treats routable hosts as non-loopback", () => {
-    for (const host of ["0.0.0.0", "192.168.1.5", "example.com"]) {
-      expect(isLoopbackHost(host)).toBe(false);
-    }
   });
 });
 

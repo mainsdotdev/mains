@@ -1,6 +1,6 @@
 import { initializeDatabase } from "./db/client";
 import { startWsHost, type WsHost } from "./ipc-kit/ws-server-host";
-import { generateToken, isLoopbackHost } from "./ipc-kit/ws-auth";
+import { generateToken } from "./ipc-kit/ws-auth";
 
 // Backend IPC registrations — the same handlers the Electron app registers (see
 // src/main/index.ts), now reachable over WebSocket. Keep this list in sync with
@@ -45,9 +45,9 @@ export interface ServeOptions {
   /** Interface to bind. Default loopback (127.0.0.1) — pair via SSH tunnel. */
   host?: string;
   /**
-   * Pairing token clients must present. Falls back to MAINS_SERVE_TOKEN. On a
-   * non-loopback bind without one, a token is generated and printed (fail-safe —
-   * the port is never left open). On loopback, no token means no auth.
+   * Pairing token clients must present. Falls back to MAINS_SERVE_TOKEN, then to
+   * a freshly generated one that is printed. Never optional, loopback included:
+   * any web page the user visits can open a WebSocket to 127.0.0.1.
    */
   token?: string | null;
   /**
@@ -122,12 +122,9 @@ export async function startBackendServer(
   pulseService.start();
 
   const host = options.host ?? DEFAULT_HOST;
-  let token = options.token ?? process.env.MAINS_SERVE_TOKEN ?? null;
-  // Generate a token for any exposure beyond pure loopback: a non-loopback bind,
-  // or `tailscale serve` (which proxies the loopback port to tailnet peers).
-  if (!token && (!isLoopbackHost(host) || options.tailscaleServe)) {
-    token = generateToken();
-  }
+  // Always token-gated, loopback included: a browser lets any web page open a
+  // WebSocket to 127.0.0.1, so "loopback only" does not mean "only this user".
+  const token = options.token || process.env.MAINS_SERVE_TOKEN || generateToken();
 
   const webRoot = resolveWebRoot(options.webRoot);
 
@@ -147,14 +144,10 @@ export async function startBackendServer(
     commandReceipts: backendService.commandReceipts,
   });
   console.log(`[serve] mains backend listening on ws://${host}:${wsHost.port}`);
-  if (token) {
-    console.log(`[serve] pairing token: ${token}`);
-  } else {
-    console.log("[serve] no pairing token (loopback only — pair via SSH tunnel)");
-  }
+  console.log(`[serve] pairing token: ${token}`);
   if (webRoot) {
     console.log(
-      `[serve] web UI: open http://${host}:${wsHost.port}/${token ? `?token=${token}` : ""} (serving ${webRoot})`,
+      `[serve] web UI: open http://${host}:${wsHost.port}/?token=${token} (serving ${webRoot})`,
     );
   } else {
     console.log(
@@ -172,8 +165,7 @@ export async function startBackendServer(
           status.magicDnsName,
           httpsPort,
         );
-        const q = token ? `?token=${token}` : "";
-        console.log(`[serve] Tailscale HTTPS web UI: ${httpsUrl}/${q}`);
+        console.log(`[serve] Tailscale HTTPS web UI: ${httpsUrl}/?token=${token}`);
         console.log(
           `[serve] Tailscale connect (WS): ${httpsUrl.replace(/^https:/, "wss:")}`,
         );

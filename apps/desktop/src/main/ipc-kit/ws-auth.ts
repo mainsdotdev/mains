@@ -2,9 +2,10 @@ import { createHash, randomBytes, timingSafeEqual } from "crypto";
 
 /**
  * Pairing-token helpers for the WebSocket backend. The token guards the backend
- * against unauthorized clients; over SSH-tunnel/loopback it's defense-in-depth,
- * for a directly-exposed backend it's the only thing standing between the network
- * and full control. See docs/design/remote-backend.md (Phase: pairing token).
+ * against unauthorized clients on every bind — loopback included, since any web
+ * page the user opens can reach 127.0.0.1 — and for a directly-exposed backend
+ * it's the only thing standing between the network and full control. See
+ * docs/design/remote-backend.md (Phase: pairing token).
  */
 
 function digest(value: string): Buffer {
@@ -18,17 +19,6 @@ function digest(value: string): Buffer {
 export function tokensMatch(expected: string, presented: string | null): boolean {
   if (!presented) return false;
   return timingSafeEqual(digest(expected), digest(presented));
-}
-
-/** A loopback bind doesn't reach the network, so a token is optional there. */
-export function isLoopbackHost(host: string | undefined | null): boolean {
-  return (
-    host === undefined ||
-    host === null ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host === "localhost"
-  );
 }
 
 /** Generate a fresh URL-safe pairing token. */

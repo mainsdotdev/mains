@@ -3,6 +3,9 @@ import WebSocket from "ws";
 import { startWsHost, type WsHost } from "./ws-server-host";
 import { clearHandlers, registerHandler } from "./handler-registry";
 import { emit } from "./event-bus";
+import { buildSubprotocols } from "../../shared/ipc-kit/ws-protocol";
+
+const TOKEN = "test-pairing-token";
 
 function opened(ws: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -30,13 +33,13 @@ describe("startWsHost (integration)", () => {
   });
 
   it("serves invokes and pushes bus events end-to-end", async () => {
-    host = await startWsHost({ port: 0, host: "127.0.0.1" });
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: TOKEN });
     registerHandler("ping:ping", async (_ctx, name) => ({
       success: true,
       data: `pong:${name}`,
     }));
 
-    client = new WebSocket(`ws://127.0.0.1:${host.port}`);
+    client = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols(TOKEN));
     await opened(client);
 
     // request/response over the wire
@@ -61,8 +64,8 @@ describe("startWsHost (integration)", () => {
   });
 
   it("replies with a failure for an unknown channel", async () => {
-    host = await startWsHost({ port: 0, host: "127.0.0.1" });
-    client = new WebSocket(`ws://127.0.0.1:${host.port}`);
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: TOKEN });
+    client = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols(TOKEN));
     await opened(client);
 
     const responsePromise = nextMessage(client);
@@ -72,6 +75,21 @@ describe("startWsHost (integration)", () => {
     const decoded = JSON.parse(await responsePromise);
     expect(decoded.id).toBe(9);
     expect(decoded.result.success).toBe(false);
+  });
+
+  it("refuses to start without a pairing token, loopback included", async () => {
+    await expect(startWsHost({ port: 0, host: "127.0.0.1", token: "" })).rejects.toThrow(
+      "without a pairing token",
+    );
+  });
+
+  it("rejects a tokenless handshake on loopback — what any web page would send", async () => {
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: TOKEN });
+    client = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols());
+    const error = await new Promise<string>((resolve) =>
+      client!.once("error", (e) => resolve(e.message)),
+    );
+    expect(error).toBe("Unexpected server response: 401");
   });
 });
 
@@ -107,13 +125,5 @@ describe("startWsHost HTTP image proxy", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("content-security-policy")).toContain("sandbox");
     expect(fetchProxiedImage).toHaveBeenCalledWith("https://example.com/a.png");
-  });
-
-  it("stays open on a tokenless loopback host, like the WS handshake", async () => {
-    const fetchProxiedImage = imageFetcher();
-    host = await startWsHost({ port: 0, host: "127.0.0.1", fetchProxiedImage });
-
-    const res = await fetch(`http://127.0.0.1:${host.port}/__img?url=${target}`);
-    expect(res.status).toBe(200);
   });
 });

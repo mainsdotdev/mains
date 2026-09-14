@@ -15,7 +15,7 @@ import {
   parseProtocolHeader,
 } from "../../shared/ipc-kit/ws-protocol";
 import { registerEventSink } from "./event-bus";
-import { isLoopbackHost, tokensMatch } from "./ws-auth";
+import { tokensMatch } from "./ws-auth";
 import { WebSocketSink } from "./websocket-sink";
 import {
   serveConnection,
@@ -51,11 +51,12 @@ export interface WsHostOptions {
   port: number;
   host?: string;
   /**
-   * Pairing token clients must present (via WS subprotocol). When set, the
-   * handshake is rejected (401) unless it matches. Optional on loopback; required
-   * on a non-loopback bind (startWsHost rejects otherwise — fail-safe).
+   * Pairing token clients must present (via WS subprotocol); the handshake is
+   * rejected (401) unless it matches. Required on every bind, loopback included:
+   * a browser lets any web page open a WebSocket to 127.0.0.1, so a tokenless
+   * loopback host is reachable from every site the user visits.
    */
-  token?: string | null;
+  token: string;
   /**
    * Directory of the built renderer to serve over HTTP on the same port (so a
    * browser can load the web UI from the backend). When unset, only WS is served.
@@ -77,9 +78,8 @@ export interface WsHostOptions {
   serveLocalDocument?: (url: URL) => Promise<Response>;
   /**
    * Authenticate a paired device's token (see modules/backend). Consulted only
-   * when a `token` is required and the presented one is not it — so a device
-   * token is an additional credential, never a way to relax an open loopback.
-   * Resolves the device on success, null otherwise.
+   * when the presented token is not the shared one. Resolves the device on
+   * success, null otherwise.
    */
   verifyDeviceToken?: (token: string) => Promise<VerifiedDevice | null>;
   /**
@@ -190,14 +190,14 @@ async function handleImageProxy(
   req: IncomingMessage,
   res: ServerResponse,
   fetchProxiedImage: (url: string) => Promise<Response>,
-  token: string | null,
+  token: string,
 ): Promise<void> {
   try {
     const params = new URL(req.url ?? "/", "http://localhost").searchParams;
     // The proxy spends this machine's network position and its GitHub token, so
     // it takes the same shared token as the WS handshake — as a query parameter,
     // since an `<img>` can't send a subprotocol. Paired phones don't use it.
-    if (token && !tokensMatch(token, params.get("token"))) {
+    if (!tokensMatch(token, params.get("token"))) {
       res.writeHead(401);
       res.end("Unauthorized");
       return;
@@ -290,12 +290,11 @@ function createStaticHandler(webRoot: string) {
  * See docs/design/remote-backend.md.
  */
 export function startWsHost(options: WsHostOptions): Promise<WsHost> {
-  const token = options.token ?? null;
-  if (!token && !isLoopbackHost(options.host)) {
+  const token = options.token;
+  // Checked at runtime too: an empty string type-checks and would open the host.
+  if (!token) {
     return Promise.reject(
-      new Error(
-        "Refusing to bind a non-loopback interface without a pairing token. Pass a token or bind to 127.0.0.1.",
-      ),
+      new Error("Refusing to start the backend without a pairing token."),
     );
   }
 
@@ -337,7 +336,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     const raw = req.headers["sec-websocket-protocol"];
     const header = Array.isArray(raw) ? raw.join(",") : raw;
     const presented = extractToken(parseProtocolHeader(header));
-    if (token && tokensMatch(token, presented)) return true;
+    if (tokensMatch(token, presented)) return true;
     if (presented && options.verifyDeviceToken) {
       const device = await options.verifyDeviceToken(presented).catch(() => null);
       if (device) {
@@ -353,16 +352,14 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     // Echo the base subprotocol; the token subprotocol is validated, not echoed.
     handleProtocols: (protocols) =>
       protocols.has(WS_SUBPROTOCOL) ? WS_SUBPROTOCOL : false,
-    // Reject the handshake (401) when a token is required but missing/wrong, so
-    // an unauthenticated socket never opens.
-    verifyClient: token
-      ? (info, cb) => {
-          void authorize(info.req).then((allowed) => {
-            if (allowed) cb(true);
-            else cb(false, 401, "Unauthorized");
-          });
-        }
-      : undefined,
+    // Reject the handshake (401) when the token is missing or wrong, so an
+    // unauthenticated socket never opens.
+    verifyClient: (info, cb) => {
+      void authorize(info.req).then((allowed) => {
+        if (allowed) cb(true);
+        else cb(false, 401, "Unauthorized");
+      });
+    },
   });
 
   // Which paired device each open socket belongs to, for disconnectDevice.

@@ -218,12 +218,12 @@ function AddBackendForm({
       <Input
         value={token}
         onChange={(e) => setToken(e.target.value)}
-        placeholder="Pairing token (optional)"
+        placeholder="Pairing token"
       />
       <Caption>
         {mode === "ssh"
-          ? "Leave blank when a launch command is set — a token is generated automatically."
-          : "Required if the backend was started with a token (printed by `mains serve`)."}
+          ? "Leave blank when a launch command is set — a token is generated automatically. Otherwise paste the one `mains serve` printed."
+          : "Printed by `mains serve`, or shown under This machine."}
       </Caption>
 
       <div className="flex justify-end">

@@ -148,21 +148,6 @@ describe("startWsHost — paired devices and POST /pair", () => {
     });
   });
 
-  it("does not consult device tokens when no shared token is required", async () => {
-    // Loopback without a token is open by design; a device hook must not
-    // silently turn that into an authenticated host.
-    host = await startWsHost({ port: 0, host: "127.0.0.1", verifyDeviceToken });
-    registerHandler("who:ami", async (ctx) => ({ success: true, data: ctx }));
-
-    client = new WebSocket(
-      `ws://127.0.0.1:${host.port}`,
-      buildSubprotocols(DEVICE_TOKEN),
-    );
-    await opened(client);
-
-    expect(await whoAmI(client)).toEqual({ clientId: expect.any(String) });
-  });
-
   it("disconnectDevice drops that device's live sockets and nobody else's", async () => {
     // Revoking is a DB write and device tokens are checked only at the
     // handshake, so without this an already-open socket keeps working.
@@ -356,6 +341,7 @@ describe("startWsHost — paired devices and POST /pair", () => {
       host = await startWsHost({
         port: 0,
         host: "127.0.0.1",
+        token: SHARED_TOKEN,
         pairDevice: async (body) => ({ echoed: body }),
       });
 
@@ -375,6 +361,7 @@ describe("startWsHost — paired devices and POST /pair", () => {
       host = await startWsHost({
         port: 0,
         host: "127.0.0.1",
+        token: SHARED_TOKEN,
         pairDevice: async () => {
           throw new Error("Pairing code is invalid or has expired");
         },
@@ -395,6 +382,7 @@ describe("startWsHost — paired devices and POST /pair", () => {
       host = await startWsHost({
         port: 0,
         host: "127.0.0.1",
+        token: SHARED_TOKEN,
         pairDevice: async (body) => body,
       });
 
@@ -410,7 +398,7 @@ describe("startWsHost — paired devices and POST /pair", () => {
     });
 
     it("is absent when no pairDevice hook is configured", async () => {
-      host = await startWsHost({ port: 0, host: "127.0.0.1" });
+      host = await startWsHost({ port: 0, host: "127.0.0.1", token: SHARED_TOKEN });
 
       const res = await fetch(`http://127.0.0.1:${host.port}/pair`, {
         method: "POST",
