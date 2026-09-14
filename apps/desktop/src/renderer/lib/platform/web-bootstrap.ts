@@ -1,6 +1,7 @@
 import { setTransport, WsTransport } from "@/lib/transport";
 import { isWeb } from "./platform";
 import { installWebApi } from "./web-api-shim";
+import { webToken } from "./web-token";
 
 /**
  * Web-mode bootstrap. Imported FIRST in main.tsx so it runs before any app
@@ -21,23 +22,7 @@ if (isWeb && typeof window !== "undefined") {
 
   installWebApi();
 
-  const params = new URLSearchParams(window.location.search);
-  const urlToken = params.get("token");
-  if (urlToken) {
-    try {
-      localStorage.setItem("mains.token", urlToken);
-    } catch {
-      /* ignore */
-    }
-  }
-  let token: string | undefined = urlToken ?? undefined;
-  if (!token) {
-    try {
-      token = localStorage.getItem("mains.token") ?? undefined;
-    } catch {
-      /* ignore */
-    }
-  }
+  const token = webToken();
 
   const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsUrl = `${scheme}//${window.location.host}`;

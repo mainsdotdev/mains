@@ -145,6 +145,16 @@ async function handlePairing(
   }
 }
 
+/**
+ * Proxied images and signed local files are served same-origin with the web UI,
+ * which keeps its pairing token in localStorage: an SVG opened directly must not
+ * run script on this origin, and no response may be sniffed into another type.
+ */
+const UNTRUSTED_CONTENT_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+};
+
 /** Pipe a Web `Response` (from the signed local-file servers) to the Node res. */
 async function handleLocalFile(
   req: IncomingMessage,
@@ -156,6 +166,7 @@ async function handleLocalFile(
     const response = await serve(url);
     const body = Buffer.from(await response.arrayBuffer());
     const headers: Record<string, string> = {
+      ...UNTRUSTED_CONTENT_HEADERS,
       "Content-Type":
         response.headers.get("content-type") ?? "application/octet-stream",
     };
@@ -173,11 +184,19 @@ async function handleImageProxy(
   req: IncomingMessage,
   res: ServerResponse,
   fetchProxiedImage: (url: string) => Promise<Response>,
+  token: string | null,
 ): Promise<void> {
   try {
-    const target = new URL(req.url ?? "/", "http://localhost").searchParams.get(
-      "url",
-    );
+    const params = new URL(req.url ?? "/", "http://localhost").searchParams;
+    // The proxy spends this machine's network position and its GitHub token, so
+    // it takes the same shared token as the WS handshake — as a query parameter,
+    // since an `<img>` can't send a subprotocol. Paired phones don't use it.
+    if (token && !tokensMatch(token, params.get("token"))) {
+      res.writeHead(401);
+      res.end("Unauthorized");
+      return;
+    }
+    const target = params.get("url");
     if (!target) {
       res.writeHead(400);
       res.end("Missing url");
@@ -192,6 +211,7 @@ async function handleImageProxy(
     }
     const body = Buffer.from(await response.arrayBuffer());
     res.writeHead(response.status, {
+      ...UNTRUSTED_CONTENT_HEADERS,
       "Content-Type":
         response.headers.get("content-type") ?? "application/octet-stream",
       "Cache-Control": "private, max-age=3600",
@@ -288,7 +308,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     ) {
       void handlePairing(req, res, options.pairDevice);
     } else if (options.fetchProxiedImage && url.startsWith("/__img")) {
-      void handleImageProxy(req, res, options.fetchProxiedImage);
+      void handleImageProxy(req, res, options.fetchProxiedImage, token);
     } else if (options.serveLocalImage && url.startsWith("/__localimg")) {
       void handleLocalFile(req, res, options.serveLocalImage);
     } else if (options.serveLocalDocument && url.startsWith("/__localdoc")) {

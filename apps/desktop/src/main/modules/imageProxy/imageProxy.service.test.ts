@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { imageProxyService, isBlockedIp } from "./imageProxy.service";
+import * as dns from "dns";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { imageProxyService, isBlockedIp, isImageContentType } from "./imageProxy.service";
 
 describe("matchUrlToGithub (B1: token-leak host match)", () => {
   it("matches real GitHub image hosts", () => {
@@ -29,6 +30,71 @@ describe("matchUrlToGithub (B1: token-leak host match)", () => {
   it("is case-insensitive and rejects malformed urls", () => {
     expect(imageProxyService.matchUrlToGithub("https://GitHub.com/a.png")).toBe(true);
     expect(imageProxyService.matchUrlToGithub("not a url")).toBe(false);
+  });
+
+  it("does NOT send the token to GitHub's data hosts", () => {
+    expect(imageProxyService.matchUrlToGithub("https://api.github.com/user/repos")).toBe(false);
+    expect(imageProxyService.matchUrlToGithub("https://uploads.github.com/x")).toBe(false);
+  });
+});
+
+describe("isImageContentType", () => {
+  it("accepts image media types, parameters and case aside", () => {
+    for (const type of ["image/png", "image/svg+xml", "IMAGE/JPEG", "image/webp; q=1"]) {
+      expect(isImageContentType(type), type).toBe(true);
+    }
+  });
+
+  it("rejects everything else", () => {
+    for (const type of ["text/plain", "application/json", "text/html; charset=utf-8", "image", "", null]) {
+      expect(isImageContentType(type), String(type)).toBe(false);
+    }
+  });
+});
+
+describe("safeImageFetch (image-only responses)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function serve(response: Response) {
+    vi.spyOn(dns.promises, "lookup").mockResolvedValue([
+      { address: "185.199.108.133", family: 4 },
+    ] as any);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+  }
+
+  it("passes an image through", async () => {
+    serve(new Response("png", { headers: { "content-type": "image/png" } }));
+    const res = await imageProxyService.safeImageFetch(
+      "https://raw.githubusercontent.com/o/r/main/a.png",
+      null,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("png");
+  });
+
+  it("drops the body of a non-image even when GitHub answered 200", async () => {
+    serve(new Response("SECRET=1", { headers: { "content-type": "text/plain; charset=utf-8" } }));
+    const res = await imageProxyService.safeImageFetch(
+      "https://raw.githubusercontent.com/o/private/main/.env",
+      { Authorization: "token x" },
+    );
+    expect(res.status).toBe(415);
+    expect(await res.text()).toBe("");
+  });
+
+  it("keeps an error status but not its body", async () => {
+    serve(
+      new Response('{"message":"Not Found"}', {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const res = await imageProxyService.safeImageFetch("https://github.com/o/r/x.png", null);
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("");
   });
 });
 

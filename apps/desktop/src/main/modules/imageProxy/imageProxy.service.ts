@@ -8,6 +8,8 @@ import { signLocalImagePath, signLocalDocumentPath } from "./imageProxy.signing"
 // Domain Map
 // ─────────────────────────────────────────────────────────────
 const GITHUB_DOMAINS = ["githubusercontent.com", "github.com"];
+/** GitHub hosts that serve data, never images — the token is not sent there. */
+const GITHUB_API_HOSTS = new Set(["api.github.com", "uploads.github.com"]);
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
 
@@ -94,6 +96,23 @@ async function assertUrlAllowed(urlStr: string): Promise<void> {
   }
 }
 
+/** `image/png`, `image/svg+xml`, … — the media type only, parameters ignored. */
+export function isImageContentType(contentType: string | null): boolean {
+  return /^image\/[a-z0-9.+-]+$/i.test((contentType ?? "").split(";")[0].trim());
+}
+
+/**
+ * This is an image proxy, not a fetch proxy: a response that is not an image
+ * leaves with its status and no body. With the GitHub token attached, anything
+ * else — API JSON, a private repo's `.env` on raw.githubusercontent.com — would
+ * be that repo's content handed to whoever asked for the URL.
+ */
+function onlyImages(response: Response): Response {
+  if (isImageContentType(response.headers.get("content-type"))) return response;
+  void response.body?.cancel().catch(() => {});
+  return new Response(null, { status: response.ok ? 415 : response.status });
+}
+
 // ─────────────────────────────────────────────────────────────
 // Image Proxy Service
 // ─────────────────────────────────────────────────────────────
@@ -136,6 +155,7 @@ export const imageProxyService = {
   matchUrlToGithub(url: string): boolean {
     try {
       const hostname = new URL(url).hostname.toLowerCase();
+      if (GITHUB_API_HOSTS.has(hostname)) return false;
       // Exact host or a dot-bounded subdomain only — never a lookalike like
       // "evilgithub.com" that merely *ends with* "github.com" (which would
       // leak the user's GitHub token to an attacker-controlled host).
@@ -178,12 +198,12 @@ export const imageProxyService = {
 
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
-        if (!location) return response;
+        if (!location) return onlyImages(response);
         url = new URL(location, url).toString();
         headers = undefined; // drop auth before following a redirect
         continue;
       }
-      return response;
+      return onlyImages(response);
     }
     throw new SsrfBlockedError("too many redirects");
   },

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { startWsHost, type WsHost } from "./ws-server-host";
 import { clearHandlers, registerHandler } from "./handler-registry";
@@ -72,5 +72,48 @@ describe("startWsHost (integration)", () => {
     const decoded = JSON.parse(await responsePromise);
     expect(decoded.id).toBe(9);
     expect(decoded.result.success).toBe(false);
+  });
+});
+
+describe("startWsHost HTTP image proxy", () => {
+  let host: WsHost | null = null;
+
+  afterEach(async () => {
+    if (host) await host.close();
+    host = null;
+  });
+
+  const target = encodeURIComponent("https://example.com/a.png");
+  const imageFetcher = () =>
+    vi.fn(async (_url: string) => new Response("png", { headers: { "content-type": "image/png" } }));
+
+  it("refuses a request without the pairing token before fetching anything", async () => {
+    const fetchProxiedImage = imageFetcher();
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: "secret", fetchProxiedImage });
+    const base = `http://127.0.0.1:${host.port}/__img?url=${target}`;
+
+    expect((await fetch(base)).status).toBe(401);
+    expect((await fetch(`${base}&token=wrong`)).status).toBe(401);
+    expect(fetchProxiedImage).not.toHaveBeenCalled();
+  });
+
+  it("serves the image with the token, locked against sniffing and script", async () => {
+    const fetchProxiedImage = imageFetcher();
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: "secret", fetchProxiedImage });
+
+    const res = await fetch(`http://127.0.0.1:${host.port}/__img?url=${target}&token=secret`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("png");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toContain("sandbox");
+    expect(fetchProxiedImage).toHaveBeenCalledWith("https://example.com/a.png");
+  });
+
+  it("stays open on a tokenless loopback host, like the WS handshake", async () => {
+    const fetchProxiedImage = imageFetcher();
+    host = await startWsHost({ port: 0, host: "127.0.0.1", fetchProxiedImage });
+
+    const res = await fetch(`http://127.0.0.1:${host.port}/__img?url=${target}`);
+    expect(res.status).toBe(200);
   });
 });
