@@ -82,6 +82,10 @@ jobs:
     name: PR target
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     runs-on: ubuntu-latest
+    # No checkout here, so apps/desktop (the workflow default) does not exist.
+    defaults:
+      run:
+        working-directory: .
     steps:
       - name: Only dev and fix/* may target main
         env:
