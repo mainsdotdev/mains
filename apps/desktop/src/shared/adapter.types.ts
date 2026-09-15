@@ -633,6 +633,11 @@ export interface WorkRunAdapter {
    */
   getRateLimits?(): Promise<RateLimitInfo | null>;
 
+  /** Spend one earned Codex credit to reset an eligible rate-limit window. */
+  consumeRateLimitResetCredit?(
+    params: ConsumeRateLimitResetCreditParams,
+  ): Promise<ConsumeRateLimitResetCreditOutcome>;
+
   // ── Thread goal controls (Codex `thread/goal/*`) ──
   /** Set/update the goal for a run's thread. Partial — omitted fields unchanged. */
   setGoal?(runId: string, params: GoalSetParams): Promise<GoalInfo | null>;
@@ -796,6 +801,9 @@ export interface ProviderDriver {
     opts?: { system?: string; model?: string },
   ): Promise<string>;
   getRateLimits?(): Promise<RateLimitInfo | null>;
+  consumeRateLimitResetCredit?(
+    params: ConsumeRateLimitResetCreditParams,
+  ): Promise<ConsumeRateLimitResetCreditOutcome>;
   getAccountInfo?(): Promise<AccountInfo>;
   updateCli?(): Promise<CliUpdateResult>;
   listPlugins?(): Promise<PluginListResponse>;
@@ -851,6 +859,8 @@ export interface SpendControlLimitInfo {
 export interface RateLimitSnapshotInfo {
   limitId?: string;
   limitName?: string;
+  /** Model that receives the bucket's normal (non-priority) inference traffic. */
+  normalModelSlug?: string;
   planType?: string;
   primary?: RateLimitWindow;
   secondary?: RateLimitWindow;
@@ -871,6 +881,8 @@ export interface RateLimitResetCreditInfo {
 }
 
 export interface RateLimitInfo extends RateLimitSnapshotInfo {
+  /** Whether the account may currently consume the ordinary Codex allowance. */
+  ordinaryUsageAllowed?: boolean | null;
   /** Complete multi-bucket view keyed by Codex's metered limit id. */
   rateLimitsByLimitId?: Record<string, RateLimitSnapshotInfo>;
   rateLimitResetCredits?: {
@@ -879,6 +891,19 @@ export interface RateLimitInfo extends RateLimitSnapshotInfo {
     credits?: RateLimitResetCreditInfo[];
   };
 }
+
+export interface ConsumeRateLimitResetCreditParams {
+  /** Stable across retries of the same logical redemption attempt. */
+  idempotencyKey: string;
+  /** Omit to let Codex select the next available credit. */
+  creditId?: string;
+}
+
+export type ConsumeRateLimitResetCreditOutcome =
+  | "reset"
+  | "nothingToReset"
+  | "noCredit"
+  | "alreadyRedeemed";
 
 export interface RateLimitWindow {
   /** Percentage used (0-100) */

@@ -69,6 +69,8 @@ export type {
   HookCallback,
   HookMatcher,
   HooksConfig,
+  ConsumeRateLimitResetCreditParams,
+  ConsumeRateLimitResetCreditOutcome,
 } from "../../../../shared/adapter.types";
 
 // Factory
@@ -93,6 +95,7 @@ export {
   setPluginEnabledForProvider,
   updatePluginForProvider,
   getRateLimitsForProvider,
+  consumeRateLimitResetCreditForProvider,
   setGoalForProvider,
   getGoalForProvider,
   clearGoalForProvider,

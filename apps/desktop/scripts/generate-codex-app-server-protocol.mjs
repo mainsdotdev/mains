@@ -25,6 +25,8 @@ const roots = [
   "InitializeResponse.ts",
   "v2/ConfigValueWriteParams.ts",
   "v2/ConfigWriteResponse.ts",
+  "v2/ConsumeAccountRateLimitResetCreditParams.ts",
+  "v2/ConsumeAccountRateLimitResetCreditResponse.ts",
   "v2/ExperimentalFeatureListParams.ts",
   "v2/ExperimentalFeatureListResponse.ts",
   "v2/GetAccountParams.ts",

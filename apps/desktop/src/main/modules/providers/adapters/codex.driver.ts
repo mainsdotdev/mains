@@ -872,6 +872,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
 
     getRateLimits: capabilities.getRateLimits,
 
+    consumeRateLimitResetCredit:
+      capabilities.consumeRateLimitResetCredit,
+
     // ── Thread goal controls (Codex `thread/goal/*`) ──
     // threadId is resolved from the coordinator, falling back to the
     // run's persisted sessionId (survives an app restart). We also broadcast the

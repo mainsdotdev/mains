@@ -98,11 +98,17 @@ describe("Codex capabilities", () => {
       },
     });
     await expect(capabilities.getRateLimits()).resolves.toMatchObject({
+      ordinaryUsageAllowed: true,
       limitId: "codex",
       planType: "pro",
       primary: { usedPercent: 10 },
       rateLimitsByLimitId: {
         codex: { limitId: "codex" },
+        base_model_inference: {
+          limitId: "base_model_inference",
+          normalModelSlug: "gpt-5.6-luna",
+          primary: { usedPercent: 2 },
+        },
       },
       rateLimitResetCredits: { availableCount: 1 },
     });

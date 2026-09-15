@@ -9,7 +9,10 @@ import type {
   UpdateRunSettingsPayload,
   ProviderKind,
 } from "./providers.dto";
-import type { PluginScope } from "../../../shared/adapter.types";
+import type {
+  ConsumeRateLimitResetCreditParams,
+  PluginScope,
+} from "../../../shared/adapter.types";
 import { CHANNELS } from "../../../shared/ipc-kit/channels";
 
 // ─────────────────────────────────────────────────────────────
@@ -97,6 +100,13 @@ export function registerProvidersIpc(): void {
   );
 
   ipcMain.handle(
+    CHANNELS.providers.consumeRateLimitResetCredit,
+    handle((id: string, params: ConsumeRateLimitResetCreditParams) =>
+      providersService.consumeRateLimitResetCredit(id, params),
+    ),
+  );
+
+  ipcMain.handle(
     CHANNELS.providers.setGoal,
     handle((id: string, runId: string, params: import("../../../shared/adapter.types").GoalSetParams) => providersService.setGoal(id, runId, params)),
   );
@@ -178,6 +188,7 @@ export function unregisterProvidersIpc(): void {
     CHANNELS.providers.getCommands,
     CHANNELS.providers.getSkills,
     CHANNELS.providers.getRateLimits,
+    CHANNELS.providers.consumeRateLimitResetCredit,
     CHANNELS.providers.setGoal,
     CHANNELS.providers.getGoal,
     CHANNELS.providers.clearGoal,

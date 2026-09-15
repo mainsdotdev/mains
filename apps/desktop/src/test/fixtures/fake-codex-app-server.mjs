@@ -634,9 +634,11 @@ input.on("line", (line) => {
 
     case "account/rateLimits/read":
       respond(id, {
+        ordinaryUsageAllowed: true,
         rateLimits: {
           limitId: "codex",
           limitName: "Codex",
+          normalModelSlug: null,
           primary: {
             usedPercent: 10,
             windowDurationMins: 300,
@@ -653,10 +655,27 @@ input.on("line", (line) => {
           codex: {
             limitId: "codex",
             limitName: "Codex",
+            normalModelSlug: null,
             primary: {
               usedPercent: 10,
               windowDurationMins: 300,
               resetsAt: 1717200000,
+            },
+            secondary: null,
+            credits: null,
+            individualLimit: null,
+            spendControlReached: false,
+            planType: "pro",
+            rateLimitReachedType: null,
+          },
+          base_model_inference: {
+            limitId: "base_model_inference",
+            limitName: "gpt-reserve",
+            normalModelSlug: "gpt-5.6-luna",
+            primary: {
+              usedPercent: 2,
+              windowDurationMins: 10080,
+              resetsAt: 1717800000,
             },
             secondary: null,
             credits: null,
@@ -670,6 +689,13 @@ input.on("line", (line) => {
           availableCount: 1,
           credits: null,
         },
+      });
+      break;
+
+    case "account/rateLimitResetCredit/consume":
+      respond(id, {
+        outcome:
+          process.env.MAINS_CODEX_FIXTURE_RESET_OUTCOME ?? "reset",
       });
       break;
 

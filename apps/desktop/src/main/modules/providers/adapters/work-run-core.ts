@@ -241,6 +241,9 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.generateText = driver.generateText.bind(driver);
   if (driver.getRateLimits)
     adapter.getRateLimits = driver.getRateLimits.bind(driver);
+  if (driver.consumeRateLimitResetCredit)
+    adapter.consumeRateLimitResetCredit =
+      driver.consumeRateLimitResetCredit.bind(driver);
   if (driver.setGoal) adapter.setGoal = driver.setGoal.bind(driver);
   if (driver.getGoal) adapter.getGoal = driver.getGoal.bind(driver);
   if (driver.clearGoal) adapter.clearGoal = driver.clearGoal.bind(driver);

@@ -390,8 +390,9 @@ describe("codex.driver / mapRateLimitSnapshot", () => {
 
   it("preserves bucket identity and spend-control state", () => {
     expect(mapRateLimitSnapshot({
-      limitId: "codex",
-      limitName: "Codex",
+      limitId: "base_model_inference",
+      limitName: "gpt-reserve",
+      normalModelSlug: "gpt-5.6-luna",
       planType: "team",
       primary: null,
       secondary: null,
@@ -405,8 +406,9 @@ describe("codex.driver / mapRateLimitSnapshot", () => {
       spendControlReached: false,
       rateLimitReachedType: "workspace_member_usage_limit_reached",
     })).toEqual({
-      limitId: "codex",
-      limitName: "Codex",
+      limitId: "base_model_inference",
+      limitName: "gpt-reserve",
+      normalModelSlug: "gpt-5.6-luna",
       planType: "team",
       primary: undefined,
       secondary: undefined,
@@ -426,6 +428,7 @@ describe("codex.driver / mapRateLimitSnapshot", () => {
 describe("codex.driver / mapRateLimitResponse", () => {
   it("maps all metered buckets and reset-credit details", () => {
     expect(mapRateLimitResponse({
+      ordinaryUsageAllowed: true,
       rateLimits: {
         limitId: "codex",
         limitName: "Codex",
@@ -439,9 +442,10 @@ describe("codex.driver / mapRateLimitResponse", () => {
           planType: "pro",
           primary: { usedPercent: 10 },
         },
-        "codex-other": {
-          limitId: "codex-other",
-          limitName: "Other",
+        base_model_inference: {
+          limitId: "base_model_inference",
+          limitName: "gpt-reserve",
+          normalModelSlug: "gpt-5.6-luna",
           secondary: { usedPercent: 20 },
         },
       },
@@ -458,12 +462,14 @@ describe("codex.driver / mapRateLimitResponse", () => {
         }],
       },
     })).toMatchObject({
+      ordinaryUsageAllowed: true,
       limitId: "codex",
       primary: { usedPercent: 10 },
       rateLimitsByLimitId: {
         codex: { limitId: "codex", primary: { usedPercent: 10 } },
-        "codex-other": {
-          limitId: "codex-other",
+        base_model_inference: {
+          limitId: "base_model_inference",
+          normalModelSlug: "gpt-5.6-luna",
           secondary: { usedPercent: 20 },
         },
       },

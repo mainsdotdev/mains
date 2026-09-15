@@ -2,6 +2,8 @@ import type { InitializeParams } from "./generated/InitializeParams";
 import type { InitializeResponse } from "./generated/InitializeResponse";
 import type { ConfigValueWriteParams } from "./generated/v2/ConfigValueWriteParams";
 import type { ConfigWriteResponse } from "./generated/v2/ConfigWriteResponse";
+import type { ConsumeAccountRateLimitResetCreditParams } from "./generated/v2/ConsumeAccountRateLimitResetCreditParams";
+import type { ConsumeAccountRateLimitResetCreditResponse } from "./generated/v2/ConsumeAccountRateLimitResetCreditResponse";
 import type { ExperimentalFeatureListParams } from "./generated/v2/ExperimentalFeatureListParams";
 import type { ExperimentalFeatureListResponse } from "./generated/v2/ExperimentalFeatureListResponse";
 import type { GetAccountParams } from "./generated/v2/GetAccountParams";
@@ -68,6 +70,10 @@ export interface CodexAppServerRpc {
   "account/rateLimits/read": RpcMethod<
     undefined,
     GetAccountRateLimitsResponse
+  >;
+  "account/rateLimitResetCredit/consume": RpcMethod<
+    ConsumeAccountRateLimitResetCreditParams,
+    ConsumeAccountRateLimitResetCreditResponse
   >;
   "experimentalFeature/list": RpcMethod<
     ExperimentalFeatureListParams,

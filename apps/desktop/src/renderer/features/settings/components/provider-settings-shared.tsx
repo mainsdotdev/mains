@@ -228,11 +228,19 @@ export function formatResetDate(resetsAt: number): string {
 }
 
 export interface ProviderUsageRow {
+  /** Optional bucket heading used when a provider exposes multiple allowances. */
+  group?: string;
   label: string;
   usedPercent: number;
   resetsAt?: number;
   used?: number;
   total?: number;
+}
+
+export interface ProviderUsageSummary {
+  label: string;
+  value: string;
+  description?: string;
 }
 
 /**
@@ -354,11 +362,29 @@ export function ProviderUsageSection({
   isLoading,
   rows,
   readout,
+  notice,
+  summary,
+  summaryAction,
 }: {
   isLoading: boolean;
   rows: ProviderUsageRow[];
   readout: UsageReadout;
+  notice?: string;
+  summary?: ProviderUsageSummary;
+  summaryAction?: ReactNode;
 }) {
+  const groups = rows.reduce<
+    Array<{ label?: string; rows: ProviderUsageRow[] }>
+  >((result, row) => {
+    let group = result.find((candidate) => candidate.label === row.group);
+    if (!group) {
+      group = { label: row.group, rows: [] };
+      result.push(group);
+    }
+    group.rows.push(row);
+    return result;
+  }, []);
+
   return (
     <SettingsSection title="Usage">
       {isLoading ? (
@@ -378,18 +404,81 @@ export function ProviderUsageSection({
             </div>
           ))}
         </div>
-      ) : rows.length > 0 ? (
-        <div className="divide-y divide-primary-200/50 dark:divide-primary-800/20">
-          {rows.map((row, i) => (
-            <UsageRateLimitRow key={`${row.label}-${i}`} row={row} readout={readout} />
-          ))}
-        </div>
       ) : (
-        <div className="px-4 py-3">
-          <Text as="span" tone="subtle">
-            No usage data available
-          </Text>
-        </div>
+        <>
+          {notice && (
+            <div
+              role="status"
+              className="border-b border-primary-200/50 py-3 dark:border-primary-800/20"
+            >
+              <Text as="span" size="xs" tone="warning" weight="medium">
+                {notice}
+              </Text>
+            </div>
+          )}
+          {rows.length > 0 ? (
+            <div>
+              {groups.map((group, groupIndex) => (
+                <div
+                  key={group.label ?? "usage"}
+                  className={
+                    groupIndex === 0
+                      ? ""
+                      : "border-t border-primary-200/60 dark:border-primary-800/20"
+                  }
+                >
+                  {group.label && (
+                    <div className="pb-0.5 pt-3">
+                      <Text
+                        as="span"
+                        size="xs"
+                        tone="subtle"
+                        weight="medium"
+                      >
+                        {group.label}
+                      </Text>
+                    </div>
+                  )}
+                  <div className="divide-y divide-primary-200/50 dark:divide-primary-800/20">
+                    {group.rows.map((row, rowIndex) => (
+                      <UsageRateLimitRow
+                        key={`${row.label}-${rowIndex}`}
+                        row={row}
+                        readout={readout}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : !summary ? (
+            <div className="px-4 py-3">
+              <Text as="span" tone="subtle">
+                No usage data available
+              </Text>
+            </div>
+          ) : null}
+          {summary && (
+            <div className="flex items-center justify-between border-t border-primary-200/60 py-3 dark:border-primary-800/20">
+              <div className="flex flex-col gap-0.5">
+                <Text as="span" weight="medium">
+                  {summary.label}
+                </Text>
+                {summary.description && (
+                  <Text as="span" size="xs" tone="subtle">
+                    {summary.description}
+                  </Text>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <Text as="span" tone="subtle" align="right">
+                  {summary.value}
+                </Text>
+                {summaryAction}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </SettingsSection>
   );

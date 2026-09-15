@@ -28,6 +28,7 @@ import {
   setPluginEnabledForProvider,
   updatePluginForProvider,
   getRateLimitsForProvider,
+  consumeRateLimitResetCreditForProvider,
   setGoalForProvider,
   getGoalForProvider,
   clearGoalForProvider,
@@ -42,6 +43,8 @@ import {
 } from "./adapters";
 import type { PluginScope } from "../../../shared/adapter.types";
 import type {
+  ConsumeRateLimitResetCreditOutcome,
+  ConsumeRateLimitResetCreditParams,
   RateLimitInfo,
   GoalInfo,
   GoalSetParams,
@@ -216,6 +219,21 @@ export const providersService = {
   async getRateLimits(id: string): Promise<RateLimitInfo | null> {
     const provider = await requireEnabledProvider(id);
     return getRateLimitsForProvider(provider);
+  },
+
+  async consumeRateLimitResetCredit(
+    id: string,
+    params: ConsumeRateLimitResetCreditParams,
+  ): Promise<ConsumeRateLimitResetCreditOutcome> {
+    if (
+      !params ||
+      typeof params.idempotencyKey !== "string" ||
+      !params.idempotencyKey.trim()
+    ) {
+      throw new Error("A reset idempotency key is required.");
+    }
+    const provider = await requireEnabledProvider(id);
+    return consumeRateLimitResetCreditForProvider(provider, params);
   },
 
   async setGoal(

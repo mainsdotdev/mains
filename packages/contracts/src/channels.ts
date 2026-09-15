@@ -198,6 +198,7 @@ export const CHANNELS = {
     getPlugins: "providers:getPlugins",
     getInstalledPlugins: "providers:getInstalledPlugins",
     getRateLimits: "providers:getRateLimits",
+    consumeRateLimitResetCredit: "providers:consumeRateLimitResetCredit",
     /** Push: emitted when the provider streams a fresh rate-limit snapshot mid-run. */
     rateLimitsUpdated: "providers:rateLimitsUpdated",
     setGoal: "providers:setGoal",

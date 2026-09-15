@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type {
   AccountInfo,
+  ConsumeRateLimitResetCreditOutcome,
+  ConsumeRateLimitResetCreditParams,
   ModelInfo,
   PluginDetail,
   PluginInfo,
@@ -72,6 +74,9 @@ export function mapRateLimitSnapshot(
       : {}),
     ...(typeof rateLimit.limitName === "string"
       ? { limitName: rateLimit.limitName }
+      : {}),
+    ...(typeof rateLimit.normalModelSlug === "string"
+      ? { normalModelSlug: rateLimit.normalModelSlug }
       : {}),
     planType:
       typeof rateLimit.planType === "string"
@@ -184,6 +189,14 @@ export function mapRateLimitResponse(
 
   return {
     ...rateLimits,
+    ...(typeof response.ordinaryUsageAllowed === "boolean" ||
+    response.ordinaryUsageAllowed === null
+      ? {
+          ordinaryUsageAllowed: response.ordinaryUsageAllowed as
+            | boolean
+            | null,
+        }
+      : {}),
     ...(Object.keys(rateLimitsByLimitId).length > 0
       ? { rateLimitsByLimitId }
       : {}),
@@ -588,7 +601,7 @@ export function createCodexCapabilities(
   // snapshots when it boots: a plugin installed from a *remote* marketplace
   // mid-session never appears in it, even though `plugin/list` flips the same
   // plugin to installed=true and `skills/list` starts returning its skills
-  // straight away (verified against codex-cli 0.146.0). Since Mains keeps one
+  // straight away (verified against codex-cli 0.153.0). Since Mains keeps one
   // long-lived app-server per adapter, without this overlay Settings › Plugins
   // and the "@" menu's Plugins section only catch up when the app restarts.
   // Entries are dropped as soon as the server reports the plugin itself.
@@ -901,6 +914,20 @@ export function createCodexCapabilities(
     }
   }
 
+  async function consumeRateLimitResetCredit(
+    params: ConsumeRateLimitResetCreditParams,
+  ): Promise<ConsumeRateLimitResetCreditOutcome> {
+    const server = await options.ensureServer();
+    const result = await server.sendRequest(
+      "account/rateLimitResetCredit/consume",
+      {
+        idempotencyKey: params.idempotencyKey,
+        ...(params.creditId ? { creditId: params.creditId } : {}),
+      },
+    );
+    return result.outcome;
+  }
+
   async function listSkills(
     workspacePath?: string,
   ): Promise<SkillInfo[]> {
@@ -1175,6 +1202,7 @@ export function createCodexCapabilities(
     listModels,
     getAccountInfo,
     getRateLimits,
+    consumeRateLimitResetCredit,
     listSkills,
     listPlugins,
     listInstalledPlugins,

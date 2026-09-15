@@ -258,6 +258,18 @@
       "sha256": "62c3b082b9ecb53ca8abb9fd65c7e3216b0875cce72db7dec3b1ecfdbfda121c"
     },
     {
+      "path": "v2/ConsumeAccountRateLimitResetCreditOutcome.ts",
+      "sha256": "2fc33514e9745ffeeefada2c51362dc66e6f9c5f6f76d28b0a9a8cf278a2e8fe"
+    },
+    {
+      "path": "v2/ConsumeAccountRateLimitResetCreditParams.ts",
+      "sha256": "f5f79c58b90a126b7620b38bc88d09a3b096543f71cdd949d19bac3c2b03399d"
+    },
+    {
+      "path": "v2/ConsumeAccountRateLimitResetCreditResponse.ts",
+      "sha256": "3240fe476768362847266693ffdfb4fdd8d8f0d7b628962255b229a182d76682"
+    },
+    {
       "path": "v2/CreditsSnapshot.ts",
       "sha256": "e56bf82bc93959ed95748dc7363520d4cf477d9c7ac2b8e40e48c91b03c2575a"
     },

@@ -4,7 +4,23 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ProviderResponse } from "../providers.dto";
-import type { WorkRunAdapter, AdapterConfig, CopilotAdapterConfig, ClaudeCodeAdapterConfig, CodexAdapterConfig, CursorAdapterConfig, ModelInfo, CommandInfo, SkillInfo, PluginListResponse, PluginDetail, PluginScope, AccountInfo } from "../../../../shared/adapter.types";
+import type {
+  WorkRunAdapter,
+  AdapterConfig,
+  CopilotAdapterConfig,
+  ClaudeCodeAdapterConfig,
+  CodexAdapterConfig,
+  CursorAdapterConfig,
+  ModelInfo,
+  CommandInfo,
+  SkillInfo,
+  PluginListResponse,
+  PluginDetail,
+  PluginScope,
+  AccountInfo,
+  ConsumeRateLimitResetCreditParams,
+  ConsumeRateLimitResetCreditOutcome,
+} from "../../../../shared/adapter.types";
 import { createClaudeDriver } from "./claude.driver";
 import { createCodexDriver } from "./codex.driver";
 import { createCopilotDriver } from "./copilot.driver";
@@ -446,6 +462,19 @@ export async function getRateLimitsForProvider(
   const adapter = createWorkAdapter(provider);
   if (!adapter.getRateLimits) return null;
   return adapter.getRateLimits();
+}
+
+export async function consumeRateLimitResetCreditForProvider(
+  provider: ProviderResponse,
+  params: ConsumeRateLimitResetCreditParams,
+): Promise<ConsumeRateLimitResetCreditOutcome> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.consumeRateLimitResetCredit) {
+    throw new Error(
+      `Provider "${provider.displayName}" does not support rate-limit resets.`,
+    );
+  }
+  return adapter.consumeRateLimitResetCredit(params);
 }
 
 type GoalInfo = import("../../../../shared/adapter.types").GoalInfo;

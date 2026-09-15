@@ -300,6 +300,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.providers.getCommands, id, workspacePath),
     getSkills: (id: string, workspacePath?: string) => ipcRenderer.invoke(CHANNELS.providers.getSkills, id, workspacePath),
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
+    consumeRateLimitResetCredit: (id: string, params: unknown) =>
+      ipcRenderer.invoke(CHANNELS.providers.consumeRateLimitResetCredit, id, params),
     // Fired when the provider streams a fresh rate-limit snapshot during a run
     // (Codex `account/rateLimits/updated`). Carries the mapped snapshot so the
     // renderer can patch its cache without a round-trip.

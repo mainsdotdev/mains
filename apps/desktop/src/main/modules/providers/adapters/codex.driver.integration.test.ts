@@ -273,12 +273,18 @@ describe("codex.driver / app-server protocol", () => {
       usesCodexManagedCredentials: true,
     });
     expect(rateLimits).toMatchObject({
+      ordinaryUsageAllowed: true,
       limitId: "codex",
       primary: { usedPercent: 10 },
       rateLimitsByLimitId: {
         codex: {
           limitId: "codex",
           primary: { usedPercent: 10 },
+        },
+        base_model_inference: {
+          limitId: "base_model_inference",
+          normalModelSlug: "gpt-5.6-luna",
+          primary: { usedPercent: 2 },
         },
       },
       rateLimitResetCredits: {
