@@ -185,7 +185,41 @@ export interface RunTurn {
   model: string | null;
   modelUsage: Record<string, ModelUsageEntry> | null;
   metadata: Record<string, unknown> | null;
+  /** What this turn did to the working tree; null when it changed nothing. */
+  changes?: RunTurnChanges | null;
   createdAt: number;
+}
+
+export type TurnFileChangeStatus = "added" | "modified" | "deleted" | "renamed";
+
+export interface TurnFileChange {
+  path: string;
+  /** Path before the move — set only when `status` is "renamed". */
+  oldPath?: string;
+  status: TurnFileChangeStatus;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+/** A turn's changes as the transcript card shows them (see CONTEXT.md "turn changes"). */
+export interface RunTurnChanges {
+  id: string;
+  files: TurnFileChange[];
+  additions: number;
+  deletions: number;
+  /** Legacy records may have an incomplete patch; new records are stored in full. */
+  truncated: boolean;
+  undoneAt: number | null;
+}
+
+export interface RunTurnChangesDiff extends RunTurnChanges {
+  diffText: string;
+}
+
+export interface RunTurnRef {
+  runId: string;
+  turnId: number;
 }
 
 export const runsApi = baseApi.injectEndpoints({
@@ -478,6 +512,26 @@ export const runsApi = baseApi.injectEndpoints({
       ],
     }),
 
+    getRunTurnChangesDiff: builder.query<RunTurnChangesDiff | null, RunTurnRef>({
+      query: ({ runId, turnId }) => ({
+        handler: CHANNELS.runTurns.getChangesDiff,
+        args: [runId, turnId],
+      }),
+      providesTags: (_result, _error, { runId }) => [
+        { type: "RunTurns", id: runId },
+      ],
+    }),
+
+    undoRunTurnChanges: builder.mutation<RunTurnChanges, RunTurnRef>({
+      query: ({ runId, turnId }) => ({
+        handler: CHANNELS.runTurns.undoChanges,
+        args: [runId, turnId],
+      }),
+      invalidatesTags: (_result, _error, { runId }) => [
+        { type: "RunTurns", id: runId },
+      ],
+    }),
+
   }),
 });
 
@@ -516,5 +570,7 @@ export const {
   useRemoveRunArtifactMutation,
   useGetRunTurnsQuery,
   useLazyGetRunTurnsQuery,
+  useGetRunTurnChangesDiffQuery,
+  useUndoRunTurnChangesMutation,
   useExecuteReviewMutation,
 } = runsApi;

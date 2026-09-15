@@ -707,6 +707,10 @@ const api = {
   // Run turns operations
   runTurns: {
     getByRun: (runId: string) => ipcRenderer.invoke(CHANNELS.runTurns.getByRun, runId),
+    getChangesDiff: (runId: string, turnId: number) =>
+      ipcRenderer.invoke(CHANNELS.runTurns.getChangesDiff, runId, turnId),
+    undoChanges: (runId: string, turnId: number) =>
+      ipcRenderer.invoke(CHANNELS.runTurns.undoChanges, runId, turnId),
   },
   // File explorer operations
   fileExplorer: {

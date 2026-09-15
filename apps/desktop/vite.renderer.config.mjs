@@ -27,6 +27,12 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, 'src/renderer'),
+      // Through the node_modules symlink, Vite serves the contracts source as a
+      // dependency: `?v=<browserHash>` plus a year-long immutable cache header.
+      // The hash ignores the file's content, so the renderer's HTTP cache keeps
+      // the old channel map across restarts and a new channel reads as
+      // `undefined`. Aliasing to the real path serves it as plain source.
+      '@mains/contracts': path.resolve(import.meta.dirname, '../../packages/contracts/src'),
     },
   },
   css: {

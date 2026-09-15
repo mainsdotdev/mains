@@ -229,6 +229,18 @@ export function registerRunsIpc(): void {
     CHANNELS.runTurns.getByRun,
     handle((runId: string) => runsService.getTurnsByRun(runId)),
   );
+  ipcMain.handle(
+    CHANNELS.runTurns.getChangesDiff,
+    handle((runId: string, turnId: number) =>
+      runsService.getTurnChangesDiff(runId, turnId),
+    ),
+  );
+  ipcMain.handle(
+    CHANNELS.runTurns.undoChanges,
+    handle((runId: string, turnId: number) =>
+      runsService.undoTurnChanges(runId, turnId),
+    ),
+  );
 
   // Tool Approval (interactive)
   ipcMain.handle(
@@ -286,6 +298,8 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runArtifacts.remove,
     CHANNELS.runToolCalls.getByRun,
     CHANNELS.runTurns.getByRun,
+    CHANNELS.runTurns.getChangesDiff,
+    CHANNELS.runTurns.undoChanges,
     CHANNELS.runs.toolApprovalResponse,
     CHANNELS.runs.listPendingApprovals,
   ].forEach((channel) => ipcMain.removeHandler(channel));

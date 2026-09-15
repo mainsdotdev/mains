@@ -524,6 +524,47 @@ export const runTurns = sqliteTable(
 );
 
 /* -----------------------------
+   RUN TURN CHANGES (what each turn did to the working tree)
+------------------------------ */
+
+export const runTurnChanges = sqliteTable(
+  "run_turn_changes",
+  {
+    id: text("id").primaryKey(), // uuid
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    turnId: integer("turn_id")
+      .notNull()
+      .references(() => runTurns.id, { onDelete: "cascade" }),
+    // Patch between the working tree at turn start and at turn end, binary
+    // hunks included so it reverse-applies exactly. Stored here rather than as
+    // git refs so the record outlives the repo, its worktree, and git's gc.
+    diffText: text("diff_text").notNull(),
+    filesJson: text("files_json").notNull(), // JSON array of TreeDiffFile
+    additions: integer("additions").notNull().default(0),
+    deletions: integer("deletions").notNull().default(0),
+    // Legacy rows may contain a file-boundary-truncated patch. New rows keep
+    // the complete patch so binary and large-file turns remain undoable.
+    truncated: integer("truncated", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    undoneAt: integer("undone_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [
+    index("idx_run_turn_changes_run").on(t.runId),
+    uniqueIndex("uniq_run_turn_changes_turn").on(t.turnId),
+    check(
+      "check_run_turn_changes_files_json",
+      sql`json_valid(${t.filesJson})`,
+    ),
+  ],
+);
+
+/* -----------------------------
    RUN CONTEXT (what the run looked at / was given)
 ------------------------------ */
 

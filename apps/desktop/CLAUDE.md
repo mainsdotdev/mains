@@ -168,6 +168,7 @@ Core tables:
 - `connections` / `connectionTokens` / `connectionResources` / `connectionStates` — External service connections, encrypted token blobs, linked resources, integration state
 - `spaces` — User-defined UI/prompt configurations; `providerId` (agent engine) and `mode` (developer/work/chat) drive `/code`. Which modes a provider offers lives in `PROVIDER_MODES` (`@mains/contracts/modes`) — claude and codex drive all three, copilot and cursor are developer-only for now
 - `runs` / `runTurns` / `runContext` / `runArtifacts` — Agent run flow with session resumption via `sessionId` and turn tracking
+- `runTurnChanges` — What each turn did to the working tree: the turn's patch (binary hunks included), per-file stats, and `undoneAt`
 - `toolCalls` — Tool invocation tracking with nested calls (`parentToolCallId`). There is no `tools` table — the registry is in-code.
 - `automations` / `automationRuns` — Scheduled/triggered automation definitions and their execution records
 - `pulses` — Scheduled automation definitions backing the `/pulse` route; each carries a `mode` (fixed at creation) and targets a workspace (developer) or an optional collection (work/chat)
@@ -196,6 +197,7 @@ Core tables:
 - Runs support session resumption and continuation via `sessionId`
 - Every run snapshots its space's `mode` (`runs.mode`) at start; `resolveRunMode` + the mode-harness composition in `runs.service` decide the prompt delta, tool policy, and config snapshot a run carries — resume and fork re-derive from the row, so a run keeps its harness even if the space's mode changes
 - Run archiving: `runs:archive` / `runs:listArchived` / `runs:unarchive`, surfaced in Settings → Archive alongside archived workspaces. The service keeps the provider-side session in sync via the adapter's optional `archiveSession` / `unarchiveSession` (Codex threads are archived/unarchived on the app server)
+- **Turn changes**: `RunSession` snapshots the working tree (`gitService.snapshotWorkingTree`) at each turn boundary and stores the turn's patch in `run_turn_changes`; the summary rides on `RunTurnResponse.changes`, `runTurns:getChangesDiff` loads the patch for Review, `runTurns:undoChanges` reverse-applies it. Rendered by `turn-changes-card.tsx`, gated by the mode flag `showTurnChanges`. See CONTEXT.md "turn changes"
 
 **Projects System** (`src/main/modules/projects/`)
 - Groups workspaces by shared git remote origin; owns `project_resources`

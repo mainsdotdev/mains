@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ModeId } from "../../../shared/modes";
+import type { TreeDiffFile } from "../git";
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type RunContextKind = "file" | "selection" | "diff" | "git" | "terminal" | "env" | "note";
@@ -282,7 +283,39 @@ export interface RunTurnResponse {
   model: string | null;
   modelUsage: Record<string, ModelUsageEntry> | null;
   metadata: Record<string, unknown> | null;
+  /** What this turn did to the working tree; null when it changed nothing or wasn't tracked. */
+  changes: RunTurnChangesSummary | null;
   createdAt: Date;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Run Turn Changes DTOs
+// ─────────────────────────────────────────────────────────────
+export type TurnFileChange = TreeDiffFile;
+
+/** The transcript card's view of a turn's changes — everything but the patch. */
+export interface RunTurnChangesSummary {
+  id: string;
+  files: TurnFileChange[];
+  additions: number;
+  deletions: number;
+  /** Legacy records may have an incomplete patch; new records are stored in full. */
+  truncated: boolean;
+  undoneAt: Date | null;
+}
+
+export interface RunTurnChangesDiffResponse extends RunTurnChangesSummary {
+  diffText: string;
+}
+
+export interface CreateRunTurnChangesPayload {
+  runId: string;
+  turnId: number;
+  diffText: string;
+  files: TurnFileChange[];
+  additions: number;
+  deletions: number;
+  truncated: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────

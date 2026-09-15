@@ -1,7 +1,15 @@
+import { randomUUID } from "crypto";
 import { eq, desc, and, sql, asc, gt, gte, inArray } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
-import { runs, runContext, runArtifacts, toolCalls, runTurns } from "../../db/schema";
+import {
+  runs,
+  runContext,
+  runArtifacts,
+  toolCalls,
+  runTurns,
+  runTurnChanges,
+} from "../../db/schema";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -16,6 +24,10 @@ import type {
   CreateRunTurnPayload,
   UpdateRunTurnPayload,
   RunTurnResponse,
+  RunTurnChangesSummary,
+  RunTurnChangesDiffResponse,
+  CreateRunTurnChangesPayload,
+  TurnFileChange,
   RunExperienceOptions,
   WorkspaceRunListOptions,
 } from "./runs.dto";
@@ -405,12 +417,30 @@ export const runsRepo = {
   // ─────────────────────────────────────────────────────────────
   async findTurnsByRun(runId: string): Promise<RunTurnResponse[]> {
     const db = getDb();
+    // The change summary rides along with its turn; the patch itself does not —
+    // turns are re-fetched on every transcript sync, the patch only on Review.
     const rows = await db
-      .select()
+      .select({
+        turn: runTurns,
+        changes: {
+          id: runTurnChanges.id,
+          filesJson: runTurnChanges.filesJson,
+          additions: runTurnChanges.additions,
+          deletions: runTurnChanges.deletions,
+          truncated: runTurnChanges.truncated,
+          undoneAt: runTurnChanges.undoneAt,
+        },
+      })
       .from(runTurns)
+      .leftJoin(runTurnChanges, eq(runTurnChanges.turnId, runTurns.id))
       .where(eq(runTurns.runId, runId))
       .orderBy(asc(runTurns.turnIndex));
-    return rows.map(mapTurnRowToResponse);
+    return rows.map((row) =>
+      mapTurnRowToResponse(
+        row.turn,
+        row.changes ? mapTurnChangesSummary(row.changes) : null,
+      ),
+    );
   },
 
   async findActiveTurnByRun(runId: string): Promise<RunTurnResponse | null> {
@@ -486,6 +516,48 @@ export const runsRepo = {
     const db = getDb();
     await db.delete(runTurns).where(eq(runTurns.runId, runId));
   },
+
+  // ─────────────────────────────────────────────────────────────
+  // Run Turn Changes
+  // ─────────────────────────────────────────────────────────────
+  async insertTurnChanges(payload: CreateRunTurnChangesPayload): Promise<string> {
+    const db = getDb();
+    const id = randomUUID();
+    await db.insert(runTurnChanges).values({
+      id,
+      runId: payload.runId,
+      turnId: payload.turnId,
+      diffText: payload.diffText,
+      filesJson: JSON.stringify(payload.files),
+      additions: payload.additions,
+      deletions: payload.deletions,
+      truncated: payload.truncated,
+    });
+    return id;
+  },
+
+  async findTurnChanges(
+    runId: string,
+    turnId: number,
+  ): Promise<RunTurnChangesDiffResponse | null> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(runTurnChanges)
+      .where(and(eq(runTurnChanges.runId, runId), eq(runTurnChanges.turnId, turnId)))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    return { ...mapTurnChangesSummary(row), diffText: row.diffText };
+  },
+
+  async markTurnChangesUndone(id: string, undoneAt: Date): Promise<void> {
+    const db = getDb();
+    await db
+      .update(runTurnChanges)
+      .set({ undoneAt })
+      .where(eq(runTurnChanges.id, id));
+  },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -547,8 +619,30 @@ function mapArtifactRowToResponse(row: typeof runArtifacts.$inferSelect): RunArt
   };
 }
 
-function mapTurnRowToResponse(row: typeof runTurns.$inferSelect): RunTurnResponse {
+function mapTurnChangesSummary(row: {
+  id: string;
+  filesJson: string;
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+  undoneAt: Date | null;
+}): RunTurnChangesSummary {
   return {
+    id: row.id,
+    files: (safeJsonParse(row.filesJson) as TurnFileChange[] | null) ?? [],
+    additions: row.additions,
+    deletions: row.deletions,
+    truncated: row.truncated,
+    undoneAt: row.undoneAt,
+  };
+}
+
+function mapTurnRowToResponse(
+  row: typeof runTurns.$inferSelect,
+  changes: RunTurnChangesSummary | null = null,
+): RunTurnResponse {
+  return {
+    changes,
     id: row.id,
     runId: row.runId,
     turnIndex: row.turnIndex,

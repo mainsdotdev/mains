@@ -42,6 +42,7 @@ import { isDocumentRenderImage } from "@/lib/document-viewer";
 import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
+import { TurnChangesCard } from "./turn-changes-card";
 
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
@@ -505,7 +506,7 @@ export function WorkspaceEvents({
 
   // Work calls a written file the deliverable, so its Write row has to stay
   // reachable: the agent names the file in prose but only that row opens it.
-  const { keepFileWritesVisible } = useModeConfig();
+  const { keepFileWritesVisible, showTurnChanges } = useModeConfig();
   const isDeliverableGroup = useMemo(
     () =>
       keepFileWritesVisible
@@ -568,11 +569,24 @@ export function WorkspaceEvents({
         group.type === "tool_calls" && group.events.length === 1
           ? toolEventPlanName(group.events[0])
           : null;
+      // The turn's changes card sits where its session bar does: right after
+      // the turn's last group, so it reads as the turn's outcome.
+      const turnForBar = sessionBarForThis?.turn;
+      const turnChangesCard =
+        showTurnChanges && activeRun && turnForBar?.changes ? (
+          <TurnChangesCard
+            runId={activeRun.id}
+            turnId={turnForBar.id}
+            changes={turnForBar.changes}
+            canUndo={!isRunning}
+          />
+        ) : null;
 
       return (
         <Fragment key={group.id}>
           {group.type === "prompt_suggestion" ? (
             <>
+              {turnChangesCard}
               {sessionBarForThis && (
                 <SessionTimeBar
                   info={sessionBarForThis}
@@ -612,6 +626,7 @@ export function WorkspaceEvents({
           ) : (
             <InfoGroup group={group} workspaceRootPath={currentWorkspace?.rootPath} />
           )}
+          {group.type !== "prompt_suggestion" && turnChangesCard}
           {group.type !== "prompt_suggestion" && sessionBarForThis && (
             <SessionTimeBar
               info={sessionBarForThis}
@@ -622,6 +637,8 @@ export function WorkspaceEvents({
       );
     },
     [
+      showTurnChanges,
+      activeRun,
       eventGroups,
       onSuggestionSelect,
       isRunCompleted,

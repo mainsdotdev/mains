@@ -56,6 +56,8 @@ vi.mock("../git/git.service", () => ({
   gitService: {
     getHeadSha: vi.fn(),
     captureDiffSnapshot: vi.fn(),
+    snapshotWorkingTree: vi.fn(),
+    diffTrees: vi.fn(),
   },
 }));
 
@@ -97,6 +99,9 @@ describe("RunSession", () => {
     vi.mocked(gitService.getHeadSha).mockRejectedValue(
       new Error("not a git repo"),
     );
+    // Default: the working tree never changes, so no turn records changes.
+    vi.mocked(gitService.snapshotWorkingTree).mockReset().mockResolvedValue("tree-same");
+    vi.mocked(gitService.diffTrees).mockReset();
     vi.mocked(createWorkAdapter).mockReset();
     vi.mocked(couldModifyFiles).mockReturnValue(false);
   });
@@ -150,6 +155,7 @@ describe("RunSession", () => {
 
       expect(gitService.getHeadSha).not.toHaveBeenCalled();
       expect(gitService.captureDiffSnapshot).not.toHaveBeenCalled();
+      expect(gitService.snapshotWorkingTree).not.toHaveBeenCalled();
       expect(logWorkspaceActivity).not.toHaveBeenCalled();
     });
 
@@ -164,6 +170,67 @@ describe("RunSession", () => {
       const turns = await runsRepo.findTurnsByRun("r1");
       const indexes = turns.map((t) => t.turnIndex).sort();
       expect(indexes).toEqual([0, 1, 2, 3]);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // Turn changes
+  // ─────────────────────────────────────────────────────────────
+  describe("turn changes", () => {
+    const treeDiff = {
+      diffText: "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more\n",
+      files: [
+        { path: "a.ts", status: "modified" as const, additions: 2, deletions: 1, binary: false },
+      ],
+      additions: 2,
+      deletions: 1,
+      truncated: false,
+    };
+
+    it("stores what the turn changed when it closes", async () => {
+      vi.mocked(gitService.snapshotWorkingTree)
+        .mockResolvedValueOnce("tree-start")
+        .mockResolvedValueOnce("tree-end");
+      vi.mocked(gitService.diffTrees).mockResolvedValue(treeDiff);
+
+      const session = makeSession();
+      await flushBackground();
+      await session.finalize({ status: "succeeded" });
+
+      expect(gitService.diffTrees).toHaveBeenCalledWith("/tmp/w1", "tree-start", "tree-end");
+      const [turn] = await runsRepo.findTurnsByRun("r1");
+      expect(turn.changes).toMatchObject({
+        files: treeDiff.files,
+        additions: 2,
+        deletions: 1,
+        truncated: false,
+        undoneAt: null,
+      });
+      const stored = await runsRepo.findTurnChanges("r1", turn.id);
+      expect(stored?.diffText).toBe(treeDiff.diffText);
+    });
+
+    it("stores nothing for a turn that left the tree as it was", async () => {
+      const session = makeSession();
+      await flushBackground();
+      await session.finalize({ status: "succeeded" });
+
+      expect(gitService.diffTrees).not.toHaveBeenCalled();
+      const [turn] = await runsRepo.findTurnsByRun("r1");
+      expect(turn.changes).toBeNull();
+    });
+
+    it("still closes the turn when the snapshot fails", async () => {
+      vi.mocked(gitService.snapshotWorkingTree).mockRejectedValue(
+        new Error("not a git repo"),
+      );
+      const session = makeSession();
+      await flushBackground();
+      await session.finalize({ status: "succeeded" });
+
+      const [turn] = await runsRepo.findTurnsByRun("r1");
+      expect(turn.status).toBe("completed");
+      expect(turn.changes).toBeNull();
     });
   });
 

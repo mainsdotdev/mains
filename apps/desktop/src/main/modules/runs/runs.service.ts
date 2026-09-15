@@ -8,6 +8,7 @@ import { providersService } from "../providers";
 import { collectionsService } from "../collections";
 import { projectsService } from "../projects";
 import { workspaceService, assertWorkspacePathExists } from "../workspace";
+import { gitService } from "../git";
 import { spaceService } from "../space";
 import { appSettingsService } from "../appSettings";
 import { DEFAULT_MODE_ID, type ModeId } from "../../../shared/modes";
@@ -67,6 +68,8 @@ import type {
   ReviewRunPayload,
   RunDetailsResponse,
   RunTurnResponse,
+  RunTurnChangesSummary,
+  RunTurnChangesDiffResponse,
 } from "./runs.dto";
 
 /** Longest side an image artifact is sent at — more than any phone shows. */
@@ -1488,6 +1491,62 @@ export const runsService = {
 
   async getTurnsByRun(runId: string): Promise<RunTurnResponse[]> {
     return runsRepo.findTurnsByRun(runId);
+  },
+
+  async getTurnChangesDiff(
+    runId: string,
+    turnId: number,
+  ): Promise<RunTurnChangesDiffResponse | null> {
+    return runsRepo.findTurnChanges(runId, turnId);
+  },
+
+  /**
+   * Reverse-apply one turn's stored patch to its workspace. Refused while the
+   * run is live (the agent may be editing the same files) and when any file
+   * the turn touched has moved on since — `git apply --check` decides that,
+   * and a failed check writes nothing. See CONTEXT.md "turn changes".
+   */
+  async undoTurnChanges(
+    runId: string,
+    turnId: number,
+  ): Promise<RunTurnChangesSummary> {
+    const run = await runsRepo.findRunById(runId);
+    if (!run) throw new Error("Run not found");
+    if (runSessionRegistry.get(runId)) {
+      throw new Error("Wait for the run to finish before undoing its changes.");
+    }
+    const changes = await runsRepo.findTurnChanges(runId, turnId);
+    if (!changes) throw new Error("This turn has no recorded changes.");
+    if (changes.undoneAt) throw new Error("These changes were already undone.");
+    if (changes.truncated) {
+      throw new Error(
+        "This turn's changes were too large to store in full, so they can't be undone.",
+      );
+    }
+    const workspace = run.workspaceId
+      ? await workspaceService.get(run.workspaceId)
+      : null;
+    if (!workspace) throw new Error("Workspace not found");
+
+    const { diffText, ...summary } = changes;
+    const applies = await gitService.canApplyPatch(workspace.rootPath, diffText, {
+      reverse: true,
+    });
+    if (!applies) {
+      throw new Error(
+        "Some of these files changed after this turn, so its changes can't be undone automatically.",
+      );
+    }
+    await gitService.applyPatch(workspace.rootPath, diffText, { reverse: true });
+    const undoneAt = new Date();
+    await runsRepo.markTurnChangesUndone(changes.id, undoneAt);
+
+    // The workspace's own diff (sidebar count, Changes tab) moved underneath it.
+    await workspaceService.resyncDiff(workspace.id).catch((err) =>
+      console.error(`[RunsService] resyncDiff after undo failed for ${runId}:`, err),
+    );
+    emit("runs:diffUpdated", { runId, workspaceId: workspace.id, ts: Date.now() });
+    return { ...summary, undoneAt };
   },
 
   async deleteRunSession(runId: string): Promise<void> {

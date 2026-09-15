@@ -85,6 +85,12 @@ export interface ModeConfigDescriptor {
    * was hiding. Same reasoning that already keeps generated media visible.
    */
   keepFileWritesVisible: boolean;
+  /**
+   * The changes card under a turn (Edited N files, Undo, Review). Work keeps
+   * it even without the git ceremony — its deliverables are files, and undoing
+   * a turn is not a git action. Chat's read-only harness changes nothing.
+   */
+  showTurnChanges: boolean;
 }
 
 export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
@@ -115,6 +121,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showPluginsButton: false,
     showRightPanel: true,
     keepFileWritesVisible: false,
+    showTurnChanges: true,
   },
   // Work: same surfaces minus the developer ceremony — no git actions, no
   // terminal, no diff tab, no permission dropdown (the harness pins
@@ -146,6 +153,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showPluginsButton: true,
     showRightPanel: false,
     keepFileWritesVisible: true,
+    showTurnChanges: true,
   },
   // Chat: plain conversation — read-only harness, so every write-adjacent
   // affordance goes. Files tab stays for viewing.
@@ -174,6 +182,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showPluginsButton: false,
     showRightPanel: false,
     keepFileWritesVisible: false,
+    showTurnChanges: false,
   },
 };
 

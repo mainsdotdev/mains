@@ -31,6 +31,12 @@ describe("MODE_CONFIGS table invariants", () => {
     expect(dev.showTasksNav).toBe(true);
     expect(dev.showTabs).toBe(true);
     expect(dev.showRightPanel).toBe(true);
+    expect(dev.showTurnChanges).toBe(true);
+  });
+
+  it("shows turn changes wherever the agent can write", () => {
+    expect(MODE_CONFIGS.work.showTurnChanges).toBe(true);
+    expect(MODE_CONFIGS.chat.showTurnChanges).toBe(false);
   });
 
   it("locks developer's sidebar shape — the pixel-identity tripwire", () => {

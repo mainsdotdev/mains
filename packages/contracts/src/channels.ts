@@ -258,6 +258,8 @@ export const CHANNELS = {
   },
   runTurns: {
     getByRun: "runTurns:getByRun",
+    getChangesDiff: "runTurns:getChangesDiff",
+    undoChanges: "runTurns:undoChanges",
   },
   runs: {
     abort: "runs:abort",

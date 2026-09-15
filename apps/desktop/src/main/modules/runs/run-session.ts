@@ -137,6 +137,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   let baseRefCaptured: Promise<void> | null = null;
   let sleepBlockerId: number | null = null;
   let activeTurnId: number | null = null;
+  // Working-tree snapshot taken when the active turn began; closing the turn
+  // diffs it against a fresh one. See CONTEXT.md "turn changes".
+  let turnStartTree: Promise<string | null> | null = null;
   let initialTurnReady: Promise<void> | null = null;
   let resolvedToolCallsReady: Promise<void> | null = null;
   let turnCounter: number = ctx.seedTurnIndex ?? -1;
@@ -252,12 +255,66 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     }
   }
 
+  // ─── Turn changes ───
+  /**
+   * Snapshot the working tree as a git tree. Null when the run has no
+   * workspace, the cwd is not a git repo, or the untracked-file guard trips —
+   * that turn then simply gets no changes card. Async, so even a synchronous
+   * throw lands in the same null instead of escaping into the turn lifecycle.
+   */
+  async function captureTurnTree(): Promise<string | null> {
+    if (!workspaceId) return null;
+    try {
+      return await gitService.snapshotWorkingTree(execution.cwd);
+    } catch (err) {
+      console.warn(
+        `[RunSession ${runId}] Working-tree snapshot skipped:`,
+        err instanceof Error ? err.message : err,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Diff a turn's start and end trees and store the result against the turn.
+   * Identical trees — every turn that only read — store nothing.
+   */
+  async function persistTurnChanges(
+    turnId: number,
+    startTree: Promise<string | null> | null,
+    endTree: Promise<string | null>,
+  ): Promise<void> {
+    try {
+      const [start, end] = await Promise.all([startTree, endTree]);
+      if (!start || !end || start === end) return;
+      const diff = await gitService.diffTrees(execution.cwd, start, end);
+      if (diff.files.length === 0) return;
+      await runsRepo.insertTurnChanges({
+        runId,
+        turnId,
+        diffText: diff.diffText,
+        files: diff.files,
+        additions: diff.additions,
+        deletions: diff.deletions,
+        truncated: diff.truncated,
+      });
+    } catch (err) {
+      console.error(`[RunSession ${runId}] Failed to record turn changes:`, err);
+    }
+  }
+
   // ─── Turn boundaries ───
   async function startNextTurn(promptContent?: string): Promise<void> {
     // Close any currently-active turn (no-op on the first call for a fresh run).
     if (activeTurnId !== null) {
-      await closeActiveTurn();
+      // One snapshot marks the boundary: the closing turn's end is the next
+      // turn's start, so no change between them goes unattributed.
+      const boundaryTree = captureTurnTree();
+      await closeActiveTurn(undefined, boundaryTree);
+      turnStartTree = boundaryTree;
     }
+    // The first turn's baseline was taken at session start (see Initialize).
+    turnStartTree ??= captureTurnTree();
     try {
       const nextIndex = turnCounter + 1;
       const id = await runsRepo.insertTurn({
@@ -273,9 +330,16 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     }
   }
 
-  async function closeActiveTurn(usage?: WorkRunUsage): Promise<void> {
+  async function closeActiveTurn(
+    usage?: WorkRunUsage,
+    endTree?: Promise<string | null>,
+  ): Promise<void> {
     if (activeTurnId === null) return;
     const turnId = activeTurnId;
+    // Snapshot before the DB writes below, as close to the boundary as we get.
+    const turnEndTree = endTree ?? captureTurnTree();
+    const turnStart = turnStartTree;
+    turnStartTree = null;
     try {
       const now = new Date();
       const turns = await runsRepo.findTurnsByRun(runId);
@@ -301,6 +365,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     } catch (err) {
       console.error(`[RunSession ${runId}] Failed to close active turn:`, err);
     }
+    await persistTurnChanges(turnId, turnStart, turnEndTree);
   }
 
   // ─── Tool call cleanup ───
@@ -898,6 +963,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   broadcastStatusChanged("running");
 
   // Fire-and-forget initialization. Each helper handles its own errors.
+  // The first turn's baseline goes first: it has to predate the agent's first
+  // write, and the adapter starts as soon as this factory returns.
+  turnStartTree = captureTurnTree();
   // Keep the baseRef-capture promise so finalize can await it (see persistFinalDiff).
   baseRefCaptured = captureBaseRef();
   void acquireSleepBlocker();
