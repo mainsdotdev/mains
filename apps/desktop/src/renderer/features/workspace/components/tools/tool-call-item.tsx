@@ -14,6 +14,7 @@ import { SaveFindingDisplay, type SaveFindingParams } from "./save-finding-displ
 import { AgentDisplay, type AgentParams } from "./agent-display";
 import { SendMessageDisplay, type SendMessageParams } from "./send-message-display";
 import { MonitorDisplay, type MonitorParams } from "./monitor-display";
+import { EnterPlanDisplay, type EnterPlanParams } from "./enter-plan-display";
 import { IntentDisplay, type IntentParams } from "./intent-display";
 import { BashDisplay, type BashParams } from "./bash-display";
 import { GlobDisplay, type GlobParams } from "./glob-display";
@@ -142,6 +143,7 @@ const DISPATCH: Renderer[] = [
   withOutput<MonitorParams>(["monitor"], MonitorDisplay, (ctx) => ({
     description: ctx.summary,
   })),
+  withOutput<EnterPlanParams>(["enterplanmode"], EnterPlanDisplay, () => ({})),
 
   withOutput<EditParams>(["edit", "replace"], EditDisplay, summaryAs("file_path")),
 

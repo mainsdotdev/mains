@@ -229,6 +229,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     icon: <Infinite className="size-4" />,
     aliases: ["monitor"],
   },
+  // Input is always `{}`; output is the CLI's plan-mode instructions to the
+  // model. Rendered by EnterPlanDisplay in tool-call-item.tsx.
   {
     displayName: "EnterPlanMode",
     groupKey: "enterplanmode",

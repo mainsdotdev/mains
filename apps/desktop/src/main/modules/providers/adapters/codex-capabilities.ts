@@ -24,6 +24,7 @@ import {
   type AdapterLogger,
 } from "./adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
+import type { CodexAppServerResult } from "./codex-app-server-protocol/rpc";
 
 interface CodexCapabilitiesOptions {
   /**
@@ -1113,11 +1114,12 @@ export function createCodexCapabilities(
       try {
         let cursor: string | null = null;
         do {
-          const page = await server.sendRequest("mcpServerStatus/list", {
-            cursor,
-            limit: 100,
-            detail: "toolsAndAuthOnly",
-          });
+          const page: CodexAppServerResult<"mcpServerStatus/list"> =
+            await server.sendRequest("mcpServerStatus/list", {
+              cursor,
+              limit: 100,
+              detail: "toolsAndAuthOnly",
+            });
           for (const status of page.data) {
             if (!wantedNames.has(status.name)) continue;
             runtimeByName.set(status.name, {
@@ -1311,11 +1313,12 @@ export function createCodexCapabilities(
     try {
       let cursor: string | null = null;
       do {
-        const page = await server.sendRequest("app/list", {
-          cursor,
-          limit: 100,
-          forceRefetch: forceRefresh,
-        });
+        const page: CodexAppServerResult<"app/list"> =
+          await server.sendRequest("app/list", {
+            cursor,
+            limit: 100,
+            forceRefetch: forceRefresh,
+          });
         catalog.push(
           ...(page.data as unknown as Array<Record<string, unknown>>),
         );
@@ -1446,11 +1449,12 @@ export function createCodexCapabilities(
     try {
       let cursor: string | null = null;
       do {
-        const page = await server.sendRequest("mcpServerStatus/list", {
-          cursor,
-          limit: 100,
-          detail: "toolsAndAuthOnly",
-        });
+        const page: CodexAppServerResult<"mcpServerStatus/list"> =
+          await server.sendRequest("mcpServerStatus/list", {
+            cursor,
+            limit: 100,
+            detail: "toolsAndAuthOnly",
+          });
         for (const status of page.data) {
           mcpServers.push({
             name: status.name,
