@@ -130,6 +130,7 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
           contextSignals: r.contextSignals,
           contextFiles: r.contextFiles,
           contextSkills: r.skills,
+          runId,
         });
       }
 

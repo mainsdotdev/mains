@@ -153,7 +153,15 @@ export const MODE_HARNESSES: Record<ModeId, ModeHarnessDescriptor> = {
     mode: "chat",
     promptDelta: CHAT_INSTRUCTIONS,
     toolPolicy: {
-      allowedTools: ["Read", "Glob", "Grep", "LSP", "WebFetch", "WebSearch"],
+      allowedTools: [
+        "Read",
+        "Glob",
+        "Grep",
+        "LSP",
+        "WebFetch",
+        "WebSearch",
+        "ToolSearch",
+      ],
       disallowedTools: ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Task"],
     },
     configDefaults: {

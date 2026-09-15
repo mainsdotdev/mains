@@ -43,6 +43,12 @@ describe("classifyDocType", () => {
     expect(classifyDocType("/tmp/runs/r1/work/plan.md")).toBe("md");
   });
 
+  it("classifies pdf", () => {
+    expect(classifyDocType("Blueprint.pdf")).toBe("pdf");
+    expect(classifyDocType("/Users/me/Downloads/TICKET.PDF")).toBe("pdf");
+    expect(classifyDocType("file.pdf?exp=123&sig=abc")).toBe("pdf");
+  });
+
   it("returns null for non-office files and edge cases", () => {
     expect(classifyDocType("image.png")).toBeNull();
     expect(classifyDocType("README")).toBeNull();
@@ -117,6 +123,8 @@ describe("DOC_VIEWER_LABELS", () => {
     expect(DOC_VIEWER_LABELS.docx).toBeTruthy();
     expect(DOC_VIEWER_LABELS.xlsx).toBeTruthy();
     expect(DOC_VIEWER_LABELS.pptx).toBeTruthy();
+    expect(DOC_VIEWER_LABELS.md).toBeTruthy();
+    expect(DOC_VIEWER_LABELS.pdf).toBeTruthy();
   });
 });
 

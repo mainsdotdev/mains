@@ -980,53 +980,36 @@ html.mains-web.dark #root {
 }
 
 /* ── Image generation ── */
-@keyframes image-generation-atmosphere {
-  0%, 100% { opacity: 0.35; transform: scale(0.92); }
-  50% { opacity: 0.72; transform: scale(1.08); }
-}
-
 @keyframes image-generation-dot-pulse {
   0%, 100% {
     opacity: var(--image-dot-dim-opacity);
-    transform: scale(0.72);
+    transform: translate3d(0, var(--image-dot-lift), 0) scale(0.76);
   }
-  48% {
+  50% {
     opacity: var(--image-dot-opacity);
-    transform: scale(1.28);
+    transform: translate3d(0, calc(0px - var(--image-dot-lift)), 0) scale(var(--image-dot-peak-scale));
   }
 }
 
 @keyframes image-generation-stage-in {
-  from { opacity: 0; filter: blur(2px); }
-  to { opacity: 1; filter: blur(0); }
+  from { opacity: 0; transform: translate3d(0, 3px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }
 
-.image-generation-card::before {
-  content: "";
-  position: absolute;
-  inset: 18% 9%;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--color-primary-400) 18%, transparent), transparent 58%);
-  filter: blur(28px);
-  animation: image-generation-atmosphere 5.2s ease-in-out infinite;
-}
-
-.dark .image-generation-card::before {
-  background:
-    radial-gradient(circle at 50% 45%, color-mix(in srgb, var(--color-primary-300) 13%, transparent), transparent 58%);
+@keyframes image-generation-dot-breathe {
+  0%, 100% { opacity: var(--image-dot-dim-opacity); }
+  50% { opacity: var(--image-dot-opacity); }
 }
 
 .image-generation-dot {
   opacity: var(--image-dot-opacity);
   animation-name: image-generation-dot-pulse;
-  animation-timing-function: ease-in-out;
+  animation-timing-function: cubic-bezier(0.77, 0, 0.175, 1);
   animation-iteration-count: infinite;
-  will-change: transform, opacity;
 }
 
 .image-generation-stage {
-  animation: image-generation-stage-in 240ms ease-out both;
+  animation: image-generation-stage-in 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1059,10 +1042,14 @@ html.mains-web.dark #root {
     animation-play-state: paused;
   }
 
-  .image-generation-card::before,
-  .image-generation-dot,
+  .image-generation-dot {
+    animation-name: image-generation-dot-breathe;
+    animation-duration: 2.4s !important;
+    animation-delay: 0ms !important;
+  }
+
   .image-generation-stage {
-    animation: none;
+    animation: fade 120ms ease-out both;
   }
 
   .shine-text,

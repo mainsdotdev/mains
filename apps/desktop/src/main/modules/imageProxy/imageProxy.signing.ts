@@ -28,7 +28,7 @@ export function signLocalImagePath(absPath: string, ttlMs: number = DEFAULT_TTL_
 
 /**
  * Same HMAC scheme as {@link signLocalImagePath}, but for the `mains-localdoc://`
- * protocol that serves Office documents (.docx/.xlsx/.pptx) to the renderer.
+ * protocol that serves documents (.docx/.xlsx/.pptx/.pdf) to the renderer.
  * The signature payload is identical (`path|exp`) so {@link verifySignedPath}
  * validates URLs from both schemes without modification.
  */

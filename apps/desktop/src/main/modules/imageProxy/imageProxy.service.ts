@@ -13,7 +13,7 @@ const GITHUB_API_HOSTS = new Set(["api.github.com", "uploads.github.com"]);
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
 
-const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx"]);
+const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf"]);
 
 function expandTilde(p: string): string {
   if (p === "~") return os.homedir();
@@ -137,8 +137,8 @@ export const imageProxyService = {
 
   /**
    * Returns a signed `mains-localdoc://` URL the renderer can `fetch()` to get
-   * the raw bytes of an Office document. Mirrors {@link signLocalImageUrl} but
-   * with an Office-extension allowlist. The HMAC signature authorizes the path;
+   * the raw bytes of an Office document or PDF. Mirrors {@link signLocalImageUrl}
+   * but with a document-extension allowlist. The HMAC signature authorizes the path;
    * the protocol handler re-stats the file (symlink/size/mime guards).
    */
   signLocalDocumentUrl(rawPath: string, ttlMs?: number): string | null {

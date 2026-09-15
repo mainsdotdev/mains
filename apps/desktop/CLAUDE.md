@@ -278,7 +278,7 @@ Core tables:
 **Image Proxy** (`src/main/modules/imageProxy/`)
 - Custom protocol handler that fetches and serves remote images to the renderer (avoids CSP / mixed-content issues)
 - Pairs with `src/renderer/lib/proxied-image-src.ts` + `local-image-url.ts` and the `useLocalImageUrl` hook — use these instead of `<img src={remoteUrl}>`
-- Backs the in-app **document viewer** too (`documents:sign`): Office formats (`.docx/.xlsx/.pptx`) render from bytes behind a shadow root, markdown renders as React through the shared markdown components. `classifyDocType` (`renderer/lib/document-viewer.ts`) is the one table saying what the viewer can show
+- Backs the in-app **document viewer** too (`documents:sign`): Office formats (`.docx/.xlsx/.pptx`) render from bytes behind a shadow root, PDFs render page by page onto canvases via lazily loaded `pdfjs-dist` (`document-viewer/pdf-document.tsx`), markdown renders as React through the shared markdown components. `classifyDocType` (`renderer/lib/document-viewer.ts`) is the one table saying what the viewer can show
 - Also backs the `api.documents` namespace (`documents:sign`) for serving local document files
 
 **Stats Module** (`src/main/modules/stats/`) — Dashboard statistics and analytics (joins `workspace_diffs` via its own repo)

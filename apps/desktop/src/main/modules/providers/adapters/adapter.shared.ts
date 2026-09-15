@@ -178,11 +178,16 @@ export function safeJson(value: unknown): string {
 // File attachments
 // ─────────────────────────────────────────────────────────────
 
+/** Where a run's attachments are written: `<tmp>/mains-uploads/<runId>`. */
+export function attachmentUploadDir(runId: string): string {
+  return path.join(os.tmpdir(), "mains-uploads", runId);
+}
+
 export function saveAttachments(
   attachments: FileAttachment[],
   runId: string,
 ): { savedPaths: string[]; inlineTexts: string[] } {
-  const uploadDir = path.join(os.tmpdir(), "mains-uploads", runId);
+  const uploadDir = attachmentUploadDir(runId);
   fs.mkdirSync(uploadDir, { recursive: true });
 
   const savedPaths: string[] = [];
@@ -510,6 +515,8 @@ export async function emitUserPromptArtifact(
       brandColor?: string;
       scope?: string;
     }>;
+    /** The run the attachments were saved under — locates their on-disk copies. */
+    runId?: string;
   },
 ): Promise<void> {
   await onEvent({
@@ -523,6 +530,15 @@ export async function emitUserPromptArtifact(
           a.sourcePath && a.sourcePath.replace(/\\/g, "/").includes("/browser-captures/")
             ? path.basename(a.sourcePath)
             : undefined;
+        // Documents land in the run's upload dir (see `saveAttachments`) — except
+        // .txt, which is inlined into the prompt and never written — so the
+        // transcript can open the copy the agent read.
+        const uploadedPath =
+          options?.runId &&
+          a.type === "document" &&
+          path.extname(a.name).toLowerCase() !== ".txt"
+            ? path.join(attachmentUploadDir(options.runId), path.basename(a.name))
+            : undefined;
         return {
           name: a.name,
           type: a.type,
@@ -532,6 +548,7 @@ export async function emitUserPromptArtifact(
             : {}),
           ...(a.sourcePath ? { sourcePath: a.sourcePath } : {}),
           ...(captureName ? { captureName } : {}),
+          ...(uploadedPath ? { path: uploadedPath } : {}),
         };
       }),
       issues: options?.contextIssues,

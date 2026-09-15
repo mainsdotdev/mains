@@ -25,6 +25,7 @@ import { useWorkspaceRuns } from "./use-workspace-runs";
 import { useFileContentLoader } from "./use-file-content-loader";
 import { useTabHandlers } from "./use-tab-handlers";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
+import { collectionIdForVisibleRun } from "@/features/workspace/lib/run-collection-context";
 
 export function useWorkspacePage(providerId: string) {
   const dispatch = useAppDispatch();
@@ -175,9 +176,14 @@ export function useWorkspacePage(providerId: string) {
   }, [showTabs, activeTab, pendingRunId, routeRunId, dispatch]);
 
   useEffect(() => {
-    if (mode === "developer" || !activeRun) return;
-    dispatch(setSelectedCollectionId(activeRun.collectionId ?? null));
-  }, [mode, activeRun, dispatch]);
+    const visibleCollectionId = collectionIdForVisibleRun(
+      mode,
+      activeTab,
+      activeRun,
+    );
+    if (visibleCollectionId === undefined) return;
+    dispatch(setSelectedCollectionId(visibleCollectionId));
+  }, [mode, activeTab, activeRun, dispatch]);
 
   useFileContentLoader(selectedFile, currentWorkspace?.rootPath);
 

@@ -21,8 +21,11 @@ import {
 } from "@/features/workspace/hooks";
 import { CONTENT_COLUMN_GUTTER } from "@/features/workspace/lib/content-column";
 import { isFirstWorkspaceTabActive } from "@/features/workspace/lib/is-first-workspace-tab-active";
+import { projectForNewChat } from "@/features/workspace/lib/run-collection-context";
 import {
   useAbortRunMutation,
+  useGetAccountQuery,
+  useGetCollectionQuery,
   useGetProviderByIdQuery,
   useUpdateProviderMutation,
 } from "@/lib/redux/api";
@@ -31,6 +34,7 @@ import { useSetMainHeader } from "@/hooks/use-main-header";
 import { useWorkspaceRouteTopRounding } from "@/hooks/use-workspace-route-top-rounding";
 import { useBottomTerminal } from "@/hooks/use-bottom-terminal";
 import { useModeConfig } from "@/hooks/use-mode-config";
+import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import {
   isExitPlanApproval,
   respondToExitPlanApproval,
@@ -55,8 +59,26 @@ export function WorkspaceProviderPage({
     label: providerLabel,
   } = getProviderVariant(variant);
   const modeConfig = useModeConfig();
+  const selectedCollectionId = useAppSelector(
+    (state) => state.workspace.selectedCollectionId,
+  );
   const onboardingCompleted = useAppSelector(
     (state) => state.appSettings.onboardingCompleted,
+  );
+  const { data: account } = useGetAccountQuery();
+  const showProjectContext =
+    modeConfig.mode !== "developer" && selectedCollectionId !== null;
+  const { data: selectedCollection } = useGetCollectionQuery(
+    {
+      id: selectedCollectionId ?? "",
+      accountId: account?.id ?? "",
+    },
+    { skip: !account || !showProjectContext },
+  );
+  const newChatProject = projectForNewChat(
+    modeConfig.mode,
+    selectedCollectionId,
+    selectedCollection,
   );
   const ws = useWorkspacePage(providerId);
   const [customizeRequested, setCustomizeRequested] = useState(false);
@@ -282,6 +304,15 @@ export function WorkspaceProviderPage({
                   onUploadedFilesChange={ws.setUploadedFiles}
                   onStop={handleStop}
                   isNewRunTabActive={ws.showNewRunTab}
+                  newChatProjectName={newChatProject?.name}
+                  newChatProjectIcon={
+                    newChatProject ? (
+                      <ProjectIcon
+                        icon={newChatProject.icon}
+                        projectName={newChatProject.name}
+                      />
+                    ) : undefined
+                  }
                   layout="centered"
                 />
               </div>

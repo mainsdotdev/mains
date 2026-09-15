@@ -36,6 +36,7 @@ import {
 } from "@/features/workspace/components/unified-context-dropdown";
 import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
 import { ContextChips } from "./context-chips";
+import { ComposerAttachments } from "./composer-attachments";
 import { InputToolbar } from "./input-toolbar";
 import { ContextUsageRing } from "./context-usage-meter";
 import {
@@ -46,6 +47,7 @@ import { useContextUsage } from "../hooks/use-context-usage";
 import { useProviderModels } from "../hooks/use-provider-models";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { useGetProviderAccountInfoQuery } from "@/lib/redux/api";
+import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 
@@ -152,6 +154,10 @@ interface WorkspaceInputProps {
   onStop?: () => void;
   /** When true (e.g. new-run draft tab active), focus the prompt after layout. */
   isNewRunTabActive?: boolean;
+  /** Work/Chat project that will own the new conversation. */
+  newChatProjectName?: string;
+  /** Project glyph rendered as part of the empty placeholder. */
+  newChatProjectIcon?: React.ReactNode;
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
   layout?: "default" | "centered";
 }
@@ -174,6 +180,8 @@ export function WorkspaceInput({
   onUploadedFilesChange,
   onStop,
   isNewRunTabActive = false,
+  newChatProjectName,
+  newChatProjectIcon,
   layout = "default",
 }: WorkspaceInputProps) {
   const inputRef = useRef<RichInputFormHandle>(null);
@@ -291,14 +299,16 @@ export function WorkspaceInput({
     { visible: false, filter: "", trigger: "@", bucket: null },
   );
 
-  // Toolbar plugins picker: opens the "$" menu narrowed to plugins without a
-  // token in the text — the chip lands at the caret on select.
+  // The toolbar plugin picker is a Codex-only capability. Other providers may
+  // still expose skills through the context menu, but they do not show this button.
   const pluginSkills = useMemo(
     () =>
-      providerSkills.filter(
-        (skill) => skill.scope === "plugin" && skill.userInvokable !== false,
-      ),
-    [providerSkills],
+      activeProviderId === PROVIDER_IDS.codex
+        ? providerSkills.filter(
+            (skill) => skill.scope === "plugin" && skill.userInvokable !== false,
+          )
+        : [],
+    [activeProviderId, providerSkills],
   );
   const pluginsMenuOpen = unifiedMenu.visible && unifiedMenu.bucket === "plugins";
   const handleTogglePluginsMenu = useCallback(() => {
@@ -649,11 +659,32 @@ export function WorkspaceInput({
     [uploadedFiles, onUploadedFilesChange],
   );
 
+  const handleRemoveUploadedFile = useCallback(
+    (index: number) => {
+      const removed = uploadedFiles[index];
+      if (removed?.preview) URL.revokeObjectURL(removed.preview);
+      onUploadedFilesChange?.(uploadedFiles.filter((_, i) => i !== index));
+    },
+    [uploadedFiles, onUploadedFilesChange],
+  );
+
   const isMobile = useIsMobile();
   const inputPlaceholder = useMemo(() => {
     if (isFileDragOver) {
       return "Drop images or documents here";
     }
+    const withProjectContext = (hint: string) => {
+      if (!newChatProjectName) return hint;
+      const dash = hint.indexOf(" — ");
+      if (dash >= 0) {
+        return `${hint.slice(0, dash)} in ${newChatProjectName}${hint.slice(dash)}`;
+      }
+      const comma = hint.indexOf(", ");
+      if (comma >= 0) {
+        return `${hint.slice(0, comma)} in ${newChatProjectName} — ${hint.slice(comma + 2)}`;
+      }
+      return `${hint} in ${newChatProjectName}`;
+    };
     // Short, calm placeholder on mobile — the long hint wraps to 2–3 lines on a phone.
     const baseHint = isMobile
       ? "Do anything"
@@ -662,24 +693,37 @@ export function WorkspaceInput({
         : composerPlaceholder.initial;
 
     if (uploadedFiles.length === 0) {
-      return baseHint;
+      return withProjectContext(baseHint);
     }
 
     const hasImages = uploadedFiles.some((f) => f.type === "image");
     const hasDocs = uploadedFiles.some((f) => f.type === "document");
 
     if (hasImages && hasDocs) {
-      return "Ask about your attachments — drop more images or documents here";
+      return withProjectContext(
+        "Ask about your attachments — drop more images or documents here",
+      );
     }
     if (hasImages) {
-      return uploadedFiles.length === 1
-        ? "Ask about this image — drop more files here anytime"
-        : "Ask about these images — drop more files here anytime";
+      return withProjectContext(
+        uploadedFiles.length === 1
+          ? "Ask about this image — drop more files here anytime"
+          : "Ask about these images — drop more files here anytime",
+      );
     }
-    return uploadedFiles.length === 1
-      ? "Ask about this document — drop more files here anytime"
-      : "Ask about these documents — drop more files here anytime";
-  }, [isFileDragOver, uploadedFiles, canResume, isMobile, composerPlaceholder]);
+    return withProjectContext(
+      uploadedFiles.length === 1
+        ? "Ask about this document — drop more files here anytime"
+        : "Ask about these documents — drop more files here anytime",
+    );
+  }, [
+    isFileDragOver,
+    uploadedFiles,
+    canResume,
+    isMobile,
+    composerPlaceholder,
+    newChatProjectName,
+  ]);
 
   //Copilot related TODO:
   const authErrorMessage = (() => {
@@ -806,6 +850,10 @@ export function WorkspaceInput({
           </div>
         )}
         <ContextChips />
+        <ComposerAttachments
+          files={uploadedFiles}
+          onRemove={handleRemoveUploadedFile}
+        />
         <div className="relative">
           <RichInputForm
             ref={inputRef}
@@ -822,6 +870,7 @@ export function WorkspaceInput({
             fileChipMap={fileChipMap}
             codeChipMap={codeChipMap}
             placeholder={inputPlaceholder}
+            placeholderIcon={newChatProjectName ? newChatProjectIcon : undefined}
           />
           <UnifiedContextDropdown
             isOpen={unifiedMenu.visible}

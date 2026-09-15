@@ -93,7 +93,7 @@ export function Modal({
           className,
         )}
         style={{
-          animation: "wizardModalIn 250ms cubic-bezier(0.22, 1, 0.36, 1) both",
+          animation: "wizardModalIn 20ms cubic-bezier(0.22, 1, 0.36, 1) both",
         }}
       >
         <ModalTitleContext.Provider value={generatedTitleId}>

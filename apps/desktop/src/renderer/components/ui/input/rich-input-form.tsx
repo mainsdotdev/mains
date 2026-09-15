@@ -5,6 +5,7 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
@@ -76,6 +77,7 @@ interface RichInputFormProps {
   /** Fires whenever the caret moves or content changes; receives the serialized text from start to caret. */
   onCaretContextChange?: (textBeforeCaret: string) => void;
   placeholder?: string;
+  placeholderIcon?: ReactNode;
   /** Maps skill name → display data so `$<name>` tokens can be rebuilt as chips when query changes externally. */
   skillChipMap?: ReadonlyMap<string, RichSkillChipData>;
   /** Maps file path → display data so `@<path>` tokens can be rebuilt as chips when query changes externally. */
@@ -723,6 +725,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onCodeChipsChange,
       onCaretContextChange,
       placeholder,
+      placeholderIcon,
       skillChipMap,
       fileChipMap,
       codeChipMap,
@@ -954,9 +957,17 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           <Text
             as="div"
             tone="subtle"
-            className="pointer-events-none absolute left-5 top-4"
+            className={`pointer-events-none absolute left-5 top-4 flex items-start gap-1.5 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}
           >
-            {placeholder}
+            {placeholderIcon ? (
+              <span
+                className="mt-0.5 inline-flex size-3.75 shrink-0 items-center justify-center opacity-60"
+                aria-hidden
+              >
+                {placeholderIcon}
+              </span>
+            ) : null}
+            <span>{placeholder}</span>
           </Text>
         )}
         {showFocusHint && (

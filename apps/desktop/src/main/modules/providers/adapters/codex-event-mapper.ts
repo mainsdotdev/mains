@@ -581,14 +581,15 @@ export function createCodexEventMapper(
     }
   }
 
-  // Office document path scanning — mirror of the image scanner above. Surfaces
-  // generated .pptx/.docx/.xlsx files as artifact cards even when the agent only
-  // references them in prose. Reuses the same workspace allowlist + symlink guard.
-  function docTypeFromPath(p: string): "pptx" | "docx" | "xlsx" | null {
+  // Document path scanning — mirror of the image scanner above. Surfaces
+  // generated .pptx/.docx/.xlsx/.pdf files as artifact cards even when the agent
+  // only references them in prose. Reuses the same workspace allowlist + symlink guard.
+  function docTypeFromPath(p: string): "pptx" | "docx" | "xlsx" | "pdf" | null {
     const ext = path.extname(p).toLowerCase();
     if (ext === ".pptx") return "pptx";
     if (ext === ".docx") return "docx";
     if (ext === ".xlsx") return "xlsx";
+    if (ext === ".pdf") return "pdf";
     return null;
   }
 
@@ -677,7 +678,7 @@ export function createCodexEventMapper(
   // No spaces in the name portion so prose ("the report.docx") splits on the
   // word boundary and yields just "report.docx" rather than swallowing the
   // preceding word. (Paths with spaces are rare for generated docs.)
-  const DOC_NAME_SCAN_REGEX = /([~/]?[\w.\-/]*[\w-]\.(?:pptx|docx|xlsx))/gi;
+  const DOC_NAME_SCAN_REGEX = /([~/]?[\w.\-/]*[\w-]\.(?:pptx|docx|xlsx|pdf))/gi;
 
   function emitDocumentArtifactsFromText(
     events: WorkRunEvent[],

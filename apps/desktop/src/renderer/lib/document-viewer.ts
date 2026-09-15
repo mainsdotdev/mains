@@ -7,9 +7,10 @@ export type OfficeDocType = "docx" | "xlsx" | "pptx";
 /**
  * Everything the viewer can show. Office formats go through the render host;
  * text ones (`md`) are React all the way down, so they keep the app's theme
- * and typography instead of living behind a shadow boundary.
+ * and typography instead of living behind a shadow boundary. PDFs are drawn
+ * page by page onto canvases by pdf.js.
  */
-export type DocType = OfficeDocType | "md";
+export type DocType = OfficeDocType | "md" | "pdf";
 
 /** Renderer module key dispatched on by the render host. */
 export type RendererKey = OfficeDocType;
@@ -20,6 +21,7 @@ const EXT_TO_DOC_TYPE: Record<string, DocType> = {
   ".pptx": "pptx",
   ".md": "md",
   ".markdown": "md",
+  ".pdf": "pdf",
 };
 
 /**
@@ -42,6 +44,7 @@ export const DOC_VIEWER_LABELS: Record<DocType, string> = {
   xlsx: "Spreadsheet",
   pptx: "Presentation",
   md: "Markdown",
+  pdf: "PDF Document",
 };
 
 /** Text formats render as React, not as bytes through the shadow-DOM host. */

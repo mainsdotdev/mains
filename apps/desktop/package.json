@@ -136,6 +136,7 @@
     "motion": "^13.2.0",
     "nanoid": "^6.0.1",
     "node-pty": "^1.1.0",
+    "pdfjs-dist": "^5.7.284",
     "pptx-preview": "^1.0.7",
     "qrcode-generator": "^2.0.4",
     "react": "^19.2.8",
