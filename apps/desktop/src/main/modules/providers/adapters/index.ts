@@ -71,6 +71,10 @@ export type {
   HooksConfig,
   ConsumeRateLimitResetCreditParams,
   ConsumeRateLimitResetCreditOutcome,
+  ConnectorInfo,
+  ConnectorMcpServerInfo,
+  ConnectorOAuthStartResult,
+  ConnectorOverview,
 } from "../../../../shared/adapter.types";
 
 // Factory
@@ -94,6 +98,8 @@ export {
   uninstallPluginForProvider,
   setPluginEnabledForProvider,
   updatePluginForProvider,
+  listConnectorsForProvider,
+  startConnectorOAuthForProvider,
   getRateLimitsForProvider,
   consumeRateLimitResetCreditForProvider,
   setGoalForProvider,

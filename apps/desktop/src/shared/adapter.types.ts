@@ -697,6 +697,12 @@ export interface WorkRunAdapter {
    * Update an installed plugin to the latest version.
    */
   updatePlugin?(pluginId: string): Promise<void>;
+
+  /** List native Codex apps plus their MCP runtime/authentication state. */
+  listConnectors?(forceRefresh?: boolean): Promise<ConnectorOverview>;
+
+  /** Start or repeat OAuth for a configured connector MCP server. */
+  startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -813,6 +819,8 @@ export interface ProviderDriver {
   uninstallPlugin?(pluginId: string): Promise<void>;
   setPluginEnabled?(pluginId: string, enabled: boolean): Promise<void>;
   updatePlugin?(pluginId: string): Promise<void>;
+  listConnectors?(forceRefresh?: boolean): Promise<ConnectorOverview>;
+  startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
 
   // ── Thread goal controls (Codex `thread/goal/*`) ──
   /** Set/update the goal for a run's thread. Partial — omitted fields unchanged. */
@@ -1854,6 +1862,10 @@ export interface PluginAppSummary {
   category?: string;
   /** Remote logo URL resolved from the codex connector directory cache. */
   iconUrl?: string;
+  /** Runtime state from app/installed; absent when the CLI lacks that RPC. */
+  installed?: boolean;
+  runtimeEnabled?: boolean;
+  callable?: boolean;
 }
 
 export interface PluginDetail {
@@ -1864,8 +1876,80 @@ export interface PluginDetail {
   skills: PluginSkillSummary[];
   apps: PluginAppSummary[];
   mcpServers: string[];
+  /** Live status for mcpServers when the provider exposes runtime inventory. */
+  mcpServerStatuses?: ConnectorMcpServerInfo[];
   /** Marketplace-reported install count — only known for catalog-indexed plugins. */
   uniqueInstalls?: number | null;
   /** ISO timestamp of the plugin's last marketplace update, if known. */
   lastUpdated?: string | null;
+}
+
+export type ConnectorRuntimeStatus =
+  | "notStarted"
+  | "starting"
+  | "connected"
+  | "authenticationRequired"
+  | "failed"
+  | "cancelled"
+  | "disabled";
+
+export type ConnectorAuthStatus =
+  | "unknown"
+  | "unsupported"
+  | "notLoggedIn"
+  | "bearerToken"
+  | "oAuth";
+
+export interface ConnectorToolSummary {
+  name: string;
+  title?: string | null;
+  description: string;
+  isEnabled: boolean;
+  disabledReason?: string | null;
+  isReadOnly: boolean;
+}
+
+/** A native Codex app/connector merged with its committed runtime state. */
+export interface ConnectorInfo {
+  id: string;
+  name: string;
+  description?: string | null;
+  logoUrl?: string | null;
+  logoUrlDark?: string | null;
+  installUrl?: string | null;
+  distributionChannel?: string | null;
+  category?: string | null;
+  developer?: string | null;
+  pluginDisplayNames: string[];
+  isAccessible: boolean;
+  isEnabled: boolean;
+  installed: boolean;
+  runtimeName?: string | null;
+  runtimeEnabled?: boolean;
+  callable: boolean;
+  tools: ConnectorToolSummary[];
+}
+
+/** Live connection and authentication state for one Codex MCP server. */
+export interface ConnectorMcpServerInfo {
+  name: string;
+  runtimeStatus: ConnectorRuntimeStatus | null;
+  authStatus: ConnectorAuthStatus;
+  pluginId?: string | null;
+  title?: string | null;
+  description?: string | null;
+  websiteUrl?: string | null;
+  toolCount: number;
+  toolsError?: string | null;
+}
+
+export interface ConnectorOverview {
+  /** False when the installed Codex CLI predates the native app RPC surface. */
+  supported: boolean;
+  apps: ConnectorInfo[];
+  mcpServers: ConnectorMcpServerInfo[];
+}
+
+export interface ConnectorOAuthStartResult {
+  authorizationUrl: string;
 }

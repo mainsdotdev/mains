@@ -21,6 +21,8 @@ export interface ModalProps {
   className?: string;
   /** "dim" matches Alert/WizardModal; "media" darkens + blurs for image/screenshot previews. */
   backdrop?: "dim" | "media";
+  /** "panel" is the glass card; "bare" drops the fill, rim, radius, and shadow so media content floats on the backdrop. */
+  surface?: "panel" | "bare";
   /** Name the dialog when its content does not use ModalHeader. */
   "aria-label"?: string;
   /** Link the dialog to a visible title when its content does not use ModalHeader. */
@@ -45,6 +47,7 @@ export function Modal({
   children,
   className,
   backdrop = "dim",
+  surface = "panel",
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
@@ -71,7 +74,7 @@ export function Modal({
         className={cn(
           "absolute inset-0",
           backdrop === "media"
-            ? "bg-black/70 backdrop-blur-sm"
+            ? "bg-black/80 "
             : "dark:bg-primary-950/60 bg-primary/80",
         )}
         role="presentation"
@@ -89,7 +92,9 @@ export function Modal({
         tabIndex={-1}
         onKeyDown={handleKeyDown}
         className={cn(
-          "relative flex flex-col glass-surface rounded-xl shadow-2xl overflow-hidden max-h-[92vh] focus:outline-none",
+          "relative flex flex-col max-h-[92vh] focus:outline-none",
+          surface === "panel" &&
+            "glass-surface rounded-xl shadow-2xl overflow-hidden",
           className,
         )}
         style={{

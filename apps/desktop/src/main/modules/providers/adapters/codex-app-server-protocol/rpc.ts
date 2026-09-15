@@ -1,5 +1,11 @@
 import type { InitializeParams } from "./generated/InitializeParams";
 import type { InitializeResponse } from "./generated/InitializeResponse";
+import type { AppsInstalledParams } from "./generated/v2/AppsInstalledParams";
+import type { AppsInstalledResponse } from "./generated/v2/AppsInstalledResponse";
+import type { AppsListParams } from "./generated/v2/AppsListParams";
+import type { AppsListResponse } from "./generated/v2/AppsListResponse";
+import type { AppsReadParams } from "./generated/v2/AppsReadParams";
+import type { AppsReadResponse } from "./generated/v2/AppsReadResponse";
 import type { ConfigValueWriteParams } from "./generated/v2/ConfigValueWriteParams";
 import type { ConfigWriteResponse } from "./generated/v2/ConfigWriteResponse";
 import type { ConsumeAccountRateLimitResetCreditParams } from "./generated/v2/ConsumeAccountRateLimitResetCreditParams";
@@ -9,6 +15,10 @@ import type { ExperimentalFeatureListResponse } from "./generated/v2/Experimenta
 import type { GetAccountParams } from "./generated/v2/GetAccountParams";
 import type { GetAccountRateLimitsResponse } from "./generated/v2/GetAccountRateLimitsResponse";
 import type { GetAccountResponse } from "./generated/v2/GetAccountResponse";
+import type { ListMcpServerStatusParams } from "./generated/v2/ListMcpServerStatusParams";
+import type { ListMcpServerStatusResponse } from "./generated/v2/ListMcpServerStatusResponse";
+import type { McpServerOauthLoginParams } from "./generated/v2/McpServerOauthLoginParams";
+import type { McpServerOauthLoginResponse } from "./generated/v2/McpServerOauthLoginResponse";
 import type { ModelListParams } from "./generated/v2/ModelListParams";
 import type { ModelListResponse } from "./generated/v2/ModelListResponse";
 import type { PluginInstallParams } from "./generated/v2/PluginInstallParams";
@@ -66,6 +76,9 @@ interface RpcMethod<Params, Result> {
  */
 export interface CodexAppServerRpc {
   initialize: RpcMethod<InitializeParams, InitializeResponse>;
+  "app/installed": RpcMethod<AppsInstalledParams, AppsInstalledResponse>;
+  "app/list": RpcMethod<AppsListParams, AppsListResponse>;
+  "app/read": RpcMethod<AppsReadParams, AppsReadResponse>;
   "account/read": RpcMethod<GetAccountParams, GetAccountResponse>;
   "account/rateLimits/read": RpcMethod<
     undefined,
@@ -83,6 +96,14 @@ export interface CodexAppServerRpc {
 
   "config/value/write": RpcMethod<ConfigValueWriteParams, ConfigWriteResponse>;
   "model/list": RpcMethod<ModelListParams, ModelListResponse>;
+  "mcpServer/oauth/login": RpcMethod<
+    McpServerOauthLoginParams,
+    McpServerOauthLoginResponse
+  >;
+  "mcpServerStatus/list": RpcMethod<
+    ListMcpServerStatusParams,
+    ListMcpServerStatusResponse
+  >;
   "plugin/install": RpcMethod<PluginInstallParams, PluginInstallResponse>;
   "plugin/installed": RpcMethod<PluginInstalledParams, PluginInstalledResponse>;
   "plugin/list": RpcMethod<PluginListParams, PluginListResponse>;

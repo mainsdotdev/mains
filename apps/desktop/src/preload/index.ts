@@ -325,6 +325,16 @@ const api = {
     updateCli: (id: string) => ipcRenderer.invoke(CHANNELS.providers.updateCli, id),
     getPlugins: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getPlugins, id),
     getInstalledPlugins: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getInstalledPlugins, id),
+    getConnectors: (id: string, forceRefresh?: boolean) =>
+      ipcRenderer.invoke(CHANNELS.providers.getConnectors, id, forceRefresh),
+    startConnectorOAuth: (id: string, serverName: string) =>
+      ipcRenderer.invoke(CHANNELS.providers.startConnectorOAuth, id, serverName),
+    onConnectorsUpdated: (callback: (data: { providerId: string }) => void) => {
+      const listener = (_: any, data: { providerId: string }) => callback(data);
+      ipcRenderer.on(CHANNELS.providers.connectorsUpdated, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.providers.connectorsUpdated, listener);
+    },
     readPlugin: (id: string, pluginName: string, marketplacePath: string) => ipcRenderer.invoke(CHANNELS.providers.readPlugin, id, pluginName, marketplacePath),
     installPlugin: (id: string, pluginId: string, scope?: string) => ipcRenderer.invoke(CHANNELS.providers.installPlugin, id, pluginId, scope),
     uninstallPlugin: (id: string, pluginId: string) => ipcRenderer.invoke(CHANNELS.providers.uninstallPlugin, id, pluginId),

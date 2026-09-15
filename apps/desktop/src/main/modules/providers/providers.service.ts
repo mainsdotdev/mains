@@ -27,6 +27,8 @@ import {
   uninstallPluginForProvider,
   setPluginEnabledForProvider,
   updatePluginForProvider,
+  listConnectorsForProvider,
+  startConnectorOAuthForProvider,
   getRateLimitsForProvider,
   consumeRateLimitResetCreditForProvider,
   setGoalForProvider,
@@ -40,6 +42,8 @@ import {
   type PluginDetail,
   type AccountInfo,
   type CliUpdateResult,
+  type ConnectorOAuthStartResult,
+  type ConnectorOverview,
 } from "./adapters";
 import type { PluginScope } from "../../../shared/adapter.types";
 import type {
@@ -310,6 +314,22 @@ export const providersService = {
   async updatePlugin(id: string, pluginId: string): Promise<void> {
     const provider = await requireEnabledProvider(id);
     await updatePluginForProvider(provider, pluginId);
+  },
+
+  async getConnectors(
+    id: string,
+    forceRefresh = false,
+  ): Promise<ConnectorOverview> {
+    const provider = await requireEnabledProvider(id);
+    return listConnectorsForProvider(provider, forceRefresh);
+  },
+
+  async startConnectorOAuth(
+    id: string,
+    serverName: string,
+  ): Promise<ConnectorOAuthStartResult> {
+    const provider = await requireEnabledProvider(id);
+    return startConnectorOAuthForProvider(provider, serverName);
   },
 
   async detectInstalled(): Promise<DetectedClisResponse> {

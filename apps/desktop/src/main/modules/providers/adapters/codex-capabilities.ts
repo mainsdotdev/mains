@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type {
   AccountInfo,
+  ConnectorInfo,
+  ConnectorOverview,
   ConsumeRateLimitResetCreditOutcome,
   ConsumeRateLimitResetCreditParams,
   ModelInfo,
@@ -13,6 +15,9 @@ import type {
   RateLimitInfo,
   SkillInfo,
 } from "../../../../shared/adapter.types";
+import {
+  filterCodexModelsForUsage,
+} from "../../../../shared/codex-model-availability";
 import { getPluginInstallBlockReason } from "../../../../shared/plugin-install-availability";
 import {
   createLogger,
@@ -48,6 +53,11 @@ interface RemotePluginReference {
 
 const PLUGIN_CATALOG_TTL_MS = 15 * 60 * 1000;
 const INSTALLED_PLUGINS_TTL_MS = 5 * 60 * 1000;
+
+function isUnsupportedRpc(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /method not found|unknown method|not supported/i.test(message);
+}
 
 let appDirectoryMemo: {
   mtimeMs: number;
@@ -826,7 +836,7 @@ export function createCodexCapabilities(
         return [];
       }
 
-      return result.data
+      const models = result.data
         .filter((model) => !model.hidden)
         .map((model): ModelInfo => {
           const effortLevels = model.supportedReasoningEfforts.map(
@@ -872,6 +882,7 @@ export function createCodexCapabilities(
             serviceTiers,
           };
         });
+      return filterCodexModelsForUsage(models, await getRateLimits());
     } catch (error) {
       const message =
         error instanceof Error ? error.message : String(error);
@@ -1046,6 +1057,98 @@ export function createCodexCapabilities(
     return request;
   }
 
+  /**
+   * `plugin/read` describes bundled apps and MCP servers, while their live
+   * enabled/authentication state lives on the app and MCP runtime RPCs. Merge
+   * the two here so plugin detail is the single connection-management surface.
+   */
+  async function enrichPluginConnectorState(
+    server: CodexAppServer,
+    detail: PluginDetail,
+  ): Promise<PluginDetail> {
+    let apps = detail.apps;
+    if (apps.length > 0) {
+      try {
+        const result = await server.sendRequest("app/installed", {
+          forceRefresh: false,
+        });
+        const runtimeById = new Map(
+          result.apps.map((app) => [app.id, app] as const),
+        );
+        apps = apps.map((app) => {
+          const runtime = runtimeById.get(app.id);
+          return runtime
+            ? {
+                ...app,
+                installed: true,
+                runtimeEnabled: runtime.enabled,
+                callable: runtime.callable,
+              }
+            : {
+                ...app,
+                installed: false,
+                callable: false,
+              };
+        });
+      } catch (error) {
+        if (!isUnsupportedRpc(error)) {
+          logger.warn("Failed to read plugin app runtime state:", error);
+        }
+      }
+    }
+
+    let mcpServerStatuses: NonNullable<PluginDetail["mcpServerStatuses"]> =
+      detail.mcpServers.map((name) => ({
+        name,
+        runtimeStatus: null,
+        authStatus: "unknown",
+        toolCount: 0,
+      }));
+    if (detail.mcpServers.length > 0) {
+      const wantedNames = new Set(detail.mcpServers);
+      const runtimeByName = new Map<
+        string,
+        NonNullable<PluginDetail["mcpServerStatuses"]>[number]
+      >();
+      try {
+        let cursor: string | null = null;
+        do {
+          const page = await server.sendRequest("mcpServerStatus/list", {
+            cursor,
+            limit: 100,
+            detail: "toolsAndAuthOnly",
+          });
+          for (const status of page.data) {
+            if (!wantedNames.has(status.name)) continue;
+            runtimeByName.set(status.name, {
+              name: status.name,
+              runtimeStatus: status.runtimeStatus,
+              authStatus: status.authStatus,
+              pluginId: status.pluginId,
+              title: status.serverInfo?.title ?? status.serverInfo?.name,
+              description: status.serverInfo?.description,
+              websiteUrl: status.serverInfo?.websiteUrl,
+              toolCount: Object.values(status.tools ?? {}).filter(Boolean)
+                .length,
+              toolsError: status.toolsError,
+            });
+          }
+          cursor = page.nextCursor;
+        } while (cursor && runtimeByName.size < wantedNames.size);
+
+        mcpServerStatuses = mcpServerStatuses.map(
+          (mcp) => runtimeByName.get(mcp.name) ?? mcp,
+        );
+      } catch (error) {
+        if (!isUnsupportedRpc(error)) {
+          logger.warn("Failed to read plugin MCP runtime state:", error);
+        }
+      }
+    }
+
+    return { ...detail, apps, mcpServerStatuses };
+  }
+
   async function readPlugin(
     pluginName: string,
     marketplacePath: string,
@@ -1072,9 +1175,10 @@ export function createCodexCapabilities(
       params,
       30000,
     );
-    return mapPluginDetail(
+    const detail = mapPluginDetail(
       result.plugin as unknown as Record<string, unknown>,
     );
+    return enrichPluginConnectorState(server, detail);
   }
 
   async function installPlugin(
@@ -1198,6 +1302,187 @@ export function createCodexCapabilities(
     );
   }
 
+  async function listConnectors(
+    forceRefresh = false,
+  ): Promise<ConnectorOverview> {
+    const server = await options.ensureServer();
+    const catalog: Array<Record<string, unknown>> = [];
+
+    try {
+      let cursor: string | null = null;
+      do {
+        const page = await server.sendRequest("app/list", {
+          cursor,
+          limit: 100,
+          forceRefetch: forceRefresh,
+        });
+        catalog.push(
+          ...(page.data as unknown as Array<Record<string, unknown>>),
+        );
+        cursor = page.nextCursor;
+      } while (cursor);
+    } catch (error) {
+      if (isUnsupportedRpc(error)) {
+        logger.warn(
+          "Native connector management is unavailable in this Codex version",
+        );
+        return { supported: false, apps: [], mcpServers: [] };
+      }
+      throw error;
+    }
+
+    const installedById = new Map<
+      string,
+      {
+        runtimeName: string | null;
+        enabled: boolean;
+        callable: boolean;
+      }
+    >();
+    try {
+      const result = await server.sendRequest("app/installed", {
+        forceRefresh,
+      });
+      for (const app of result.apps) installedById.set(app.id, app);
+    } catch (error) {
+      if (!isUnsupportedRpc(error)) {
+        logger.warn("Failed to read installed connectors:", error);
+      }
+    }
+
+    const detailsById = new Map<string, Record<string, unknown>>();
+    try {
+      for (let index = 0; index < catalog.length; index += 100) {
+        const appIds = catalog
+          .slice(index, index + 100)
+          .map((app) => app.id as string)
+          .filter(Boolean);
+        if (appIds.length === 0) continue;
+        const result = await server.sendRequest("app/read", {
+          appIds,
+          includeTools: true,
+        });
+        for (const app of result.apps) {
+          detailsById.set(
+            app.id,
+            app as unknown as Record<string, unknown>,
+          );
+        }
+      }
+    } catch (error) {
+      if (!isUnsupportedRpc(error)) {
+        logger.warn("Failed to read connector details:", error);
+      }
+    }
+
+    const apps = catalog
+      .map((app): ConnectorInfo => {
+        const id = app.id as string;
+        const detail = detailsById.get(id);
+        const installed = installedById.get(id);
+        const branding = app.branding as
+          | Record<string, unknown>
+          | null
+          | undefined;
+        const rawTools = detail?.toolSummaries;
+        return {
+          id,
+          name:
+            (detail?.name as string | undefined) ??
+            (app.name as string | undefined) ??
+            id,
+          description:
+            (detail?.description as string | null | undefined) ??
+            (app.description as string | null | undefined),
+          logoUrl:
+            (detail?.iconUrl as string | null | undefined) ??
+            (app.logoUrl as string | null | undefined),
+          logoUrlDark:
+            (detail?.iconUrlDark as string | null | undefined) ??
+            (app.logoUrlDark as string | null | undefined),
+          installUrl:
+            (detail?.installUrl as string | null | undefined) ??
+            (app.installUrl as string | null | undefined),
+          distributionChannel:
+            (detail?.distributionChannel as string | null | undefined) ??
+            (app.distributionChannel as string | null | undefined),
+          category: branding?.category as string | null | undefined,
+          developer: branding?.developer as string | null | undefined,
+          pluginDisplayNames:
+            (detail?.pluginDisplayNames as string[] | undefined) ??
+            (app.pluginDisplayNames as string[] | undefined) ??
+            [],
+          isAccessible: Boolean(app.isAccessible),
+          isEnabled: Boolean(app.isEnabled),
+          installed: Boolean(installed),
+          runtimeName: installed?.runtimeName,
+          runtimeEnabled: installed?.enabled,
+          callable: installed?.callable ?? false,
+          tools: Array.isArray(rawTools)
+            ? rawTools.map((rawTool) => {
+                const tool = rawTool as Record<string, unknown>;
+                return {
+                  name: tool.name as string,
+                  title: tool.title as string | null | undefined,
+                  description: (tool.description as string) ?? "",
+                  isEnabled: Boolean(tool.isEnabled),
+                  disabledReason: tool.disabledReason as
+                    | string
+                    | null
+                    | undefined,
+                  isReadOnly: Boolean(tool.isReadOnly),
+                };
+              })
+            : [],
+        };
+      })
+      .sort((left, right) => {
+        if (left.callable !== right.callable) return left.callable ? -1 : 1;
+        if (left.installed !== right.installed) return left.installed ? -1 : 1;
+        return left.name.localeCompare(right.name);
+      });
+
+    const mcpServers: ConnectorOverview["mcpServers"] = [];
+    try {
+      let cursor: string | null = null;
+      do {
+        const page = await server.sendRequest("mcpServerStatus/list", {
+          cursor,
+          limit: 100,
+          detail: "toolsAndAuthOnly",
+        });
+        for (const status of page.data) {
+          mcpServers.push({
+            name: status.name,
+            runtimeStatus: status.runtimeStatus,
+            authStatus: status.authStatus,
+            pluginId: status.pluginId,
+            title: status.serverInfo?.title ?? status.serverInfo?.name,
+            description: status.serverInfo?.description,
+            websiteUrl: status.serverInfo?.websiteUrl,
+            toolCount: Object.values(status.tools).filter(Boolean).length,
+            toolsError: status.toolsError,
+          });
+        }
+        cursor = page.nextCursor;
+      } while (cursor);
+    } catch (error) {
+      if (!isUnsupportedRpc(error)) {
+        logger.warn("Failed to read MCP server status:", error);
+      }
+    }
+
+    mcpServers.sort((left, right) => left.name.localeCompare(right.name));
+    return { supported: true, apps, mcpServers };
+  }
+
+  async function startConnectorOAuth(serverName: string) {
+    const server = await options.ensureServer();
+    return server.sendRequest("mcpServer/oauth/login", {
+      name: serverName,
+    });
+  }
+
   return {
     listModels,
     getAccountInfo,
@@ -1210,6 +1495,8 @@ export function createCodexCapabilities(
     installPlugin,
     uninstallPlugin,
     setPluginEnabled,
+    listConnectors,
+    startConnectorOAuth,
     onServerClosed(): void {
       pluginCapabilityPromise = null;
     },

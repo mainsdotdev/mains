@@ -7,6 +7,8 @@ import type {
 import type {
   ConsumeRateLimitResetCreditOutcome,
   ConsumeRateLimitResetCreditParams,
+  ConnectorMcpServerInfo,
+  ConnectorOAuthStartResult,
   RateLimitInfo,
 } from "../../../../shared/adapter.types";
 
@@ -17,6 +19,10 @@ export type {
   SpendControlLimitInfo,
   ConsumeRateLimitResetCreditOutcome,
   ConsumeRateLimitResetCreditParams,
+  ConnectorInfo,
+  ConnectorMcpServerInfo,
+  ConnectorOAuthStartResult,
+  ConnectorOverview,
 } from "../../../../shared/adapter.types";
 
 /** A Codex thread goal (mirrors `GoalInfo` in shared/adapter.types). */
@@ -219,6 +225,10 @@ export interface PluginAppSummary {
   category?: string;
   /** Remote logo URL resolved from the codex connector directory cache. */
   iconUrl?: string;
+  /** Runtime state from app/installed; absent when the CLI lacks that RPC. */
+  installed?: boolean;
+  runtimeEnabled?: boolean;
+  callable?: boolean;
 }
 
 export interface PluginDetailResponse {
@@ -229,6 +239,8 @@ export interface PluginDetailResponse {
   skills: PluginSkillSummary[];
   apps: PluginAppSummary[];
   mcpServers: string[];
+  /** Live status for mcpServers when the provider exposes runtime inventory. */
+  mcpServerStatuses?: ConnectorMcpServerInfo[];
   /** Marketplace-reported install count — only known for catalog-indexed plugins. */
   uniqueInstalls?: number | null;
   /** ISO timestamp of the plugin's last marketplace update, if known. */
@@ -436,6 +448,16 @@ export const providersApi = baseApi.injectEndpoints({
       keepUnusedDataFor: 300,
     }),
 
+    startProviderConnectorOAuth: builder.mutation<
+      ConnectorOAuthStartResult,
+      { providerId: string; serverName: string }
+    >({
+      query: ({ providerId, serverName }) => ({
+        handler: CHANNELS.providers.startConnectorOAuth,
+        args: [providerId, serverName],
+      }),
+    }),
+
     readProviderPlugin: builder.query<
       PluginDetailResponse,
       { providerId: string; pluginName: string; marketplacePath: string }
@@ -520,6 +542,7 @@ export const providersApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_result, _error, { providerId }) => [
         { type: "ProviderRateLimits", id: providerId },
+        { type: "ProviderModels", id: providerId },
       ],
     }),
 
@@ -579,6 +602,7 @@ export const {
   useUpdateProviderCliMutation,
   useGetProviderPluginsQuery,
   useGetProviderInstalledPluginsQuery,
+  useStartProviderConnectorOAuthMutation,
   useReadProviderPluginQuery,
   useInstallProviderPluginMutation,
   useUninstallProviderPluginMutation,

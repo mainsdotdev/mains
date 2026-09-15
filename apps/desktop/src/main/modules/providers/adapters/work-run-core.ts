@@ -262,6 +262,10 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.setPluginEnabled = driver.setPluginEnabled.bind(driver);
   if (driver.updatePlugin)
     adapter.updatePlugin = driver.updatePlugin.bind(driver);
+  if (driver.listConnectors)
+    adapter.listConnectors = driver.listConnectors.bind(driver);
+  if (driver.startConnectorOAuth)
+    adapter.startConnectorOAuth = driver.startConnectorOAuth.bind(driver);
 
   return adapter;
 }

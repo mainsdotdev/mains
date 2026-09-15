@@ -38,6 +38,9 @@ import type {
   RateLimitInfo,
   WorkRunContextItem,
 } from "../../../../shared/adapter.types";
+import {
+  getCodexReserveModelSlugs,
+} from "../../../../shared/codex-model-availability";
 import { runsRepo } from "../../runs/runs.repo";
 import { logWorkspaceActivity } from "../../workspace";
 // Direct repo import — a known driver egress-seam leak (see CONTEXT.md
@@ -432,6 +435,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       await runsRepo.updateRun(runId, { sessionId: threadId });
     },
     establishGoal: maybeSetThreadGoal,
+    resolveModel: resolveRunModel,
     resolveDefaultModel: catalogDefaultModel,
     logger: codexLogger,
   });
@@ -443,6 +447,36 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     getCliHealth: () => getCodexCliHealth(),
     logger: codexLogger,
   });
+
+  /**
+   * A persisted renderer selection can outlive the ordinary usage allowance.
+   *
+   * Codex 0.154 exposes the Reserve bucket and model slug to app-server
+   * clients, but it does not expose the TUI's Reserve accept/recovery action.
+   * Starting `gpt-5.6-luna` directly therefore still consumes the exhausted
+   * ordinary bucket and fails with a generic usage-limit error. Stop before
+   * creating a misleading thread until app-server gains that recovery verb.
+   *
+   * Upstream: https://github.com/openai/codex/issues/45132
+   */
+  async function resolveRunModel(
+    requestedModel: string | null | undefined,
+  ): Promise<string | undefined> {
+    const preferredModel = requestedModel || config.defaultModel || undefined;
+    await ensureServer();
+    const rateLimits = await capabilities.getRateLimits();
+    if (rateLimits?.ordinaryUsageAllowed === false) {
+      if (getCodexReserveModelSlugs(rateLimits).length > 0) {
+        throw new Error(
+          "Luna Reserve is available on this account, but Codex App Server 0.154.0 cannot start Reserve turns yet. Continue in the Codex app or wait for the normal usage limit to reset.",
+        );
+      }
+      throw new Error(
+        "Your Codex usage limit has been reached. Wait for the normal usage limit to reset.",
+      );
+    }
+    return preferredModel ?? catalogDefaultModel();
+  }
 
   /**
    * The catalog's own default — what the other drivers reach through
@@ -703,6 +737,21 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           | Record<string, unknown>
           | undefined;
         broadcastRateLimits(PROVIDER_IDS.codex, mapRateLimitSnapshot(rl));
+        // `model/list` is a catalog. The Codex adapter combines it with the
+        // account snapshot, so a usage change also changes the effective list.
+        emit(CHANNELS.providers.modelsUpdated, {
+          providerId: PROVIDER_IDS.codex,
+        });
+      }
+
+      if (
+        method === "app/list/updated" ||
+        method === "mcpServer/oauthLogin/completed" ||
+        method === "mcpServer/startupStatus/updated"
+      ) {
+        emit(CHANNELS.providers.connectorsUpdated, {
+          providerId: PROVIDER_IDS.codex,
+        });
       }
 
       // Live goal updates — push to the renderer so the goal card above the
@@ -1219,5 +1268,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     installPlugin: capabilities.installPlugin,
     uninstallPlugin: capabilities.uninstallPlugin,
     setPluginEnabled: capabilities.setPluginEnabled,
+    listConnectors: capabilities.listConnectors,
+    startConnectorOAuth: capabilities.startConnectorOAuth,
   };
 }

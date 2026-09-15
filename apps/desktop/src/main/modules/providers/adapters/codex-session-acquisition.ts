@@ -80,6 +80,13 @@ interface CodexSessionAcquisitionOptions {
    * ("missing field `model`"), so this is what keeps a continued run alive.
    */
   resolveDefaultModel?: () => Promise<string | undefined>;
+  /**
+   * Resolve a requested/persisted model against live account availability.
+   * Codex uses this to move exhausted ordinary usage onto a reserve model.
+   */
+  resolveModel?: (
+    requestedModel: string | null | undefined,
+  ) => Promise<string | undefined>;
   establishGoal: (
     server: CodexAppServer,
     threadId: string | undefined,
@@ -396,6 +403,10 @@ export function createCodexSessionAcquisition(
   async function effectiveModel(
     requestedModel: string | null | undefined,
   ): Promise<string | undefined> {
+    if (options.resolveModel) {
+      const resolved = await options.resolveModel(requestedModel);
+      if (resolved) return resolved;
+    }
     return (
       requestedModel ||
       config.defaultModel ||

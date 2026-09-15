@@ -20,6 +20,8 @@ import type {
   AccountInfo,
   ConsumeRateLimitResetCreditParams,
   ConsumeRateLimitResetCreditOutcome,
+  ConnectorOAuthStartResult,
+  ConnectorOverview,
 } from "../../../../shared/adapter.types";
 import { createClaudeDriver } from "./claude.driver";
 import { createCodexDriver } from "./codex.driver";
@@ -454,6 +456,30 @@ export async function updatePluginForProvider(provider: ProviderResponse, plugin
     throw new Error(`Provider "${provider.displayName}" does not support updating plugins.`);
   }
   return adapter.updatePlugin(pluginId);
+}
+
+export async function listConnectorsForProvider(
+  provider: ProviderResponse,
+  forceRefresh = false,
+): Promise<ConnectorOverview> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.listConnectors) {
+    return { supported: false, apps: [], mcpServers: [] };
+  }
+  return adapter.listConnectors(forceRefresh);
+}
+
+export async function startConnectorOAuthForProvider(
+  provider: ProviderResponse,
+  serverName: string,
+): Promise<ConnectorOAuthStartResult> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.startConnectorOAuth) {
+    throw new Error(
+      `Provider "${provider.displayName}" does not support connector OAuth.`,
+    );
+  }
+  return adapter.startConnectorOAuth(serverName);
 }
 
 export async function getRateLimitsForProvider(

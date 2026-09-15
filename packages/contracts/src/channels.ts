@@ -197,6 +197,10 @@ export const CHANNELS = {
     modelsUpdated: "providers:modelsUpdated",
     getPlugins: "providers:getPlugins",
     getInstalledPlugins: "providers:getInstalledPlugins",
+    getConnectors: "providers:getConnectors",
+    startConnectorOAuth: "providers:startConnectorOAuth",
+    /** Push: native connector catalog, runtime, or OAuth state changed. */
+    connectorsUpdated: "providers:connectorsUpdated",
     getRateLimits: "providers:getRateLimits",
     consumeRateLimitResetCredit: "providers:consumeRateLimitResetCredit",
     /** Push: emitted when the provider streams a fresh rate-limit snapshot mid-run. */
