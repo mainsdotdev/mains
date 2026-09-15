@@ -195,7 +195,7 @@ describe("codex.driver / app-server protocol", () => {
   });
 
   it("rejects Codex CLI versions older than the supported protocol", async () => {
-    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.145.0";
+    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.152.9";
 
     const driver = createCodexDriver({
       binary: fixtureBinary,
@@ -206,12 +206,12 @@ describe("codex.driver / app-server protocol", () => {
     await expect(
       driver.createSession(request("run-old-codex")),
     ).rejects.toThrow(
-      "Codex CLI 0.145.0 is not supported. Mains requires 0.147.0 or newer.",
+      "Codex CLI 0.152.9 is not supported. Mains requires 0.153.0 or newer.",
     );
   });
 
   it("reports an unsupported Codex CLI in account health metadata", async () => {
-    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.145.0";
+    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.152.9";
 
     const driver = createCodexDriver({
       binary: fixtureBinary,
@@ -222,10 +222,10 @@ describe("codex.driver / app-server protocol", () => {
     const accountInfo = await driver.getAccountInfo?.();
 
     expect(accountInfo?.cli).toMatchObject({
-      version: "0.145.0",
+      version: "0.152.9",
       outdated: true,
       compatibility: "unsupported",
-      minimumVersion: "0.147.0",
+      minimumVersion: "0.153.0",
       testedProtocolVersion: CODEX_APP_SERVER_PROTOCOL_VERSION,
     });
   });
@@ -484,7 +484,7 @@ describe("codex.driver / app-server protocol", () => {
     });
   });
 
-  it("follows the reviewThreadId returned for a detached review", async () => {
+  it("runs a review inline on its dedicated review thread", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
@@ -505,7 +505,6 @@ describe("codex.driver / app-server protocol", () => {
         cwd: process.cwd(),
       },
       target: { type: "uncommittedChanges" },
-      delivery: "detached",
       model: "gpt-5.4",
     });
     expect(acquired).toBeDefined();
@@ -532,15 +531,16 @@ describe("codex.driver / app-server protocol", () => {
       (message) => message.method === "review/start",
     );
     expect(reviewStart?.params).not.toHaveProperty("model");
+    expect(reviewStart?.params).toMatchObject({
+      threadId: "thread-1",
+      delivery: "inline",
+    });
     const unsubscribedThreadIds = readProtocolLog(logPath)
       .filter((message) => message.method === "thread/unsubscribe")
       .map((message) => (
         message.params as { threadId?: string } | undefined
       )?.threadId);
-    expect(unsubscribedThreadIds).toEqual([
-      "thread-1",
-      "thread-1-review",
-    ]);
+    expect(unsubscribedThreadIds).toEqual(["thread-1"]);
   });
 
   it("lets the run's mode-resolved snapshot set the thread personality", async () => {

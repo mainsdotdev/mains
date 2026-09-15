@@ -441,7 +441,6 @@ export interface ReviewRunPayload {
   spaceId?: string;
   providerId: string;
   target: ReviewTarget;
-  delivery?: "inline" | "detached";
   model?: string;
   systemPrompt?: string;
   configSnapshot?: Record<string, unknown>;

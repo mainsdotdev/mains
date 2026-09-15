@@ -351,7 +351,7 @@ function reviewPromptEvent(
       source: "user",
       isReview: true,
       reviewTarget: request.target.type,
-      delivery: request.delivery ?? "inline",
+      delivery: "inline",
     },
   };
 }
@@ -796,13 +796,11 @@ export function createCodexSessionAcquisition(
       CodexAppServerParams<"review/start"> = {
         threadId,
         target,
-        ...(request.delivery
-          ? { delivery: request.delivery }
-          : {}),
+        delivery: "inline",
       };
     const startTurn = async () => {
       logger.info(
-        `Starting review: target=${request.target.type}, delivery=${request.delivery ?? "inline"}`,
+        `Starting review: target=${request.target.type}, delivery=inline`,
       );
       const result = await server.sendRequest(
         "review/start",
@@ -818,7 +816,7 @@ export function createCodexSessionAcquisition(
         void persistSession(runId, reviewThreadId).catch(
           (error) =>
             logger.warn(
-              "Failed to persist detached review thread:",
+              "Failed to persist unexpected review thread:",
               error instanceof Error
                 ? error.message
                 : error,

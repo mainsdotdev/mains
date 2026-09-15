@@ -455,7 +455,6 @@ export const runsApi = baseApi.injectEndpoints({
           title?: string;
           instructions?: string;
         };
-        delivery?: "inline" | "detached";
         model?: string;
         systemPrompt?: string;
         configSnapshot?: Record<string, unknown>;

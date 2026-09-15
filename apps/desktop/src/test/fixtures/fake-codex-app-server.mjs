@@ -6,7 +6,7 @@ import process from "node:process";
 import { setTimeout } from "node:timers";
 
 const fixtureCliVersion =
-  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.147.0";
+  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.153.0";
 
 if (process.argv.includes("--version")) {
   process.stdout.write(`codex-cli ${fixtureCliVersion}\n`);

@@ -226,7 +226,7 @@ describe("Codex capabilities", () => {
       ensureServer: async () => server,
       getRunningServer: () => server,
       getCliHealth: async () => ({
-        version: "0.147.0",
+        version: "0.153.0",
         channel: null,
         outdated: false,
       }),

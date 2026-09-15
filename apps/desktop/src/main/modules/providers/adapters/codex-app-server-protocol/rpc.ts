@@ -57,7 +57,7 @@ interface RpcMethod<Params, Result> {
 
 /**
  * Typed request/result pairs for every app-server RPC currently emitted by
- * codex.driver.ts, against Codex's generated 0.153.4 bindings. The snapshot is
+ * codex.driver.ts, against Codex's generated 0.154.0 bindings. The snapshot is
  * generated with `--experimental`, so experimental fields the driver actually
  * sends — `collaborationMode` on turn/start, `dynamicTools` on thread/start —
  * are typed here rather than patched in at the call site.

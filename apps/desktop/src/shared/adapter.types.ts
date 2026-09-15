@@ -503,8 +503,6 @@ export interface WorkRunReviewRequest {
   accountId: string;
   execution: RunExecutionContext;
   target: WorkRunReviewTarget;
-  /** inline = review on same thread (default), detached = fork new review thread */
-  delivery?: "inline" | "detached";
   model?: string | null;
 }
 

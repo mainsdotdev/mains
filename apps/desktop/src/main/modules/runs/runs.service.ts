@@ -1093,7 +1093,6 @@ export const runsService = {
             accountId: payload.accountId,
             execution: { cwd: workspace.rootPath, workspaceId: workspace.id },
             target: payload.target,
-            delivery: payload.delivery,
             model: payload.model,
           },
           eventCallback,

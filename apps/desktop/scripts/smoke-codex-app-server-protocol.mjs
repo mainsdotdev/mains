@@ -8,7 +8,7 @@ import process from "node:process";
 import readline from "node:readline";
 
 const codexBinary = process.env.CODEX_BINARY || "codex";
-const minimumVersion = "0.147.0";
+const minimumVersion = "0.153.0";
 const temporaryRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "mains-codex-smoke-"),
 );
