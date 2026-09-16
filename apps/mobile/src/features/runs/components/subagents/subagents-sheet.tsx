@@ -1,5 +1,4 @@
 import { and, asc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
@@ -8,6 +7,7 @@ import { backendSession, useSession } from "@/backend/backend-session";
 import { AsciiSpinner, SFSymbol, ThemedText } from "@/components/ui";
 import { db } from "@/db/client";
 import { runArtifacts, toolCalls, type ToolCallRow } from "@/db/schema";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { formatDuration } from "@/lib/format";
 import {
   buildSubagentFlow,
@@ -123,20 +123,22 @@ export function SubagentsSheet() {
     }, [runId]),
   );
 
-  const callQuery = useLiveQuery(
+  const callQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(toolCalls)
       .where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId)))
       .orderBy(asc(toolCalls.createdAt), asc(toolCalls.id)),
+    toolCalls,
     [backendId, runId],
   );
-  const artifactQuery = useLiveQuery(
+  const artifactQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(runArtifacts)
       .where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId)))
       .orderBy(asc(runArtifacts.createdAt), asc(runArtifacts.id)),
+    runArtifacts,
     [backendId, runId],
   );
 
