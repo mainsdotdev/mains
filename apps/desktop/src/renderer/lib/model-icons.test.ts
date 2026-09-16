@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatModelDisplayName, selectableModelNames } from "./model-icons";
+import {
+  formatModelDisplayName,
+  resolveModelDisplayName,
+  selectableModelNames,
+} from "./model-icons";
 
 describe("formatModelDisplayName", () => {
   it("removes separators from GPT display names", () => {
@@ -56,5 +60,49 @@ describe("selectableModelNames", () => {
   it("tolerates a missing or non-array list", () => {
     expect(selectableModelNames([], "copilot")).toEqual([]);
     expect(selectableModelNames(undefined as unknown as string[], "copilot")).toEqual([]);
+  });
+});
+
+describe("resolveModelDisplayName", () => {
+  const claudeModels = [
+    {
+      id: "sonnet",
+      displayName: "Claude Sonnet",
+      description: "Claude Sonnet 5 · Best for everyday work",
+    },
+    {
+      id: "haiku",
+      displayName: "Claude Haiku",
+      description: "Claude Haiku 4.5 · Fastest",
+    },
+    {
+      id: "opus[1m]",
+      displayName: "Claude Opus [1M]",
+    },
+  ];
+
+  it("uses the same catalogue label as the model dropdown", () => {
+    expect(resolveModelDisplayName("sonnet", claudeModels, "claude")).toBe(
+      "Claude Sonnet 5",
+    );
+  });
+
+  it("maps Claude canonical usage ids back to their picker aliases", () => {
+    expect(
+      resolveModelDisplayName(
+        "claude-haiku-4-5-20251001",
+        claudeModels,
+        "claude",
+      ),
+    ).toBe("Claude Haiku 4.5");
+    expect(
+      resolveModelDisplayName("claude-sonnet-5", claudeModels, "claude"),
+    ).toBe("Claude Sonnet 5");
+  });
+
+  it("falls back to the existing formatter when the model is absent", () => {
+    expect(resolveModelDisplayName("GPT-5.6-Sol", [], "codex")).toBe(
+      "GPT 5.6 Sol",
+    );
   });
 });

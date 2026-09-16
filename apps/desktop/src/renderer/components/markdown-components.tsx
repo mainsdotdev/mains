@@ -38,9 +38,11 @@ function isFileHref(href: string): boolean {
 export function MarkdownLink({
   href,
   children,
+  showFavicon = false,
 }: {
   href?: string;
   children?: ReactNode;
+  showFavicon?: boolean;
 }) {
   const openFileInEditor = useOpenFileInEditor();
 
@@ -102,8 +104,48 @@ export function MarkdownLink({
       }}
       className="inline whitespace-normal wrap-break-word text-left text-accent hover:underline cursor-pointer  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 "
     >
+      {showFavicon && <LinkFavicon key={href} href={href} />}
       {children}
     </a>
+  );
+}
+
+/**
+ * The conventional favicon endpoint for a web link.
+ *
+ * Only the origin survives: an agent-controlled path, query, fragment, or
+ * credential must never become an automatic image request. The image itself
+ * still travels through the app's SSRF-guarded proxy below.
+ */
+export function faviconUrlForHref(href: string | undefined): string | null {
+  if (!href) return null;
+  try {
+    const url = new URL(href);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    return `${url.origin}/favicon.ico`;
+  } catch {
+    return null;
+  }
+}
+
+function LinkFavicon({ href }: { href: string | undefined }) {
+  const faviconUrl = faviconUrlForHref(href);
+  const [failed, setFailed] = useState(false);
+
+  if (!faviconUrl || failed) return null;
+
+  return (
+    <img
+      src={proxiedImageSrc(faviconUrl) ?? faviconUrl}
+      alt=""
+      aria-hidden="true"
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      onError={() => setFailed(true)}
+      className="mr-1 inline-block size-3.5 rounded-[3px] bg-primary/5 object-contain align-[-0.125em] ring-1 ring-black/5 dark:ring-white/10"
+      style={{ marginTop: 0, marginBottom: 0 }}
+    />
   );
 }
 
@@ -217,7 +259,7 @@ function MarkdownCode({ children }: { children?: ReactNode }) {
  * list decoration, table rules, and the `font-sans` that pulls prose out of a
  * monospace ancestor.
  */
-export const  markdownComponents: Components = {
+export const markdownComponents: Components = {
   h1: ({ children }) => (
     <Text as="h1" size="lg" weight="bold" className="mt-4 mb-2 font-sans">
       {children}
@@ -353,5 +395,15 @@ export const  markdownComponents: Components = {
   hr: () => <hr className="my-4 border-primary-300 dark:border-primary-700" />,
   img: ({ src, alt }) => (
     <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />
+  ),
+};
+
+/** Agent-authored prose opts into origin-only favicons for external links. */
+export const agentMarkdownComponents: Components = {
+  ...markdownComponents,
+  a: ({ href, children }) => (
+    <MarkdownLink href={href} showFavicon>
+      {children}
+    </MarkdownLink>
   ),
 };

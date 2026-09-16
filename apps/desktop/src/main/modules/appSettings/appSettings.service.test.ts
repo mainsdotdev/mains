@@ -41,6 +41,11 @@ describe("appSettingsService", () => {
       expect(result.enableWorktrees).toBe(false);
     });
 
+    it("creates the row with remote keep-awake off", async () => {
+      const result = await appSettingsService.ensureSettings();
+      expect(result.keepAwakeForRemoteAccess).toBe(false);
+    });
+
     it("is idempotent", async () => {
       const first = await appSettingsService.ensureSettings();
       const second = await appSettingsService.ensureSettings();
@@ -79,6 +84,17 @@ describe("appSettingsService", () => {
       } finally {
         appSettingsRepo.findById = original;
       }
+    });
+  });
+
+  describe("updateBackendAccess", () => {
+    it("persists the remote-access keep-awake preference", async () => {
+      await appSettingsService.updateBackendAccess({
+        keepAwakeForRemoteAccess: true,
+      });
+
+      const settings = await appSettingsService.getSettings();
+      expect(settings.keepAwakeForRemoteAccess).toBe(true);
     });
   });
 

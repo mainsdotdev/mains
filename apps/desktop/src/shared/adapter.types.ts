@@ -749,6 +749,8 @@ export interface AcquiredSession {
   prompt: string;
   /** Provider-assigned session ID; Core persists to runsRepo when present. */
   sessionId?: string;
+  /** Model actually selected while acquiring the session, when the provider reports it. */
+  model?: string;
 }
 
 export interface ProviderDriver {

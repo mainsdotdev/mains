@@ -90,6 +90,11 @@ export const appSettings = sqliteTable("app_settings", {
   backendTailscaleHttps: integer("backend_tailscale_https", { mode: "boolean" })
     .notNull()
     .default(false),
+  keepAwakeForRemoteAccess: integer("keep_awake_for_remote_access", {
+    mode: "boolean",
+  })
+    .notNull()
+    .default(false),
   // Stable identity of THIS install as a backend. Minted on first use and never
   // rotated: a paired phone keys its saved backend on it, so it must outlive
   // restarts and pairing-token changes. Null until first minted.

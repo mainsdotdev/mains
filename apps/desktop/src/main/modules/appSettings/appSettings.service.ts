@@ -38,6 +38,7 @@ export const appSettingsService = {
     backendRemoteAccess?: boolean;
     backendLanAccess?: boolean;
     backendTailscaleHttps?: boolean;
+    keepAwakeForRemoteAccess?: boolean;
   }): Promise<void> {
     await this.ensureSettings();
     await appSettingsRepo.update(SETTINGS_ID, patch);

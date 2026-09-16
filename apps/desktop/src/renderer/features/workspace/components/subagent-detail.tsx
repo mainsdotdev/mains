@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
-import { markdownComponents } from "@/components/markdown-components";
+import { agentMarkdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import { Check, Close, Minimize, Stop } from "@/components/ui/icons";
 import { AgentGlyph, Button, Text } from "@/components/ui";
@@ -198,7 +198,7 @@ export function SubagentDetail({
                     rehypeRaw,
                     [rehypeSanitize, markdownSanitizeSchema],
                   ]}
-                  components={markdownComponents}
+                  components={agentMarkdownComponents}
                 >
                   {item.content}
                 </ReactMarkdown>
@@ -224,7 +224,7 @@ export function SubagentDetail({
                 rehypeRaw,
                 [rehypeSanitize, markdownSanitizeSchema],
               ]}
-              components={markdownComponents}
+              components={agentMarkdownComponents}
             >
               {resultText}
             </ReactMarkdown>

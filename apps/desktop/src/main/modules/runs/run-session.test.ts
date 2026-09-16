@@ -674,6 +674,22 @@ describe("RunSession", () => {
       const indexes = turns.map((t) => t.turnIndex).sort();
       expect(indexes).toEqual([0, 1]);
     });
+
+    it("stores the resolved model on the active turn", async () => {
+      const session = makeSession();
+
+      // Project immediately to cover the acquisition/initial-turn insertion race.
+      await session.project({
+        type: "artifact",
+        kind: "user-prompt",
+        content: "do the thing",
+        metadata: { source: "user", model: "gpt-5.6-terra" },
+      } as any);
+
+      const turns = await runsRepo.findTurnsByRun("r1");
+      expect(turns).toHaveLength(1);
+      expect(turns[0].model).toBe("gpt-5.6-terra");
+    });
   });
 
   // ─────────────────────────────────────────────────────────────

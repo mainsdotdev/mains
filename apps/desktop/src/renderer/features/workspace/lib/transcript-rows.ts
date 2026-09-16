@@ -187,6 +187,44 @@ export function isUserPromptGroup(g: EventGroup): boolean {
   return g.type === "info" && g.events[0]?.metadata?.kind === "user-prompt";
 }
 
+export interface ModelChangeMarker {
+  fromModel: string;
+  toModel: string;
+}
+
+/**
+ * Attach adjacent turn-model changes to the user prompt that started the new
+ * turn. Unknown historical models stay silent — guessing would create a false
+ * change marker in older transcripts whose turn rows predate model capture.
+ */
+export function matchModelChangesToPromptGroups(
+  groups: EventGroup[],
+  turns: RunTurn[],
+): Map<number, ModelChangeMarker> {
+  const result = new Map<number, ModelChangeMarker>();
+  const promptGroupIndices = groups.reduce<number[]>((indices, group, index) => {
+    if (isUserPromptGroup(group)) indices.push(index);
+    return indices;
+  }, []);
+  const orderedTurns = [...turns].sort((a, b) => a.turnIndex - b.turnIndex);
+  const comparableCount = Math.min(promptGroupIndices.length, orderedTurns.length);
+
+  for (let i = 1; i < comparableCount; i++) {
+    const fromModel = orderedTurns[i - 1]?.model?.trim();
+    const toModel = orderedTurns[i]?.model?.trim();
+    if (
+      !fromModel ||
+      !toModel ||
+      fromModel.toLowerCase() === toModel.toLowerCase()
+    ) {
+      continue;
+    }
+    result.set(promptGroupIndices[i]!, { fromModel, toModel });
+  }
+
+  return result;
+}
+
 function expandIndexRange(r: { start: number; end: number }): number[] {
   const out: number[] = [];
   for (let i = r.start; i <= r.end; i++) out.push(i);

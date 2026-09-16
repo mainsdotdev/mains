@@ -732,6 +732,22 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     if (artifactKind === "user-prompt") {
       await startNextTurn(event.content);
     }
+    if (event.kind === "user-prompt") {
+      const resolvedModel =
+        typeof event.metadata?.model === "string"
+          ? event.metadata.model.trim()
+          : "";
+      if (resolvedModel) {
+        // The core emits the prompt as soon as acquisition resolves, which can
+        // race the fire-and-forget initial turn insert in this constructor.
+        if (activeTurnId === null && initialTurnReady) {
+          await initialTurnReady;
+        }
+        if (activeTurnId !== null) {
+          await runsRepo.updateTurn(activeTurnId, { model: resolvedModel });
+        }
+      }
+    }
     if (artifactKind === "result" && event.content && activeTurnId !== null) {
       try {
         await runsRepo.appendResponseContent(activeTurnId, event.content);

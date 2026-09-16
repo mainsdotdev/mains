@@ -517,6 +517,8 @@ export async function emitUserPromptArtifact(
     }>;
     /** The run the attachments were saved under — locates their on-disk copies. */
     runId?: string;
+    /** Resolved model for the turn this prompt starts. */
+    model?: string;
   },
 ): Promise<void> {
   await onEvent({
@@ -555,6 +557,7 @@ export async function emitUserPromptArtifact(
       signals: options?.contextSignals,
       files: options?.contextFiles,
       skills: options?.contextSkills,
+      ...(options?.model ? { model: options.model } : {}),
     },
   });
 }

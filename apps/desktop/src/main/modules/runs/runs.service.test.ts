@@ -2292,6 +2292,68 @@ describe("runsService", () => {
       await flushBackground();
     });
 
+    it("continues with the latest turn model when the caller omits one", async () => {
+      createWorkspace(db, { id: "ws-model" });
+      createRun(db, {
+        id: "run-model",
+        accountId: "default",
+        workspaceId: "ws-model",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "run-model",
+        turnIndex: 0,
+        status: "completed",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "run-model",
+        turnIndex: 1,
+        status: "completed",
+        model: "gpt-5.6-terra",
+      });
+      const mockAdapter = setupContinueAdapter();
+
+      await runsService.continueRun({
+        runId: "run-model",
+        accountId: "default",
+        message: "keep going",
+      });
+
+      expect(mockAdapter.continueRun.mock.calls[0][0].model).toBe(
+        "gpt-5.6-terra",
+      );
+      await flushBackground();
+    });
+
+    it("lets an explicit continue model override the latest turn model", async () => {
+      createRun(db, {
+        id: "run-explicit-model",
+        accountId: "default",
+        mode: "work",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "run-explicit-model",
+        turnIndex: 0,
+        status: "completed",
+        model: "gpt-5.6-terra",
+      });
+      const mockAdapter = setupContinueAdapter();
+
+      await runsService.continueRun({
+        runId: "run-explicit-model",
+        accountId: "default",
+        message: "switch again",
+        model: "gpt-5.6-luna",
+      });
+
+      expect(mockAdapter.continueRun.mock.calls[0][0].model).toBe(
+        "gpt-5.6-luna",
+      );
+      await flushBackground();
+    });
+
     it("updates run status to running", async () => {
       createWorkspace(db, { id: "ws1" });
       createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1", status: "succeeded" });
@@ -2545,6 +2607,42 @@ describe("runsService", () => {
       const callArgs = mockAdapter.forkRun.mock.calls[0][0];
       expect(callArgs.sourceRunId).toBe("r1");
       expect(callArgs.message).toBe("fork");
+      await flushBackground();
+    });
+
+    it("forks from the source's latest turn model", async () => {
+      createRun(db, {
+        id: "source-model",
+        accountId: "default",
+        mode: "work",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "source-model",
+        turnIndex: 0,
+        status: "completed",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "source-model",
+        turnIndex: 1,
+        status: "completed",
+        model: "gpt-5.6-terra",
+      });
+      const mockAdapter = setupForkAdapter();
+
+      const result = await runsService.forkRun({
+        sourceRunId: "source-model",
+        accountId: "default",
+        message: "branch here",
+      });
+
+      expect(mockAdapter.forkRun.mock.calls[0][0].model).toBe(
+        "gpt-5.6-terra",
+      );
+      expect((await runsRepo.findRunById(result.runId))?.model).toBe(
+        "gpt-5.6-terra",
+      );
       await flushBackground();
     });
 

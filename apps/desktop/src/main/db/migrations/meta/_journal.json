@@ -134,6 +134,13 @@
       "when": 1789495754218,
       "tag": "0018_run_turn_changes",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1789544269318,
+      "tag": "0019_wandering_strong_guy",
+      "breakpoints": true
     }
   ]
 }

@@ -162,6 +162,11 @@ const api = {
         enabled,
         httpsPort,
       ),
+    setKeepAwakeForRemoteAccess: (enabled: boolean) =>
+      ipcRenderer.invoke(
+        CHANNELS.localBackend.setKeepAwakeForRemoteAccess,
+        enabled,
+      ),
     // Replace the shared token; clients using the old one are disconnected
     rotateToken: () => ipcRenderer.invoke(CHANNELS.localBackend.rotateToken),
     // Phone pairing — mint a QR code, list/revoke the phones that used one

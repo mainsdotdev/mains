@@ -93,6 +93,18 @@ const RAW_IMAGE_MIMES: Record<string, string> = {
   svg: "image/svg+xml",
 };
 
+/** Last model that actually handled a turn, falling back to the run's initial snapshot. */
+function latestKnownModel(
+  turns: RunTurnResponse[],
+  initialModel: string | null,
+): string | undefined {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const model = turns[i]?.model?.trim();
+    if (model) return model;
+  }
+  return initialModel?.trim() || undefined;
+}
+
 function isWithin(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -1179,6 +1191,7 @@ export const runsService = {
         (max, t) => Math.max(max, t.turnIndex),
         -1,
       );
+      const previousModel = latestKnownModel(existingTurns, run.model);
 
       if (workspace) {
         await workspaceService.update(workspace.id, { status: "in_progress" });
@@ -1246,9 +1259,9 @@ export const runsService = {
           accountId,
           execution,
           message,
-          // The run's own model unless the caller names another: a phone that
-          // sends none means "as before", not "whatever the adapter has".
-          model: payload.model ?? run.model ?? undefined,
+          // An omitted model means "as before". `runs.model` is the initial
+          // snapshot; a conversation may have switched since then.
+          model: payload.model ?? previousModel,
           systemPrompt: run.systemPrompt,
           mode: run.mode,
           extraInstructions: composeExtraInstructions(run.mode, space?.systemPrompt),
@@ -1325,6 +1338,9 @@ export const runsService = {
         }
       }
 
+      const sourceTurns = await runsRepo.findTurnsByRun(sourceRunId);
+      const sourceModel = latestKnownModel(sourceTurns, sourceRun.model);
+
       if (workspace) {
         await workspaceService.update(workspace.id, { status: "in_progress" });
       }
@@ -1347,7 +1363,7 @@ export const runsService = {
         spaceId: sourceRun.spaceId ?? undefined,
         providerId: sourceRun.providerId,
         mode: sourceRun.mode,
-        model: sourceRun.model ?? undefined,
+        model: sourceModel,
         goal: message,
         status: "running",
         systemPrompt: sourceRun.systemPrompt ?? undefined,
@@ -1407,10 +1423,9 @@ export const runsService = {
           accountId,
           execution,
           message,
-          // The forked run row inherits the source's model; the request has to
-          // carry it too, or the provider picks its own default for a
-          // conversation that was already running on something else.
-          model: sourceRun.model ?? undefined,
+          // Fork from the model that handled the latest source turn, not the
+          // model the source happened to start with.
+          model: sourceModel,
           mode: sourceRun.mode,
           extraInstructions: composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
           toolPolicy,

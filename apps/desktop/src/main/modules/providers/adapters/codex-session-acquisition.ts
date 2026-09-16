@@ -561,6 +561,7 @@ export function createCodexSessionAcquisition(
       session: makeSession(runId, model, startTurn),
       prompt: request.goal,
       sessionId: threadId,
+      model,
     };
   }
 
@@ -687,6 +688,7 @@ export function createCodexSessionAcquisition(
       session: makeSession(runId, model, startTurn),
       prompt: message,
       sessionId: threadId,
+      model,
     };
   }
 
@@ -770,6 +772,7 @@ export function createCodexSessionAcquisition(
       session: makeSession(runId, model, startTurn),
       prompt: message,
       sessionId: forkedThreadId,
+      model,
     };
   }
 
@@ -845,6 +848,7 @@ export function createCodexSessionAcquisition(
       ),
       prompt: "",
       sessionId: threadId,
+      model,
     };
   }
 

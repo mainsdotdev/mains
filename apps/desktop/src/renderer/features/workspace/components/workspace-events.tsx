@@ -22,10 +22,17 @@ import { FILE_WRITING_TOOLS } from "../lib/tool-registry";
 import { resolveTool } from "../lib/resolve-tool";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import type { Run, RunEvent, Workspace } from "../types";
-import type { IssueWithEntity, SignalWithEntity, RunTurn, ModelUsageEntry } from "@/lib/redux/api";
+import type {
+  IssueWithEntity,
+  SignalWithEntity,
+  RunTurn,
+  ModelInfo,
+  ModelUsageEntry,
+} from "@/lib/redux/api";
 import {
   buildTurnRenderRows,
   matchTurnsToGroups,
+  matchModelChangesToPromptGroups,
   isUserPromptGroup,
   type SessionInfo,
 } from "../lib/transcript-rows";
@@ -35,10 +42,15 @@ import { isIssueTab, getIssueEntityId, isSignalTab, getSignalEntityId, isNoteTab
 import { AsciiLoader } from "./ascii-loader";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
-import { ArrowUp, Fork } from "@/components/ui/icons";
-import { useGetAppSettingsQuery, useGetProviderAccountInfoQuery } from "@/lib/redux/api";
+import { ArrowUp, Box, Fork } from "@/components/ui/icons";
+import {
+  useGetAppSettingsQuery,
+  useGetProviderAccountInfoQuery,
+  useGetProviderModelsQuery,
+} from "@/lib/redux/api";
 import { getProviderVariant } from "@/lib/provider-variants";
 import { isDocumentRenderImage } from "@/lib/document-viewer";
+import { resolveModelDisplayName } from "@/lib/model-icons";
 import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
@@ -145,6 +157,61 @@ function UsageTooltipContent({ turn }: { turn: RunTurn }) {
         </Text>
       )}
     </Text>
+  );
+}
+
+function ModelChangeNotice({
+  fromModel,
+  toModel,
+  variant,
+  models,
+}: {
+  fromModel: string;
+  toModel: string;
+  variant: NonNullable<WorkspaceEventsProps["variant"]>;
+  models: ModelInfo[];
+}) {
+  const fromLabel = resolveModelDisplayName(fromModel, models, variant);
+  const toLabel = resolveModelDisplayName(toModel, models, variant);
+
+  return (
+    <div
+      role="note"
+      aria-label={`Model changed from ${fromLabel} to ${toLabel}`}
+      className="flex items-center gap-3 py-1"
+    >
+      <div className="min-w-6 flex-1 border-t border-dashed border-primary-300/80 dark:border-primary-800" />
+      <Text
+        as="div"
+        size="s"
+        tone="faint"
+        className="flex shrink-0 items-center gap-1.5"
+      >
+        <Box className="size-4 shrink-0" aria-hidden />
+        <span>
+          Model changed from {fromLabel} to {toLabel}.
+        </span>
+        <Tooltip
+          position="top-left"
+          className="max-w-72 whitespace-normal px-3 py-2 text-center"
+          content={
+            <span>
+              A different model may interpret the conversation differently.
+              <br />
+              Earlier context may be condensed to fit the new model.
+            </span>
+          }
+        >
+          <Button
+            aria-label="About changing models"
+            className="flex size-4 shrink-0 items-center justify-center rounded-full border border-current text-[10px] font-semibold leading-none opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
+          >
+            i
+          </Button>
+        </Tooltip>
+      </Text>
+      <div className="min-w-6 flex-1 border-t border-dashed border-primary-300/80 dark:border-primary-800" />
+    </div>
   );
 }
 
@@ -384,6 +451,10 @@ export function WorkspaceEvents({
 
   // Check if current run is still running
   const activeRun = runs.find((r) => r.id === activeTab);
+  const { data: providerModels = [] } = useGetProviderModelsQuery(
+    activeRun?.providerId ?? "",
+    { skip: !activeRun?.providerId },
+  );
 
   // Being signed out entirely is already reported above the composer, with a
   // recheck the run-anchored notice does not offer. The notice below is for the
@@ -468,6 +539,10 @@ export function WorkspaceEvents({
   const sessionTimes = useMemo(
     () => matchTurnsToGroups(eventGroups, turns, activeRun?.startedAt, isRunCompleted),
     [eventGroups, turns, activeRun?.startedAt, isRunCompleted],
+  );
+  const modelChanges = useMemo(
+    () => matchModelChangesToPromptGroups(eventGroups, turns),
+    [eventGroups, turns],
   );
 
   // Last session time index — fork button only shown on the last one
@@ -557,6 +632,7 @@ export function WorkspaceEvents({
     (index: number) => {
       const group = eventGroups[index];
       if (!group) return null;
+      const modelChange = modelChanges.get(index);
       const isLastSuggestion =
         group.type === "prompt_suggestion" &&
         onSuggestionSelect &&
@@ -584,6 +660,14 @@ export function WorkspaceEvents({
 
       return (
         <Fragment key={group.id}>
+          {modelChange && (
+            <ModelChangeNotice
+              fromModel={modelChange.fromModel}
+              toModel={modelChange.toModel}
+              variant={variant}
+              models={providerModels}
+            />
+          )}
           {group.type === "prompt_suggestion" ? (
             <>
               {turnChangesCard}
@@ -653,6 +737,8 @@ export function WorkspaceEvents({
       hasPendingPlanApproval,
       isRunning,
       currentWorkspace?.rootPath,
+      modelChanges,
+      providerModels,
     ],
   );
 
