@@ -4,7 +4,7 @@ import path from 'path';
 import { copyFileSync, mkdirSync, readdirSync, existsSync, cpSync } from 'fs';
 
 // https://vitejs.dev/config
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
   return {
   // The GitHub OAuth device-flow client id is a *public* identifier (device
   // flow has no client secret), but it has to travel with the bundle: every
@@ -27,6 +27,8 @@ export default defineConfig(() => {
     mainFields: ['module', 'jsnext:main', 'jsnext'],
   },
   build: {
+    // Dev-only (`npm start`), so debugger breakpoints bind to the TS sources.
+    sourcemap: command === 'serve',
     lib: {
       entry: 'src/main/index.ts',
       formats: ['cjs'],
