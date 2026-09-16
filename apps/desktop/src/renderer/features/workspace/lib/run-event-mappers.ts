@@ -31,7 +31,7 @@ export function mapArtifactToEvent(artifact: RunArtifact): RunEvent {
     return {
       id: `artifact-${artifact.id}`,
       type: artifact.kind === "log" ? "log" : "artifact",
-      content: artifact.content || artifact.path || JSON.stringify(artifact),
+      content: artifact.content ?? artifact.path ?? JSON.stringify(artifact),
       timestamp: artifact.createdAt ? new Date(artifact.createdAt) : new Date(),
       metadata: { ...parseMetadata(artifact.metadata), kind: artifact.kind },
     };
@@ -39,7 +39,7 @@ export function mapArtifactToEvent(artifact: RunArtifact): RunEvent {
     return {
       id: `artifact-${artifact.id}`,
       type: artifact.kind === "log" ? "log" : "artifact",
-      content: artifact.content || artifact.path || String(artifact),
+      content: artifact.content ?? artifact.path ?? String(artifact),
       timestamp: new Date(),
       metadata: { kind: artifact.kind },
     };

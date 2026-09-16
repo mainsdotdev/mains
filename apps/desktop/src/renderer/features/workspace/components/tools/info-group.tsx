@@ -227,13 +227,15 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
                 filePath={att.path}
               />
             ))}
-            <div className="min-w-0 max-w-full px-3.5 py-2 rounded-2xl bg-primary-50 dark:bg-primary/5">
-              <div className="prose prose-sm dark:prose-invert max-w-none text-left">
-                <PromptMarkdown skills={skills} files={files}>
-                  {message}
-                </PromptMarkdown>
+            {message && (
+              <div className="min-w-0 max-w-full px-3.5 py-2 rounded-2xl bg-primary-50 dark:bg-primary/5">
+                <div className="prose prose-sm dark:prose-invert max-w-none text-left">
+                  <PromptMarkdown skills={skills} files={files}>
+                    {message}
+                  </PromptMarkdown>
+                </div>
               </div>
-            </div>
+            )}
             {previewAtt && (
               <ImagePreviewModal
                 name={previewAtt.name}
