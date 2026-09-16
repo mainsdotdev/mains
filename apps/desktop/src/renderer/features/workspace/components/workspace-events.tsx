@@ -858,7 +858,11 @@ export function WorkspaceEvents({
           </div>
         )}
         {hasRunContent && (
-          <TurnRail markers={turnMarkers} onSelect={scrollToTurn} />
+          <TurnRail
+            markers={turnMarkers}
+            onSelect={scrollToTurn}
+            transcriptRef={transcriptRef}
+          />
         )}
         {showEmpty && <WorkspaceEmptyState workspace={currentWorkspace} />}
         {/* Top/bottom fade overlays — only shown on run content (chat), not on editor/issue/note tabs.
