@@ -403,7 +403,7 @@ interface SDKAssistantMessage {
   type: "assistant";
   uuid: string;
   session_id: string;
-  message: { role: "assistant"; content: SDKMessageContent[] };
+  message: { role: "assistant"; model?: string; content: SDKMessageContent[] };
   parent_tool_use_id: string | null;
   /**
    * Set when the API call behind this turn failed. Without it an auth or
@@ -502,6 +502,77 @@ interface SDKResultError extends SDKResultBase {
 }
 
 type SDKResultMessage = SDKResultSuccess | SDKResultError;
+
+interface ClaudeTurnModelMessage {
+  type?: unknown;
+  subtype?: unknown;
+  scope?: unknown;
+  parent_tool_use_id?: unknown;
+  message?: { model?: unknown };
+  model?: unknown;
+  fallback_model?: unknown;
+  modelUsage?: Record<string, { contextWindow?: unknown }>;
+}
+
+function cleanModel(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Resolve the main conversation model from a stream without trusting usage-key order. */
+export function resolveClaudeTurnModel(
+  currentModel: string | undefined,
+  message: ClaudeTurnModelMessage,
+  configuredModel?: string,
+): string | undefined {
+  if (message.type === "assistant" && message.parent_tool_use_id === null) {
+    const assistantModel = cleanModel(message.message?.model);
+    if (assistantModel) return assistantModel;
+  }
+
+  if (message.type === "system" && message.subtype === "init") {
+    const initializedModel = cleanModel(message.model);
+    if (initializedModel) return initializedModel;
+  }
+
+  if (
+    message.type === "system" &&
+    message.subtype === "model_refusal_fallback" &&
+    message.scope !== "local"
+  ) {
+    const fallbackModel = cleanModel(message.fallback_model);
+    if (fallbackModel) return fallbackModel;
+  }
+
+  const current = cleanModel(currentModel);
+  if (current) return current;
+  if (message.type !== "result" || !message.modelUsage) return undefined;
+
+  const entries = Object.entries(message.modelUsage);
+  if (entries.length === 1) return entries[0]?.[0];
+
+  const configured = cleanModel(configuredModel);
+  const exactConfigured = entries.find(
+    ([name]) => name.toLowerCase() === configured?.toLowerCase(),
+  );
+  if (exactConfigured) return exactConfigured[0];
+
+  const rankedByWindow = entries
+    .map(([name, usage]) => ({
+      name,
+      contextWindow:
+        typeof usage.contextWindow === "number" ? usage.contextWindow : 0,
+    }))
+    .sort((a, b) => b.contextWindow - a.contextWindow);
+  if (
+    rankedByWindow[0] &&
+    rankedByWindow[0].contextWindow > (rankedByWindow[1]?.contextWindow ?? 0)
+  ) {
+    return rankedByWindow[0].name;
+  }
+
+  // Multiple equally plausible models are safer left unknown than mislabeled.
+  return undefined;
+}
 
 export interface SDKSystemMessage {
   type: "system";
@@ -3115,6 +3186,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         let lastReqContextTokens = 0;
         let contextUsageInFlight = false;
         let contextUsageAt = 0;
+        let primaryModel: string | undefined;
         // The reply is a whole-context token count, so it is asked for at a
         // human-readable cadence rather than once per assistant message.
         const CONTEXT_USAGE_MIN_INTERVAL_MS = 2_000;
@@ -3148,6 +3220,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         const streamPromise = (async () => {
           for await (const msg of query) {
             if (signal.aborted || timedOut) break;
+            primaryModel = resolveClaudeTurnModel(
+              primaryModel,
+              msg as unknown as ClaudeTurnModelMessage,
+              cs.options.model,
+            );
 
             // Track whether any assistant text content has been streamed (for result-message dedup).
             if (msg.type === "assistant") {
@@ -3213,7 +3290,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                 outputTokens = 0,
                 cacheRead = 0,
                 cacheWrite = 0;
-              let primaryModel: string | undefined;
               // Fallback context meter: the entry with the largest window is the
               // main conversation model (not haiku subagents).
               let ctxModel: string | undefined;
@@ -3224,7 +3300,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                   outputTokens += usage.outputTokens;
                   cacheRead += usage.cacheReadInputTokens;
                   cacheWrite += usage.cacheCreationInputTokens;
-                  if (!primaryModel) primaryModel = modelName;
                   const window = usage.contextWindow ?? 0;
                   if (window > ctxWindow) {
                     ctxWindow = window;

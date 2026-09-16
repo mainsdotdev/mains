@@ -77,10 +77,10 @@ export function TurnRail({
               className="flex h-3 w-8 shrink-0 items-center"
             >
               <span
-                className={`h-px rounded-full transition-all duration-200 ${
+                className={`h-0.5 rounded-full transition-all duration-200 ${
                   isHovered
                     ? "w-6 bg-primary-700 dark:bg-primary-200"
-                    : "w-3 bg-primary-300 dark:bg-primary-600"
+                    : "w-2 bg-primary-300 dark:bg-primary-700"
                 }`}
               />
             </Button>

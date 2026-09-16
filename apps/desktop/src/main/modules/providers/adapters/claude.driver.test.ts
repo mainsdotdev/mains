@@ -31,6 +31,7 @@ import {
   buildSubagentCompletionEvent,
   mapSDKMessage,
   resolveClaudeDefaultModelId,
+  resolveClaudeTurnModel,
 } from "./claude.driver";
 import type { ClaudeTaskIndex, SDKSystemMessage } from "./claude.driver";
 import fs from "node:fs";
@@ -90,6 +91,96 @@ describe("claude.driver / resolveClaudeDefaultModelId", () => {
   it("still resolves when the synthetic entry is the only model offered", () => {
     expect(resolveClaudeDefaultModelId([{ value: "default" }])).toBe("default");
     expect(resolveClaudeDefaultModelId([])).toBeUndefined();
+  });
+});
+
+describe("claude.driver / turn model resolution", () => {
+  it("keeps a Haiku subagent from replacing the top-level Opus model", () => {
+    let model: string | undefined;
+    model = resolveClaudeTurnModel(model, {
+      type: "assistant",
+      parent_tool_use_id: null,
+      message: { model: "claude-opus-5" },
+    });
+    model = resolveClaudeTurnModel(model, {
+      type: "assistant",
+      parent_tool_use_id: "toolu_agent",
+      message: { model: "claude-haiku-4-5-20251001" },
+    });
+    model = resolveClaudeTurnModel(model, {
+      type: "result",
+      modelUsage: {
+        "claude-haiku-4-5-20251001": { contextWindow: 200_000 },
+        "claude-opus-5": { contextWindow: 1_000_000 },
+      },
+    });
+
+    expect(model).toBe("claude-opus-5");
+  });
+
+  it("uses a unique largest context window for an older usage-only stream", () => {
+    expect(
+      resolveClaudeTurnModel(
+        undefined,
+        {
+          type: "result",
+          modelUsage: {
+            "claude-spark-1": { contextWindow: 200_000 },
+            "claude-nebula-7": { contextWindow: 1_000_000 },
+          },
+        },
+        "nebula",
+      ),
+    ).toBe("claude-nebula-7");
+  });
+
+  it("matches an exact configured ID without knowing its model family", () => {
+    expect(
+      resolveClaudeTurnModel(
+        undefined,
+        {
+          type: "result",
+          modelUsage: {
+            "claude-nebula-7": { contextWindow: 1_000_000 },
+            "claude-orbit-3": { contextWindow: 1_000_000 },
+          },
+        },
+        "claude-orbit-3",
+      ),
+    ).toBe("claude-orbit-3");
+  });
+
+  it("tracks an explicit model-refusal fallback", () => {
+    expect(
+      resolveClaudeTurnModel("claude-opus-5", {
+        type: "system",
+        subtype: "model_refusal_fallback",
+        fallback_model: "claude-sonnet-5",
+      }),
+    ).toBe("claude-sonnet-5");
+  });
+
+  it("ignores a subagent-local model-refusal fallback", () => {
+    expect(
+      resolveClaudeTurnModel("claude-opus-5", {
+        type: "system",
+        subtype: "model_refusal_fallback",
+        scope: "local",
+        fallback_model: "claude-sonnet-5",
+      }),
+    ).toBe("claude-opus-5");
+  });
+
+  it("leaves equally plausible usage-only models unknown", () => {
+    expect(
+      resolveClaudeTurnModel(undefined, {
+        type: "result",
+        modelUsage: {
+          "claude-opus-5": { contextWindow: 1_000_000 },
+          "claude-sonnet-5": { contextWindow: 1_000_000 },
+        },
+      }),
+    ).toBeUndefined();
   });
 });
 
