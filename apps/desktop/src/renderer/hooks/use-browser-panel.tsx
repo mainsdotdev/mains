@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  type ReactNode,
+} from "react";
+import { useLocation } from "react-router-dom";
+import { shouldHideRightPanel } from "@/lib/layout";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import {
   setBrowserPanelOpen,
@@ -29,6 +38,15 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
     if (!isOpen) dispatch(setSessionPanelOpen(false));
     dispatch(setBrowserPanelOpen(!isOpen));
   }, [dispatch, isOpen]);
+
+  // The browser has no place on the routes that hide the right edge (Settings,
+  // Plugins, Pulse, Relay, Tasks) — its toggle is hidden there too. The open
+  // state is persisted, so it is taken down here rather than by each page.
+  const { pathname } = useLocation();
+  const hiddenOnRoute = shouldHideRightPanel(pathname);
+  useEffect(() => {
+    if (hiddenOnRoute && isOpen) close();
+  }, [hiddenOnRoute, isOpen, close]);
 
   const value = useMemo(
     () => ({ isOpen, open, close, toggle }),
