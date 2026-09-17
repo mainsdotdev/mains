@@ -742,7 +742,7 @@ html.mains-web.dark #root {
 :root {
   --glass-rim: rgba(0, 0, 0, 0.08);
   --glass-rim-shadow: rgba(255, 255, 255, 0);
-  --glass-outline-rim: rgba(0, 0, 0, 0.1);
+  --glass-outline-rim: rgba(0, 0, 0, 0.08);
   /* Half-strength rim for large decorative surfaces, where the full one reads
      as a drawn box rather than a lit edge. Selected via `glass-outline-soft`. */
   --glass-outline-rim-soft: rgba(0, 0, 0, 0.045);
@@ -766,7 +766,7 @@ html.mains-web.dark #root {
 .dark {
   --glass-rim: rgba(255, 255, 255, 0.08);
   --glass-rim-shadow: rgba(0, 0, 0, 0);
-  --glass-outline-rim: rgba(255, 255, 255, 0.1);
+  --glass-outline-rim: rgba(255, 255, 255, 0.08);
   --glass-outline-rim-soft: rgba(255, 255, 255, 0.045);
 
   /* Same five hues, re-stepped for the dark surface — not an automatic flip. */

@@ -6,9 +6,8 @@ import {
   Close,
   External,
   Search,
-  Web,
 } from "@/components/ui/icons";
-import { proxiedImageSrc } from "@/lib/proxied-image-src";
+import { BrowserFavicon } from "./browser-favicon";
 
 export interface BrowserHistoryEntryViewModel {
   id: string;
@@ -84,33 +83,6 @@ function groupEntries(entries: BrowserHistoryEntryViewModel[]): HistoryGroup[] {
     }
   }
   return Array.from(groups.values());
-}
-
-function HistoryFavicon({
-  faviconUrl,
-}: Pick<BrowserHistoryEntryViewModel, "faviconUrl">) {
-  const src = proxiedImageSrc(faviconUrl);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-
-  if (src && failedSrc !== src) {
-    return (
-      <img
-        src={src}
-        alt=""
-        aria-hidden="true"
-        draggable={false}
-        onError={() => setFailedSrc(src)}
-        className="size-4 rounded-[3px] object-contain"
-      />
-    );
-  }
-
-  return (
-    <Web
-      aria-hidden="true"
-      className="size-4 text-primary-400 dark:text-primary-500"
-    />
-  );
 }
 
 export function BrowserHistoryPanel({
@@ -242,7 +214,7 @@ export function BrowserHistoryPanel({
                     title={entry.url}
                   >
                     <span className="flex size-7 shrink-0 items-center justify-center">
-                      <HistoryFavicon faviconUrl={entry.faviconUrl} />
+                      <BrowserFavicon faviconUrl={entry.faviconUrl} />
                     </span>
                     <span className="min-w-0 flex-1">
                       <Text

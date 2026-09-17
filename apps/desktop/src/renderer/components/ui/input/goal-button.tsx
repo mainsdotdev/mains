@@ -37,7 +37,7 @@ export function GoalButton({ goalMode, onToggle }: GoalButtonProps) {
       tooltip="Toggle Goal Mode"
       type="button"
       onClick={onToggle}
-      className={`flex items-center px-2 py-1.5 rounded-full text-sm transition-all animate-blur-reveal cursor-pointer hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300 ${
+      className={`flex items-center px-2 py-1.5 rounded-full text-s transition-all animate-blur-reveal cursor-pointer hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300 ${
         goalMode ? "gap-1" : ""
       }`}
       title={

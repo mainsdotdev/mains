@@ -55,9 +55,10 @@ import {
   historyAfterBrowsingDataClear,
 } from "./browser-clear-data";
 import {
-  browserDeviceEmulationParameters,
+  createBrowserDeviceEmulationQueue,
   DEFAULT_BROWSER_DEVICE_EMULATION,
   normalizeBrowserDeviceEmulation,
+  type BrowserDeviceEmulationQueue,
 } from "./browser-device";
 
 const BROWSER_PARTITION = "persist:mains-browser";
@@ -100,6 +101,8 @@ interface BrowserTabRecord {
   history: BrowserHistorySnapshot | null;
   view: WebContentsView | null;
   viewPromise: Promise<WebContentsView> | null;
+  deviceEmulationQueue: BrowserDeviceEmulationQueue;
+  isClosing: boolean;
 }
 
 interface PersistedBrowserTab {
@@ -158,6 +161,8 @@ function createTabRecord(
     history: null,
     view: null,
     viewPromise: null,
+    deviceEmulationQueue: createBrowserDeviceEmulationQueue(),
+    isClosing: false,
   };
 }
 
@@ -680,7 +685,10 @@ export const browserService = {
     });
 
     contents.on("will-navigate", (event, url) => {
-      if (isAllowedBrowserUrl(url)) return;
+      if (isAllowedBrowserUrl(url)) {
+        record.deviceEmulationQueue.beginNavigation();
+        return;
+      }
       event.preventDefault();
       this._openExternalIfAllowed(url);
     });
@@ -757,7 +765,9 @@ export const browserService = {
     contents.on(
       "did-start-navigation",
       (_event, _url, _isSameDocument, isMainFrame) => {
-        if (isMainFrame) record.faviconUrl = null;
+        if (!isMainFrame) return;
+        record.faviconUrl = null;
+        record.deviceEmulationQueue.beginNavigation();
       },
     );
     contents.on("did-finish-load", syncAndRefreshHistory);
@@ -773,8 +783,14 @@ export const browserService = {
       this._refreshHistoryMetadata(record);
     });
     contents.on("page-title-updated", syncAndRefreshHistory);
-    contents.on("did-start-loading", sync);
-    contents.on("did-stop-loading", sync);
+    contents.on("did-start-loading", () => {
+      record.deviceEmulationQueue.beginNavigation();
+      sync();
+    });
+    contents.on("did-stop-loading", () => {
+      void record.deviceEmulationQueue.readyAfterPaint(contents);
+      sync();
+    });
     contents.on("page-favicon-updated", (_event, favicons) => {
       record.faviconUrl =
         favicons.find((url) => /^https?:/i.test(url)) ?? null;
@@ -792,11 +808,13 @@ export const browserService = {
       this._sendToRenderer(CHANNELS.browser.findResult, payload);
     });
     contents.on("render-process-gone", () => {
+      record.deviceEmulationQueue.reset();
       record.isCrashed = true;
       record.isLoading = false;
       this._emitState();
     });
     contents.on("destroyed", () => {
+      record.deviceEmulationQueue.reset();
       if (record.view === view) record.view = null;
     });
 
@@ -823,10 +841,12 @@ export const browserService = {
   },
 
   async _ensureTabView(record: BrowserTabRecord): Promise<WebContentsView> {
+    if (record.isClosing) throw new Error("Browser tab is closing");
     if (record.view && !record.view.webContents.isDestroyed()) return record.view;
     if (record.viewPromise) return record.viewPromise;
 
     record.viewPromise = (async () => {
+      record.deviceEmulationQueue.reset();
       const view = new WebContentsView({
         webPreferences: {
           partition: BROWSER_PARTITION,
@@ -867,6 +887,13 @@ export const browserService = {
         }
       }
 
+      if (record.isClosing) {
+        record.deviceEmulationQueue.reset();
+        if (!view.webContents.isDestroyed()) view.webContents.close();
+        if (record.view === view) record.view = null;
+        throw new Error("Browser tab is closing");
+      }
+
       view.webContents.setZoomFactor(record.zoomFactor);
       this._syncRecord(record);
       return view;
@@ -893,15 +920,24 @@ export const browserService = {
     this._emitState();
   },
 
-  _applyDeviceEmulation(record: BrowserTabRecord) {
-    const contents = record.view?.webContents;
-    if (!contents || contents.isDestroyed()) return;
-    if (!record.deviceEmulation.enabled) {
-      contents.disableDeviceEmulation();
+  _scheduleDeviceEmulation(record: BrowserTabRecord) {
+    const view = record.view;
+    if (
+      !view ||
+      !this.visible ||
+      this.activeTabId !== record.id ||
+      !this.host ||
+      this.host.isDestroyed() ||
+      !this.host.contentView.children.includes(view) ||
+      view.webContents.isDestroyed()
+    ) {
       return;
     }
-    contents.enableDeviceEmulation(
-      browserDeviceEmulationParameters(record.deviceEmulation, this.bounds),
+    const contents = view.webContents;
+    record.deviceEmulationQueue.schedule(
+      contents,
+      record.deviceEmulation,
+      this.bounds,
     );
   },
 
@@ -1031,7 +1067,17 @@ export const browserService = {
   async _hibernateViews() {
     this._persistNow();
     for (const record of this.tabs.values()) {
-      const view = record.view;
+      if (this.visible) return;
+      let view = record.view;
+      if (record.viewPromise) {
+        try {
+          view = await record.viewPromise;
+        } catch {
+          view = record.view;
+        }
+      }
+      if (this.visible) return;
+      record.deviceEmulationQueue.reset();
       if (!view || view.webContents.isDestroyed()) continue;
       if (this.host && !this.host.isDestroyed()) {
         try {
@@ -1064,8 +1110,9 @@ export const browserService = {
       this.host.contentView.addChildView(view);
     }
     if (this.bounds) view.setBounds(this.bounds);
-    this._applyDeviceEmulation(record);
     view.setVisible(true);
+    this._scheduleDeviceEmulation(record);
+    void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
     view.webContents.focus();
   },
 
@@ -1281,9 +1328,11 @@ export const browserService = {
   },
 
   detach(): null {
-    const activeView = this.activeTabId
-      ? this.tabs.get(this.activeTabId)?.view
+    const activeRecord = this.activeTabId
+      ? this.tabs.get(this.activeTabId)
       : null;
+    const activeView = activeRecord?.view;
+    activeRecord?.deviceEmulationQueue.cancel();
     if (activeView && this.host && !this.host.isDestroyed()) {
       try {
         this.host.contentView.removeChildView(activeView);
@@ -1315,7 +1364,16 @@ export const browserService = {
     this._persistDownloadsNow();
     this._persistHistoryNow();
     for (const record of this.tabs.values()) {
+      record.isClosing = true;
+      record.deviceEmulationQueue.reset();
       if (record.view && !record.view.webContents.isDestroyed()) {
+        if (this.host && !this.host.isDestroyed()) {
+          try {
+            this.host.contentView.removeChildView(record.view);
+          } catch {
+            // It may already be detached.
+          }
+        }
         record.view.webContents.close();
       }
     }
@@ -1512,6 +1570,8 @@ export const browserService = {
     const record = this.tabs.get(tabId);
     if (!record) throw new Error("Browser tab not found");
     const closingIndex = orderedIds.indexOf(tabId);
+    record.isClosing = true;
+    record.deviceEmulationQueue.reset();
 
     if (record.viewPromise) {
       try {
@@ -1560,6 +1620,7 @@ export const browserService = {
 
     const previous = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
     if (previous && previous.id !== next.id && previous.view) {
+      previous.deviceEmulationQueue.cancel();
       if (this.selectMode && !previous.view.webContents.isDestroyed()) {
         try {
           await previous.view.webContents.executeJavaScript(
@@ -1604,17 +1665,26 @@ export const browserService = {
     const view = this._activeTab().view;
     if (view && !view.webContents.isDestroyed()) {
       view.setBounds(rect);
-      this._applyDeviceEmulation(this._activeTab());
+      this._scheduleDeviceEmulation(this._activeTab());
     }
     return null;
   },
 
   setVisible(visible: boolean): null {
-    const view = this._activeTab().view;
+    const record = this._activeTab();
+    const view = record.view;
     if (view && !view.webContents.isDestroyed()) view.setVisible(visible);
+    if (!visible) record.deviceEmulationQueue.cancel();
     this.visible = visible;
-    if (visible) this._clearIdleTimer();
-    else this._scheduleIdleHibernate();
+    if (visible) {
+      this._clearIdleTimer();
+      this._scheduleDeviceEmulation(record);
+      if (view && !view.webContents.isDestroyed()) {
+        void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
+      }
+    } else {
+      this._scheduleIdleHibernate();
+    }
     return null;
   },
 
@@ -1624,6 +1694,7 @@ export const browserService = {
     const url = resolveBrowserInput(rawInput);
     record.url = url;
     if (url === BLANK_URL) record.title = "New tab";
+    record.deviceEmulationQueue.beginNavigation();
     try {
       await view.webContents.loadURL(url);
     } catch (error) {
@@ -1646,26 +1717,32 @@ export const browserService = {
   },
 
   async goBack(): Promise<null> {
-    const contents = this._activeTab().view?.webContents;
+    const record = this._activeTab();
+    const contents = record.view?.webContents;
     if (!contents || contents.isDestroyed()) throw new Error("No browser tab");
     if (contents.navigationHistory.canGoBack()) {
+      record.deviceEmulationQueue.beginNavigation();
       contents.navigationHistory.goBack();
     }
     return null;
   },
 
   async goForward(): Promise<null> {
-    const contents = this._activeTab().view?.webContents;
+    const record = this._activeTab();
+    const contents = record.view?.webContents;
     if (!contents || contents.isDestroyed()) throw new Error("No browser tab");
     if (contents.navigationHistory.canGoForward()) {
+      record.deviceEmulationQueue.beginNavigation();
       contents.navigationHistory.goForward();
     }
     return null;
   },
 
   async reload(): Promise<null> {
-    const contents = this._activeTab().view?.webContents;
+    const record = this._activeTab();
+    const contents = record.view?.webContents;
     if (!contents || contents.isDestroyed()) throw new Error("No browser tab");
+    record.deviceEmulationQueue.beginNavigation();
     contents.reload();
     return null;
   },
@@ -1771,7 +1848,7 @@ export const browserService = {
   setDeviceEmulation(input: BrowserDeviceEmulation): BrowserState {
     const record = this._activeTab();
     record.deviceEmulation = normalizeBrowserDeviceEmulation(input);
-    this._applyDeviceEmulation(record);
+    this._scheduleDeviceEmulation(record);
     this._schedulePersist();
     this._emitState();
     return this.getState();

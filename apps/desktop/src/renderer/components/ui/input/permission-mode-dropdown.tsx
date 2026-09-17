@@ -3,7 +3,7 @@ import { Plan, Lock, Edit, DontAsk, Danger, ArrowUp, Infinite } from "../icons";
 import DropdownWrapper from "../dropdown-wrapper";
 import { Button } from "../button";
 import Tooltip from "../tooltip";
-import { Body, Caption } from "../text";
+import { Caption, Tiny } from "../text";
 import { useIsMobile } from "@/lib/platform";
 import {
   CURSOR_MODES as CURSOR_MODE_DEFS,
@@ -188,7 +188,7 @@ export function PermissionModeDropdown({
         onClick={onToggle}
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        className="flex items-center gap-1.5 px-2 py-1.5 rounded-full text-sm transition-all cursor-pointer hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 text-primary-950 dark:text-primary"
+        className="flex items-center gap-1.5 px-2 py-1.5 rounded-full text-s transition-all cursor-pointer hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 text-primary-950 dark:text-primary"
       >
         <PermissionModeIcon
           mode={permissionMode}
@@ -233,7 +233,7 @@ export function PermissionModeDropdown({
               className="size-3.5 shrink-0"
             />
             <div className="flex flex-col flex-1 min-w-0">
-              <Body className="mb-0.5">{mode.label}</Body>
+              <Tiny className="mb-0.5">{mode.label}</Tiny>
               <Caption>
                 {mode.description}
               </Caption>
@@ -267,7 +267,7 @@ export function PermissionModeDropdown({
             >
               <Plan className="size-3.5 shrink-0" />
               <div className="flex flex-col flex-1 min-w-0">
-                <Body className="mb-0.5">Plan Mode</Body>
+                <Tiny className="mb-0.5">Plan Mode</Tiny>
                 <Caption>
                   Plan before changes
                 </Caption>

@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -60,6 +61,10 @@ import {
   BrowserHistoryPanel,
   type BrowserHistoryEntryViewModel,
 } from "./browser-history-panel";
+import {
+  BrowserAddressSuggestions,
+  browserAddressSuggestions,
+} from "./browser-address-suggestions";
 import {
   BrowserClearDataPanel,
   type BrowserClearDataOptionsViewModel,
@@ -144,6 +149,8 @@ export function BrowserPanel() {
     EMPTY_BROWSER_STATE,
   );
   const [urlInput, setUrlInput] = useState("");
+  const [addressSuggestionsOpen, setAddressSuggestionsOpen] = useState(false);
+  const [addressSuggestionIndex, setAddressSuggestionIndex] = useState(-1);
   const [selectMode, setSelectMode] = useState(false);
   const [attached, setAttached] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
@@ -177,6 +184,17 @@ export function BrowserPanel() {
   const activeTab =
     browserState.tabs.find((tab) => tab.tabId === browserState.activeTabId) ??
     null;
+  const addressSuggestions = useMemo(
+    () => browserAddressSuggestions(historyEntries, urlInput),
+    [historyEntries, urlInput],
+  );
+  const selectedAddressSuggestionIndex =
+    addressSuggestions.length > 0
+      ? Math.min(
+          Math.max(addressSuggestionIndex, 0),
+          addressSuggestions.length - 1,
+        )
+      : -1;
 
   const applyBrowserState = useCallback((state: BrowserState) => {
     if (
@@ -1009,10 +1027,17 @@ export function BrowserPanel() {
     setZoom,
   ]);
 
-  const navigate = useCallback(() => {
-    if (!api || !urlInput.trim()) return;
-    void api.navigate(urlInput.trim());
-  }, [api, urlInput]);
+  const navigate = useCallback(
+    (target = urlInput) => {
+      const value = target.trim();
+      if (!api || !value) return;
+      setAddressSuggestionsOpen(false);
+      setAddressSuggestionIndex(-1);
+      locationInputRef.current?.blur();
+      void api.navigate(value);
+    },
+    [api, urlInput],
+  );
 
   const toggleSelect = useCallback(async () => {
     if (!api) return;
@@ -1180,23 +1205,85 @@ export function BrowserPanel() {
           </Button>
         </div>
 
-        <Input
-          ref={locationInputRef}
-          type="text"
-          value={urlInput}
-          onChange={(event) => setUrlInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              navigate();
+        <div className="min-w-0 flex-1">
+          <Input
+            ref={locationInputRef}
+            type="text"
+            role="combobox"
+            value={urlInput}
+            onChange={(event) => {
+              setUrlInput(event.target.value);
+              setAddressSuggestionsOpen(true);
+              setAddressSuggestionIndex(0);
+            }}
+            onKeyDown={(event) => {
+              if (
+                (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+                addressSuggestions.length > 0
+              ) {
+                event.preventDefault();
+                setAddressSuggestionsOpen(true);
+                setAddressSuggestionIndex((current) => {
+                  if (current < 0) {
+                    return event.key === "ArrowDown"
+                      ? 0
+                      : addressSuggestions.length - 1;
+                  }
+                  const direction = event.key === "ArrowDown" ? 1 : -1;
+                  const clampedCurrent = Math.min(
+                    current,
+                    addressSuggestions.length - 1,
+                  );
+                  return (
+                    (clampedCurrent + direction + addressSuggestions.length) %
+                    addressSuggestions.length
+                  );
+                });
+              } else if (event.key === "Enter") {
+                event.preventDefault();
+                const suggestion = addressSuggestionsOpen
+                  ? addressSuggestions[selectedAddressSuggestionIndex]
+                  : undefined;
+                navigate(suggestion?.url ?? urlInput);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setAddressSuggestionsOpen(false);
+                setAddressSuggestionIndex(-1);
+              }
+            }}
+            onFocus={(event) => {
+              event.currentTarget.select();
+              setAddressSuggestionsOpen(true);
+              setAddressSuggestionIndex(addressSuggestions.length > 0 ? 0 : -1);
+            }}
+            onClick={() => setAddressSuggestionsOpen(true)}
+            onBlur={() => {
+              setAddressSuggestionsOpen(false);
+              setAddressSuggestionIndex(-1);
+            }}
+            placeholder="Search or enter address"
+            aria-label="Search or enter address"
+            aria-autocomplete="list"
+            aria-controls={
+              addressSuggestionsOpen && addressSuggestions.length > 0
+                ? "browser-address-suggestions"
+                : undefined
             }
-          }}
-          onFocus={(event) => event.currentTarget.select()}
-          placeholder="Search or enter address"
-          aria-label="Search or enter address"
-          className="min-w-0 flex-1 rounded-full py-1.75 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:text-primary-100 dark:focus:bg-primary-800/60"
-          spellCheck={false}
-        />
+            aria-expanded={
+              addressSuggestionsOpen && addressSuggestions.length > 0
+            }
+            aria-activedescendant={
+              addressSuggestionsOpen && selectedAddressSuggestionIndex >= 0
+                ? `browser-address-suggestion-${selectedAddressSuggestionIndex}`
+                : undefined
+            }
+            autoCapitalize="none"
+            autoComplete="off"
+            autoCorrect="off"
+            className="w-full rounded-full py-1.75 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:text-primary-100 dark:focus:bg-primary-800/60"
+            spellCheck={false}
+          />
+        </div>
 
         <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
           <Button
@@ -1229,6 +1316,19 @@ export function BrowserPanel() {
           </Button>
         </div>
       </div>
+
+      {addressSuggestionsOpen && (
+        <BrowserAddressSuggestions
+          suggestions={addressSuggestions}
+          selectedIndex={selectedAddressSuggestionIndex}
+          onHighlight={setAddressSuggestionIndex}
+          onSelect={(suggestion) => {
+            setUrlInput(suggestion.url);
+            navigate(suggestion.url);
+          }}
+          onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
+        />
+      )}
 
       {activeTab?.deviceEmulation.enabled && (
         <BrowserDeviceToolbar
