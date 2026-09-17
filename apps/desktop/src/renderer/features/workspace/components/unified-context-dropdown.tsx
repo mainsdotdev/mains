@@ -2,7 +2,7 @@ import { ReactNode, RefObject, useCallback, useEffect, useMemo, useReducer, useS
 import { Button, DropdownWrapper, Text } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { CommandInfo, SkillInfo } from "@/lib/redux/api/providersApi";
-import { Sparkles } from "@/components/ui/icons";
+import { ArrowUp, Sparkles } from "@/components/ui/icons";
 import { useDropdownKeyboardNavigation } from "@/features/workspace/hooks/use-dropdown-keyboard-navigation";
 import { FileIconComponent } from "@/components/ui/icons";
 import type { DirEntry, FileNode } from "@/features/workspace/types/file-explorer";
@@ -350,6 +350,7 @@ export function UnifiedContextDropdown({
           rootPath: workspacePath,
           query: nameFilter,
           max: MAX_WORKSPACE_FILE_MATCHES,
+          includeDirectories: true,
         })
         .then((response: { success: boolean; data?: DirEntry[]; error?: string }) => {
           if (cancelled) return;
@@ -502,15 +503,12 @@ export function UnifiedContextDropdown({
           onClose();
           break;
         case "file": {
-          const { entry, dirPath: d } = row;
-          if (entry.type === "directory") {
-            onNavigateFile(d + entry.name + "/");
-            return;
-          }
+          const { entry } = row;
           onSelectFile({
             name: entry.name,
             fullPath: entry.fullPath,
             type: entry.type,
+            hasChildren: entry.hasChildren,
             extension: entry.extension,
             size: entry.size,
           });
@@ -519,7 +517,17 @@ export function UnifiedContextDropdown({
         }
       }
     },
-    [flatRows, onClose, onNavigateFile, onSelectCommand, onSelectFile, onSelectIssue, onSelectSkill],
+    [flatRows, onClose, onSelectCommand, onSelectFile, onSelectIssue, onSelectSkill],
+  );
+
+  const navigateToDirectory = useCallback(
+    (entry: DirEntry, currentDirPath: string) => {
+      const nextDirPath = isWorkspaceFileSearch
+        ? `${workspaceRelativePath(entry.fullPath, workspacePath ?? "").replace(/\/$/, "")}/`
+        : `${currentDirPath}${entry.name}/`;
+      onNavigateFile(nextDirPath);
+    },
+    [isWorkspaceFileSearch, onNavigateFile, workspacePath],
   );
 
   const { activeIndex, setActiveIndex } = useDropdownKeyboardNavigation({
@@ -660,22 +668,23 @@ export function UnifiedContextDropdown({
                       );
                     }
                     if (row.kind === "file") {
-                      const { entry } = row;
+                      const { entry, dirPath: rowDirPath } = row;
+                      const isDirectory = entry.type === "directory";
                       return (
-                        <RowButton key={entry.fullPath} {...rowProps}>
-                          <div className="flex items-start gap-2 min-w-0">
-                            <FileIconComponent
-                              isDirectory={entry.type === "directory"}
-                              extension={entry.extension}
-                              fileName={entry.name}
-                              className="size-4 shrink-0 mt-0.5"
-                            />
-                            <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                              <Text as="span" size="xs" weight="medium" className="truncate">
-                                {entry.name}
-                              </Text>
-                              {entry.type !== "directory" &&
-                                (() => {
+                        <div key={entry.fullPath} className="group relative">
+                          <RowButton {...rowProps} className={isDirectory ? "pr-9" : ""}>
+                            <div className="flex items-start gap-2 min-w-0">
+                              <FileIconComponent
+                                isDirectory={isDirectory}
+                                extension={entry.extension}
+                                fileName={entry.name}
+                                className="size-4 shrink-0 mt-0.5"
+                              />
+                              <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                                <Text as="span" size="xs" weight="medium" className="truncate">
+                                  {entry.name}
+                                </Text>
+                                {(() => {
                                   const loc = formatFileLocation(entry.fullPath, workspacePath);
                                   return loc ? (
                                     <Text as="span" size="xs" tone="subtle" className="truncate">
@@ -683,14 +692,23 @@ export function UnifiedContextDropdown({
                                     </Text>
                                   ) : null;
                                 })()}
+                              </div>
                             </div>
-                            {entry.type === "directory" && (
-                              <Text as="span" size="xs" tone="subtle" className="ml-auto shrink-0">
-                                /
-                              </Text>
-                            )}
-                          </div>
-                        </RowButton>
+                          </RowButton>
+                          {isDirectory && (
+                            <Button
+                              type="button"
+                              data-dropdown-secondary-action="true"
+                              aria-label={`Browse ${entry.name} folder`}
+                              title={`Browse ${entry.name}`}
+                              onMouseEnter={() => setActiveIndex(idx)}
+                              onClick={() => navigateToDirectory(entry, rowDirPath)}
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2 size-6 flex items-center justify-center rounded-lg text-primary-500 hover:bg-primary-300/40 dark:hover:bg-primary-700/50"
+                            >
+                              <ArrowUp className="size-3 rotate-90" />
+                            </Button>
+                          )}
+                        </div>
                       );
                     }
                     if (row.kind === "issue") {

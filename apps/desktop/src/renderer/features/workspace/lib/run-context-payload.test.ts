@@ -83,7 +83,9 @@ describe("buildRunContextPayload", () => {
     ];
     const payload = buildRunContextPayload(items);
 
-    expect(payload.contextFiles).toEqual([{ path: "/repo/a.ts" }]);
+    expect(payload.contextFiles).toEqual([
+      { path: "/repo/a.ts", type: "file" },
+    ]);
     // `labels` and `entityId` are composer-only — they don't cross to the run.
     expect(payload.contextIssues).toEqual([
       { provider: "github", number: 7, title: "Bug", body: "details" },
@@ -103,6 +105,21 @@ describe("buildRunContextPayload", () => {
       name: "reviewer",
       scope: "project",
     });
+  });
+
+  it("preserves directory context so folder mentions stay identifiable", () => {
+    const payload = buildRunContextPayload([
+      {
+        kind: "file",
+        name: "components",
+        fullPath: "/repo/src/components",
+        type: "directory",
+      },
+    ]);
+
+    expect(payload.contextFiles).toEqual([
+      { path: "/repo/src/components", type: "directory" },
+    ]);
   });
 
   it("turns a code selection into a `selection` item whose ref matches its chip token", () => {

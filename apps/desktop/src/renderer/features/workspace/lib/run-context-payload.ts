@@ -40,7 +40,7 @@ export interface RunContextPayload {
     title: string;
     body?: string | null;
   }>;
-  contextFiles?: Array<{ path: string }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
   contextSignals?: Array<{
     source: string;
     level: string;
@@ -195,7 +195,9 @@ export function buildRunContextPayload(
         body: i.body,
       })),
     ),
-    contextFiles: orUndefined(files.map((f) => ({ path: f.fullPath }))),
+    contextFiles: orUndefined(
+      files.map((f) => ({ path: f.fullPath, type: f.type })),
+    ),
     contextSignals: orUndefined(
       signals.map((s) => ({
         source: s.source,

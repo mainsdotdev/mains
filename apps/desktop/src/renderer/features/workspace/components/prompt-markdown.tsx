@@ -25,6 +25,7 @@ export interface PromptMarkdownSkill {
 export interface PromptMarkdownFile {
   fullPath: string;
   basename: string;
+  isDirectory?: boolean;
 }
 
 interface MarkdownNode {
@@ -194,6 +195,7 @@ function PromptFileChip({ file }: { file: PromptMarkdownFile }) {
       <FileIconComponent
         extension={extension}
         fileName={file.basename}
+        isDirectory={file.isDirectory}
         className="size-3.5 shrink-0"
       />
       <span className="leading-none">{file.basename}</span>

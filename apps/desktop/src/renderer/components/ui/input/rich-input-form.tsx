@@ -33,6 +33,8 @@ export interface RichFileChipData {
   path: string;
   /** Short label rendered inside the chip. */
   basename: string;
+  /** Render a folder icon while keeping the same path-token semantics. */
+  isDirectory?: boolean;
 }
 
 export interface RichCodeChipData {
@@ -243,14 +245,19 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
 
 const fileIconMarkupCache = new Map<string, string>();
 
-function getFileIconMarkup(basename: string): string {
-  const cacheKey = basename;
+function getFileIconMarkup(basename: string, isDirectory = false): string {
+  const cacheKey = `${isDirectory ? "directory" : "file"}:${basename}`;
   const cached = fileIconMarkupCache.get(cacheKey);
   if (cached !== undefined) return cached;
   const dotIdx = basename.lastIndexOf(".");
   const extension = dotIdx > 0 && dotIdx < basename.length - 1 ? basename.slice(dotIdx + 1) : undefined;
   const markup = renderToStaticMarkup(
-    <FileIconComponent extension={extension} fileName={basename} className="size-3.5" />,
+    <FileIconComponent
+      extension={extension}
+      fileName={basename}
+      isDirectory={isDirectory}
+      className="size-3.5"
+    />,
   );
   fileIconMarkupCache.set(cacheKey, markup);
   return markup;
@@ -268,7 +275,7 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
 
   const iconSlot = document.createElement("span");
   iconSlot.className = "inline-flex items-center justify-center size-3.5 shrink-0";
-  iconSlot.innerHTML = getFileIconMarkup(file.basename);
+  iconSlot.innerHTML = getFileIconMarkup(file.basename, file.isDirectory);
   chip.appendChild(iconSlot);
 
   const label = document.createElement("span");

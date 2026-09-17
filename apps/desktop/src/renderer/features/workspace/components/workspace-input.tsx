@@ -509,7 +509,11 @@ export function WorkspaceInput({
   const fileChipMap = useMemo(() => {
     const m = new Map<string, RichFileChipData>();
     for (const f of contextFiles) {
-      m.set(f.fullPath, { path: f.fullPath, basename: f.name });
+      m.set(f.fullPath, {
+        path: f.fullPath,
+        basename: f.name,
+        isDirectory: f.type === "directory",
+      });
     }
     return m;
   }, [contextFiles]);
@@ -573,6 +577,7 @@ export function WorkspaceInput({
         inputRef.current?.replaceTokenWithFileChip(t, {
           path: node.fullPath,
           basename: node.name,
+          isDirectory: node.type === "directory",
         }) ?? false;
       if (!ok) {
         const next = replaceMentionInGoal(

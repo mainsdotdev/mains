@@ -88,7 +88,7 @@ export interface WorkRunRequest {
   /** Structured context signals (error reports) passed from the UI */
   contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
   /** Structured context files passed from the UI */
-  contextFiles?: Array<{ path: string }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
   /** User-selected skills to invoke during this run (adapter decides how to inject) */
   skills?: Array<{
     name: string;
@@ -422,7 +422,7 @@ export interface WorkRunContinueRequest {
   /** Structured context signals (error reports) to inject into this follow-up */
   contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
   /** Structured context files to inject into this follow-up */
-  contextFiles?: Array<{ path: string }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
   /** User-selected skills to invoke for this follow-up (adapter decides how to inject) */
   skills?: Array<{
     name: string;

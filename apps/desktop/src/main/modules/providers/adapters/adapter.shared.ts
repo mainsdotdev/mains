@@ -407,7 +407,7 @@ export function formatSignalsSection(
  * Format context files into a section string.
  */
 export function formatFilesSection(
-  files: Array<{ path: string }>,
+  files: Array<{ path: string; type?: "file" | "directory" }>,
 ): string {
   return files.map((f) => `- ${f.path}`).join("\n");
 }
@@ -433,7 +433,7 @@ export function appendPromptSections(
       stackTrace?: string | null;
       eventCount?: number;
     }>;
-    contextFiles?: Array<{ path: string }>;
+    contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
     attachments?: FileAttachment[];
     runId?: string;
     includeIssueBody?: boolean;
@@ -503,7 +503,7 @@ export async function emitUserPromptArtifact(
       stackTrace?: string | null;
       eventCount?: number;
     }>;
-    contextFiles?: Array<{ path: string }>;
+    contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
     contextSkills?: Array<{
       name: string;
       path?: string;

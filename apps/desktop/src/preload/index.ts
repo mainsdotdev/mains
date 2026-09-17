@@ -622,7 +622,7 @@ const api = {
       attachments?: Array<{ name: string; type: string; data?: string; sourcePath?: string; mimeType: string }>;
       contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
       contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
-      contextFiles?: Array<{ path: string }>;
+      contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
       contextSkills?: Array<{ name: string; path?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
     }) => ipcRenderer.invoke(CHANNELS.runs.execute, payload),
     abort: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.abort, runId),
@@ -643,7 +643,7 @@ const api = {
       attachments?: Array<{ name: string; type: string; data?: string; sourcePath?: string; mimeType: string }>;
       contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
       contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
-      contextFiles?: Array<{ path: string }>;
+      contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
       contextSkills?: Array<{ name: string; path?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
     canResume: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.canResume, runId),
@@ -833,6 +833,7 @@ const api = {
       query: string;
       max?: number;
       includeHidden?: boolean;
+      includeDirectories?: boolean;
       excludePatterns?: string[];
     }) => ipcRenderer.invoke(CHANNELS.fileExplorer.searchFiles, options),
     /**

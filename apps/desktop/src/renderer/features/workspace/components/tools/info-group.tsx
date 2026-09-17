@@ -105,7 +105,10 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
       title: string;
     }>;
     const files = (
-      (event.metadata?.files ?? []) as Array<{ path: string }>
+      (event.metadata?.files ?? []) as Array<{
+        path: string;
+        type?: "file" | "directory";
+      }>
     ).map((f) => {
       const lastSlash = f.path.lastIndexOf("/");
       const fileName = f.path.substring(lastSlash + 1);
@@ -115,6 +118,7 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
       return {
         fullPath: f.path,
         basename: fileName,
+        isDirectory: f.type === "directory",
         displayName: parent ? `${parent}/${fileName}` : fileName,
       };
     });
