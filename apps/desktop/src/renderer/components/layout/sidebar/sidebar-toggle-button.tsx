@@ -2,24 +2,15 @@ import { SidebarOpen, SidebarClose } from "@/components/ui/icons";
 import { Button } from "@/components/ui";
 import { useState, useEffect } from "react";
 import { useCapabilities } from "@/lib/platform";
-import { SpaceModePicker } from "@/features/workspace/components/space-mode-picker";
-import type { ModeId } from "../../../../shared/modes";
 
 interface SidebarToggleButtonProps {
   isOpen: boolean;
   onClick: () => void;
-  mode?: ModeId;
-  /** Active space's provider — the picker narrows its list with it. */
-  providerId?: string;
-  onModeChange?: (mode: ModeId) => void;
 }
 
 export function SidebarToggleButton({
   isOpen,
   onClick,
-  mode,
-  providerId,
-  onModeChange,
 }: SidebarToggleButtonProps) {
   const { windowChrome } = useCapabilities();
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -54,13 +45,6 @@ export function SidebarToggleButton({
           )}
         </Button>
       </div>
-      {mode && onModeChange && (
-        <SpaceModePicker
-          value={mode}
-          providerId={providerId}
-          onChange={onModeChange}
-        />
-      )}
     </div>
   );
 }

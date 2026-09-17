@@ -1,46 +1,44 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import UserProfile from "./user-profile";
-import SearchBar from "./search-bar";
+import { Button } from "@/components/ui";
+import { Search } from "@/components/ui/icons";
+import { SpaceModePicker } from "@/features/workspace/components/space-mode-picker";
+import type { ModeId } from "../../../../shared/modes";
 
 interface SidebarHeaderProps {
-  avatarUrl?: string;
-  displayName?: string;
-  isSearchExpanded: boolean;
-  searchQuery: string;
-  onSearchExpand: () => void;
-  onSearchChange: (query: string) => void;
-  onSearchClear: () => void;
+  mode?: ModeId;
+  providerId?: string;
+  onModeChange: (mode: ModeId) => void;
 }
 
 export function SidebarHeader({
-  avatarUrl,
-  displayName,
-  isSearchExpanded,
-  searchQuery,
-  onSearchExpand,
-  onSearchChange,
-  onSearchClear,
+  mode,
+  providerId,
+  onModeChange,
 }: SidebarHeaderProps) {
   return (
-    <div className="px-3 pt-12  shrink-0">
-      {/* <div
-        className={`flex items-center transition-all duration-200 ease-in-out ${
-          isSearchExpanded ? "gap-0" : "gap-3"
-        }`}
+    <div className="flex shrink-0 items-center gap-2 px-3 pb-1 pt-11">
+      <div className="flex min-w-0 flex-1 items-center">
+        {mode ? (
+          <SpaceModePicker
+            value={mode}
+            providerId={providerId}
+            prefixLabel="Mains"
+            appearance="sidebar"
+            onChange={onModeChange}
+          />
+        ) : (
+          <span className="flex h-9 items-center px-2 text-base font-semibold text-primary-800 dark:text-primary-200">
+            Mains
+          </span>
+        )}
+      </div>
+      <Button
+        tooltip="Search coming soon"
+        aria-label="Search (coming soon)"
+        aria-disabled="true"
+        className="flex size-9 shrink-0 items-center justify-center rounded-xl text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5"
       >
-        <UserProfile
-          avatarUrl={avatarUrl}
-          displayName={displayName}
-          isVisible={!isSearchExpanded}
-        />
-        <SearchBar
-          isExpanded={isSearchExpanded}
-          searchQuery={searchQuery}
-          onToggle={onSearchExpand}
-          onSearchChange={onSearchChange}
-          onClear={onSearchClear}
-        />
-      </div> */}
+        <Search aria-hidden="true" className="size-4" />
+      </Button>
     </div>
   );
 }

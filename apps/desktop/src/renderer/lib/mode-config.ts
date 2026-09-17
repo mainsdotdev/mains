@@ -43,6 +43,8 @@ export interface ModeConfigDescriptor {
   mode: ModeId;
   /** Human-facing name for the mode picker. */
   label: string;
+  /** Supporting copy shown under the mode name in the picker menu. */
+  description: string;
   sidebar: ModeSidebarConfig;
   /**
    * Composer placeholder per mode: developer advertises files because the
@@ -97,6 +99,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
   developer: {
     mode: "developer",
     label: "Code",
+    description: "Shape and ship your codebase",
     sidebar: {
       title: "Project",
       itemType: "workspace",
@@ -131,6 +134,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
   work: {
     mode: "work",
     label: "Work",
+    description: "Turn tasks into finished work",
     sidebar: {
       title: "chat",
       itemType: "chat",
@@ -160,6 +164,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
   chat: {
     mode: "chat",
     label: "Chat",
+    description: "Think, explore, and get answers",
     sidebar: {
       title: "chat",
       itemType: "chat",

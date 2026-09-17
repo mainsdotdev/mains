@@ -32,6 +32,7 @@ import { useActiveSpace } from "@/hooks/use-active-space";
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import { useScriptNotifications } from "@/hooks/use-script-notifications";
 import { useSidebarSpaceSwipe } from "@/hooks/use-sidebar-space-swipe";
+import { useUpdateSpaceMutation } from "@/lib/redux/api";
 import { UpdateBanner } from "./update-banner";
 import { BackgroundRunsDock } from "@/features/workspace/components/background-runs";
 import { Button, Text, Tooltip } from "@/components/ui";
@@ -47,6 +48,7 @@ import {
   SIDEBAR_WIDTH_DEFAULT,
 } from "@/lib/layout";
 import { Clock } from "@/components/ui/icons/space";
+import type { ModeId } from "../../../../shared/modes";
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -60,16 +62,11 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const sidebarConfig = useSidebarConfig();
   const modeConfig = useModeConfig();
   const isChatShell = sidebarConfig.itemType === "chat";
-  const { spaces, activeSpaceId } = useActiveSpace();
+  const { spaces, activeSpaceId, activeSpace } = useActiveSpace();
+  const [updateSpace] = useUpdateSpaceMutation();
   const spaceProvider = useSpaceProviderVariant();
 
-  const {
-    searchQuery,
-    isSearchExpanded,
-    setSearchQuery,
-    handleSearchExpand,
-    handleSearchClear,
-  } = useSidebarSearch();
+  const { searchQuery } = useSidebarSearch();
 
   const { isSettingsOpen, handleOpenSettings, handleCloseSettings } =
     useSettingsNavigation();
@@ -96,7 +93,6 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   };
 
   const {
-    account,
     workspaces,
     gitStateByWorkspaceId,
     isLoadingWorkspaces,
@@ -168,6 +164,11 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     location.pathname === "/relay" || location.pathname.startsWith("/relay/");
   const isPluginsDisabledForAgent = !spaceProvider.supportsPlugins;
 
+  const handleModeChange = (mode: ModeId) => {
+    if (!activeSpace || mode === activeSpace.mode) return;
+    void updateSpace({ id: activeSpace.id, payload: { mode } });
+  };
+
   return (
     <>
       <aside
@@ -190,13 +191,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         ) : (
           <div className="h-full overflow-hidden flex flex-col">
             <SidebarHeader
-              avatarUrl={account?.avatarUrl}
-              displayName={account?.displayName}
-              isSearchExpanded={isSearchExpanded}
-              searchQuery={searchQuery}
-              onSearchExpand={handleSearchExpand}
-              onSearchChange={setSearchQuery}
-              onSearchClear={handleSearchClear}
+              mode={activeSpace?.mode}
+              providerId={activeSpace?.providerId}
+              onModeChange={handleModeChange}
             />
             <div className="px-3 py-px">
               <NewButton

@@ -41,10 +41,6 @@ import { MainHeaderProvider } from "./hooks/use-main-header";
 import { useLayoutWidthVars } from "./hooks/use-layout-width-vars";
 import { useAppearanceFonts } from "./hooks/use-appearance-fonts";
 import { getProviderVariant } from "./lib/provider-variants";
-import { getRouteType } from "./lib/route-utils";
-import { useActiveSpace } from "./hooks/use-active-space";
-import { useUpdateSpaceMutation } from "./lib/redux/api";
-import type { ModeId } from "../shared/modes";
 
 // First-run-only UI is a substantial graph (feature previews, provider cards,
 // and settings controls). Completed users should not parse it on every launch.
@@ -95,7 +91,6 @@ function AppContent() {
   useLayoutWidthVars();
   useAppearanceFonts();
   const location = useLocation();
-  const showSpaceModePicker = getRouteType(location.pathname) !== "settings";
   const hideRightPanel = shouldHideRightPanel(location.pathname);
   const variant = useWorkspaceVariant();
   const activeProviderId =
@@ -104,8 +99,6 @@ function AppContent() {
   const browserPanel = useBrowserPanel();
   const docViewer = useDocumentViewer();
   const modeConfig = useModeConfig();
-  const { activeSpace } = useActiveSpace();
-  const [updateSpace] = useUpdateSpaceMutation();
   const showTerminalToggle = variant !== "default" && modeConfig.showTerminal;
   const showBrowserToggle = variant !== "default";
   const dispatch = useAppDispatch();
@@ -126,11 +119,6 @@ function AppContent() {
     (state) => state.appSettings.onboardingCompleted,
   );
   const isMobile = useIsMobile();
-
-  const handleSelectMode = (mode: ModeId) => {
-    if (!activeSpace || mode === activeSpace.mode) return;
-    void updateSpace({ id: activeSpace.id, payload: { mode } });
-  };
 
   // Chat/work hide the right panel entirely; a persisted rightPanelOpen from a
   // developer session must not inset the content there (and is left untouched
@@ -276,9 +264,6 @@ function AppContent() {
           <SidebarToggleButton
             isOpen={!sidebarCollapsed}
             onClick={() => dispatch(setSidebarCollapsed(!sidebarCollapsed))}
-            mode={showSpaceModePicker ? activeSpace?.mode : undefined}
-            providerId={activeSpace?.providerId}
-            onModeChange={handleSelectMode}
           />
         )}
         <Sidebar collapsed={sidebarCollapsed} />

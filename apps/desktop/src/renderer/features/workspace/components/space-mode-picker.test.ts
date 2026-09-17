@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe("SpaceModePicker", () => {
-  it("shows all three modes, shortcuts, and the active check", async () => {
+  it("shows all three modes, descriptions, shortcuts, and the active fill", async () => {
     const user = userEvent.setup();
     render(
       createElement(SpaceModePicker, {
@@ -36,9 +36,9 @@ describe("SpaceModePicker", () => {
     const menu = screen.getByRole("menu", { name: "Choose mode" });
     const choices = within(menu).getAllByRole("menuitemradio");
     expect(choices.map((choice) => choice.textContent)).toEqual([
-      "Code⌘ 1",
-      "Work⌘ 2",
-      "Chat⌘ 3",
+      "CodeShape and ship your codebase⌘ 1",
+      "WorkTurn tasks into finished work⌘ 2",
+      "ChatThink, explore, and get answers⌘ 3",
     ]);
     expect(choices.map((choice) => choice.getAttribute("aria-checked"))).toEqual([
       "false",
@@ -62,6 +62,21 @@ describe("SpaceModePicker", () => {
 
     expect(screen.getByText("Code")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Current mode/ })).toBeNull();
+  });
+
+  it("keeps the product and mode labels in one sidebar trigger", () => {
+    render(
+      createElement(SpaceModePicker, {
+        value: "developer",
+        prefixLabel: "Mains",
+        appearance: "sidebar",
+        onChange: vi.fn(),
+      }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Current mode: Code" }).textContent,
+    ).toBe("MainsCode");
   });
 
   it("ignores the shortcut for a mode the provider does not drive", () => {

@@ -21,6 +21,18 @@ interface MainContentProps {
   browserOpen?: boolean;
 }
 
+export function getCollapsedHeaderPaddingLeft(
+  sidebarCollapsed: boolean | undefined,
+  windowChrome: boolean,
+  isFullscreen: boolean,
+): string | undefined {
+  if (!sidebarCollapsed) return undefined;
+
+  // Only the sidebar toggle remains in the titlebar. Native chrome also needs
+  // room for the macOS traffic lights to its left.
+  return windowChrome && !isFullscreen ? "7rem" : "3rem";
+}
+
 export function MainContent({
   children,
   marginLeft,
@@ -37,12 +49,11 @@ export function MainContent({
     return window.api.app.onFullscreenChange(setIsFullscreen);
   }, []);
 
-  // When the sidebar is collapsed, its toggle and active mode stay in the
-  // titlebar. Keep tabs clear of that cluster; native chrome needs additional
-  // room for the macOS traffic lights to its left.
-  const reserveTrafficLights = windowChrome && !isFullscreen;
-  const headerPaddingLeft =
-    sidebarCollapsed ? (reserveTrafficLights ? "11rem" : "7rem") : undefined;
+  const headerPaddingLeft = getCollapsedHeaderPaddingLeft(
+    sidebarCollapsed,
+    windowChrome,
+    isFullscreen,
+  );
 
   // When header exists and the first tab is active, the content's top-left corner
   // must be sharp so it connects seamlessly with the active tab above it.
