@@ -303,6 +303,10 @@ body[data-resizing] iframe {
 /* Toasts use transitions (not keyframes) so rapid add/dismiss retargets from
    the current state instead of restarting from zero; entry via @starting-style. */
 .toast-item {
+  --toast-glow: var(--color-primary-500);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   opacity: 1;
   transform: scale(1) translateY(0);
   transform-origin: top;
@@ -311,6 +315,36 @@ body[data-resizing] iframe {
     opacity 250ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform, opacity;
   contain: layout style paint;
+}
+
+.toast-item[data-toast-type="success"] {
+  --toast-glow: var(--color-success);
+}
+
+.toast-item[data-toast-type="error"] {
+  --toast-glow: var(--color-danger);
+}
+
+.toast-item-glow {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 60% 120% at 50% 120%,
+    color-mix(in srgb, var(--toast-glow) 42%, transparent) 0%,
+    color-mix(in srgb, var(--toast-glow) 14%, transparent) 46%,
+    transparent 76%
+  );
+}
+
+.toast-item > :not(.toast-item-glow) {
+  position: relative;
+  z-index: 1;
+}
+
+.toast-item::before {
+  z-index: 2;
 }
 
 @starting-style {
