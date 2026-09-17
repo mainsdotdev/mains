@@ -24,6 +24,7 @@ import {
 import { createWorkAdapter } from "../providers/adapters";
 import { runSessionRegistry } from "./run-session-registry";
 import { emit } from "../../ipc-kit";
+import type { RunArtifactKind } from "./runs.dto";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -720,7 +721,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
 
     await runsRepo.insertArtifact({
       runId,
-      kind: event.kind as "patch" | "file" | "log" | "report" | "command_result" | "result",
+      kind: event.kind as RunArtifactKind,
       path: event.path,
       content: event.content,
       contentHash: event.content ? hashContent(event.content) : undefined,

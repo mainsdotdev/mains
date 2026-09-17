@@ -88,7 +88,8 @@ export type RunArtifactKind =
   | "result"
   | "prompt_suggestion"
   | "image"
-  | "document";
+  | "document"
+  | "visualization";
 
 /**
  * `runArtifacts:getByRun` row. `metadata.kind` is the transcript's real

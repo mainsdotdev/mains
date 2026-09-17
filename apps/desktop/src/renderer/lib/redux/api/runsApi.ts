@@ -21,7 +21,12 @@ export type RunArtifactKind =
   | "file"
   | "log"
   | "report"
-  | "command_result";
+  | "command_result"
+  | "result"
+  | "prompt_suggestion"
+  | "image"
+  | "document"
+  | "visualization";
 
 export interface Run {
   id: string;

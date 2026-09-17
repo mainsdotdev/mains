@@ -30,6 +30,7 @@ import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useCapabilities } from "@/lib/platform";
 import { DocumentArtifact } from "@/features/workspace/components/tools/document-artifact";
 import { ImageGenerationLoader } from "@/features/workspace/components/tools/image-generation-loader";
+import { VisualizationArtifact } from "@/features/workspace/components/tools/visualization-artifact";
 import { classifyDocType, type DocType } from "@/lib/document-viewer";
 import { useSmoothText } from "../../hooks/use-smooth-text";
 import {
@@ -381,6 +382,20 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
           docType={docType}
         />
       </div>
+    );
+  }
+
+  if (event.type === "artifact" && event.metadata?.kind === "visualization") {
+    const absPath = (event.metadata?.path as string | undefined) ?? "";
+    if (!absPath) return null;
+    const title = event.metadata?.title as string | undefined;
+    const mode = event.metadata?.mode === "wide" ? "wide" : undefined;
+    return (
+      <VisualizationArtifact
+        absPath={absPath}
+        title={title}
+        mode={mode}
+      />
     );
   }
 

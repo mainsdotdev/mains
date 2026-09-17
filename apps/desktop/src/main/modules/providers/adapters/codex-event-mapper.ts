@@ -147,9 +147,89 @@ function settleSubAgent(
 const ANNOTATION_MARKER = /[\uE200-\uE20F]/;
 const ANNOTATION_BLOCK = /[ \t]*\uE200[\s\S]*?(?:\uE201|$)/g;
 
+const CONTENT_REFERENCE_BLOCK = /[ \t]*\uE200([\s\S]*?)(\uE201|$)/g;
+const CONTENT_REFERENCE_SEPARATOR = "\uE202";
+const VISUALIZATION_MAX_BYTES = 1024 * 1024;
+
+interface VisualizationReference {
+  path: string;
+  mode?: "wide";
+  title?: string;
+}
+
+type AgentMessagePart =
+  | { type: "text"; text: string }
+  | { type: "visualization"; reference: VisualizationReference };
+
 export function stripAnnotationMarkers(text: string): string {
   if (!ANNOTATION_MARKER.test(text)) return text;
   return text.replace(ANNOTATION_BLOCK, "").replace(/[\uE200-\uE20F]/g, "");
+}
+
+/**
+ * Codex uses the same private-use envelope for citations and rich content
+ * references. Citations remain invisible in Mains, while a complete
+ * `visualize` reference becomes a first-class transcript artifact. Keeping
+ * this parser separate from the streaming sanitizer is deliberate: a partial
+ * reference must stay hidden until its closing marker and valid JSON arrive.
+ */
+export function parseAgentMessageParts(text: string): AgentMessagePart[] {
+  if (!ANNOTATION_MARKER.test(text)) {
+    const plain = text.trim();
+    return plain ? [{ type: "text", text: plain }] : [];
+  }
+
+  const parts: AgentMessagePart[] = [];
+  let cursor = 0;
+  let pendingText = "";
+
+  const flushText = () => {
+    const plain = pendingText.replace(/[\uE200-\uE20F]/g, "").trim();
+    if (plain) parts.push({ type: "text", text: plain });
+    pendingText = "";
+  };
+
+  for (const match of text.matchAll(CONTENT_REFERENCE_BLOCK)) {
+    const index = match.index ?? 0;
+    pendingText += text.slice(cursor, index);
+    cursor = index + match[0].length;
+
+    // An unterminated streaming reference consumes the remainder and stays
+    // invisible. The completed notification will be parsed again in full.
+    if (match[2] !== "\uE201") continue;
+
+    const payload = match[1] ?? "";
+    const separatorIndex = payload.indexOf(CONTENT_REFERENCE_SEPARATOR);
+    if (separatorIndex < 0) continue;
+    const kind = payload.slice(0, separatorIndex).trim();
+    if (kind !== "visualize") continue;
+
+    try {
+      const raw = JSON.parse(
+        payload.slice(separatorIndex + CONTENT_REFERENCE_SEPARATOR.length),
+      ) as Record<string, unknown>;
+      if (typeof raw.path !== "string" || !raw.path.trim()) continue;
+      const title = typeof raw.title === "string"
+        ? raw.title.trim().slice(0, 200)
+        : "";
+      flushText();
+      parts.push({
+        type: "visualization",
+        reference: {
+          path: raw.path.trim(),
+          ...(raw.mode === "wide" ? { mode: "wide" as const } : {}),
+          ...(title ? { title } : {}),
+        },
+      });
+    } catch {
+      // Malformed rich-content references are transport syntax, not prose.
+      // Drop them just like an unresolvable citation.
+    }
+  }
+
+  pendingText += text.slice(cursor);
+  flushText();
+  return parts;
 }
 
 interface Usage {
@@ -184,6 +264,7 @@ export interface CodexEventRunState {
   commandOutputBuffers: Map<string, string>;
   emittedImagePaths: Set<string>;
   emittedDocPaths: Set<string>;
+  emittedVisualizationKeys: Set<string>;
   runStartedAt: number;
   planBuffers: Map<string, string>;
   lastPlanSnapshot: string | null;
@@ -247,6 +328,7 @@ export function createCodexEventRunState(
     commandOutputBuffers: new Map(),
     emittedImagePaths: new Set(),
     emittedDocPaths: new Set(),
+    emittedVisualizationKeys: new Set(),
     runStartedAt,
     planBuffers: new Map(),
     lastPlanSnapshot: null,
@@ -708,6 +790,133 @@ export function createCodexEventMapper(
     }
   }
 
+  function isAllowedVisualizationPath(
+    resolved: string,
+    workspaceRoot: string | null,
+  ): boolean {
+    const codexVisualizationRoot = path.join(
+      os.homedir(),
+      ".codex",
+      "visualizations",
+    );
+    if (
+      resolved === codexVisualizationRoot ||
+      resolved.startsWith(codexVisualizationRoot + path.sep)
+    ) {
+      return true;
+    }
+    if (!workspaceRoot) return false;
+    const root = path.resolve(workspaceRoot);
+    return resolved === root || resolved.startsWith(root + path.sep);
+  }
+
+  function emitVisualizationArtifact(
+    events: WorkRunEvent[],
+    runId: string,
+    reference: VisualizationReference,
+    ts: number,
+    metadata: Record<string, unknown>,
+  ): boolean {
+    const rs = getRunState(runId);
+    if (!rs) return false;
+
+    const expanded = expandHomeTilde(reference.path);
+    if (!path.isAbsolute(expanded)) return false;
+    const resolved = path.resolve(expanded);
+    const itemId = typeof metadata.itemId === "string"
+      ? metadata.itemId
+      : "unknown-item";
+    const dedupeKey = `${itemId}\0${resolved}`;
+    if (
+      path.extname(resolved).toLowerCase() !== ".html" ||
+      !isAllowedVisualizationPath(resolved, rs.mainsCtx.rootPath) ||
+      rs.emittedVisualizationKeys.has(dedupeKey)
+    ) {
+      return false;
+    }
+
+    try {
+      const stat = fs.lstatSync(resolved);
+      if (stat.isSymbolicLink() || !stat.isFile()) return false;
+      if (stat.size <= 0 || stat.size > VISUALIZATION_MAX_BYTES) return false;
+    } catch {
+      return false;
+    }
+
+    rs.emittedVisualizationKeys.add(dedupeKey);
+    events.push({
+      type: "artifact",
+      kind: "visualization",
+      path: resolved,
+      content: "",
+      metadata: {
+        ...metadata,
+        kind: "visualization",
+        source: "codex_visualize",
+        path: resolved,
+        fileName: path.basename(resolved),
+        ...(reference.mode ? { mode: reference.mode } : {}),
+        ...(reference.title ? { title: reference.title } : {}),
+      },
+      ts,
+    });
+    return true;
+  }
+
+  /**
+   * Persist a completed Codex assistant message in transport order. Plain text
+   * remains a report; `visualize` references become sandboxed HTML artifacts.
+   */
+  function emitAgentMessageContent(
+    events: WorkRunEvent[],
+    runId: string,
+    rawText: string,
+    itemId: string | null,
+    ts: number,
+    extraMetadata: Record<string, unknown> = {},
+  ): boolean {
+    const parts = parseAgentMessageParts(rawText);
+    const documentText: string[] = [];
+    let emitted = false;
+    const metadata = {
+      source: "agent_message",
+      itemId,
+      ...extraMetadata,
+    };
+
+    for (const part of parts) {
+      if (part.type === "text") {
+        documentText.push(part.text);
+        events.push({
+          type: "artifact",
+          kind: "report",
+          content: part.text,
+          metadata,
+          ts,
+        });
+        emitted = true;
+        continue;
+      }
+      emitted = emitVisualizationArtifact(
+        events,
+        runId,
+        part.reference,
+        ts,
+        metadata,
+      ) || emitted;
+    }
+
+    if (documentText.length > 0) {
+      emitDocumentArtifactsFromText(
+        events,
+        runId,
+        documentText.join("\n"),
+        ts,
+      );
+    }
+    return emitted;
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Event mapping: app-server notifications → WorkRunEvent
   // ─────────────────────────────────────────────────────────────
@@ -1086,30 +1295,19 @@ export function createCodexEventMapper(
           runState.pendingFlush = [];
 
           // Emit remaining buffer
-          const messageText = stripAnnotationMarkers(
-            runState.agentMessageBuffer,
-          ).trim();
-          if (messageText) {
+          const rawMessage = runState.agentMessageBuffer.trim();
+          if (rawMessage) {
             const messageItemId = runState.currentMessageItemId;
-            events.push({
-              type: "artifact",
-              kind: "report",
-              content: messageText,
-              metadata: { source: "agent_message", itemId: messageItemId },
-            });
+            emitAgentMessageContent(
+              events,
+              runId,
+              rawMessage,
+              messageItemId,
+              ts,
+            );
             if (messageItemId) {
               runState.emittedAgentMessageItemIds.add(messageItemId);
             }
-            // The agent's closing summary is the most reliable reference to a
-            // generated document (e.g. "Done: report.docx") — surface it as a
-            // document artifact card even when the .png previews it produced
-            // live elsewhere.
-            emitDocumentArtifactsFromText(
-              events,
-              runId,
-              messageText,
-              ts,
-            );
             runState.agentMessageBuffer = "";
             runState.currentMessageItemId = null;
           }
@@ -1264,17 +1462,16 @@ export function createCodexEventMapper(
           // evidence that the foreground buffer ended.
           !isAsyncDelivery;
 
-        const competingText = rsItem
-          ? stripAnnotationMarkers(rsItem.agentMessageBuffer).trim()
-          : "";
+        const competingText = rsItem?.agentMessageBuffer.trim() ?? "";
         if (rsItem && competingText && isCompetingAgentMessage) {
           const completedItemId = rsItem.currentMessageItemId;
-          events.push({
-            type: "artifact",
-            kind: "report",
-            content: competingText,
-            metadata: { source: "agent_message", itemId: completedItemId },
-          });
+          emitAgentMessageContent(
+            events,
+            runId,
+            competingText,
+            completedItemId,
+            ts,
+          );
           if (completedItemId) {
             rsItem.emittedAgentMessageItemIds.add(completedItemId);
           }
@@ -1311,17 +1508,16 @@ export function createCodexEventMapper(
           if (runState) {
             // New message item started — flush previous one
             if (itemId && runState.currentMessageItemId && itemId !== runState.currentMessageItemId) {
-              const text = stripAnnotationMarkers(
-                runState.agentMessageBuffer,
-              ).trim();
+              const text = runState.agentMessageBuffer.trim();
               if (text) {
                 const completedItemId = runState.currentMessageItemId;
-                runState.pendingFlush.push({
-                  type: "artifact",
-                  kind: "report",
-                  content: text,
-                  metadata: { source: "agent_message", itemId: completedItemId },
-                });
+                emitAgentMessageContent(
+                  runState.pendingFlush,
+                  runId,
+                  text,
+                  completedItemId,
+                  ts,
+                );
                 runState.emittedAgentMessageItemIds.add(completedItemId);
               }
               runState.agentMessageBuffer = "";
@@ -1880,10 +2076,10 @@ export function createCodexEventMapper(
           if (rs) {
             const ownsBuffer = rs.currentMessageItemId === item.id;
             const bufferedText = ownsBuffer
-              ? stripAnnotationMarkers(rs.agentMessageBuffer).trim()
+              ? rs.agentMessageBuffer.trim()
               : "";
             const itemText = typeof item.text === "string"
-              ? stripAnnotationMarkers(item.text).trim()
+              ? item.text.trim()
               : "";
             const messageText = bufferedText || itemText;
             const questions = normalizeAsyncQuestions(item.questions);
@@ -1895,22 +2091,18 @@ export function createCodexEventMapper(
               : undefined;
 
             if (messageText && !rs.emittedAgentMessageItemIds.has(item.id)) {
-              events.push({
-                type: "artifact",
-                kind: "report",
-                content: messageText,
-                metadata: {
-                  source: "agent_message",
-                  itemId: item.id,
+              emitAgentMessageContent(
+                events,
+                runId,
+                messageText,
+                item.id,
+                ts,
+                {
                   ...(messagePhase ? { messagePhase } : {}),
                   ...(delivery ? { delivery } : {}),
                   ...(questions.length > 0 ? { questions } : {}),
                 },
-              });
-              // The agent's closing summary is the most reliable reference to a
-              // generated document (e.g. "Done: report.docx") — surface it as a
-              // document artifact card.
-              emitDocumentArtifactsFromText(events, runId, messageText, ts);
+              );
               rs.emittedAgentMessageItemIds.add(item.id);
             }
             if (

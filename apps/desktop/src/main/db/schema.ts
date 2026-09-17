@@ -636,6 +636,7 @@ export const runArtifacts = sqliteTable(
         "prompt_suggestion",
         "image",
         "document",
+        "visualization",
       ],
     }).notNull(),
 

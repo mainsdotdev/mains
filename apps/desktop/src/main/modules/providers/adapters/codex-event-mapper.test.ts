@@ -32,6 +32,7 @@ function createRunState(
     commandOutputBuffers: new Map(),
     emittedImagePaths: new Set(),
     emittedDocPaths: new Set(),
+    emittedVisualizationKeys: new Set(),
     runStartedAt: Date.now(),
     planBuffers: new Map(),
     lastPlanSnapshot: null,
@@ -180,6 +181,99 @@ describe("Codex event mapper", () => {
         content: "Buy once and play on Xbox and PC Included at launch.",
         metadata: { source: "agent_message", itemId: "message-1" },
       }),
+    );
+  });
+
+  it("turns a completed Codex visualize reference into an HTML artifact", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-viz-mapper-"));
+    tempDirs.push(root);
+    const visualizationPath = path.join(root, "spinning-gyroscope.html");
+    fs.writeFileSync(
+      visualizationPath,
+      '<div id="gyro"><button type="button">Pause</button></div>',
+    );
+    const state = createRunState(root);
+    state.runStartedAt = Date.now() - 1_000;
+    const { mapper } = createHarness(state);
+    const reference = `\uE200visualize\uE202${JSON.stringify({
+      path: visualizationPath,
+      mode: "wide",
+      title: "Spinning gyroscope",
+    })}\uE201`;
+
+    const streaming = mapper.mapNotification(
+      "item/agentMessage/delta",
+      {
+        threadId: "thread-parent",
+        itemId: "message-viz",
+        delta: `Interactive model ready.\n\n${reference}`,
+      },
+      "run-1",
+    );
+    const completed = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: { id: "message-viz", type: "agentMessage" },
+      },
+      "run-1",
+    );
+
+    expect(streaming).toContainEqual(
+      expect.objectContaining({
+        content: "Interactive model ready.\n\n",
+        ephemeral: true,
+      }),
+    );
+    expect(completed).toContainEqual(
+      expect.objectContaining({
+        type: "artifact",
+        kind: "report",
+        content: "Interactive model ready.",
+      }),
+    );
+    expect(completed).toContainEqual(
+      expect.objectContaining({
+        type: "artifact",
+        kind: "visualization",
+        path: visualizationPath,
+        metadata: expect.objectContaining({
+          kind: "visualization",
+          source: "codex_visualize",
+          path: visualizationPath,
+          mode: "wide",
+          title: "Spinning gyroscope",
+          itemId: "message-viz",
+        }),
+      }),
+    );
+  });
+
+  it("does not surface visualize paths outside the workspace allowlist", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-viz-root-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "mains-viz-outside-"));
+    tempDirs.push(root, outside);
+    const visualizationPath = path.join(outside, "outside.html");
+    fs.writeFileSync(visualizationPath, "<div>outside</div>");
+    const state = createRunState(root);
+    state.runStartedAt = Date.now() - 1_000;
+    const { mapper } = createHarness(state);
+
+    const completed = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "message-viz",
+          type: "agentMessage",
+          text: `\uE200visualize\uE202${JSON.stringify({ path: visualizationPath })}\uE201`,
+        },
+      },
+      "run-1",
+    );
+
+    expect(completed).not.toContainEqual(
+      expect.objectContaining({ kind: "visualization" }),
     );
   });
 

@@ -308,7 +308,8 @@ function groupHasMediaArtifact(g: EventGroup): boolean {
       (
         e.metadata?.kind === "image" ||
         e.metadata?.kind === "image_generation" ||
-        e.metadata?.kind === "document"
+        e.metadata?.kind === "document" ||
+        e.metadata?.kind === "visualization"
       ),
   );
 }

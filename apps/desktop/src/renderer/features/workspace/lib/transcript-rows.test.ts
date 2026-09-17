@@ -90,6 +90,27 @@ describe("buildTurnRenderRows — deliverable breakout", () => {
       writeGroupIndex(groups),
     );
   });
+
+  it("keeps an interactive visualization outside the collapsed accordion", () => {
+    const events = turnWithFileWrite();
+    events[2] = ev({
+      id: "viz1",
+      metadata: { kind: "visualization", path: "/tmp/chart.html" },
+    });
+    const groups = groupEvents(events);
+    const visualizationIndex = groups.findIndex((group) =>
+      group.events.some((event) => event.id === "viz1"),
+    );
+    const rows = buildTurnRenderRows(groups);
+    const accordion = rows.find((row) => row.kind === "accordion");
+
+    expect(accordion).toBeDefined();
+    if (accordion?.kind !== "accordion") return;
+    expect(accordion.messageBreakoutIndices).toContain(visualizationIndex);
+    expect(accordion.previousSegments.flat()).not.toContain(
+      visualizationIndex,
+    );
+  });
 });
 
 describe("matchModelChangesToPromptGroups", () => {

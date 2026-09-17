@@ -107,6 +107,9 @@ export const CHANNELS = {
   documents: {
     sign: "documents:sign",
   },
+  visualizations: {
+    sign: "visualizations:sign",
+  },
   entities: {
     create: "entities:create",
     delete: "entities:delete",

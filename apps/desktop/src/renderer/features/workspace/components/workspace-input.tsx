@@ -48,6 +48,10 @@ import { useProviderModels } from "../hooks/use-provider-models";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { useGetProviderAccountInfoQuery } from "@/lib/redux/api";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import {
+  VISUALIZATION_FOLLOW_UP_EVENT,
+  type VisualizationFollowUpDetail,
+} from "../lib/visualization-bridge";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 
@@ -291,6 +295,28 @@ export function WorkspaceInput({
     });
     return () => cancelAnimationFrame(id);
   }, [isNewRunTabActive]);
+
+  // Interactive visualizations never submit autonomously. A drill-down action
+  // places its proposed follow-up in the composer so the user can review,
+  // edit, and explicitly send it.
+  useEffect(() => {
+    const handleVisualizationFollowUp = (event: Event) => {
+      const detail = (event as CustomEvent<VisualizationFollowUpDetail>).detail;
+      if (!detail?.prompt) return;
+      onGoalChange(detail.prompt);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener(
+      VISUALIZATION_FOLLOW_UP_EVENT,
+      handleVisualizationFollowUp,
+    );
+    return () => {
+      window.removeEventListener(
+        VISUALIZATION_FOLLOW_UP_EVENT,
+        handleVisualizationFollowUp,
+      );
+    };
+  }, [onGoalChange]);
 
   const [unifiedMenu, updateUnifiedMenu] = useReducer(
     (prev: UnifiedMenuState, next: Partial<UnifiedMenuState>) => {

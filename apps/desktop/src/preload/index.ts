@@ -919,6 +919,9 @@ const api = {
   documents: {
     sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.documents.sign, absPath),
   },
+  visualizations: {
+    sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.visualizations.sign, absPath),
+  },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(CHANNELS.shell.openExternal, url),
     openPath: (path: string) => ipcRenderer.invoke(CHANNELS.shell.openPath, path),
