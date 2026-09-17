@@ -57,7 +57,7 @@ export function SidebarFooter({
             tooltip="Open Settings"
             tooltipPosition="top-right"
           >
-            <Settings className="size-4 text-primary-900 dark:text-primary-100 hover:text-primary-950 dark:hover:text-primary-100 transition-colors duration-300" />
+            <Settings className="size-4.5 text-primary-900 dark:text-primary-100 hover:text-primary-950 dark:hover:text-primary-100 transition-colors duration-300" />
           </Button>
         </div>
           <div className="">

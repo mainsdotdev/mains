@@ -161,13 +161,13 @@ export function SpaceModePicker({
         minWidth={260}
         origin="top-left"
         initialFocus="selected"
-        className="glass-input!"
+        className="glass-input! space-y-0.5"
       >
         {options.map(({ mode, shortcutLabel }) => {
           return (
             <DropdownMenuItem
               key={mode}
-              className="gap-4 px-3 py-2"
+              className="gap-4 px-3 py-1.5"
               selected={mode === value}
               indicator="none"
               onClick={() => handleModeChange(mode)}

@@ -304,6 +304,11 @@ export default function WorkspacesList({
                 navigate(`/settings?section=projects&id=${workspace.projectId}`)
             : undefined
         }
+        onCreateWorktree={
+          projectData
+            ? () => handleCreateWorktreeForProject(projectData)
+            : undefined
+        }
       />
     );
   };

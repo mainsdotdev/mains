@@ -245,7 +245,7 @@ export function DropdownMenu({
         aria-labelledby={ariaLabelledBy}
         onKeyDown={handleMenuKeyDown}
         className={cn(
-          "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in",
+          "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in p-1.5",
           className,
         )}
         style={{
@@ -382,7 +382,7 @@ export function DropdownMenuSub({
         onMouseEnter={() => openSubmenu(false)}
         onMouseLeave={startCloseTimer}
         className={cn(
-          "flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-s",
+          "flex w-full cursor-pointer items-center gap-3 px-1.5 rounded-xl py-1.5 text-s",
           "text-primary-700 transition-colors hover:bg-primary-200/40 hover:text-primary-900",
           "dark:text-primary-300 dark:hover:bg-primary/5 dark:hover:text-primary-100",
           className,
@@ -404,7 +404,7 @@ export function DropdownMenuSub({
             onKeyDown={handleSubmenuKeyDown}
             onMouseEnter={clearCloseTimer}
             onMouseLeave={startCloseTimer}
-            className="fixed z-(--z-dropdown-sub) overflow-hidden rounded-2xl glass-surface animate-dropdown-sub-in "
+            className="fixed z-(--z-dropdown-sub) overflow-hidden p-1.5 rounded-2xl glass-surface animate-dropdown-sub-in "
             style={{
               top: submenuPosition.top,
               left: submenuPosition.left,
@@ -426,12 +426,6 @@ export interface DropdownMenuItemProps {
   className?: string;
   disabled?: boolean;
   selected?: boolean;
-  /**
-   * How the selected row is drawn: a leading check, or a filled row. "none"
-   * suits menus whose rows already carry an icon, where a second glyph would
-   * only crowd them. Either way the radio semantics stay — role,
-   * `aria-checked`, and the menu's focus-the-selected-row-on-open.
-   */
   indicator?: "check" | "none";
 }
 
@@ -461,18 +455,11 @@ export function DropdownMenuItem({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "flex w-full items-center gap-3 px-3 py-2 text-s",
-        // Button's standalone focus ring does not survive here: the row runs
-        // edge to edge inside an `overflow-hidden rounded-2xl` menu, so the
-        // ring's sides are clipped away and its offset band reads as two thick
-        // bars across the row. A menu marks the keyboard position by filling the
-        // row instead — which also needs to outrank hover, or the two states
-        // look identical while arrowing over a row the pointer happens to sit on.
+        "flex w-full items-center gap-3 px-2 py-1.5 rounded-xl text-s",
         "focus-visible:ring-0 focus-visible:ring-offset-0",
         "transition-colors hover:bg-primary-200/40 ",
         "dark:hover:bg-primary/5 ",
-        // With the check suppressed the selection still has to be visible, so
-        // the row carries it as a fill — the same tint hover uses.
+
         indicator === "none" && selected
           ? "bg-primary-200/40 dark:bg-primary/5"
           : "",

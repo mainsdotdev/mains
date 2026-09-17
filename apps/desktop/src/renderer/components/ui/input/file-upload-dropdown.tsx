@@ -55,7 +55,7 @@ export function FileUploadDropdown({
   }
 
   return (
-    <div className="relative flex shrink-0 items-center" ref={dropdownRef}>
+    <div className="relative flex shrink-0 items-center " ref={dropdownRef}>
       <Button
         type="button"
         tooltip="Upload file or photo"
@@ -68,12 +68,12 @@ export function FileUploadDropdown({
       >
         <Attach className="text-primary-950 dark:text-primary size-4" />
       </Button>
-
+    
       <DropdownWrapper
         isOpen={isOpen}
         aria-label="Upload type"
         openUpward={openUpward}
-      >
+      ><div className="p-1.5">
         {[
           { label: "Images", Icon: Picture, onClick: onImageUpload },
           { label: "Documents", Icon: Document, onClick: onDocumentUpload },
@@ -83,13 +83,15 @@ export function FileUploadDropdown({
             type="button"
             onClick={onClick}
             role="menuitem"
-            className="flex w-full cursor-pointer items-center px-3 py-2 text-left text-s text-primary-900 first:rounded-t-xl last:rounded-b-xl hover:bg-primary-200/30 dark:text-primary-100 dark:hover:bg-primary-800"
+            className="flex w-full cursor-pointer items-center px-2 py-1.5 text-left text-s text-primary-900 rounded-lg hover:bg-primary-200/30 dark:text-primary-100 dark:hover:bg-primary-800"
           >
             <Icon className="mr-2 size-3.5" />
             {label}
           </Button>
         ))}
+          </div>
       </DropdownWrapper>
-    </div>
+      </div>
+  
   );
 }

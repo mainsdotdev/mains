@@ -157,7 +157,7 @@ function RowButton({
       data-dropdown-active={active ? "true" : undefined}
       onMouseEnter={onHover}
       onClick={onSelect}
-      className={`w-full text-left px-3 py-1.5 cursor-pointer transition-colors hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300 ${
+      className={`w-full text-left px-2 py-1.5 rounded-xl cursor-pointer transition-colors hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300 ${
         active ? "bg-primary-200/30 dark:bg-primary-800" : ""
       } ${className}`}
     >
@@ -258,7 +258,7 @@ function SectionHeading({
       size="xs"
       tone="subtle"
       weight="medium"
-      className={`px-3 pt-2 pb-1 ${className ?? ""}`}
+      className={`px-2 pt-2 pb-1 ${className ?? ""}`}
     >
       {children}
     </Text>
@@ -551,14 +551,14 @@ export function UnifiedContextDropdown({
         : "No matches";
 
   return (
-    <div ref={dropdownRef}>
+    <div ref={dropdownRef} >
       <DropdownWrapper
         isOpen={isOpen}
         aria-label="Context suggestions"
         openUpward={true}
         minWidth="min-w-[22rem]"
       >
-        <div className="max-h-96 max-w-115 overflow-auto noscrollbar">
+        <div className="max-h-96 max-w-115 overflow-auto noscrollbar p-1.5">
           {wantsFiles && dirPath && (
             <SectionHeading className="truncate">
               {dirPath}
@@ -642,7 +642,7 @@ export function UnifiedContextDropdown({
                                       as="span"
                                       size="t"
                                       tone="subtle"
-                                      className="px-1.5 py-px rounded-full glass-outline bg-primary-200/50 dark:bg-primary-700/20"
+                                      className="px-1.5 py-px rounded-full glass-surface "
                                     >
                                       {scopeLabel}
                                     </Text>

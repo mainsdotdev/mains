@@ -88,9 +88,7 @@ export function PullRequestsPanel({
       relationship,
       lifecycle,
       text: debouncedText || undefined,
-      ...(repoFilters.length > 0
-        ? { repos: [...repoFilters].sort() }
-        : {}),
+      ...(repoFilters.length > 0 ? { repos: [...repoFilters].sort() } : {}),
       pageSize: PAGE_SIZE,
     }),
     [relationship, lifecycle, debouncedText, repoFilters],
@@ -161,15 +159,12 @@ export function PullRequestsPanel({
 
   const toggleRepoFilter = (slug: string) =>
     setRepoFilters((prev) =>
-      prev.includes(slug)
-        ? prev.filter((s) => s !== slug)
-        : [...prev, slug],
+      prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug],
     );
 
   // A non-default state counts as a filter too, now that it lives inside
   // the facet menu with no always-visible control of its own.
-  const activeFilterCount =
-    repoFilters.length + (lifecycle !== "all" ? 1 : 0);
+  const activeFilterCount = repoFilters.length + (lifecycle !== "all" ? 1 : 0);
 
   const clearFilters = () => {
     setRepoFilters([]);
@@ -277,7 +272,7 @@ export function PullRequestsPanel({
                 className="px-2 py-1 flex items-center gap-1 text-xs rounded-full bg-primary/60 dark:bg-primary/10 glass-outline text-primary-800 dark:text-primary-200 cursor-pointer whitespace-nowrap"
                 tooltip="Clear filters"
               >
-                <Trash className="size-3.5"/>
+                <Trash className="size-3.5" />
                 {activeFilterCount} filter
                 {activeFilterCount === 1 ? "" : "s"}
               </Button>
@@ -311,6 +306,11 @@ export function PullRequestsPanel({
                     options={LIFECYCLE_FILTERS}
                     value={lifecycle}
                     onSelect={setLifecycle}
+                  />
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    className="mx-3.5 h-px bg-primary-200/70 dark:bg-primary-700/40"
                   />
                   <FilterSection
                     title="Repository"

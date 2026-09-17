@@ -95,7 +95,7 @@ export function SessionPanel({
     >
       {/* Rows open their forms in place, so the box grows with its content —
           capped short of the viewport so it never runs off the bottom. */}
-      <div className="max-h-[calc(100vh-5rem)] overflow-y-auto noscrollbar">
+      <div className="max-h-[calc(100vh-5rem)] overflow-y-auto noscrollbar p-1.5">
         <GitActionsSection providerId={providerId} onClose={close} />
       </div>
     </div>

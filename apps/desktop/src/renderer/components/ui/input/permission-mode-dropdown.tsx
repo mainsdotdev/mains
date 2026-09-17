@@ -210,6 +210,7 @@ export function PermissionModeDropdown({
         openUpward={true}
         minWidth={!isMobile ? "min-w-64" : "min-w-52"}
       >
+        <div className="p-1.5 space-y-0.5">
         {modes.map((mode) => (
           <Button
             key={mode.value}
@@ -220,9 +221,8 @@ export function PermissionModeDropdown({
               onPermissionModeChange(mode.value);
               onToggle();
             }}
-            className={`w-full text-left px-2.5 py-1.5 cursor-pointer transition-colors flex items-center gap-2.5 first:rounded-t-xl ${
-              !showPlanRow ? "last:rounded-b-xl" : ""
-            } ${
+            className={`w-full text-left px-2 py-1.5 cursor-pointer rounded-xl transition-colors flex items-center gap-2 
+              ${
               permissionMode === mode.value
                 ? "bg-primary-200/60 dark:bg-primary-200/10 text-primary-950 dark:text-primary"
                 : "hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300"
@@ -233,19 +233,22 @@ export function PermissionModeDropdown({
               className="size-3.5 shrink-0"
             />
             <div className="flex flex-col flex-1 min-w-0">
-              <Tiny className="mb-0.5">{mode.label}</Tiny>
+              <Tiny className="mb-px">{mode.label}</Tiny>
               <Caption>
                 {mode.description}
               </Caption>
             </div>
           </Button>
         ))}
+        </div>
+        <div className="px-1.5 ">
         {showPlanRow && (
           <Tooltip
             content="Disable goal mode to use plan mode"
             position="top"
             disabled={!planDisabled}
           >
+            <div className=" border-t pt-1.5 border-primary-200/40 dark:border-primary/5" />
             {/* `aria-disabled` rather than `disabled` — a truly disabled button
                 swallows the hover events the Tooltip above needs to explain
                 *why* the row is unavailable. */}
@@ -257,7 +260,7 @@ export function PermissionModeDropdown({
               onClick={() => {
                 if (!planDisabled) onPlanModeToggle?.();
               }}
-              className={`w-full text-left px-2.5 py-1.5 transition-colors flex items-center gap-2.5 last:rounded-b-xl border-t border-primary-200/40 dark:border-primary/5 ${
+              className={`w-full text-left px-2.5 p-1.5 mb-1.5 rounded-xl transition-colors flex items-center gap-2.5 ${
                 planDisabled
                   ? "cursor-not-allowed opacity-50 text-primary-600 dark:text-primary-400"
                   : planMode
@@ -276,6 +279,7 @@ export function PermissionModeDropdown({
             </Button>
           </Tooltip>
         )}
+        </div>
       </DropdownWrapper>
     </div>
   );
