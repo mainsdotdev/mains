@@ -8,6 +8,7 @@ export interface CollectionResponse {
   name: string;
   icon: string | null;
   isArchived: boolean;
+  sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,6 +33,11 @@ export interface CreateCollectionPayload {
 export interface UpdateCollectionPayload {
   name?: string;
   icon?: string | null;
+}
+
+export interface ReorderCollectionsPayload {
+  accountId: string;
+  orderedIds: string[];
 }
 
 export type CollectionSourceRecord = typeof collectionSources.$inferSelect;
@@ -90,6 +96,7 @@ export function formatCollectionResponse(
     name: record.name,
     icon: record.icon,
     isArchived: record.isArchived,
+    sortOrder: record.sortOrder,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };

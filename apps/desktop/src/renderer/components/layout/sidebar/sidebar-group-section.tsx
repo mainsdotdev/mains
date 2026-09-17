@@ -1,4 +1,8 @@
-import type { MouseEvent, ReactNode } from "react";
+import type {
+  DragEventHandler,
+  MouseEvent,
+  ReactNode,
+} from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceGroupExpanded } from "@/lib/redux/slices/appSettingsSlice";
 import { Button, Text } from "@/components/ui";
@@ -21,6 +25,8 @@ export function SidebarGroupSection({
   // count,
   action,
   secondaryAction,
+  dragHandleProps,
+  onReorderKey,
   children,
 }: {
   groupKey: string;
@@ -44,6 +50,14 @@ export function SidebarGroupSection({
     onClick: (event: MouseEvent<HTMLElement>) => void;
     icon: ReactNode;
   };
+  dragHandleProps?: {
+    draggable: boolean;
+    onDragStart: DragEventHandler<HTMLDivElement>;
+    onDragOver: DragEventHandler<HTMLDivElement>;
+    onDrop: DragEventHandler<HTMLDivElement>;
+    onDragEnd: DragEventHandler<HTMLDivElement>;
+  };
+  onReorderKey?: (direction: "up" | "down") => void;
   children: ReactNode;
 }) {
   const dispatch = useAppDispatch();
@@ -60,14 +74,38 @@ export function SidebarGroupSection({
       <div
         role="button"
         tabIndex={0}
+        draggable={dragHandleProps?.draggable}
+        onDragStart={(event) => {
+          if ((event.target as HTMLElement).closest("button")) {
+            event.preventDefault();
+            return;
+          }
+          dragHandleProps?.onDragStart(event);
+        }}
+        onDragOver={dragHandleProps?.onDragOver}
+        onDrop={dragHandleProps?.onDrop}
+        onDragEnd={dragHandleProps?.onDragEnd}
         onClick={toggleExpanded}
         onKeyDown={(e) => {
+          if (
+            onReorderKey &&
+            e.altKey &&
+            (e.key === "ArrowUp" || e.key === "ArrowDown")
+          ) {
+            e.preventDefault();
+            onReorderKey?.(e.key === "ArrowUp" ? "up" : "down");
+            return;
+          }
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             toggleExpanded();
           }
         }}
-        className="group/section w-full flex items-center gap-1.5 px-2 py-1 mb-px rounded-lg cursor-pointer hover:bg-primary/50 dark:hover:bg-primary/5 transition-colors"
+        className={`group/section w-full flex items-center gap-1.5 px-2 py-1 mb-px rounded-lg hover:bg-primary/50 dark:hover:bg-primary/5 transition-colors ${
+          dragHandleProps?.draggable
+            ? "cursor-grab active:cursor-grabbing"
+            : "cursor-pointer"
+        }`}
       >
         {icon && (
           <span className="shrink-0 text-xs">

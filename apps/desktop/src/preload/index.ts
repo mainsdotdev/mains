@@ -298,6 +298,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.collections.create, payload),
     update: (options: { id: string; accountId: string }, payload: unknown) =>
       ipcRenderer.invoke(CHANNELS.collections.update, options, payload),
+    reorder: (payload: { accountId: string; orderedIds: string[] }) =>
+      ipcRenderer.invoke(CHANNELS.collections.reorder, payload),
     archive: (options: { id: string; accountId: string }) =>
       ipcRenderer.invoke(CHANNELS.collections.archive, options),
     unarchive: (options: { id: string; accountId: string }) =>

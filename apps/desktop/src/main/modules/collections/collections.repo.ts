@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, max, sql } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { collectionSources, collections } from "../../db/schema";
 import type {
@@ -25,7 +25,7 @@ export const collectionsRepo = {
       .select()
       .from(collections)
       .where(and(...conditions))
-      .orderBy(desc(collections.updatedAt));
+      .orderBy(asc(collections.sortOrder), asc(collections.name));
     return rows.map(formatCollectionResponse);
   },
 
@@ -43,11 +43,33 @@ export const collectionsRepo = {
     payload: CreateCollectionPayload & { id: string },
   ): Promise<void> {
     const db = getDb();
+    const [row] = await db
+      .select({ maxSortOrder: max(collections.sortOrder) })
+      .from(collections)
+      .where(eq(collections.accountId, payload.accountId));
     await db.insert(collections).values({
       id: payload.id,
       accountId: payload.accountId,
       name: payload.name,
       icon: payload.icon,
+      sortOrder: (row?.maxSortOrder ?? -1) + 1,
+    });
+  },
+
+  reorder(accountId: string, orderedIds: string[]): void {
+    const db = getDb();
+    db.transaction(() => {
+      orderedIds.forEach((id, sortOrder) => {
+        db.update(collections)
+          .set({ sortOrder })
+          .where(
+            and(
+              eq(collections.id, id),
+              eq(collections.accountId, accountId),
+            ),
+          )
+          .run();
+      });
     });
   },
 
@@ -73,9 +95,23 @@ export const collectionsRepo = {
     isArchived: boolean,
   ): Promise<CollectionResponse | null> {
     const db = getDb();
+    const restoredSortOrder = isArchived
+      ? undefined
+      : (
+          await db
+            .select({ maxSortOrder: max(collections.sortOrder) })
+            .from(collections)
+            .where(eq(collections.accountId, accountId))
+        )[0]?.maxSortOrder;
     const [row] = await db
       .update(collections)
-      .set({ isArchived, updatedAt: sql`(unixepoch())` })
+      .set({
+        isArchived,
+        ...(isArchived
+          ? {}
+          : { sortOrder: (restoredSortOrder ?? -1) + 1 }),
+        updatedAt: sql`(unixepoch())`,
+      })
       .where(
         and(eq(collections.id, id), eq(collections.accountId, accountId)),
       )

@@ -2,6 +2,7 @@ import type {
   AddCollectionSourcePayload,
   CollectionIdentityOptions,
   CreateCollectionPayload,
+  ReorderCollectionsPayload,
   UpdateCollectionPayload,
 } from "./collections.dto";
 
@@ -87,6 +88,31 @@ export function validateUpdateCollection(
     throw new Error("Collection icon must be a string or null");
   }
   return data as UpdateCollectionPayload;
+}
+
+export function validateReorderCollections(
+  payload: unknown,
+): ReorderCollectionsPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Collection reorder payload must be an object");
+  }
+  const obj = payload as Record<string, unknown>;
+  if (typeof obj.accountId !== "string" || !obj.accountId.trim()) {
+    throw new Error("accountId is required");
+  }
+  if (
+    !Array.isArray(obj.orderedIds) ||
+    obj.orderedIds.some((id) => typeof id !== "string" || !id.trim())
+  ) {
+    throw new Error("orderedIds must be an array of collection ids");
+  }
+  if (new Set(obj.orderedIds).size !== obj.orderedIds.length) {
+    throw new Error("orderedIds cannot contain duplicates");
+  }
+  return {
+    accountId: obj.accountId,
+    orderedIds: obj.orderedIds,
+  };
 }
 
 export function validateAddCollectionSource(

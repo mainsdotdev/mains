@@ -77,6 +77,7 @@ export const CHANNELS = {
     get: "collections:get",
     list: "collections:list",
     listSources: "collections:listSources",
+    reorder: "collections:reorder",
     remove: "collections:remove",
     removeSource: "collections:removeSource",
     unarchive: "collections:unarchive",

@@ -7,6 +7,7 @@ export interface Collection {
   name: string;
   icon: string | null;
   isArchived: boolean;
+  sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -91,6 +92,43 @@ export const collectionsApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: ["Collections"],
     }),
+    reorderCollections: builder.mutation<
+      void,
+      { accountId: string; orderedIds: string[] }
+    >({
+      query: (payload) => ({
+        handler: CHANNELS.collections.reorder,
+        args: [payload],
+      }),
+      async onQueryStarted(
+        { accountId, orderedIds },
+        { dispatch, queryFulfilled },
+      ) {
+        const order = new Map(orderedIds.map((id, index) => [id, index]));
+        const patch = dispatch(
+          collectionsApi.util.updateQueryData(
+            "listCollections",
+            { accountId },
+            (draft) => {
+              draft.sort(
+                (a, b) =>
+                  (order.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+                  (order.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+              );
+              draft.forEach((collection, index) => {
+                if (order.has(collection.id)) collection.sortOrder = index;
+              });
+            },
+          ),
+        );
+        try {
+          await queryFulfilled;
+        } catch {
+          patch.undo();
+        }
+      },
+      invalidatesTags: (_result, error) => (error ? [] : ["Collections"]),
+    }),
     archiveCollection: builder.mutation<Collection, CollectionIdentityOptions>({
       query: (options) => ({
         handler: CHANNELS.collections.archive,
@@ -156,6 +194,7 @@ export const {
   useGetCollectionQuery,
   useCreateCollectionMutation,
   useUpdateCollectionMutation,
+  useReorderCollectionsMutation,
   useArchiveCollectionMutation,
   useUnarchiveCollectionMutation,
   useRemoveCollectionMutation,

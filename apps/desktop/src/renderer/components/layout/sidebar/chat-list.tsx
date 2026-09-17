@@ -1,4 +1,9 @@
-import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useMemo,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import {
@@ -16,6 +21,7 @@ import {
   useListCollectionsQuery,
   useMoveRunToCollectionMutation,
   useRemoveCollectionMutation,
+  useReorderCollectionsMutation,
   useUpdateRunMutation,
   useSetActiveSpaceMutation,
   useUpdateCollectionMutation,
@@ -39,9 +45,11 @@ import { useRecentChats } from "./use-recent-chats";
 import { CollectionSourcesModal } from "./collection-sources-modal";
 import CollectionModal from "./collection-modal";
 import DeleteConfirmationModal from "./delete-confirmation-modal";
+import { moveCollectionId } from "./collection-order";
 
 /** How many rows the flat Recents section shows. */
 const RECENTS_LIMIT = 20;
+const COLLECTION_DRAG_MIME = "application/x-mains-collection";
 
 interface SidebarChatListProps {
   searchQuery: string;
@@ -73,6 +81,8 @@ export function SidebarChatList({
   const [updateRun] = useUpdateRunMutation();
   const [updateCollection] = useUpdateCollectionMutation();
   const [removeCollection] = useRemoveCollectionMutation();
+  const [reorderCollections, { isLoading: isReorderingCollections }] =
+    useReorderCollectionsMutation();
   const [sourcesCollection, setSourcesCollection] =
     useState<Collection | null>(null);
   // One row's ⋯ menu at a time, plus the two dialogs it can open. Anchored to
@@ -87,6 +97,13 @@ export function SidebarChatList({
   // so it parks the run here until the confirmation comes back.
   const [deleteRunTarget, setDeleteRunTarget] = useState<RecentRun | null>(null);
   const [isDeletingRun, setIsDeletingRun] = useState(false);
+  const [draggedCollectionId, setDraggedCollectionId] = useState<string | null>(
+    null,
+  );
+  const [collectionDropTarget, setCollectionDropTarget] = useState<{
+    id: string;
+    edge: "before" | "after";
+  } | null>(null);
 
   const activeTab = useAppSelector((state) => state.workspace.activeTab);
   const { data: recentRuns, isLoading } = useRecentChats();
@@ -131,8 +148,96 @@ export function SidebarChatList({
             (runsByCollection.get(collection.id)?.length ?? 0) > 0,
         )
       : rows;
-    return [...filtered].sort((a, b) => a.name.localeCompare(b.name));
+    return filtered;
   }, [collections, query, runsByCollection]);
+
+  const canReorderCollections =
+    !query && collectionRows.length > 1 && !isReorderingCollections;
+
+  const persistCollectionOrder = (orderedIds: string[]) => {
+    if (!account) return;
+    void reorderCollections({ accountId: account.id, orderedIds })
+      .unwrap()
+      .catch((error) => {
+        console.error("Failed to reorder projects:", error);
+        toast.error("Failed to reorder projects");
+      });
+  };
+
+  const handleCollectionDragStart = (
+    collectionId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    if (!canReorderCollections) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(COLLECTION_DRAG_MIME, collectionId);
+    setDraggedCollectionId(collectionId);
+    setCollectionDropTarget(null);
+  };
+
+  const collectionDropEdge = (event: ReactDragEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY < rect.top + rect.height / 2
+      ? ("before" as const)
+      : ("after" as const);
+  };
+
+  const handleCollectionDragOver = (
+    collectionId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    if (!draggedCollectionId || draggedCollectionId === collectionId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setCollectionDropTarget({
+      id: collectionId,
+      edge: collectionDropEdge(event),
+    });
+  };
+
+  const clearCollectionDrag = () => {
+    setDraggedCollectionId(null);
+    setCollectionDropTarget(null);
+  };
+
+  const handleCollectionDrop = (
+    targetId: string,
+    event: ReactDragEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    const sourceId =
+      draggedCollectionId || event.dataTransfer.getData(COLLECTION_DRAG_MIME);
+    const currentIds = collectionRows.map((collection) => collection.id);
+    const nextIds = moveCollectionId(
+      currentIds,
+      sourceId,
+      targetId,
+      collectionDropEdge(event),
+    );
+    clearCollectionDrag();
+    if (nextIds.every((id, index) => id === currentIds[index])) return;
+    persistCollectionOrder(nextIds);
+  };
+
+  const handleCollectionReorderKey = (
+    collectionId: string,
+    direction: "up" | "down",
+  ) => {
+    if (!canReorderCollections) return;
+    const currentIds = collectionRows.map((collection) => collection.id);
+    const index = currentIds.indexOf(collectionId);
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (index < 0 || targetIndex < 0 || targetIndex >= currentIds.length) return;
+    const nextIds = [...currentIds];
+    [nextIds[index], nextIds[targetIndex]] = [
+      nextIds[targetIndex],
+      nextIds[index],
+    ];
+    persistCollectionOrder(nextIds);
+  };
 
   const handleSelectChat = async (run: RecentRun) => {
     dispatch(setSelectedCollectionId(run.collectionId));
@@ -326,43 +431,76 @@ export function SidebarChatList({
           <div className="flex flex-col gap-1">
             {collectionRows.map((collection: Collection) => {
               const collectionRuns = runsByCollection.get(collection.id) ?? [];
+              const dropTarget =
+                collectionDropTarget?.id === collection.id
+                  ? collectionDropTarget.edge
+                  : null;
               return (
-                <SidebarGroupSection
+                <div
                   key={collection.id}
-                  groupKey={`collection-${collection.id}`}
-                  label={collection.name}
-                  icon={(expanded) => (
-                    <ProjectIcon
-                      icon={collection.icon}
-                      projectName={collection.name}
-                      expanded={expanded}
+                  className={`relative ${
+                    draggedCollectionId === collection.id ? "opacity-50" : ""
+                  }`}
+                >
+                  {dropTarget && (
+                    <div
+                      className={`pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-primary-500 ${
+                        dropTarget === "before" ? "top-0" : "bottom-0"
+                      }`}
                     />
                   )}
-                  count={collectionRuns.length}
-                  action={{
-                    label: "New chat in project",
-                    onClick: () => onNewChatInCollection(collection.id),
-                  }}
-                  secondaryAction={{
-                    label: "Project options",
-                    onClick: (event) => openCollectionMenu(collection, event),
-                    icon: (
-                      <Option className="size-3 text-primary-800 dark:text-primary-200" />
-                    ),
-                  }}
-                >
-                  <div className="flex flex-col space-y-0.5">
-                    {collectionRuns.length > 0 ? (
-                      collectionRuns.map((run) => renderChat(run))
-                    ) : (
-                      <div className="px-2 py-1">
-                        <Text as="span" size="xxs" tone="muted">
-                          No chats
-                        </Text>
-                      </div>
+                  <SidebarGroupSection
+                    groupKey={`collection-${collection.id}`}
+                    label={collection.name}
+                    icon={(expanded) => (
+                      <ProjectIcon
+                        icon={collection.icon}
+                        projectName={collection.name}
+                        expanded={expanded}
+                      />
                     )}
-                  </div>
-                </SidebarGroupSection>
+                    count={collectionRuns.length}
+                    action={{
+                      label: "New chat in project",
+                      onClick: () => onNewChatInCollection(collection.id),
+                    }}
+                    secondaryAction={{
+                      label: "Project options",
+                      onClick: (event) => openCollectionMenu(collection, event),
+                      icon: (
+                        <Option className="size-3 text-primary-800 dark:text-primary-200" />
+                      ),
+                    }}
+                    dragHandleProps={{
+                      draggable: canReorderCollections,
+                      onDragStart: (event) =>
+                        handleCollectionDragStart(collection.id, event),
+                      onDragOver: (event) =>
+                        handleCollectionDragOver(collection.id, event),
+                      onDrop: (event) =>
+                        handleCollectionDrop(collection.id, event),
+                      onDragEnd: clearCollectionDrag,
+                    }}
+                    onReorderKey={
+                      canReorderCollections
+                        ? (direction) =>
+                            handleCollectionReorderKey(collection.id, direction)
+                        : undefined
+                    }
+                  >
+                    <div className="flex flex-col space-y-0.5">
+                      {collectionRuns.length > 0 ? (
+                        collectionRuns.map((run) => renderChat(run))
+                      ) : (
+                        <div className="px-2 py-1">
+                          <Text as="span" size="xxs" tone="muted">
+                            No chats
+                          </Text>
+                        </div>
+                      )}
+                    </div>
+                  </SidebarGroupSection>
+                </div>
               );
             })}
           </div>

@@ -353,6 +353,7 @@ export const collections = sqliteTable(
     isArchived: integer("is_archived", { mode: "boolean" })
       .notNull()
       .default(false),
+    sortOrder: integer("sort_order").notNull().default(0),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -362,6 +363,7 @@ export const collections = sqliteTable(
   },
   (t) => [
     index("idx_collections_account").on(t.accountId),
+    index("idx_collections_account_sort").on(t.accountId, t.sortOrder),
     index("idx_collections_updated").on(t.updatedAt),
   ],
 );

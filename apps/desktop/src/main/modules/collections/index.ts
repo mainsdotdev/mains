@@ -10,6 +10,7 @@ export type {
   CollectionSourceResponse,
   CreateCollectionPayload,
   ListCollectionsOptions,
+  ReorderCollectionsPayload,
   UpdateCollectionPayload,
   ListCollectionSourcesOptions,
   RemoveCollectionSourcePayload,

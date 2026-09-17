@@ -4,6 +4,7 @@ import {
   validateAddCollectionSource,
   validateCollectionIdentity,
   validateCreateCollection,
+  validateReorderCollections,
   validateUpdateCollection,
 } from "./collections.validation";
 import type {
@@ -97,6 +98,21 @@ export const collectionsService = {
     );
     if (!updated) throw new Error("Collection not found");
     return updated;
+  },
+
+  async reorder(payload: unknown): Promise<void> {
+    const data = validateReorderCollections(payload);
+    const activeCollections = await collectionsRepo.list({
+      accountId: data.accountId,
+    });
+    const activeIds = new Set(activeCollections.map((collection) => collection.id));
+    if (
+      data.orderedIds.length !== activeIds.size ||
+      data.orderedIds.some((id) => !activeIds.has(id))
+    ) {
+      throw new Error("Collection order must include every active project");
+    }
+    collectionsRepo.reorder(data.accountId, data.orderedIds);
   },
 
   async archive(

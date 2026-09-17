@@ -29,6 +29,10 @@ export function registerCollectionsIpc(): void {
     ),
   );
   ipcMain.handle(
+    CHANNELS.collections.reorder,
+    handle((payload: unknown) => collectionsService.reorder(payload)),
+  );
+  ipcMain.handle(
     CHANNELS.collections.archive,
     handle((options: CollectionIdentityOptions) =>
       collectionsService.archive(options),
