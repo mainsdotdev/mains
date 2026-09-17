@@ -125,15 +125,6 @@ function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): 
         mimeType: sel.screenshotMimeType || "image/png",
       });
     }
-    if (sel.surroundingScreenshotPath) {
-      attachments.push({
-        name: `browser-${host}-${slug}-${sel.id.slice(0, 6)}-context.png`,
-        type: "image",
-        sourcePath: sel.surroundingScreenshotPath,
-        mimeType: sel.screenshotMimeType || "image/png",
-      });
-    }
-
     const content = [
       `Browser selection: ${sel.componentName ? `<${sel.componentName}>` : sel.tagName}`,
       `URL: ${sel.url}`,

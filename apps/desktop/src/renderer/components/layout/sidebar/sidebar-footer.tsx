@@ -47,7 +47,7 @@ export function SidebarFooter({
               style={{
           animation: `slide-from-bottom 0.2s ease-out 0.1s both`,
         }}>
-        <div className="glass-outline rounded-full p-1.5">
+        <div className=" rounded-full p-1.5">
           <Button
             onClick={onSettingsClick}
             className="shrink-0 flex items-center justify-center transition-transform duration-300 cursor-pointer"
@@ -67,7 +67,7 @@ export function SidebarFooter({
               onSpaceChange={onSpaceChange}
             />
           </div>
-        <div className="glass-outline rounded-full p-1.5">
+        <div className=" rounded-full p-1.5">
           <Button
             tooltip="Help & Resources"
             tooltipPosition="top"

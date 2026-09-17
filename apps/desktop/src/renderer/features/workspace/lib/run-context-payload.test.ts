@@ -127,18 +127,14 @@ describe("buildRunContextPayload", () => {
       [
         browserSel({
           screenshotPath: "/caps/el.png",
-          surroundingScreenshotPath: "/caps/ctx.png",
         }),
       ],
       uploads,
     );
 
-    expect(payload.attachments).toHaveLength(3);
+    expect(payload.attachments).toHaveLength(2);
     expect(payload.attachments?.[0]).toBe(uploads[0]);
-    expect(payload.attachments?.slice(1).map((a) => a.sourcePath)).toEqual([
-      "/caps/el.png",
-      "/caps/ctx.png",
-    ]);
+    expect(payload.attachments?.[1].sourcePath).toBe("/caps/el.png");
     // Named by host + element + a slice of the selection id.
     expect(payload.attachments?.[1].name).toBe(
       "browser-example.com-button-abcdef.png",

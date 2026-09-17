@@ -191,6 +191,7 @@ export function WorkspaceInput({
     files: contextFiles,
     skills: contextSkills,
     codeSelections: contextCodeSelections,
+    browserSelections: contextBrowserSelections,
     add: addContext,
     remove: removeContext,
   } = useComposerContext();
@@ -669,6 +670,7 @@ export function WorkspaceInput({
   );
 
   const isMobile = useIsMobile();
+  const contextBrowserSelectionCount = contextBrowserSelections.length;
   const inputPlaceholder = useMemo(() => {
     if (isFileDragOver) {
       return "Drop images or documents here";
@@ -692,33 +694,38 @@ export function WorkspaceInput({
         ? composerPlaceholder.followUp
         : composerPlaceholder.initial;
 
-    if (uploadedFiles.length === 0) {
+    const imageCount =
+      uploadedFiles.filter((file) => file.type === "image").length +
+      contextBrowserSelectionCount;
+    const documentCount = uploadedFiles.filter(
+      (file) => file.type === "document",
+    ).length;
+
+    if (imageCount === 0 && documentCount === 0) {
       return withProjectContext(baseHint);
     }
 
-    const hasImages = uploadedFiles.some((f) => f.type === "image");
-    const hasDocs = uploadedFiles.some((f) => f.type === "document");
-
-    if (hasImages && hasDocs) {
+    if (imageCount > 0 && documentCount > 0) {
       return withProjectContext(
         "Ask about your attachments — drop more images or documents here",
       );
     }
-    if (hasImages) {
+    if (imageCount > 0) {
       return withProjectContext(
-        uploadedFiles.length === 1
+        imageCount === 1
           ? "Ask about this image — drop more files here anytime"
           : "Ask about these images — drop more files here anytime",
       );
     }
     return withProjectContext(
-      uploadedFiles.length === 1
+      documentCount === 1
         ? "Ask about this document — drop more files here anytime"
         : "Ask about these documents — drop more files here anytime",
     );
   }, [
     isFileDragOver,
     uploadedFiles,
+    contextBrowserSelectionCount,
     canResume,
     isMobile,
     composerPlaceholder,

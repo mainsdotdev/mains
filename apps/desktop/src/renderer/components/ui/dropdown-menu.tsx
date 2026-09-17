@@ -160,6 +160,16 @@ export function DropdownMenu({
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
       if (menuRef.current?.contains(target)) return;
+      if (target instanceof Element) {
+        const dropdownPortal = target.closest<HTMLElement>(
+          '[data-dropdown-portal="true"]',
+        );
+        const labelledBy = dropdownPortal?.getAttribute("aria-labelledby");
+        const portalTrigger = labelledBy
+          ? document.getElementById(labelledBy)
+          : null;
+        if (portalTrigger && menuRef.current?.contains(portalTrigger)) return;
+      }
       for (const submenu of submenuRefs.current) {
         if (submenu.contains(target)) return;
       }

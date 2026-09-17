@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Button, Text, type UploadedFile } from "@/components/ui";
-import { Close, FileIcon, FileIconComponent } from "@/components/ui/icons";
+import { Close, FileIcon, FileIconComponent, Web } from "@/components/ui/icons";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { classifyDocType, isTextDocType } from "@/lib/document-viewer";
+import { useComposerContext } from "@/features/workspace/hooks/use-composer-context";
+import type { ContextBrowserSelection } from "@/features/workspace/lib/composer-context";
 import { ImagePreviewModal } from "./image-preview-modal";
 
 /**
@@ -18,7 +20,24 @@ function fileExtension(name: string): string | undefined {
   return dot > 0 ? name.slice(dot + 1) : undefined;
 }
 
-function RemoveButton({ name, onRemove }: { name: string; onRemove: () => void }) {
+function browserSelectionLabel(selection: ContextBrowserSelection): string {
+  let host = selection.url;
+  try {
+    host = new URL(selection.url).hostname;
+  } catch {
+    // Keep the original URL as the useful fallback label.
+  }
+  const element = selection.componentName || selection.tagName || "selection";
+  return `${element} · ${host}`;
+}
+
+function RemoveButton({
+  name,
+  onRemove,
+}: {
+  name: string;
+  onRemove: () => void;
+}) {
   return (
     <Button
       type="button"
@@ -44,10 +63,22 @@ interface ComposerAttachmentsProps {
  * tiles above the prompt. Images open in the preview modal; documents the
  * viewer can render open in the document viewer panel.
  */
-export function ComposerAttachments({ files, onRemove }: ComposerAttachmentsProps) {
+export function ComposerAttachments({
+  files,
+  onRemove,
+}: ComposerAttachmentsProps) {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [browserPreviewId, setBrowserPreviewId] = useState<string | null>(null);
   const preview = previewIndex !== null ? files[previewIndex] : undefined;
+  const { browserSelections, remove: removeContext } = useComposerContext();
+  const browserPreview = browserSelections.find(
+    (selection) => selection.id === browserPreviewId,
+  );
+  const browserPreviewSrc = browserPreview?.screenshotCaptureName
+    ? `mains-capture://cap/${browserPreview.screenshotCaptureName}`
+    : undefined;
   const { open: openDocument } = useDocumentViewer();
+  const hasAttachments = files.length > 0 || browserSelections.length > 0;
 
   useEffect(() => {
     const present = new Set(files.map((f) => f.file));
@@ -73,10 +104,52 @@ export function ComposerAttachments({ files, onRemove }: ComposerAttachmentsProp
   return (
     <>
       <div
-        className={`grid transition-[grid-template-rows] duration-300 ease-out ${files.length > 0 ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+        className={`grid transition-[grid-template-rows] duration-300 ease-out ${hasAttachments ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
       >
         <div className="min-h-0 overflow-hidden">
           <div className="flex gap-2 overflow-x-auto noscrollbar px-5 pt-4">
+            {browserSelections.map((selection) => {
+              const src = selection.screenshotCaptureName
+                ? `mains-capture://cap/${selection.screenshotCaptureName}`
+                : undefined;
+              const label = browserSelectionLabel(selection);
+
+              return (
+                <div
+                  key={selection.id}
+                  className="group/attachment relative size-24 shrink-0 overflow-hidden rounded-2xl border border-primary-200 bg-primary-100 dark:border-primary-800 dark:bg-primary-950 animate-blur-reveal"
+                  title={label}
+                >
+                  {src ? (
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        setPreviewIndex(null);
+                        setBrowserPreviewId(selection.id);
+                      }}
+                      aria-label={`Preview ${label}`}
+                      className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                    >
+                      <img
+                        src={src}
+                        alt={label}
+                        draggable={false}
+                        className="size-full object-cover"
+                      />
+                    </Button>
+                  ) : (
+                    <div className="flex size-full items-center justify-center">
+                      <Web className="size-6 text-primary-400 dark:text-primary-600" />
+                    </div>
+                  )}
+                  <RemoveButton
+                    name={label}
+                    onRemove={() => removeContext(selection)}
+                  />
+                </div>
+              );
+            })}
+
             {files.map((uploaded, index) => {
               const { file } = uploaded;
               const key = `${file.name}-${file.size}-${file.lastModified}-${index}`;
@@ -90,7 +163,10 @@ export function ComposerAttachments({ files, onRemove }: ComposerAttachmentsProp
                   >
                     <Button
                       type="button"
-                      onClick={() => setPreviewIndex(index)}
+                      onClick={() => {
+                        setBrowserPreviewId(null);
+                        setPreviewIndex(index);
+                      }}
                       aria-label={`Preview ${file.name}`}
                       className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
                     >
@@ -101,7 +177,10 @@ export function ComposerAttachments({ files, onRemove }: ComposerAttachmentsProp
                         className="size-full object-cover"
                       />
                     </Button>
-                    <RemoveButton name={file.name} onRemove={() => onRemove(index)} />
+                    <RemoveButton
+                      name={file.name}
+                      onRemove={() => onRemove(index)}
+                    />
                   </div>
                 );
               }
@@ -119,7 +198,12 @@ export function ComposerAttachments({ files, onRemove }: ComposerAttachmentsProp
                       extension={fileExtension(file.name)}
                       className="size-3.5 shrink-0"
                     />
-                    <Text as="span" size="xs" tone="contrast" className="truncate">
+                    <Text
+                      as="span"
+                      size="xs"
+                      tone="contrast"
+                      className="truncate"
+                    >
                       {file.name}
                     </Text>
                   </div>
@@ -144,7 +228,10 @@ export function ComposerAttachments({ files, onRemove }: ComposerAttachmentsProp
                   ) : (
                     <div className="flex size-full flex-col">{content}</div>
                   )}
-                  <RemoveButton name={file.name} onRemove={() => onRemove(index)} />
+                  <RemoveButton
+                    name={file.name}
+                    onRemove={() => onRemove(index)}
+                  />
                 </div>
               );
             })}
@@ -157,6 +244,13 @@ export function ComposerAttachments({ files, onRemove }: ComposerAttachmentsProp
           name={preview.file.name}
           src={preview.preview}
           onClose={() => setPreviewIndex(null)}
+        />
+      )}
+      {browserPreview && browserPreviewSrc && (
+        <ImagePreviewModal
+          name={browserSelectionLabel(browserPreview)}
+          src={browserPreviewSrc}
+          onClose={() => setBrowserPreviewId(null)}
         />
       )}
     </>

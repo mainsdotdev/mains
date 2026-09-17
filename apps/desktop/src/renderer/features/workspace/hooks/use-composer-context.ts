@@ -23,9 +23,6 @@ function releaseBrowserCaptures(sel: ContextBrowserItem) {
   if (sel.screenshotCaptureName) {
     api.deleteCapture(sel.screenshotCaptureName).catch(() => {});
   }
-  if (sel.surroundingScreenshotCaptureName) {
-    api.deleteCapture(sel.surroundingScreenshotCaptureName).catch(() => {});
-  }
 }
 
 /**

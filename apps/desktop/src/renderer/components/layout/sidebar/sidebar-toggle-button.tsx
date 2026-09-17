@@ -39,7 +39,7 @@ export function SidebarToggleButton({
         left: reserveTrafficLights ? "5.5rem" : "0.75rem",
       }}
     >
-      <div className="rounded-full  glass-outline">
+      <div className="rounded-full ">
         <Button
           tooltip={isOpen ? "Close sidebar" : "Open sidebar"}
           tooltipPosition="right"

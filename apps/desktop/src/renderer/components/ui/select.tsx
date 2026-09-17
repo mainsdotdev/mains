@@ -59,6 +59,7 @@ interface SelectBaseProps<T extends string = string> {
   /** Inert trigger — for a control an in-flight action has taken over. */
   disabled?: boolean;
   size?: SelectSize;
+  onOpenChange?: (open: boolean) => void;
 }
 
 export type SelectProps<T extends string = string> = SelectBaseProps<T> &
@@ -76,6 +77,7 @@ export default function Select<T extends string = string>({
   title,
   disabled,
   size = "md",
+  onOpenChange,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
 }: SelectProps<T>) {
@@ -91,6 +93,8 @@ export default function Select<T extends string = string>({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const initialFocusIndex = useRef(-1);
+  const notifiedOpenRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
   const [dropdownPosition, setDropdownPosition] = useState({
     top: 0,
     left: 0,
@@ -112,6 +116,13 @@ export default function Select<T extends string = string>({
   const selectedOption =
     selectedIndex >= 0 ? options[selectedIndex] : undefined;
 
+  const setOpen = (open: boolean) => {
+    if (open === notifiedOpenRef.current) return;
+    notifiedOpenRef.current = open;
+    setIsOpen(open);
+    onOpenChangeRef.current?.(open);
+  };
+
   const updateDropdownPosition = () => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -125,11 +136,11 @@ export default function Select<T extends string = string>({
         : Math.min(options.length - 1, Math.max(0, preferredIndex));
     initialFocusIndex.current = nextIndex;
     setActiveIndex(nextIndex);
-    setIsOpen(true);
+    setOpen(true);
   };
 
   const closeMenu = (restoreTriggerFocus: boolean) => {
-    setIsOpen(false);
+    setOpen(false);
     if (restoreTriggerFocus) {
       requestAnimationFrame(() => triggerRef.current?.focus());
     }
@@ -154,29 +165,35 @@ export default function Select<T extends string = string>({
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
+        event.stopPropagation();
         openMenu(selectedIndex >= 0 ? selectedIndex : 0);
         break;
       case "ArrowUp":
         event.preventDefault();
+        event.stopPropagation();
         openMenu(selectedIndex >= 0 ? selectedIndex : options.length - 1);
         break;
       case "Home":
         event.preventDefault();
+        event.stopPropagation();
         openMenu(0);
         break;
       case "End":
         event.preventDefault();
+        event.stopPropagation();
         openMenu(options.length - 1);
         break;
       case "Enter":
       case " ":
         event.preventDefault();
+        event.stopPropagation();
         if (isOpen) closeMenu(true);
         else openMenu(selectedIndex >= 0 ? selectedIndex : 0);
         break;
       case "Escape":
         if (isOpen) {
           event.preventDefault();
+          event.stopPropagation();
           closeMenu(true);
         }
         break;
@@ -189,18 +206,22 @@ export default function Select<T extends string = string>({
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
+        event.stopPropagation();
         focusOption(activeIndex + 1);
         break;
       case "ArrowUp":
         event.preventDefault();
+        event.stopPropagation();
         focusOption(activeIndex - 1);
         break;
       case "Home":
         event.preventDefault();
+        event.stopPropagation();
         focusOption(0);
         break;
       case "End":
         event.preventDefault();
+        event.stopPropagation();
         focusOption(options.length - 1);
         break;
       case "Escape":
@@ -212,7 +233,8 @@ export default function Select<T extends string = string>({
         // Continue from the trigger rather than from a portaled option, which
         // would otherwise disappear before the browser resolves its next stop.
         event.preventDefault();
-        setIsOpen(false);
+        event.stopPropagation();
+        setOpen(false);
         requestAnimationFrame(() =>
           focusNextFrom(triggerRef.current, event.shiftKey),
         );
@@ -267,9 +289,23 @@ export default function Select<T extends string = string>({
   useClickOutside(
     containerRef,
     () => {
-      if (isOpen) setIsOpen(false);
+      if (isOpen) setOpen(false);
     },
     dropdownRef,
+  );
+
+  useEffect(
+    () => {
+      onOpenChangeRef.current = onOpenChange;
+    },
+    [onOpenChange],
+  );
+
+  useEffect(
+    () => () => {
+      if (notifiedOpenRef.current) onOpenChangeRef.current?.(false);
+    },
+    [],
   );
 
   return (
@@ -292,7 +328,7 @@ export default function Select<T extends string = string>({
         onKeyDown={handleTriggerKeyDown}
         className={`
           w-full ${TRIGGER_SIZE[size]}
-          glass-button
+          glass-input
           text-primary-900 dark:text-primary
           cursor-pointer
           disabled:cursor-not-allowed disabled:opacity-60
@@ -330,6 +366,7 @@ export default function Select<T extends string = string>({
           <div
             ref={dropdownRef}
             id={listboxId}
+            data-dropdown-portal="true"
             role="listbox"
             aria-labelledby={triggerId}
             onKeyDown={handleListboxKeyDown}

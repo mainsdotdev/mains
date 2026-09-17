@@ -246,7 +246,8 @@ function InstalledPluginShelf({
               return (
                 <Button
                   key={plugin.id}
-                  title={name}
+                  tooltip={name}
+                  tooltipPosition="bottom"
                   aria-label={`Open ${name}`}
                   onClick={() => onSelect(plugin.id)}
                   className={`size-12 shrink-0 snap-start rounded-2xl glass-surface flex items-center justify-center transition-[transform,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400/70 cursor-pointer ${

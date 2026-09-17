@@ -55,9 +55,9 @@ export function buildInspectorScript(enable: boolean): string {
     "position:fixed",
     "pointer-events:none",
     "z-index:2147483646",
-    "border:2px solid #4f8cff",
-    "background:rgba(79,140,255,0.16)",
-    "box-shadow:0 0 0 9999px rgba(12,16,28,0.10)",
+    "border:1px solid rgba(148,163,184,0.9)",
+    "background:rgba(148,163,184,0.07)",
+    "box-shadow:0 2px 12px rgba(0,0,0,0.10)",
     "border-radius:4px",
     "transition:top 60ms linear,left 60ms linear,width 60ms linear,height 60ms linear",
     "top:-9999px",
@@ -92,7 +92,7 @@ export function buildInspectorScript(enable: boolean): string {
   document.documentElement.setAttribute("data-mains-inspect", "1");
 
   function isOwnElement(el) {
-    return el === overlay || el === label || (el && el.closest && (el.closest("[data-mains-inspector-overlay]") || el.closest("[data-mains-inspector]") || el.closest("[data-mains-selection-marker]")));
+    return el === overlay || el === label || (el && el.closest && (el.closest("[data-mains-inspector-overlay]") || el.closest("[data-mains-inspector]")));
   }
 
   function cssEscape(s) {
@@ -197,45 +197,6 @@ export function buildInspectorScript(enable: boolean): string {
     try { console.log(SENTINEL + JSON.stringify(obj)); } catch (_) {}
   }
 
-  function placeMarker(el, rect) {
-    var marker = document.createElement("div");
-    marker.setAttribute("data-mains-selection-marker", "1");
-    var pageTop = rect.top + window.scrollY;
-    var pageLeft = rect.left + window.scrollX;
-    marker.style.cssText = [
-      "position:absolute",
-      "pointer-events:none",
-      "z-index:2147483645",
-      "border:2px solid #4f8cff",
-      "background:rgba(79,140,255,0.08)",
-      "border-radius:4px",
-      "box-sizing:border-box",
-      "top:" + pageTop + "px",
-      "left:" + pageLeft + "px",
-      "width:" + rect.width + "px",
-      "height:" + rect.height + "px"
-    ].join(";");
-    var tag = el.nodeName.toLowerCase();
-    var id = el.id ? "#" + el.id : "";
-    var cls = el.classList && el.classList.length ? "." + Array.prototype.slice.call(el.classList, 0, 2).join(".") : "";
-    var badge = document.createElement("div");
-    badge.textContent = tag + id + cls;
-    badge.style.cssText = [
-      "position:absolute",
-      "top:-18px",
-      "left:-2px",
-      "background:#4f8cff",
-      "color:#fff",
-      "font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace",
-      "padding:1px 5px",
-      "border-radius:3px 3px 3px 0",
-      "white-space:nowrap",
-      "pointer-events:none"
-    ].join(";");
-    marker.appendChild(badge);
-    document.documentElement.appendChild(marker);
-  }
-
   function onClick(e) {
     var el = e.target;
     if (!el || isOwnElement(el)) return;
@@ -245,8 +206,6 @@ export function buildInspectorScript(enable: boolean): string {
     var rect = el.getBoundingClientRect();
     var meta = findMeta(el);
     var text = trim((el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim(), 600);
-
-    placeMarker(el, rect);
 
     var payload = {
       type: "browser_selection",
@@ -265,8 +224,8 @@ export function buildInspectorScript(enable: boolean): string {
       sourceFile: meta.sourceFile,
       timestamp: new Date().toISOString()
     };
-    emit(payload);
     teardown();
+    emit(payload);
   }
 
   state = { active: true, overlay: overlay, label: label, styleTag: style, onMove: onMove, onOver: onOver, onClick: onClick, onKey: onKey, onScroll: onScroll };

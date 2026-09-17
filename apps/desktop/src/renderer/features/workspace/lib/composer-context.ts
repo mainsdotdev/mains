@@ -82,8 +82,6 @@ export interface ContextBrowserSelection {
   screenshotPath?: string;
   /** Basename used for `mains-capture://<name>` in `<img src>`. */
   screenshotCaptureName?: string;
-  surroundingScreenshotPath?: string;
-  surroundingScreenshotCaptureName?: string;
   screenshotMimeType: string;
 }
 

@@ -151,7 +151,7 @@ function CloseOverlay({
       )}
       <Button
         onClick={onClose}
-        className="relative z-(--z-base) p-1 glass-outline  hover:bg-primary/5 cursor-pointer rounded-full transition-all pointer-events-auto"
+        className="relative z-(--z-base) p-1  hover:bg-primary/5 cursor-pointer rounded-full transition-all pointer-events-auto"
       >
         {closeIcon || <Close className="size-3.25 text-primary-900 dark:text-primary hover:text-primary-900 dark:hover:text-primary-100" />}
       </Button>

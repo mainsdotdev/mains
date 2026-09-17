@@ -36,7 +36,7 @@ export function SessionPanelTrigger() {
       aria-label={isOpen ? "Close session panel" : "Open session panel"}
       tooltip={isOpen ? "Close session panel" : "Open session panel"}
       tooltipPosition="left"
-      className={`flex items-center glass-outline rounded-full gap-1 px-1.75 py-1.75 cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-all duration-300 ease-out ${
+      className={`flex items-center rounded-full gap-1 p-1.5 cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-all duration-300 ease-out ${
         isOpen
           ? "text-primary-900 dark:text-primary-100"
           : "text-primary-700 dark:text-primary-300"

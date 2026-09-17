@@ -3,6 +3,73 @@ import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 import type { ModeId } from "../shared/modes";
 
+type BrowserDownloadState =
+  | "progressing"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "interrupted";
+
+interface BrowserDownload {
+  id: string;
+  tabId: string | null;
+  fileName: string;
+  savePath: string;
+  sourceUrl: string;
+  mimeType: string;
+  state: BrowserDownloadState;
+  receivedBytes: number;
+  totalBytes: number;
+  speedBytesPerSecond: number;
+  startedAt: string;
+  updatedAt: string;
+}
+
+interface BrowserHistoryEntry {
+  id: string;
+  url: string;
+  title: string;
+  faviconUrl: string | null;
+  visitedAt: string;
+  visitCount: number;
+}
+
+type BrowserDevicePresetId =
+  | "responsive"
+  | "iphone-se"
+  | "iphone-14-pro"
+  | "iphone-14-pro-max"
+  | "pixel-7"
+  | "galaxy-s20-ultra"
+  | "surface-duo"
+  | "ipad-mini"
+  | "ipad-air"
+  | "nest-hub";
+
+interface BrowserDeviceEmulation {
+  enabled: boolean;
+  presetId: BrowserDevicePresetId;
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  scale: number;
+}
+
+type BrowserClearDataTimeRange =
+  | "last-hour"
+  | "last-day"
+  | "last-week"
+  | "last-four-weeks"
+  | "all-time";
+
+interface BrowserClearDataOptions {
+  timeRange: BrowserClearDataTimeRange;
+  history: boolean;
+  cookiesAndSiteData: boolean;
+  cache: boolean;
+  downloads: boolean;
+}
+
 // Expose IPC methods to renderer process
 const api = {
   // Entity operations (canonical content)
@@ -898,6 +965,12 @@ const api = {
 
   // Embedded browser panel operations
   browser: {
+    createTab: (url?: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.createTab, url),
+    closeTab: (tabId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.closeTab, tabId),
+    activateTab: (tabId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.activateTab, tabId),
     attach: (bounds: { x: number; y: number; width: number; height: number }) =>
       ipcRenderer.invoke(CHANNELS.browser.attach, bounds),
     detach: () => ipcRenderer.invoke(CHANNELS.browser.detach),
@@ -914,21 +987,116 @@ const api = {
     setSelectMode: (enabled: boolean) =>
       ipcRenderer.invoke(CHANNELS.browser.setSelectMode, enabled),
     getNavState: () => ipcRenderer.invoke(CHANNELS.browser.getNavState),
+    getState: () => ipcRenderer.invoke(CHANNELS.browser.getState),
+    getDownloads: () => ipcRenderer.invoke(CHANNELS.browser.getDownloads),
+    getHistory: () => ipcRenderer.invoke(CHANNELS.browser.getHistory),
+    removeHistoryEntry: (historyEntryId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.removeHistoryEntry, historyEntryId),
+    clearBrowsingData: (input: BrowserClearDataOptions) =>
+      ipcRenderer.invoke(CHANNELS.browser.clearBrowsingData, input),
+    clearHistory: () => ipcRenderer.invoke(CHANNELS.browser.clearHistory),
+    cancelDownload: (downloadId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.cancelDownload, downloadId),
+    clearDownloads: () => ipcRenderer.invoke(CHANNELS.browser.clearDownloads),
+    openDownload: (downloadId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.openDownload, downloadId),
+    showDownloadInFolder: (downloadId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.showDownloadInFolder, downloadId),
+    setZoomFactor: (factor: number) =>
+      ipcRenderer.invoke(CHANNELS.browser.setZoomFactor, factor),
+    setDeviceEmulation: (input: BrowserDeviceEmulation) =>
+      ipcRenderer.invoke(CHANNELS.browser.setDeviceEmulation, input),
+    findInPage: (input: {
+      query: string;
+      forward?: boolean;
+      findNext?: boolean;
+    }) => ipcRenderer.invoke(CHANNELS.browser.findInPage, input),
+    stopFindInPage: (
+      action: "clearSelection" | "keepSelection" = "clearSelection",
+    ) => ipcRenderer.invoke(CHANNELS.browser.stopFindInPage, action),
+    printPage: () => ipcRenderer.invoke(CHANNELS.browser.printPage),
+    captureScreenshot: (mode: "viewport" | "fullPage") =>
+      ipcRenderer.invoke(CHANNELS.browser.captureScreenshot, mode),
     /** Remove a browser capture PNG from userData/browser-captures. Pass the basename only. */
     deleteCapture: (captureName: string) =>
       ipcRenderer.invoke(CHANNELS.browser.deleteCapture, captureName),
     onNavState: (
       callback: (state: {
+        tabId: string;
         url: string;
         title: string;
+        faviconUrl: string | null;
         canGoBack: boolean;
         canGoForward: boolean;
         isLoading: boolean;
+        zoomFactor: number;
+        deviceEmulation: BrowserDeviceEmulation;
       }) => void,
     ) => {
       const listener = (_: any, state: any) => callback(state);
       ipcRenderer.on(CHANNELS.browser.navState, listener);
       return () => ipcRenderer.removeListener(CHANNELS.browser.navState, listener);
+    },
+    onStateChanged: (
+      callback: (state: {
+        activeTabId: string;
+        tabs: Array<{
+          tabId: string;
+          url: string;
+          title: string;
+          faviconUrl: string | null;
+          canGoBack: boolean;
+          canGoForward: boolean;
+          isLoading: boolean;
+          isCrashed: boolean;
+          zoomFactor: number;
+          deviceEmulation: BrowserDeviceEmulation;
+        }>;
+      }) => void,
+    ) => {
+      const listener = (_: any, state: any) => callback(state);
+      ipcRenderer.on(CHANNELS.browser.stateChanged, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.stateChanged, listener);
+    },
+    onFindResult: (
+      callback: (result: {
+        tabId: string;
+        activeMatchOrdinal: number;
+        matches: number;
+        finalUpdate: boolean;
+      }) => void,
+    ) => {
+      const listener = (_: any, result: any) => callback(result);
+      ipcRenderer.on(CHANNELS.browser.findResult, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.findResult, listener);
+    },
+    onShortcut: (
+      callback: (data: { action: "focus-location" | "find" }) => void,
+    ) => {
+      const listener = (_: any, data: any) => callback(data);
+      ipcRenderer.on(CHANNELS.browser.shortcut, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.shortcut, listener);
+    },
+    onDownloadsChanged: (
+      callback: (downloads: BrowserDownload[]) => void,
+    ) => {
+      const listener = (_: any, downloads: BrowserDownload[]) =>
+        callback(downloads);
+      ipcRenderer.on(CHANNELS.browser.downloadsChanged, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.downloadsChanged, listener);
+    },
+    onHistoryChanged: (
+      callback: (entries: BrowserHistoryEntry[]) => void,
+    ) => {
+      const listener = (_: any, entries: BrowserHistoryEntry[]) =>
+        callback(entries);
+      ipcRenderer.on(CHANNELS.browser.historyChanged, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.historyChanged, listener);
     },
     onSelectModeChanged: (callback: (data: { enabled: boolean }) => void) => {
       const listener = (_: any, data: any) => callback(data);

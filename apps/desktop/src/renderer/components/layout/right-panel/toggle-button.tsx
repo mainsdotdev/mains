@@ -28,7 +28,7 @@ export function ToggleButton({
   return (
     <div
       data-layout-toggle
-      className="fixed z-(--z-panel-toggle) flex items-center gap-1.5 transition-[right] duration-300 ease-out"
+      className="fixed z-(--z-panel-toggle) flex items-center transition-[right] duration-300 ease-out"
       style={{
         top: "calc(0.4875rem + env(safe-area-inset-top))",
         right: browserOpen
@@ -37,13 +37,13 @@ export function ToggleButton({
       }}
     >
       {showGitActions && <SessionPanelTrigger />}
-      <div className="flex items-center gap-1.5 glass-outline rounded-full p-0.5">
+      <div className="flex items-center  rounded-full p-0.5">
       {onBrowserToggle && embeddedBrowser && (
         <Button
           tooltip={browserOpen ? "Close browser" : "Open browser"}
           tooltipPosition="left"
           onClick={onBrowserToggle}
-          className={`p-1.25 transition-all duration-300 ease-out rounded-full cursor-pointer  hover:bg-primary-50 dark:hover:bg-primary/10 ${
+          className={`p-1.5 transition-all duration-300 ease-out rounded-full cursor-pointer  hover:bg-primary-50 dark:hover:bg-primary/10 ${
             browserOpen
               ? "text-primary-800 dark:text-primary-200"
               : "text-primary-700 dark:text-primary-300"
@@ -65,7 +65,7 @@ export function ToggleButton({
             }
             onTerminalToggle();
           }}
-          className={` p-1.25 transition-all duration-300 ease-out
+          className={` p-1.5 transition-all duration-300 ease-out
              rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10
            `}
           aria-label={terminalOpen ? "Close terminal" : "Open terminal"}
@@ -78,7 +78,7 @@ export function ToggleButton({
           tooltip={isOpen ? "Close right panel" : "Open right panel"}
           tooltipPosition="left"
           onClick={onClick}
-          className="rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10 p-1  transition-all duration-300 ease-out"
+          className="rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10 p-1.5  transition-all duration-300 ease-out"
           aria-label={isOpen ? "Close right panel" : "Open right panel"}
         >
           {isOpen ? (
