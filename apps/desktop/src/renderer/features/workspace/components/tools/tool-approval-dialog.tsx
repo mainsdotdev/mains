@@ -391,7 +391,7 @@ export function ToolApprovalDialog({
   if (request.kind === "ask_user") {
     return (
       <div className="mx-auto mb-1 max-w-210 ">
-        <div className="overflow-hidden rounded-2xl  glass-surface">
+        <div className="overflow-hidden rounded-3xl  glass-surface">
           <div className="flex gap-3 px-3.5 pb-2 pt-3.5 sm:px-4 sm:pt-4">
             <Question className="mt-0.5 size-4 shrink-0 text-primary-600 dark:text-primary-400" />
             <div className="min-w-0 flex-1 space-y-2">
@@ -428,14 +428,14 @@ export function ToolApprovalDialog({
                     key={opt.label}
                     type="button"
                     onClick={() => toggleOption(opt.label)}
-                    className={`flex w-full gap-2.5 rounded-lg  px-2.5 py-2.5 text-left text-xs transition-colors ${
+                    className={`flex w-full gap-2.5 rounded-xl  px-2.5 py-2.5 text-left text-xs transition-colors ${
                       isSelected
-                        ? " bg-success/10"
-                        : " bg-primary-100/30 hover:border-primary-300/70 dark:bg-primary-800/50 dark:hover:border-primary-600/50"
+                        ? " dark:bg-success/5 bg-success/10"
+                        : " bg-primary-100/30 hover:border-primary-300/70 dark:bg-primary/2 dark:hover:border-primary-600/50"
                     }`}
                   >
                     <span
-                      className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded ${
+                      className={`mt-0.5 flex size-4 shrink-0 items-center justify-center glass-outline rounded-md ${
                         isSelected
                           ? " bg-success text-primary "
                           : " bg-primary-50 dark:border-primary-600 dark:bg-primary-900/50"
@@ -469,7 +469,7 @@ export function ToolApprovalDialog({
             </div>
           )}
 
-          <div className="border-t border-primary-200/40 px-3.5 py-3 dark:border-primary-700/25 sm:px-4">
+          <div className=" px-3.5 py-3  sm:px-4">
             <div
               className={`flex flex-col gap-3 sm:flex-row sm:items-end ${isCursor ? "sm:justify-end" : ""}`}
             >
@@ -486,7 +486,7 @@ export function ToolApprovalDialog({
                       if (e.key === "Enter") handleSubmitAnswer();
                     }}
                     placeholder="Type a custom answer…"
-                    className="w-full rounded-lg bg-primary-100/50   px-3 py-2 text-xs text-primary-900 transition-colors placeholder:text-primary-500 focus:outline-none dark:bg-primary-800/50 dark:text-primary-100 dark:placeholder:text-primary-500"
+                    className="w-full rounded-xl glass-input  px-3 py-2 text-xs text-primary-900 transition-colors placeholder:text-primary-500 focus:outline-none dark:bg-primary-800/50 dark:text-primary-100 dark:placeholder:text-primary-500"
                   />
                 </label>
               )}
