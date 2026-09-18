@@ -250,6 +250,7 @@ describe("Codex event mapper", () => {
       visualizationPath,
       '<div id="gyro"><button type="button">Pause</button></div>',
     );
+    const canonicalVisualizationPath = fs.realpathSync.native(visualizationPath);
     const state = createRunState(root);
     state.runStartedAt = Date.now() - 1_000;
     const { mapper } = createHarness(state);
@@ -294,15 +295,57 @@ describe("Codex event mapper", () => {
       expect.objectContaining({
         type: "artifact",
         kind: "visualization",
-        path: visualizationPath,
+        path: canonicalVisualizationPath,
         metadata: expect.objectContaining({
           kind: "visualization",
           source: "codex_visualize",
-          path: visualizationPath,
+          path: canonicalVisualizationPath,
           mode: "wide",
           title: "Spinning gyroscope",
           itemId: "message-viz",
         }),
+      }),
+    );
+  });
+
+  it("accepts a visualize path when the workspace root is a filesystem alias", () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "mains-viz-alias-"));
+    tempDirs.push(parent);
+    const realRoot = path.join(parent, "Mains", "runs", "run-1", "work");
+    const aliasRoot = path.join(parent, "mains-work");
+    fs.mkdirSync(realRoot, { recursive: true });
+    fs.symlinkSync(
+      realRoot,
+      aliasRoot,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const visualizationPath = path.join(realRoot, "spinning-gyroscope.html");
+    fs.writeFileSync(visualizationPath, "<div>gyroscope</div>");
+    const state = createRunState(aliasRoot);
+    state.runStartedAt = Date.now() - 1_000;
+    const { mapper } = createHarness(state);
+
+    const completed = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "message-viz-alias",
+          type: "agentMessage",
+          text: `\uE200visualize\uE202${JSON.stringify({
+            path: visualizationPath,
+            mode: "wide",
+          })}\uE201`,
+        },
+      },
+      "run-1",
+    );
+
+    expect(completed).toContainEqual(
+      expect.objectContaining({
+        type: "artifact",
+        kind: "visualization",
+        path: fs.realpathSync.native(visualizationPath),
       }),
     );
   });
@@ -325,6 +368,42 @@ describe("Codex event mapper", () => {
           id: "message-viz",
           type: "agentMessage",
           text: `\uE200visualize\uE202${JSON.stringify({ path: visualizationPath })}\uE201`,
+        },
+      },
+      "run-1",
+    );
+
+    expect(completed).not.toContainEqual(
+      expect.objectContaining({ kind: "visualization" }),
+    );
+  });
+
+  it("does not follow a workspace directory symlink to an outside visualization", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-viz-root-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "mains-viz-outside-"));
+    tempDirs.push(root, outside);
+    const visualizationPath = path.join(outside, "outside.html");
+    fs.writeFileSync(visualizationPath, "<div>outside</div>");
+    const linkedDirectory = path.join(root, "linked");
+    fs.symlinkSync(
+      outside,
+      linkedDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const state = createRunState(root);
+    state.runStartedAt = Date.now() - 1_000;
+    const { mapper } = createHarness(state);
+
+    const completed = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "message-viz-symlink-escape",
+          type: "agentMessage",
+          text: `\uE200visualize\uE202${JSON.stringify({
+            path: path.join(linkedDirectory, "outside.html"),
+          })}\uE201`,
         },
       },
       "run-1",

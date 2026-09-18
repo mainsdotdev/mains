@@ -863,24 +863,44 @@ export function createCodexEventMapper(
     }
   }
 
-  function isAllowedVisualizationPath(
+  function isPathWithinOrEqual(root: string, candidate: string): boolean {
+    const relative = path.relative(root, candidate);
+    return relative === "" || (
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    );
+  }
+
+  function realPathOrNull(candidate: string): string | null {
+    try {
+      return fs.realpathSync.native(candidate);
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveAllowedVisualizationPath(
     resolved: string,
     workspaceRoot: string | null,
-  ): boolean {
-    const codexVisualizationRoot = path.join(
-      os.homedir(),
-      ".codex",
-      "visualizations",
-    );
-    if (
-      resolved === codexVisualizationRoot ||
-      resolved.startsWith(codexVisualizationRoot + path.sep)
-    ) {
-      return true;
+  ): string | null {
+    const canonicalPath = realPathOrNull(resolved);
+    if (!canonicalPath) return null;
+
+    const allowedRoots = [
+      path.join(os.homedir(), ".codex", "visualizations"),
+      ...(workspaceRoot ? [path.resolve(workspaceRoot)] : []),
+    ];
+    for (const allowedRoot of allowedRoots) {
+      const canonicalRoot = realPathOrNull(allowedRoot);
+      if (
+        canonicalRoot &&
+        isPathWithinOrEqual(canonicalRoot, canonicalPath)
+      ) {
+        return canonicalPath;
+      }
     }
-    if (!workspaceRoot) return false;
-    const root = path.resolve(workspaceRoot);
-    return resolved === root || resolved.startsWith(root + path.sep);
+    return null;
   }
 
   function emitVisualizationArtifact(
@@ -896,13 +916,17 @@ export function createCodexEventMapper(
     const expanded = expandHomeTilde(reference.path);
     if (!path.isAbsolute(expanded)) return false;
     const resolved = path.resolve(expanded);
+    const canonicalPath = resolveAllowedVisualizationPath(
+      resolved,
+      rs.mainsCtx.rootPath,
+    );
     const itemId = typeof metadata.itemId === "string"
       ? metadata.itemId
       : "unknown-item";
-    const dedupeKey = `${itemId}\0${resolved}`;
+    const dedupeKey = `${itemId}\0${canonicalPath ?? resolved}`;
     if (
       path.extname(resolved).toLowerCase() !== ".html" ||
-      !isAllowedVisualizationPath(resolved, rs.mainsCtx.rootPath) ||
+      !canonicalPath ||
       rs.emittedVisualizationKeys.has(dedupeKey)
     ) {
       return false;
@@ -920,14 +944,14 @@ export function createCodexEventMapper(
     events.push({
       type: "artifact",
       kind: "visualization",
-      path: resolved,
+      path: canonicalPath,
       content: "",
       metadata: {
         ...metadata,
         kind: "visualization",
         source: "codex_visualize",
-        path: resolved,
-        fileName: path.basename(resolved),
+        path: canonicalPath,
+        fileName: path.basename(canonicalPath),
         ...(reference.mode ? { mode: reference.mode } : {}),
         ...(reference.title ? { title: reference.title } : {}),
       },

@@ -22,6 +22,39 @@ const MENU_ITEM_SELECTOR = [
   '[role="menuitemcheckbox"]',
 ].join(",");
 
+const VIEWPORT_PADDING = 8;
+const SUBMENU_GAP = 4;
+const SUBMENU_WIDTH_ESTIMATE = 180;
+const SUBMENU_HEIGHT_ESTIMATE = 160;
+
+function clampToViewport(value: number, size: number, viewportSize: number) {
+  return Math.max(
+    VIEWPORT_PADDING,
+    Math.min(value, viewportSize - size - VIEWPORT_PADDING),
+  );
+}
+
+function placeSubmenu(
+  anchor: Pick<DOMRect, "top" | "right" | "left">,
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+) {
+  const spaceRight =
+    viewport.width - VIEWPORT_PADDING - anchor.right - SUBMENU_GAP;
+  const spaceLeft = anchor.left - VIEWPORT_PADDING - SUBMENU_GAP;
+  const opensRight =
+    size.width <= spaceRight ||
+    (size.width > spaceLeft && spaceRight >= spaceLeft);
+  const desiredLeft = opensRight
+    ? anchor.right + SUBMENU_GAP
+    : anchor.left - size.width - SUBMENU_GAP;
+
+  return {
+    top: clampToViewport(anchor.top, size.height, viewport.height),
+    left: clampToViewport(desiredLeft, size.width, viewport.width),
+  };
+}
+
 function getEnabledMenuItems(container: HTMLElement | null): HTMLElement[] {
   if (!container) return [];
   return Array.from(
@@ -234,7 +267,7 @@ export function DropdownMenu({
 
   if (!isOpen) return null;
 
-  const viewportPadding = 8;
+  const viewportPadding = VIEWPORT_PADDING;
   const menuWidth = Math.max(minWidth, menuSize?.width ?? minWidth);
   // Keep the previous estimate for the first render. The layout effect above
   // replaces it with the real size before the browser paints.
@@ -243,23 +276,15 @@ export function DropdownMenu({
   const upwardAnchor = position.anchorTop ?? position.y;
   const spaceAbove = upwardAnchor - viewportPadding;
   const opensUpward = menuHeight > spaceBelow && spaceAbove > spaceBelow;
-  const desiredY = opensUpward
-    ? upwardAnchor - menuHeight
-    : position.y;
+  const desiredY = opensUpward ? upwardAnchor - menuHeight : position.y;
   const adjustedPosition = {
     x: Math.max(
       viewportPadding,
-      Math.min(
-        position.x,
-        window.innerWidth - menuWidth - viewportPadding,
-      ),
+      Math.min(position.x, window.innerWidth - menuWidth - viewportPadding),
     ),
     y: Math.max(
       viewportPadding,
-      Math.min(
-        desiredY,
-        window.innerHeight - menuHeight - viewportPadding,
-      ),
+      Math.min(desiredY, window.innerHeight - menuHeight - viewportPadding),
     ),
   };
 
@@ -330,6 +355,22 @@ export function DropdownMenuSub({
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [submenuPosition, setSubmenuPosition] = useState({ top: 0, left: 0 });
 
+  const updateSubmenuPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const submenu = submenuElementRef.current;
+    const width = submenu?.offsetWidth || SUBMENU_WIDTH_ESTIMATE;
+    const height = submenu?.offsetHeight || SUBMENU_HEIGHT_ESTIMATE;
+    const next = placeSubmenu(
+      trigger.getBoundingClientRect(),
+      { width, height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    setSubmenuPosition((current) =>
+      current.top === next.top && current.left === next.left ? current : next,
+    );
+  }, []);
+
   const submenuRefCallback = useCallback(
     (element: HTMLDivElement | null) => {
       if (submenuElementRef.current) {
@@ -359,22 +400,14 @@ export function DropdownMenuSub({
   const openSubmenu = useCallback(
     (moveFocusInside: boolean) => {
       clearCloseTimer();
-      if (triggerRef.current) {
-        const rect = triggerRef.current.getBoundingClientRect();
-        const submenuWidth = 180;
-        const opensRight =
-          rect.right + 4 + submenuWidth <= window.innerWidth - 8;
-        setSubmenuPosition({
-          top: Math.max(8, Math.min(rect.top, window.innerHeight - 160)),
-          left: opensRight
-            ? rect.right + 4
-            : Math.max(8, rect.left - submenuWidth - 4),
-        });
-      }
+      // Repeated pointer/click opens can happen while the submenu is already
+      // mounted. Reuse its real dimensions instead of resetting the corrected
+      // position back to the first-render estimate.
+      updateSubmenuPosition();
       focusSubmenuOnOpen.current = moveFocusInside;
       setIsOpen(true);
     },
-    [clearCloseTimer],
+    [clearCloseTimer, updateSubmenuPosition],
   );
 
   const startCloseTimer = useCallback(() => {
@@ -383,10 +416,26 @@ export function DropdownMenuSub({
   }, [clearCloseTimer]);
 
   useLayoutEffect(() => {
-    if (!isOpen || !focusSubmenuOnOpen.current) return;
-    focusSubmenuOnOpen.current = false;
-    getEnabledMenuItems(submenuElementRef.current)[0]?.focus();
-  }, [isOpen]);
+    if (!isOpen) return;
+    // The first position uses an estimate because the portal does not exist
+    // yet. Measure the real submenu before paint and correct both axes.
+    updateSubmenuPosition();
+    if (focusSubmenuOnOpen.current) {
+      focusSubmenuOnOpen.current = false;
+      getEnabledMenuItems(submenuElementRef.current)[0]?.focus();
+    }
+  }, [children, isOpen, updateSubmenuPosition]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const update = () => updateSubmenuPosition();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [isOpen, updateSubmenuPosition]);
 
   useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
 
@@ -435,10 +484,7 @@ export function DropdownMenuSub({
         )}
       >
         {label}
-        <ArrowUp
-          aria-hidden="true"
-          className="ml-auto size-3 rotate-90"
-        />
+        <ArrowUp aria-hidden="true" className="ml-auto size-3 rotate-90" />
       </Button>
       {isOpen &&
         createPortal(
@@ -450,11 +496,13 @@ export function DropdownMenuSub({
             onKeyDown={handleSubmenuKeyDown}
             onMouseEnter={clearCloseTimer}
             onMouseLeave={startCloseTimer}
-            className="fixed z-(--z-dropdown-sub) overflow-hidden p-1.5 rounded-2xl glass-surface animate-dropdown-sub-in "
+            className="fixed z-(--z-dropdown-sub) overflow-x-hidden overflow-y-auto p-1.5 rounded-2xl glass-surface animate-dropdown-sub-in"
             style={{
               top: submenuPosition.top,
               left: submenuPosition.left,
-              minWidth: 180,
+              minWidth: SUBMENU_WIDTH_ESTIMATE,
+              maxWidth: window.innerWidth - VIEWPORT_PADDING * 2,
+              maxHeight: window.innerHeight - VIEWPORT_PADDING * 2,
             }}
           >
             {children}
