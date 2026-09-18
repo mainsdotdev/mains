@@ -282,7 +282,7 @@ export function PromptMarkdown({
           return <PromptCodeChip token={context.value} />;
         }
         return (
-          <MarkdownLink href={href}>
+          <MarkdownLink href={href} openWebLinksInApp>
             {linkChildren as ReactNode}
           </MarkdownLink>
         );

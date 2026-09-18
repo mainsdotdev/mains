@@ -319,6 +319,7 @@ export const CHANNELS = {
     getById: "runs:getById",
     getByStatus: "runs:getByStatus",
     getExecutionRoot: "runs:getExecutionRoot",
+    listOutputFiles: "runs:listOutputFiles",
     readTextFile: "runs:readTextFile",
     getByWorkspace: "runs:getByWorkspace",
     getDetails: "runs:getDetails",

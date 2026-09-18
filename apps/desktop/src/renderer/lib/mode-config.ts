@@ -52,8 +52,12 @@ export interface ModeConfigDescriptor {
    */
   composerPlaceholder: ModeComposerPlaceholder;
   rightPanel: ModeRightPanelConfig;
-  /** Session panel with the git-actions menu, and its trigger. */
+  /** Git/environment section inside the session panel. */
   showGitActions: boolean;
+  /** Sources used by the active run, and the session-panel trigger for them. */
+  showSources: boolean;
+  /** Files/media produced by the active run, kept separate from its sources. */
+  showDeliverables: boolean;
   /** Terminal section + the right-panel terminal toggle. */
   showTerminal: boolean;
   /** The right panel's Changes (git diff) tab. */
@@ -114,6 +118,8 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     },
     rightPanel: { component: "workspace" },
     showGitActions: true,
+    showSources: true,
+    showDeliverables: false,
     showTerminal: true,
     showChangesTab: true,
     showPermissionControls: true,
@@ -147,6 +153,8 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     },
     rightPanel: { component: "workspace" },
     showGitActions: false,
+    showSources: true,
+    showDeliverables: true,
     showTerminal: false,
     showChangesTab: false,
     showPermissionControls: false,
@@ -177,6 +185,8 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     },
     rightPanel: { component: "workspace" },
     showGitActions: false,
+    showSources: false,
+    showDeliverables: false,
     showTerminal: false,
     showChangesTab: false,
     showPermissionControls: false,

@@ -4,9 +4,11 @@ import { Components } from "react-markdown";
 
 import { Button, Checkbox, Text } from "@/components/ui";
 import { CODE_FONT_SIZE_CSS } from "@/lib/appearance-fonts";
+import { faviconUrlForHref } from "@/lib/favicon-url";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { FileIconComponent } from "@/components/ui/icons";
 import { useOpenFileInEditor } from "@/features/workspace/hooks/use-open-file-in-editor";
+import { useOpenLink } from "@/hooks/use-open-link";
 
 /**
  * Split a trailing line locator off a file href: `path.ts:114`,
@@ -32,19 +34,23 @@ function isFileHref(href: string): boolean {
 }
 
 /**
- * File references render as an icon chip and open in the editor tab; real
- * URLs open in the system browser; `#fragment` links stay inside the document.
+ * File references render as an icon chip and open in the editor tab;
+ * `#fragment` links stay inside the document. Chat surfaces may opt web URLs
+ * into the in-app browser while other markdown keeps its existing behaviour.
  */
 export function MarkdownLink({
   href,
   children,
   showFavicon = false,
+  openWebLinksInApp = false,
 }: {
   href?: string;
   children?: ReactNode;
   showFavicon?: boolean;
+  openWebLinksInApp?: boolean;
 }) {
   const openFileInEditor = useOpenFileInEditor();
+  const openLink = useOpenLink();
 
   // A fragment names a node in this very document — GFM footnote references
   // and their back-links are the common case. Handing it to the shell was a
@@ -99,7 +105,11 @@ export function MarkdownLink({
       onClick={(event) => {
         event.preventDefault();
         if (href) {
-          window.api.shell.openExternal(href);
+          if (openWebLinksInApp) {
+            void openLink(href);
+          } else {
+            void window.api.shell.openExternal(href);
+          }
         }
       }}
       className="inline whitespace-normal wrap-break-word text-left text-accent hover:underline cursor-pointer  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 "
@@ -110,23 +120,8 @@ export function MarkdownLink({
   );
 }
 
-/**
- * The conventional favicon endpoint for a web link.
- *
- * Only the origin survives: an agent-controlled path, query, fragment, or
- * credential must never become an automatic image request. The image itself
- * still travels through the app's SSRF-guarded proxy below.
- */
-export function faviconUrlForHref(href: string | undefined): string | null {
-  if (!href) return null;
-  try {
-    const url = new URL(href);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-    return `${url.origin}/favicon.ico`;
-  } catch {
-    return null;
-  }
-}
+// Kept as part of this module's public surface for existing markdown callers.
+export { faviconUrlForHref };
 
 function LinkFavicon({ href }: { href: string | undefined }) {
   const faviconUrl = faviconUrlForHref(href);
@@ -402,7 +397,7 @@ export const markdownComponents: Components = {
 export const agentMarkdownComponents: Components = {
   ...markdownComponents,
   a: ({ href, children }) => (
-    <MarkdownLink href={href} showFavicon>
+    <MarkdownLink href={href} showFavicon openWebLinksInApp>
       {children}
     </MarkdownLink>
   ),

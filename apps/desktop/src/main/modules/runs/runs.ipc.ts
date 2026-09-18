@@ -55,6 +55,11 @@ export function registerRunsIpc(): void {
   );
 
   ipcMain.handle(
+    CHANNELS.runs.listOutputFiles,
+    handle((runId: string) => runsService.listRunOutputFiles(runId)),
+  );
+
+  ipcMain.handle(
     CHANNELS.runs.readTextFile,
     handle((payload: ReadRunTextFilePayload) => runsService.readTextFile(payload)),
   );
@@ -265,6 +270,7 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.listArchived,
     CHANNELS.runs.listActive,
     CHANNELS.runs.getExecutionRoot,
+    CHANNELS.runs.listOutputFiles,
     CHANNELS.runs.readTextFile,
     CHANNELS.runs.listRecent,
     CHANNELS.runs.getById,

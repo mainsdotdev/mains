@@ -1508,6 +1508,63 @@ describe("runsService", () => {
     });
   });
 
+  describe("listRunOutputFiles", () => {
+    it("lists visible files from a Work run and excludes internal context", async () => {
+      createRun(db, {
+        id: "run-outputs",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      const root = managedRunDir("run-outputs", "work");
+      const outside = "/tmp/mains-output-outside.md";
+      mkdirSync(`${root}/outputs`, { recursive: true });
+      mkdirSync(`${root}/.mains/sources`, { recursive: true });
+      writeFileSync(`${root}/notes.md`, "# Notes");
+      writeFileSync(`${root}/outputs/chart.csv`, "x,y\n1,2");
+      writeFileSync(`${root}/.mains/sources/brief.pdf`, "source");
+      writeFileSync(`${root}/.hidden.txt`, "hidden");
+      writeFileSync(outside, "outside");
+      symlinkSync(outside, `${root}/linked.md`);
+
+      try {
+        const files = await runsService.listRunOutputFiles("run-outputs");
+
+        expect(files.map((file) => file.relativePath).sort()).toEqual([
+          "notes.md",
+          "outputs/chart.csv",
+        ]);
+        expect(files).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              fileName: "notes.md",
+              absolutePath: `${root}/notes.md`,
+              size: 7,
+            }),
+          ]),
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+        rmSync(outside, { force: true });
+      }
+    });
+
+    it("does not scan a Developer workspace or a missing run", async () => {
+      createWorkspace(db, { id: "ws-output" });
+      createRun(db, {
+        id: "run-developer-output",
+        workspaceId: "ws-output",
+        mode: "developer",
+      });
+
+      await expect(
+        runsService.listRunOutputFiles("run-developer-output"),
+      ).resolves.toEqual([]);
+      await expect(
+        runsService.listRunOutputFiles("missing-run"),
+      ).resolves.toEqual([]);
+    });
+  });
+
   describe("readTextFile", () => {
     it("finds a Markdown file by basename inside its Work run", async () => {
       createRun(db, {

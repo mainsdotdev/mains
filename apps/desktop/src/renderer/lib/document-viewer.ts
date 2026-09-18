@@ -70,6 +70,29 @@ export function shouldFallback(result: {
   return result.threw || result.producedNodes === 0;
 }
 
+/**
+ * Return the slide whose centre is closest to the viewport centre. The PPTX
+ * navigator uses this while the main stage scrolls so its active thumbnail
+ * follows the page the user is actually looking at.
+ */
+export function nearestSlideIndex(
+  slideCenters: readonly number[],
+  viewportCenter: number,
+): number {
+  if (slideCenters.length === 0) return -1;
+
+  let nearest = 0;
+  let nearestDistance = Math.abs(slideCenters[0] - viewportCenter);
+  for (let index = 1; index < slideCenters.length; index += 1) {
+    const distance = Math.abs(slideCenters[index] - viewportCenter);
+    if (distance < nearestDistance) {
+      nearest = index;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
 const ALL_DOC_EXTENSIONS = [".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"];
 
 function dirOf(p: string): string {
@@ -80,10 +103,12 @@ function dirOf(p: string): string {
 /**
  * Is this image actually a rendered *preview* of a generated Office document
  * (e.g. the per-page PNGs `qlmanage`/LibreOffice emit), rather than an image the
- * agent was asked to produce? Two signals, both keyed off the document outputs
+ * agent was asked to produce? Three signals, all keyed off the document outputs
  * so intentionally-generated images are never caught:
- *   1. filename stem ends with a document extension — "brief.docx.png"
- *   2. the image sits in a SUBdirectory of a generated document's folder —
+ *   1. removing the image extension yields an exact generated-document path —
+ *      "brief.pdf.png" beside "brief.pdf"
+ *   2. filename stem ends with an Office extension — "brief.docx.png"
+ *   3. the image sits in a SUBdirectory of a generated document's folder —
  *      "…/outputs/documents/rendered-brief/slide-01.png" (a sibling image in
  *      the doc's own folder is left alone)
  */
@@ -94,6 +119,9 @@ export function isDocumentRenderImage(
   if (!imagePath || documentPaths.length === 0) return false;
   const lower = imagePath.toLowerCase();
   const stem = lower.replace(/\.(png|jpe?g|webp|gif)$/i, "");
+  if (documentPaths.some((docPath) => docPath.toLowerCase() === stem)) {
+    return true;
+  }
   if (ALL_DOC_EXTENSIONS.some((ext) => stem.endsWith(ext))) return true;
 
   const imgDir = dirOf(imagePath);

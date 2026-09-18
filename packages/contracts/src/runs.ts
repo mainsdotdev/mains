@@ -145,6 +145,18 @@ export interface RunTextFile {
   content: string;
 }
 
+/**
+ * One user-facing file found in a Work/Chat run's managed execution directory.
+ * Internal context snapshots and hidden files are excluded by the backend.
+ */
+export interface RunOutputFile {
+  fileName: string;
+  relativePath: string;
+  absolutePath: string;
+  size: number;
+  modifiedAt: number;
+}
+
 /** `space:getAll` row — a run's home: it pins the provider and the mode. */
 export interface SpaceRecord {
   id: string;

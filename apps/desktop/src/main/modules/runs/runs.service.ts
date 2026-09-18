@@ -16,6 +16,7 @@ import type {
   ArtifactImage,
   ReadArtifactImagePayload,
   ReadRunTextFilePayload,
+  RunOutputFile,
   RunTextFile,
 } from "@mains/contracts/runs";
 import {
@@ -82,6 +83,17 @@ const RUN_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const RUN_TEXT_SEARCH_MAX_ENTRIES = 10_000;
 const RUN_TEXT_SEARCH_MAX_DEPTH = 12;
 const RUN_TEXT_SEARCH_EXCLUDES = new Set([".git", "node_modules"]);
+/** A run folder is app-owned, but still bound traversal in case a tool explodes it. */
+const RUN_OUTPUT_MAX_FILES = 500;
+const RUN_OUTPUT_MAX_DEPTH = 12;
+const RUN_OUTPUT_EXCLUDES = new Set([
+  ".mains",
+  ".git",
+  "node_modules",
+  "bower_components",
+  ".DS_Store",
+  "Thumbs.db",
+]);
 /** Image types the phone decodes on its own, by extension — `nativeImage` reads only PNG and JPEG. */
 const RAW_IMAGE_MIMES: Record<string, string> = {
   webp: "image/webp",
@@ -108,6 +120,68 @@ function latestKnownModel(
 function isWithin(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Visible files created in a managed Work/Chat directory. The `.mains` tree is
+ * copied input context, not output, and symlinks are deliberately not followed.
+ */
+async function listManagedOutputFiles(root: string): Promise<RunOutputFile[]> {
+  const files: RunOutputFile[] = [];
+
+  const visit = async (directory: string, depth: number): Promise<void> => {
+    if (depth > RUN_OUTPUT_MAX_DEPTH || files.length >= RUN_OUTPUT_MAX_FILES) {
+      return;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    entries.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+
+    for (const entry of entries) {
+      if (files.length >= RUN_OUTPUT_MAX_FILES) break;
+      if (entry.name.startsWith(".") || RUN_OUTPUT_EXCLUDES.has(entry.name)) {
+        continue;
+      }
+
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(absolutePath, depth + 1);
+        continue;
+      }
+      // `Dirent.isFile()` excludes symlinks, sockets, and device files.
+      if (!entry.isFile()) continue;
+
+      let stats: fs.Stats;
+      try {
+        stats = await fs.promises.stat(absolutePath);
+      } catch {
+        continue;
+      }
+      if (!stats.isFile()) continue;
+
+      files.push({
+        fileName: entry.name,
+        relativePath: path.relative(root, absolutePath).split(path.sep).join("/"),
+        absolutePath,
+        size: stats.size,
+        modifiedAt: Math.trunc(stats.mtimeMs),
+      });
+    }
+  };
+
+  await visit(root, 0);
+  return files.sort(
+    (a, b) =>
+      b.modifiedAt - a.modifiedAt || a.relativePath.localeCompare(b.relativePath),
+  );
 }
 
 /**
@@ -571,6 +645,17 @@ export const runsService = {
     }
     if (run.mode === "developer") return null;
     return managedRunDir(run.id, run.mode);
+  },
+
+  /**
+   * Files the agent left in a Work/Chat run's managed directory. Developer
+   * runs use workspace changes instead; scanning their whole repository would
+   * mislabel pre-existing files as deliverables.
+   */
+  async listRunOutputFiles(runId: string): Promise<RunOutputFile[]> {
+    const run = await runsRepo.findRunById(runId);
+    if (!run || run.mode === "developer" || run.workspaceId) return [];
+    return listManagedOutputFiles(managedRunDir(run.id, run.mode));
   },
 
   /**

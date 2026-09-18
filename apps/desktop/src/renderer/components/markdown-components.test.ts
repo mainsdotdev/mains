@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 
 import { AgentMarkdown } from "./agent-markdown";
 import {
@@ -10,11 +10,19 @@ import {
   isRemoteImageSrc,
 } from "./markdown-components";
 
+const linkHarness = vi.hoisted(() => ({
+  openLink: vi.fn(),
+}));
+
 vi.mock("@/features/workspace/hooks/use-open-file-in-editor", () => ({
   useOpenFileInEditor: () => vi.fn(),
 }));
+vi.mock("@/hooks/use-open-link", () => ({
+  useOpenLink: () => linkHarness.openLink,
+}));
 
 afterEach(cleanup);
+beforeEach(() => vi.clearAllMocks());
 
 function renderMarkdown(source: string) {
   return render(createElement(AgentMarkdown, null, source));
@@ -145,6 +153,15 @@ describe("markdownComponents / links", () => {
     expect(link.querySelector("img")?.getAttribute("src")).toContain(
       encodeURIComponent("https://www.nair.sh/favicon.ico"),
     );
+  });
+
+  it("opens assistant web links through the in-app browser flow", () => {
+    const url = "https://news.ycombinator.com/item?id=49717558";
+    renderMarkdown(`[Top comment thread](${url})`);
+
+    fireEvent.click(screen.getByRole("link", { name: "Top comment thread" }));
+
+    expect(linkHarness.openLink).toHaveBeenCalledWith(url);
   });
 });
 

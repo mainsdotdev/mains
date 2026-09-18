@@ -111,6 +111,57 @@ describe("buildTurnRenderRows — deliverable breakout", () => {
       visualizationIndex,
     );
   });
+
+  it("keeps only the latest version of the same document visible", () => {
+    const events = [
+      ev({
+        id: "u1",
+        content: "create a pitch deck",
+        metadata: { kind: "user-prompt" },
+      }),
+      ev({
+        id: "d1",
+        metadata: {
+          kind: "document",
+          path: "/work/build/preview/mains_pitch_deck.pptx",
+          fileName: "mains_pitch_deck.pptx",
+        },
+      }),
+      ev({
+        id: "t1",
+        type: "tool_call",
+        content: "Bash: refine deck",
+        metadata: { status: "done", toolName: "Bash" },
+      }),
+      ev({
+        id: "d2",
+        metadata: {
+          kind: "document",
+          path: "/work/final/mains-pitch-deck.pptx",
+          fileName: "mains-pitch-deck.pptx",
+        },
+      }),
+      ev({
+        id: "r1",
+        content: "The presentation is ready.",
+        metadata: { kind: "report" },
+      }),
+    ];
+    const groups = groupEvents(events);
+    const firstDocument = groups.findIndex((group) =>
+      group.events.some((event) => event.id === "d1"),
+    );
+    const finalDocument = groups.findIndex((group) =>
+      group.events.some((event) => event.id === "d2"),
+    );
+    const rows = buildTurnRenderRows(groups);
+    const accordion = rows.find((row) => row.kind === "accordion");
+
+    expect(accordion).toBeDefined();
+    if (accordion?.kind !== "accordion") return;
+    expect(accordion.messageBreakoutIndices).toEqual([finalDocument]);
+    expect(accordion.previousSegments.flat()).toContain(firstDocument);
+  });
 });
 
 describe("matchModelChangesToPromptGroups", () => {

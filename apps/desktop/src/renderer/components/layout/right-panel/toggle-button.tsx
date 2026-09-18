@@ -24,7 +24,7 @@ export function ToggleButton({
 }: ToggleButtonProps) {
   const activeWorkspaceId = useAppSelector((state) => state.workspace.activeWorkspaceId);
   const { embeddedBrowser } = useCapabilities();
-  const { showGitActions, showRightPanel } = useModeConfig();
+  const { showGitActions, showSources, showRightPanel } = useModeConfig();
   return (
     <div
       data-layout-toggle
@@ -36,7 +36,12 @@ export function ToggleButton({
           : "0.8125rem",
       }}
     >
-      {showGitActions && <SessionPanelTrigger />}
+      {(showGitActions || showSources) && (
+        <SessionPanelTrigger
+          showGitActions={showGitActions}
+          showSources={showSources}
+        />
+      )}
       <div className="flex items-center  rounded-full p-0.5">
       {onBrowserToggle && embeddedBrowser && (
         <Button

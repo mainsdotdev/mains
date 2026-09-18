@@ -7,11 +7,14 @@ import {
   DrizzleFileIcon,
   ElectronFileIcon,
   EnvFileIcon,
+  ExcelFileIcon,
   JsonFileIcon,
   LicenseFileIcon,
   LockFileIcon,
+  MarkdownFileIcon,
   NodeFileIcon,
   PnpmFileIcon,
+  PowerPointFileIcon,
   PythonFileIcon,
   ShellFileIcon,
   TestFileIcon,
@@ -19,6 +22,7 @@ import {
   TsconfigFileIcon,
   ViteFileIcon,
   VitestFileIcon,
+  WordFileIcon,
   YamlFileIcon,
 } from "@/components/ui/icons/file-icons";
 
@@ -34,6 +38,22 @@ describe("resolveFileIcon", () => {
     expect(iconFor("schema.sql")).toBe(DatabaseFileIcon);
     expect(iconFor("mains.db")).toBe(DatabaseFileIcon);
     expect(iconFor("ci.yml")).toBe(YamlFileIcon);
+  });
+
+  it("derives the basename and extension from a full path", () => {
+    expect(resolveFileIcon("/runs/run-1/work/report.md")).toBe(
+      MarkdownFileIcon,
+    );
+    expect(resolveFileIcon("/repo/config/CLAUDE.md")).toBe(ClaudeFileIcon);
+  });
+
+  it("maps Microsoft Office documents to dedicated icons", () => {
+    expect(iconFor("proposal.doc")).toBe(WordFileIcon);
+    expect(iconFor("proposal.docx")).toBe(WordFileIcon);
+    expect(iconFor("budget.xls")).toBe(ExcelFileIcon);
+    expect(iconFor("budget.xlsx")).toBe(ExcelFileIcon);
+    expect(iconFor("deck.ppt")).toBe(PowerPointFileIcon);
+    expect(iconFor("deck.pptx")).toBe(PowerPointFileIcon);
   });
 
   it("prefers an exact filename over its extension", () => {

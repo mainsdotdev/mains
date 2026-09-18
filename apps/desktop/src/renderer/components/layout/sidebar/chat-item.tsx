@@ -80,7 +80,11 @@ export function ChatItem({
   const isLive = run.status === "running" || run.status === "queued";
   const age = timeAgo(run.updatedAt);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const [menuPosition, setMenuPosition] = useState({
+    x: 0,
+    y: 0,
+    anchorTop: 0,
+  });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   // Escape leaves without saving, but it also blurs the input — this tells the
@@ -106,7 +110,13 @@ export function ChatItem({
   const openMenu = (event: MouseEvent) => {
     event.stopPropagation();
     const rect = triggerRef.current?.getBoundingClientRect();
-    if (rect) setMenuPosition({ x: rect.right, y: rect.bottom });
+    if (rect) {
+      setMenuPosition({
+        x: rect.right,
+        y: rect.bottom,
+        anchorTop: rect.top,
+      });
+    }
     setIsMenuOpen(true);
   };
 
@@ -229,7 +239,6 @@ export function ChatItem({
         isOpen={isMenuOpen}
         aria-label="Chat actions"
         position={menuPosition}
-        origin="top-left"
         onClose={() => setIsMenuOpen(false)}
       >
         <DropdownMenuItem onClick={startRename}>

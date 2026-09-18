@@ -1,6 +1,9 @@
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { ModeId } from "../../../../shared/modes";
+import type { RunOutputFile } from "@mains/contracts/runs";
+
+export type { RunOutputFile } from "@mains/contracts/runs";
 
 export type RunStatus =
   | "queued"
@@ -273,6 +276,16 @@ export const runsApi = baseApi.injectEndpoints({
         args: [id],
       }),
       providesTags: (_result, _error, id) => [{ type: "Runs", id }],
+    }),
+
+    listRunOutputFiles: builder.query<RunOutputFile[], string>({
+      query: (runId) => ({
+        handler: CHANNELS.runs.listOutputFiles,
+        args: [runId],
+      }),
+      providesTags: (_result, _error, runId) => [
+        { type: "RunOutputs", id: runId },
+      ],
     }),
 
     getRunsByAccount: builder.query<
@@ -548,6 +561,7 @@ export const {
   useListRecentRunsQuery,
   useGetRunByIdQuery,
   useLazyGetRunByIdQuery,
+  useListRunOutputFilesQuery,
   useGetRunsByAccountQuery,
   useLazyGetRunsByAccountQuery,
   useGetRunsByWorkspaceQuery,

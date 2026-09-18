@@ -81,7 +81,12 @@ const DropdownContext = createContext<{
 
 interface DropdownMenuBaseProps {
   isOpen: boolean;
-  position: { x: number; y: number };
+  position: {
+    x: number;
+    y: number;
+    /** Top edge of the trigger, used when the menu needs to open upward. */
+    anchorTop?: number;
+  };
   onClose: () => void;
   // Optional like its siblings (DropdownMenuSub, DropdownMenuItem): a menu
   // whose every row is conditional can legitimately render none of them.
@@ -115,6 +120,10 @@ export function DropdownMenu({
   const submenuRefs = useRef<Set<HTMLElement>>(new Set());
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const shouldRestoreFocus = useRef(true);
+  const [menuSize, setMenuSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   const registerSubmenu = useCallback((element: HTMLElement) => {
     submenuRefs.current.add(element);
@@ -153,6 +162,20 @@ export function DropdownMenu({
       });
     };
   }, [initialFocus, isOpen]);
+
+  useLayoutEffect(() => {
+    if (!isOpen || !menuRef.current) return;
+
+    // Layout dimensions ignore the scale used by the opening animation.
+    const { offsetWidth: width, offsetHeight: height } = menuRef.current;
+    if (width <= 0 || height <= 0) return;
+
+    setMenuSize((current) =>
+      current?.width === width && current.height === height
+        ? current
+        : { width, height },
+    );
+  }, [children, isOpen, minWidth]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -211,9 +234,33 @@ export function DropdownMenu({
 
   if (!isOpen) return null;
 
+  const viewportPadding = 8;
+  const menuWidth = Math.max(minWidth, menuSize?.width ?? minWidth);
+  // Keep the previous estimate for the first render. The layout effect above
+  // replaces it with the real size before the browser paints.
+  const menuHeight = menuSize?.height ?? 125;
+  const spaceBelow = window.innerHeight - viewportPadding - position.y;
+  const upwardAnchor = position.anchorTop ?? position.y;
+  const spaceAbove = upwardAnchor - viewportPadding;
+  const opensUpward = menuHeight > spaceBelow && spaceAbove > spaceBelow;
+  const desiredY = opensUpward
+    ? upwardAnchor - menuHeight
+    : position.y;
   const adjustedPosition = {
-    x: Math.max(8, Math.min(position.x, window.innerWidth - minWidth - 8)),
-    y: Math.max(8, Math.min(position.y, window.innerHeight - 125)),
+    x: Math.max(
+      viewportPadding,
+      Math.min(
+        position.x,
+        window.innerWidth - menuWidth - viewportPadding,
+      ),
+    ),
+    y: Math.max(
+      viewportPadding,
+      Math.min(
+        desiredY,
+        window.innerHeight - menuHeight - viewportPadding,
+      ),
+    ),
   };
 
   const getTransformOrigin = () => {
@@ -228,10 +275,9 @@ export function DropdownMenu({
     }
 
     const isRight = position.x > window.innerWidth / 2;
-    const isBottom = position.y > window.innerHeight / 2;
 
-    if (isBottom && isRight) return "bottom right";
-    if (isBottom) return "bottom left";
+    if (opensUpward && isRight) return "bottom right";
+    if (opensUpward) return "bottom left";
     if (isRight) return "top right";
     return "top left";
   };

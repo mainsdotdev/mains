@@ -33,6 +33,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -131,5 +132,42 @@ describe("DropdownMenu focus handoff", () => {
     flushFrames();
 
     expect(document.activeElement).not.toBe(trigger);
+  });
+});
+
+describe("DropdownMenu viewport placement", () => {
+  it("flips a tall menu above an anchor near the bottom edge", () => {
+    vi.stubGlobal("innerWidth", 1_200);
+    vi.stubGlobal("innerHeight", 800);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.getAttribute("role") === "menu" ? 180 : 0;
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.getAttribute("role") === "menu" ? 220 : 0;
+      },
+    );
+
+    render(
+      createElement(
+        DropdownMenu,
+        {
+          isOpen: true,
+          position: { x: 200, y: 760, anchorTop: 730 },
+          onClose: () => undefined,
+          "aria-label": "Bottom actions",
+        },
+        createElement(DropdownMenuItem, { onClick: () => undefined }, "Rename"),
+        createElement(DropdownMenuItem, { onClick: () => undefined }, "Move"),
+        createElement(DropdownMenuItem, { onClick: () => undefined }, "Archive"),
+        createElement(DropdownMenuItem, { onClick: () => undefined }, "Delete"),
+      ),
+    );
+
+    const menu = screen.getByRole("menu", { name: "Bottom actions" });
+    expect(menu.style.top).toBe("510px");
+    expect(menu.style.transformOrigin).toBe("bottom left");
   });
 });

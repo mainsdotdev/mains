@@ -6,6 +6,7 @@ import {
   shouldFallback,
   DOC_VIEWER_LABELS,
   isDocumentRenderImage,
+  nearestSlideIndex,
 } from "./document-viewer";
 
 describe("classifyDocType", () => {
@@ -79,6 +80,21 @@ describe("shouldFallback", () => {
   });
 });
 
+describe("nearestSlideIndex", () => {
+  it("returns -1 when the presentation has no slides", () => {
+    expect(nearestSlideIndex([], 400)).toBe(-1);
+  });
+
+  it("returns the slide closest to the viewport centre", () => {
+    expect(nearestSlideIndex([120, 520, 920], 610)).toBe(1);
+    expect(nearestSlideIndex([120, 520, 920], 850)).toBe(2);
+  });
+
+  it("keeps the earlier slide when two centres are equally close", () => {
+    expect(nearestSlideIndex([200, 600], 400)).toBe(0);
+  });
+});
+
 describe("isDocumentRenderImage", () => {
   const docs = [
     "/ws/outputs/documents/file-over-app-brief.docx",
@@ -86,14 +102,27 @@ describe("isDocumentRenderImage", () => {
   ];
 
   it("returns false when the run produced no documents", () => {
-    expect(isDocumentRenderImage("/ws/outputs/documents/anything.png", [])).toBe(false);
+    expect(
+      isDocumentRenderImage("/ws/outputs/documents/anything.png", []),
+    ).toBe(false);
   });
 
   it("flags a png whose stem ends with a document extension", () => {
     expect(
-      isDocumentRenderImage("/ws/outputs/documents/file-over-app-brief.docx.png", docs),
+      isDocumentRenderImage(
+        "/ws/outputs/documents/file-over-app-brief.docx.png",
+        docs,
+      ),
     ).toBe(true);
-    expect(isDocumentRenderImage("/tmp/whatever/deck.pptx.png", docs)).toBe(true);
+    expect(isDocumentRenderImage("/tmp/whatever/deck.pptx.png", docs)).toBe(
+      true,
+    );
+  });
+
+  it("flags a PDF preview only when it matches a generated PDF", () => {
+    const pdfs = ["/tmp/deck.pdf"];
+    expect(isDocumentRenderImage("/tmp/deck.pdf.png", pdfs)).toBe(true);
+    expect(isDocumentRenderImage("/tmp/unrelated.pdf.png", pdfs)).toBe(false);
   });
 
   it("flags page renders living in a subdirectory of a document's folder", () => {
@@ -104,17 +133,24 @@ describe("isDocumentRenderImage", () => {
       ),
     ).toBe(true);
     expect(
-      isDocumentRenderImage("/ws/outputs/documents/rendered-deck/contact-sheet.png", docs),
+      isDocumentRenderImage(
+        "/ws/outputs/documents/rendered-deck/contact-sheet.png",
+        docs,
+      ),
     ).toBe(true);
   });
 
   it("leaves an intentional image in a sibling folder alone", () => {
-    expect(isDocumentRenderImage("/ws/outputs/images/cat.png", docs)).toBe(false);
+    expect(isDocumentRenderImage("/ws/outputs/images/cat.png", docs)).toBe(
+      false,
+    );
   });
 
   it("leaves an intentional image in the document's own folder alone", () => {
     // same dir as the doc, generic name → not a render byproduct
-    expect(isDocumentRenderImage("/ws/outputs/documents/diagram.png", docs)).toBe(false);
+    expect(
+      isDocumentRenderImage("/ws/outputs/documents/diagram.png", docs),
+    ).toBe(false);
   });
 });
 

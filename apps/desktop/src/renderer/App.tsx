@@ -134,15 +134,17 @@ function AppContent() {
       : rightPanelVisible
         ? RIGHT_PANEL_WIDTH
         : EDGE_GUTTER;
-  // The box renders nothing without a workspace, and not at all on the routes
-  // that hide the right panel. Work/chat modes hide the git ceremony entirely
-  // (which also spares the panel's gitFlow status query — it throws on
-  // repo-less trees).
+  // The box has two independent targets: Code can describe a workspace before
+  // a run exists; Work can describe a workspace-less run. Git remains gated
+  // behind the workspace half so its status query never touches managed run
+  // directories.
+  const hasSessionPanelTarget =
+    (modeConfig.showGitActions && !!activeWorkspaceId) ||
+    (modeConfig.showSources && !!sessionRunId);
   const sessionPanelShown =
     isSessionPanelOpen &&
-    !!activeWorkspaceId &&
     !hideRightPanel &&
-    modeConfig.showGitActions;
+    hasSessionPanelTarget;
   // The box floats — overlays the content instead of taking a column — when
   // there is no room to share (another panel already holds the right edge), or
   // nothing to share *with*: the empty state and the other non-run tabs centre
@@ -315,6 +317,7 @@ function AppContent() {
         {!hideRightPanel && (
           <SessionPanel
             providerId={activeProviderId}
+            runId={sessionRunId}
             laneOffset={rightLaneWidth}
             floating={sessionPanelFloating}
           />

@@ -575,6 +575,8 @@ const api = {
     getById: (id: string) => ipcRenderer.invoke(CHANNELS.runs.getById, id),
     getExecutionRoot: (runId: string) =>
       ipcRenderer.invoke(CHANNELS.runs.getExecutionRoot, runId),
+    listOutputFiles: (runId: string) =>
+      ipcRenderer.invoke(CHANNELS.runs.listOutputFiles, runId),
     getByAccount: (accountId: string, limit?: number) =>
       ipcRenderer.invoke(CHANNELS.runs.getByAccount, accountId, limit),
     getByWorkspace: (

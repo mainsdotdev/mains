@@ -36,6 +36,9 @@ import {
   CsvFileIcon,
   TextFileIcon,
   PdfFileIcon,
+  WordFileIcon,
+  ExcelFileIcon,
+  PowerPointFileIcon,
   ArchiveFileIcon,
   FontFileIcon,
   VideoFileIcon,
@@ -123,6 +126,12 @@ const EXTENSION_ICONS: Record<string, FileIconType> = {
   log: TextFileIcon,
   rtf: TextFileIcon,
   pdf: PdfFileIcon,
+  doc: WordFileIcon,
+  docx: WordFileIcon,
+  xls: ExcelFileIcon,
+  xlsx: ExcelFileIcon,
+  ppt: PowerPointFileIcon,
+  pptx: PowerPointFileIcon,
   zip: ArchiveFileIcon,
   tar: ArchiveFileIcon,
   gz: ArchiveFileIcon,
@@ -217,6 +226,20 @@ const FILENAME_PATTERNS: Array<[RegExp, FileIconType]> = [
   [/^(LICENSE|LICENCE|COPYING)(\..+)?$/i, LicenseFileIcon],
 ];
 
+function basename(fileName?: string): string | undefined {
+  if (!fileName) return undefined;
+  return fileName.split(/[\\/]/).pop() || fileName;
+}
+
+function extensionFromFileName(fileName?: string): string | undefined {
+  const name = basename(fileName);
+  if (!name) return undefined;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && dot < name.length - 1
+    ? name.slice(dot + 1).toLowerCase()
+    : undefined;
+}
+
 const EXTENSION_COLORS: Record<string, string> = {
   js: "text-warning",
   jsx: "text-warning",
@@ -281,14 +304,17 @@ export function resolveFileIcon(
   fileName?: string,
   extension?: string,
 ): FileIconType | null {
-  if (fileName) {
-    const exact = FILENAME_ICONS[fileName];
+  const name = basename(fileName);
+  const resolvedExtension = extension?.toLowerCase() ?? extensionFromFileName(name);
+
+  if (name) {
+    const exact = FILENAME_ICONS[name];
     if (exact) return exact;
-    const patterned = FILENAME_PATTERNS.find(([re]) => re.test(fileName));
+    const patterned = FILENAME_PATTERNS.find(([re]) => re.test(name));
     if (patterned) return patterned[1];
   }
-  if (extension) {
-    const byExtension = EXTENSION_ICONS[extension.toLowerCase()];
+  if (resolvedExtension) {
+    const byExtension = EXTENSION_ICONS[resolvedExtension];
     if (byExtension) return byExtension;
   }
   return null;
@@ -339,13 +365,14 @@ export const FileIconComponent = memo(function FileIconComponent({
     return <FolderIcon className={`${colorClass} ${className}`} />;
   }
 
-  const Resolved = resolveFileIcon(fileName, extension);
+  const resolvedExtension = extension?.toLowerCase() ?? extensionFromFileName(fileName);
+  const Resolved = resolveFileIcon(fileName, resolvedExtension);
   if (Resolved) {
     return <Resolved className={className} />;
   }
 
-    const colorClass = extension
-    ? EXTENSION_COLORS[extension.toLowerCase()] || "text-primary-600 dark:text-primary-400"
+  const colorClass = resolvedExtension
+    ? EXTENSION_COLORS[resolvedExtension] || "text-primary-600 dark:text-primary-400"
     : "text-primary-600 dark:text-primary-400";
 
   return <FileIcon className={`${colorClass} ${className}`} />;

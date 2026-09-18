@@ -328,7 +328,7 @@ export default function Select<T extends string = string>({
         className={`
           w-full ${TRIGGER_SIZE[size]}
           glass-input
-          px-4.5
+          pl-4.5 pr-2.5
           text-primary-900 dark:text-primary
           cursor-pointer
           disabled:cursor-not-allowed disabled:opacity-60

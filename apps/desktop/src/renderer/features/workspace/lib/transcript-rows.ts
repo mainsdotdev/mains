@@ -17,6 +17,7 @@
 // re-export — going through the component would pull the whole React/UI tree
 // (and its browser-global-touching deps) into this React-free module.
 import { isPlanToolCallGroup, type EventGroup } from "./group-events";
+import { documentDeliverableKey } from "./deliverable-identity";
 import type { RunTurn } from "@/lib/redux/api";
 
 export interface SessionInfo {
@@ -301,17 +302,49 @@ export type TurnRenderRow =
       previousToolSummary: string;
     };
 
-function groupHasMediaArtifact(g: EventGroup): boolean {
-  return g.events.some(
-    (e) =>
-      e.type === "artifact" &&
-      (
-        e.metadata?.kind === "image" ||
-        e.metadata?.kind === "image_generation" ||
-        e.metadata?.kind === "document" ||
-        e.metadata?.kind === "visualization"
-      ),
-  );
+function documentArtifactKey(event: EventGroup["events"][number]): string | null {
+  if (event.type !== "artifact" || event.metadata?.kind !== "document") {
+    return null;
+  }
+  const candidate =
+    (typeof event.metadata.fileName === "string" && event.metadata.fileName) ||
+    (typeof event.metadata.path === "string" && event.metadata.path) ||
+    event.content;
+  return candidate ? documentDeliverableKey(candidate) : null;
+}
+
+function latestDocumentGroups(
+  groups: EventGroup[],
+  turnStart: number,
+  turnEnd: number,
+): Map<string, number> {
+  const latest = new Map<string, number>();
+  for (let groupIndex = turnStart; groupIndex <= turnEnd; groupIndex++) {
+    for (const event of groups[groupIndex]?.events ?? []) {
+      const key = documentArtifactKey(event);
+      if (key) latest.set(key, groupIndex);
+    }
+  }
+  return latest;
+}
+
+function groupHasMediaArtifact(
+  group: EventGroup,
+  groupIndex: number,
+  latestDocumentGroup: ReadonlyMap<string, number>,
+): boolean {
+  return group.events.some((event) => {
+    if (event.type !== "artifact") return false;
+    if (event.metadata?.kind === "document") {
+      const key = documentArtifactKey(event);
+      return !key || latestDocumentGroup.get(key) === groupIndex;
+    }
+    return (
+      event.metadata?.kind === "image" ||
+      event.metadata?.kind === "image_generation" ||
+      event.metadata?.kind === "visualization"
+    );
+  });
 }
 
 /** Linear plan: every group index appears exactly once, in order. */
@@ -344,6 +377,11 @@ export function buildTurnRenderRows(
     if (turnStart > turnEnd) continue;
 
     const { prefix, segments } = partitionAgentTurn(groups, turnStart, turnEnd);
+    const latestDocumentGroup = latestDocumentGroups(
+      groups,
+      turnStart,
+      turnEnd,
+    );
     const prefixIndices = prefix.flatMap(expandIndexRange);
 
     if (segments.length === 0) {
@@ -377,7 +415,10 @@ export function buildTurnRenderRows(
         const g = groups[gIdx]!;
         if (isPlanToolCallGroup(g)) {
           planBreakout.push(gIdx);
-        } else if (groupHasMediaArtifact(g) || options.isDeliverableGroup?.(g)) {
+        } else if (
+          groupHasMediaArtifact(g, gIdx, latestDocumentGroup) ||
+          options.isDeliverableGroup?.(g)
+        ) {
           messageBreakout.push(gIdx);
         }
       }
