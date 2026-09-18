@@ -88,6 +88,13 @@ const api = {
     search: (query: string, options?: { kind?: string; limit?: number }) =>
       ipcRenderer.invoke(CHANNELS.entities.search, query, options),
   },
+  search: {
+    query: (input: {
+      query: string;
+      accountId?: string;
+      limitPerKind?: number;
+    }) => ipcRenderer.invoke(CHANNELS.search.query, input),
+  },
   // Task operations (actionable domain)
   tasks: {
     getAll: (options?: { status?: string; limit?: number }) =>
@@ -950,6 +957,7 @@ const api = {
     getDashboard: (filter?: string) => ipcRenderer.invoke(CHANNELS.stats.getDashboard, filter),
   },
   app: {
+    quit: () => ipcRenderer.invoke(CHANNELS.app.quit),
     setUnsavedChanges: (hasChanges: boolean) =>
       ipcRenderer.invoke(CHANNELS.app.setUnsavedChanges, hasChanges),
     setMenuBarIconVisible: (visible: boolean) =>
@@ -1089,7 +1097,9 @@ const api = {
         ipcRenderer.removeListener(CHANNELS.browser.findResult, listener);
     },
     onShortcut: (
-      callback: (data: { action: "focus-location" | "find" }) => void,
+      callback: (data: {
+        action: "focus-location" | "find" | "command-palette";
+      }) => void,
     ) => {
       const listener = (_: any, data: any) => callback(data);
       ipcRenderer.on(CHANNELS.browser.shortcut, listener);

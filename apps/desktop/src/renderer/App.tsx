@@ -41,6 +41,7 @@ import { MainHeaderProvider } from "./hooks/use-main-header";
 import { useLayoutWidthVars } from "./hooks/use-layout-width-vars";
 import { useAppearanceFonts } from "./hooks/use-appearance-fonts";
 import { getProviderVariant } from "./lib/provider-variants";
+import { CommandMenu } from "./features/command-menu/command-menu";
 
 // First-run-only UI is a substantial graph (feature previews, provider cards,
 // and settings controls). Completed users should not parse it on every launch.
@@ -240,6 +241,7 @@ function AppContent() {
   return (
     <>
       <Toaster />
+      <CommandMenu />
       <MainLayout>
         {/* Mobile drawer scrims — tap to dismiss. Each sits just below its panel
             (sidebar z-30, right panel z-50) and above the full-width content. */}

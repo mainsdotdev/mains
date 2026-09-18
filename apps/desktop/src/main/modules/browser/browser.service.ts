@@ -697,6 +697,13 @@ export const browserService = {
       if (input.type !== "keyDown" || (!input.meta && !input.control)) return;
       const key = input.key.toLowerCase();
 
+      if (input.code === "KeyK" && input.alt && !input.shift) {
+        event.preventDefault();
+        this._sendToRenderer(CHANNELS.browser.shortcut, {
+          action: "command-palette",
+        });
+        return;
+      }
       if (key === "l" || key === "f") {
         event.preventDefault();
         this._sendToRenderer(CHANNELS.browser.shortcut, {

@@ -23,6 +23,10 @@ export interface ModalProps {
   backdrop?: "dim" | "media";
   /** "panel" is the glass card; "bare" drops the fill, rim, radius, and shadow so media content floats on the backdrop. */
   surface?: "panel" | "bare";
+  /** Vertical placement; command/search surfaces sit near the top edge. */
+  placement?: "center" | "top";
+  /** Command surfaces use a restrained entrance without spring overshoot. */
+  motion?: "default" | "command";
   /** Name the dialog when its content does not use ModalHeader. */
   "aria-label"?: string;
   /** Link the dialog to a visible title when its content does not use ModalHeader. */
@@ -48,6 +52,8 @@ export function Modal({
   className,
   backdrop = "dim",
   surface = "panel",
+  placement = "center",
+  motion = "default",
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
@@ -69,7 +75,12 @@ export function Modal({
   if (!isOpen) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-(--z-modal) flex items-center justify-center p-4">
+    <div
+      className={cn(
+        "fixed inset-0 z-(--z-modal) flex justify-center p-4",
+        placement === "top" ? "items-start pt-[12vh]" : "items-center",
+      )}
+    >
       <div
         className={cn(
           "absolute inset-0",
@@ -98,7 +109,10 @@ export function Modal({
           className,
         )}
         style={{
-          animation: "wizardModalIn 20ms cubic-bezier(0.22, 1, 0.36, 1) both",
+          animation:
+            motion === "command"
+              ? "commandMenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1) both"
+              : "wizardModalIn 20ms cubic-bezier(0.22, 1, 0.36, 1) both",
         }}
       >
         <ModalTitleContext.Provider value={generatedTitleId}>

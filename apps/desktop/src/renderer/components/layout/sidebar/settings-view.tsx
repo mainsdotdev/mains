@@ -1,7 +1,11 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { Body, Button, Text } from "@/components/ui";
 import { ChevronUp, ProjectFolder } from "@/components/ui/icons";
-import { useListProjectsQuery } from "@/lib/redux/api";
+import {
+  useGetAccountQuery,
+  useListCollectionsQuery,
+  useListProjectsQuery,
+} from "@/lib/redux/api";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { useIsMobile } from "@/lib/platform";
@@ -12,6 +16,7 @@ import {
   SETTINGS_MAIN_NAV_ITEMS,
   type SettingsRouteId,
 } from "@/features/settings/settings-sections";
+import { useActiveSpace } from "@/hooks/use-active-space";
 
 interface SettingsViewProps {
   onClose: () => void;
@@ -22,6 +27,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const location = useLocation();
   const dispatch = useAppDispatch();
   const isMobile = useIsMobile();
+  const { activeSpace } = useActiveSpace();
+  const showCollections = activeSpace?.mode !== "developer";
 
   // The settings nav lives in the sidebar; on mobile that's an overlay drawer, so
   // close it after picking a section/project to reveal the content underneath.
@@ -35,7 +42,18 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const activeSection = getSettingsRouteId(searchParams.get("section"));
   const activeId = searchParams.get("id");
 
-  const { data: projects = [] } = useListProjectsQuery();
+  const { data: account } = useGetAccountQuery();
+  const { data: codeProjects = [] } = useListProjectsQuery(undefined, {
+    skip: showCollections,
+  });
+  const { data: collections = [] } = useListCollectionsQuery(
+    { accountId: account?.id ?? "" },
+    { skip: !showCollections || !account?.id },
+  );
+  const projects = showCollections
+    ? collections.filter((collection) => !collection.isArchived)
+    : codeProjects;
+  const projectKind = showCollections ? "collection" : "code";
 
   const handleSectionClick = (sectionId: SettingsRouteId) => {
     goTo(`/settings?section=${sectionId}`);
@@ -114,7 +132,9 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                   <Button
                     key={project.id}
                     onClick={() =>
-                      goTo(`/settings?section=projects&id=${project.id}`)
+                      goTo(
+                        `/settings?section=projects&kind=${projectKind}&id=${encodeURIComponent(project.id)}`,
+                      )
                     }
                     className={`w-full cursor-pointer text-left px-3 py-1.5 rounded-xl text-sm transition-all flex items-center gap-2
                       ${

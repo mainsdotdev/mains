@@ -301,7 +301,9 @@ export default function WorkspacesList({
         onSettings={
           workspace.projectId
             ? () =>
-                navigate(`/settings?section=projects&id=${workspace.projectId}`)
+                navigate(
+                  `/settings?section=projects&kind=code&id=${workspace.projectId}`,
+                )
             : undefined
         }
         onCreateWorktree={

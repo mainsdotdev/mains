@@ -38,6 +38,7 @@ import {
 } from "./modules/imageProxy";
 import { tailscaleService } from "./modules/tailscale";
 import { resolveWebRoot } from "./web-root";
+import { registerSearchIpc } from "./modules/search";
 
 export interface ServeOptions {
   /** Port to listen on. Default 8787. */
@@ -113,6 +114,7 @@ export async function startBackendServer(
   registerAutomationsIpc();
   registerPulseIpc();
   registerGuardsIpc();
+  registerSearchIpc();
   // sign-only: the HMAC signing IPC (imageProxy:sign / documents:sign). The
   // Electron custom-protocol handler isn't registered here — web mode serves the
   // signed paths over HTTP (/__localimg, /__localdoc) instead.

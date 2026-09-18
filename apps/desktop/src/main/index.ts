@@ -136,6 +136,7 @@ import {
   unregisterRemoteBackendsIpc,
 } from "./modules/remoteBackends";
 import { registerBackendIpc, unregisterBackendIpc } from "./modules/backend";
+import { registerSearchIpc, unregisterSearchIpc } from "./modules/search";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 
 // ─────────────────────────────────────────────────────────────
@@ -800,6 +801,7 @@ async function initializeApp() {
     registerRemoteBackendsIpc();
     registerBackendIpc();
     registerLocalBackendIpc();
+    registerSearchIpc();
     // Re-apply any persisted "This machine" exposure (survives app restarts).
     void localBackendService.restore();
     automationsService.start();
@@ -934,6 +936,9 @@ async function initializeApp() {
 
     ipcMain.handle(CHANNELS.app.setUnsavedChanges, (_, value: boolean) => {
       hasUnsavedChanges = value;
+    });
+    ipcMain.handle(CHANNELS.app.quit, () => {
+      app.quit();
     });
 
     // Build custom application menu
@@ -1117,6 +1122,7 @@ async function cleanupApp() {
     unregisterRemoteBackendsIpc();
     unregisterBackendIpc();
     unregisterLocalBackendIpc();
+    unregisterSearchIpc();
     ipcMain.removeHandler(CHANNELS.shell.openExternal);
     ipcMain.removeHandler(CHANNELS.shell.openPath);
     ipcMain.removeHandler(CHANNELS.shell.showItemInFolder);
@@ -1126,6 +1132,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.shell.openFileWithBundle);
     ipcMain.removeHandler(CHANNELS.app.setUnsavedChanges);
     ipcMain.removeHandler(CHANNELS.app.setMenuBarIconVisible);
+    ipcMain.removeHandler(CHANNELS.app.quit);
 
     // Close database
     await closeDatabase();

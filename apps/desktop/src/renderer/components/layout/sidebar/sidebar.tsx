@@ -49,6 +49,7 @@ import {
 } from "@/lib/layout";
 import { Clock } from "@/components/ui/icons/space";
 import type { ModeId } from "../../../../shared/modes";
+import { listenForCommandMenuQuickActions } from "@/features/command-menu/command-menu-bridge";
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -124,6 +125,32 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     isCreateCollectionModalOpen,
     isCreatingCollection,
   } = useSidebarActions();
+
+  useEffect(
+    () =>
+      listenForCommandMenuQuickActions((action) => {
+        switch (action) {
+          case "add-project-from-local":
+            void handleAddProject();
+            break;
+          case "clone-project-from-url":
+            handleOpenCloneModal();
+            break;
+          case "create-code-project":
+            handleOpenCreateProjectModal();
+            break;
+          case "create-collection-project":
+            handleOpenCreateCollectionModal();
+            break;
+        }
+      }),
+    [
+      handleAddProject,
+      handleOpenCloneModal,
+      handleOpenCreateCollectionModal,
+      handleOpenCreateProjectModal,
+    ],
+  );
 
   const deleteWorkspace = useDeleteWorkspace();
   const archiveWorkspace = useArchiveWorkspace();

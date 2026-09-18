@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Close, Plus, Search } from "@/components/ui/icons";
 import { useGetPulsesQuery, type Pulse } from "@/lib/redux/api/pulseApi";
 import { useModeConfig } from "@/hooks/use-mode-config";
@@ -14,6 +15,7 @@ import { Button, Heading3, Input, Muted } from "@/components/ui";
 import { PageShell } from "@/components/layout/page-shell";
 
 export default function PulsePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { data: pulses = [], isLoading } = useGetPulsesQuery();
   const { mode } = useModeConfig();
   const [query, setQuery] = useState("");
@@ -22,6 +24,13 @@ export default function PulsePage() {
     null,
   );
   const [modalOpen, setModalOpen] = useState(false);
+
+  const linkedTemplateId = searchParams.get("template");
+  const linkedTemplate = linkedTemplateId
+    ? templatesForMode(mode).find((template) => template.id === linkedTemplateId) ?? null
+    : null;
+  const linkedCreate = searchParams.get("new") === "1";
+  const linkedModalOpen = linkedCreate || linkedTemplate !== null;
 
   const searching = query.trim().length > 0;
   const visiblePulses = pulses.filter((p) =>
@@ -55,6 +64,7 @@ export default function PulsePage() {
     setModalOpen(false);
     setEditingPulse(null);
     setActiveTemplate(null);
+    if (linkedModalOpen) setSearchParams({}, { replace: true });
   };
 
   return (
@@ -120,10 +130,10 @@ export default function PulsePage() {
       )}
 
       <PulseModal
-        isOpen={modalOpen}
+        isOpen={modalOpen || linkedModalOpen}
         onClose={closeModal}
-        pulse={editingPulse}
-        initialTemplate={activeTemplate}
+        pulse={linkedModalOpen ? null : editingPulse}
+        initialTemplate={linkedModalOpen ? linkedTemplate : activeTemplate}
       />
     </PageShell>
   );

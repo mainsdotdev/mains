@@ -2,6 +2,7 @@ import { Button } from "@/components/ui";
 import { Search } from "@/components/ui/icons";
 import { SpaceModePicker } from "@/features/workspace/components/space-mode-picker";
 import type { ModeId } from "../../../../shared/modes";
+import { requestCommandMenu } from "@/features/command-menu/command-menu-bridge";
 
 interface SidebarHeaderProps {
   mode?: ModeId;
@@ -32,10 +33,11 @@ export function SidebarHeader({
         )}
       </div>
       <Button
-        tooltip="Search coming soon"
-        aria-label="Search (coming soon)"
-        aria-disabled="true"
-        className="flex size-9 shrink-0 items-center justify-center rounded-xl text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5"
+        onClick={requestCommandMenu}
+        tooltip="Search Mains "
+        tooltipShortcut="(⌘⌥K)"
+        aria-label="Search Mains"
+        className="flex size-8 shrink-0 items-center justify-center rounded-lg text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5"
       >
         <Search aria-hidden="true" className="size-4" />
       </Button>

@@ -11,6 +11,7 @@ export const CHANNELS = {
   app: {
     flushAndQuit: "app:flushAndQuit",
     fullscreenChange: "app:fullscreenChange",
+    quit: "app:quit",
     setMenuBarIconVisible: "app:setMenuBarIconVisible",
     setUnsavedChanges: "app:setUnsavedChanges",
   },
@@ -294,6 +295,9 @@ export const CHANNELS = {
     getByRun: "runTurns:getByRun",
     getChangesDiff: "runTurns:getChangesDiff",
     undoChanges: "runTurns:undoChanges",
+  },
+  search: {
+    query: "search:query",
   },
   runs: {
     abort: "runs:abort",
