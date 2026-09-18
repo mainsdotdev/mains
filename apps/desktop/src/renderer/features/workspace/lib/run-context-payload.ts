@@ -53,6 +53,7 @@ export interface RunContextPayload {
   contextSkills?: Array<{
     name: string;
     path?: string;
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -213,6 +214,7 @@ export function buildRunContextPayload(
       skills.map((s) => ({
         name: s.name,
         path: s.path,
+        mentionPath: s.mentionPath,
         displayName: s.displayName,
         description: s.description,
         shortDescription: s.shortDescription,

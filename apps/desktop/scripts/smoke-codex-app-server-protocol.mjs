@@ -214,6 +214,17 @@ try {
   assertContains("v2/TurnStartParams.ts", [
     "collaborationMode?: CollaborationMode",
   ]);
+  assertContains("v2/McpResourceReadParams.ts", [
+    "threadId?: string | null",
+    "originCallId?: string | null",
+    "server: string",
+    "uri: string",
+  ]);
+  assertContains("v2/McpServerToolCallParams.ts", [
+    "threadId: string",
+    "server: string",
+    "tool: string",
+  ]);
   assertContains("Settings.ts", [
     "model: string",
     "reasoning_effort: ReasoningEffort | null",

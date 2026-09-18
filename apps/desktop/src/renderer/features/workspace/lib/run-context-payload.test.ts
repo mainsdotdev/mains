@@ -79,7 +79,13 @@ describe("buildRunContextPayload", () => {
         stackTrace: "at foo()",
         eventCount: 12,
       },
-      { kind: "skill", name: "reviewer", scope: "project" },
+      {
+        kind: "skill",
+        name: "flight-search",
+        displayName: "Flight Search",
+        mentionPath: "plugin://flight-search@marketplace",
+        scope: "plugin",
+      },
     ];
     const payload = buildRunContextPayload(items);
 
@@ -102,8 +108,10 @@ describe("buildRunContextPayload", () => {
       },
     ]);
     expect(payload.contextSkills?.[0]).toMatchObject({
-      name: "reviewer",
-      scope: "project",
+      name: "flight-search",
+      displayName: "Flight Search",
+      mentionPath: "plugin://flight-search@marketplace",
+      scope: "plugin",
     });
   });
 

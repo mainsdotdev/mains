@@ -90,6 +90,12 @@ import {
   unregisterImageProxyIpc,
 } from "./modules/imageProxy";
 import {
+  registerMcpAppsIpc,
+  unregisterMcpAppsIpc,
+  registerMcpAppsProtocolHandler,
+  unregisterMcpAppsProtocolHandler,
+} from "./modules/mcpApps";
+import {
   registerUpdatesIpc,
   unregisterUpdatesIpc,
   updatesService,
@@ -780,6 +786,8 @@ async function initializeApp() {
     registerTerminalIpc();
     registerImageProxyHandler();
     registerImageProxyIpc();
+    registerMcpAppsProtocolHandler();
+    registerMcpAppsIpc();
     registerStatsIpc();
     registerUpdatesIpc();
     updatesService.initialize();
@@ -1092,6 +1100,8 @@ async function cleanupApp() {
     unregisterGitFlowIpc();
     unregisterTerminalIpc();
     unregisterImageProxyIpc();
+    unregisterMcpAppsIpc();
+    unregisterMcpAppsProtocolHandler();
     unregisterStatsIpc();
     unregisterUpdatesIpc();
     automationsService.stop();

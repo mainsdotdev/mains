@@ -93,6 +93,8 @@ export interface WorkRunRequest {
   skills?: Array<{
     name: string;
     path?: string;
+    /** Structured app-server mention target for an app or plugin selection. */
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -427,6 +429,8 @@ export interface WorkRunContinueRequest {
   skills?: Array<{
     name: string;
     path?: string;
+    /** Structured app-server mention target for an app or plugin selection. */
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -504,6 +508,42 @@ export interface WorkRunReviewRequest {
   execution: RunExecutionContext;
   target: WorkRunReviewTarget;
   model?: string | null;
+}
+
+export interface McpAppReadResourceRequest {
+  runId: string;
+  server: string;
+  uri: string;
+  originCallId?: string;
+  connectorId?: string;
+}
+
+export interface McpAppResourceContent {
+  uri: string;
+  mimeType?: string;
+  text?: string;
+  blob?: string;
+  _meta?: unknown;
+}
+
+export interface McpAppReadResourceResult {
+  contents: McpAppResourceContent[];
+  originCallId: string | null;
+}
+
+export interface McpAppCallToolRequest {
+  runId: string;
+  server: string;
+  tool: string;
+  arguments?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+}
+
+export interface McpAppCallToolResult {
+  content: unknown[];
+  structuredContent?: unknown;
+  isError?: boolean;
+  _meta?: unknown;
 }
 
 /**
@@ -703,6 +743,16 @@ export interface WorkRunAdapter {
 
   /** Start or repeat OAuth for a configured connector MCP server. */
   startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
+
+  /** Read an MCP App HTML resource through this run's existing provider thread. */
+  readMcpAppResource?(
+    request: McpAppReadResourceRequest,
+  ): Promise<McpAppReadResourceResult>;
+
+  /** Forward an interactive MCP App tool call through the same provider thread. */
+  callMcpAppTool?(
+    request: McpAppCallToolRequest,
+  ): Promise<McpAppCallToolResult>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -823,6 +873,12 @@ export interface ProviderDriver {
   updatePlugin?(pluginId: string): Promise<void>;
   listConnectors?(forceRefresh?: boolean): Promise<ConnectorOverview>;
   startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
+  readMcpAppResource?(
+    request: McpAppReadResourceRequest,
+  ): Promise<McpAppReadResourceResult>;
+  callMcpAppTool?(
+    request: McpAppCallToolRequest,
+  ): Promise<McpAppCallToolResult>;
 
   // ── Thread goal controls (Codex `thread/goal/*`) ──
   /** Set/update the goal for a run's thread. Partial — omitted fields unchanged. */
@@ -1247,6 +1303,8 @@ export interface SkillInfo {
   agent?: string;
   /** Full path to the SKILL.md file */
   path?: string;
+  /** Structured app-server mention target, e.g. plugin://name@marketplace. */
+  mentionPath?: string;
   /** Human-friendly display name (from interface.displayName, e.g. "Documents") */
   displayName?: string;
   /** Short description for compact UI surfaces (from interface.shortDescription) */

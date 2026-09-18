@@ -19,6 +19,10 @@ import type { ListMcpServerStatusParams } from "./generated/v2/ListMcpServerStat
 import type { ListMcpServerStatusResponse } from "./generated/v2/ListMcpServerStatusResponse";
 import type { McpServerOauthLoginParams } from "./generated/v2/McpServerOauthLoginParams";
 import type { McpServerOauthLoginResponse } from "./generated/v2/McpServerOauthLoginResponse";
+import type { McpResourceReadParams } from "./generated/v2/McpResourceReadParams";
+import type { McpResourceReadResponse } from "./generated/v2/McpResourceReadResponse";
+import type { McpServerToolCallParams } from "./generated/v2/McpServerToolCallParams";
+import type { McpServerToolCallResponse } from "./generated/v2/McpServerToolCallResponse";
 import type { ModelListParams } from "./generated/v2/ModelListParams";
 import type { ModelListResponse } from "./generated/v2/ModelListResponse";
 import type { PluginInstallParams } from "./generated/v2/PluginInstallParams";
@@ -99,6 +103,14 @@ export interface CodexAppServerRpc {
   "mcpServer/oauth/login": RpcMethod<
     McpServerOauthLoginParams,
     McpServerOauthLoginResponse
+  >;
+  "mcpServer/resource/read": RpcMethod<
+    McpResourceReadParams,
+    McpResourceReadResponse
+  >;
+  "mcpServer/tool/call": RpcMethod<
+    McpServerToolCallParams,
+    McpServerToolCallResponse
   >;
   "mcpServerStatus/list": RpcMethod<
     ListMcpServerStatusParams,

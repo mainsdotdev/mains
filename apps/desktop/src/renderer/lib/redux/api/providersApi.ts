@@ -141,6 +141,7 @@ export interface SkillInfo {
   forked?: boolean;
   agent?: string;
   path?: string;
+  mentionPath?: string;
   displayName?: string;
   shortDescription?: string;
   iconSmall?: string;

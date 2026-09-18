@@ -65,6 +65,64 @@ afterEach(() => {
 });
 
 describe("Codex event mapper", () => {
+  it("preserves MCP App resource context on completed tool calls", () => {
+    const { mapper } = createHarness();
+    const result = {
+      content: [{ type: "text", text: "Found 10 itineraries" }],
+      structuredContent: { itineraries: [{ id: "flight-1" }] },
+      _meta: {
+        ui: {
+          resourceUri: "ui://widgets/flights.html",
+        },
+      },
+    };
+
+    const events = mapper.mapNotification(
+      "item/completed",
+      {
+        threadId: "thread-parent",
+        item: {
+          id: "mcp-call-1",
+          type: "mcpToolCall",
+          server: "codex_apps",
+          tool: "skyscanner.flights-live-prices-create-search",
+          arguments: { origin_iata: "TYO", destination_iata: "SEL" },
+          appContext: {
+            connectorId: "skyscanner",
+            linkId: null,
+            resourceUri: null,
+            appName: "Skyscanner",
+            actionName: "Flights live prices create search",
+          },
+          mcpAppResourceUri: null,
+          result,
+          error: null,
+        },
+      },
+      "run-1",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_call",
+        toolName:
+          "mcp__codex_apps__skyscanner.flights-live-prices-create-search",
+        output: result,
+        metadata: expect.objectContaining({
+          mcpApp: {
+            server: "codex_apps",
+            tool: "skyscanner.flights-live-prices-create-search",
+            resourceUri: "ui://widgets/flights.html",
+            originCallId: "mcp-call-1",
+            connectorId: "skyscanner",
+            appName: "Skyscanner",
+            actionName: "Flights live prices create search",
+          },
+        }),
+      }),
+    );
+  });
+
   it("owns parent thread registration and agent-message buffering", () => {
     const state = createRunState();
     state.threadId = null;

@@ -13,6 +13,7 @@ import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 export interface PromptMarkdownSkill {
   name: string;
   path?: string;
+  mentionPath?: string;
   displayName?: string;
   description?: string;
   shortDescription?: string;

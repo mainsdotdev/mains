@@ -378,6 +378,7 @@ export interface StartRunPayload {
   contextSkills?: Array<{
     name: string;
     path?: string;
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -415,6 +416,7 @@ export interface ContinueRunPayload {
   contextSkills?: Array<{
     name: string;
     path?: string;
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;

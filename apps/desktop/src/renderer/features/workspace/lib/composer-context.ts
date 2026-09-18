@@ -41,6 +41,7 @@ export interface ContextSignal {
 export interface ContextSkill {
   name: string;
   path?: string;
+  mentionPath?: string;
   description?: string;
   displayName?: string;
   shortDescription?: string;

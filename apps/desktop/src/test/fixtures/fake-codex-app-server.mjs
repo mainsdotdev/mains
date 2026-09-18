@@ -15,6 +15,7 @@ if (process.argv.includes("--version")) {
 
 const logPath = process.env.MAINS_CODEX_FIXTURE_LOG;
 let nextThreadId = 1;
+const activeThreads = new Set();
 
 function log(message) {
   if (!logPath) return;
@@ -27,6 +28,10 @@ function send(message) {
 
 function respond(id, result) {
   send({ jsonrpc: "2.0", id, result });
+}
+
+function respondError(id, code, message) {
+  send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
 function fixtureResponseModel(params) {
@@ -136,6 +141,7 @@ input.on("line", (line) => {
 
     case "thread/start": {
       const threadId = `thread-${nextThreadId++}`;
+      activeThreads.add(threadId);
       respond(id, {
         model: fixtureResponseModel(params),
         thread: {
@@ -163,6 +169,7 @@ input.on("line", (line) => {
     }
 
     case "thread/resume":
+      activeThreads.add(params.threadId);
       respond(id, {
         model: fixtureResponseModel(params),
         thread: {
@@ -190,6 +197,7 @@ input.on("line", (line) => {
 
     case "thread/fork": {
       const threadId = `${params.threadId}-fork`;
+      activeThreads.add(threadId);
       respond(id, {
         model: fixtureResponseModel(params),
         thread: {
@@ -589,6 +597,7 @@ input.on("line", (line) => {
     }
 
     case "thread/unsubscribe":
+      activeThreads.delete(params.threadId);
       respond(id, { status: "unsubscribed" });
       break;
 
@@ -842,6 +851,46 @@ input.on("line", (line) => {
         version: "1",
         filePath: "/tmp/mains-test-codex-home/config.toml",
         overriddenMetadata: null,
+      });
+      break;
+
+    case "mcpServer/resource/read":
+      if (
+        process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD === "1" &&
+        !activeThreads.has(params.threadId)
+      ) {
+        respondError(id, -32600, `thread not found: ${params.threadId}`);
+        break;
+      }
+      respond(id, {
+        contents: [{
+          uri: params.uri,
+          mimeType: "text/html;profile=mcp-app",
+          text: "<!doctype html><html><body>Fixture MCP App</body></html>",
+          _meta: {
+            ui: {
+              csp: { resourceDomains: ["https://cdn.example.com"] },
+              prefersBorder: true,
+            },
+          },
+        }],
+        originCallId: params.originCallId ?? null,
+      });
+      break;
+
+    case "mcpServer/tool/call":
+      if (
+        process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD === "1" &&
+        !activeThreads.has(params.threadId)
+      ) {
+        respondError(id, -32600, `thread not found: ${params.threadId}`);
+        break;
+      }
+      respond(id, {
+        content: [{ type: "text", text: "Fixture tool completed" }],
+        structuredContent: { echoed: params.arguments ?? null },
+        isError: false,
+        _meta: { fixture: true },
       });
       break;
 

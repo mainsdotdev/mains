@@ -75,6 +75,11 @@ export type {
   ConnectorMcpServerInfo,
   ConnectorOAuthStartResult,
   ConnectorOverview,
+  McpAppReadResourceRequest,
+  McpAppReadResourceResult,
+  McpAppResourceContent,
+  McpAppCallToolRequest,
+  McpAppCallToolResult,
 } from "../../../../shared/adapter.types";
 
 // Factory

@@ -149,6 +149,14 @@ export function registerImageProxyScheme() {
         supportFetchAPI: true,
       },
     },
+    {
+      scheme: "mains-mcp-app",
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+      },
+    },
   ]);
 }
 

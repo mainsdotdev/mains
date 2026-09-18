@@ -625,7 +625,7 @@ const api = {
       contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
       contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
       contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
-      contextSkills?: Array<{ name: string; path?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
+      contextSkills?: Array<{ name: string; path?: string; mentionPath?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
     }) => ipcRenderer.invoke(CHANNELS.runs.execute, payload),
     abort: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.abort, runId),
     getToolCalls: (runId: string, sinceUpdatedAt?: Date) =>
@@ -646,7 +646,7 @@ const api = {
       contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
       contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
       contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
-      contextSkills?: Array<{ name: string; path?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
+      contextSkills?: Array<{ name: string; path?: string; mentionPath?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
     canResume: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.canResume, runId),
     fork: (payload: {
@@ -924,6 +924,14 @@ const api = {
   },
   visualizations: {
     sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.visualizations.sign, absPath),
+  },
+  mcpApps: {
+    readResource: (payload: unknown) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.readResource, payload),
+    callTool: (payload: unknown) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.callTool, payload),
+    sendMessage: (payload: unknown) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.sendMessage, payload),
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(CHANNELS.shell.openExternal, url),

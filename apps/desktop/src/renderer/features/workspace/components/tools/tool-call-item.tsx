@@ -8,6 +8,7 @@ import { TaskDisplay, type TaskParams } from "./task-display";
 import { PlanDisplay } from "./plan-display";
 import { WriteDisplay, type WriteParams } from "./write-display";
 import { McpDisplay } from "./mcp-display";
+import type { McpAppToolMetadata } from "./mcp-app-display";
 import { SaveReviewDisplay, type SaveReviewParams } from "./save-review-display";
 import { CheckPackageDisplay, type CheckPackageParams } from "./check-package-display";
 import { SaveFindingDisplay, type SaveFindingParams } from "./save-finding-display";
@@ -220,6 +221,26 @@ const DISPATCH: Renderer[] = [
     <CheckPackageDisplay params={params} output={ctx.event.metadata?.output} isCompact={ctx.isCompact} />
   )),
 
+  // Generic MCP fallback — an MCP App must win even when its plugin has no
+  // curated vendor mapping. Otherwise the ui:// resource falls through to the
+  // plain JSON renderer and the provider-authored card is lost.
+  (ctx) => {
+    const mcpApp = ctx.event.metadata?.mcpApp as McpAppToolMetadata | undefined;
+    if (!mcpApp) return null;
+    const runId = ctx.event.metadata?.runId;
+    return (
+      <McpDisplay
+        displayName={ctx.displayName}
+        icon={ctx.icon}
+        params={ctx.metadataInput ?? ctx.params}
+        output={ctx.event.metadata?.output}
+        isCompact={ctx.isCompact}
+        runId={typeof runId === "string" ? runId : undefined}
+        mcpApp={mcpApp}
+      />
+    );
+  },
+
   // Generic MCP fallback — the resolver tags any vendor-mapped tool (Linear, GitHub,
   // Figma, Notion, computer-use, Mains-without-special-renderer, …) with `vendorId`,
   // so we don't need a brittle string-includes chain.
@@ -274,7 +295,10 @@ export function ToolCallItem({ event, isCompact = true }: ToolCallItemProps) {
     (metadataInput !== undefined && Object.keys(metadataInput).length > 0);
   const hasSummary = Boolean(summary?.trim());
   const isEmptyTool =
-    !hasParamsOrInput && !hasSummary && !hasMeaningfulOutput(event.metadata?.output);
+    !hasParamsOrInput &&
+    !hasSummary &&
+    !hasMeaningfulOutput(event.metadata?.output) &&
+    !event.metadata?.mcpApp;
 
   // Lifecycle status (queued/running/done/error/canceled) flows down to every
   // ToolHeader via context, so the per-tool displays stay status-agnostic.

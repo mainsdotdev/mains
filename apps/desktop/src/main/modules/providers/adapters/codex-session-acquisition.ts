@@ -110,7 +110,7 @@ export function isCodexArchivedThreadError(
   );
 }
 
-function isCodexMissingThreadError(error: unknown): boolean {
+export function isCodexMissingThreadError(error: unknown): boolean {
   return (
     /\b(?:session|thread)\b[^\n]*\bnot found\b/i.test(
       codexErrorMessage(error),
@@ -287,7 +287,13 @@ function buildTurnInput(
   }];
 
   for (const skill of request.skills ?? []) {
-    if (skill.name && skill.path) {
+    if (skill.name && skill.mentionPath) {
+      input.push({
+        type: "mention",
+        name: skill.displayName || skill.name,
+        path: skill.mentionPath,
+      });
+    } else if (skill.name && skill.path) {
       input.push({
         type: "skill",
         name: skill.name,

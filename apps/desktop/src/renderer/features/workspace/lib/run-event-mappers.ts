@@ -160,6 +160,7 @@ export function mergeRunEvents(
  */
 export interface MappableToolCall {
   id: number;
+  runId?: string | null;
   toolName: string;
   status: string;
   toolCallId?: string | null;
@@ -185,6 +186,7 @@ export function mapToolCallToEvent(tc: MappableToolCall): RunEvent | null {
       timestamp: tc.createdAt ? new Date(tc.createdAt as string | number | Date) : new Date(),
       metadata: {
         ...persistedMetadata,
+        runId: tc.runId ?? undefined,
         status: tc.status,
         toolName: tc.toolName,
         // Set from the row's column (present from insert), unlike the
@@ -212,6 +214,7 @@ export function mapToolCallToEvent(tc: MappableToolCall): RunEvent | null {
       timestamp: tc.createdAt ? new Date(tc.createdAt as string | number | Date) : new Date(),
       metadata: {
         ...parseMetadata(tc.metadata),
+        runId: tc.runId ?? undefined,
         status: tc.status,
         toolName: tc.toolName,
         parentToolCallId: tc.parentToolCallId ?? undefined,

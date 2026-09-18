@@ -180,6 +180,11 @@ export const CHANNELS = {
   imageProxy: {
     sign: "imageProxy:sign",
   },
+  mcpApps: {
+    callTool: "mcpApps:callTool",
+    readResource: "mcpApps:readResource",
+    sendMessage: "mcpApps:sendMessage",
+  },
   issues: {
     create: "issues:create",
     delete: "issues:delete",

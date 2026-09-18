@@ -141,11 +141,18 @@ describe("mapToolCallToEvent", () => {
     const ev = mapToolCallToEvent(tc);
 
     expect(ev?.metadata).toMatchObject({
+      runId: "r1",
       planStatus: "applied",
       phase: "complete",
       status: "done",
       toolName: "ExitPlanMode",
     });
+  });
+
+  it("carries the run id needed by an MCP App host", () => {
+    const event = mapToolCallToEvent(toolCall(11, "done", 10, 12));
+
+    expect(event?.metadata?.runId).toBe("r1");
   });
 
   it("returns a degraded fallback event (never null) when mapping throws", () => {

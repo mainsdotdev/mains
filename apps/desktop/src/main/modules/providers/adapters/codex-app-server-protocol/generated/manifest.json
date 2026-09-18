@@ -130,6 +130,10 @@
       "sha256": "d5b8c1e68332e96ac9281075a30bc231810ceafea795c0a388d8fe0d54596bf1"
     },
     {
+      "path": "ResourceContent.ts",
+      "sha256": "fea0c6f29fbdbabae62e543234b7a1380507d18d843f771be32a461ed1fbce4c"
+    },
+    {
       "path": "ResourceTemplate.ts",
       "sha256": "f9da8918d1cad3998ee31a01c719f3cecf17ae20eac49910e77b4a7954b472a5"
     },
@@ -438,6 +442,14 @@
       "sha256": "567dad6dbb3bc81cee7103965cf31fbfafec2d2e5c61bbc872630cbae9c380c8"
     },
     {
+      "path": "v2/McpResourceReadParams.ts",
+      "sha256": "1842e7dca854501d4cb80f2eb3f5786dddbb38d2304b1841f91f6fde5d99c1ad"
+    },
+    {
+      "path": "v2/McpResourceReadResponse.ts",
+      "sha256": "65f26c31e9b713ef755bf92affa7a423057619508f51a7afeffaa9f80b44cff2"
+    },
+    {
       "path": "v2/McpServerConnectionStatus.ts",
       "sha256": "e8a1ab81bca6c3623e08d8c62cdce50cf98d7a68ea406e711eceb1c890c5045c"
     },
@@ -460,6 +472,14 @@
     {
       "path": "v2/McpServerStatusDetail.ts",
       "sha256": "8faec4faebac7fa38696408b4f1386bbf8b07ae721242ce475a2b6d7a894aee0"
+    },
+    {
+      "path": "v2/McpServerToolCallParams.ts",
+      "sha256": "bc2c9772b2b5e59a1c91d2b57b259616aae409b56cd04d6acd2394eb2888ddda"
+    },
+    {
+      "path": "v2/McpServerToolCallResponse.ts",
+      "sha256": "6846847691a9239c8fab35c8ad094a5f2e2e88a0fbb2884a9fd75a1e89efb195"
     },
     {
       "path": "v2/McpToolCallAppContext.ts",

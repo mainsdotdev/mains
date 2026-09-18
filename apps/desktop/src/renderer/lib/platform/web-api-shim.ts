@@ -11,7 +11,7 @@ import type { ServiceResponse } from "../../../shared/ipc-kit/service-response";
  *    appApi and appEvents already go through the transport directly; this covers
  *    any remaining direct calls.)
  *  - Local-shell namespaces (shell/platform/app/browser/updates/imageProxy/
- *    documents/visualizations) act on the user's machine and have no browser equivalent, so they
+ *    documents/visualizations/mcpApps) act on the user's machine and have no browser equivalent, so they
  *    are stubbed: methods resolve to a benign value, `on*` subscriptions are
  *    no-ops, and `shell.openExternal` opens a new tab.
  *
@@ -27,6 +27,7 @@ const LOCAL_NAMESPACES = new Set([
   "imageProxy",
   "documents",
   "visualizations",
+  "mcpApps",
 ]);
 
 const okResponse: ServiceResponse<null> = { success: true, data: null };

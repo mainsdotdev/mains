@@ -412,6 +412,7 @@ export function WorkspaceInput({
         kind: "skill",
         name: skill.name,
         path: skill.path,
+        mentionPath: skill.mentionPath,
         description: skill.description,
         displayName: skill.displayName,
         shortDescription: skill.shortDescription,

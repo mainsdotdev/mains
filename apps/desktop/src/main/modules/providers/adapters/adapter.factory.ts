@@ -125,6 +125,7 @@ function pluginListToSkillInfo(pluginList: PluginListResponse): SkillInfo[] {
 
       skills.push({
         name: plugin.name,
+        mentionPath: `plugin://${plugin.id}`,
         description:
           plugin.interface?.shortDescription ||
           plugin.interface?.longDescription ||

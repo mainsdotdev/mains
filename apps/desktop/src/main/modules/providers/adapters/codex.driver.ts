@@ -60,6 +60,7 @@ import {
 } from "./codex-run-coordinator";
 import {
   createCodexSessionAcquisition,
+  isCodexMissingThreadError,
   isCodexUnavailableThreadError,
 } from "./codex-session-acquisition";
 import type { CodexSubAgentRunMeta } from "./codex-event-mapper";
@@ -412,6 +413,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   let appServerStartPromise: Promise<CodexAppServer> | null = null;
   let codexVersionPromise: Promise<string | null> | null = null;
   let codexCompatibilityPromise: Promise<void> | null = null;
+  const mcpThreadResumePromises = new Map<string, Promise<void>>();
   // One-shot generation model (titles, commit messages, PR bodies): Codex's
   // "fast and affordable agentic coding model" tier, at medium effort.
   const titleGenerationModel = "gpt-5.6-luna";
@@ -682,6 +684,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       if (appServer === server) {
         appServer = null;
       }
+      mcpThreadResumePromises.clear();
       capabilities.onServerClosed();
       runCoordinator.handleServerClose();
     });
@@ -816,6 +819,40 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     );
   }
 
+  async function resumeMcpThread(
+    server: CodexAppServer,
+    threadId: string,
+  ): Promise<void> {
+    const pending = mcpThreadResumePromises.get(threadId);
+    if (pending) return pending;
+
+    const resume = server
+      .sendRequest("thread/resume", { threadId, excludeTurns: true })
+      .then(() => undefined);
+    mcpThreadResumePromises.set(threadId, resume);
+    try {
+      await resume;
+    } finally {
+      if (mcpThreadResumePromises.get(threadId) === resume) {
+        mcpThreadResumePromises.delete(threadId);
+      }
+    }
+  }
+
+  async function withLoadedMcpThread<Result>(
+    threadId: string,
+    operation: (server: CodexAppServer) => Promise<Result>,
+  ): Promise<Result> {
+    const server = await ensureServer();
+    try {
+      return await operation(server);
+    } catch (error) {
+      if (!isCodexMissingThreadError(error)) throw error;
+      await resumeMcpThread(server, threadId);
+      return operation(server);
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // WorkRunAdapter implementation
   // ─────────────────────────────────────────────────────────────
@@ -884,6 +921,52 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         await server.sendRequest("thread/delete", { threadId });
       }
       runCoordinator.deleteRun(runId);
+    },
+
+    async readMcpAppResource(request) {
+      const threadId = await findThreadIdForRun(request.runId);
+      if (!threadId) {
+        throw new Error(`No Codex thread found for run ${request.runId}`);
+      }
+      const params: CodexAppServerParams<"mcpServer/resource/read"> = {
+        threadId,
+        server: request.server,
+        uri: request.uri,
+        ...(request.originCallId
+          ? { originCallId: request.originCallId }
+          : {}),
+        ...(request.connectorId
+          ? { connectorId: request.connectorId }
+          : {}),
+      };
+      return withLoadedMcpThread(threadId, (server) =>
+        server.sendRequest("mcpServer/resource/read", params),
+      );
+    },
+
+    async callMcpAppTool(request) {
+      const threadId = await findThreadIdForRun(request.runId);
+      if (!threadId) {
+        throw new Error(`No Codex thread found for run ${request.runId}`);
+      }
+      const params: CodexAppServerParams<"mcpServer/tool/call"> = {
+        threadId,
+        server: request.server,
+        tool: request.tool,
+        ...(request.arguments !== undefined
+          ? {
+              arguments: request.arguments as CodexAppServerParams<"mcpServer/tool/call">["arguments"],
+            }
+          : {}),
+        ...(request.meta !== undefined
+          ? {
+              _meta: request.meta as CodexAppServerParams<"mcpServer/tool/call">["_meta"],
+            }
+          : {}),
+      };
+      return withLoadedMcpThread(threadId, (server) =>
+        server.sendRequest("mcpServer/tool/call", params, 60_000),
+      );
     },
 
     // Settings writes land here instead of rebuilding the driver: a second

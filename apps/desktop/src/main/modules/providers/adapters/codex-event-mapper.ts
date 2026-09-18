@@ -17,6 +17,79 @@ export interface CodexThreadItem {
   [key: string]: unknown;
 }
 
+interface CodexMcpAppMetadata {
+  server: string;
+  tool: string;
+  resourceUri: string;
+  originCallId: string;
+  connectorId?: string;
+  linkId?: string;
+  appName?: string;
+  actionName?: string;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : undefined;
+}
+
+/**
+ * Codex has exposed the MCP App URI in three places over time: the current
+ * item appContext, the deprecated item-level field, and the tool result's
+ * standard/ChatGPT compatibility metadata. Keep all three readable so old
+ * persisted threads gain widgets too.
+ */
+function mcpAppMetadata(
+  item: ThreadItem,
+  result: unknown,
+  server: string,
+  tool: string,
+): CodexMcpAppMetadata | undefined {
+  const appContext = objectRecord(item.appContext ?? item.app_context);
+  const resultMeta = objectRecord(objectRecord(result)?._meta);
+  const uiMeta = objectRecord(resultMeta?.ui);
+  const resourceUri = [
+    appContext?.resourceUri,
+    appContext?.resource_uri,
+    item.mcpAppResourceUri,
+    item.mcp_app_resource_uri,
+    uiMeta?.resourceUri,
+    uiMeta?.resource_uri,
+    resultMeta?.["ui/resourceUri"],
+    resultMeta?.["openai/outputTemplate"],
+  ].map(optionalString).find((value) => value?.startsWith("ui://"));
+
+  if (!resourceUri) return undefined;
+
+  const optional = {
+    connectorId: optionalString(
+      appContext?.connectorId ?? appContext?.connector_id,
+    ),
+    linkId: optionalString(appContext?.linkId ?? appContext?.link_id),
+    appName: optionalString(appContext?.appName ?? appContext?.app_name),
+    actionName: optionalString(
+      appContext?.actionName ?? appContext?.action_name,
+    ),
+  };
+
+  return {
+    server,
+    tool,
+    resourceUri,
+    originCallId: item.id,
+    ...Object.fromEntries(
+      Object.entries(optional).filter(([, value]) => value !== undefined),
+    ),
+  };
+}
+
 export type CodexThreadItemPhase = "start" | "update" | "complete";
 type ThreadItem = CodexThreadItem;
 type ThreadItemPhase = CodexThreadItemPhase;
@@ -2426,6 +2499,13 @@ export function createCodexEventMapper(
         const args = item.arguments as Record<string, unknown> | undefined;
         const result = item.result as unknown;
         const error = (item.error as { message?: string } | undefined)?.message;
+        const app = mcpAppMetadata(item, result, server, tool);
+        const metadata = {
+          toolCallId: item.id,
+          itemId: item.id,
+          codexItemType: "mcp_tool_call" as const,
+          ...(app ? { mcpApp: app } : {}),
+        };
 
         if (phase === "start") {
           events.push({
@@ -2433,7 +2513,7 @@ export function createCodexEventMapper(
             toolName,
             input: args,
             startedAt: ts,
-            metadata: { phase: "start", toolCallId: item.id, itemId: item.id, codexItemType: "mcp_tool_call" },
+            metadata: { phase: "start", ...metadata },
           });
         } else if (phase === "complete") {
           events.push({
@@ -2443,7 +2523,7 @@ export function createCodexEventMapper(
             output: result,
             error,
             endedAt: ts,
-            metadata: { phase: "complete", toolCallId: item.id, itemId: item.id, codexItemType: "mcp_tool_call" },
+            metadata: { phase: "complete", ...metadata },
           });
         }
         break;
