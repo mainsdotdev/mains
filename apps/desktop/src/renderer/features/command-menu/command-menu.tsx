@@ -51,7 +51,10 @@ import { selectSessionRunId } from "@/features/workspace/components/session-pane
 import { requestVisualizationFollowUp } from "@/features/workspace/lib/visualization-bridge";
 import { MODE_CONFIGS } from "@/lib/mode-config";
 import { classifyDocType } from "@/lib/document-viewer";
-import { SETTINGS_MAIN_NAV_ITEMS } from "@/features/settings/settings-sections";
+import {
+  SETTINGS_MAIN_NAV_ITEMS,
+  SETTINGS_PROVIDER_NAV_ITEMS,
+} from "@/features/settings/settings-sections";
 import { useCommandNavigation } from "./use-command-navigation";
 import {
   OPEN_COMMAND_MENU_EVENT,
@@ -459,12 +462,18 @@ export function CommandMenu() {
 
   const settingsItems = useMemo<MenuItemModel[]>(
     () =>
-      SETTINGS_MAIN_NAV_ITEMS.map((section) => ({
+      [
+        ...SETTINGS_MAIN_NAV_ITEMS.map((section) => ({ section, meta: "Settings" })),
+        ...SETTINGS_PROVIDER_NAV_ITEMS.map((section) => ({
+          section,
+          meta: "Provider settings",
+        })),
+      ].map(({ section, meta }) => ({
         id: `settings:${section.id}`,
         title: section.label,
-        keywords: `settings preferences ${section.id} ${section.label} ayarlar`,
+        keywords: `settings preferences ${section.id} ${section.label} ${meta} ayarlar`,
         icon: (section.icon ?? Settings) as IconComponent,
-        meta: "Settings",
+        meta,
         onSelect: runAndClose(() =>
           navigate(`/settings?section=${section.id}`),
         ),

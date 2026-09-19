@@ -14,10 +14,14 @@ import {
   useUnarchiveSpaceMutation,
   useUpdateProviderMutation,
   useUpdateProviderCliMutation,
+  useUpdateSpaceMutation,
+  type Space,
 } from "@/lib/redux/api";
 import type { AccountInfo } from "@/lib/redux/api/providersApi";
 import { getSpaceDefaultRoute } from "@/lib/route-utils";
 import { extractErrorMessage } from "@/lib/extract-error-message";
+import { solidColors, themeConfigToSwatchIndex } from "@/lib/space-themes";
+import { SpaceThemePicker } from "./space-theme-picker";
 
 type ProviderData = ReturnType<typeof useGetProviderByIdQuery>["data"];
 
@@ -91,6 +95,45 @@ export function useProviderSettings<TConfig extends object = Record<string, unkn
     updateConfig,
     setSpaceVisible,
   };
+}
+
+/**
+ * The provider's own color. Each provider has one space, and the color lives
+ * on that space's `themeConfig` — so it is what the app wears whenever this
+ * provider is the active one, whichever provider page it was picked from.
+ */
+export function ProviderColorSection({ space }: { space: Space | undefined }) {
+  const [updateSpace] = useUpdateSpaceMutation();
+  if (!space) return null;
+
+  const { colorIndex } = themeConfigToSwatchIndex(space.themeConfig);
+
+  const handleSelectColor = async (index: number) => {
+    const pair = solidColors[index] ?? solidColors[0];
+    const themeConfig = JSON.stringify({
+      lightBackground: pair.light.value,
+      darkBackground: pair.dark.value,
+    });
+    try {
+      await updateSpace({ id: space.id, payload: { themeConfig } }).unwrap();
+    } catch (err: any) {
+      toast.error(extractErrorMessage(err, "Failed to update color"));
+    }
+  };
+
+  return (
+    <SettingsSection title="Appearance">
+      <SettingsRow
+        title="Color"
+        description="Background and accent used while this provider is active"
+      >
+        <SpaceThemePicker
+          selectedColorIndex={colorIndex}
+          onSelectColor={handleSelectColor}
+        />
+      </SettingsRow>
+    </SettingsSection>
+  );
 }
 
 /**

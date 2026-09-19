@@ -47,6 +47,22 @@ describe("Settings sections", () => {
     expect(getSettingsSection("notifications").label).toBe("Notifications");
   });
 
+  it("lists every agent provider under the Providers group", async () => {
+    vi.resetModules();
+    const { SETTINGS_MAIN_NAV_ITEMS, SETTINGS_PROVIDER_NAV_ITEMS } =
+      await import("./settings-sections");
+
+    expect(SETTINGS_PROVIDER_NAV_ITEMS.map((item) => item.id)).toEqual([
+      "claude",
+      "codex",
+      "copilot",
+      "cursor",
+    ]);
+    expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain(
+      "claude",
+    );
+  });
+
   it("keeps the local-only Lens page out of web navigation", async () => {
     vi.resetModules();
     const { SETTINGS_MAIN_NAV_ITEMS } = await import("./settings-sections");

@@ -68,11 +68,15 @@ export type SettingsRouteId =
   | "archive"
   | "dashboard";
 
+/** Which heading a nav entry sits under; entries without one are top-level. */
+export type SettingsNavGroup = "providers";
+
 export type SettingsSection = {
   id: SettingsRouteId;
   label: string;
   icon?: ElementType;
   showInNav?: boolean;
+  navGroup?: SettingsNavGroup;
   activeIds?: SettingsRouteId[];
   Component: ComponentType;
 };
@@ -96,16 +100,18 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "dashboard", label: "Dashboard", icon: Chart, showInNav: true, Component: DashboardPage },
   { id: "archive", label: "Archive", icon: Archive, showInNav: true, Component: ArchiveSettings },
 
-  { id: "claude", label: "Claude", icon: Claude, Component: ClaudeSettings },
+  { id: "claude", label: "Claude", icon: Claude, showInNav: true, navGroup: "providers", Component: ClaudeSettings },
   {
     id: "codex",
     label: "Codex",
     icon: Codex,
+    showInNav: true,
+    navGroup: "providers",
     activeIds: ["codex", "codex-plugins"],
     Component: CodexSettings,
   },
-  { id: "copilot", label: "Copilot", icon: CopilotStatic, Component: CopilotSettings },
-  { id: "cursor", label: "Cursor", icon: Cursor, Component: CursorSettings },
+  { id: "copilot", label: "Copilot", icon: CopilotStatic, showInNav: true, navGroup: "providers", Component: CopilotSettings },
+  { id: "cursor", label: "Cursor", icon: Cursor, showInNav: true, navGroup: "providers", Component: CursorSettings },
 
   { id: "personalization", label: "Personalization", Component: PersonalizationSettings },
   { id: "schedules", label: "Schedules", Component: SchedulesSettings },
@@ -125,8 +131,16 @@ const toNavItem = (section: SettingsSection): SettingsNavItem => ({
   activeIds: section.activeIds,
 });
 
+const navItemsIn = (group: SettingsNavGroup | undefined) =>
+  SETTINGS_SECTIONS.filter((s) => s.showInNav && s.navGroup === group).map(
+    toNavItem,
+  );
+
 export const SETTINGS_MAIN_NAV_ITEMS: readonly SettingsNavItem[] =
-  SETTINGS_SECTIONS.filter((s) => s.showInNav).map(toNavItem);
+  navItemsIn(undefined);
+
+export const SETTINGS_PROVIDER_NAV_ITEMS: readonly SettingsNavItem[] =
+  navItemsIn("providers");
 
 const SETTINGS_ROUTE_ID_SET = new Set<string>(
   SETTINGS_SECTIONS.map((section) => section.id),

@@ -14,6 +14,8 @@ import {
   getSettingsRouteId,
   isSettingsNavItemActive,
   SETTINGS_MAIN_NAV_ITEMS,
+  SETTINGS_PROVIDER_NAV_ITEMS,
+  type SettingsNavItem,
   type SettingsRouteId,
 } from "@/features/settings/settings-sections";
 import { useActiveSpace } from "@/hooks/use-active-space";
@@ -70,6 +72,31 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     goTo(`/settings?section=${sectionId}`);
   };
 
+  const renderSectionButton = (item: SettingsNavItem) => {
+    const IconComponent = item.icon;
+    const isActive = isOnSettingsPage && isSettingsNavItemActive(item, activeSection);
+    return (
+      <Button
+        key={item.id}
+        onClick={() => handleSectionClick(item.id)}
+        className={`w-full cursor-pointer text-left px-3 py-1.5 rounded-xl text-sm  transition-all flex items-center gap-2
+          ${
+            isActive
+              ? " glass-outline bg-primary/80 dark:bg-primary/5 text-primary-900 dark:text-primary-100"
+              : "text-primary-800 dark:text-primary-200 bg-transparent hover:bg-primary/50 dark:hover:bg-primary/5"
+          }
+          `}
+      >
+        {IconComponent ? (
+          <IconComponent className={`size-3.5 `} />
+        ) : (
+          <div className="size-4 rounded bg-primary-300 dark:bg-primary-700" />
+        )}
+        <span className="">{item.label}</span>
+      </Button>
+    );
+  };
+
   return (
     <div
       className="flex flex-col h-full"
@@ -83,31 +110,20 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
 
       <div className="flex-1 px-3 mb-1 mt-2 overflow-y-auto noscrollbar">
         <nav className="space-y-0.5">
-          {SETTINGS_MAIN_NAV_ITEMS.map((item) => {
-            const IconComponent = item.icon;
-            const isActive = isOnSettingsPage && isSettingsNavItemActive(item, activeSection);
-            return (
-              <Button
-                key={item.id}
-                onClick={() => handleSectionClick(item.id)}
-                className={`w-full cursor-pointer text-left px-3 py-1.5 rounded-xl text-sm  transition-all flex items-center gap-2
-                  ${
-                    isActive
-                      ? " glass-outline bg-primary/80 dark:bg-primary/5 text-primary-900 dark:text-primary-100"
-                      : "text-primary-800 dark:text-primary-200 bg-transparent hover:bg-primary/50 dark:hover:bg-primary/5"
-                  }
-                  `}
-              >
-                {IconComponent ? (
-                  <IconComponent className={`size-3.5 `} />
-                ) : (
-                  <div className="size-4 rounded bg-primary-300 dark:bg-primary-700" />
-                )}
-                <span className="">{item.label}</span>
-              </Button>
-            );
-          })}
+          {SETTINGS_MAIN_NAV_ITEMS.map(renderSectionButton)}
         </nav>
+
+        {/* Providers section */}
+        <div className="mt-2">
+          <div className="px-3 mb-1">
+            <Text as="span" size="xs">
+              Providers
+            </Text>
+          </div>
+          <nav className="space-y-0.5">
+            {SETTINGS_PROVIDER_NAV_ITEMS.map(renderSectionButton)}
+          </nav>
+        </div>
 
         {/* Projects section */}
         {projects.length > 0 && (
