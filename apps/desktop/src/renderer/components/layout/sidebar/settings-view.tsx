@@ -79,7 +79,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
       <Button
         key={item.id}
         onClick={() => handleSectionClick(item.id)}
-        className={`w-full cursor-pointer text-left px-3 py-1.5 rounded-xl text-sm  transition-all flex items-center gap-2
+        className={`w-full cursor-pointer text-left px-2.5 py-1.5 rounded-xl text-sm  transition-all flex items-center gap-2
           ${
             isActive
               ? " glass-outline bg-primary/80 dark:bg-primary/5 text-primary-900 dark:text-primary-100"

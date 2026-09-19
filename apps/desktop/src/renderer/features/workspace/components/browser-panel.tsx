@@ -1458,7 +1458,7 @@ export function BrowserPanel() {
                 as="span"
                 size="xs"
                 tone="subtle"
-                className="mr-auto pl-3.5"
+                className="mr-auto pl-8.5"
               >
                 Zoom
               </Text>

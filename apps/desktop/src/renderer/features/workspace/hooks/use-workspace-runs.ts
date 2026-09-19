@@ -36,11 +36,15 @@ import { useStreamingEvents } from "./use-streaming-events";
  */
 const MAX_EVENTS_PER_RUN = 5000;
 
+const NO_WORKSPACE_IDS: readonly string[] = [];
+
 export function useWorkspaceRuns(
   workspaceId: string | undefined,
   providerId?: string,
   mode?: ModeId,
   routeRunId?: string,
+  /** Workspaces the user can switch to next; their run lists are fetched ahead. */
+  prefetchWorkspaceIds: readonly string[] = NO_WORKSPACE_IDS,
 ) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -65,6 +69,33 @@ export function useWorkspaceRuns(
   // object inside mutates), and it has to be readable during render to be
   // handed to `useRunSync`.
   const [cache] = useState(createRunCache);
+
+  // Each workspace's last known run list, so switching back to one shows its
+  // tabs in the same frame instead of an empty page while the list reloads.
+  // Held like `cache`: never reassigned, and read during render.
+  const [runLists] = useState(() => new Map<string, Run[]>());
+
+  // Which list the page is showing: a routed run, a workspace, or nothing.
+  // `loadedKey` names the view whose list is known, so an empty `runs` can be
+  // told apart from one that simply hasn't arrived yet.
+  const viewKey = routeRunId
+    ? `run:${routeRunId}`
+    : workspaceId
+      ? `ws:${workspaceId}`
+      : null;
+  const [shownKey, setShownKey] = useState(viewKey);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  if (shownKey !== viewKey) {
+    // Swap during render, not in an effect: an effect would first paint the
+    // workspace being left under the new one's name.
+    const remembered =
+      workspaceId && !routeRunId ? runLists.get(workspaceId) : undefined;
+    setShownKey(viewKey);
+    setRuns(remembered ?? []);
+    setActiveRunId(remembered?.[0]?.id ?? null);
+    setLoadedKey(remembered ? viewKey : null);
+  }
+  const runsLoaded = viewKey === null || loadedKey === viewKey;
 
   // --- Internal helpers ---
 
@@ -187,51 +218,58 @@ export function useWorkspaceRuns(
   );
 
   const loadWorkspaceRuns = useCallback(
-    async (wsId: string) => {
+    async (wsId: string, isCurrent: () => boolean) => {
+      // A remembered list already put a run on screen; the reload refreshes
+      // the list around it rather than jumping to another one.
+      const wasShown = runLists.has(wsId);
+      let filteredRuns: Run[] = [];
       try {
         const result = await appApi.runs.getByWorkspace(wsId, {
           limit: 50,
           providerId,
           mode,
         });
-        if (result.success && result.data) {
-          const filteredRuns = result.data;
-
-          setRuns(filteredRuns);
-          // A jump from outside the page (the background-runs dock, the chat
-          // sidebar) names the run to open; every other arrival lands on the
-          // newest one. Read through a ref so the request can't re-trigger
-          // the mount effect.
-          const requestedId = pendingRunIdRef.current;
-          if (requestedId) dispatch(clearPendingRunId());
-          const target =
-            filteredRuns.find((run: Run) => run.id === requestedId) ??
-            filteredRuns[0];
-          if (target) {
-            setActiveRunId(target.id);
-            loadRunDetails(target.id);
-            // A requested run must own the view too — without this, the
-            // editor-tab auto-select (developer) or the new-chat neutral
-            // state (tab-less modes) claims it instead.
-            if (target.id === requestedId) {
-              dispatch(setActiveTab(target.id));
-            }
-          }
-        }
+        if (result.success && result.data) filteredRuns = result.data;
       } catch (err) {
         console.error("Failed to load workspace runs:", err);
       }
+      // The user moved on while this was in flight.
+      if (!isCurrent()) return;
+
+      runLists.set(wsId, filteredRuns);
+      setRuns(filteredRuns);
+      setLoadedKey(`ws:${wsId}`);
+      // A jump from outside the page (the background-runs dock, the chat
+      // sidebar) names the run to open; every other arrival lands on the
+      // newest one. Read through a ref so the request can't re-trigger
+      // the mount effect.
+      const requestedId = pendingRunIdRef.current;
+      if (requestedId) dispatch(clearPendingRunId());
+      const requested = filteredRuns.find((run: Run) => run.id === requestedId);
+      const target = requested ?? (wasShown ? undefined : filteredRuns[0]);
+      if (target) {
+        setActiveRunId(target.id);
+        loadRunDetails(target.id);
+        // A requested run must own the view too — without this, the
+        // editor-tab auto-select (developer) or the new-chat neutral
+        // state (tab-less modes) claims it instead.
+        if (target === requested) {
+          dispatch(setActiveTab(target.id));
+        }
+      }
     },
-    [loadRunDetails, providerId, mode, dispatch],
+    [runLists, loadRunDetails, providerId, mode, dispatch],
   );
 
   const loadRoutedRun = useCallback(
-    async (runId: string) => {
+    async (runId: string, isCurrent: () => boolean) => {
       try {
         const [result, accountResult] = await Promise.all([
           appApi.runs.getById(runId),
           appApi.account.get(),
         ]);
+        if (!isCurrent()) return;
+        setLoadedKey(`run:${runId}`);
         const run = result.success ? result.data : null;
         const accountId =
           accountResult.success && accountResult.data
@@ -257,21 +295,53 @@ export function useWorkspaceRuns(
         await loadRunDetails(run.id);
       } catch (err) {
         console.error("Failed to load routed run:", err);
+        if (isCurrent()) setLoadedKey(`run:${runId}`);
       }
     },
     [providerId, mode, dispatch, loadRunDetails],
   );
 
+  // The render-time swap above already put the remembered list on screen;
+  // this reloads it. Transcripts are keyed by run, so a workspace switch keeps
+  // them — switching back finds the last run's messages still in the LRU.
   useEffect(() => {
+    let current = true;
+    const isCurrent = () => current;
     void (async () => {
-      clearState();
       if (routeRunId) {
-        await loadRoutedRun(routeRunId);
+        clearState();
+        await loadRoutedRun(routeRunId, isCurrent);
       } else if (workspaceId) {
-        await loadWorkspaceRuns(workspaceId);
+        await loadWorkspaceRuns(workspaceId, isCurrent);
       }
     })();
+    return () => {
+      current = false;
+    };
   }, [workspaceId, routeRunId, loadRoutedRun, loadWorkspaceRuns, clearState]);
+
+  // Keep the remembered list current as runs are started, renamed, or closed.
+  useEffect(() => {
+    if (workspaceId && !routeRunId && loadedKey === `ws:${workspaceId}`) {
+      runLists.set(workspaceId, runs);
+    }
+  }, [runs, workspaceId, routeRunId, loadedKey, runLists]);
+
+  // Remember the other workspaces' lists up front, so even the first switch to
+  // one lands on its tabs rather than an empty strip.
+  useEffect(() => {
+    for (const id of prefetchWorkspaceIds) {
+      if (id === workspaceId || runLists.has(id)) continue;
+      void appApi.runs
+        .getByWorkspace(id, { limit: 50, providerId, mode })
+        .then((result) => {
+          if (result.success && result.data && !runLists.has(id)) {
+            runLists.set(id, result.data);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [prefetchWorkspaceIds, workspaceId, runLists, providerId, mode]);
 
   // Same-workspace jumps (a chat sidebar click with no navigation): the mount
   // path above never re-runs, so consume the request here once its run is in
@@ -444,6 +514,9 @@ export function useWorkspaceRuns(
   );
 
   const activeRun = runs.find((r) => r.id === activeRunId);
+  // The active run's transcript hasn't arrived yet (first open, or evicted from
+  // the LRU) — distinct from a run that genuinely has no events.
+  const isTranscriptLoading = activeRunId !== null && !(activeRunId in runEvents);
   const currentTurns = useMemo(
     () => (activeRunId ? runTurns[activeRunId] || [] : []),
     [activeRunId, runTurns],
@@ -451,11 +524,13 @@ export function useWorkspaceRuns(
 
   return {
     runs,
+    runsLoaded,
     setRuns,
     activeRunId,
     activeRun,
     runEvents,
     currentEvents,
+    isTranscriptLoading,
     currentTurns,
     isLoading,
     error,

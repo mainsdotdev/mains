@@ -522,13 +522,7 @@ export function SidebarChatList({
           </div>
         </SidebarGroupSection>
       )}
-      {runs.length === 0 && (
-        <div className="py-3 text-center">
-          <Text as="span" size="xs" tone="muted">
-            No chats yet
-          </Text>
-        </div>
-      )}
+
       <DropdownMenu
         isOpen={!!menuCollection}
         aria-label="Project actions"

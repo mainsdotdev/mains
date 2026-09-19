@@ -405,6 +405,8 @@ interface WorkspaceEventsProps {
   runs: Run[];
   activeTab: "editor" | string;
   currentEvents: RunEvent[];
+  /** The active run's events haven't arrived yet — not the same as having none. */
+  isTranscriptLoading?: boolean;
   currentWorkspace: Workspace | null;
   eventsEndRef: RefObject<HTMLDivElement>;
   issueTabs: IssueWithEntity[];
@@ -422,6 +424,7 @@ export function WorkspaceEvents({
   runs,
   activeTab,
   currentEvents,
+  isTranscriptLoading = false,
   currentWorkspace,
   eventsEndRef,
   issueTabs,
@@ -771,7 +774,9 @@ export function WorkspaceEvents({
   // Run content stays mounted whenever there are events for the active run,
   // just hidden when a non-run tab is active. Preserves accordion open state,
   // scroll position, and other local UI state across tab switches.
-  const showEmpty = isRunTabActive && currentEvents.length === 0;
+  // A transcript still loading stays blank instead of flashing the empty state.
+  const showEmpty =
+    isRunTabActive && currentEvents.length === 0 && !isTranscriptLoading;
 
   return (
     <Text as="div" size="sm" tone="inherit" className="h-full flex flex-col">

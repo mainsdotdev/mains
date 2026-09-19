@@ -318,6 +318,7 @@ export function WorkspaceProviderPage({
             runs={ws.runs}
             activeTab={ws.activeTab}
             currentEvents={ws.currentEvents}
+            isTranscriptLoading={ws.isTranscriptLoading}
             currentWorkspace={ws.currentWorkspace}
             eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
             issueTabs={ws.openIssueTabs}

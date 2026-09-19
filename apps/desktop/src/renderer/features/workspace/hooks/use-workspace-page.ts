@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import { toast, type UploadedFile } from "@/components/ui";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAppSelector, useAppDispatch } from "@/lib/redux/hooks";
@@ -88,8 +88,12 @@ export function useWorkspacePage(providerId: string) {
     [dispatch, providerId],
   );
 
-  const { workspaceId, selectedWorkspace, currentWorkspace } =
+  const { workspaceId, selectedWorkspace, currentWorkspace, workspaces } =
     useWorkspaceData(providerId, mode);
+  const switchableWorkspaceIds = useMemo(
+    () => (mode === "developer" ? workspaces.map((w) => w.id) : []),
+    [mode, workspaces],
+  );
 
   // A space switch can land on the same workspace, so the workspaceId-keyed
   // resets below never fire — sync the provider so the slice drops tab state
@@ -98,14 +102,17 @@ export function useWorkspacePage(providerId: string) {
     dispatch(setWorkspaceProvider(providerId));
   }, [providerId, dispatch]);
 
-  useEffect(() => {
+  // The workspace-switch resets below and the run auto-select further down are
+  // layout effects: they settle the tab before the browser paints, so a switch
+  // never shows a frame of the neutral "editor" placeholder in between.
+  useLayoutEffect(() => {
     dispatch(setActiveWorkspaceId(workspaceId ?? null));
     if (workspaceId) {
       dispatch(setActiveWorkspaceForProvider({ providerId, workspaceId }));
     }
   }, [workspaceId, providerId, dispatch]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     dispatch(clearSelectedFile());
     resetContextForRoute();
     dispatch(clearIssueTabs());
@@ -130,8 +137,10 @@ export function useWorkspacePage(providerId: string) {
 
   const {
     runs,
+    runsLoaded,
     activeRun,
     currentEvents,
+    isTranscriptLoading,
     currentTurns,
     isLoading,
     eventsEndRef,
@@ -144,7 +153,13 @@ export function useWorkspacePage(providerId: string) {
     closeTab,
     selectTab,
     setRuns,
-  } = useWorkspaceRuns(workspaceId, providerId, mode, routeRunId);
+  } = useWorkspaceRuns(
+    workspaceId,
+    providerId,
+    mode,
+    routeRunId,
+    switchableWorkspaceIds,
+  );
 
   // Handle pending review target (native code review) — developer-only UI,
   // gated defensively so a stale target can't hijack the tab-less view.
@@ -161,14 +176,16 @@ export function useWorkspacePage(providerId: string) {
     run();
   }, [showTabs, pendingReviewTarget, workspaceId, selectedWorkspace, providerId, selectedModel, executeReview, dispatch]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!showTabs) return; // tab-less neutral state is the new-chat screen, not the newest run
     if (runs.length > 0 && !selectedFile && activeTab === "editor") {
-      const firstRun = runs[0];
-      dispatch(setActiveTab(firstRun.id));
-      selectTab(firstRun.id);
+      // A jump into another workspace names its run; landing on the newest
+      // first would flash it before the jump is consumed.
+      const target = runs.find((r) => r.id === pendingRunId) ?? runs[0];
+      dispatch(setActiveTab(target.id));
+      selectTab(target.id);
     }
-  }, [showTabs, runs, selectedFile, activeTab, dispatch, selectTab]);
+  }, [showTabs, runs, selectedFile, activeTab, pendingRunId, dispatch, selectTab]);
 
   // Tab-less modes: "editor" is only ever the post-reset placeholder (workspace,
   // provider, and space switches all hard-reset to it). Promote it to the
@@ -416,7 +433,10 @@ export function useWorkspacePage(providerId: string) {
 
   const showNewRunTab = isNewRunTab(activeTab);
 
+  // Only once the list is known: a workspace whose runs are still loading is
+  // not an empty one, and flashing the empty state would drop the tab strip.
   const showEmptyState =
+    runsLoaded &&
     runs.length === 0 &&
     !selectedFile &&
     openIssueTabs.length === 0 &&
@@ -446,6 +466,7 @@ export function useWorkspacePage(providerId: string) {
     composerRun,
     sendTarget,
     currentEvents,
+    isTranscriptLoading,
     currentTurns,
     isLoading,
     eventsEndRef,

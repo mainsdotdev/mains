@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useLayoutEffect, useCallback, type ReactNode } from "react";
 
 interface MainHeaderState {
   header: ReactNode | null;
@@ -33,7 +33,9 @@ export function useMainHeader() {
 /** Set a header element that renders in the transparent area above MainContent's opaque container. */
 export function useSetMainHeader(header: ReactNode | null, firstTabActive = false) {
   const { setMainHeader } = useMainHeader();
-  useEffect(() => {
+  // Layout effect: the header lands in the same frame as the content it
+  // belongs to, never one frame behind it.
+  useLayoutEffect(() => {
     setMainHeader({ header, firstTabActive });
     return () => setMainHeader(DEFAULT_STATE);
   }, [header, firstTabActive, setMainHeader]);
