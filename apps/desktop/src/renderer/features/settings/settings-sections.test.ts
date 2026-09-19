@@ -37,6 +37,14 @@ describe("Settings sections", () => {
 
     expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).toContain("lens");
     expect(getSettingsSection("lens").label).toBe("Lens");
+    expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).toContain(
+      "shortcuts",
+    );
+    expect(getSettingsSection("shortcuts").label).toBe("Keyboard Shortcuts");
+    expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).toContain(
+      "notifications",
+    );
+    expect(getSettingsSection("notifications").label).toBe("Notifications");
   });
 
   it("keeps the local-only Lens page out of web navigation", async () => {
@@ -45,6 +53,12 @@ describe("Settings sections", () => {
 
     expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain(
       "lens",
+    );
+    expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain(
+      "shortcuts",
+    );
+    expect(SETTINGS_MAIN_NAV_ITEMS.map((item) => item.id)).not.toContain(
+      "notifications",
     );
   });
 });

@@ -52,6 +52,11 @@ import {
   VISUALIZATION_FOLLOW_UP_EVENT,
   type VisualizationFollowUpDetail,
 } from "../lib/visualization-bridge";
+import {
+  useKeyboardShortcut,
+  useKeyboardShortcutBinding,
+} from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 
@@ -276,17 +281,14 @@ export function WorkspaceInput({
   const activeDescriptor =
     getProviderVariantById(activeProviderId) ?? spaceProvider;
 
-  // Cmd+P to focus input
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "p") {
-        e.preventDefault();
-        inputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  useKeyboardShortcut(
+    "app.focusComposer",
+    () => inputRef.current?.focus(),
+    { allowInEditable: true },
+  );
+  const focusComposerShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.focusComposer"),
+  );
 
   useEffect(() => {
     if (!isNewRunTabActive) return;
@@ -910,6 +912,7 @@ export function WorkspaceInput({
             codeChipMap={codeChipMap}
             placeholder={inputPlaceholder}
             placeholderIcon={newChatProjectName ? newChatProjectIcon : undefined}
+            focusShortcutLabel={focusComposerShortcut}
           />
           <UnifiedContextDropdown
             isOpen={unifiedMenu.visible}

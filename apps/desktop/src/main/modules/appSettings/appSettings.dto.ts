@@ -19,6 +19,7 @@ export type AppSettingsPatch = Partial<{
   showMenuBarIcon: boolean;
   appshotsEnabled: boolean;
   appshotsShortcut: string;
+  keyboardShortcutOverrides: string;
   backendRemoteAccess: boolean;
   backendLanAccess: boolean;
   backendTailscaleHttps: boolean;

@@ -80,6 +80,7 @@ interface RichInputFormProps {
   onCaretContextChange?: (textBeforeCaret: string) => void;
   placeholder?: string;
   placeholderIcon?: ReactNode;
+  focusShortcutLabel?: string;
   /** Maps skill name → display data so `$<name>` tokens can be rebuilt as chips when query changes externally. */
   skillChipMap?: ReadonlyMap<string, RichSkillChipData>;
   /** Maps file path → display data so `@<path>` tokens can be rebuilt as chips when query changes externally. */
@@ -733,6 +734,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onCaretContextChange,
       placeholder,
       placeholderIcon,
+      focusShortcutLabel,
       skillChipMap,
       fileChipMap,
       codeChipMap,
@@ -741,7 +743,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
   ) {
     const editorRef = useRef<HTMLDivElement | null>(null);
     const [isEmpty, setIsEmpty] = useState(query.length === 0);
-    // The ⌘P focus hint is keyboard-only — useless (and overlaps the placeholder)
+    // The focus hint is keyboard-only — useless (and overlaps the placeholder)
     // on touch/mobile and in the browser.
     const showFocusHint = !useIsMobile() && !isWeb;
     // Sentinel that no real query string can equal — forces an initial DOM rebuild on mount.
@@ -977,14 +979,14 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
             <span>{placeholder}</span>
           </Text>
         )}
-        {showFocusHint && (
+        {showFocusHint && focusShortcutLabel && (
           <Text
             as="kbd"
             size="xxs"
             tone="muted"
             className="absolute cursor-default right-3 top-3 px-1.5 py-0.5 font-sans"
           >
-            ⌘ P to focus
+            {focusShortcutLabel} to focus
           </Text>
         )}
       </div>

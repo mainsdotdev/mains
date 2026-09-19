@@ -1,6 +1,7 @@
 import { lazy, type ComponentType, type ElementType } from "react";
 import {
   Archive,
+  Bell,
   Branch,
   Chart,
   Codex,
@@ -8,6 +9,7 @@ import {
   CopilotStatic,
   Cursor,
   General,
+  Keyboard,
   Relay,
 } from "@/components/ui/icons";
 import { capabilities } from "@/lib/platform";
@@ -30,6 +32,12 @@ const CodexSettings = lazy(() => import("./components/codex"));
 const CodexPlugins = lazy(() => import("./components/provider-plugins"));
 const CursorSettings = lazy(() => import("./components/cursor"));
 const LensSettings = lazy(() => import("./components/lens"));
+const KeyboardShortcutsSettings = lazy(
+  () => import("./components/keyboard-shortcuts"),
+);
+const NotificationsSettings = lazy(
+  () => import("./components/notifications"),
+);
 const ProjectsSettings = lazy(() => import("./components/projects"));
 const ArchiveSettings = lazy(() => import("./components/archive"));
 const BackendsSettings = lazy(() => import("@/features/relay/components/backends"));
@@ -37,13 +45,13 @@ const DashboardPage = lazy(
   () => import("@/features/stats/components/dashboard-page"),
 );
 
-const NotificationsSettings = () => <PlaceholderSection title="Notifications" />;
 const SchedulesSettings = () => <PlaceholderSection title="Schedules" />;
 const SecuritySettings = () => <PlaceholderSection title="Security" />;
 
 export type SettingsRouteId =
   | "general"
   | "lens"
+  | "shortcuts"
   | "notifications"
   | "personalization"
   | "connections"
@@ -78,9 +86,10 @@ export type SettingsNavItem = {
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "general", label: "General", icon: General, showInNav: true, Component: GeneralSettings },
+  { id: "notifications", label: "Notifications", icon: Bell, showInNav: capabilities.nativeNotifications, Component: NotificationsSettings },
   { id: "git", label: "Git", icon: Branch, showInNav: true, Component: GitSettings },
   { id: "lens", label: "Lens", icon: Scan, showInNav: capabilities.appshots, Component: LensSettings },
-
+  { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard, showInNav: capabilities.windowChrome, Component: KeyboardShortcutsSettings },
   { id: "connections", label: "Connections", icon: Connect, showInNav: true, Component: ConnectionsSettings },
   // Hidden from the Settings nav — surfaced as the top-level "Relay" route instead.
   { id: "backends", label: "Relay", icon: Relay, Component: BackendsSettings },
@@ -98,7 +107,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "copilot", label: "Copilot", icon: CopilotStatic, Component: CopilotSettings },
   { id: "cursor", label: "Cursor", icon: Cursor, Component: CursorSettings },
 
-  { id: "notifications", label: "Notifications", Component: NotificationsSettings },
   { id: "personalization", label: "Personalization", Component: PersonalizationSettings },
   { id: "schedules", label: "Schedules", Component: SchedulesSettings },
   { id: "security", label: "Security", Component: SecuritySettings },

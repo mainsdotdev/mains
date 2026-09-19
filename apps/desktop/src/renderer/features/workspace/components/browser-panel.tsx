@@ -70,6 +70,11 @@ import {
   type BrowserClearDataOptionsViewModel,
 } from "./browser-clear-data-panel";
 import { browserPanelBounds } from "../lib/browser-panel-bounds";
+import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
+import {
+  keyboardShortcutLabel,
+  matchesKeyboardShortcut,
+} from "../../../../shared/keyboard-shortcuts";
 
 const BLANK_URL = "about:blank";
 const ZOOM_STEP = 0.1;
@@ -171,6 +176,22 @@ export function BrowserPanel() {
     x: 0,
     y: 0,
   });
+  const focusLocationShortcut = useKeyboardShortcutBinding(
+    "browser.focusLocation",
+  );
+  const findShortcut = useKeyboardShortcutBinding("browser.find");
+  const newTabShortcut = useKeyboardShortcutBinding("browser.newTab");
+  const closeTabShortcut = useKeyboardShortcutBinding("browser.closeTab");
+  const printShortcut = useKeyboardShortcutBinding("browser.print");
+  const backShortcut = useKeyboardShortcutBinding("browser.back");
+  const forwardShortcut = useKeyboardShortcutBinding("browser.forward");
+  const zoomInShortcut = useKeyboardShortcutBinding("browser.zoomIn");
+  const zoomOutShortcut = useKeyboardShortcutBinding("browser.zoomOut");
+  const resetZoomShortcut = useKeyboardShortcutBinding("browser.resetZoom");
+  const nextTabShortcut = useKeyboardShortcutBinding("browser.nextTab");
+  const previousTabShortcut = useKeyboardShortcutBinding(
+    "browser.previousTab",
+  );
 
   const [animState, dispatchAnim] = useReducer(
     (_: AnimationState, next: AnimationState) => next,
@@ -977,39 +998,50 @@ export function BrowserPanel() {
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!event.metaKey && !event.ctrlKey) return;
-      const key = event.key.toLowerCase();
-      if (key === "l") {
+      if (event.defaultPrevented) return;
+      if (matchesKeyboardShortcut(event, focusLocationShortcut)) {
         event.preventDefault();
         locationInputRef.current?.focus();
         locationInputRef.current?.select();
-      } else if (key === "f") {
+      } else if (matchesKeyboardShortcut(event, findShortcut)) {
         event.preventDefault();
         setFindOpen(true);
-      } else if (key === "p") {
+      } else if (matchesKeyboardShortcut(event, printShortcut)) {
         event.preventDefault();
         void printPage();
-      } else if (key === "t") {
+      } else if (matchesKeyboardShortcut(event, newTabShortcut)) {
         event.preventDefault();
         createTab();
-      } else if (key === "w" && activeTab) {
+      } else if (matchesKeyboardShortcut(event, closeTabShortcut) && activeTab) {
         event.preventDefault();
         closeTab(activeTab.tabId);
-      } else if ((key === "=" || key === "+") && activeTab) {
+      } else if (matchesKeyboardShortcut(event, backShortcut) && activeTab) {
+        event.preventDefault();
+        void api?.back();
+      } else if (matchesKeyboardShortcut(event, forwardShortcut) && activeTab) {
+        event.preventDefault();
+        void api?.forward();
+      } else if (matchesKeyboardShortcut(event, zoomInShortcut) && activeTab) {
         event.preventDefault();
         void setZoom(activeTab.zoomFactor + ZOOM_STEP);
-      } else if (key === "-" && activeTab) {
+      } else if (matchesKeyboardShortcut(event, zoomOutShortcut) && activeTab) {
         event.preventDefault();
         void setZoom(activeTab.zoomFactor - ZOOM_STEP);
-      } else if (key === "0") {
+      } else if (matchesKeyboardShortcut(event, resetZoomShortcut)) {
         event.preventDefault();
         void setZoom(1);
-      } else if (key === "tab" && browserState.tabs.length > 1) {
+      } else if (
+        (matchesKeyboardShortcut(event, nextTabShortcut) ||
+          matchesKeyboardShortcut(event, previousTabShortcut)) &&
+        browserState.tabs.length > 1
+      ) {
         event.preventDefault();
         const current = browserState.tabs.findIndex(
           (tab) => tab.tabId === browserState.activeTabId,
         );
-        const direction = event.shiftKey ? -1 : 1;
+        const direction = matchesKeyboardShortcut(event, previousTabShortcut)
+          ? -1
+          : 1;
         const next =
           (current + direction + browserState.tabs.length) %
           browserState.tabs.length;
@@ -1024,11 +1056,24 @@ export function BrowserPanel() {
     activateTab,
     browserState.activeTabId,
     browserState.tabs,
+    closeTabShortcut,
     closeTab,
     createTab,
+    findShortcut,
+    focusLocationShortcut,
     isOpen,
+    newTabShortcut,
+    nextTabShortcut,
+    previousTabShortcut,
+    printShortcut,
     printPage,
+    resetZoomShortcut,
     setZoom,
+    backShortcut,
+    forwardShortcut,
+    zoomInShortcut,
+    zoomOutShortcut,
+    api,
   ]);
 
   const navigate = useCallback(
@@ -1165,13 +1210,15 @@ export function BrowserPanel() {
         onClose={closeTab}
         onCreate={createTab}
         onClosePanel={() => void closePanel()}
+        newTabShortcutLabel={keyboardShortcutLabel(newTabShortcut)}
+        closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}
       />
 
       <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
         <div className="flex items-center gap-1 rounded-full p-0.5 ">
           <Button
             tooltip="Back"
-            tooltipShortcut="⌘["
+            tooltipShortcut={keyboardShortcutLabel(backShortcut)}
             tooltipPosition="top"
             onClick={() => void api.back()}
             disabled={!activeTab?.canGoBack}
@@ -1182,7 +1229,7 @@ export function BrowserPanel() {
           </Button>
           <Button
             tooltip="Forward"
-            tooltipShortcut="⌘]"
+            tooltipShortcut={keyboardShortcutLabel(forwardShortcut)}
             tooltipPosition="top"
             onClick={() => void api.forward()}
             disabled={!activeTab?.canGoForward}
@@ -1388,7 +1435,7 @@ export function BrowserPanel() {
               <Search className="size-3.5" />
               <span>Find in page</span>
               <Text as="span" size="xxs" tone="subtle" className="ml-auto">
-                ⌘F
+                {keyboardShortcutLabel(findShortcut)}
               </Text>
             </DropdownMenuItem>
             <DropdownMenuItem
@@ -1399,7 +1446,7 @@ export function BrowserPanel() {
               <Document className="size-3.5" />
               <span>Print…</span>
               <Text as="span" size="xxs" tone="subtle" className="ml-auto">
-                ⌘P
+                {keyboardShortcutLabel(printShortcut)}
               </Text>
             </DropdownMenuItem>
             <div

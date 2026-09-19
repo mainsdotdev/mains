@@ -45,6 +45,10 @@ import { CommandMenu } from "./features/command-menu/command-menu";
 import { useAppshots } from "./hooks/use-appshots";
 import { useWindowRequests } from "./hooks/use-window-requests";
 import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
+import {
+  KeyboardShortcutsProvider,
+  useKeyboardShortcut,
+} from "./providers/keyboard-shortcuts-provider";
 
 // First-run-only UI is a substantial graph (feature previews, provider cards,
 // and settings controls). Completed users should not parse it on every launch.
@@ -201,6 +205,26 @@ function AppContent() {
     isMobile || sidebarCollapsed ? EDGE_GUTTER : SIDEBAR_WIDTH;
   const contentRight = isMobile ? EDGE_GUTTER : rightLaneWidth;
   const shellVisible = onboardingCompleted || isWeb;
+
+  useKeyboardShortcut("app.toggleSidebar", () => {
+    dispatch(setSidebarCollapsed(!sidebarCollapsed));
+  }, { allowInEditable: true });
+  useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
+    enabled:
+      showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
+    allowInEditable: true,
+  });
+  useKeyboardShortcut("app.toggleBrowser", () => {
+    if (!showBrowserToggle) return;
+    if (!browserPanel.isOpen) {
+      dispatch(setRightPanelOpen(false));
+      docViewer.close();
+    }
+    browserPanel.toggle();
+  }, {
+    enabled: showBrowserToggle && !hideRightPanel,
+    allowInEditable: true,
+  });
   useLayoutEffect(() => {
     const root = document.documentElement.style;
     if (!shellVisible) {
@@ -345,13 +369,15 @@ export default function App() {
     <ErrorBoundary level="app">
       <ReduxProvider>
         <Router>
-          <MainHeaderProvider>
-            <BrowserPanelProvider>
-              <DocumentViewerProvider>
-                <AppContent />
-              </DocumentViewerProvider>
-            </BrowserPanelProvider>
-          </MainHeaderProvider>
+          <KeyboardShortcutsProvider>
+            <MainHeaderProvider>
+              <BrowserPanelProvider>
+                <DocumentViewerProvider>
+                  <AppContent />
+                </DocumentViewerProvider>
+              </BrowserPanelProvider>
+            </MainHeaderProvider>
+          </KeyboardShortcutsProvider>
         </Router>
       </ReduxProvider>
     </ErrorBoundary>

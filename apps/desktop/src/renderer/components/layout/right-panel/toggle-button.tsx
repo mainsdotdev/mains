@@ -4,6 +4,8 @@ import { useAppSelector } from "@/lib/redux/hooks";
 import { useCapabilities } from "@/lib/platform";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { SessionPanelTrigger } from "@/features/workspace/components/session-panel";
+import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface ToggleButtonProps {
   isOpen: boolean;
@@ -25,6 +27,18 @@ export function ToggleButton({
   const activeWorkspaceId = useAppSelector((state) => state.workspace.activeWorkspaceId);
   const { embeddedBrowser } = useCapabilities();
   const { showGitActions, showSources, showRightPanel } = useModeConfig();
+  const browserShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.toggleBrowser"),
+  );
+  const terminalShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.toggleTerminal"),
+  );
+  const browserTooltip = `${browserOpen ? "Close" : "Open"} browser${
+    browserShortcut ? ` (${browserShortcut})` : ""
+  }`;
+  const terminalTooltip = `${terminalOpen ? "Close" : "Open"} terminal${
+    terminalShortcut ? ` (${terminalShortcut})` : ""
+  }`;
   return (
     <div
       data-layout-toggle
@@ -45,7 +59,7 @@ export function ToggleButton({
       <div className="flex items-center  rounded-full p-0.5">
       {onBrowserToggle && embeddedBrowser && (
         <Button
-          tooltip={browserOpen ? "Close browser" : "Open browser"}
+          tooltip={browserTooltip}
           tooltipPosition="left"
           onClick={onBrowserToggle}
           className={`p-1.5 transition-all duration-300 ease-out rounded-full cursor-pointer  hover:bg-primary-50 dark:hover:bg-primary/10 ${
@@ -61,7 +75,7 @@ export function ToggleButton({
       )}
       {onTerminalToggle && (
         <Button
-          tooltip={terminalOpen ? "Close terminal" : "Open terminal"}
+          tooltip={terminalTooltip}
           tooltipPosition="left"
           onClick={() => {
             if (!activeWorkspaceId && !terminalOpen) {

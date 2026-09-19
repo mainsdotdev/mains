@@ -3,6 +3,8 @@ import { Search } from "@/components/ui/icons";
 import { SpaceModePicker } from "@/features/workspace/components/space-mode-picker";
 import type { ModeId } from "../../../../shared/modes";
 import { requestCommandMenu } from "@/features/command-menu/command-menu-bridge";
+import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SidebarHeaderProps {
   mode?: ModeId;
@@ -15,6 +17,9 @@ export function SidebarHeader({
   providerId,
   onModeChange,
 }: SidebarHeaderProps) {
+  const commandMenuShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.commandMenu"),
+  );
   return (
     <div className="flex shrink-0 items-center gap-2 px-3 pb-1 pt-11">
       <div className="flex min-w-0 flex-1 items-center">
@@ -35,7 +40,7 @@ export function SidebarHeader({
       <Button
         onClick={requestCommandMenu}
         tooltip="Search Mains "
-        tooltipShortcut="(⌘⌥K)"
+        tooltipShortcut={commandMenuShortcut}
         aria-label="Search Mains"
         className="flex size-8 shrink-0 items-center justify-center rounded-lg text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5"
       >

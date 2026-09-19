@@ -159,6 +159,7 @@ export { default as Box} from "./box"
 export { default as New} from "./new"
 export { default as Link} from "./link"
 export { default as Quit} from "./quit"
+export { default as Keyboard } from "./keyboard";
 
 
 

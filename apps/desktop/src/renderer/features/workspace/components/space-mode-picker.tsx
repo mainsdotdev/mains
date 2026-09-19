@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Button, DropdownMenu, DropdownMenuItem } from "@/components/ui";
 import { ArrowUp } from "@/components/ui/icons";
 import { MODE_IDS, providerModes, type ModeId } from "../../../../shared/modes";
 import { MODE_CONFIGS } from "@/lib/mode-config";
+import {
+  useKeyboardShortcut,
+  useKeyboardShortcutBinding,
+} from "@/providers/keyboard-shortcuts-provider";
+import { formatKeyboardShortcut } from "../../../../shared/keyboard-shortcuts";
 
 /**
  * Shape and type shared by the trigger and the static label. The outline is
@@ -10,12 +15,6 @@ import { MODE_CONFIGS } from "@/lib/mode-config";
  */
 const MODE_PILL =
   "flex h-7 items-center rounded-2xl px-3 text-s font-medium text-primary-900 dark:text-primary-100";
-
-const MODE_OPTIONS = MODE_IDS.map((mode, index) => ({
-  mode,
-  shortcutKey: String(index + 1),
-  shortcutLabel: `⌘ ${index + 1}`,
-}));
 
 interface SpaceModePickerProps {
   value: ModeId;
@@ -48,7 +47,20 @@ export function SpaceModePicker({
   // Shortcut numbers stay tied to the full list (⌘1 is always Code), so a
   // narrowed provider skips its keys rather than renumbering the rest.
   const available = providerId ? providerModes(providerId) : MODE_IDS;
-  const options = MODE_OPTIONS.filter(({ mode }) => available.includes(mode));
+  const codeShortcut = useKeyboardShortcutBinding("navigation.code");
+  const workShortcut = useKeyboardShortcutBinding("navigation.work");
+  const chatShortcut = useKeyboardShortcutBinding("navigation.chat");
+  const shortcutByMode: Record<ModeId, string | null> = {
+    developer: codeShortcut,
+    work: workShortcut,
+    chat: chatShortcut,
+  };
+  const options = MODE_IDS.filter((mode) => available.includes(mode)).map(
+    (mode) => ({
+      mode,
+      shortcutLabel: formatKeyboardShortcut(shortcutByMode[mode]).join(" "),
+    }),
+  );
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -94,32 +106,18 @@ export function SpaceModePicker({
     if (mode !== value) onChange(mode);
   };
 
-  useEffect(() => {
-    const handleShortcut = (event: KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.repeat ||
-        !event.metaKey ||
-        event.ctrlKey ||
-        event.altKey ||
-        event.shiftKey
-      ) {
-        return;
-      }
-
-      const option = MODE_OPTIONS.find(
-        ({ shortcutKey }) => shortcutKey === event.key,
-      );
-      if (!option || !available.includes(option.mode)) return;
-
-      event.preventDefault();
-      setIsOpen(false);
-      if (option.mode !== value) onChange(option.mode);
-    };
-
-    window.addEventListener("keydown", handleShortcut, true);
-    return () => window.removeEventListener("keydown", handleShortcut, true);
-  }, [onChange, value, available]);
+  useKeyboardShortcut("navigation.code", () => handleModeChange("developer"), {
+    enabled: available.includes("developer"),
+    allowInEditable: true,
+  });
+  useKeyboardShortcut("navigation.work", () => handleModeChange("work"), {
+    enabled: available.includes("work"),
+    allowInEditable: true,
+  });
+  useKeyboardShortcut("navigation.chat", () => handleModeChange("chat"), {
+    enabled: available.includes("chat"),
+    allowInEditable: true,
+  });
 
   // One mode is not a choice — the label stays so the surrounding shell keeps
   // saying which experience is running without presenting a fake dropdown.
@@ -183,12 +181,14 @@ export function SpaceModePicker({
                   {MODE_CONFIGS[mode].description}
                 </span>
               </span>
-              <span
-                aria-hidden="true"
-                className="shrink-0 text-xs text-primary-500 dark:text-primary-400"
-              >
-                {shortcutLabel}
-              </span>
+              {shortcutLabel && (
+                <span
+                  aria-hidden="true"
+                  className="shrink-0 text-xs text-primary-500 dark:text-primary-400"
+                >
+                  {shortcutLabel}
+                </span>
+              )}
             </DropdownMenuItem>
           );
         })}

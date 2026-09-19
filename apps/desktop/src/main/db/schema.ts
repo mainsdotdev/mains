@@ -89,6 +89,13 @@ export const appSettings = sqliteTable("app_settings", {
     .notNull()
     .default("Command+Shift+Space"),
 
+  // Device-local in-app shortcut overrides. Lens deliberately keeps its own
+  // constrained global shortcut fields above; this JSON only covers commands
+  // dispatched while the Mains window (or its embedded browser) has focus.
+  keyboardShortcutOverrides: text("keyboard_shortcut_overrides")
+    .notNull()
+    .default("{}"),
+
   // "This machine" backend exposure — persisted so it survives an app restart.
   backendRemoteAccess: integer("backend_remote_access", { mode: "boolean" })
     .notNull()

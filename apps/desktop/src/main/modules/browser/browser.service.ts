@@ -60,6 +60,12 @@ import {
   normalizeBrowserDeviceEmulation,
   type BrowserDeviceEmulationQueue,
 } from "./browser-device";
+import { keyboardShortcutsService } from "../keyboardShortcuts";
+import {
+  KEYBOARD_SHORTCUTS,
+  matchesKeyboardShortcut,
+  type KeyboardShortcutId,
+} from "../../../shared/keyboard-shortcuts";
 
 const BROWSER_PARTITION = "persist:mains-browser";
 const VIEW_BORDER_RADIUS_PX = 0;
@@ -694,64 +700,91 @@ export const browserService = {
     });
 
     contents.on("before-input-event", (event, input) => {
-      if (input.type !== "keyDown" || (!input.meta && !input.control)) return;
-      const key = input.key.toLowerCase();
-
-      if (input.code === "KeyK" && input.alt && !input.shift) {
+      if (input.type !== "keyDown" || input.isAutoRepeat) return;
+      const shortcutInput = {
+        code: input.code,
+        key: input.key,
+        metaKey: input.meta,
+        ctrlKey: input.control,
+        altKey: input.alt,
+        shiftKey: input.shift,
+      };
+      const matches = (id: KeyboardShortcutId) =>
+        matchesKeyboardShortcut(
+          shortcutInput,
+          keyboardShortcutsService.getBinding(id),
+        );
+      const appShortcut = KEYBOARD_SHORTCUTS.find(
+        (shortcut) => shortcut.scope === "app" && matches(shortcut.id),
+      );
+      if (appShortcut) {
         event.preventDefault();
         this._sendToRenderer(CHANNELS.browser.shortcut, {
-          action: "command-palette",
+          action: "app-shortcut",
+          shortcutId: appShortcut.id,
         });
         return;
       }
-      if (key === "l" || key === "f") {
+      if (matches("browser.focusLocation") || matches("browser.find")) {
         event.preventDefault();
         this._sendToRenderer(CHANNELS.browser.shortcut, {
-          action: key === "l" ? "focus-location" : "find",
+          action: matches("browser.focusLocation")
+            ? "focus-location"
+            : "find",
         });
         return;
       }
-      if (key === "t") {
+      if (matches("browser.newTab")) {
         event.preventDefault();
         void this.createTab().catch((error) => {
           console.warn("[browser] Failed to create a tab from shortcut:", error);
         });
         return;
       }
-      if (key === "w") {
+      if (matches("browser.closeTab")) {
         event.preventDefault();
         void this.closeTab(record.id).catch((error) => {
           console.warn("[browser] Failed to close a tab from shortcut:", error);
         });
         return;
       }
-      if (key === "p") {
+      if (matches("browser.print")) {
         event.preventDefault();
         void this.printPage().catch((error) => {
           console.warn("[browser] Failed to print from shortcut:", error);
         });
         return;
       }
-      if (key === "0") {
+      if (matches("browser.back")) {
+        event.preventDefault();
+        void this.goBack();
+        return;
+      }
+      if (matches("browser.forward")) {
+        event.preventDefault();
+        void this.goForward();
+        return;
+      }
+      if (matches("browser.resetZoom")) {
         event.preventDefault();
         this.setZoomFactor(1);
         return;
       }
-      if (key === "=" || key === "+") {
+      if (matches("browser.zoomIn")) {
         event.preventDefault();
         this.setZoomFactor(record.zoomFactor + 0.1);
         return;
       }
-      if (key === "-") {
+      if (matches("browser.zoomOut")) {
         event.preventDefault();
         this.setZoomFactor(record.zoomFactor - 0.1);
         return;
       }
-      if (key === "tab") {
+      if (matches("browser.nextTab") || matches("browser.previousTab")) {
         event.preventDefault();
         const ids = Array.from(this.tabs.keys());
         const current = ids.indexOf(record.id);
-        const direction = input.shift ? -1 : 1;
+        const direction = matches("browser.previousTab") ? -1 : 1;
         const next = (current + direction + ids.length) % ids.length;
         if (ids[next]) {
           void this.activateTab(ids[next]).catch((error) => {

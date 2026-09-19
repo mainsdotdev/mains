@@ -44,6 +44,8 @@ interface BrowserTabStripProps {
   onClose: (tabId: string) => void;
   onCreate: () => void;
   onClosePanel: () => void;
+  newTabShortcutLabel?: string;
+  closeTabShortcutLabel?: string;
 }
 
 function BrowserTabIcon({
@@ -89,6 +91,8 @@ export function BrowserTabStrip({
   onClose,
   onCreate,
   onClosePanel,
+  newTabShortcutLabel,
+  closeTabShortcutLabel,
 }: BrowserTabStripProps) {
   return (
     <div className="flex min-h-10 items-center border-b border-primary-200/60 px-2 dark:border-primary-800/50">
@@ -134,6 +138,7 @@ export function BrowserTabStrip({
                     onClose(tab.tabId);
                   }}
                   tooltip="Close tab"
+                  tooltipShortcut={closeTabShortcutLabel}
                   tooltipPosition="bottom"
                   aria-label={`Close ${tab.title || "New tab"}`}
                   className={`mr-1 rounded-full p-0.5 transition-opacity hover:bg-primary-200/70 dark:hover:bg-primary/10 ${
@@ -151,7 +156,7 @@ export function BrowserTabStrip({
         <Button
           onClick={onCreate}
           tooltip="New tab"
-          tooltipShortcut="⌘T"
+          tooltipShortcut={newTabShortcutLabel}
           tooltipPosition="bottom-left"
           aria-label="New browser tab"
           className="shrink-0 rounded-md p-1 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"

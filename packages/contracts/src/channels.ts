@@ -35,6 +35,11 @@ export const CHANNELS = {
     openSystemSettings: "appshots:openSystemSettings",
     requestAccessibility: "appshots:requestAccessibility",
   },
+  keyboardShortcuts: {
+    get: "keyboardShortcuts:get",
+    update: "keyboardShortcuts:update",
+    resetAll: "keyboardShortcuts:resetAll",
+  },
   automations: {
     create: "automations:create",
     delete: "automations:delete",

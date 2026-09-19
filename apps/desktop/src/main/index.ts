@@ -137,6 +137,11 @@ import {
   unregisterAppshotsIpc,
   appshotsService,
 } from "./modules/appshots";
+import {
+  registerKeyboardShortcutsIpc,
+  unregisterKeyboardShortcutsIpc,
+  keyboardShortcutsService,
+} from "./modules/keyboardShortcuts";
 import { registerSshIpc, unregisterSshIpc, sshService } from "./modules/ssh";
 import { tailscaleService } from "./modules/tailscale";
 import {
@@ -702,6 +707,7 @@ async function initializeApp() {
       enableWAL: true,
       busyTimeout: 5000,
     });
+    await keyboardShortcutsService.start();
 
     // Wire the outbound event bus to the local renderer before any module can
     // emit. A headless `mains serve` would register a WebSocket sink instead.
@@ -736,6 +742,7 @@ async function initializeApp() {
     registerPullRequestsIpc();
     registerBrowserIpc();
     registerAppshotsIpc();
+    registerKeyboardShortcutsIpc();
     registerSshIpc();
     registerRemoteBackendsIpc();
     registerBackendIpc();
@@ -1065,6 +1072,7 @@ async function cleanupApp() {
     unregisterBrowserIpc();
     appshotsService.stop();
     unregisterAppshotsIpc();
+    unregisterKeyboardShortcutsIpc();
     unregisterSshIpc();
     unregisterRemoteBackendsIpc();
     unregisterBackendIpc();

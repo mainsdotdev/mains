@@ -58,6 +58,7 @@ import {
   requestCommandMenuQuickAction,
 } from "./command-menu-bridge";
 import { Bag, Code } from "@/components/ui/icons/space";
+import { useKeyboardShortcut } from "@/providers/keyboard-shortcuts-provider";
 
 type IconTone = "neutral" | "blue" | "purple" | "amber";
 
@@ -309,36 +310,9 @@ export function CommandMenu() {
     [close],
   );
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.repeat ||
-        event.isComposing ||
-        (!event.metaKey && !event.ctrlKey) ||
-        !event.altKey ||
-        event.shiftKey ||
-        event.code !== "KeyK"
-      ) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      toggleMenu();
-    };
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [toggleMenu]);
-
-  useEffect(() => {
-    if (!isElectron) return;
-    const unsubscribe = window.api.browser.onShortcut(({ action }) => {
-      if (action === "command-palette") toggleMenu();
-    });
-    return () => {
-      unsubscribe();
-    };
-  }, [toggleMenu]);
+  useKeyboardShortcut("app.commandMenu", toggleMenu, {
+    allowInEditable: true,
+  });
 
   useEffect(() => {
     window.addEventListener(OPEN_COMMAND_MENU_EVENT, openMenu);

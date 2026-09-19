@@ -8,20 +8,21 @@ import type { WindowRequest } from "../../shared/window-request";
 import type { ServiceResponse } from "../../shared/ipc-kit/service-response";
 
 /**
- * Carries out what a desktop notification or the menu bar asked the window to
- * do. Main parks the request and pings; the window collects it — on the ping,
- * or on mount when the click had to re-create a closed window. Collection
- * waits for the spaces to load, since opening a run has to pick its space.
+ * Carries out what a desktop notification, the menu bar or the Dock menu asked
+ * the window to do. Main parks the request and pings; the window collects it —
+ * on the ping, or on mount when the click had to re-create a closed window.
+ * Collection waits for the spaces to load, since opening a run has to pick its
+ * space.
  */
 export function useWindowRequests(): void {
   const caps = useCapabilities();
   const { isLoaded } = useActiveSpace();
   const navigate = useNavigate();
   const jumpToRun = useJumpToRun();
-  const { newChat } = useCommandNavigation();
+  const { newChat, openWorkspace } = useCommandNavigation();
 
   useEffect(() => {
-    // Requests come from this Mac's notifications and menu bar icon.
+    // Requests come from this Mac's notifications, menu bar icon and Dock.
     if (!caps.windowChrome || !isLoaded) return;
 
     const carryOut = (request: WindowRequest) => {
@@ -31,6 +32,9 @@ export function useWindowRequests(): void {
           void jumpToRun({ id: runId, ...run });
           return;
         }
+        case "openWorkspace":
+          void openWorkspace(request.workspaceId);
+          return;
         case "newChat":
           newChat();
           return;
@@ -56,5 +60,5 @@ export function useWindowRequests(): void {
     return () => {
       unsubscribe();
     };
-  }, [caps.windowChrome, isLoaded, jumpToRun, newChat, navigate]);
+  }, [caps.windowChrome, isLoaded, jumpToRun, newChat, openWorkspace, navigate]);
 }

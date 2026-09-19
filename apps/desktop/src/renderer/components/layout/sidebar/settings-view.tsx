@@ -17,6 +17,11 @@ import {
   type SettingsRouteId,
 } from "@/features/settings/settings-sections";
 import { useActiveSpace } from "@/hooks/use-active-space";
+import {
+  useKeyboardShortcut,
+  useKeyboardShortcutBinding,
+} from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SettingsViewProps {
   onClose: () => void;
@@ -29,6 +34,12 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const isMobile = useIsMobile();
   const { activeSpace } = useActiveSpace();
   const showCollections = activeSpace?.mode !== "developer";
+  const closeSettingsShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.closeSettings"),
+  );
+  useKeyboardShortcut("app.closeSettings", onClose, {
+    allowInEditable: true,
+  });
 
   // The settings nav lives in the sidebar; on mobile that's an overlay drawer, so
   // close it after picking a section/project to reveal the content underneath.
@@ -164,6 +175,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
       >
         <Button
           tooltip={"Close settings"}
+          tooltipShortcut={closeSettingsShortcut}
           variant="bare"
           tooltipPosition="top-right"
           onClick={onClose}

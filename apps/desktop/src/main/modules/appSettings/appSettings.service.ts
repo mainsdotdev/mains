@@ -68,6 +68,22 @@ export const appSettingsService = {
     return updated;
   },
 
+  /**
+   * Internal write for the desktop shortcut registry. Renderer settings use
+   * the local-only keyboardShortcuts IPC surface so a remote client cannot
+   * rewrite shortcuts on the host Mac.
+   */
+  async updateKeyboardShortcutOverrides(
+    keyboardShortcutOverrides: string,
+  ): Promise<AppSettingsRecord> {
+    await this.ensureSettings();
+    const updated = await appSettingsRepo.update(SETTINGS_ID, {
+      keyboardShortcutOverrides,
+    });
+    if (!updated) throw new Error("Failed to update keyboard shortcuts");
+    return updated;
+  },
+
   async updateSettings(patch: unknown): Promise<AppSettingsRecord> {
     const sanitized = sanitizeAppSettingsPatch(patch);
     if (!sanitized) {

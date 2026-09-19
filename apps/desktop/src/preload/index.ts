@@ -7,6 +7,9 @@ import type {
   AppshotsConfiguration,
   AppshotsSystemSettingsPane,
 } from "../shared/appshots";
+import type {
+  KeyboardShortcutId,
+} from "../shared/keyboard-shortcuts";
 
 type BrowserDownloadState =
   | "progressing"
@@ -383,6 +386,22 @@ const api = {
       ipcRenderer.on(CHANNELS.appshots.error, listener);
       return () => ipcRenderer.removeListener(CHANNELS.appshots.error, listener);
     },
+  },
+  // In-app keyboard shortcuts (local desktop only; Lens remains separate).
+  keyboardShortcuts: {
+    get: () => ipcRenderer.invoke(CHANNELS.keyboardShortcuts.get),
+    update: (input: {
+      id: KeyboardShortcutId;
+      binding: string | null;
+    }) => ipcRenderer.invoke(CHANNELS.keyboardShortcuts.update, input),
+    resetAll: () => ipcRenderer.invoke(CHANNELS.keyboardShortcuts.resetAll),
+  } satisfies {
+    get: () => Promise<unknown>;
+    update: (input: {
+      id: KeyboardShortcutId;
+      binding: string | null;
+    }) => Promise<unknown>;
+    resetAll: () => Promise<unknown>;
   },
   // Provider operations
   providers: {
@@ -1146,14 +1165,16 @@ const api = {
         ipcRenderer.removeListener(CHANNELS.browser.findResult, listener);
     },
     onShortcut: (
-      callback: (data: {
-        action: "focus-location" | "find" | "command-palette";
-      }) => void,
+      callback: (data:
+        | { action: "focus-location" | "find" }
+        | { action: "app-shortcut"; shortcutId: KeyboardShortcutId }
+      ) => void,
     ) => {
       const listener = (_: any, data: any) => callback(data);
       ipcRenderer.on(CHANNELS.browser.shortcut, listener);
-      return () =>
+      return () => {
         ipcRenderer.removeListener(CHANNELS.browser.shortcut, listener);
+      };
     },
     onDownloadsChanged: (
       callback: (downloads: BrowserDownload[]) => void,
