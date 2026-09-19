@@ -359,10 +359,23 @@ export function useWorkspaceRuns(
     return [...dbEvents, ...streamRunEvents];
   }, [activeRunId, runEvents, streamingEvents]);
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom. Landing on a run jumps straight to its last message:
+  // a smooth scroll from the top of a long transcript is a seconds-long glide
+  // that fights the user's own scrolling. Only growth of the run already in
+  // view animates.
+  const landedRunIdRef = useRef<string | null>(null);
   useEffect(() => {
-    eventsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [currentEvents]);
+    const end = eventsEndRef.current;
+    // No transcript on screen (events not loaded yet, or the run tab is
+    // hidden): whenever it shows next, that counts as a fresh landing.
+    if (!end || end.getClientRects().length === 0) {
+      landedRunIdRef.current = null;
+      return;
+    }
+    const isLanding = landedRunIdRef.current !== activeRunId;
+    landedRunIdRef.current = activeRunId;
+    end.scrollIntoView({ behavior: isLanding ? "instant" : "smooth" });
+  }, [activeRunId, currentEvents]);
 
   // --- Tab operations ---
 
