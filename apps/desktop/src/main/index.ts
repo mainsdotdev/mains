@@ -89,7 +89,7 @@ import {
   unregisterThemeSourceIpc,
   watchChildProcesses,
 } from "./windows";
-import { showTray, hideTray } from "./tray";
+import { showTray, hideTray, startDockMenu, stopDockMenu } from "./status";
 import { offerMoveToApplications } from "./move-to-applications";
 import {
   registerImageProxyScheme,
@@ -958,6 +958,7 @@ async function initializeApp() {
       console.warn("Failed to read menu bar icon preference, defaulting to shown:", err);
       showTray();
     }
+    startDockMenu();
 
     // IPC: toggle menu bar icon visibility at runtime
     ipcMain.handle(CHANNELS.app.setMenuBarIconVisible, (_, visible: boolean) => {
@@ -1010,8 +1011,9 @@ async function cleanupApp() {
   try {
     console.log("Cleaning up application...");
 
-    // Destroy tray
+    // Destroy tray and the Dock menu's status feed
     hideTray();
+    stopDockMenu();
 
     // Destroy all terminal PTY instances
     destroyAllTerminals();

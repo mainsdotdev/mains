@@ -1,7 +1,5 @@
-import { Menu, Notification, Tray } from "electron";
 import { CHANNELS } from "../../shared/ipc-kit/channels";
-import { emit, registerEventSink, type EventSink } from "../ipc-kit";
-import { reopenMainWindow, requestWindow } from "../windows";
+import { registerEventSink, type EventSink } from "../ipc-kit";
 import { appSettingsService } from "../modules/appSettings";
 import { appshotsService } from "../modules/appshots";
 import { backendService } from "../modules/backend";
@@ -10,37 +8,24 @@ import { pulseService } from "../modules/pulse";
 import {
   describeApprovalNotification,
   formatRunLabel,
-  handleToolApprovalResponse,
   listPendingApprovals,
-  openRunInWindow,
-  responseFromNotification,
   runsService,
   type ActiveRunResponse,
 } from "../modules/runs";
 import { updatesService } from "../modules/updates";
-import { loadTrayIcons, type TrayIcons } from "./tray-icon";
-import {
-  EMPTY_TRAY_SNAPSHOT,
-  buildTrayMenu,
-  needsAttention,
-  trayTitle,
-  trayTooltip,
-  type TrayActions,
-  type TrayFinishedStatus,
-  type TraySnapshot,
-} from "./tray-menu";
+import { workspaceService } from "../modules/workspace";
+import type { TrayFinishedStatus, TraySnapshot } from "./status-menus";
 
 /**
- * The menu bar icon: a live count of running runs, a badge while something
- * waits on the user, and a menu to act on both without opening the window.
+ * What the menu bar icon and the Dock menu show, kept current for both.
  *
- * It listens on the event bus like any other client (a sink), so the icon
- * follows run and approval changes without a single call site knowing it
- * exists. The menu itself is built when it opens, from a fresh snapshot, so
- * elapsed times and status lines are never stale.
+ * It listens on the event bus like any other client (a sink), so it follows
+ * run and approval changes without a single call site knowing it exists. A
+ * slow heartbeat covers what nothing announces (a new workspace, a pulse, a
+ * remote-access toggle). It only runs while someone subscribes.
  */
 
-/** Pushes that change what the icon or the menu shows. */
+/** Pushes that change what the icon or the menus show. */
 const WATCHED_CHANNELS = new Set<string>([
   CHANNELS.runs.statusChanged,
   CHANNELS.runs.toolApprovalRequest,
@@ -50,23 +35,25 @@ const WATCHED_CHANNELS = new Set<string>([
 
 const TERMINAL_STATUSES = new Set<string>(["succeeded", "failed", "canceled"]);
 const MAX_FINISHED = 3;
+const MAX_RECENT_WORKSPACES = 5;
 /** Coalesce a burst of pushes (a run ending settles its approvals too). */
 const REFRESH_DEBOUNCE_MS = 150;
+const HEARTBEAT_MS = 60_000;
 
-let tray: Tray | null = null;
-let icons: TrayIcons | null = null;
-let showingAttention = false;
-let snapshot: TraySnapshot = EMPTY_TRAY_SNAPSHOT;
+type Listener = (snapshot: TraySnapshot) => void;
+
+const listeners = new Set<Listener>();
 let refreshTimer: NodeJS.Timeout | null = null;
+let heartbeat: NodeJS.Timeout | null = null;
 let unregisterSink: (() => void) | null = null;
-/** Runs that ended while the app was up, newest first. */
+/** Runs that ended while the feed was running, newest first. */
 let finished: Array<{ id: string; status: TrayFinishedStatus }> = [];
 
 async function safely<T>(what: string, read: () => T | Promise<T>, fallback: T): Promise<T> {
   try {
     return await read();
   } catch (error) {
-    console.warn(`[tray] could not read ${what}:`, error);
+    console.warn(`[status] could not read ${what}:`, error);
     return fallback;
   }
 }
@@ -115,6 +102,7 @@ async function readSnapshot(): Promise<TraySnapshot> {
       })),
   );
 
+  const workspaces = await safely("workspaces", () => workspaceService.list(), []);
   const pulse = await safely("next pulse", () => pulseService.getNextScheduled(), null);
   const backend = await safely("remote access", () => localBackendService.getStatus(), null);
   const exposed = !!backend && (backend.remoteAccess || backend.tailscale);
@@ -128,6 +116,9 @@ async function readSnapshot(): Promise<TraySnapshot> {
     approvals,
     running,
     finished: finishedRuns,
+    recentWorkspaces: workspaces
+      .slice(0, MAX_RECENT_WORKSPACES)
+      .map((workspace) => ({ id: workspace.id, name: workspace.name })),
     nextPulse:
       pulse?.nextRunAt ? { title: pulse.title, at: new Date(pulse.nextRunAt).getTime() } : null,
     remoteAccess: exposed ? { pairedDevices } : null,
@@ -137,28 +128,22 @@ async function readSnapshot(): Promise<TraySnapshot> {
   };
 }
 
-/** Title, tooltip and badge — what the menu bar shows without opening the menu. */
-function applyToIcon(): void {
-  if (!tray || tray.isDestroyed()) return;
-  tray.setTitle(trayTitle(snapshot), { fontType: "monospacedDigit" });
-  tray.setToolTip(trayTooltip(snapshot));
-  const attention = needsAttention(snapshot);
-  if (icons && attention !== showingAttention) {
-    tray.setImage(attention ? icons.attention : icons.normal);
-    showingAttention = attention;
-  }
+/** Re-read everything and tell the subscribers. Resolves with the fresh snapshot. */
+export async function refreshStatus(): Promise<TraySnapshot> {
+  const snapshot = await readSnapshot();
+  for (const listener of listeners) listener(snapshot);
+  return snapshot;
 }
 
-async function refresh(): Promise<void> {
-  snapshot = await readSnapshot();
-  applyToIcon();
+function refreshQuietly(): void {
+  refreshStatus().catch((error) => console.warn("[status] refresh failed:", error));
 }
 
 function scheduleRefresh(): void {
   if (refreshTimer) clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
-    void refresh();
+    refreshQuietly();
   }, REFRESH_DEBOUNCE_MS);
 }
 
@@ -174,8 +159,8 @@ function recordStatus(payload: unknown): void {
   }
 }
 
-const traySink: EventSink = {
-  kind: "tray",
+const statusSink: EventSink = {
+  kind: "status",
   send(channel, payload) {
     if (!WATCHED_CHANNELS.has(channel)) return;
     if (channel === CHANNELS.runs.statusChanged) recordStatus(payload);
@@ -183,91 +168,32 @@ const traySink: EventSink = {
   },
 };
 
-function warnOnFailure(what: string) {
-  return (error: unknown) => console.warn(`[tray] ${what} failed:`, error);
+function start(): void {
+  unregisterSink = registerEventSink(statusSink);
+  heartbeat = setInterval(refreshQuietly, HEARTBEAT_MS);
+  heartbeat.unref();
 }
 
-const actions: TrayActions = {
-  answerApproval(requestId, actionIndex) {
-    const request = listPendingApprovals().find((r) => r.requestId === requestId);
-    if (!request) return;
-    const response = responseFromNotification(request, {
-      type: "action",
-      index: actionIndex,
-    });
-    if (response) handleToolApprovalResponse(response);
-  },
-  openRun(runId) {
-    void openRunInWindow(runId).catch(warnOnFailure("opening the run"));
-  },
-  stopRun(runId) {
-    void runsService.abortRun(runId).catch(warnOnFailure("stopping the run"));
-  },
-  newChat() {
-    requestWindow({ kind: "newChat" });
-  },
-  navigate(path) {
-    requestWindow({ kind: "navigate", path });
-  },
-  captureWindow() {
-    void appshotsService.captureAndDeliver().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      new Notification({ title: "Couldn't capture the window", body: message }).show();
-    });
-  },
-  setPreventSleep(enabled) {
-    void appSettingsService
-      .updateSettings({ preventSleepDuringRuns: enabled })
-      // The window didn't make this change — tell it, so Settings isn't stale.
-      .then(() => emit(CHANNELS.appSettings.changed, {}))
-      .catch(warnOnFailure("updating the sleep setting"));
-  },
-  installUpdate() {
-    try {
-      updatesService.quitAndInstall();
-    } catch (error) {
-      warnOnFailure("installing the update")(error);
-    }
-  },
-  checkForUpdates() {
-    void updatesService.checkForUpdates().catch(warnOnFailure("checking for updates"));
-  },
-  showWindow() {
-    reopenMainWindow();
-  },
-};
-
-async function openMenu(): Promise<void> {
-  await refresh().catch(warnOnFailure("refreshing the menu"));
-  if (!tray || tray.isDestroyed()) return;
-  tray.popUpContextMenu(Menu.buildFromTemplate(buildTrayMenu(snapshot, actions, Date.now())));
-}
-
-/** Put the icon in the menu bar (idempotent). */
-export function showTray(): void {
-  if (tray) return;
-  icons = loadTrayIcons();
-  showingAttention = false;
-  tray = new Tray(icons.normal);
-  tray.setToolTip("Mains");
-  // No `setContextMenu`: the menu is built fresh on every open, and either
-  // button opens it — the window is one item away ("Show Mains").
-  tray.on("click", () => void openMenu());
-  tray.on("right-click", () => void openMenu());
-  unregisterSink = registerEventSink(traySink);
-  void refresh().catch(warnOnFailure("reading the tray state"));
-}
-
-/** Take the icon out of the menu bar (idempotent). */
-export function hideTray(): void {
-  if (refreshTimer) {
-    clearTimeout(refreshTimer);
-    refreshTimer = null;
-  }
+function stop(): void {
   unregisterSink?.();
   unregisterSink = null;
-  tray?.destroy();
-  tray = null;
+  if (heartbeat) clearInterval(heartbeat);
+  heartbeat = null;
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = null;
   finished = [];
-  snapshot = EMPTY_TRAY_SNAPSHOT;
+}
+
+/**
+ * Follow the status. The listener gets every fresh snapshot, starting with one
+ * read right away. Returns the unsubscribe; the feed stops with its last one.
+ */
+export function subscribeStatus(listener: Listener): () => void {
+  if (listeners.size === 0) start();
+  listeners.add(listener);
+  refreshQuietly();
+  return () => {
+    if (!listeners.delete(listener)) return;
+    if (listeners.size === 0) stop();
+  };
 }

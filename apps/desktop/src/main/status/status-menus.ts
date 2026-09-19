@@ -1,9 +1,9 @@
 import type { MenuItemConstructorOptions } from "electron";
 
 /**
- * The menu bar (tray) menu as a pure function of what is going on — no
- * Electron runtime, so the layout is testable. `tray.ts` gathers the snapshot
- * and supplies the actions.
+ * The menu bar (tray) and Dock menus as pure functions of what is going on —
+ * no Electron runtime, so the layouts are testable. `status-feed.ts` gathers
+ * the snapshot; `status-actions.ts` supplies the actions.
  */
 
 /** A request waiting on the user, already described the way its notification is. */
@@ -33,11 +33,18 @@ export interface TrayFinishedRun {
   status: TrayFinishedStatus;
 }
 
+export interface TrayWorkspace {
+  id: string;
+  name: string;
+}
+
 export interface TraySnapshot {
   approvals: TrayApproval[];
   running: TrayRun[];
   /** Newest first. */
   finished: TrayFinishedRun[];
+  /** Most recently touched first. */
+  recentWorkspaces: TrayWorkspace[];
   nextPulse: { title: string; at: number } | null;
   /** Null while the desktop is not exposed as a backend. */
   remoteAccess: { pairedDevices: number } | null;
@@ -52,6 +59,7 @@ export const EMPTY_TRAY_SNAPSHOT: TraySnapshot = {
   approvals: [],
   running: [],
   finished: [],
+  recentWorkspaces: [],
   nextPulse: null,
   remoteAccess: null,
   lensShortcut: null,
@@ -63,6 +71,7 @@ export interface TrayActions {
   answerApproval(requestId: string, actionIndex: number): void;
   openRun(runId: string): void;
   stopRun(runId: string): void;
+  openWorkspace(workspaceId: string): void;
   newChat(): void;
   navigate(path: string): void;
   captureWindow(): void;
@@ -144,14 +153,15 @@ function approvalItem(
   };
 }
 
+/** `now` null leaves out the elapsed time (a menu that is not rebuilt per open). */
 function runningItem(
   run: TrayRun,
   actions: TrayActions,
-  now: number,
+  now: number | null,
 ): MenuItemConstructorOptions {
   const progress = run.queued
     ? "Queued"
-    : run.startedAt !== null
+    : run.startedAt !== null && now !== null
       ? formatElapsed(now - run.startedAt)
       : null;
   const sublabel = [run.workspaceName, progress].filter(Boolean).join(" · ");
@@ -170,6 +180,14 @@ function section(
   items: MenuItemConstructorOptions[],
 ): MenuItemConstructorOptions[] {
   return items.length > 0 ? [{ type: "header", label: title }, ...items] : [];
+}
+
+/** The Dock draws its menu itself and skips header items; a greyed title reads the same. */
+function dockSection(
+  title: string,
+  items: MenuItemConstructorOptions[],
+): MenuItemConstructorOptions[] {
+  return items.length > 0 ? [{ label: title, enabled: false }, ...items] : [];
 }
 
 /** Join non-empty groups with separators. */
@@ -252,4 +270,35 @@ export function buildTrayMenu(
   ];
 
   return joinGroups([needsYou, runs, status, quick, app]);
+}
+
+/**
+ * The Dock icon's menu: what needs the user and what is running, the recent
+ * workspaces, and a new chat. macOS appends its own items (Options, Show All
+ * Windows, Hide, Quit), so there is no Show / Quit here. It is set ahead of
+ * time rather than built on open, so it carries no elapsed times.
+ */
+export function buildDockMenu(
+  snapshot: TraySnapshot,
+  actions: TrayActions,
+): MenuItemConstructorOptions[] {
+  const needsYou = dockSection(
+    "Needs you",
+    snapshot.approvals.map((approval) => approvalItem(approval, actions)),
+  );
+  const running = dockSection(
+    "Running",
+    snapshot.running.map((run) => runningItem(run, actions, null)),
+  );
+  const recent = dockSection(
+    "Recent Workspaces",
+    snapshot.recentWorkspaces.map((workspace) => ({
+      label: clip(workspace.name),
+      click: () => actions.openWorkspace(workspace.id),
+    })),
+  );
+  const quick: MenuItemConstructorOptions[] = [
+    { label: "New Chat", click: () => actions.newChat() },
+  ];
+  return joinGroups([needsYou, running, recent, quick]);
 }

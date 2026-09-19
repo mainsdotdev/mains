@@ -2,6 +2,7 @@ import type { MenuItemConstructorOptions } from "electron";
 import { describe, expect, it, vi } from "vitest";
 import {
   EMPTY_TRAY_SNAPSHOT,
+  buildDockMenu,
   buildTrayMenu,
   formatElapsed,
   needsAttention,
@@ -9,7 +10,7 @@ import {
   trayTooltip,
   type TrayActions,
   type TraySnapshot,
-} from "./tray-menu";
+} from "./status-menus";
 
 const NOW = new Date("2026-09-19T10:00:00").getTime();
 
@@ -18,6 +19,7 @@ function actions(): TrayActions {
     answerApproval: vi.fn(),
     openRun: vi.fn(),
     stopRun: vi.fn(),
+    openWorkspace: vi.fn(),
     newChat: vi.fn(),
     navigate: vi.fn(),
     captureWindow: vi.fn(),
@@ -204,6 +206,71 @@ describe("buildTrayMenu", () => {
     );
     expect(menu[1].label).toHaveLength(48);
     expect(menu[1].label!.endsWith("…")).toBe(true);
+  });
+});
+
+describe("buildDockMenu", () => {
+  it("offers a new chat even when nothing is going on", () => {
+    expect(outline(buildDockMenu(snapshot(), actions()))).toEqual(["New Chat"]);
+  });
+
+  it("lists what needs you, what runs and the recent workspaces — no Show or Quit", () => {
+    const menu = buildDockMenu(
+      snapshot({
+        approvals: [
+          { requestId: "req-1", runId: "run-1", title: "Allow Bash?", runLabel: "Hero", actions: ["Allow", "Deny"] },
+        ],
+        running: [
+          { id: "run-1", label: "Hero", workspaceName: "web", startedAt: NOW - 4 * 60_000, queued: false },
+        ],
+        finished: [{ id: "run-0", label: "Docs", status: "succeeded" }],
+        recentWorkspaces: [
+          { id: "ws-1", name: "web" },
+          { id: "ws-2", name: "api" },
+        ],
+        updateReady: "0.11.0",
+      }),
+      actions(),
+    );
+    expect(outline(menu)).toEqual([
+      "Needs you",
+      "Allow Bash?",
+      "---",
+      "Running",
+      "Hero",
+      "---",
+      "Recent Workspaces",
+      "web",
+      "api",
+      "---",
+      "New Chat",
+    ]);
+    // The Dock skips header items, so section titles are greyed rows.
+    expect(find(menu, "Running")).toEqual({ label: "Running", enabled: false });
+    // Set ahead of time, so no elapsed time that would go stale.
+    expect(find(menu, "Hero").sublabel).toBe("web");
+  });
+
+  it("opens a workspace, answers a request and stops a run", () => {
+    const act = actions();
+    const menu = buildDockMenu(
+      snapshot({
+        approvals: [
+          { requestId: "req-1", runId: "run-1", title: "Allow Bash?", runLabel: null, actions: ["Allow", "Deny"] },
+        ],
+        running: [{ id: "run-1", label: "Hero", workspaceName: null, startedAt: null, queued: false }],
+        recentWorkspaces: [{ id: "ws-1", name: "web" }],
+      }),
+      act,
+    );
+    click(find(menu, "web"));
+    expect(act.openWorkspace).toHaveBeenCalledWith("ws-1");
+    click(find(submenu(find(menu, "Allow Bash?")), "Deny"));
+    expect(act.answerApproval).toHaveBeenCalledWith("req-1", 1);
+    click(find(submenu(find(menu, "Hero")), "Stop"));
+    expect(act.stopRun).toHaveBeenCalledWith("run-1");
+    click(find(menu, "New Chat"));
+    expect(act.newChat).toHaveBeenCalled();
   });
 });
 
