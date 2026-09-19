@@ -8,6 +8,7 @@ import {
   toolEventPlanName,
   type EventGroup,
 } from "./tools/tool-call-group";
+import { ToolCallItem } from "./tools/tool-call-item";
 import { PlanDisplay } from "./tools/plan-display";
 import { demoteStaleRunningTools } from "./tools/_shared";
 import { EditorContent } from "./editor-content";
@@ -684,6 +685,8 @@ export function WorkspaceEvents({
                 />
               ) : null}
             </>
+          ) : group.type === "mcp_app" ? (
+            <ToolCallItem event={group.events[0]} isCompact={false} />
           ) : group.type === "tool_calls" ? (
             planToolName === "plan" ||
             planToolName === "create plan" ||

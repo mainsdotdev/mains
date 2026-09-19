@@ -7,7 +7,7 @@ import { eventsValueEqual } from "./run-event-mappers";
 
 export interface EventGroup {
   id: string;
-  type: "tool_calls" | "info" | "response" | "prompt_suggestion";
+  type: "tool_calls" | "mcp_app" | "info" | "response" | "prompt_suggestion";
   events: RunEvent[];
   startTime: Date;
   endTime: Date;
@@ -49,6 +49,15 @@ function isSubagentChildEvent(event: RunEvent): boolean {
   return !!(m?.parentToolCallId || m?.isFromSubagent);
 }
 
+/**
+ * An MCP App is an interactive user-facing deliverable, even though its wire
+ * event is a tool call. Keep it out of execution-detail groups so it remains
+ * visible and interactive when ordinary tool activity is collapsed or hidden.
+ */
+function isMcpAppEvent(event: RunEvent): boolean {
+  return event.type === "tool_call" && !!event.metadata?.mcpApp;
+}
+
 export function isPlanToolCallGroup(group: EventGroup): boolean {
   if (group.type !== "tool_calls") return false;
   return group.events.some((ev) => isPlanToolEvent(ev));
@@ -86,6 +95,15 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
         groups.push({
           id: `plan-${event.id}`,
           type: "tool_calls",
+          events: [event],
+          startTime: event.timestamp,
+          endTime: event.timestamp,
+        });
+      } else if (isMcpAppEvent(event)) {
+        flushToolGroup();
+        groups.push({
+          id: `mcp-app-${event.id}`,
+          type: "mcp_app",
           events: [event],
           startTime: event.timestamp,
           endTime: event.timestamp,

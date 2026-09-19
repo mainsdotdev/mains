@@ -406,8 +406,9 @@ export function buildTurnRenderRows(
       prevRanges[0] = [...prefixIndices, ...prevRanges[0]!];
     }
 
-    // Plan (PlanDisplay) must stay out of the collapsed region so Apply / Dismiss stay usable.
-    // Image/document artifacts also stay outside — generated media shouldn't be hidden behind the accordion.
+    // Plans and MCP Apps must stay out of the collapsed region so their
+    // interactions remain reachable. Generated media/documents stay outside
+    // for the same reason: these are turn deliverables, not execution detail.
     const planBreakout: number[] = [];
     const messageBreakout: number[] = [];
     for (const range of prevRanges) {
@@ -416,6 +417,7 @@ export function buildTurnRenderRows(
         if (isPlanToolCallGroup(g)) {
           planBreakout.push(gIdx);
         } else if (
+          g.type === "mcp_app" ||
           groupHasMediaArtifact(g, gIdx, latestDocumentGroup) ||
           options.isDeliverableGroup?.(g)
         ) {

@@ -112,6 +112,41 @@ describe("buildTurnRenderRows — deliverable breakout", () => {
     );
   });
 
+  it("keeps an MCP App visible outside the collapsed turn accordion", () => {
+    const events = [
+      ev({
+        id: "u1",
+        content: "find a flight",
+        metadata: { kind: "user-prompt" },
+      }),
+      ev({
+        id: "app1",
+        type: "tool_call",
+        content: "mcp__skyscanner__search: Tokyo to Seoul",
+        metadata: {
+          mcpApp: {
+            server: "skyscanner",
+            tool: "search",
+            resourceUri: "ui://skyscanner/flights.html",
+          },
+        },
+      }),
+      ev({ id: "r1", content: "Live fares are ready.", metadata: { kind: "report" } }),
+      ev({ id: "r2", content: "Here is the cheapest option.", metadata: { kind: "report" } }),
+    ];
+    const groups = groupEvents(events);
+    const appIndex = groups.findIndex((group) => group.type === "mcp_app");
+    const rows = buildTurnRenderRows(groups);
+    const accordion = rows.find((row) => row.kind === "accordion");
+
+    expect(appIndex).toBeGreaterThan(-1);
+    expect(accordion).toBeDefined();
+    if (accordion?.kind !== "accordion") return;
+    expect(accordion.messageBreakoutIndices).toContain(appIndex);
+    expect(accordion.previousSegments.flat()).not.toContain(appIndex);
+    expect(accordion.previousToolSummary).toBe("");
+  });
+
   it("keeps only the latest version of the same document visible", () => {
     const events = [
       ev({
