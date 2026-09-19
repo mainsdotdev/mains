@@ -43,7 +43,8 @@ import { useAppearanceFonts } from "./hooks/use-appearance-fonts";
 import { getProviderVariant } from "./lib/provider-variants";
 import { CommandMenu } from "./features/command-menu/command-menu";
 import { useAppshots } from "./hooks/use-appshots";
-import { useRunOpenRequests } from "./hooks/use-run-open-requests";
+import { useWindowRequests } from "./hooks/use-window-requests";
+import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
 
 // First-run-only UI is a substantial graph (feature previews, provider cards,
 // and settings controls). Completed users should not parse it on every launch.
@@ -94,7 +95,8 @@ function AppContent() {
   useLayoutWidthVars();
   useAppearanceFonts();
   useAppshots();
-  useRunOpenRequests();
+  useWindowRequests();
+  useAppSettingsEvents();
   const location = useLocation();
   const hideRightPanel = shouldHideRightPanel(location.pathname);
   const variant = useWorkspaceVariant();

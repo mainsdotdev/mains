@@ -1,23 +1,23 @@
 import { Notification } from "electron";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
-import type { RunOpenRequest } from "../../../shared/run-open-request";
-import { reopenMainWindow } from "../../windows";
+import { requestWindow } from "../../windows";
 import {
   describeApprovalNotification,
   responseFromNotification,
   type NotificationInteraction,
 } from "./approval-notification";
 import { runsRepo } from "./runs.repo";
-import type {
-  RunResponse,
-  ToolApprovalRequest,
-  ToolApprovalResponse,
+import {
+  formatRunLabel,
+  type RunResponse,
+  type ToolApprovalRequest,
+  type ToolApprovalResponse,
 } from "./runs.dto";
 
 /**
  * The run's OS notifications: a pending request (answerable from the banner
  * where it can be — see `approval-notification.ts`) and a finished run. A click
- * on either opens that run in the window.
+ * on either opens that run in the window (`openRunInWindow`, which the menu bar
+ * uses too).
  *
  * Electron drops a Notification's listeners once the object is garbage
  * collected, so a notification nobody references stops answering clicks. The
@@ -28,18 +28,8 @@ import type {
 const MAX_RETAINED_FINISHED = 20;
 const retainedFinished: Notification[] = [];
 
-/** A click only counts if the window asks for it soon after. */
-const OPEN_REQUEST_TTL_MS = 60_000;
-let pendingOpen: { request: RunOpenRequest; at: number } | null = null;
-
 export interface ApprovalNotificationHandle {
   close(): void;
-}
-
-function runLabel(run: RunResponse | null): string | null {
-  const title = run?.title?.trim();
-  if (title) return title;
-  return run?.goal?.split("\n").find((line) => line.trim())?.trim() ?? null;
 }
 
 async function findRun(runId: string): Promise<RunResponse | null> {
@@ -51,18 +41,18 @@ async function findRun(runId: string): Promise<RunResponse | null> {
 }
 
 /**
- * Bring the window forward on the run a notification was about. The target is
- * parked until the renderer collects it (`consumeRunOpenRequest`): a window
- * that was closed is still loading when the click lands, so the push alone
- * would arrive before anyone listens.
+ * Bring the window forward on a run — from a notification, or the menu bar.
+ * An unknown run still brings the window up; there is just nothing to open.
  */
-export async function openRunFromNotification(runId: string): Promise<void> {
-  const window = reopenMainWindow();
-  if (!window) return;
+export async function openRunInWindow(runId: string): Promise<void> {
   const run = await findRun(runId);
-  if (!run) return;
-  pendingOpen = {
-    request: {
+  if (!run) {
+    requestWindow({ kind: "navigate", path: "/code" });
+    return;
+  }
+  requestWindow({
+    kind: "openRun",
+    run: {
       runId: run.id,
       workspaceId: run.workspaceId,
       collectionId: run.collectionId,
@@ -70,17 +60,7 @@ export async function openRunFromNotification(runId: string): Promise<void> {
       providerId: run.providerId,
       mode: run.mode,
     },
-    at: Date.now(),
-  };
-  if (!window.isDestroyed()) window.webContents.send(CHANNELS.runs.openRequested);
-}
-
-/** Hand the parked open request to the window, once. */
-export function consumeRunOpenRequest(): RunOpenRequest | null {
-  const parked = pendingOpen;
-  pendingOpen = null;
-  if (!parked || Date.now() - parked.at > OPEN_REQUEST_TTL_MS) return null;
-  return parked.request;
+  });
 }
 
 /**
@@ -99,7 +79,7 @@ export async function showApprovalNotification(
   const run = await findRun(req.runId);
   if (!handlers.isPending()) return null;
 
-  const spec = describeApprovalNotification(req, runLabel(run));
+  const spec = describeApprovalNotification(req, run ? formatRunLabel(run) : null);
   const notification = new Notification({
     title: spec.title,
     ...(spec.subtitle ? { subtitle: spec.subtitle } : {}),
@@ -112,7 +92,7 @@ export async function showApprovalNotification(
   const answer = (interaction: NotificationInteraction) => {
     const response = responseFromNotification(req, interaction);
     if (response) handlers.respond(response);
-    else void openRunFromNotification(req.runId);
+    else void openRunInWindow(req.runId);
   };
   notification.on("action", (details, legacyIndex) =>
     answer({ type: "action", index: details?.actionIndex ?? legacyIndex }),
@@ -120,7 +100,7 @@ export async function showApprovalNotification(
   notification.on("reply", (details, legacyReply) =>
     answer({ type: "reply", text: details?.reply ?? legacyReply ?? "" }),
   );
-  notification.on("click", () => void openRunFromNotification(req.runId));
+  notification.on("click", () => void openRunInWindow(req.runId));
   notification.on("failed", (_event, error) =>
     console.warn(`[runs] approval notification failed: ${error}`),
   );
@@ -141,7 +121,7 @@ export function showRunFinishedNotification(runId: string, status: string): void
   };
   notification.on("click", () => {
     release();
-    void openRunFromNotification(runId);
+    void openRunInWindow(runId);
   });
   notification.on("close", release);
   retainedFinished.push(notification);

@@ -161,6 +161,11 @@ export const pulseService = {
     return pulseRepo.findById(id) ?? null;
   },
 
+  /** The active pulse due soonest — what the scheduler's timer is waiting on. */
+  getNextScheduled(): Pulse | null {
+    return pulseRepo.findNextScheduled() ?? null;
+  },
+
   create(accountId: string, input: CreatePulseInput): Pulse {
     const validationError = validateCreate(input);
     if (validationError) throw new Error(validationError);

@@ -1,4 +1,3 @@
-import { ipcMain as electronIpcMain } from "electron";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { ok } from "../../../shared/ipc-kit/service-response";
@@ -22,7 +21,6 @@ import {
   handleToolApprovalResponse,
   listPendingApprovals,
 } from "./user-input-broker";
-import { consumeRunOpenRequest } from "./run-notifications";
 import { CHANNELS } from "../../../shared/ipc-kit/channels";
 import type {
   ReadArtifactImagePayload,
@@ -264,14 +262,6 @@ export function registerRunsIpc(): void {
     CHANNELS.runs.listPendingApprovals,
     handle((runId?: string) => listPendingApprovals(runId)),
   );
-
-  // The run a desktop notification click asked to open. The notification fired
-  // on this Mac, so only this Mac's window may collect it — raw Electron IPC,
-  // deliberately kept off the WebSocket handler registry.
-  electronIpcMain.handle(
-    CHANNELS.runs.consumeOpenRequest,
-    handle(() => consumeRunOpenRequest()),
-  );
 }
 
 export function unregisterRunsIpc(): void {
@@ -319,5 +309,4 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.toolApprovalResponse,
     CHANNELS.runs.listPendingApprovals,
   ].forEach((channel) => ipcMain.removeHandler(channel));
-  electronIpcMain.removeHandler(CHANNELS.runs.consumeOpenRequest);
 }

@@ -13,3 +13,10 @@ export {
 } from "./splashWindow";
 
 export { openAboutWindow, getAboutWindow } from "./aboutWindow";
+
+export {
+  requestWindow,
+  consumeWindowRequest,
+  registerWindowRequestIpc,
+  unregisterWindowRequestIpc,
+} from "./window-requests";

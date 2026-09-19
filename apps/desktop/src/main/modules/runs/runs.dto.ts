@@ -85,6 +85,13 @@ export interface RunResponse {
   updatedAt: Date;
 }
 
+/** What a run is called outside the app (notifications, the menu bar): its title, else the goal's first line. */
+export function formatRunLabel(run: Pick<RunResponse, "title" | "goal">): string | null {
+  const title = run.title?.trim();
+  if (title) return title;
+  return run.goal?.split("\n").find((line) => line.trim())?.trim() ?? null;
+}
+
 export interface ArchivedRunWorkspaceResponse {
   id: string;
   name: string;

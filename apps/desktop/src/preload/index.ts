@@ -751,15 +751,6 @@ const api = {
       approved: boolean;
       answer?: string;
     }) => ipcRenderer.invoke(CHANNELS.runs.toolApprovalResponse, response),
-    // A desktop notification was clicked: collect the run it asked to open.
-    onOpenRequested: (callback: () => void) => {
-      const listener = () => callback();
-      ipcRenderer.on(CHANNELS.runs.openRequested, listener);
-      return () =>
-        ipcRenderer.removeListener(CHANNELS.runs.openRequested, listener);
-    },
-    consumeOpenRequest: () =>
-      ipcRenderer.invoke(CHANNELS.runs.consumeOpenRequest),
     // Streaming events (ephemeral — pushed from main, not persisted)
     onStreamingEvent: (callback: (data: { runId: string; event: { type: string; kind: string; content?: string; metadata?: Record<string, unknown>; streamId?: string }; ts: number }) => void) => {
       const listener = (_: any, data: any) => callback(data);
@@ -1006,6 +997,14 @@ const api = {
   },
   app: {
     quit: () => ipcRenderer.invoke(CHANNELS.app.quit),
+    // A notification or the menu bar asked the window for something: collect it.
+    onWindowRequest: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on(CHANNELS.app.windowRequest, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.app.windowRequest, listener);
+    },
+    consumeWindowRequest: () =>
+      ipcRenderer.invoke(CHANNELS.app.consumeWindowRequest),
     setUnsavedChanges: (hasChanges: boolean) =>
       ipcRenderer.invoke(CHANNELS.app.setUnsavedChanges, hasChanges),
     setMenuBarIconVisible: (visible: boolean) =>
