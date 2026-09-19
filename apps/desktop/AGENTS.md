@@ -299,7 +299,7 @@ Core tables:
 
 **Stats Module** (`src/main/modules/stats/`) — Dashboard statistics and analytics (joins `workspace_diffs` via its own repo)
 
-**Updates Module** (`src/main/modules/updates/`) — Application update checking and management
+**Updates Module** (`src/main/modules/updates/`) — Application update checking and management. Self-update only works from `/Applications`: a copy run from the DMG or a translocated zip in Downloads can't replace itself, so `src/main/move-to-applications.ts` offers the move at launch (before the splash; packaged macOS only; "Don't ask again" persists in `userData/move-to-applications.json`)
 
 **Database Seeding** (`src/main/db/seeds/`)
 - Not a domain module and has no IPC surface. A versioned, idempotent runner: each `v{N}.ts` exports `run(db)`, the runner tracks `appSettings.seedVersion`, and `db/client.ts` calls `runSeeds(db)` at init. Fixtures live in `src/main/db/data/` (accounts, connectionStates, providers, spaces).

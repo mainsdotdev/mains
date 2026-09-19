@@ -90,6 +90,7 @@ import {
   watchChildProcesses,
 } from "./windows";
 import { showTray, hideTray } from "./tray";
+import { offerMoveToApplications } from "./move-to-applications";
 import {
   registerImageProxyScheme,
   registerImageProxyHandler,
@@ -687,6 +688,10 @@ async function initializeApp() {
     // Native chrome (vibrancy, menus, dialogs) in the user's theme from the
     // first frame — before the renderer is up to say which one it is.
     applySavedThemeSource();
+
+    // Running from the DMG or Downloads breaks auto-update: offer the move
+    // before anything boots. On a move the app quits and relaunches itself.
+    if (await offerMoveToApplications()) return;
 
     // Show splash screen immediately
     createSplashWindow();
