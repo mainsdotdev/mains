@@ -1009,6 +1009,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.app.setUnsavedChanges, hasChanges),
     setMenuBarIconVisible: (visible: boolean) =>
       ipcRenderer.invoke(CHANNELS.app.setMenuBarIconVisible, visible),
+    setThemeSource: (theme: "system" | "light" | "dark") =>
+      ipcRenderer.invoke(CHANNELS.app.setThemeSource, theme),
     onFlushAndQuit: (callback: () => void) => {
       const listener = () => callback();
       ipcRenderer.on(CHANNELS.app.flushAndQuit, listener);

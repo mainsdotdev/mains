@@ -84,6 +84,9 @@ import {
   openAboutWindow,
   registerWindowRequestIpc,
   unregisterWindowRequestIpc,
+  applySavedThemeSource,
+  registerThemeSourceIpc,
+  unregisterThemeSourceIpc,
 } from "./windows";
 import { showTray, hideTray } from "./tray";
 import {
@@ -679,6 +682,10 @@ async function initializeApp() {
       return;
     }
 
+    // Native chrome (vibrancy, menus, dialogs) in the user's theme from the
+    // first frame — before the renderer is up to say which one it is.
+    applySavedThemeSource();
+
     // Show splash screen immediately
     createSplashWindow();
 
@@ -866,6 +873,7 @@ async function initializeApp() {
       app.quit();
     });
     registerWindowRequestIpc();
+    registerThemeSourceIpc();
 
     // Build custom application menu
     const template: Electron.MenuItemConstructorOptions[] = [
@@ -1064,6 +1072,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.app.setMenuBarIconVisible);
     ipcMain.removeHandler(CHANNELS.app.quit);
     unregisterWindowRequestIpc();
+    unregisterThemeSourceIpc();
 
     // Close database
     await closeDatabase();

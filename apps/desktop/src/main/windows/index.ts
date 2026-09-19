@@ -15,6 +15,12 @@ export {
 export { openAboutWindow, getAboutWindow } from "./aboutWindow";
 
 export {
+  applySavedThemeSource,
+  registerThemeSourceIpc,
+  unregisterThemeSourceIpc,
+} from "./theme-source";
+
+export {
   requestWindow,
   consumeWindowRequest,
   registerWindowRequestIpc,

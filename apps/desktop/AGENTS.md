@@ -206,6 +206,10 @@ Core tables:
 - Follows changes as an event-bus sink (`runs:statusChanged`, approval request/resolved, `updates:status`) — no call site knows it exists. Settings it writes are announced on `appSettings:changed`
 - **Window requests** (`windows/window-requests.ts`, `shared/window-request.ts`): how the tray and notifications drive the window — `openRun` / `newChat` / `navigate`. `requestWindow` re-opens the window, parks the request and pings `app:windowRequest`; the renderer's `useWindowRequests` collects it over local-only `app:consumeWindowRequest` (never on WS), so it survives a window that had to be re-created. Runs open via `useJumpToRun`, shared with the background-run dock
 
+**Native theme** (`src/main/windows/theme-source.ts`)
+- The renderer's theme preference (`use-dark-mode.ts`) only styles our content; AppKit-drawn chrome — vibrancy behind transparent surfaces, menus (tray included), dialogs — follows `nativeTheme.themeSource`. The renderer hands its preference over `app:setThemeSource` (local only); main saves it to `userData/theme-source.json` and re-applies it before the splash on the next launch
+- `themeSource` also drives the renderer's `prefers-color-scheme`, which `use-dark-mode` reads only for "system" — exactly when main leaves it tracking the OS
+
 **Projects System** (`src/main/modules/projects/`)
 - Groups workspaces by shared git remote origin; owns `project_resources`
 - Tracks rootPath, workspacesPath (worktree dir), branches, scripts (setup, run, archive)

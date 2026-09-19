@@ -14,6 +14,7 @@ export const CHANNELS = {
     fullscreenChange: "app:fullscreenChange",
     quit: "app:quit",
     setMenuBarIconVisible: "app:setMenuBarIconVisible",
+    setThemeSource: "app:setThemeSource",
     setUnsavedChanges: "app:setUnsavedChanges",
     windowRequest: "app:windowRequest",
   },
