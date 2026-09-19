@@ -124,6 +124,11 @@ import {
   unregisterBrowserIpc,
   browserService,
 } from "./modules/browser";
+import {
+  registerAppshotsIpc,
+  unregisterAppshotsIpc,
+  appshotsService,
+} from "./modules/appshots";
 import { registerSshIpc, unregisterSshIpc, sshService } from "./modules/ssh";
 import { tailscaleService } from "./modules/tailscale";
 import {
@@ -797,6 +802,7 @@ async function initializeApp() {
     registerGuardsIpc();
     registerPullRequestsIpc();
     registerBrowserIpc();
+    registerAppshotsIpc();
     registerSshIpc();
     registerRemoteBackendsIpc();
     registerBackendIpc();
@@ -1052,6 +1058,8 @@ async function initializeApp() {
       },
     });
 
+    await appshotsService.start();
+
     console.log("Application initialized successfully");
   } catch (error) {
     console.error("Failed to initialize application:", error);
@@ -1118,6 +1126,8 @@ async function cleanupApp() {
     await shutdownAllGuardAdapters();
     try { browserService.destroy(); } catch { /* ignore */ }
     unregisterBrowserIpc();
+    appshotsService.stop();
+    unregisterAppshotsIpc();
     unregisterSshIpc();
     unregisterRemoteBackendsIpc();
     unregisterBackendIpc();

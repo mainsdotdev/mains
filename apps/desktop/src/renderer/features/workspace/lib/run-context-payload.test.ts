@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildRunContextPayload } from "./run-context-payload";
 import type {
   ContextBrowserItem,
+  ContextAppshotItem,
   ContextCodeItem,
   ContextItem,
 } from "./composer-context";
@@ -35,6 +36,24 @@ const codeSel = (overrides: Partial<ContextCodeItem> = {}): ContextCodeItem => (
   startLine: 10,
   endLine: 12,
   text: "const a = 1;",
+  ...overrides,
+});
+
+const appshot = (
+  overrides: Partial<ContextAppshotItem> = {},
+): ContextAppshotItem => ({
+  kind: "appshot",
+  id: "shot123456",
+  appName: "Safari",
+  bundleIdentifier: "com.apple.Safari",
+  windowTitle: "API docs",
+  timestamp: "2026-01-01T00:00:00Z",
+  screenshotPath: "/caps/appshot.png",
+  screenshotCaptureName: "appshot-shot123456-1.png",
+  screenshotMimeType: "image/png",
+  accessibilityText: "[AXButton] Save",
+  accessibilityStatus: "captured",
+  accessibilityTruncated: false,
   ...overrides,
 });
 
@@ -179,9 +198,35 @@ describe("buildRunContextPayload", () => {
     });
   });
 
-  it("orders browser context ahead of code selections", () => {
-    const payload = buildRunContextPayload([codeSel(), browserSel()]);
+  it("sends an Appshot image and its accessibility snapshot together", () => {
+    const payload = buildRunContextPayload([appshot()]);
+    expect(payload.attachments).toEqual([
+      expect.objectContaining({
+        name: "lens-safari-api-docs-shot12.png",
+        sourcePath: "/caps/appshot.png",
+        mimeType: "image/png",
+      }),
+    ]);
+    expect(payload.initialContext[0]).toMatchObject({
+      kind: "selection",
+      ref: "Safari — API docs",
+      metadata: {
+        source: "appshot",
+        appName: "Safari",
+        accessibilityStatus: "captured",
+      },
+    });
+    expect(payload.initialContext[0].content).toContain("[AXButton] Save");
+  });
+
+  it("orders captured-window and browser context ahead of code selections", () => {
+    const payload = buildRunContextPayload([
+      codeSel(),
+      browserSel(),
+      appshot(),
+    ]);
     expect(payload.initialContext.map((c) => c.metadata?.source)).toEqual([
+      "appshot",
       "browser",
       "editor",
     ]);

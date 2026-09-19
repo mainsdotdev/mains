@@ -19,6 +19,18 @@ export const CHANNELS = {
     get: "appSettings:get",
     update: "appSettings:update",
   },
+  appshots: {
+    acknowledge: "appshots:acknowledge",
+    captureNow: "appshots:captureNow",
+    captured: "appshots:captured",
+    configure: "appshots:configure",
+    consumePending: "appshots:consumePending",
+    deleteCapture: "appshots:deleteCapture",
+    error: "appshots:error",
+    getStatus: "appshots:getStatus",
+    openSystemSettings: "appshots:openSystemSettings",
+    requestAccessibility: "appshots:requestAccessibility",
+  },
   automations: {
     create: "automations:create",
     delete: "automations:delete",

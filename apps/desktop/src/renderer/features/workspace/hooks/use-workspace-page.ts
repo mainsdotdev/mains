@@ -42,7 +42,11 @@ export function useWorkspacePage(providerId: string) {
   const selectedFile = useAppSelector(
     (state) => state.workspace.selectedFile,
   );
-  const { items: contextItems, clear: clearContext } = useComposerContext();
+  const {
+    items: contextItems,
+    clear: clearContext,
+    resetForRoute: resetContextForRoute,
+  } = useComposerContext();
   const openIssueTabs = useAppSelector(
     (state) => state.workspace.openIssueTabs,
   );
@@ -103,13 +107,14 @@ export function useWorkspacePage(providerId: string) {
 
   useEffect(() => {
     dispatch(clearSelectedFile());
-    clearContext();
+    resetContextForRoute();
     dispatch(clearIssueTabs());
     dispatch(clearSignalTabs());
     dispatch(clearNoteTabs());
     dispatch(setActiveTab("editor"));
-    // `clearContext` is dispatch-stable, so listing it doesn't re-fire this.
-  }, [workspaceId, routeRunId, dispatch, clearContext]);
+    // `resetContextForRoute` is dispatch-stable, so listing it doesn't re-fire
+    // this effect; global Appshots intentionally survive the route reset.
+  }, [workspaceId, routeRunId, dispatch, resetContextForRoute]);
 
   // Sync pendingGoal from Redux to local state
   useEffect(() => {

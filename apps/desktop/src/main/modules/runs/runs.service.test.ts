@@ -928,7 +928,7 @@ describe("runsService", () => {
       ]);
     });
 
-    it("refuses a sourcePath outside browser captures before the adapter runs", async () => {
+    it("refuses a sourcePath outside trusted captures before the adapter runs", async () => {
       createSpace(db, {
         id: "sp-attach-src",
         accountId: "default",
@@ -948,7 +948,7 @@ describe("runsService", () => {
             { name: "shot.png", type: "image", mimeType: "image/png", sourcePath: "/etc/passwd" },
           ],
         }),
-      ).rejects.toThrow("browser capture");
+      ).rejects.toThrow("trusted Mains capture");
       expect(startRun).not.toHaveBeenCalled();
     });
 
@@ -978,7 +978,7 @@ describe("runsService", () => {
             { name: "key.png", type: "image", mimeType: "image/png", sourcePath: "/Users/me/.ssh/id_ed25519" },
           ],
         }),
-      ).rejects.toThrow("browser capture");
+      ).rejects.toThrow("trusted Mains capture");
       expect(continueRun).not.toHaveBeenCalled();
       expect((await runsService.getRunById("run-attach"))?.status).toBe("succeeded");
     });

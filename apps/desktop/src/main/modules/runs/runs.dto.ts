@@ -325,7 +325,7 @@ export interface CreateRunTurnChangesPayload {
 /** A file attachment serialized for IPC transport.
  *
  * Memory optimization: prefer `sourcePath` over inline base64 `data` whenever the
- * attachment already lives on disk (e.g. browser captures). Providing `sourcePath`
+ * attachment already lives on disk (e.g. trusted browser/Appshot captures). Providing `sourcePath`
  * lets the adapter copy the file byte-for-byte instead of roundtripping base64
  * through IPC and Redux. Provide `data` only for in-memory payloads. */
 export interface FileAttachment {

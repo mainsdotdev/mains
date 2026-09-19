@@ -87,14 +87,14 @@ describe("sanitizeRunAttachments", () => {
 
   it("refuses a source outside the captures directory", () => {
     expect(() => sanitizeRunAttachments([image({ sourcePath: outside })], captureDir)).toThrow(
-      "browser capture",
+      "trusted Mains capture",
     );
   });
 
   it("refuses a source that climbs out with ..", () => {
     const climbing = path.join(captureDir, "..", "..", "secret.txt");
     expect(() => sanitizeRunAttachments([image({ sourcePath: climbing })], captureDir)).toThrow(
-      "browser capture",
+      "trusted Mains capture",
     );
   });
 
@@ -102,13 +102,13 @@ describe("sanitizeRunAttachments", () => {
     const link = path.join(captureDir, "link.png");
     fs.symlinkSync(outside, link);
     expect(() => sanitizeRunAttachments([image({ sourcePath: link })], captureDir)).toThrow(
-      "browser capture",
+      "trusted Mains capture",
     );
   });
 
   it("refuses the captures directory itself", () => {
     expect(() => sanitizeRunAttachments([image({ sourcePath: captureDir })], captureDir)).toThrow(
-      "browser capture",
+      "trusted Mains capture",
     );
   });
 
@@ -120,6 +120,6 @@ describe("sanitizeRunAttachments", () => {
         [{ name: "notes.txt", type: "document", mimeType: "text/plain", sourcePath: shot }],
         captureDir,
       ),
-    ).toThrow("browser capture");
+    ).toThrow("trusted Mains capture");
   });
 });

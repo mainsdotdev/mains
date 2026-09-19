@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 import { Button, Text, type UploadedFile } from "@/components/ui";
-import { Close, FileIcon, FileIconComponent, Web } from "@/components/ui/icons";
+import {
+  Close,
+  FileIcon,
+  FileIconComponent,
+  Picture,
+  Web,
+} from "@/components/ui/icons";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { classifyDocType, isTextDocType } from "@/lib/document-viewer";
 import { useComposerContext } from "@/features/workspace/hooks/use-composer-context";
-import type { ContextBrowserSelection } from "@/features/workspace/lib/composer-context";
+import type {
+  ContextAppshotItem,
+  ContextBrowserSelection,
+} from "@/features/workspace/lib/composer-context";
 import { ImagePreviewModal } from "./image-preview-modal";
 
 /**
@@ -29,6 +38,12 @@ function browserSelectionLabel(selection: ContextBrowserSelection): string {
   }
   const element = selection.componentName || selection.tagName || "selection";
   return `${element} · ${host}`;
+}
+
+function appshotLabel(appshot: ContextAppshotItem): string {
+  return appshot.windowTitle
+    ? `${appshot.appName} · ${appshot.windowTitle}`
+    : appshot.appName;
 }
 
 function RemoveButton({
@@ -69,16 +84,25 @@ export function ComposerAttachments({
 }: ComposerAttachmentsProps) {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [browserPreviewId, setBrowserPreviewId] = useState<string | null>(null);
+  const [appshotPreviewId, setAppshotPreviewId] = useState<string | null>(null);
   const preview = previewIndex !== null ? files[previewIndex] : undefined;
-  const { browserSelections, remove: removeContext } = useComposerContext();
+  const { appshots, browserSelections, remove: removeContext } =
+    useComposerContext();
   const browserPreview = browserSelections.find(
     (selection) => selection.id === browserPreviewId,
   );
   const browserPreviewSrc = browserPreview?.screenshotCaptureName
     ? `mains-capture://cap/${browserPreview.screenshotCaptureName}`
     : undefined;
+  const appshotPreview = appshots.find(
+    (capture) => capture.id === appshotPreviewId,
+  );
+  const appshotPreviewSrc = appshotPreview?.screenshotCaptureName
+    ? `mains-capture://cap/${appshotPreview.screenshotCaptureName}`
+    : undefined;
   const { open: openDocument } = useDocumentViewer();
-  const hasAttachments = files.length > 0 || browserSelections.length > 0;
+  const hasAttachments =
+    files.length > 0 || browserSelections.length > 0 || appshots.length > 0;
 
   useEffect(() => {
     const present = new Set(files.map((f) => f.file));
@@ -108,6 +132,46 @@ export function ComposerAttachments({
       >
         <div className="min-h-0 overflow-hidden">
           <div className="flex gap-2 overflow-x-auto noscrollbar px-5 pt-4">
+            {appshots.map((appshot) => {
+              const src = `mains-capture://cap/${appshot.screenshotCaptureName}`;
+              const label = appshotLabel(appshot);
+              return (
+                <div
+                  key={appshot.id}
+                  className="group/attachment relative size-24 shrink-0 overflow-hidden rounded-2xl border border-primary-200 bg-primary-100 dark:border-primary-800 dark:bg-primary-950 animate-blur-reveal"
+                  title={label}
+                >
+                  {appshot.screenshotCaptureName ? (
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        setPreviewIndex(null);
+                        setBrowserPreviewId(null);
+                        setAppshotPreviewId(appshot.id);
+                      }}
+                      aria-label={`Preview ${label}`}
+                      className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                    >
+                      <img
+                        src={src}
+                        alt={label}
+                        draggable={false}
+                        className="size-full object-cover"
+                      />
+                    </Button>
+                  ) : (
+                    <div className="flex size-full items-center justify-center">
+                      <Picture className="size-6 text-primary-400 dark:text-primary-600" />
+                    </div>
+                  )}
+                  <RemoveButton
+                    name={label}
+                    onRemove={() => removeContext(appshot)}
+                  />
+                </div>
+              );
+            })}
+
             {browserSelections.map((selection) => {
               const src = selection.screenshotCaptureName
                 ? `mains-capture://cap/${selection.screenshotCaptureName}`
@@ -125,6 +189,7 @@ export function ComposerAttachments({
                       type="button"
                       onClick={() => {
                         setPreviewIndex(null);
+                        setAppshotPreviewId(null);
                         setBrowserPreviewId(selection.id);
                       }}
                       aria-label={`Preview ${label}`}
@@ -165,6 +230,7 @@ export function ComposerAttachments({
                       type="button"
                       onClick={() => {
                         setBrowserPreviewId(null);
+                        setAppshotPreviewId(null);
                         setPreviewIndex(index);
                       }}
                       aria-label={`Preview ${file.name}`}
@@ -251,6 +317,13 @@ export function ComposerAttachments({
           name={browserSelectionLabel(browserPreview)}
           src={browserPreviewSrc}
           onClose={() => setBrowserPreviewId(null)}
+        />
+      )}
+      {appshotPreview && appshotPreviewSrc && (
+        <ImagePreviewModal
+          name={appshotLabel(appshotPreview)}
+          src={appshotPreviewSrc}
+          onClose={() => setAppshotPreviewId(null)}
         />
       )}
     </>

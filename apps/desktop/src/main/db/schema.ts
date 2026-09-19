@@ -80,6 +80,15 @@ export const appSettings = sqliteTable("app_settings", {
     .notNull()
     .default(true),
 
+  // Global macOS capture shortcut. The capture remains local draft context
+  // until the user explicitly sends a composer message.
+  appshotsEnabled: integer("appshots_enabled", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  appshotsShortcut: text("appshots_shortcut")
+    .notNull()
+    .default("Command+Shift+Space"),
+
   // "This machine" backend exposure — persisted so it survives an app restart.
   backendRemoteAccess: integer("backend_remote_access", { mode: "boolean" })
     .notNull()

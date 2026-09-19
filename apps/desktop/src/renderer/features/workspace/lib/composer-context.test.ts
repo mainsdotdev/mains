@@ -4,6 +4,7 @@ import {
   groupContextItems,
   isSameContextItem,
   type ContextBrowserItem,
+  type ContextAppshotItem,
   type ContextCodeItem,
   type ContextFileItem,
   type ContextIssueItem,
@@ -74,6 +75,21 @@ const code = (
   ...overrides,
 });
 
+const appshot = (id: string): ContextAppshotItem => ({
+  kind: "appshot",
+  id,
+  appName: "Safari",
+  bundleIdentifier: "com.apple.Safari",
+  windowTitle: "Docs",
+  timestamp: "2026-01-01T00:00:00Z",
+  screenshotPath: `/caps/${id}.png`,
+  screenshotCaptureName: `appshot-${id}-1.png`,
+  screenshotMimeType: "image/png",
+  accessibilityText: "Save",
+  accessibilityStatus: "captured",
+  accessibilityTruncated: false,
+});
+
 describe("contextItemKey", () => {
   it("uses the identity each kind actually arrives with", () => {
     expect(contextItemKey(file("/repo/a.ts"))).toBe("/repo/a.ts");
@@ -81,6 +97,7 @@ describe("contextItemKey", () => {
     expect(contextItemKey(signal("ent-2"))).toBe("ent-2");
     expect(contextItemKey(skill("commit-helper"))).toBe("commit-helper");
     expect(contextItemKey(browser("sel-1"))).toBe("sel-1");
+    expect(contextItemKey(appshot("shot-1"))).toBe("shot-1");
     expect(contextItemKey(code({ id: "sel-2" }))).toBe("sel-2");
   });
 });
@@ -117,6 +134,7 @@ describe("groupContextItems", () => {
       issue("ent-1"),
       file("/repo/a.ts"),
       browser("sel-1"),
+      appshot("shot-1"),
       skill("s"),
       signal("ent-2"),
       code(),
@@ -131,6 +149,7 @@ describe("groupContextItems", () => {
     expect(grouped.signals).toHaveLength(1);
     expect(grouped.skills).toHaveLength(1);
     expect(grouped.browserSelections).toHaveLength(1);
+    expect(grouped.appshots).toHaveLength(1);
     expect(grouped.codeSelections).toHaveLength(1);
   });
 });

@@ -10,7 +10,8 @@ import {
   General,
   Relay,
 } from "@/components/ui/icons";
-import { Claude } from "@/components/ui/icons/space";
+import { capabilities } from "@/lib/platform";
+import { Claude, Scan } from "@/components/ui/icons/space";
 import GeneralSettings from "./components/general";
 import GitSettings from "./components/git";
 import { PlaceholderSection } from "./components/settings-layout";
@@ -28,6 +29,7 @@ const CodexSettings = lazy(() => import("./components/codex"));
 // its default (codex) provider.
 const CodexPlugins = lazy(() => import("./components/provider-plugins"));
 const CursorSettings = lazy(() => import("./components/cursor"));
+const LensSettings = lazy(() => import("./components/lens"));
 const ProjectsSettings = lazy(() => import("./components/projects"));
 const ArchiveSettings = lazy(() => import("./components/archive"));
 const BackendsSettings = lazy(() => import("@/features/relay/components/backends"));
@@ -41,6 +43,7 @@ const SecuritySettings = () => <PlaceholderSection title="Security" />;
 
 export type SettingsRouteId =
   | "general"
+  | "lens"
   | "notifications"
   | "personalization"
   | "connections"
@@ -76,6 +79,8 @@ export type SettingsNavItem = {
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "general", label: "General", icon: General, showInNav: true, Component: GeneralSettings },
   { id: "git", label: "Git", icon: Branch, showInNav: true, Component: GitSettings },
+  { id: "lens", label: "Lens", icon: Scan, showInNav: capabilities.appshots, Component: LensSettings },
+
   { id: "connections", label: "Connections", icon: Connect, showInNav: true, Component: ConnectionsSettings },
   // Hidden from the Settings nav — surfaced as the top-level "Relay" route instead.
   { id: "backends", label: "Relay", icon: Relay, Component: BackendsSettings },

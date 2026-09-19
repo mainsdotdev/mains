@@ -42,6 +42,7 @@ import { useLayoutWidthVars } from "./hooks/use-layout-width-vars";
 import { useAppearanceFonts } from "./hooks/use-appearance-fonts";
 import { getProviderVariant } from "./lib/provider-variants";
 import { CommandMenu } from "./features/command-menu/command-menu";
+import { useAppshots } from "./hooks/use-appshots";
 
 // First-run-only UI is a substantial graph (feature previews, provider cards,
 // and settings controls). Completed users should not parse it on every launch.
@@ -91,6 +92,7 @@ function AppContent() {
   useDropdownAnimationPrewarm();
   useLayoutWidthVars();
   useAppearanceFonts();
+  useAppshots();
   const location = useLocation();
   const hideRightPanel = shouldHideRightPanel(location.pathname);
   const variant = useWorkspaceVariant();

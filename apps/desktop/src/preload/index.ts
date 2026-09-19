@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer } from "electron";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 import type { ModeId } from "../shared/modes";
+import type {
+  AppshotCapture,
+  AppshotsConfiguration,
+  AppshotsSystemSettingsPane,
+} from "../shared/appshots";
 
 type BrowserDownloadState =
   | "progressing"
@@ -343,6 +348,40 @@ const api = {
         callback(data);
       ipcRenderer.on(CHANNELS.space.changed, listener);
       return () => ipcRenderer.removeListener(CHANNELS.space.changed, listener);
+    },
+  },
+  // macOS global window capture (local desktop only)
+  appshots: {
+    getStatus: () => ipcRenderer.invoke(CHANNELS.appshots.getStatus),
+    configure: (configuration: AppshotsConfiguration) =>
+      ipcRenderer.invoke(CHANNELS.appshots.configure, configuration),
+    captureNow: () => ipcRenderer.invoke(CHANNELS.appshots.captureNow),
+    consumePending: () =>
+      ipcRenderer.invoke(CHANNELS.appshots.consumePending),
+    acknowledge: (captureId: string) =>
+      ipcRenderer.invoke(CHANNELS.appshots.acknowledge, captureId),
+    deleteCapture: (captureName: string) =>
+      ipcRenderer.invoke(CHANNELS.appshots.deleteCapture, captureName),
+    requestAccessibility: () =>
+      ipcRenderer.invoke(CHANNELS.appshots.requestAccessibility),
+    openSystemSettings: (pane: AppshotsSystemSettingsPane) =>
+      ipcRenderer.invoke(CHANNELS.appshots.openSystemSettings, pane),
+    onCaptured: (callback: (capture: AppshotCapture) => void) => {
+      const listener = (_event: unknown, capture: AppshotCapture) =>
+        callback(capture);
+      ipcRenderer.on(CHANNELS.appshots.captured, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.appshots.captured, listener);
+    },
+    onError: (callback: (message: string) => void) => {
+      const listener = (_event: unknown, payload: { message?: unknown }) =>
+        callback(
+          typeof payload?.message === "string"
+            ? payload.message
+            : "Lens capture failed",
+        );
+      ipcRenderer.on(CHANNELS.appshots.error, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.appshots.error, listener);
     },
   },
   // Provider operations

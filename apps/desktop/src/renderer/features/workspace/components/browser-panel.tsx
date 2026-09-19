@@ -184,6 +184,7 @@ export function BrowserPanel() {
   const activeTab =
     browserState.tabs.find((tab) => tab.tabId === browserState.activeTabId) ??
     null;
+  const isBlank = !activeTab?.url || activeTab.url === BLANK_URL;
   const addressSuggestions = useMemo(
     () => browserAddressSuggestions(historyEntries, urlInput),
     [historyEntries, urlInput],
@@ -687,27 +688,29 @@ export function BrowserPanel() {
     let pendingCaptureName: string | null = null;
 
     try {
-      const response = await api.captureScreenshot("viewport");
-      const captureName = response?.success
-        ? (response.data as ContextBrowserSelection | undefined)
-            ?.screenshotCaptureName
-        : undefined;
-      if (!captureName) {
-        toast.error(response?.error || "Failed to open browser menu");
-        return;
-      }
-      pendingCaptureName = captureName;
+      if (!isBlank) {
+        const response = await api.captureScreenshot("viewport");
+        const captureName = response?.success
+          ? (response.data as ContextBrowserSelection | undefined)
+              ?.screenshotCaptureName
+          : undefined;
+        if (!captureName) {
+          toast.error(response?.error || "Failed to open browser menu");
+          return;
+        }
+        pendingCaptureName = captureName;
 
-      await preloadImage(browserCaptureUrl(captureName));
-      if (operation !== browserMenuOperationRef.current || !isOpen) return;
+        await preloadImage(browserCaptureUrl(captureName));
+        if (operation !== browserMenuOperationRef.current || !isOpen) return;
 
-      browserMenuPreviewNameRef.current = captureName;
-      setBrowserMenuPreviewName(captureName);
-      pendingCaptureName = null;
-      await waitForPaint();
-      if (operation !== browserMenuOperationRef.current || !isOpen) {
-        await clearBrowserMenuPreview();
-        return;
+        browserMenuPreviewNameRef.current = captureName;
+        setBrowserMenuPreviewName(captureName);
+        pendingCaptureName = null;
+        await waitForPaint();
+        if (operation !== browserMenuOperationRef.current || !isOpen) {
+          await clearBrowserMenuPreview();
+          return;
+        }
       }
 
       const visibilityResponse = await api.setVisible(false);
@@ -737,6 +740,7 @@ export function BrowserPanel() {
     browserMenuOpen,
     clearBrowserMenuPreview,
     closeBrowserMenu,
+    isBlank,
     isOpen,
     restoreBrowserView,
   ]);
@@ -1121,7 +1125,6 @@ export function BrowserPanel() {
   }
 
   const zoomFactor = activeTab?.zoomFactor ?? 1;
-  const isBlank = !activeTab?.url || activeTab.url === BLANK_URL;
   const activeDownloadCount = downloads.filter(
     (download) =>
       download.state === "progressing" || download.state === "paused",
@@ -1379,6 +1382,7 @@ export function BrowserPanel() {
           <>
             <DropdownMenuItem
               onClick={() => void openFindFromMenu()}
+              disabled={isBlank}
               className="text-xs"
             >
               <Search className="size-3.5" />
@@ -1389,6 +1393,7 @@ export function BrowserPanel() {
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => void printPage()}
+              disabled={isBlank}
               className="text-xs"
             >
               <Document className="size-3.5" />
@@ -1415,7 +1420,7 @@ export function BrowserPanel() {
                   role="menuitem"
                   tabIndex={-1}
                   onClick={() => void setZoom(zoomFactor - ZOOM_STEP)}
-                  disabled={zoomFactor <= ZOOM_MIN}
+                  disabled={isBlank || zoomFactor <= ZOOM_MIN}
                   aria-label="Zoom out"
                   className="h-full rounded-none px-2 text-primary-600 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-300 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
                 >
@@ -1432,7 +1437,7 @@ export function BrowserPanel() {
                   role="menuitem"
                   tabIndex={-1}
                   onClick={() => void setZoom(zoomFactor + ZOOM_STEP)}
-                  disabled={zoomFactor >= ZOOM_MAX}
+                  disabled={isBlank || zoomFactor >= ZOOM_MAX}
                   aria-label="Zoom in"
                   className="h-full rounded-none px-2 text-primary-600 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-300 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
                 >
@@ -1443,6 +1448,7 @@ export function BrowserPanel() {
                 role="menuitem"
                 tabIndex={-1}
                 onClick={() => void setZoom(1)}
+                disabled={isBlank}
                 aria-label="Reset zoom"
                 className="rounded-lg p-1.5 mr-1 text-primary-600 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-300 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
               >
@@ -1454,6 +1460,7 @@ export function BrowserPanel() {
               selected={activeTab?.deviceEmulation.enabled ?? false}
               indicator="none"
               onClick={() => void toggleDeviceToolbarFromMenu()}
+              disabled={isBlank}
             >
               <DeviceMobile className="size-3.5" />
               <span>
@@ -1465,6 +1472,7 @@ export function BrowserPanel() {
             <DropdownMenuItem
               className="text-xs"
               onClick={() => void takeScreenshot("viewport")}
+              disabled={isBlank}
             >
               <Picture className="size-3.5" />
               <span>Take a screenshot</span>
@@ -1472,6 +1480,7 @@ export function BrowserPanel() {
             <DropdownMenuItem
               className="text-xs"
               onClick={() => void takeScreenshot("fullPage")}
+              disabled={isBlank}
             >
               <View className="size-3.5" />
               <span>Capture full page</span>

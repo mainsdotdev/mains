@@ -53,6 +53,21 @@ export const appSettingsService = {
     await appSettingsRepo.update(SETTINGS_ID, { backendId });
   },
 
+  /**
+   * Internal write for the Appshots runtime. Keeping these fields out of the
+   * renderer settings allowlist prevents the database and the registered
+   * global shortcut from drifting apart.
+   */
+  async updateAppshotsSettings(patch: {
+    appshotsEnabled?: boolean;
+    appshotsShortcut?: string;
+  }): Promise<AppSettingsRecord> {
+    await this.ensureSettings();
+    const updated = await appSettingsRepo.update(SETTINGS_ID, patch);
+    if (!updated) throw new Error("Failed to update Lens settings");
+    return updated;
+  },
+
   async updateSettings(patch: unknown): Promise<AppSettingsRecord> {
     const sanitized = sanitizeAppSettingsPatch(patch);
     if (!sanitized) {

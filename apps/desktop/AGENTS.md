@@ -359,12 +359,19 @@ iconutil -c icns icon.iconset -o icon.icns
 
 ### Composer Context (renderer)
 
-Everything the composer attaches to the next message — files, issues, signals, skills, browser selections, code selections — is one tagged union, not six parallel lists. See CONTEXT.md for the vocabulary.
+Everything the composer attaches to the next message — files, issues, signals, skills, browser selections, Lens captures, code selections — is one tagged union, not parallel lists. See CONTEXT.md for the vocabulary.
 
 - `features/workspace/lib/composer-context.ts` — the `ContextItem` union plus its identity rules (`contextItemKey` for removal, `isSameContextItem` for dedupe) and `groupContextItems` for the per-kind views. The only home for these types.
-- `features/workspace/hooks/use-composer-context.ts` — the read path (`items`, the grouped views, `add` / `remove` / `clear`). Components read it directly; never pass context lists or `onRemoveContextX` down as props. A component that only attaches dispatches `addContextItem` instead of subscribing.
+- `features/workspace/hooks/use-composer-context.ts` — the read path (`items`, the grouped views, `add` / `remove` / `clear` / route reset). Route reset preserves global Lens captures and drops workspace-scoped context. Components read it directly; never pass context lists or `onRemoveContextX` down as props. A component that only attaches dispatches `addContextItem` instead of subscribing.
 - `features/workspace/lib/run-context-payload.ts` — `buildRunContextPayload(items, uploads)` shapes context for `runs:execute` / `runs:continue`. `executeRun` / `continueRun` take one `ContextItem[]`, never per-kind parameters.
 - Store side: a single `workspace.contextItems` array behind `addContextItem` / `removeContextItem` / `clearContextItems`.
+
+### Lens (macOS desktop; internal name `appshots`)
+
+- `features/settings/components/lens.tsx` owns the standalone Settings › Lens page (`?section=lens`). Keep Lens controls out of General.
+- `main/modules/appshots` owns the global shortcut, frontmost-window capture, permissions, and pending delivery. It is local Electron IPC only; do not add it to the WebSocket handler registry.
+- `renderer/hooks/use-appshots.ts` is the one main→composer bridge. A capture adds draft context and navigates to `/code`; it never starts or continues a run.
+- Lens PNGs live in the existing trusted, size-bounded `userData/browser-captures` directory. Explicit removal and route discard delete unused captures; a successfully sent capture stays cached long enough for the background provider session to copy it, then normal cache eviction removes it.
 
 ### Code Style
 
