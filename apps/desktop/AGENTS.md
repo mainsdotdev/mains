@@ -194,6 +194,7 @@ Core tables:
 - Runs track agent sessions with turns, context, artifacts, and tool calls
 - `run-session.ts` / `run-session-registry.ts` own the live session lifecycle and event persistence
 - Tool approval broker (`user-input-broker.ts`) bridges main↔renderer for interactive tool approvals
+- **Approval notifications**: the broker's OS notification can answer on its own — Allow/Deny for a tool permission, option buttons for a single-choice question, inline reply for an open one (`approval-notification.ts`, pure; `run-notifications.ts`, Electron). Plan review, forms, multi-select and secrets stay click-to-open. Every settlement closes the notification. A click parks a `RunOpenRequest` that the window collects over the local-only `runs:consumeOpenRequest` (never on WS) and opens via `useJumpToRun`
 - Runs support session resumption and continuation via `sessionId`
 - Every run snapshots its space's `mode` (`runs.mode`) at start; `resolveRunMode` + the mode-harness composition in `runs.service` decide the prompt delta, tool policy, and config snapshot a run carries — resume and fork re-derive from the row, so a run keeps its harness even if the space's mode changes
 - Run archiving: `runs:archive` / `runs:listArchived` / `runs:unarchive`, surfaced in Settings → Archive alongside archived workspaces. The service keeps the provider-side session in sync via the adapter's optional `archiveSession` / `unarchiveSession` (Codex threads are archived/unarchived on the app server)

@@ -1,4 +1,4 @@
-import { BrowserWindow, Notification, powerSaveBlocker } from "electron";
+import { powerSaveBlocker } from "electron";
 
 import {
   couldModifyFiles,
@@ -23,6 +23,7 @@ import {
 } from "../workspace";
 import { createWorkAdapter } from "../providers/adapters";
 import { runSessionRegistry } from "./run-session-registry";
+import { showRunFinishedNotification } from "./run-notifications";
 import { emit } from "../../ipc-kit";
 import type { RunArtifactKind } from "./runs.dto";
 
@@ -194,18 +195,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     try {
       const settings = await appSettingsService.getSettings();
       if (!settings.notifyOnRunComplete) return;
-      const title = status === "succeeded" ? "Run Completed" : "Run Failed";
-      const body = status === "succeeded" ? "Run finished successfully" : "Run failed";
-      const notification = new Notification({ title, body });
-      notification.on("click", () => {
-        const windows = BrowserWindow.getAllWindows();
-        if (windows.length > 0) {
-          const win = windows[0];
-          if (win.isMinimized()) win.restore();
-          win.focus();
-        }
-      });
-      notification.show();
+      showRunFinishedNotification(runId, status);
     } catch (err) {
       console.error(`[RunSession ${runId}] Failed to send notification:`, err);
     }

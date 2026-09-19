@@ -751,6 +751,15 @@ const api = {
       approved: boolean;
       answer?: string;
     }) => ipcRenderer.invoke(CHANNELS.runs.toolApprovalResponse, response),
+    // A desktop notification was clicked: collect the run it asked to open.
+    onOpenRequested: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on(CHANNELS.runs.openRequested, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.runs.openRequested, listener);
+    },
+    consumeOpenRequest: () =>
+      ipcRenderer.invoke(CHANNELS.runs.consumeOpenRequest),
     // Streaming events (ephemeral — pushed from main, not persisted)
     onStreamingEvent: (callback: (data: { runId: string; event: { type: string; kind: string; content?: string; metadata?: Record<string, unknown>; streamId?: string }; ts: number }) => void) => {
       const listener = (_: any, data: any) => callback(data);

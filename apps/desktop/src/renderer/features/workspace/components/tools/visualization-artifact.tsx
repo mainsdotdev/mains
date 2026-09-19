@@ -204,7 +204,7 @@ export function VisualizationArtifact({
   return (
     <div
       ref={containerRef}
-      className="w-full mb-9 overflow-hidden"
+      className="w-full mb-9 mt-6 overflow-hidden "
       data-visualization-mode={mode ?? "normal"}
       style={mode === "wide" ? wideLayout ?? undefined : undefined}
     >

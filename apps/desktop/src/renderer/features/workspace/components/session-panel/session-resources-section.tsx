@@ -68,10 +68,7 @@ function SectionHeading({
   );
 }
 
-function resourceIcon(
-  resource: SessionResource,
-  imageUrl?: string,
-): ReactNode {
+function resourceIcon(resource: SessionResource, imageUrl?: string): ReactNode {
   switch (resource.kind) {
     case "file":
     case "document":
@@ -239,21 +236,22 @@ function SessionPlugins({ plugins }: { plugins: SessionPlugin[] }) {
   if (plugins.length === 0) return null;
 
   return (
-    <section
-      className="px-2 pb-1 pt-2"
-      aria-labelledby="session-plugins-heading"
-    >
-      <ResourceSubsectionHeading
-        id="session-plugins-heading"
-        title="Plugins"
-        count={plugins.length}
-      />
-      <ul className="flex w-full gap-3 overflow-x-auto pb-1 noscrollbar">
+    <section className="pb-1 pt-2" aria-labelledby="session-plugins-heading">
+      <div className="px-2">
+        <ResourceSubsectionHeading
+          id="session-plugins-heading"
+          title="Plugins"
+          count={plugins.length}
+        />
+      </div>
+      <ul className="w-full">
         {plugins.map((plugin) => (
-          <li key={plugin.id} className="shrink-0" title={plugin.title}>
-            <span role="img" aria-label={plugin.title} className="block">
-              <SessionPluginIcon plugin={plugin} />
-            </span>
+          <li key={plugin.id}>
+            <PanelItem
+              icon={<SessionPluginIcon plugin={plugin} />}
+              label={plugin.title}
+              title={plugin.title}
+            />
           </li>
         ))}
       </ul>
@@ -436,16 +434,18 @@ export function SessionResourcesSection({
       }
     >
       <section aria-labelledby="session-sources-heading">
-        <SectionHeading
-          id="session-sources-heading"
-          title="Sources"
-        />
+        <SectionHeading id="session-sources-heading" title="Sources" />
         {loading && sourceCount === 0 ? (
           <Text as="div" size="xs" tone="faint" className="px-2 py-3">
             Loading sources…
           </Text>
         ) : sourceCount === 0 ? (
-          <Text as="div" size="xs" tone="faint" className="px-2 py-3 leading-relaxed">
+          <Text
+            as="div"
+            size="xs"
+            tone="faint"
+            className="px-2 py-3 leading-relaxed"
+          >
             Files, links, and references used in this chat appear here.
           </Text>
         ) : (

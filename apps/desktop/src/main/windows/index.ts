@@ -1,6 +1,7 @@
 export {
   createMainWindow,
   getMainWindow,
+  reopenMainWindow,
   type MainWindowOptions,
 } from "./mainWindow";
 
