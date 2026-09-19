@@ -2,6 +2,7 @@ import { app, BrowserWindow, nativeImage, screen, shell } from "electron";
 import path from "path";
 import fs, { existsSync } from "fs";
 import { CHANNELS } from "../../shared/ipc-kit/channels";
+import { attachCrashRecovery } from "./crash-recovery";
 
 let mainWindow: BrowserWindow | null = null;
 /** Whether this process has ever shown a main window (false under `--serve`). */
@@ -175,6 +176,9 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription) => {
     console.error(`Failed to load: ${errorDescription} (${errorCode})`);
   });
+
+  // A crashed or hung renderer must not leave an empty window behind.
+  attachCrashRecovery(mainWindow);
 
   // Load the app
   // In development, Electron Forge's Vite plugin injects the dev server URL

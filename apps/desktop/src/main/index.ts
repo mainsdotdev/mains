@@ -87,6 +87,7 @@ import {
   applySavedThemeSource,
   registerThemeSourceIpc,
   unregisterThemeSourceIpc,
+  watchChildProcesses,
 } from "./windows";
 import { showTray, hideTray } from "./tray";
 import {
@@ -661,6 +662,7 @@ const SERVE = parseServeOptions();
 async function initializeApp() {
   try {
     console.log("Initializing application...");
+    watchChildProcesses();
 
     // Augment PATH early so provider binaries are discoverable in packaged app.
     // The login-shell read only runs packaged: dev inherits the terminal's PATH.

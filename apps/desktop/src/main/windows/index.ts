@@ -14,6 +14,8 @@ export {
 
 export { openAboutWindow, getAboutWindow } from "./aboutWindow";
 
+export { watchChildProcesses } from "./crash-recovery";
+
 export {
   applySavedThemeSource,
   registerThemeSourceIpc,

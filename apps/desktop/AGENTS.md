@@ -210,6 +210,9 @@ Core tables:
 - The renderer's theme preference (`use-dark-mode.ts`) only styles our content; AppKit-drawn chrome — vibrancy behind transparent surfaces, menus (tray included), dialogs — follows `nativeTheme.themeSource`. The renderer hands its preference over `app:setThemeSource` (local only); main saves it to `userData/theme-source.json` and re-applies it before the splash on the next launch
 - `themeSource` also drives the renderer's `prefers-color-scheme`, which `use-dark-mode` reads only for "system" — exactly when main leaves it tracking the OS
 
+**Window crash recovery** (`src/main/windows/crash-recovery.ts`)
+- A crashed main-window renderer reloads on its own (Cmd+R is disabled, so there is no other way back); 3 crashes within a minute stop that and ask Reload / Quit. A hung renderer (`unresponsive`) gets a Wait / Reload prompt that closes itself on `responsive`; Reload kills the renderer (`forcefullyCrashRenderer`) so the reload gets a fresh process. Quitting and clean exits are ignored. Other helper processes (GPU, utilities) are logged via `child-process-gone`
+
 **Projects System** (`src/main/modules/projects/`)
 - Groups workspaces by shared git remote origin; owns `project_resources`
 - Tracks rootPath, workspacesPath (worktree dir), branches, scripts (setup, run, archive)
