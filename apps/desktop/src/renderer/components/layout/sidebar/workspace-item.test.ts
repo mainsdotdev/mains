@@ -146,7 +146,7 @@ describe("WorkspaceItem project actions", () => {
 
     await user.click(screen.getByRole("button", { name: "Workspace options" }));
     await user.click(
-      screen.getByRole("menuitem", { name: "Create new worktree" }),
+      screen.getByRole("menuitem", { name: "New worktree" }),
     );
 
     expect(onCreateWorktree).toHaveBeenCalledOnce();

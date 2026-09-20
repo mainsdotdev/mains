@@ -77,3 +77,13 @@ describe("resolveTool — unregistered tool labels", () => {
     expect(resolveTool("deploy").displayName).toBe("Deploy");
   });
 });
+
+// The computer-use REPL's rows render as "Computer use"; without a vendor
+// entry the generic MCP path would still head their group "Cua repl".
+describe("resolveTool — computer use", () => {
+  it("names the group after the vendor, not the server slug", () => {
+    const resolved = resolveTool("mcp__cua_repl__js");
+    expect(resolved.groupLabel).toBe("Computer use");
+    expect(resolved.vendorId).toBe("cua_repl");
+  });
+});

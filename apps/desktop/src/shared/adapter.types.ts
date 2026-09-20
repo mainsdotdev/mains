@@ -258,7 +258,15 @@ export interface WorkRunTaskEvent {
  */
 export interface WorkRunPromptSuggestionEvent {
   type: "prompt_suggestion";
+  /** What gets sent when the chip is clicked. */
   suggestion: string;
+  /**
+   * Short text for the chip, when the provider gives one. Codex writes its
+   * follow-ups as `:codex-followup[Make it investor-ready]{prompt="…"}` — a
+   * label to read and a prompt to send, which are not the same sentence.
+   * Absent for providers that only offer the prompt.
+   */
+  label?: string;
   ts?: number;
 }
 

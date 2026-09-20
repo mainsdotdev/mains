@@ -644,7 +644,13 @@ export function createCodexEventMapper(
 
   // Image path scanning helpers — used to surface generated images from tool outputs
   // even when the agent doesn't mention the path in chat text.
-  const IMAGE_PATH_SCAN_REGEX = /([~/][\w./\- ]+\.(?:png|jpe?g|webp|gif))/gi;
+  //
+  // Lazy, not greedy: the class has to allow spaces (every run directory sits
+  // under "Application Support"), and a greedy quantifier reads "wrote a.png
+  // and b.png" as one path that spans both. That path exists nowhere, so the
+  // existence check dropped it and BOTH images went missing. Stopping at the
+  // first extension yields `a.png`, and the scan resumes at `b.png`.
+  const IMAGE_PATH_SCAN_REGEX = /([~/][\w./\- ]+?\.(?:png|jpe?g|webp|gif))/gi;
 
   function expandHomeTilde(p: string): string {
     if (p === "~") return os.homedir();
@@ -684,6 +690,12 @@ export function createCodexEventMapper(
     return out;
   }
 
+  /** Codex writes what it generates here, so the directory is the provenance. */
+  function isCodexGeneratedImage(resolved: string): boolean {
+    const codexGenDir = path.join(os.homedir(), ".codex", "generated_images");
+    return resolved === codexGenDir || resolved.startsWith(codexGenDir + path.sep);
+  }
+
   /**
    * Only surface images that come from Codex's own generated_images dir or live
    * inside the active workspace. Random PNG path references picked up from grep
@@ -691,8 +703,7 @@ export function createCodexEventMapper(
    * artifact cards.
    */
   function isAllowedImagePath(resolved: string, workspaceRoot: string | null): boolean {
-    const codexGenDir = path.join(os.homedir(), ".codex", "generated_images");
-    if (resolved === codexGenDir || resolved.startsWith(codexGenDir + path.sep)) {
+    if (isCodexGeneratedImage(resolved)) {
       return true;
     }
     if (workspaceRoot) {
@@ -702,6 +713,34 @@ export function createCodexEventMapper(
       }
     }
     return false;
+  }
+
+  /**
+   * True for a file the agent parked in a hidden directory under the run root
+   * (`.mains-pitch-build/`, `.assets/`, …). Those are working material — the
+   * scratch copies and intermediate renders of one deliverable — not the
+   * deliverable itself, and a transcript that gives each of them its own card
+   * buries the file the answer actually points at.
+   *
+   * The same rule already decides what counts as output in
+   * `runs.service.listManagedOutputFiles`; this brings the transcript's
+   * scanners in line with it.
+   *
+   * Only segments *below the root* are read: the run directory itself lives
+   * under `~/Library/Application Support/…`, and Codex's own generated images
+   * sit in `~/.codex/generated_images` — dots above the root say nothing about
+   * the file.
+   */
+  function isWorkingCopy(resolved: string, workspaceRoot: string | null): boolean {
+    if (!workspaceRoot) return false;
+    const root = path.resolve(workspaceRoot);
+    const relative = path.relative(root, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      return false;
+    }
+    const segments = relative.split(path.sep);
+    // The basename is the file; a dotfile is not by itself working material.
+    return segments.slice(0, -1).some((segment) => segment.startsWith("."));
   }
 
   function emitImageArtifacts(
@@ -719,32 +758,57 @@ export function createCodexEventMapper(
       const resolved = path.resolve(expanded);
       if (rs.emittedImagePaths.has(resolved)) continue;
       if (!isAllowedImagePath(resolved, rs.mainsCtx.rootPath)) continue;
+      let stat: fs.Stats;
       try {
-        const stat = fs.lstatSync(resolved);
+        stat = fs.lstatSync(resolved);
         if (stat.isSymbolicLink() || !stat.isFile()) continue;
       } catch {
         continue;
       }
+      // Produced or merely looked at? Codex's own directory answers it
+      // outright; inside the workspace the answer is the file's age, the same
+      // gate the document scanner uses. A picture the agent opened to read —
+      // an icon in the repo, a screenshot it was pointed at — is something the
+      // turn worked *with*, and putting it inline next to what the turn
+      // produced is what made the transcript look nothing like Codex.
+      const viewed =
+        !isCodexGeneratedImage(resolved) &&
+        stat.mtimeMs < rs.runStartedAt - DOC_MTIME_SKEW_MS;
       rs.emittedImagePaths.add(resolved);
       events.push({
         type: "artifact",
         kind: "image",
         content: "",
-        metadata: { kind: "image", path: resolved, fileName: path.basename(resolved) },
+        metadata: {
+          kind: "image",
+          path: resolved,
+          fileName: path.basename(resolved),
+          ...(isWorkingCopy(resolved, rs.mainsCtx.rootPath)
+            ? { working: true }
+            : {}),
+          ...(viewed ? { viewed: true } : {}),
+        },
         ts,
       });
     }
   }
 
   // Document path scanning — mirror of the image scanner above. Surfaces
-  // generated .pptx/.docx/.xlsx/.pdf files as artifact cards even when the agent
-  // only references them in prose. Reuses the same workspace allowlist + symlink guard.
-  function docTypeFromPath(p: string): "pptx" | "docx" | "xlsx" | "pdf" | null {
+  // generated .pptx/.docx/.xlsx/.pdf/.md files as artifact cards even when the
+  // agent only references them in prose. Reuses the same workspace allowlist + symlink guard.
+  function docTypeFromPath(
+    p: string,
+  ): "pptx" | "docx" | "xlsx" | "pdf" | "md" | null {
     const ext = path.extname(p).toLowerCase();
     if (ext === ".pptx") return "pptx";
     if (ext === ".docx") return "docx";
     if (ext === ".xlsx") return "xlsx";
     if (ext === ".pdf") return "pdf";
+    // Markdown is a deliverable like the rest — the viewer renders it, and a
+    // written note is as much the point of a turn as a written deck. The
+    // existence + workspace + "modified this run" gates below are what keep
+    // every README the agent merely read out of the transcript.
+    if (ext === ".md" || ext === ".markdown") return "md";
     return null;
   }
 
@@ -802,6 +866,7 @@ export function createCodexEventMapper(
         path: resolved,
         fileName: path.basename(resolved),
         docType,
+        ...(isWorkingCopy(resolved, rs.mainsCtx.rootPath) ? { working: true } : {}),
       },
       ts,
     });
@@ -833,7 +898,7 @@ export function createCodexEventMapper(
   // No spaces in the name portion so prose ("the report.docx") splits on the
   // word boundary and yields just "report.docx" rather than swallowing the
   // preceding word. (Paths with spaces are rare for generated docs.)
-  const DOC_NAME_SCAN_REGEX = /([~/]?[\w.\-/]*[\w-]\.(?:pptx|docx|xlsx|pdf))/gi;
+  const DOC_NAME_SCAN_REGEX = /([~/]?[\w.\-/]*[\w-]\.(?:pptx|docx|xlsx|pdf|markdown|md))/gi;
 
   function emitDocumentArtifactsFromText(
     events: WorkRunEvent[],
@@ -964,6 +1029,52 @@ export function createCodexEventMapper(
    * Persist a completed Codex assistant message in transport order. Plain text
    * remains a report; `visualize` references become sandboxed HTML artifacts.
    */
+  /**
+   * Codex writes its follow-up chips into the message as a remark-directive
+   * leaf: `:codex-followup[Make it investor-ready]{prompt="Expand this…"}`.
+   * Its own UI parses them; ours does not load remark-directive, so they were
+   * printed verbatim at the end of every answer.
+   *
+   * We lift them onto the `prompt_suggestion` channel the app already has —
+   * the one Claude emits natively — and take them out of the prose. The
+   * surrounding list markers go too: a bullet whose only content was the
+   * directive would otherwise be left behind as an empty item.
+   */
+  const FOLLOWUP_DIRECTIVE_REGEX =
+    /^[ \t]*(?:[-*+]|\d+[.)])?[ \t]*:codex-followup\[([^\]]*)\]\{prompt="((?:[^"\\]|\\.)*)"\}[ \t]*$/gm;
+
+  interface FollowupDirective {
+    label: string;
+    prompt: string;
+  }
+
+  function extractFollowupDirectives(text: string): {
+    text: string;
+    followups: FollowupDirective[];
+  } {
+    if (!text.includes(":codex-followup[")) return { text, followups: [] };
+    const followups: FollowupDirective[] = [];
+    const stripped = text.replace(
+      FOLLOWUP_DIRECTIVE_REGEX,
+      (_match, label: string, prompt: string) => {
+        const resolved = prompt.replace(/\\(["\\])/g, "$1").trim();
+        if (resolved) {
+          followups.push({ label: label.trim(), prompt: resolved });
+        }
+        return "\u0000";
+      },
+    );
+    if (followups.length === 0) return { text, followups: [] };
+    // Drop the placeholder lines and any blank tail they leave behind.
+    const cleaned = stripped
+      .split("\n")
+      .filter((line) => line !== "\u0000")
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd();
+    return { text: cleaned, followups };
+  }
+
   function emitAgentMessageContent(
     events: WorkRunEvent[],
     runId: string,
@@ -972,7 +1083,8 @@ export function createCodexEventMapper(
     ts: number,
     extraMetadata: Record<string, unknown> = {},
   ): boolean {
-    const parts = parseAgentMessageParts(rawText);
+    const { text: messageText, followups } = extractFollowupDirectives(rawText);
+    const parts = parseAgentMessageParts(messageText);
     const documentText: string[] = [];
     let emitted = false;
     const metadata = {
@@ -1010,6 +1122,17 @@ export function createCodexEventMapper(
         documentText.join("\n"),
         ts,
       );
+    }
+
+    // After the message: the chips belong under the answer they follow.
+    for (const followup of followups) {
+      events.push({
+        type: "prompt_suggestion",
+        suggestion: followup.prompt,
+        ...(followup.label ? { label: followup.label } : {}),
+        ts,
+      });
+      emitted = true;
     }
     return emitted;
   }

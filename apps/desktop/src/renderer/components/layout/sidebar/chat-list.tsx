@@ -15,15 +15,10 @@ import {
 } from "@/components/ui";
 import { Edit, Option, Plus, Trash } from "@/components/ui/icons";
 import {
-  useArchiveRunMutation,
-  useDeleteRunMutation,
   useGetAccountQuery,
   useListCollectionsQuery,
-  useMoveRunToCollectionMutation,
   useRemoveCollectionMutation,
   useReorderCollectionsMutation,
-  useSetRunPinnedMutation,
-  useUpdateRunMutation,
   useSetActiveSpaceMutation,
   useUpdateCollectionMutation,
   useUpdateSpaceMutation,
@@ -31,7 +26,6 @@ import {
   type RecentRun,
 } from "@/lib/redux/api";
 import {
-  openNewRunTab,
   setPendingRunId,
   setSelectedCollectionId,
 } from "@/lib/redux/slices/workspaceSlice";
@@ -40,6 +34,7 @@ import { resolveRunSpaceTarget } from "@/features/workspace/lib/background-runs"
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 import { iconColorClass, splitStoredIcon } from "@/lib/icon-registry";
+import { useChatActions } from "@/features/workspace/hooks/use-chat-actions";
 import { SidebarGroupSection } from "./sidebar-group-section";
 import { ChatItem, chatLabel } from "./chat-item";
 import { ProjectIcon } from "./project-icon";
@@ -77,11 +72,8 @@ export function SidebarChatList({
   const { data: account } = useGetAccountQuery();
   const [setActiveSpace] = useSetActiveSpaceMutation();
   const [updateSpace] = useUpdateSpaceMutation();
-  const [archiveRun] = useArchiveRunMutation();
-  const [deleteRun] = useDeleteRunMutation();
-  const [moveRunToCollection] = useMoveRunToCollectionMutation();
-  const [setRunPinned] = useSetRunPinnedMutation();
-  const [updateRun] = useUpdateRunMutation();
+  const { renameChat, toggleChatPin, moveChat, archiveChat, deleteChat } =
+    useChatActions();
   const [updateCollection] = useUpdateCollectionMutation();
   const [removeCollection] = useRemoveCollectionMutation();
   const [reorderCollections, { isLoading: isReorderingCollections }] =
@@ -289,69 +281,16 @@ export function SidebarChatList({
     navigate(targetPath);
   };
 
-  /** The open tab cannot survive its run leaving the list — send it home. */
-  const leaveIfActive = (runId: string) => {
-    if (activeTab !== runId) return;
-    navigate(WORKSPACE_BASE_PATH);
-    dispatch(openNewRunTab());
-  };
-
-  const handleArchive = async (run: RecentRun) => {
-    try {
-      await archiveRun(run.id).unwrap();
-      leaveIfActive(run.id);
-    } catch (error) {
-      console.error("Failed to archive chat:", error);
-      toast.error("Failed to archive chat");
-    }
-  };
-
   const handleDeleteRun = async () => {
     if (!deleteRunTarget) return;
     setIsDeletingRun(true);
     try {
-      await deleteRun(deleteRunTarget.id).unwrap();
-      leaveIfActive(deleteRunTarget.id);
+      await deleteChat(deleteRunTarget);
       setDeleteRunTarget(null);
-    } catch (error) {
-      console.error("Failed to delete chat:", error);
-      toast.error("Failed to delete chat");
+    } catch {
+      // Reported by the hook; the dialog stays up so the click can be retried.
     } finally {
       setIsDeletingRun(false);
-    }
-  };
-
-  const handleMove = async (
-    run: RecentRun,
-    collectionId: string | null,
-  ) => {
-    if (!account) return;
-    try {
-      await moveRunToCollection({
-        runId: run.id,
-        accountId: account.id,
-        collectionId,
-      }).unwrap();
-      if (activeTab === run.id) {
-        dispatch(setSelectedCollectionId(collectionId));
-      }
-    } catch (error) {
-      console.error("Failed to move chat:", error);
-      toast.error("Failed to move chat");
-    }
-  };
-
-  const handleTogglePin = async (run: RecentRun) => {
-    if (!account) return;
-    try {
-      await setRunPinned({
-        runId: run.id,
-        accountId: account.id,
-        pinned: !run.pinnedAt,
-      }).unwrap();
-    } catch (error) {
-      console.error("Failed to pin chat:", error);
-      toast.error(run.pinnedAt ? "Failed to unpin chat" : "Failed to pin chat");
     }
   };
 
@@ -402,15 +341,6 @@ export function SidebarChatList({
     }
   };
 
-  const handleRename = async (run: RecentRun, title: string) => {
-    try {
-      await updateRun({ id: run.id, payload: { title } }).unwrap();
-    } catch (error) {
-      console.error("Failed to rename chat:", error);
-      toast.error("Failed to rename chat");
-    }
-  };
-
   const renderChat = (run: RecentRun, isRecent = false) => (
     <ChatItem
       key={run.id}
@@ -419,13 +349,13 @@ export function SidebarChatList({
       isActive={activeTab === run.id}
       isRecent={isRecent}
       onSelect={() => void handleSelectChat(run)}
-      onArchive={() => void handleArchive(run)}
+      onArchive={() => void archiveChat(run)}
       onDelete={() => setDeleteRunTarget(run)}
-      onRename={(title) => void handleRename(run, title)}
+      onRename={(title) => void renameChat(run, title)}
       collections={collections ?? []}
-      onMove={(collectionId) => void handleMove(run, collectionId)}
+      onMove={(collectionId) => void moveChat(run, collectionId)}
       isPinned={run.pinnedAt !== null}
-      onTogglePin={() => void handleTogglePin(run)}
+      onTogglePin={() => void toggleChatPin(run)}
     />
   );
 

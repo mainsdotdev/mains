@@ -151,7 +151,7 @@ export function DocumentViewerPanel() {
               tooltip="Reset zoom"
               tooltipPosition="bottom"
               onClick={() => setZoom(1)}
-              className="min-w-10 px-1 text-xxs tabular-nums rounded-md cursor-pointer hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
+              className="min-w-10 px-1 text-xxs tabular-nums rounded-full cursor-pointer hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
               aria-label="Reset zoom"
             >
               {Math.round(zoom * 100)}%
@@ -161,7 +161,7 @@ export function DocumentViewerPanel() {
               tooltipPosition="bottom"
               onClick={zoomIn}
               disabled={zoom >= ZOOM_MAX}
-              className="size-6 flex items-center justify-center rounded-md cursor-pointer disabled:opacity-40 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
+              className="size-6 flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
               aria-label="Zoom in"
             >
               <Text as="span" size="sm" tone="inherit" className="leading-none">+</Text>
@@ -177,7 +177,7 @@ export function DocumentViewerPanel() {
             tooltipPosition="bottom"
             onClick={() => void saveCopy()}
             disabled={!currentDoc || isSaving}
-            className="p-1 rounded-full glass-button cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60 disabled:opacity-40"
+            className="p-1 rounded-full cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60 disabled:opacity-40"
             aria-label="Save a copy of this document"
           >
             <Download className="size-4" />
@@ -188,7 +188,7 @@ export function DocumentViewerPanel() {
           tooltip="Close"
           tooltipPosition="bottom-left"
           onClick={close}
-          className="p-1 rounded-full glass-button cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
+          className="p-1 rounded-full  cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
           aria-label="Close document viewer"
         >
           <Close className="size-4" />

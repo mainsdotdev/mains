@@ -68,18 +68,27 @@ function ToolCallGroupImpl({
         className="group w-full flex items-center gap-1 mb-1 text-s font-sans cursor-pointer"
       >
         <div className="flex items-center transition-all duration-200">
+          {/* Collapsing on `grid-template-columns` rather than `max-width` —
+              the same trick `ToolCollapse` uses vertically. A max-width
+              animation has to guess a cap (it was 5rem), and every pixel
+              between the cap and the strip's real width is dead time: the
+              strip sat still, then clipped in the last moment. `1fr` resolves
+              to the strip's own width, whether that is one icon or five, so
+              the whole 200ms is the actual shrink. */}
           <span
             aria-hidden="true"
-            className={`flex shrink-0 items-center gap-1 overflow-hidden transition-[max-width,opacity,transform,margin] duration-200 ease-out ${ isExpanded ? "mr-0 max-w-0 -translate-x-1 opacity-0" : "mr-1 max-w-20 translate-x-0 opacity-100" } ${TOOL_ROW_TEXT}`}
+            className={`grid shrink-0 overflow-hidden transition-[grid-template-columns,opacity,margin] duration-200 ease-out ${ isExpanded ? "mr-0 grid-cols-[0fr] opacity-0" : "mr-1 grid-cols-[1fr] opacity-100" } ${TOOL_ROW_TEXT}`}
           >
-            {Array.from(toolIcons.entries()).slice(0, 5).map(([key, icon]) => (
-              <span
-                key={key}
-                className="flex size-4 items-center justify-center [&>svg]:size-4"
-              >
-                {icon}
-              </span>
-            ))}
+            <span className="flex min-w-0 items-center gap-1 overflow-hidden">
+              {Array.from(toolIcons.entries()).slice(0, 5).map(([key, icon]) => (
+                <span
+                  key={key}
+                  className="flex size-4 items-center justify-center [&>svg]:size-4"
+                >
+                  {icon}
+                </span>
+              ))}
+            </span>
           </span>
           <span className={`mr-0.5 ${TOOL_ROW_TEXT}`}>
             {toolCount} tool call{toolCount !== 1 ? "s" : ""}

@@ -29,7 +29,7 @@ export function ContextChips() {
           {issues.map((issue) => (
             <div
               key={issue.entityId}
-              className={`flex items-center glass-button gap-1.5 px-2 py-1.5 rounded-full text-xs  dark:text-primary-300 text-primary-700`}
+              className={`flex items-center glass-outline glass-outline-soft gap-1.5 px-2 py-1.5 rounded-full text-xs  dark:text-primary-300 text-primary-700`}
             >
               <ProviderIcon
                 provider={issue.provider}
@@ -39,7 +39,7 @@ export function ContextChips() {
               <span className="truncate max-w-37.5">{issue.title}</span>
               <Button
                 onClick={() => remove(issue)}
-                className=" flex items-center glass-button justify-center rounded-full p-0.5  transition-colors"
+                className=" flex items-center  justify-center rounded-full p-0.5  transition-colors"
                 title="Remove from context"
               >
                 <Close className="size-3" />
@@ -50,7 +50,7 @@ export function ContextChips() {
           {signals.map((signal) => (
             <div
               key={signal.entityId}
-              className={`flex items-center glass-button gap-1.5 px-2 py-1.5 rounded-full text-xs dark:text-primary-300 text-primary-700`}
+              className={`flex items-center glass-outline glass-outline-soft gap-1.5 px-2 py-1.5 rounded-full text-xs dark:text-primary-300 text-primary-700`}
             >
               <ProviderIcon
                 provider={signal.source}
@@ -60,7 +60,7 @@ export function ContextChips() {
               <span className="truncate max-w-37.5">{signal.title}</span>
               <Button
                 onClick={() => remove(signal)}
-                className="w-4 h-4 flex items-center justify-center glass-button rounded-full p-0.5 transition-colors"
+                className="w-4 h-4 flex items-center justify-center  rounded-full p-0.5 transition-colors"
                 title="Remove from context"
               >
                 <Close className="size-3" />

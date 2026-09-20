@@ -920,6 +920,278 @@ describe("Codex event mapper", () => {
       ),
     ).toHaveLength(0);
   });
+
+  // A presentation run renders the same deck several times under its own
+  // build directory before copying one out. Those copies still reach the
+  // transcript — the flag is what keeps them from each taking a card beside
+  // the file the answer points at.
+  it("flags documents under a hidden build directory as working copies", () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "mains-codex-working-"),
+    );
+    tempDirs.push(tempDir);
+    fs.mkdirSync(path.join(tempDir, ".build", "pptx"), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, "deliverables"), { recursive: true });
+    const scratch = path.join(tempDir, ".build", "pptx", "deck.pptx");
+    const deliverable = path.join(tempDir, "deliverables", "deck.pptx");
+    fs.writeFileSync(scratch, "fixture");
+    fs.writeFileSync(deliverable, "fixture");
+    const { mapper } = createHarness(createRunState(tempDir));
+
+    const events = mapper.mapThreadItem(
+      {
+        id: "command-docs",
+        type: "unknownFixtureItem",
+        output: `Rendered ${scratch} and copied it to ${deliverable}`,
+      },
+      "item/completed",
+      400,
+      "run-1",
+    );
+
+    const byPath = new Map(
+      events
+        .filter((event) => event.type === "artifact" && event.kind === "document")
+        .map((event) => {
+          const artifact = event as Extract<WorkRunEvent, { type: "artifact" }>;
+          return [artifact.metadata?.path, artifact.metadata?.working];
+        }),
+    );
+
+    expect(byPath.get(scratch)).toBe(true);
+    expect(byPath.get(deliverable)).toBeUndefined();
+  });
+
+  // Markdown is a deliverable too: the viewer renders it, and a written note is
+  // as much the point of a turn as a written deck.
+  it("cards a markdown file the run wrote", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-md-"));
+    tempDirs.push(tempDir);
+    const notePath = path.join(tempDir, "summary.md");
+    fs.writeFileSync(notePath, "fixture");
+    const { mapper } = createHarness(createRunState(tempDir));
+
+    const events = mapper.mapThreadItem(
+      {
+        id: "command-md",
+        type: "unknownFixtureItem",
+        output: `Wrote ${notePath}`,
+      },
+      "item/completed",
+      400,
+      "run-1",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "artifact",
+        kind: "document",
+        metadata: expect.objectContaining({ path: notePath, docType: "md" }),
+      }),
+    );
+  });
+
+  // A file the agent only read is not a deliverable — the mtime gate is what
+  // keeps every README in the repo out of the transcript.
+  it("ignores a markdown file that predates the run", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-md-old-"));
+    tempDirs.push(tempDir);
+    const readmePath = path.join(tempDir, "README.md");
+    fs.writeFileSync(readmePath, "fixture");
+    const state = createRunState(tempDir);
+    state.runStartedAt = Date.now() + 60_000;
+    const { mapper } = createHarness(state);
+
+    const events = mapper.mapThreadItem(
+      {
+        id: "command-md-old",
+        type: "unknownFixtureItem",
+        output: `Read ${readmePath}`,
+      },
+      "item/completed",
+      400,
+      "run-1",
+    );
+
+    expect(
+      events.filter(
+        (event) => event.type === "artifact" && event.kind === "document",
+      ),
+    ).toHaveLength(0);
+  });
+
+  // The run directory itself lives under ~/Library/Application Support, and
+  // Codex keeps its generated images in ~/.codex — dots above the root say
+  // nothing about the file.
+  it("reads only the segments below the run root", () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-dotroot-"));
+    tempDirs.push(parent);
+    const root = path.join(parent, ".hidden-run", "work");
+    fs.mkdirSync(root, { recursive: true });
+    const documentPath = path.join(root, "deck.pptx");
+    fs.writeFileSync(documentPath, "fixture");
+    const { mapper } = createHarness(createRunState(root));
+
+    const events = mapper.mapThreadItem(
+      {
+        id: "command-doc-dotroot",
+        type: "unknownFixtureItem",
+        output: `Created ${documentPath}`,
+      },
+      "item/completed",
+      400,
+      "run-1",
+    );
+
+    const document = events.find(
+      (event) => event.type === "artifact" && event.kind === "document",
+    ) as Extract<WorkRunEvent, { type: "artifact" }> | undefined;
+    expect(document?.metadata?.working).toBeUndefined();
+  });
+
+  // An image the agent opened to read is not something the turn produced, and
+  // inline it crowded out what the turn did produce.
+  it("flags a pre-existing workspace image as viewed", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-viewed-"));
+    tempDirs.push(tempDir);
+    const olderThanRun = path.join(tempDir, "logo.png");
+    const writtenThisRun = path.join(tempDir, "chart.png");
+    fs.writeFileSync(olderThanRun, "fixture");
+    fs.writeFileSync(writtenThisRun, "fixture");
+    const state = createRunState(tempDir);
+    // Both files exist now; only one predates the run.
+    state.runStartedAt = Date.now() + 60_000;
+    fs.utimesSync(writtenThisRun, new Date(), new Date(state.runStartedAt));
+    const { mapper } = createHarness(state);
+
+    const events = mapper.mapThreadItem(
+      {
+        id: "command-images",
+        type: "unknownFixtureItem",
+        output: `read ${olderThanRun} and wrote ${writtenThisRun}`,
+      },
+      "item/completed",
+      400,
+      "run-1",
+    );
+
+    const byPath = new Map(
+      events
+        .filter((event) => event.type === "artifact" && event.kind === "image")
+        .map((event) => {
+          const artifact = event as Extract<WorkRunEvent, { type: "artifact" }>;
+          return [artifact.metadata?.path, artifact.metadata?.viewed];
+        }),
+    );
+
+    expect(byPath.get(olderThanRun)).toBe(true);
+    expect(byPath.get(writtenThisRun)).toBeUndefined();
+  });
+
+  // The scan has to allow spaces — every managed run directory sits under
+  // "Application Support" — which is what made a greedy match span two paths
+  // and, since the span exists nowhere, drop both images.
+  it("finds both images when a line names two of them", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-pair-"));
+    tempDirs.push(tempDir);
+    const spaced = path.join(tempDir, "Application Support");
+    fs.mkdirSync(spaced);
+    const first = path.join(spaced, "before.png");
+    const second = path.join(spaced, "after.png");
+    fs.writeFileSync(first, "fixture");
+    fs.writeFileSync(second, "fixture");
+    const { mapper } = createHarness(createRunState(tempDir));
+
+    const events = mapper.mapThreadItem(
+      {
+        id: "command-two-images",
+        type: "unknownFixtureItem",
+        output: `compared ${first} with ${second}`,
+      },
+      "item/completed",
+      400,
+      "run-1",
+    );
+
+    const paths = events
+      .filter((event) => event.type === "artifact" && event.kind === "image")
+      .map(
+        (event) =>
+          (event as Extract<WorkRunEvent, { type: "artifact" }>).metadata?.path,
+      );
+
+    expect(paths).toContain(first);
+    expect(paths).toContain(second);
+  });
+});
+
+// Codex ends a turn by writing its follow-up chips into the message as
+// remark-directive leaves. Nothing here loads remark-directive, so before this
+// they were printed verbatim under every answer.
+describe("Codex follow-up directives", () => {
+  function messageEvents(text: string): WorkRunEvent[] {
+    const { mapper } = createHarness();
+    return mapper.mapThreadItem(
+      { id: "item-msg", type: "agentMessage", text },
+      "item/completed",
+      400,
+      "run-1",
+    );
+  }
+
+  const MESSAGE = [
+    "Your deck is ready.",
+    "",
+    '- :codex-followup[Make it investor-ready]{prompt="Expand this into a 6-slide investor pitch"}',
+    '- :codex-followup[Create a PDF handout]{prompt="Create a matching one-page PDF handout"}',
+  ].join("\n");
+
+  it("lifts each directive onto the prompt_suggestion channel", () => {
+    const suggestions = messageEvents(MESSAGE).filter(
+      (event) => event.type === "prompt_suggestion",
+    ) as Extract<WorkRunEvent, { type: "prompt_suggestion" }>[];
+
+    expect(suggestions).toHaveLength(2);
+    expect(suggestions[0]).toMatchObject({
+      label: "Make it investor-ready",
+      suggestion: "Expand this into a 6-slide investor pitch",
+    });
+    expect(suggestions[1]).toMatchObject({
+      label: "Create a PDF handout",
+      suggestion: "Create a matching one-page PDF handout",
+    });
+  });
+
+  it("takes the directives out of the prose, bullet and all", () => {
+    const report = messageEvents(MESSAGE).find(
+      (event) => event.type === "artifact" && event.kind === "report",
+    ) as Extract<WorkRunEvent, { type: "artifact" }> | undefined;
+
+    expect(report?.content).toBe("Your deck is ready.");
+  });
+
+  it("leaves a message without directives untouched", () => {
+    const events = messageEvents("Just an answer.");
+    const report = events.find(
+      (event) => event.type === "artifact" && event.kind === "report",
+    ) as Extract<WorkRunEvent, { type: "artifact" }> | undefined;
+
+    expect(report?.content).toBe("Just an answer.");
+    expect(
+      events.filter((event) => event.type === "prompt_suggestion"),
+    ).toHaveLength(0);
+  });
+
+  it("keeps an escaped quote inside the prompt", () => {
+    const suggestions = messageEvents(
+      ':codex-followup[Quote it]{prompt="Say \\"hello\\" once"}',
+    ).filter((event) => event.type === "prompt_suggestion") as Extract<
+      WorkRunEvent,
+      { type: "prompt_suggestion" }
+    >[];
+
+    expect(suggestions[0]?.suggestion).toBe('Say "hello" once');
+  });
 });
 
 describe("Codex subagent lifecycle projection", () => {

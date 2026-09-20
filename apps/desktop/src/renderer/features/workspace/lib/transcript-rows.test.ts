@@ -62,7 +62,10 @@ function turn(turnIndex: number, model: string | null): RunTurn {
 }
 
 describe("buildTurnRenderRows — deliverable breakout", () => {
-  it("collapses a file write into the accordion by default", () => {
+  // Every mode now: the file is reachable from its artifact card and from
+  // the agent's own prose link, so the write row has nothing left to offer
+  // that would justify a place outside the accordion.
+  it("collapses a file write into the accordion", () => {
     const groups = groupEvents(turnWithFileWrite());
     const rows = buildTurnRenderRows(groups);
     const accordion = rows.find((r) => r.kind === "accordion");
@@ -73,22 +76,6 @@ describe("buildTurnRenderRows — deliverable breakout", () => {
       writeGroupIndex(groups),
     );
     expect(accordion.previousSegments.flat()).toContain(writeGroupIndex(groups));
-  });
-
-  it("keeps it visible when the caller calls it a deliverable", () => {
-    const groups = groupEvents(turnWithFileWrite());
-    const rows = buildTurnRenderRows(groups, {
-      isDeliverableGroup: (g) =>
-        g.events.some((e) => e.metadata?.toolName === "Write"),
-    });
-    const accordion = rows.find((r) => r.kind === "accordion");
-
-    expect(accordion).toBeDefined();
-    if (accordion?.kind !== "accordion") return;
-    expect(accordion.messageBreakoutIndices).toContain(writeGroupIndex(groups));
-    expect(accordion.previousSegments.flat()).not.toContain(
-      writeGroupIndex(groups),
-    );
   });
 
   it("keeps an interactive visualization outside the collapsed accordion", () => {
@@ -196,6 +183,158 @@ describe("buildTurnRenderRows — deliverable breakout", () => {
     if (accordion?.kind !== "accordion") return;
     expect(accordion.messageBreakoutIndices).toEqual([finalDocument]);
     expect(accordion.previousSegments.flat()).toContain(firstDocument);
+  });
+
+  // The real shape of a presentation run: three scratch renders under a hidden
+  // build directory and one file in the folder the answer points at. Before
+  // this rule each of the four took a card of its own.
+  it("leaves working copies inside the accordion", () => {
+    const events = [
+      ev({
+        id: "u1",
+        content: "create a pitch deck",
+        metadata: { kind: "user-prompt" },
+      }),
+      ev({
+        id: "d1",
+        metadata: {
+          kind: "document",
+          path: "/work/.build/pptx/mains_pitch.pptx",
+          fileName: "mains_pitch.pptx",
+          working: true,
+        },
+      }),
+      ev({
+        id: "t1",
+        type: "tool_call",
+        content: "Bash: refine deck",
+        metadata: { status: "done", toolName: "Bash" },
+      }),
+      ev({
+        id: "d2",
+        metadata: {
+          kind: "document",
+          path: "/work/deliverables/mains-pitch-deck.pptx",
+          fileName: "mains-pitch-deck.pptx",
+        },
+      }),
+      ev({
+        id: "t2",
+        type: "tool_call",
+        content: "Bash: render the handout",
+        metadata: { status: "done", toolName: "Bash" },
+      }),
+      ev({
+        id: "d3",
+        metadata: {
+          kind: "document",
+          path: "/work/.build/final-pdf/mains-pitch-deck.pdf",
+          fileName: "mains-pitch-deck.pdf",
+          working: true,
+        },
+      }),
+      ev({
+        id: "r1",
+        content: "The presentation is ready.",
+        metadata: { kind: "report" },
+      }),
+    ];
+    const groups = groupEvents(events);
+    const groupOf = (id: string) =>
+      groups.findIndex((group) => group.events.some((event) => event.id === id));
+    const rows = buildTurnRenderRows(groups);
+    const accordion = rows.find((row) => row.kind === "accordion");
+
+    expect(accordion).toBeDefined();
+    if (accordion?.kind !== "accordion") return;
+    expect(accordion.messageBreakoutIndices).toEqual([groupOf("d2")]);
+    expect(accordion.previousSegments.flat()).toContain(groupOf("d1"));
+    expect(accordion.previousSegments.flat()).toContain(groupOf("d3"));
+  });
+
+  // A late scratch render shares its key with the deliverable. If it could
+  // claim that key the real card would be suppressed as "not the latest" while
+  // the working copy is never shown either — the turn would end with no
+  // document at all.
+  it("does not let a working copy shadow the deliverable it was rendered from", () => {
+    const events = [
+      ev({ id: "u1", content: "deck please", metadata: { kind: "user-prompt" } }),
+      ev({
+        id: "d1",
+        metadata: {
+          kind: "document",
+          path: "/work/deliverables/deck.pptx",
+          fileName: "deck.pptx",
+        },
+      }),
+      ev({
+        id: "t1",
+        type: "tool_call",
+        content: "Bash: re-render",
+        metadata: { status: "done", toolName: "Bash" },
+      }),
+      ev({
+        id: "d2",
+        metadata: {
+          kind: "document",
+          path: "/work/.build/deck.pptx",
+          fileName: "deck.pptx",
+          working: true,
+        },
+      }),
+      ev({ id: "r1", content: "Done.", metadata: { kind: "report" } }),
+    ];
+    const groups = groupEvents(events);
+    const deliverable = groups.findIndex((group) =>
+      group.events.some((event) => event.id === "d1"),
+    );
+    const rows = buildTurnRenderRows(groups);
+    const accordion = rows.find((row) => row.kind === "accordion");
+
+    expect(accordion).toBeDefined();
+    if (accordion?.kind !== "accordion") return;
+    expect(accordion.messageBreakoutIndices).toEqual([deliverable]);
+  });
+
+  // An image the agent opened stays inside the turn; one it produced does not.
+  it("keeps viewed images out of the breakout, generated ones in", () => {
+    const events = [
+      ev({ id: "u1", content: "make a chart", metadata: { kind: "user-prompt" } }),
+      ev({
+        id: "i1",
+        metadata: {
+          kind: "image",
+          path: "/work/assets/logo.png",
+          fileName: "logo.png",
+          viewed: true,
+        },
+      }),
+      ev({
+        id: "t1",
+        type: "tool_call",
+        content: "Bash: plot",
+        metadata: { status: "done", toolName: "Bash" },
+      }),
+      ev({
+        id: "i2",
+        metadata: {
+          kind: "image",
+          path: "/work/chart.png",
+          fileName: "chart.png",
+        },
+      }),
+      ev({ id: "r1", content: "Here it is.", metadata: { kind: "report" } }),
+    ];
+    const groups = groupEvents(events);
+    const groupOf = (id: string) =>
+      groups.findIndex((group) => group.events.some((event) => event.id === id));
+    const rows = buildTurnRenderRows(groups);
+    const accordion = rows.find((row) => row.kind === "accordion");
+
+    expect(accordion).toBeDefined();
+    if (accordion?.kind !== "accordion") return;
+    expect(accordion.messageBreakoutIndices).toEqual([groupOf("i2")]);
+    expect(accordion.previousSegments.flat()).toContain(groupOf("i1"));
   });
 });
 

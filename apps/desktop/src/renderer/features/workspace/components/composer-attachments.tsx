@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Text, type UploadedFile } from "@/components/ui";
 import {
   Close,
@@ -44,6 +44,41 @@ function appshotLabel(appshot: ContextAppshotItem): string {
   return appshot.windowTitle
     ? `${appshot.appName} · ${appshot.windowTitle}`
     : appshot.appName;
+}
+
+/**
+ * A composer thumbnail, revealed when there is something to reveal.
+ *
+ * Lens and browser captures are served through `mains-capture://`, which reads
+ * the PNG off disk — the tile paints a frame or two before the picture exists,
+ * so the box appeared empty and the image then snapped in with no transition of
+ * its own. Fading on `load` puts the reveal at the moment the bitmap arrives.
+ *
+ * The ref callback covers the cached case: an image already in memory can
+ * finish loading before React attaches `onLoad`, and without the `complete`
+ * check that tile would stay invisible for good.
+ */
+function AttachmentImage({ src, alt }: { src: string; alt: string }) {
+  const [isLoaded, setIsLoaded] = useState(false);
+  const captureLoadedBeforeMount = useCallback((node: HTMLImageElement | null) => {
+    if (node?.complete) setIsLoaded(true);
+  }, []);
+
+  return (
+    <img
+      ref={captureLoadedBeforeMount}
+      src={src}
+      alt={alt}
+      draggable={false}
+      onLoad={() => setIsLoaded(true)}
+      // A capture that cannot be read is still a tile the user can remove —
+      // leaving it at zero opacity would only hide the remove button's target.
+      onError={() => setIsLoaded(true)}
+      className={`size-full object-cover transition-opacity duration-200 ease-out ${
+        isLoaded ? "opacity-100" : "opacity-0"
+      }`}
+    />
+  );
 }
 
 function RemoveButton({
@@ -152,12 +187,7 @@ export function ComposerAttachments({
                       aria-label={`Preview ${label}`}
                       className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
                     >
-                      <img
-                        src={src}
-                        alt={label}
-                        draggable={false}
-                        className="size-full object-cover"
-                      />
+                      <AttachmentImage src={src} alt={label} />
                     </Button>
                   ) : (
                     <div className="flex size-full items-center justify-center">
@@ -195,12 +225,7 @@ export function ComposerAttachments({
                       aria-label={`Preview ${label}`}
                       className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
                     >
-                      <img
-                        src={src}
-                        alt={label}
-                        draggable={false}
-                        className="size-full object-cover"
-                      />
+                      <AttachmentImage src={src} alt={label} />
                     </Button>
                   ) : (
                     <div className="flex size-full items-center justify-center">
@@ -236,11 +261,9 @@ export function ComposerAttachments({
                       aria-label={`Preview ${file.name}`}
                       className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
                     >
-                      <img
+                      <AttachmentImage
                         src={uploaded.preview}
                         alt={file.name}
-                        draggable={false}
-                        className="size-full object-cover"
                       />
                     </Button>
                     <RemoveButton

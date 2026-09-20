@@ -40,7 +40,7 @@ export function SchemaModalHeader({
       <Button
         onClick={onClose}
         aria-label="Close modal"
-        className="absolute top-4 right-4  glass-button flex items-center justify-center rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 p-1.5 text-primary-900 dark:text-primary-100 transition-all duration-300 ease-out"
+        className="absolute top-4 right-4  flex items-center justify-center rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 p-1.5 text-primary-900 dark:text-primary-100 transition-all duration-300 ease-out"
       >
         <Close className="size-4" />
       </Button>

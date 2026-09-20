@@ -822,8 +822,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     await runsRepo.insertArtifact({
       runId,
       kind: "prompt_suggestion",
+      // Content is what gets sent; the label is only what the chip reads.
       content: event.suggestion,
-      metadata: { ts: event.ts },
+      metadata: { ts: event.ts, ...(event.label ? { label: event.label } : {}) },
     });
   }
 

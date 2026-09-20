@@ -83,15 +83,6 @@ export interface ModeConfigDescriptor {
    */
   showRightPanel: boolean;
   /**
-   * Keep file-writing tool calls out of the turn accordion.
-   *
-   * In Code a turn is dozens of edits and collapsing them is the whole point.
-   * In Work the file *is* the deliverable — the agent names it in prose but the
-   * only way to open it is the Write row, which is exactly what the accordion
-   * was hiding. Same reasoning that already keeps generated media visible.
-   */
-  keepFileWritesVisible: boolean;
-  /**
    * The changes card under a turn (Edited N files, Undo, Review). Work keeps
    * it even without the git ceremony — its deliverables are files, and undoing
    * a turn is not a git action. Chat's read-only harness changes nothing.
@@ -129,7 +120,6 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showTabs: true,
     showPluginsButton: false,
     showRightPanel: true,
-    keepFileWritesVisible: false,
     showTurnChanges: true,
   },
   // Work: same surfaces minus the developer ceremony — no git actions, no
@@ -164,7 +154,6 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showTabs: false,
     showPluginsButton: true,
     showRightPanel: false,
-    keepFileWritesVisible: true,
     showTurnChanges: true,
   },
   // Chat: plain conversation — read-only harness, so every write-adjacent
@@ -196,7 +185,6 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showTabs: false,
     showPluginsButton: false,
     showRightPanel: false,
-    keepFileWritesVisible: false,
     showTurnChanges: false,
   },
 };

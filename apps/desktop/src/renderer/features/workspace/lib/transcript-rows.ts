@@ -292,8 +292,8 @@ export type TurnRenderRow =
       /** Plan tool groups — pulled out of `previousSegments` so they stay outside the collapsed bucket. */
       planBreakoutIndices: number[];
       /**
-       * Groups whose output is the turn's deliverable — generated media, plus
-       * file writes in modes that say so. Kept visible rather than folded into
+       * Groups whose output is the turn's deliverable — generated media and
+       * the documents a turn produced. Kept visible rather than folded into
        * the collapsed bucket.
        */
       messageBreakoutIndices: number[];
@@ -301,6 +301,21 @@ export type TurnRenderRow =
       previousMessageCount: number;
       previousToolSummary: string;
     };
+
+/**
+ * Material the turn worked *with* rather than produced, tagged at the source
+ * (see `isWorkingCopy` and the `viewed` gate in codex-event-mapper): a scratch
+ * copy under a hidden build directory, or an image that already existed when
+ * the run started and was only opened.
+ *
+ * It still reaches the transcript, so nothing is lost — it stays inside the
+ * turn's collapsed bucket instead of claiming a place beside what the turn
+ * actually produced.
+ */
+function isSupportingArtifact(event: EventGroup["events"][number]): boolean {
+  if (event.type !== "artifact") return false;
+  return event.metadata?.working === true || event.metadata?.viewed === true;
+}
 
 function documentArtifactKey(event: EventGroup["events"][number]): string | null {
   if (event.type !== "artifact" || event.metadata?.kind !== "document") {
@@ -321,6 +336,10 @@ function latestDocumentGroups(
   const latest = new Map<string, number>();
   for (let groupIndex = turnStart; groupIndex <= turnEnd; groupIndex++) {
     for (const event of groups[groupIndex]?.events ?? []) {
+      // A supporting artifact must not claim the key: it is never broken out,
+      // so letting a late scratch render win would take the real card down
+      // with it and leave the turn showing no document at all.
+      if (isSupportingArtifact(event)) continue;
       const key = documentArtifactKey(event);
       if (key) latest.set(key, groupIndex);
     }
@@ -335,6 +354,7 @@ function groupHasMediaArtifact(
 ): boolean {
   return group.events.some((event) => {
     if (event.type !== "artifact") return false;
+    if (isSupportingArtifact(event)) return false;
     if (event.metadata?.kind === "document") {
       const key = documentArtifactKey(event);
       return !key || latestDocumentGroup.get(key) === groupIndex;
@@ -348,21 +368,7 @@ function groupHasMediaArtifact(
 }
 
 /** Linear plan: every group index appears exactly once, in order. */
-export interface TurnRenderOptions {
-  /**
-   * Extra groups to keep out of the collapsed bucket, beyond plans and media.
-   *
-   * Injected rather than decided here: what counts as a deliverable is a
-   * question about tool vocabulary and the active mode, and this module is the
-   * layout plan — React-free, and deliberately ignorant of both.
-   */
-  isDeliverableGroup?: (group: EventGroup) => boolean;
-}
-
-export function buildTurnRenderRows(
-  groups: EventGroup[],
-  options: TurnRenderOptions = {},
-): TurnRenderRow[] {
+export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
   const rows: TurnRenderRow[] = [];
   let idx = 0;
   while (idx < groups.length) {
@@ -418,8 +424,7 @@ export function buildTurnRenderRows(
           planBreakout.push(gIdx);
         } else if (
           g.type === "mcp_app" ||
-          groupHasMediaArtifact(g, gIdx, latestDocumentGroup) ||
-          options.isDeliverableGroup?.(g)
+          groupHasMediaArtifact(g, gIdx, latestDocumentGroup)
         ) {
           messageBreakout.push(gIdx);
         }

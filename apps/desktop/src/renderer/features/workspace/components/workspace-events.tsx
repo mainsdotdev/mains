@@ -19,8 +19,6 @@ import { WorkspaceEmptyState } from "./workspace-empty-state";
 import { TurnRail } from "./turn-rail";
 import { CONTENT_COLUMN_GUTTER } from "../lib/content-column";
 import { buildTurnMarkers, type TurnMarker } from "../lib/turn-markers";
-import { FILE_WRITING_TOOLS } from "../lib/tool-registry";
-import { resolveTool } from "../lib/resolve-tool";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import type { Run, RunEvent, Workspace } from "../types";
 import type {
@@ -583,27 +581,10 @@ export function WorkspaceEvents({
     [activeRun, onForkRun],
   );
 
-  // Work calls a written file the deliverable, so its Write row has to stay
-  // reachable: the agent names the file in prose but only that row opens it.
-  const { keepFileWritesVisible, showTurnChanges } = useModeConfig();
-  const isDeliverableGroup = useMemo(
-    () =>
-      keepFileWritesVisible
-        ? (group: EventGroup) =>
-            group.events.some(
-              (e) =>
-                e.type === "tool_call" &&
-                typeof e.metadata?.toolName === "string" &&
-                FILE_WRITING_TOOLS.has(
-                  resolveTool(e.metadata.toolName).displayName,
-                ),
-            )
-        : undefined,
-    [keepFileWritesVisible],
-  );
+  const { showTurnChanges } = useModeConfig();
   const turnRenderRows = useMemo(
-    () => buildTurnRenderRows(eventGroups, { isDeliverableGroup }),
-    [eventGroups, isDeliverableGroup],
+    () => buildTurnRenderRows(eventGroups),
+    [eventGroups],
   );
 
   // Left-edge navigator: one tick per user message. Built from the same groups
@@ -683,7 +664,15 @@ export function WorkspaceEvents({
               )}
               {isLastSuggestion ? (
                 <PromptSuggestionChips
-                  suggestions={group.events.map((e) => e.content).filter(Boolean)}
+                  suggestions={group.events
+                    .filter((e) => Boolean(e.content))
+                    .map((e) => ({
+                      prompt: e.content,
+                      label:
+                        typeof e.metadata?.label === "string"
+                          ? e.metadata.label
+                          : undefined,
+                    }))}
                   onSelect={onSuggestionSelect}
                 />
               ) : null}

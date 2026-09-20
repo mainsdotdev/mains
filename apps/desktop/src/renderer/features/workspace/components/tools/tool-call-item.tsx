@@ -31,6 +31,7 @@ import { WorkflowDisplay, type WorkflowParams } from "./workflow-display";
 import { SkillDisplay, type SkillParams } from "./skill-display";
 import { AskUserQuestionDisplay, type AskUserQuestionParams } from "./ask-user-question-display";
 import { WebFetchDisplay, type WebFetchParams } from "./web-fetch-display";
+import { CuaReplDisplay, type CuaReplParams } from "./cua-repl-display";
 import { GenericToolDisplay } from "./generic-tool-display";
 import { TOOL_ROW_TEXT, ToolStatusProvider, eventToolStatus } from "./_shared";
 import {
@@ -220,6 +221,21 @@ const DISPATCH: Renderer[] = [
   byDisplayName<CheckPackageParams>("CheckPackage", (ctx, params) => (
     <CheckPackageDisplay params={params} output={ctx.event.metadata?.output} isCompact={ctx.isCompact} />
   )),
+
+  // Computer use (`mcp__cua_repl__js`) ahead of the MCP fallbacks: its result
+  // carries a screenshot the generic display drops, and its `title` says what
+  // the step was for where the tool name says only "Cua repl js".
+  (ctx) => {
+    if (ctx.resolved.vendorId !== "cua_repl") return null;
+    const params = pickParams<CuaReplParams>(ctx, {});
+    return (
+      <CuaReplDisplay
+        params={params}
+        output={ctx.event.metadata?.output}
+        isCompact={ctx.isCompact}
+      />
+    );
+  },
 
   // Generic MCP fallback — an MCP App must win even when its plugin has no
   // curated vendor mapping. Otherwise the ui:// resource falls through to the

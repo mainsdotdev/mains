@@ -4,6 +4,7 @@ import { useAppSelector } from "@/lib/redux/hooks";
 import { useCapabilities } from "@/lib/platform";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { SessionPanelTrigger } from "@/features/workspace/components/session-panel";
+import { ChatActionsMenu } from "@/features/workspace/components/chat-actions-menu";
 import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
@@ -57,6 +58,9 @@ export function ToggleButton({
         />
       )}
       <div className="flex items-center  rounded-full p-0.5">
+      {/* Ahead of the layout toggles: it acts on the chat, not on the window,
+          and decides for itself whether this mode has one. */}
+      <ChatActionsMenu />
       {onBrowserToggle && embeddedBrowser && (
         <Button
           tooltip={browserTooltip}

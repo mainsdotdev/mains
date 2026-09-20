@@ -141,7 +141,7 @@ export function ModalHeader({ onClose, children }: ModalHeaderProps) {
       <Button
         onClick={onClose}
         aria-label="Close"
-        className="ml-3 shrink-0 p-1.5 rounded-full glass-button hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
+        className="ml-3 shrink-0 p-1.5 rounded-full  hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
       >
         <Close className="size-4 text-primary-500" />
       </Button>
