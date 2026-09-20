@@ -2,7 +2,7 @@
   "name": "mains",
   "type": "commonjs",
   "productName": "Mains",
-  "version": "0.10.0",
+  "version": "0.11.0-preview.20260921",
   "description": "AI-powered developer workspace",
   "main": ".vite/build/main.js",
   "publish": {
