@@ -204,9 +204,7 @@ export function SubagentDetail({
                 </ReactMarkdown>
               </div>
             ) : (
-              // isCompact={false} — the compact variant is for rows inside a
-              // sub-group accordion whose header already carries the icon and
-              // tool name; standalone rows need both (see ToolSubGroupAccordion).
+              // Standalone rows carry their own icon and tool name.
               <ToolCallItem
                 key={item.key}
                 event={mapToolCallToEvent(item.call)!}

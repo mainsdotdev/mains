@@ -66,7 +66,6 @@ export interface BuiltinTool {
    * `true` for tools that should always start a new group on their own
    * (Task, TaskCreate/TaskUpdate). Mirrors the legacy `isSpecial` behavior.
    */
-  isSpecialGroup?: boolean;
 }
 
 /** Past-tense verb labels used for any vendor that doesn't override them. */
@@ -139,14 +138,13 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   // TaskUpdate (taskId/status). They share the `task-plan` groupKey so
   // `stripTaskPlanEvents` strips them from the timeline and the
   // `TodoSummaryBar` aggregator picks them up as the source of truth.
-  // TaskGet / TaskList are read-only queries → own keys, not isSpecialGroup.
+  // TaskGet / TaskList are read-only queries → own keys.
   {
     displayName: "TaskCreate",
     groupKey: "task-plan",
     category: "Todo",
     icon: <Check className="size-4" />,
     aliases: ["taskcreate"],
-    isSpecialGroup: true,
   },
   {
     displayName: "TaskUpdate",
@@ -154,7 +152,6 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     category: "Todo",
     icon: <Check className="size-4" />,
     aliases: ["taskupdate"],
-    isSpecialGroup: true,
   },
   // Copilot's full-snapshot todo writes (synthesized from session.todos_changed).
   // Shares the `task-plan` groupKey so `stripTaskPlanEvents` removes the raw
@@ -165,7 +162,6 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     category: "Todo",
     icon: <Check className="size-4" />,
     aliases: ["updatetodos"],
-    isSpecialGroup: true,
   },
   {
     displayName: "TaskGet",
@@ -187,7 +183,6 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     category: "Agent",
     icon: <Task className="size-4" />,
     aliases: ["task"],
-    isSpecialGroup: true,
   },
   {
     displayName: "Agent",
@@ -376,9 +371,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     icon: <Grep className="size-3.5" />,
     aliases: ["grep"],
   },
-  // Copilot CLI's ripgrep tool. Shares the grep groupKey so consecutive
-  // content searches collapse together; rendered by GrepDisplay (timeline) and
-  // the Rg renderer (approval).
+  // Copilot CLI's ripgrep tool. Shares Grep's classification key and is
+  // rendered by GrepDisplay (timeline) and the Rg renderer (approval).
   {
     displayName: "Search",
     groupKey: "grep",

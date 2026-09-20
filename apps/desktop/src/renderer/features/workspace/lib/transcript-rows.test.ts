@@ -3,6 +3,7 @@ import { groupEvents } from "./group-events";
 import {
   buildTurnRenderRows,
   matchModelChangesToPromptGroups,
+  matchTurnsToGroups,
 } from "./transcript-rows";
 import type { RunEvent } from "../types";
 import type { RunTurn } from "@/lib/redux/api";
@@ -335,6 +336,38 @@ describe("buildTurnRenderRows — deliverable breakout", () => {
     if (accordion?.kind !== "accordion") return;
     expect(accordion.messageBreakoutIndices).toEqual([groupOf("i2")]);
     expect(accordion.previousSegments.flat()).toContain(groupOf("i1"));
+  });
+});
+
+describe("matchTurnsToGroups", () => {
+  // A continue that died before the provider emitted anything leaves a short
+  // turn row with no prompt of its own in the transcript. Its bar must not
+  // land on the previous turn's reply — that reply's own duration belongs
+  // there. (Seen live: a 2m50s first turn rendered as "3s".)
+  it("ignores a turn that produced no groups of its own", () => {
+    // Turn timestamps arrive from the DB as epoch seconds; event timestamps
+    // are Dates. Keep both on one clock so the match is the real one.
+    const t0 = 1_789_913_752;
+    const at = (offsetSec: number) => new Date((t0 + offsetSec) * 1000);
+    const groups = groupEvents([
+      ev({ id: "u1", content: "write the guide", timestamp: at(0), metadata: { kind: "user-prompt" } }),
+      ev({ id: "r1", content: "here it is", timestamp: at(170), metadata: { kind: "report" } }),
+      ev({ id: "u2", content: "now as a doc", timestamp: at(1_370), metadata: { kind: "user-prompt" } }),
+      ev({ id: "r2", content: "done", timestamp: at(2_058), metadata: { kind: "report" } }),
+    ]);
+    const groupOf = (id: string) =>
+      groups.findIndex((g) => g.events.some((e) => e.id === id));
+
+    const info = matchTurnsToGroups(groups, [
+      { ...turn(0, "gpt-5.6-terra"), elapsedMs: 170_461, endedAt: t0 + 170 },
+      // Started and finalized between the two prompts, 3s and nothing to show.
+      { ...turn(1, null), elapsedMs: 3_151, endedAt: t0 + 1_327 },
+      { ...turn(2, "gpt-5.6-terra"), elapsedMs: 689_073, endedAt: t0 + 2_058 },
+    ]);
+
+    expect(info.get(groupOf("r1"))?.elapsed).toBe(170_461);
+    expect(info.get(groupOf("r2"))?.elapsed).toBe(689_073);
+    expect([...info.values()].map((i) => i.elapsed)).not.toContain(3_151);
   });
 });
 

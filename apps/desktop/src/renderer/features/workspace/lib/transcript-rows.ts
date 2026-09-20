@@ -100,9 +100,16 @@ export function matchTurnsToGroups(
 
     // Skip if this group is a user-prompt itself
     const groupAtBest = groups[bestIdx];
-    if (groupAtBest?.type === "info" && groupAtBest.events[0]?.metadata?.kind === "user-prompt") {
-      if (bestIdx > 0) bestIdx--;
+    if (groupAtBest && isUserPromptGroup(groupAtBest)) {
+      bestIdx--;
     }
+
+    // An abandoned attempt — a continue that died before the provider emitted
+    // anything — owns no groups: its end time falls before the next prompt, so
+    // the step back above lands on the *previous* turn's last group. Placing it
+    // there would overwrite that turn's bar with this turn's (tiny) elapsed
+    // time. Nothing to attach it to, so it gets no bar and claims no groups.
+    if (bestIdx < lastGroupIdx) continue;
 
     result.set(bestIdx, {
       elapsed: turn.elapsedMs,

@@ -216,7 +216,7 @@ export function hasOutstandingWork(
  * Collapsed it shows a spinner + "Task N/M" + the active step; hovering
  * expands it down and outward into the full checklist. Clicking pins it open.
  * Replaces the per-call TaskCreate/TaskUpdate cards in the message timeline
- * (those are filtered out by `groupConsecutiveToolCalls`) so users see one
+ * (those are filtered out by `prepareToolCalls`) so users see one
  * continuously-updated plan instead of repeating snapshots.
  *
  * Lifecycle: the parent mounts this only while the active run's status is
