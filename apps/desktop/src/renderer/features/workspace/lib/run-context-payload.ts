@@ -11,6 +11,7 @@
 
 import {
   groupContextItems,
+  type ContextAppshotItem,
   type ContextBrowserItem,
   type ContextCodeItem,
   type ContextItem,
@@ -40,7 +41,7 @@ export interface RunContextPayload {
     title: string;
     body?: string | null;
   }>;
-  contextFiles?: Array<{ path: string }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
   contextSignals?: Array<{
     source: string;
     level: string;
@@ -53,6 +54,7 @@ export interface RunContextPayload {
   contextSkills?: Array<{
     name: string;
     path?: string;
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -61,6 +63,58 @@ export interface RunContextPayload {
     brandColor?: string;
     scope?: string;
   }>;
+}
+
+/** Appshots carry the captured pixels plus a bounded accessibility snapshot. */
+function appshotsToPayload(appshots: readonly ContextAppshotItem[]): {
+  attachments: Attachments;
+  initialContext: InitialContextItem[];
+} {
+  const attachments: Attachments = [];
+  const initialContext: InitialContextItem[] = [];
+
+  for (const appshot of appshots) {
+    const slug = `${appshot.appName}-${appshot.windowTitle || "window"}`
+      .replace(/[^a-z0-9_-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase()
+      .slice(0, 80);
+    attachments.push({
+      name: `lens-${slug || "window"}-${appshot.id.slice(0, 6)}.png`,
+      type: "image",
+      sourcePath: appshot.screenshotPath,
+      mimeType: appshot.screenshotMimeType,
+    });
+
+    const content = [
+      `Lens capture from ${appshot.appName}`,
+      appshot.windowTitle ? `Window: ${appshot.windowTitle}` : null,
+      `Captured: ${appshot.timestamp}`,
+      appshot.accessibilityText
+        ? `Accessible interface text:\n${appshot.accessibilityText}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    initialContext.push({
+      kind: "selection",
+      ref: `${appshot.appName}${
+        appshot.windowTitle ? ` — ${appshot.windowTitle}` : ""
+      }`,
+      content,
+      metadata: {
+        source: "appshot",
+        id: appshot.id,
+        appName: appshot.appName,
+        bundleIdentifier: appshot.bundleIdentifier,
+        windowTitle: appshot.windowTitle,
+        timestamp: appshot.timestamp,
+        accessibilityStatus: appshot.accessibilityStatus,
+        accessibilityTruncated: appshot.accessibilityTruncated,
+      },
+    });
+  }
+  return { attachments, initialContext };
 }
 
 /** Build "selection" context items from editor code selections. */
@@ -125,15 +179,6 @@ function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): 
         mimeType: sel.screenshotMimeType || "image/png",
       });
     }
-    if (sel.surroundingScreenshotPath) {
-      attachments.push({
-        name: `browser-${host}-${slug}-${sel.id.slice(0, 6)}-context.png`,
-        type: "image",
-        sourcePath: sel.surroundingScreenshotPath,
-        mimeType: sel.screenshotMimeType || "image/png",
-      });
-    }
-
     const content = [
       `Browser selection: ${sel.componentName ? `<${sel.componentName}>` : sel.tagName}`,
       `URL: ${sel.url}`,
@@ -177,24 +222,37 @@ function orUndefined<T>(list: T[]): T[] | undefined {
 
 /**
  * Project the composer's context onto a run payload. `uploads` are the user's
- * own file attachments; browser screenshots are appended to them so a run sees
- * one attachment list.
+ * own file attachments; Appshot and browser screenshots are appended so a run
+ * sees one attachment list.
  */
 export function buildRunContextPayload(
   items: readonly ContextItem[] | undefined,
   uploads?: Attachments,
 ): RunContextPayload {
-  const { files, issues, signals, skills, browserSelections, codeSelections } =
-    groupContextItems(items ?? []);
+  const {
+    files,
+    issues,
+    signals,
+    skills,
+    browserSelections,
+    appshots,
+    codeSelections,
+  } = groupContextItems(items ?? []);
 
+  const capturedWindows = appshotsToPayload(appshots);
   const browser = browserSelectionsToPayload(browserSelections);
   const initialContext = [
+    ...capturedWindows.initialContext,
     ...browser.initialContext,
     ...codeSelectionsToContext(codeSelections),
   ];
 
   return {
-    attachments: orUndefined([...(uploads ?? []), ...browser.attachments]),
+    attachments: orUndefined([
+      ...(uploads ?? []),
+      ...capturedWindows.attachments,
+      ...browser.attachments,
+    ]),
     initialContext,
     contextIssues: orUndefined(
       issues.map((i) => ({
@@ -204,7 +262,9 @@ export function buildRunContextPayload(
         body: i.body,
       })),
     ),
-    contextFiles: orUndefined(files.map((f) => ({ path: f.fullPath }))),
+    contextFiles: orUndefined(
+      files.map((f) => ({ path: f.fullPath, type: f.type })),
+    ),
     contextSignals: orUndefined(
       signals.map((s) => ({
         source: s.source,
@@ -220,6 +280,7 @@ export function buildRunContextPayload(
       skills.map((s) => ({
         name: s.name,
         path: s.path,
+        mentionPath: s.mentionPath,
         displayName: s.displayName,
         description: s.description,
         shortDescription: s.shortDescription,

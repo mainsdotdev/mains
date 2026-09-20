@@ -12,24 +12,27 @@ export interface ResolvedTool {
   /** Human-readable label shown in the UI ("Linear listed issues", "Bash"). */
   displayName: string;
   /**
-   * Stable comparison key used by `groupConsecutiveToolCalls` to decide
-   * whether two events belong in the same sub-group. Built-ins use the
-   * canonical lowercase tool name (`bash`, `read`); MCP tools use
-   * `vendorId:verb` (`linear:list`) so distinct verbs stay separate.
+   * Stable classification key used for preparation and summary de-duplication.
+   * Built-ins use the canonical lowercase tool name (`bash`, `read`); MCP
+   * tools use `vendorId:verb` (`linear:list`).
    */
   groupKey: string;
-  /** Label shown when several events with the same groupKey are collapsed. */
+  /** Short label used in the main tool-group summary. */
   groupLabel: string;
   category: string;
   icon: React.ReactNode;
   /** Defined for MCP tools that route through `McpDisplay`. */
   vendorId?: string;
+  /**
+   * The vendor's own name ("Linear", "Computer use"), without the verb that
+   * `groupLabel` carries. The summary sentence names the integration, not the
+   * call: "used the Computer use integration".
+   */
+  vendorLabel?: string;
   /** Verb extracted from the MCP tool name (e.g. "list"). */
   verb?: string;
   /** Entity extracted from the MCP tool name (e.g. "issues"). */
   entity?: string;
-  /** True for tools that should always start a fresh group (Task, TaskCreate/TaskUpdate). */
-  isSpecialGroup: boolean;
   /** True when this tool resolved to a built-in entry. */
   isBuiltin: boolean;
 }
@@ -96,7 +99,6 @@ function resolveVendorTool(vendor: VendorInfo, rest: string): ResolvedTool {
       groupLabel: special,
       category: vendor.category,
       icon: vendor.icon,
-      isSpecialGroup: false,
       isBuiltin: true,
     };
   }
@@ -118,9 +120,9 @@ function resolveVendorTool(vendor: VendorInfo, rest: string): ResolvedTool {
       category: vendor.category,
       icon: vendor.icon,
       vendorId: vendor.id,
+      vendorLabel: vendor.label,
       verb: rawVerb,
       entity: entity.length > 0 ? entity : undefined,
-      isSpecialGroup: false,
       isBuiltin: false,
     };
   }
@@ -137,8 +139,8 @@ function resolveVendorTool(vendor: VendorInfo, rest: string): ResolvedTool {
     category: vendor.category,
     icon: vendor.icon,
     vendorId: vendor.id,
+    vendorLabel: vendor.label,
     entity: entity.length > 0 ? entity : undefined,
-    isSpecialGroup: false,
     isBuiltin: false,
   };
 }
@@ -208,9 +210,9 @@ function resolveUnknownMcp(lower: string): ResolvedTool {
       category: "MCP",
       icon,
       vendorId: providerSlug,
+      vendorLabel: providerLabel,
       verb: rawVerb,
       entity: entity.length > 0 ? entity : undefined,
-      isSpecialGroup: false,
       isBuiltin: false,
     };
   }
@@ -226,8 +228,8 @@ function resolveUnknownMcp(lower: string): ResolvedTool {
     category: "MCP",
     icon,
     vendorId: providerSlug,
+    vendorLabel: providerLabel,
     entity: entity.length > 0 ? entity : undefined,
-    isSpecialGroup: false,
     isBuiltin: false,
   };
 }
@@ -273,7 +275,6 @@ function resolveToolImpl(toolName: string): ResolvedTool {
       groupLabel: builtin.displayName,
       category: builtin.category,
       icon: builtin.icon,
-      isSpecialGroup: builtin.isSpecialGroup ?? false,
       isBuiltin: true,
     };
   }
@@ -285,7 +286,6 @@ function resolveToolImpl(toolName: string): ResolvedTool {
     groupLabel: label,
     category: "Tool",
     icon: <Mcp className="size-4" />,
-    isSpecialGroup: false,
     isBuiltin: false,
   };
 }

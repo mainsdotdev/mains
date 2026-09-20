@@ -80,6 +80,22 @@ export const appSettings = sqliteTable("app_settings", {
     .notNull()
     .default(true),
 
+  // Global macOS capture shortcut. The capture remains local draft context
+  // until the user explicitly sends a composer message.
+  appshotsEnabled: integer("appshots_enabled", { mode: "boolean" })
+    .notNull()
+    .default(true),
+  appshotsShortcut: text("appshots_shortcut")
+    .notNull()
+    .default("Command+Shift+Space"),
+
+  // Device-local in-app shortcut overrides. Lens deliberately keeps its own
+  // constrained global shortcut fields above; this JSON only covers commands
+  // dispatched while the Mains window (or its embedded browser) has focus.
+  keyboardShortcutOverrides: text("keyboard_shortcut_overrides")
+    .notNull()
+    .default("{}"),
+
   // "This machine" backend exposure — persisted so it survives an app restart.
   backendRemoteAccess: integer("backend_remote_access", { mode: "boolean" })
     .notNull()
@@ -88,6 +104,11 @@ export const appSettings = sqliteTable("app_settings", {
     .notNull()
     .default(false),
   backendTailscaleHttps: integer("backend_tailscale_https", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  keepAwakeForRemoteAccess: integer("keep_awake_for_remote_access", {
+    mode: "boolean",
+  })
     .notNull()
     .default(false),
   // Stable identity of THIS install as a backend. Minted on first use and never
@@ -348,6 +369,7 @@ export const collections = sqliteTable(
     isArchived: integer("is_archived", { mode: "boolean" })
       .notNull()
       .default(false),
+    sortOrder: integer("sort_order").notNull().default(0),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -357,6 +379,7 @@ export const collections = sqliteTable(
   },
   (t) => [
     index("idx_collections_account").on(t.accountId),
+    index("idx_collections_account_sort").on(t.accountId, t.sortOrder),
     index("idx_collections_updated").on(t.updatedAt),
   ],
 );
@@ -453,6 +476,11 @@ export const runs = sqliteTable(
       .notNull()
       .default(false),
 
+    // When the user pinned this chat to the top of the sidebar; null means
+    // unpinned. A timestamp rather than a flag because the pinned group has to
+    // be ordered somehow, and "most recently pinned first" comes free with it.
+    pinnedAt: integer("pinned_at", { mode: "timestamp" }),
+
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -469,6 +497,7 @@ export const runs = sqliteTable(
     index("idx_runs_collection").on(t.collectionId),
     index("idx_runs_space").on(t.spaceId),
     index("idx_runs_updated").on(t.updatedAt),
+    index("idx_runs_pinned").on(t.pinnedAt),
     check(
       "check_runs_config_snapshot_json",
       sql`json_valid(${t.configSnapshot}) OR ${t.configSnapshot} IS NULL`,
@@ -519,6 +548,47 @@ export const runTurns = sqliteTable(
     check(
       "check_run_turns_metadata_json",
       sql`json_valid(${t.metadata}) OR ${t.metadata} IS NULL`,
+    ),
+  ],
+);
+
+/* -----------------------------
+   RUN TURN CHANGES (what each turn did to the working tree)
+------------------------------ */
+
+export const runTurnChanges = sqliteTable(
+  "run_turn_changes",
+  {
+    id: text("id").primaryKey(), // uuid
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    turnId: integer("turn_id")
+      .notNull()
+      .references(() => runTurns.id, { onDelete: "cascade" }),
+    // Patch between the working tree at turn start and at turn end, binary
+    // hunks included so it reverse-applies exactly. Stored here rather than as
+    // git refs so the record outlives the repo, its worktree, and git's gc.
+    diffText: text("diff_text").notNull(),
+    filesJson: text("files_json").notNull(), // JSON array of TreeDiffFile
+    additions: integer("additions").notNull().default(0),
+    deletions: integer("deletions").notNull().default(0),
+    // Legacy rows may contain a file-boundary-truncated patch. New rows keep
+    // the complete patch so binary and large-file turns remain undoable.
+    truncated: integer("truncated", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    undoneAt: integer("undone_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => [
+    index("idx_run_turn_changes_run").on(t.runId),
+    uniqueIndex("uniq_run_turn_changes_turn").on(t.turnId),
+    check(
+      "check_run_turn_changes_files_json",
+      sql`json_valid(${t.filesJson})`,
     ),
   ],
 );
@@ -590,6 +660,7 @@ export const runArtifacts = sqliteTable(
         "prompt_suggestion",
         "image",
         "document",
+        "visualization",
       ],
     }).notNull(),
 

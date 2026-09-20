@@ -36,6 +36,7 @@ describe("MODE_HARNESSES table invariants", () => {
     for (const tool of ["Bash", "Write", "Edit", "NotebookEdit", "Task"]) {
       expect(allowed).not.toContain(tool);
     }
+    expect(allowed).toContain("ToolSearch");
     expect(allowed.some((t) => t.startsWith("mcp__mains__"))).toBe(false);
   });
 

@@ -104,9 +104,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   const handleAddToContext = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (onAddToContext && node.type === "file") {
-        onAddToContext(node);
-      }
+      onAddToContext?.(node);
     },
     [node, onAddToContext],
   );
@@ -156,11 +154,11 @@ export const FileTreeNode = memo(function FileTreeNode({
 
         <span className="truncate flex-1">{node.name}</span>
 
-        {!isDirectory && onAddToContext && (
+        {onAddToContext && (
           <Button
             onClick={handleAddToContext}
             className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded hover:bg-primary/20 dark:hover:bg-primary/10 transition-opacity mr-1"
-            title="Add to context"
+            title={isDirectory ? "Add folder to context" : "Add to context"}
           >
             <Plus className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400" />
           </Button>

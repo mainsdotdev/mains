@@ -37,7 +37,7 @@ const variantStyles: Record<ButtonVariant, string> = {
   ghost:
     "text-primary-900 dark:text-primary-100 hover:bg-primary dark:hover:bg-primary-950/10",
   danger: "text-primary glass-danger",
-  icon: "p-1 rounded-md text-primary-600 dark:text-primary-400 hover:bg-primary-200/40 dark:hover:bg-primary-700",
+  icon: "p-1 rounded-full text-primary-600 dark:text-primary-400 hover:bg-primary-200/40 dark:hover:bg-primary/5",
   subtle:
     "flex items-center gap-2 hover:bg-primary/50 dark:hover:bg-primary/5",
   bare: "",

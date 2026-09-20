@@ -158,7 +158,7 @@ export function WorkspaceTabs({
       <div
         className="relative flex-1 flex items-end overflow-x-auto noscrollbar"
         style={{
-          // Clears the sidebar-toggle cluster once the sidebar is gone. Third
+          // Clears the sidebar toggle once the sidebar is gone. Third
           // and last term of the strip's left edge (content margin + header
           // padding + this), so it runs on the same clock as the other two —
           // untransitioned it snapped 12px ahead of them.

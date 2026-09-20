@@ -1,9 +1,13 @@
 import type { CSSProperties } from "react";
-import { useEffect } from "react";
 import { Settings, Question } from "@/components/ui/icons";
 import SpaceSelector from "./space-selector";
 import type { Space } from "@/lib/redux/api";
 import { Button } from "@/components/ui";
+import {
+  useKeyboardShortcut,
+  useKeyboardShortcutBinding,
+} from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SidebarFooterProps {
   spaces: Space[];
@@ -23,19 +27,12 @@ export function SidebarFooter({
   helpMenuOpen,
 }: SidebarFooterProps) {
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        onSettingsClick();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [onSettingsClick]);
+  useKeyboardShortcut("app.openSettings", onSettingsClick, {
+    allowInEditable: true,
+  });
+  const settingsShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.openSettings"),
+  );
 
   return (
     <div
@@ -47,17 +44,17 @@ export function SidebarFooter({
               style={{
           animation: `slide-from-bottom 0.2s ease-out 0.1s both`,
         }}>
-        <div className="glass-outline rounded-full p-1.5">
+        <div className=" rounded-full p-1.5">
           <Button
             onClick={onSettingsClick}
             className="shrink-0 flex items-center justify-center transition-transform duration-300 cursor-pointer"
             aria-label="Settings"
             title="Settings"
-            tooltipShortcut="⌘S"
+            tooltipShortcut={settingsShortcut}
             tooltip="Open Settings"
             tooltipPosition="top-right"
           >
-            <Settings className="size-4 text-primary-900 dark:text-primary-100 hover:text-primary-950 dark:hover:text-primary-100 transition-colors duration-300" />
+            <Settings className="size-4.5 text-primary-900 dark:text-primary-100 hover:text-primary-950 dark:hover:text-primary-100 transition-colors duration-300" />
           </Button>
         </div>
           <div className="">
@@ -67,7 +64,7 @@ export function SidebarFooter({
               onSpaceChange={onSpaceChange}
             />
           </div>
-        <div className="glass-outline rounded-full p-1.5">
+        <div className=" rounded-full p-1.5">
           <Button
             tooltip="Help & Resources"
             tooltipPosition="top"

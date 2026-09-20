@@ -14,19 +14,25 @@ import {
   SegmentedTabs,
 } from "@/components/ui";
 import {
-  useGetProviderInstalledPluginsQuery,
   useGetProviderPluginsQuery,
   useReadProviderPluginQuery,
   useInstallProviderPluginMutation,
   useUninstallProviderPluginMutation,
   useSetProviderPluginEnabledMutation,
+  useStartProviderConnectorOAuthMutation,
   useUpdateProviderPluginMutation,
 } from "@/lib/redux/api";
-import type { PluginAppSummary, PluginInfo, PluginScope } from "@/lib/redux/api";
+import type {
+  ConnectorMcpServerInfo,
+  PluginAppSummary,
+  PluginInfo,
+  PluginScope,
+} from "@/lib/redux/api";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import { getPluginInstallBlockReason } from "../../../../shared/plugin-install-availability";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
+import { appEvents } from "@/lib/transport/events";
 import {
   Search,
   Check,
@@ -240,7 +246,8 @@ function InstalledPluginShelf({
               return (
                 <Button
                   key={plugin.id}
-                  title={name}
+                  tooltip={name}
+                  tooltipPosition="bottom"
                   aria-label={`Open ${name}`}
                   onClick={() => onSelect(plugin.id)}
                   className={`size-12 shrink-0 snap-start rounded-2xl glass-surface flex items-center justify-center transition-[transform,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400/70 cursor-pointer ${
@@ -276,18 +283,32 @@ function groupAppsByCategory(
   return groups;
 }
 
-/** App logo from the connector directory; falls back to the generic Apps icon. */
-function AppIncludeIcon({ app }: { app: PluginAppSummary }) {
-  const [failed, setFailed] = useState(false);
-  if (app.iconUrl && !failed) {
+/**
+ * Prefer the app-directory icon. Some first-party connectors intentionally
+ * publish no app icon, so a one-app plugin can reuse its own branded logo.
+ */
+function AppIncludeIcon({
+  app,
+  fallbackIcon,
+}: {
+  app: PluginAppSummary;
+  fallbackIcon?: string;
+}) {
+  const sources = [app.iconUrl, fallbackIcon].filter(
+    (source, index, all): source is string =>
+      Boolean(source) && all.indexOf(source) === index,
+  );
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const source = sources[sourceIndex];
+  if (source) {
     return (
       <img
-        src={proxiedImageSrc(app.iconUrl)}
+        src={proxiedImageSrc(source)}
         alt=""
         loading="lazy"
         decoding="async"
         className="size-7 rounded-lg object-cover shrink-0"
-        onError={() => setFailed(true)}
+        onError={() => setSourceIndex((index) => index + 1)}
       />
     );
   }
@@ -295,6 +316,84 @@ function AppIncludeIcon({ app }: { app: PluginAppSummary }) {
     <div className="size-7 rounded-lg bg-primary-200/50 dark:bg-primary-700/30 flex items-center justify-center shrink-0">
       <Apps className="size-4 text-primary-800 dark:text-primary" />
     </div>
+  );
+}
+
+function appConnectionState(app: PluginAppSummary): {
+  label: string;
+  tone: "success" | "warning" | "subtle";
+} {
+  if (app.callable) return { label: "Connected", tone: "success" };
+  if (app.runtimeEnabled === false || app.isEnabled === false) {
+    return { label: "Disabled", tone: "subtle" };
+  }
+  if (app.installed) return { label: "Needs setup", tone: "warning" };
+  if (app.installed === false && app.needsAuth) {
+    return { label: "Not connected", tone: "warning" };
+  }
+  if (app.isAccessible) return { label: "Available", tone: "subtle" };
+  return { label: "Included", tone: "subtle" };
+}
+
+function mcpConnectionState(server: ConnectorMcpServerInfo): {
+  label: string;
+  tone: "success" | "warning" | "subtle";
+  action: "Connect" | "Reconnect" | null;
+} {
+  if (server.runtimeStatus === "connected") {
+    return { label: "Connected", tone: "success", action: null };
+  }
+  if (server.runtimeStatus === "starting") {
+    return { label: "Connecting", tone: "subtle", action: null };
+  }
+  if (
+    server.runtimeStatus === "authenticationRequired" ||
+    server.authStatus === "notLoggedIn"
+  ) {
+    return {
+      label: "Authentication required",
+      tone: "warning",
+      action: "Connect",
+    };
+  }
+  if (server.runtimeStatus === "failed" && server.authStatus === "oAuth") {
+    return {
+      label: "Reconnect required",
+      tone: "warning",
+      action: "Reconnect",
+    };
+  }
+  if (server.runtimeStatus === "failed") {
+    return { label: "Connection failed", tone: "warning", action: null };
+  }
+  if (server.runtimeStatus === "disabled") {
+    return { label: "Disabled", tone: "subtle", action: null };
+  }
+  return { label: "Included", tone: "subtle", action: null };
+}
+
+function ConnectionBadge({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "success" | "warning" | "subtle";
+}) {
+  const background =
+    tone === "success"
+      ? "bg-success/15"
+      : tone === "warning"
+        ? "bg-warning/15"
+        : "bg-primary-200/60 dark:bg-primary-800/20";
+  return (
+    <Text
+      as="span"
+      size="xs"
+      tone={tone}
+      className={`shrink-0 rounded-full px-2 py-0.5 ${background}`}
+    >
+      {label}
+    </Text>
   );
 }
 
@@ -460,15 +559,54 @@ function PluginDetail({
 
   // Remote-catalog plugins have no marketplace path — the codex driver resolves
   // them by backend id, so an empty path is fine to send.
-  const { data: detail } = useReadProviderPluginQuery(
+  const { data: detail, refetch: refetchDetail } = useReadProviderPluginQuery(
     { providerId, pluginName, marketplacePath },
     { skip: !pluginName },
+  );
+  const [startConnectorOAuth] = useStartProviderConnectorOAuthMutation();
+  const [oauthServer, setOauthServer] = useState<string | null>(null);
+
+  useEffect(
+    () =>
+      appEvents.providers.onConnectorsUpdated(({ providerId: changedId }) => {
+        if (changedId === providerId) void refetchDetail();
+      }),
+    [providerId, refetchDetail],
+  );
+
+  const handleConnectorOAuth = useCallback(
+    async (serverName: string) => {
+      setOauthServer(serverName);
+      try {
+        const result = await startConnectorOAuth({
+          providerId,
+          serverName,
+        }).unwrap();
+        await window.api.shell.openExternal(result.authorizationUrl);
+      } catch (error) {
+        toast.error(
+          extractErrorMessage(error, "Failed to start connector login"),
+        );
+      } finally {
+        setOauthServer(null);
+      }
+    },
+    [providerId, startConnectorOAuth],
   );
   const hasIncludes =
     detail &&
     (detail.skills.length > 0 ||
       detail.apps.length > 0 ||
       detail.mcpServers.length > 0);
+  const mcpServerStatuses: ConnectorMcpServerInfo[] =
+    detail?.mcpServerStatuses ??
+    detail?.mcpServers.map((name) => ({
+      name,
+      runtimeStatus: null,
+      authStatus: "unknown" as const,
+      toolCount: 0,
+    })) ??
+    [];
 
   // The detail read carries marketplace.json fallback fields (developer,
   // category, website) that the list payload lacks — prefer it for the
@@ -641,47 +779,46 @@ function PluginDetail({
                     {category}
                   </Text>
                 )}
-                {categoryApps.map((app) => (
-                  <div key={app.id} className="flex items-center gap-3 px-4 py-3">
-                    <AppIncludeIcon app={app} />
-                    <div className="flex-1 min-w-0">
-                      <IncludeText
-                        name={app.name || name}
-                        kind="App"
-                        description={app.description}
-                      />
+                {categoryApps.map((app) => {
+                  const state = appConnectionState(app);
+                  const fallbackIcon =
+                    detail.apps.length === 1
+                      ? info?.logo ?? iface?.logo
+                      : undefined;
+                  return (
+                    <div
+                      key={app.id}
+                      className="flex items-center gap-3 px-4 py-3"
+                    >
+                      <AppIncludeIcon app={app} fallbackIcon={fallbackIcon} />
+                      <div className="min-w-0 flex-1">
+                        <IncludeText
+                          name={app.name || name}
+                          kind="App"
+                          description={app.description}
+                        />
+                      </div>
+                      {plugin.installed && state.label !== "Included" && (
+                        <ConnectionBadge {...state} />
+                      )}
+                      {plugin.installed &&
+                        !app.callable &&
+                        app.isEnabled !== false &&
+                        app.installUrl && (
+                          <Button
+                            variant="secondary"
+                            className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-0"
+                            onClick={() =>
+                              window.api.shell.openExternal(app.installUrl!)
+                            }
+                          >
+                            <span>Set up</span>
+                            <External className="size-3.5 shrink-0" />
+                          </Button>
+                        )}
                     </div>
-                {app.isEnabled === false ? (
-                  <Text
-                    as="span"
-                    size="xs"
-                    tone="subtle"
-                    className="shrink-0 px-2 py-0.5 rounded-full bg-primary-200/60 dark:bg-primary-800/20"
-                  >
-                    Disabled
-                  </Text>
-                ) : app.isAccessible === true ? (
-                  <Text
-                    as="span"
-                    size="xs"
-                    tone="success"
-                    className="shrink-0 px-2 py-0.5 rounded-full bg-success/15"
-                  >
-                    Connected
-                  </Text>
-                ) : app.installUrl ? (
-                  <Button
-                    variant="icon"
-                    className="shrink-0 rounded-lg"
-                    onClick={() =>
-                      window.api.shell.openExternal(app.installUrl!)
-                    }
-                  >
-                    <External className="size-4" />
-                  </Button>
-                ) : null}
-                  </div>
-                ))}
+                  );
+                })}
               </Fragment>
             ))}
             {detail.skills.map((skill) => (
@@ -701,18 +838,46 @@ function PluginDetail({
                 </div>
               </div>
             ))}
-            {detail.mcpServers.map((server) => (
-              <div key={server} className="flex items-center gap-3 px-4 py-3">
-                <div className="size-8 rounded-lg bg-primary-200/50 dark:bg-primary-700/30 flex items-center justify-center shrink-0">
-                  <Text as="span" size="xs" tone="subtle">
-                    MCP
-                  </Text>
+            {mcpServerStatuses.map((server) => {
+              const state = mcpConnectionState(server);
+              return (
+                <div
+                  key={server.name}
+                  className="flex items-center gap-3 px-4 py-3"
+                >
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-200/50 dark:bg-primary-700/30">
+                    <Text as="span" size="xs" tone="subtle">
+                      MCP
+                    </Text>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <IncludeText
+                      name={server.title || server.name}
+                      kind="MCP Server"
+                      description={server.description}
+                    />
+                  </div>
+                  {plugin.installed && state.label !== "Included" && (
+                    <ConnectionBadge label={state.label} tone={state.tone} />
+                  )}
+                  {plugin.installed && state.action && (
+                    <Button
+                      variant={
+                        state.action === "Reconnect" ? "primary" : "secondary"
+                      }
+                      disabled={oauthServer === server.name}
+                      onClick={() => handleConnectorOAuth(server.name)}
+                    >
+                      {oauthServer === server.name ? (
+                        <AsciiSpinner variant="null" />
+                      ) : (
+                        state.action
+                      )}
+                    </Button>
+                  )}
                 </div>
-                <div className="min-w-0">
-                  <IncludeText name={server} kind="MCP Server" />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -921,7 +1086,7 @@ const FEATURED_PLUGIN_NAMES = [
 
 // ── Main Component ──
 
-export default function ProviderPlugins({
+function ProviderPluginCatalog({
   providerId = PROVIDER_IDS.codex,
 }: {
   providerId?: string;
@@ -931,15 +1096,6 @@ export default function ProviderPlugins({
     isLoading,
     error,
   } = useGetProviderPluginsQuery(providerId, {
-    refetchOnFocus: false,
-    refetchOnReconnect: false,
-  });
-  const isCodex = providerId === PROVIDER_IDS.codex;
-  const {
-    data: installedPluginData,
-    isLoading: isLoadingInstalledPlugins,
-  } = useGetProviderInstalledPluginsQuery(providerId, {
-    skip: !isCodex,
     refetchOnFocus: false,
     refetchOnReconnect: false,
   });
@@ -964,16 +1120,14 @@ export default function ProviderPlugins({
     //.filter((p) => p.interface?.developerName === "OpenAI" || p.interface?.developerName === "Vercel Labs" );
   }, [pluginData]);
 
-  const installedPlugins = useMemo(() => {
-    if (isCodex) {
-      return (
-        installedPluginData?.marketplaces.flatMap(
-          (marketplace) => marketplace.plugins,
-        ) ?? []
-      );
-    }
-    return allPlugins.filter((plugin) => plugin.installed);
-  }, [allPlugins, installedPluginData, isCodex]);
+  // `plugin/installed` can retain legacy marketplace entries after they have
+  // been uninstalled (for example `@openai-curated` after migration to
+  // `@openai-curated-remote`). The catalog drives the cards and reflects
+  // mutations immediately, so it must also be the shelf's source of truth.
+  const installedPlugins = useMemo(
+    () => allPlugins.filter((plugin) => plugin.installed),
+    [allPlugins],
+  );
 
   // id → rank; the marketplace's featuredPluginIds order is a curated ranking,
   // so keep it instead of falling back to marketplace order.
@@ -1146,7 +1300,7 @@ export default function ProviderPlugins({
       <div className="mb-12">
         <InstalledPluginShelf
           plugins={installedPlugins}
-          isLoading={isCodex ? isLoadingInstalledPlugins : true}
+          isLoading={isLoading}
           onSelect={setSelectedPluginId}
         />
         <Muted>Loading plugins... This may take a moment on first load.</Muted>
@@ -1159,7 +1313,7 @@ export default function ProviderPlugins({
       <div className="mb-12">
         <InstalledPluginShelf
           plugins={installedPlugins}
-          isLoading={isCodex && isLoadingInstalledPlugins}
+          isLoading={isLoading}
           onSelect={setSelectedPluginId}
         />
         <Muted>Failed to load plugins: {extractErrorMessage(error, "Unknown error")}</Muted>
@@ -1196,7 +1350,7 @@ export default function ProviderPlugins({
     <div className="mb-12">
       <InstalledPluginShelf
         plugins={installedPlugins}
-        isLoading={isCodex && isLoadingInstalledPlugins}
+        isLoading={isLoading}
         onSelect={setSelectedPluginId}
       />
 
@@ -1301,4 +1455,12 @@ export default function ProviderPlugins({
       )}
     </div>
   );
+}
+
+export default function ProviderPlugins({
+  providerId = PROVIDER_IDS.codex,
+}: {
+  providerId?: string;
+} = {}) {
+  return <ProviderPluginCatalog providerId={providerId} />;
 }

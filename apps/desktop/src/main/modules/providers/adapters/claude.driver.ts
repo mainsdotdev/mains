@@ -74,6 +74,7 @@ import {
   adoptConfig,
   createLogger,
   ALLOWED_TOOLS_SET,
+  couldModifyFiles,
   resolveEffectiveAllowedTools,
   safeJson,
   extractArtifactsFromToolOutput,
@@ -171,7 +172,9 @@ interface SDKOptions {
   additionalDirectories?: string[];
   agents?: SDKAgentsConfig;
   maxTurns?: number;
-  systemPrompt?: string | { type: "preset"; preset: "claude_code"; append?: string };
+  systemPrompt?:
+    | string
+    | { type: "preset"; preset: "claude_code"; append?: string; snapshot?: boolean };
   settingSources?: Array<"user" | "project" | "local">;
   hooks?: SDKHooksConfig;
   mcpServers?: Record<string, McpServerConfig>;
@@ -347,9 +350,10 @@ interface SDKMessageContent {
  * Reply to the `get_context_usage` control request — the CLI's own `/context`
  * report, structured. This is the meter's live source.
  *
- * Unlike the `/context` message payload below, its categories carry no kind
- * discriminator: deferred rows are flagged, and the two rows that are space
- * rather than content are identified only by name.
+ * Claude Code >= 2.1.268 stamps each category with its `kind`, the same
+ * classification the `/context` message payload below carries. An older CLI
+ * (a configured binary) leaves it off: deferred rows are flagged, and the two
+ * rows that are space rather than content are identified only by name.
  */
 export interface SDKContextUsageResponse {
   totalTokens: number;
@@ -358,7 +362,7 @@ export interface SDKContextUsageResponse {
   model: string;
   isAutoCompactEnabled?: boolean;
   autoCompactThreshold?: number;
-  categories?: { name: string; tokens: number; isDeferred?: boolean }[];
+  categories?: { name: string; tokens: number; isDeferred?: boolean; kind?: string }[];
 }
 
 /**
@@ -399,7 +403,7 @@ interface SDKAssistantMessage {
   type: "assistant";
   uuid: string;
   session_id: string;
-  message: { role: "assistant"; content: SDKMessageContent[] };
+  message: { role: "assistant"; model?: string; content: SDKMessageContent[] };
   parent_tool_use_id: string | null;
   /**
    * Set when the API call behind this turn failed. Without it an auth or
@@ -498,6 +502,77 @@ interface SDKResultError extends SDKResultBase {
 }
 
 type SDKResultMessage = SDKResultSuccess | SDKResultError;
+
+interface ClaudeTurnModelMessage {
+  type?: unknown;
+  subtype?: unknown;
+  scope?: unknown;
+  parent_tool_use_id?: unknown;
+  message?: { model?: unknown };
+  model?: unknown;
+  fallback_model?: unknown;
+  modelUsage?: Record<string, { contextWindow?: unknown }>;
+}
+
+function cleanModel(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Resolve the main conversation model from a stream without trusting usage-key order. */
+export function resolveClaudeTurnModel(
+  currentModel: string | undefined,
+  message: ClaudeTurnModelMessage,
+  configuredModel?: string,
+): string | undefined {
+  if (message.type === "assistant" && message.parent_tool_use_id === null) {
+    const assistantModel = cleanModel(message.message?.model);
+    if (assistantModel) return assistantModel;
+  }
+
+  if (message.type === "system" && message.subtype === "init") {
+    const initializedModel = cleanModel(message.model);
+    if (initializedModel) return initializedModel;
+  }
+
+  if (
+    message.type === "system" &&
+    message.subtype === "model_refusal_fallback" &&
+    message.scope !== "local"
+  ) {
+    const fallbackModel = cleanModel(message.fallback_model);
+    if (fallbackModel) return fallbackModel;
+  }
+
+  const current = cleanModel(currentModel);
+  if (current) return current;
+  if (message.type !== "result" || !message.modelUsage) return undefined;
+
+  const entries = Object.entries(message.modelUsage);
+  if (entries.length === 1) return entries[0]?.[0];
+
+  const configured = cleanModel(configuredModel);
+  const exactConfigured = entries.find(
+    ([name]) => name.toLowerCase() === configured?.toLowerCase(),
+  );
+  if (exactConfigured) return exactConfigured[0];
+
+  const rankedByWindow = entries
+    .map(([name, usage]) => ({
+      name,
+      contextWindow:
+        typeof usage.contextWindow === "number" ? usage.contextWindow : 0,
+    }))
+    .sort((a, b) => b.contextWindow - a.contextWindow);
+  if (
+    rankedByWindow[0] &&
+    rankedByWindow[0].contextWindow > (rankedByWindow[1]?.contextWindow ?? 0)
+  ) {
+    return rankedByWindow[0].name;
+  }
+
+  // Multiple equally plausible models are safer left unknown than mislabeled.
+  return undefined;
+}
 
 export interface SDKSystemMessage {
   type: "system";
@@ -711,10 +786,41 @@ export type ClaudeTaskIndex = Map<
   { toolUseId?: string; description?: string; subagentType?: string }
 >;
 
+type ClaudeSDKPermissionMode = NonNullable<SDKOptions["permissionMode"]>;
+
+/**
+ * The session's live permission mode. A run starts in one mode, but the CLI
+ * moves the session mid-run — the model calls EnterPlanMode, an applied plan
+ * switches modes — so the permission bridge judges each request by where the
+ * session is now, not where it started.
+ */
+export interface ClaudePermissionModeRef {
+  current: ClaudeSDKPermissionMode;
+  /** The mode plan mode was entered from: where an applied plan returns. */
+  beforePlan?: ClaudeSDKPermissionMode;
+}
+
+export function createClaudePermissionModeRef(
+  initial: ClaudeSDKPermissionMode,
+): ClaudePermissionModeRef {
+  return { current: initial };
+}
+
+function setClaudePermissionMode(
+  ref: ClaudePermissionModeRef,
+  next: ClaudeSDKPermissionMode,
+): void {
+  if (next !== "plan") delete ref.beforePlan;
+  else if (ref.current !== "plan") ref.beforePlan = ref.current;
+  ref.current = next;
+}
+
 interface ClaudeSession {
   runId: string;
   options: SDKOptions;
   abortController: AbortController;
+  /** Live permission mode, shared with this session's permission bridge. */
+  permissionMode: ClaudePermissionModeRef;
   /** On-disk flag-settings snapshot inherited by dynamic Workflow agents. */
   runtimeSettingsPath?: string;
   /** Whether this run asked for fast mode — the CLI only reports on it. */
@@ -869,7 +975,8 @@ type ApprovalRequester = (request: ToolApprovalRequest) => Promise<ToolApprovalR
 interface ClaudePermissionBridgeOptions {
   runId: string;
   allowedTools: Set<string>;
-  bypassMode: boolean;
+  /** Read on every decision — see ClaudePermissionModeRef. */
+  permissionMode: ClaudePermissionModeRef;
   /**
    * True when the run's tool policy *replaced* the default allowlist rather
    * than trimming it — a mode that ships its own tool set (chat). MCP tools
@@ -898,7 +1005,7 @@ interface PermissionDecision {
 export function createClaudePermissionBridge({
   runId,
   allowedTools,
-  bypassMode,
+  permissionMode,
   restrictedToolset = false,
   requestApproval = requestToolApproval,
   cancelApproval = cancelPendingRequest,
@@ -911,15 +1018,23 @@ export function createClaudePermissionBridge({
     context: { signal: AbortSignal; requestId?: string },
   ): Promise<PermissionDecision> {
     const isAskUser = toolName === "AskUserQuestion";
+    const isPlanReview = toolName === "ExitPlanMode";
+    const mode = permissionMode.current;
 
-    // AskUserQuestion is an interaction, not a permission gate, so it must
-    // still reach the renderer even in bypass mode.
+    // AskUserQuestion and the plan review are interactions, not permission
+    // gates — the user is the one answering — so they must still reach the
+    // renderer even in bypass mode.
     // The `mcp__` shortcut is the pre-approval an MCP server earns by being
     // configured at all — but only while the run is on the default toolset.
     // Under a replacement allowlist it falls through to the approval dialog,
     // matching the copilot driver's pre-tool hook.
+    // While the session plans, nothing waves a file change through: the SDK
+    // (>= 0.3.269) asks here about plan-mode writes even under
+    // allowDangerouslySkipPermissions, and the plan is not approved yet.
+    const bypass = mode === "bypassPermissions" && !isAskUser && !isPlanReview;
     const mcpTrusted = !restrictedToolset && toolName.startsWith("mcp__");
-    if ((bypassMode && !isAskUser) || allowedTools.has(toolName) || mcpTrusted) {
+    const planGated = mode === "plan" && couldModifyFiles(toolName);
+    if (!planGated && (bypass || allowedTools.has(toolName) || mcpTrusted)) {
       return { allowed: true, updatedInput: toolInput };
     }
 
@@ -979,17 +1094,21 @@ export function createClaudePermissionBridge({
       return { allowed: false, reason: "User denied permission" };
     }
 
-    if (toolName === "ExitPlanMode") {
+    if (isPlanReview) {
+      // Updating the persisted provider config only affects future queries.
+      // Move the currently running Claude SDK session out of plan mode too:
+      // back to the mode it planned from (a bypass run stays bypass), or to
+      // the UI's "Edit" selection when the run itself started in plan mode.
+      const { current, beforePlan } = permissionMode;
+      const nextMode = beforePlan ?? (current === "plan" ? "acceptEdits" : current);
+      setClaudePermissionMode(permissionMode, nextMode);
       return {
         allowed: true,
         updatedInput: toolInput,
-        // Updating the persisted provider config only affects future queries.
-        // Move the currently running Claude SDK session out of plan mode too,
-        // so the implementation phase inherits the UI's "Edit" selection.
         updatedPermissions: [
           {
             type: "setMode",
-            mode: "acceptEdits",
+            mode: nextMode,
             destination: "session",
           },
         ],
@@ -1255,10 +1374,17 @@ export function buildFastModeEvent(
   };
 }
 
+const CONTEXT_USAGE_KINDS = new Set(["used", "free", "buffer", "deferred"]);
+
+/** The kinds come off a subprocess, so an unknown one is not trusted. */
+function isContextUsageKind(value: unknown): value is WorkRunContextUsageCategory["kind"] {
+  return typeof value === "string" && CONTEXT_USAGE_KINDS.has(value);
+}
+
 /**
  * The two category names that are space rather than content.
  *
- * Matched by name because the control reply carries no kind discriminator. A
+ * Only consulted for a row without a kind the meter knows (an older CLI). A
  * rename upstream degrades gracefully — the row keeps its real tokens and just
  * renders as an ordinary category instead of as empty space.
  */
@@ -1279,6 +1405,9 @@ export function mapContextUsageResponse(
   const categories = response.categories
     ?.filter((category) => category.tokens > 0)
     .map((category) => {
+      if (isContextUsageKind(category.kind)) {
+        return { name: category.name, tokens: category.tokens, kind: category.kind };
+      }
       const name = category.name.trim().toLowerCase();
       const kind: WorkRunContextUsageCategory["kind"] = category.isDeferred
         ? "deferred"
@@ -1320,13 +1449,11 @@ export function buildContextUsageEvent(
 ): WorkRunEvent | null {
   const ctx = msg.context_usage;
   if (!ctx || msg.parent_tool_use_id || !(ctx.raw_max_tokens > 0)) return null;
-  // The kinds come off a subprocess, so unknown ones are dropped rather than
-  // widening the renderer's union — a row it can't classify has no place to go.
+  // Unknown kinds are dropped rather than widening the renderer's union — a row
+  // it can't classify has no place to go.
   const categories = ctx.categories
     ?.filter(
-      (c): c is WorkRunContextUsageCategory =>
-        c.tokens > 0 &&
-        (c.kind === "used" || c.kind === "free" || c.kind === "buffer" || c.kind === "deferred"),
+      (c): c is WorkRunContextUsageCategory => c.tokens > 0 && isContextUsageKind(c.kind),
     )
     .map((c) => ({ name: c.name, tokens: c.tokens, kind: c.kind }));
   return {
@@ -1605,6 +1732,9 @@ export function mapSDKMessage(
             delete cs.state.terminalToolNonExecutionKind;
           }
           if (toolUseId) cs.toolCallIndex.delete(toolUseId);
+          if (prev?.toolName === "EnterPlanMode" && !block.is_error && !isFromSubagent) {
+            setClaudePermissionMode(cs.permissionMode, "plan");
+          }
           events.push({
             type: "tool_call",
             toolName: prev?.toolName || "unknown",
@@ -1665,6 +1795,13 @@ export function mapSDKMessage(
 
     case "system": {
       const systemMsg = msg as SDKSystemMessage;
+      // The CLI reports the session's mode on init and on every change.
+      if (
+        (systemMsg.subtype === "init" || systemMsg.subtype === "status") &&
+        isSDKPermissionMode(systemMsg.permissionMode)
+      ) {
+        setClaudePermissionMode(cs.permissionMode, systemMsg.permissionMode);
+      }
       if (systemMsg.subtype === "init") {
         const plugins = systemMsg.plugins ?? [];
         const pluginPart = plugins.length
@@ -2357,6 +2494,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     newSessionId?: string;
     onEvent?: WorkRunEventHandler;
     permissionMode?: NonNullable<SDKOptions["permissionMode"]>;
+    /**
+     * Receives the run's resolved mode and becomes the permission bridge's live
+     * view of it — hand the same object to newSession so the stream updates it.
+     */
+    permissionModeRef?: ClaudePermissionModeRef;
     /** Mode/space instruction delta, appended to the claude_code preset. */
     extraInstructions?: string | null;
     /** Experience mode — filters which mains tools the MCP server exposes. */
@@ -2377,6 +2519,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       newSessionId,
       onEvent,
       permissionMode: runPermissionMode,
+      permissionModeRef,
       extraInstructions,
       mode,
       toolPolicy,
@@ -2419,11 +2562,16 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     const effectiveAllowedTools = toolPolicy
       ? new Set(resolveEffectiveAllowedTools(toolPolicy))
       : ALLOWED_TOOLS_SET;
+    // A run that starts in plan mode has no mode it planned *from* — applying
+    // its plan lands on "Edit" — so this seeds the ref rather than switching it.
+    const livePermissionMode = permissionModeRef ?? createClaudePermissionModeRef(permissionMode);
+    livePermissionMode.current = permissionMode;
+    delete livePermissionMode.beforePlan;
     const permissionBridge = runId
       ? createClaudePermissionBridge({
           runId,
           allowedTools: effectiveAllowedTools,
-          bypassMode: permissionMode === "bypassPermissions",
+          permissionMode: livePermissionMode,
           restrictedToolset: !!toolPolicy?.allowedTools,
         })
       : null;
@@ -2551,10 +2699,15 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       options.hooks.PostToolUse.push(buildPostToolUseHook(onEvent));
     }
 
+    // Recorded once per session (the SDK default since 0.3.267, pinned here on
+    // purpose): resume and continue reuse the first rendering, which keeps the
+    // prompt cache and earlier thinking intact. The trade-off — an edited space
+    // prompt reaches new runs, not ones already in progress — is accepted.
     options.systemPrompt = {
       type: "preset",
       preset: "claude_code",
       ...(extraInstructions ? { append: extraInstructions } : {}),
+      snapshot: true,
     };
 
     if (runId && options.settings && typeof options.settings !== "string") {
@@ -2667,11 +2820,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     options: SDKOptions,
     abortController: AbortController,
     isInitial: boolean,
+    permissionMode: ClaudePermissionModeRef,
   ): ClaudeSession {
     return {
       runId,
       options,
       abortController,
+      permissionMode,
       runtimeSettingsPath:
         typeof options.settings === "string" ? options.settings : undefined,
       fastModeRequested: !!config.fastMode,
@@ -2870,6 +3025,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const abortController = new AbortController();
       const overridePermissionMode = request.configSnapshot?.permissionMode;
       const sessionId = randomUUID();
+      const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
       const options = await buildOptions({
         model: getModel(request.model),
         workspacePath: request.execution.cwd,
@@ -2882,12 +3038,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         permissionMode: isSDKPermissionMode(overridePermissionMode)
           ? overridePermissionMode
           : undefined,
+        permissionModeRef,
         extraInstructions: request.extraInstructions,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
       });
 
-      const session = newSession(request.runId, options, abortController, true);
+      const session = newSession(request.runId, options, abortController, true, permissionModeRef);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
       return { session, prompt: buildStartPrompt(request), sessionId };
@@ -2906,6 +3063,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
       const abortController = new AbortController();
       const resumePermissionMode = request.configSnapshot?.permissionMode;
+      const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
       const options = await buildOptions({
         model: getModel(request.model ?? config.defaultModel),
         workspacePath: request.execution.cwd,
@@ -2918,12 +3076,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         permissionMode: isSDKPermissionMode(resumePermissionMode)
           ? resumePermissionMode
           : undefined,
+        permissionModeRef,
         extraInstructions: request.extraInstructions,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
       });
 
-      const session = newSession(request.runId, options, abortController, false);
+      const session = newSession(request.runId, options, abortController, false, permissionModeRef);
       // Prime sessionId so executePrompt's "first session_id" persistence is a no-op for resume;
       // the SDK keeps the same id when resuming.
       session.state.sessionId = sessionId;
@@ -2946,6 +3105,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       // identified before it produces anything, same as a fresh session.
       const sessionId = randomUUID();
       const forkPermissionMode = request.configSnapshot?.permissionMode;
+      const permissionModeRef = createClaudePermissionModeRef(DEFAULT_CLAUDE_PERMISSION_MODE);
       const options = await buildOptions({
         model: getModel(request.model ?? config.defaultModel),
         workspacePath: request.execution.cwd,
@@ -2960,12 +3120,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         permissionMode: isSDKPermissionMode(forkPermissionMode)
           ? forkPermissionMode
           : undefined,
+        permissionModeRef,
         extraInstructions: request.extraInstructions,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
       });
 
-      const session = newSession(request.runId, options, abortController, true);
+      const session = newSession(request.runId, options, abortController, true, permissionModeRef);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
       return { session, prompt: buildForkPrompt(request), sessionId };
@@ -3025,6 +3186,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         let lastReqContextTokens = 0;
         let contextUsageInFlight = false;
         let contextUsageAt = 0;
+        let primaryModel: string | undefined;
         // The reply is a whole-context token count, so it is asked for at a
         // human-readable cadence rather than once per assistant message.
         const CONTEXT_USAGE_MIN_INTERVAL_MS = 2_000;
@@ -3058,6 +3220,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         const streamPromise = (async () => {
           for await (const msg of query) {
             if (signal.aborted || timedOut) break;
+            primaryModel = resolveClaudeTurnModel(
+              primaryModel,
+              msg as unknown as ClaudeTurnModelMessage,
+              cs.options.model,
+            );
 
             // Track whether any assistant text content has been streamed (for result-message dedup).
             if (msg.type === "assistant") {
@@ -3123,7 +3290,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                 outputTokens = 0,
                 cacheRead = 0,
                 cacheWrite = 0;
-              let primaryModel: string | undefined;
               // Fallback context meter: the entry with the largest window is the
               // main conversation model (not haiku subagents).
               let ctxModel: string | undefined;
@@ -3134,7 +3300,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                   outputTokens += usage.outputTokens;
                   cacheRead += usage.cacheReadInputTokens;
                   cacheWrite += usage.cacheCreationInputTokens;
-                  if (!primaryModel) primaryModel = modelName;
                   const window = usage.contextWindow ?? 0;
                   if (window > ctxWindow) {
                     ctxWindow = window;

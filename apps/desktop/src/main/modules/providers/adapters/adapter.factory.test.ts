@@ -15,6 +15,7 @@ vi.mock("./cursor.driver", () => ({ createCursorDriver: (c: any) => createCursor
 import {
   clearAdapterCache,
   createWorkAdapter,
+  listSkillsForProvider,
   refreshWorkAdapterConfig,
 } from "./adapter.factory";
 
@@ -80,6 +81,56 @@ describe("createWorkAdapter", () => {
       createWorkAdapter({ ...codexProvider({}), isEnabled: false }),
     ).toThrow(/is not enabled/);
     expect(createCodexDriver).not.toHaveBeenCalled();
+  });
+
+  it("preserves installed plugin identity as a structured mention path", async () => {
+    const driver = {
+      ...fakeDriver(),
+      listSkills: vi.fn().mockResolvedValue([]),
+      listPlugins: vi.fn().mockResolvedValue({
+        marketplaces: [],
+        marketplaceLoadErrors: [],
+        remoteSyncError: null,
+        featuredPluginIds: [],
+      }),
+      listInstalledPlugins: vi.fn().mockResolvedValue({
+        marketplaces: [{
+          name: "openai-curated-remote",
+          path: "",
+          interface: null,
+          plugins: [{
+            id: "app-694546cd042881919bb746a8dc300f38@openai-curated-remote",
+            name: "app-694546cd042881919bb746a8dc300f38",
+            source: { type: "remote", path: "" },
+            installed: true,
+            enabled: true,
+            installPolicy: "AVAILABLE",
+            authPolicy: "ON_INSTALL",
+            interface: {
+              displayName: "Skyscanner",
+              capabilities: ["apps"],
+              screenshots: [],
+            },
+          }],
+        }],
+        marketplaceLoadErrors: [],
+        remoteSyncError: null,
+        featuredPluginIds: [],
+      }),
+    } as ProviderDriver;
+    createCodexDriver.mockReturnValue(driver);
+
+    const skills = await listSkillsForProvider(codexProvider({}));
+
+    expect(skills).toEqual([
+      expect.objectContaining({
+        name: "app-694546cd042881919bb746a8dc300f38",
+        displayName: "Skyscanner",
+        scope: "plugin",
+        mentionPath:
+          "plugin://app-694546cd042881919bb746a8dc300f38@openai-curated-remote",
+      }),
+    ]);
   });
 });
 

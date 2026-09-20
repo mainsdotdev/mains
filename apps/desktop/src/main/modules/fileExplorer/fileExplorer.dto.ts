@@ -39,6 +39,8 @@ export interface SearchFilesOptions {
   query: string;
   max?: number;
   includeHidden?: boolean;
+  /** Include matching directory paths as well as files. */
+  includeDirectories?: boolean;
   excludePatterns?: string[];
 }
 

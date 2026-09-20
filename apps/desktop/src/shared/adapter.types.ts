@@ -88,11 +88,13 @@ export interface WorkRunRequest {
   /** Structured context signals (error reports) passed from the UI */
   contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
   /** Structured context files passed from the UI */
-  contextFiles?: Array<{ path: string }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
   /** User-selected skills to invoke during this run (adapter decides how to inject) */
   skills?: Array<{
     name: string;
     path?: string;
+    /** Structured app-server mention target for an app or plugin selection. */
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -256,7 +258,15 @@ export interface WorkRunTaskEvent {
  */
 export interface WorkRunPromptSuggestionEvent {
   type: "prompt_suggestion";
+  /** What gets sent when the chip is clicked. */
   suggestion: string;
+  /**
+   * Short text for the chip, when the provider gives one. Codex writes its
+   * follow-ups as `:codex-followup[Make it investor-ready]{prompt="…"}` — a
+   * label to read and a prompt to send, which are not the same sentence.
+   * Absent for providers that only offer the prompt.
+   */
+  label?: string;
   ts?: number;
 }
 
@@ -422,11 +432,13 @@ export interface WorkRunContinueRequest {
   /** Structured context signals (error reports) to inject into this follow-up */
   contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
   /** Structured context files to inject into this follow-up */
-  contextFiles?: Array<{ path: string }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
   /** User-selected skills to invoke for this follow-up (adapter decides how to inject) */
   skills?: Array<{
     name: string;
     path?: string;
+    /** Structured app-server mention target for an app or plugin selection. */
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -503,9 +515,43 @@ export interface WorkRunReviewRequest {
   accountId: string;
   execution: RunExecutionContext;
   target: WorkRunReviewTarget;
-  /** inline = review on same thread (default), detached = fork new review thread */
-  delivery?: "inline" | "detached";
   model?: string | null;
+}
+
+export interface McpAppReadResourceRequest {
+  runId: string;
+  server: string;
+  uri: string;
+  originCallId?: string;
+  connectorId?: string;
+}
+
+export interface McpAppResourceContent {
+  uri: string;
+  mimeType?: string;
+  text?: string;
+  blob?: string;
+  _meta?: unknown;
+}
+
+export interface McpAppReadResourceResult {
+  contents: McpAppResourceContent[];
+  originCallId: string | null;
+}
+
+export interface McpAppCallToolRequest {
+  runId: string;
+  server: string;
+  tool: string;
+  arguments?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+}
+
+export interface McpAppCallToolResult {
+  content: unknown[];
+  structuredContent?: unknown;
+  isError?: boolean;
+  _meta?: unknown;
 }
 
 /**
@@ -635,6 +681,11 @@ export interface WorkRunAdapter {
    */
   getRateLimits?(): Promise<RateLimitInfo | null>;
 
+  /** Spend one earned Codex credit to reset an eligible rate-limit window. */
+  consumeRateLimitResetCredit?(
+    params: ConsumeRateLimitResetCreditParams,
+  ): Promise<ConsumeRateLimitResetCreditOutcome>;
+
   // ── Thread goal controls (Codex `thread/goal/*`) ──
   /** Set/update the goal for a run's thread. Partial — omitted fields unchanged. */
   setGoal?(runId: string, params: GoalSetParams): Promise<GoalInfo | null>;
@@ -694,6 +745,22 @@ export interface WorkRunAdapter {
    * Update an installed plugin to the latest version.
    */
   updatePlugin?(pluginId: string): Promise<void>;
+
+  /** List native Codex apps plus their MCP runtime/authentication state. */
+  listConnectors?(forceRefresh?: boolean): Promise<ConnectorOverview>;
+
+  /** Start or repeat OAuth for a configured connector MCP server. */
+  startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
+
+  /** Read an MCP App HTML resource through this run's existing provider thread. */
+  readMcpAppResource?(
+    request: McpAppReadResourceRequest,
+  ): Promise<McpAppReadResourceResult>;
+
+  /** Forward an interactive MCP App tool call through the same provider thread. */
+  callMcpAppTool?(
+    request: McpAppCallToolRequest,
+  ): Promise<McpAppCallToolResult>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -740,6 +807,8 @@ export interface AcquiredSession {
   prompt: string;
   /** Provider-assigned session ID; Core persists to runsRepo when present. */
   sessionId?: string;
+  /** Model actually selected while acquiring the session, when the provider reports it. */
+  model?: string;
 }
 
 export interface ProviderDriver {
@@ -798,6 +867,9 @@ export interface ProviderDriver {
     opts?: { system?: string; model?: string },
   ): Promise<string>;
   getRateLimits?(): Promise<RateLimitInfo | null>;
+  consumeRateLimitResetCredit?(
+    params: ConsumeRateLimitResetCreditParams,
+  ): Promise<ConsumeRateLimitResetCreditOutcome>;
   getAccountInfo?(): Promise<AccountInfo>;
   updateCli?(): Promise<CliUpdateResult>;
   listPlugins?(): Promise<PluginListResponse>;
@@ -807,6 +879,14 @@ export interface ProviderDriver {
   uninstallPlugin?(pluginId: string): Promise<void>;
   setPluginEnabled?(pluginId: string, enabled: boolean): Promise<void>;
   updatePlugin?(pluginId: string): Promise<void>;
+  listConnectors?(forceRefresh?: boolean): Promise<ConnectorOverview>;
+  startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
+  readMcpAppResource?(
+    request: McpAppReadResourceRequest,
+  ): Promise<McpAppReadResourceResult>;
+  callMcpAppTool?(
+    request: McpAppCallToolRequest,
+  ): Promise<McpAppCallToolResult>;
 
   // ── Thread goal controls (Codex `thread/goal/*`) ──
   /** Set/update the goal for a run's thread. Partial — omitted fields unchanged. */
@@ -853,6 +933,8 @@ export interface SpendControlLimitInfo {
 export interface RateLimitSnapshotInfo {
   limitId?: string;
   limitName?: string;
+  /** Model that receives the bucket's normal (non-priority) inference traffic. */
+  normalModelSlug?: string;
   planType?: string;
   primary?: RateLimitWindow;
   secondary?: RateLimitWindow;
@@ -873,6 +955,8 @@ export interface RateLimitResetCreditInfo {
 }
 
 export interface RateLimitInfo extends RateLimitSnapshotInfo {
+  /** Whether the account may currently consume the ordinary Codex allowance. */
+  ordinaryUsageAllowed?: boolean | null;
   /** Complete multi-bucket view keyed by Codex's metered limit id. */
   rateLimitsByLimitId?: Record<string, RateLimitSnapshotInfo>;
   rateLimitResetCredits?: {
@@ -881,6 +965,19 @@ export interface RateLimitInfo extends RateLimitSnapshotInfo {
     credits?: RateLimitResetCreditInfo[];
   };
 }
+
+export interface ConsumeRateLimitResetCreditParams {
+  /** Stable across retries of the same logical redemption attempt. */
+  idempotencyKey: string;
+  /** Omit to let Codex select the next available credit. */
+  creditId?: string;
+}
+
+export type ConsumeRateLimitResetCreditOutcome =
+  | "reset"
+  | "nothingToReset"
+  | "noCredit"
+  | "alreadyRedeemed";
 
 export interface RateLimitWindow {
   /** Percentage used (0-100) */
@@ -1214,6 +1311,8 @@ export interface SkillInfo {
   agent?: string;
   /** Full path to the SKILL.md file */
   path?: string;
+  /** Structured app-server mention target, e.g. plugin://name@marketplace. */
+  mentionPath?: string;
   /** Human-friendly display name (from interface.displayName, e.g. "Documents") */
   displayName?: string;
   /** Short description for compact UI surfaces (from interface.shortDescription) */
@@ -1831,6 +1930,10 @@ export interface PluginAppSummary {
   category?: string;
   /** Remote logo URL resolved from the codex connector directory cache. */
   iconUrl?: string;
+  /** Runtime state from app/installed; absent when the CLI lacks that RPC. */
+  installed?: boolean;
+  runtimeEnabled?: boolean;
+  callable?: boolean;
 }
 
 export interface PluginDetail {
@@ -1841,8 +1944,80 @@ export interface PluginDetail {
   skills: PluginSkillSummary[];
   apps: PluginAppSummary[];
   mcpServers: string[];
+  /** Live status for mcpServers when the provider exposes runtime inventory. */
+  mcpServerStatuses?: ConnectorMcpServerInfo[];
   /** Marketplace-reported install count — only known for catalog-indexed plugins. */
   uniqueInstalls?: number | null;
   /** ISO timestamp of the plugin's last marketplace update, if known. */
   lastUpdated?: string | null;
+}
+
+export type ConnectorRuntimeStatus =
+  | "notStarted"
+  | "starting"
+  | "connected"
+  | "authenticationRequired"
+  | "failed"
+  | "cancelled"
+  | "disabled";
+
+export type ConnectorAuthStatus =
+  | "unknown"
+  | "unsupported"
+  | "notLoggedIn"
+  | "bearerToken"
+  | "oAuth";
+
+export interface ConnectorToolSummary {
+  name: string;
+  title?: string | null;
+  description: string;
+  isEnabled: boolean;
+  disabledReason?: string | null;
+  isReadOnly: boolean;
+}
+
+/** A native Codex app/connector merged with its committed runtime state. */
+export interface ConnectorInfo {
+  id: string;
+  name: string;
+  description?: string | null;
+  logoUrl?: string | null;
+  logoUrlDark?: string | null;
+  installUrl?: string | null;
+  distributionChannel?: string | null;
+  category?: string | null;
+  developer?: string | null;
+  pluginDisplayNames: string[];
+  isAccessible: boolean;
+  isEnabled: boolean;
+  installed: boolean;
+  runtimeName?: string | null;
+  runtimeEnabled?: boolean;
+  callable: boolean;
+  tools: ConnectorToolSummary[];
+}
+
+/** Live connection and authentication state for one Codex MCP server. */
+export interface ConnectorMcpServerInfo {
+  name: string;
+  runtimeStatus: ConnectorRuntimeStatus | null;
+  authStatus: ConnectorAuthStatus;
+  pluginId?: string | null;
+  title?: string | null;
+  description?: string | null;
+  websiteUrl?: string | null;
+  toolCount: number;
+  toolsError?: string | null;
+}
+
+export interface ConnectorOverview {
+  /** False when the installed Codex CLI predates the native app RPC surface. */
+  supported: boolean;
+  apps: ConnectorInfo[];
+  mcpServers: ConnectorMcpServerInfo[];
+}
+
+export interface ConnectorOAuthStartResult {
+  authorizationUrl: string;
 }

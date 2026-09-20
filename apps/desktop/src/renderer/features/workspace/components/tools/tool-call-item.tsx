@@ -8,12 +8,14 @@ import { TaskDisplay, type TaskParams } from "./task-display";
 import { PlanDisplay } from "./plan-display";
 import { WriteDisplay, type WriteParams } from "./write-display";
 import { McpDisplay } from "./mcp-display";
+import type { McpAppToolMetadata } from "./mcp-app-display";
 import { SaveReviewDisplay, type SaveReviewParams } from "./save-review-display";
 import { CheckPackageDisplay, type CheckPackageParams } from "./check-package-display";
 import { SaveFindingDisplay, type SaveFindingParams } from "./save-finding-display";
 import { AgentDisplay, type AgentParams } from "./agent-display";
 import { SendMessageDisplay, type SendMessageParams } from "./send-message-display";
 import { MonitorDisplay, type MonitorParams } from "./monitor-display";
+import { EnterPlanDisplay, type EnterPlanParams } from "./enter-plan-display";
 import { IntentDisplay, type IntentParams } from "./intent-display";
 import { BashDisplay, type BashParams } from "./bash-display";
 import { GlobDisplay, type GlobParams } from "./glob-display";
@@ -29,6 +31,7 @@ import { WorkflowDisplay, type WorkflowParams } from "./workflow-display";
 import { SkillDisplay, type SkillParams } from "./skill-display";
 import { AskUserQuestionDisplay, type AskUserQuestionParams } from "./ask-user-question-display";
 import { WebFetchDisplay, type WebFetchParams } from "./web-fetch-display";
+import { CuaReplDisplay, type CuaReplParams } from "./cua-repl-display";
 import { GenericToolDisplay } from "./generic-tool-display";
 import { TOOL_ROW_TEXT, ToolStatusProvider, eventToolStatus } from "./_shared";
 import {
@@ -142,6 +145,7 @@ const DISPATCH: Renderer[] = [
   withOutput<MonitorParams>(["monitor"], MonitorDisplay, (ctx) => ({
     description: ctx.summary,
   })),
+  withOutput<EnterPlanParams>(["enterplanmode"], EnterPlanDisplay, () => ({})),
 
   withOutput<EditParams>(["edit", "replace"], EditDisplay, summaryAs("file_path")),
 
@@ -218,6 +222,41 @@ const DISPATCH: Renderer[] = [
     <CheckPackageDisplay params={params} output={ctx.event.metadata?.output} isCompact={ctx.isCompact} />
   )),
 
+  // Computer use (`mcp__cua_repl__js`) ahead of the MCP fallbacks: its result
+  // carries a screenshot the generic display drops, and its `title` says what
+  // the step was for where the tool name says only "Cua repl js".
+  (ctx) => {
+    if (ctx.resolved.vendorId !== "cua_repl") return null;
+    const params = pickParams<CuaReplParams>(ctx, {});
+    return (
+      <CuaReplDisplay
+        params={params}
+        output={ctx.event.metadata?.output}
+        isCompact={ctx.isCompact}
+      />
+    );
+  },
+
+  // Generic MCP fallback — an MCP App must win even when its plugin has no
+  // curated vendor mapping. Otherwise the ui:// resource falls through to the
+  // plain JSON renderer and the provider-authored card is lost.
+  (ctx) => {
+    const mcpApp = ctx.event.metadata?.mcpApp as McpAppToolMetadata | undefined;
+    if (!mcpApp) return null;
+    const runId = ctx.event.metadata?.runId;
+    return (
+      <McpDisplay
+        displayName={ctx.displayName}
+        icon={ctx.icon}
+        params={ctx.metadataInput ?? ctx.params}
+        output={ctx.event.metadata?.output}
+        isCompact={ctx.isCompact}
+        runId={typeof runId === "string" ? runId : undefined}
+        mcpApp={mcpApp}
+      />
+    );
+  },
+
   // Generic MCP fallback — the resolver tags any vendor-mapped tool (Linear, GitHub,
   // Figma, Notion, computer-use, Mains-without-special-renderer, …) with `vendorId`,
   // so we don't need a brittle string-includes chain.
@@ -272,7 +311,10 @@ export function ToolCallItem({ event, isCompact = true }: ToolCallItemProps) {
     (metadataInput !== undefined && Object.keys(metadataInput).length > 0);
   const hasSummary = Boolean(summary?.trim());
   const isEmptyTool =
-    !hasParamsOrInput && !hasSummary && !hasMeaningfulOutput(event.metadata?.output);
+    !hasParamsOrInput &&
+    !hasSummary &&
+    !hasMeaningfulOutput(event.metadata?.output) &&
+    !event.metadata?.mcpApp;
 
   // Lifecycle status (queued/running/done/error/canceled) flows down to every
   // ToolHeader via context, so the per-tool displays stay status-agnostic.

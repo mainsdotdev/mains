@@ -1,4 +1,5 @@
 import { networkInterfaces } from "node:os";
+import { powerMonitor, powerSaveBlocker } from "electron";
 import { emit } from "../../ipc-kit";
 import { startWsHost, type WsHost } from "../../ipc-kit/ws-server-host";
 import { generateToken } from "../../ipc-kit/ws-auth";
@@ -13,6 +14,7 @@ import {
   type PairedDevice,
   type PairingCode,
 } from "../backend";
+import { shouldKeepRemoteHostAwake } from "./localBackend.sleep";
 
 /**
  * "This machine" exposure — turns the RUNNING desktop app into a backend other
@@ -65,6 +67,8 @@ export interface LocalBackendStatus {
   tailscaleWsUrl: string | null;
   /** False when no built web renderer was found (run `npm run build:web`). */
   webUiAvailable: boolean;
+  /** User preference; effective only while remote access is exposed and on AC. */
+  keepAwakeForRemoteAccess: boolean;
 }
 
 let wsHost: WsHost | null = null;
@@ -74,7 +78,60 @@ let port = DEFAULT_PORT;
 let remoteAccess = false;
 let lanAccess = false;
 let tailscale: { httpsPort: number; magicDnsName: string | null } | null = null;
+let keepAwakeForRemoteAccess = false;
+let remoteSleepBlockerId: number | null = null;
+let powerSourceListenersInstalled = false;
 let webRootCached: string | null | undefined;
+
+function onBatteryPower(): boolean {
+  try {
+    return powerMonitor.isOnBatteryPower();
+  } catch {
+    // Some Linux desktop environments do not expose power-source state.
+    // Treat them as AC-powered so the explicit preference still works.
+    return false;
+  }
+}
+
+function reconcileRemoteSleepBlocker(): void {
+  const shouldBlock = shouldKeepRemoteHostAwake({
+    enabled: keepAwakeForRemoteAccess,
+    remoteAccess,
+    tailscale: tailscale !== null,
+    onBatteryPower: onBatteryPower(),
+  });
+
+  if (shouldBlock) {
+    if (
+      remoteSleepBlockerId === null ||
+      !powerSaveBlocker.isStarted(remoteSleepBlockerId)
+    ) {
+      remoteSleepBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+    }
+    return;
+  }
+
+  if (remoteSleepBlockerId !== null) {
+    if (powerSaveBlocker.isStarted(remoteSleepBlockerId)) {
+      powerSaveBlocker.stop(remoteSleepBlockerId);
+    }
+    remoteSleepBlockerId = null;
+  }
+}
+
+function installPowerSourceListeners(): void {
+  if (powerSourceListenersInstalled) return;
+  powerMonitor.on("on-ac", reconcileRemoteSleepBlocker);
+  powerMonitor.on("on-battery", reconcileRemoteSleepBlocker);
+  powerSourceListenersInstalled = true;
+}
+
+function removePowerSourceListeners(): void {
+  if (!powerSourceListenersInstalled) return;
+  powerMonitor.removeListener("on-ac", reconcileRemoteSleepBlocker);
+  powerMonitor.removeListener("on-battery", reconcileRemoteSleepBlocker);
+  powerSourceListenersInstalled = false;
+}
 
 function webRoot(): string | null {
   if (webRootCached === undefined) webRootCached = resolveWebRoot();
@@ -132,6 +189,7 @@ function buildStatus(): LocalBackendStatus {
       : null,
     tailscaleWsUrl: httpsUrl ? httpsUrl.replace(/^https:/, "wss:") : null,
     webUiAvailable: webRoot() !== null,
+    keepAwakeForRemoteAccess,
   };
 }
 
@@ -147,6 +205,7 @@ function persist(): void {
       backendRemoteAccess: remoteAccess,
       backendLanAccess: lanAccess,
       backendTailscaleHttps: tailscale !== null,
+      keepAwakeForRemoteAccess,
     })
     .catch(() => {});
 }
@@ -238,6 +297,7 @@ export const localBackendService = {
     remoteAccess = enabled;
     if (!enabled) lanAccess = false; // LAN access requires the base exposure
     await reconcileHost();
+    reconcileRemoteSleepBlocker();
     persist();
     return buildStatus();
   },
@@ -274,6 +334,7 @@ export const localBackendService = {
         }
         tailscale = null;
         await reconcileHost();
+        reconcileRemoteSleepBlocker();
         throw error;
       }
     } else {
@@ -288,6 +349,18 @@ export const localBackendService = {
       }
       await reconcileHost();
     }
+    reconcileRemoteSleepBlocker();
+    persist();
+    return buildStatus();
+  },
+
+  /** Keep an AC-powered remote host reachable between runs. */
+  async setKeepAwakeForRemoteAccess(
+    enabled: boolean,
+  ): Promise<LocalBackendStatus> {
+    keepAwakeForRemoteAccess = enabled;
+    installPowerSourceListeners();
+    reconcileRemoteSleepBlocker();
     persist();
     return buildStatus();
   },
@@ -345,7 +418,10 @@ export const localBackendService = {
       if (!row) return;
       remoteAccess = !!row.backendRemoteAccess;
       lanAccess = !!row.backendLanAccess && remoteAccess;
+      keepAwakeForRemoteAccess = !!row.keepAwakeForRemoteAccess;
+      installPowerSourceListeners();
       if (remoteAccess) await reconcileHost();
+      reconcileRemoteSleepBlocker();
       if (row.backendTailscaleHttps) {
         // setTailscaleHttps rolls back its own runtime state on failure; just
         // swallow the rejection so a closed Tailscale app doesn't crash startup
@@ -370,5 +446,7 @@ export const localBackendService = {
     remoteAccess = false;
     lanAccess = false;
     await reconcileHost();
+    reconcileRemoteSleepBlocker();
+    removePowerSourceListeners();
   },
 };

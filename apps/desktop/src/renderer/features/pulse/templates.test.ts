@@ -6,7 +6,8 @@
 
 import { describe, it, expect } from "vitest";
 import { MODE_IDS } from "../../../shared/modes";
-import { PULSE_CATEGORIES, PULSE_TEMPLATES } from "./templates";
+import { iconColorClass } from "@/lib/icon-registry";
+import { PULSE_CATEGORIES, PULSE_TEMPLATES, templatesForMode } from "./templates";
 
 describe("PULSE_TEMPLATES invariants", () => {
   it("every template names a known category and known modes", () => {
@@ -19,6 +20,12 @@ describe("PULSE_TEMPLATES invariants", () => {
     }
   });
 
+  it("every tint resolves to an icon colour", () => {
+    for (const template of PULSE_TEMPLATES) {
+      expect(iconColorClass(template.tint)).not.toBe("");
+    }
+  });
+
   it("ids are unique", () => {
     const ids = PULSE_TEMPLATES.map((template) => template.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -26,10 +33,7 @@ describe("PULSE_TEMPLATES invariants", () => {
 
   it("offers templates for every mode", () => {
     for (const mode of MODE_IDS) {
-      const forMode = PULSE_TEMPLATES.filter(
-        (template) => !template.modes || template.modes.includes(mode),
-      );
-      expect(forMode.length).toBeGreaterThan(0);
+      expect(templatesForMode(mode).length).toBeGreaterThan(0);
     }
   });
 

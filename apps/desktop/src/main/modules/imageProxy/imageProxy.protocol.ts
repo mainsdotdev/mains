@@ -7,6 +7,7 @@ import {
   serveLocalImage,
   serveLocalDocument,
 } from "./imageProxy.local-serve";
+import { serveLocalVisualization } from "./imageProxy.visualization-serve";
 
 /**
  * Bound concurrent upstream fetches. A grid of hundreds of remote images (e.g.
@@ -140,6 +141,22 @@ export function registerImageProxyScheme() {
         corsEnabled: true,
       },
     },
+    {
+      scheme: "mains-visualize",
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+      },
+    },
+    {
+      scheme: "mains-mcp-app",
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+      },
+    },
   ]);
 }
 
@@ -223,7 +240,16 @@ export function registerImageProxyHandler() {
     }
   });
 
-    protocol.handle("mains-img", async (request) => {
+  protocol.handle("mains-visualize", async (request) => {
+    try {
+      return await serveLocalVisualization(new URL(request.url));
+    } catch (error) {
+      console.error("[mains-visualize] handler error:", error);
+      return new Response("Visualization error", { status: 500 });
+    }
+  });
+
+  protocol.handle("mains-img", async (request) => {
     try {
       const requestUrl = new URL(request.url);
       const originalUrl = requestUrl.searchParams.get("url");

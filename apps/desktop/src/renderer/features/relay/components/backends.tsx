@@ -16,7 +16,10 @@ import {
 } from "@/features/settings/components/settings-layout";
 import { useBackendConnection } from "../hooks/use-backend-connection";
 import { isWeb } from "@/lib/platform";
-import { LocalBackendShare } from "./local-backend-share";
+import {
+  LocalBackendShare,
+  RemoteKeepAwakeSetting,
+} from "./local-backend-share";
 import type {
   BackendSshConfig,
   KnownBackend,
@@ -430,6 +433,8 @@ export default function BackendsSettings() {
       <SettingsSection title="Add">
         <AddBackendForm onAdd={add} />
       </SettingsSection>
+
+      <RemoteKeepAwakeSetting />
     </SettingsPageShell>
   );
 }

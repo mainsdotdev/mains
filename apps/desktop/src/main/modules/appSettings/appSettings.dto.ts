@@ -17,11 +17,14 @@ export type AppSettingsPatch = Partial<{
   notifyOnRunComplete: boolean;
   notifyOnToolApproval: boolean;
   showMenuBarIcon: boolean;
+  appshotsEnabled: boolean;
+  appshotsShortcut: string;
+  keyboardShortcutOverrides: string;
   backendRemoteAccess: boolean;
   backendLanAccess: boolean;
   backendTailscaleHttps: boolean;
+  keepAwakeForRemoteAccess: boolean;
   backendId: string | null;
   commitInstructions: string;
   prInstructions: string;
 }>;
-

@@ -2,6 +2,10 @@ import { useState } from "react";
 import { Text } from "@/components/ui";
 import { resolveTool } from "../../lib/resolve-tool";
 import { ToolHeader, ToolCollapse } from "./_shared";
+import {
+  McpAppDisplay,
+  type McpAppToolMetadata,
+} from "./mcp-app-display";
 
 interface McpDisplayProps {
   displayName: string;
@@ -11,6 +15,8 @@ interface McpDisplayProps {
   /** MCP tool call result (`metadata.output`), often `{ content: [{ type: "text", text: string }] }`. */
   output?: unknown;
   isCompact?: boolean;
+  runId?: string;
+  mcpApp?: McpAppToolMetadata;
 }
 
 /** Pulls `{ type: "text", text }` bodies from MCP-style `content` arrays. */
@@ -109,7 +115,15 @@ function McpOutput({ segments }: { segments: string[] }) {
 //   return parts.join(" · ");
 // }
 
-export function McpDisplay({ displayName, icon, output, isCompact = false }: McpDisplayProps) {
+export function McpDisplay({
+  displayName,
+  icon,
+  params,
+  output,
+  isCompact = false,
+  runId,
+  mcpApp,
+}: McpDisplayProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const resolvedIcon = icon ?? resolveTool(displayName).icon;
 
@@ -129,6 +143,16 @@ export function McpDisplay({ displayName, icon, output, isCompact = false }: Mcp
       >
 
       </ToolHeader>
+
+      {runId && mcpApp && (
+        <McpAppDisplay
+          runId={runId}
+          app={mcpApp}
+          input={params}
+          output={output}
+          title={displayName}
+        />
+      )}
 
       {hasOutput && (
         <ToolCollapse isExpanded={isExpanded}>

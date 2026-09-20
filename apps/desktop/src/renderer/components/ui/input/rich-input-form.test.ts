@@ -37,6 +37,23 @@ function hasDirectFormattingNewline(element: ParentNode): boolean {
 }
 
 describe("RichInputForm Markdown editing", () => {
+  it("renders a contextual icon as part of the empty placeholder", () => {
+    render(
+      createElement(RichInputForm, {
+        query: "",
+        onQueryChange: vi.fn(),
+        onSubmit: vi.fn(),
+        placeholder: "Ask in Work",
+        placeholderIcon: createElement("span", {
+          "data-testid": "project-placeholder-icon",
+        }),
+      }),
+    );
+
+    expect(screen.getByText("Ask in Work")).toBeTruthy();
+    expect(screen.getByTestId("project-placeholder-icon")).toBeTruthy();
+  });
+
   it("renders pasted Markdown in the editable surface and serializes it for sending", () => {
     const onQueryChange = vi.fn();
     const tick = String.fromCharCode(96);

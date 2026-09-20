@@ -632,6 +632,38 @@ describe("fileExplorerService", () => {
       expect(result.map((e) => e.name)).toEqual(["kept.txt"]);
     });
 
+    it("includes matching directories only when requested", async () => {
+      await fs.mkdir(path.join(tmpDir, "src", "components"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(tmpDir, "src", "components", "button.tsx"),
+        "export {};",
+      );
+
+      const filesOnly = await fileExplorerService.searchFiles({
+        rootPath: tmpDir,
+        query: "components",
+      });
+      expect(filesOnly.map((entry) => entry.type)).toEqual(["file"]);
+
+      const withDirectories = await fileExplorerService.searchFiles({
+        rootPath: tmpDir,
+        query: "components",
+        includeDirectories: true,
+      });
+      expect(withDirectories).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "components",
+            fullPath: path.join(tmpDir, "src", "components"),
+            type: "directory",
+          }),
+          expect.objectContaining({ name: "button.tsx", type: "file" }),
+        ]),
+      );
+    });
+
     it("respects .gitignore inside a git repository", async () => {
       execFileSync("git", ["init"], { cwd: tmpDir });
       await fs.writeFile(path.join(tmpDir, ".gitignore"), "ignored.txt\n");
@@ -645,6 +677,34 @@ describe("fileExplorerService", () => {
       });
       expect(result.map((e) => e.name)).toEqual(["kept.txt"]);
       expect(result[0].fullPath).toBe(path.join(tmpDir, "kept.txt"));
+    });
+
+    it("derives matching directories from git search candidates", async () => {
+      execFileSync("git", ["init"], { cwd: tmpDir });
+      await fs.mkdir(path.join(tmpDir, "src", "components"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(tmpDir, "src", "components", "button.tsx"),
+        "export {};",
+      );
+
+      const result = await fileExplorerService.searchFiles({
+        rootPath: tmpDir,
+        query: "components",
+        includeDirectories: true,
+      });
+
+      expect(result).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "components",
+            fullPath: path.join(tmpDir, "src", "components"),
+            type: "directory",
+          }),
+          expect.objectContaining({ name: "button.tsx", type: "file" }),
+        ]),
+      );
     });
   });
 });

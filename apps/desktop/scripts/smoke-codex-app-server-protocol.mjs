@@ -8,7 +8,7 @@ import process from "node:process";
 import readline from "node:readline";
 
 const codexBinary = process.env.CODEX_BINARY || "codex";
-const minimumVersion = "0.147.0";
+const minimumVersion = "0.153.0";
 const temporaryRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "mains-codex-smoke-"),
 );
@@ -213,6 +213,17 @@ try {
   assertContains("v2/DynamicToolSpec.ts", ['"type": "function"']);
   assertContains("v2/TurnStartParams.ts", [
     "collaborationMode?: CollaborationMode",
+  ]);
+  assertContains("v2/McpResourceReadParams.ts", [
+    "threadId?: string | null",
+    "originCallId?: string | null",
+    "server: string",
+    "uri: string",
+  ]);
+  assertContains("v2/McpServerToolCallParams.ts", [
+    "threadId: string",
+    "server: string",
+    "tool: string",
   ]);
   assertContains("Settings.ts", [
     "model: string",

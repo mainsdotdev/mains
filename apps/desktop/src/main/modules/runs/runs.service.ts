@@ -8,6 +8,7 @@ import { providersService } from "../providers";
 import { collectionsService } from "../collections";
 import { projectsService } from "../projects";
 import { workspaceService, assertWorkspacePathExists } from "../workspace";
+import { gitService } from "../git";
 import { spaceService } from "../space";
 import { appSettingsService } from "../appSettings";
 import { DEFAULT_MODE_ID, type ModeId } from "../../../shared/modes";
@@ -15,6 +16,7 @@ import type {
   ArtifactImage,
   ReadArtifactImagePayload,
   ReadRunTextFilePayload,
+  RunOutputFile,
   RunTextFile,
 } from "@mains/contracts/runs";
 import {
@@ -64,9 +66,12 @@ import type {
   ForkRunPayload,
   ForkRunResponse,
   MoveRunToCollectionPayload,
+  SetRunPinnedPayload,
   ReviewRunPayload,
   RunDetailsResponse,
   RunTurnResponse,
+  RunTurnChangesSummary,
+  RunTurnChangesDiffResponse,
 } from "./runs.dto";
 
 /** Longest side an image artifact is sent at — more than any phone shows. */
@@ -79,6 +84,17 @@ const RUN_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const RUN_TEXT_SEARCH_MAX_ENTRIES = 10_000;
 const RUN_TEXT_SEARCH_MAX_DEPTH = 12;
 const RUN_TEXT_SEARCH_EXCLUDES = new Set([".git", "node_modules"]);
+/** A run folder is app-owned, but still bound traversal in case a tool explodes it. */
+const RUN_OUTPUT_MAX_FILES = 500;
+const RUN_OUTPUT_MAX_DEPTH = 12;
+const RUN_OUTPUT_EXCLUDES = new Set([
+  ".mains",
+  ".git",
+  "node_modules",
+  "bower_components",
+  ".DS_Store",
+  "Thumbs.db",
+]);
 /** Image types the phone decodes on its own, by extension — `nativeImage` reads only PNG and JPEG. */
 const RAW_IMAGE_MIMES: Record<string, string> = {
   webp: "image/webp",
@@ -90,9 +106,83 @@ const RAW_IMAGE_MIMES: Record<string, string> = {
   svg: "image/svg+xml",
 };
 
+/** Last model that actually handled a turn, falling back to the run's initial snapshot. */
+function latestKnownModel(
+  turns: RunTurnResponse[],
+  initialModel: string | null,
+): string | undefined {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const model = turns[i]?.model?.trim();
+    if (model) return model;
+  }
+  return initialModel?.trim() || undefined;
+}
+
 function isWithin(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Visible files created in a managed Work/Chat directory. The `.mains` tree is
+ * copied input context, not output, and symlinks are deliberately not followed.
+ */
+async function listManagedOutputFiles(root: string): Promise<RunOutputFile[]> {
+  const files: RunOutputFile[] = [];
+
+  const visit = async (directory: string, depth: number): Promise<void> => {
+    if (depth > RUN_OUTPUT_MAX_DEPTH || files.length >= RUN_OUTPUT_MAX_FILES) {
+      return;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    entries.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+
+    for (const entry of entries) {
+      if (files.length >= RUN_OUTPUT_MAX_FILES) break;
+      if (entry.name.startsWith(".") || RUN_OUTPUT_EXCLUDES.has(entry.name)) {
+        continue;
+      }
+
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(absolutePath, depth + 1);
+        continue;
+      }
+      // `Dirent.isFile()` excludes symlinks, sockets, and device files.
+      if (!entry.isFile()) continue;
+
+      let stats: fs.Stats;
+      try {
+        stats = await fs.promises.stat(absolutePath);
+      } catch {
+        continue;
+      }
+      if (!stats.isFile()) continue;
+
+      files.push({
+        fileName: entry.name,
+        relativePath: path.relative(root, absolutePath).split(path.sep).join("/"),
+        absolutePath,
+        size: stats.size,
+        modifiedAt: Math.trunc(stats.mtimeMs),
+      });
+    }
+  };
+
+  await visit(root, 0);
+  return files.sort(
+    (a, b) =>
+      b.modifiedAt - a.modifiedAt || a.relativePath.localeCompare(b.relativePath),
+  );
 }
 
 /**
@@ -559,6 +649,17 @@ export const runsService = {
   },
 
   /**
+   * Files the agent left in a Work/Chat run's managed directory. Developer
+   * runs use workspace changes instead; scanning their whole repository would
+   * mislabel pre-existing files as deliverables.
+   */
+  async listRunOutputFiles(runId: string): Promise<RunOutputFile[]> {
+    const run = await runsRepo.findRunById(runId);
+    if (!run || run.mode === "developer" || run.workspaceId) return [];
+    return listManagedOutputFiles(managedRunDir(run.id, run.mode));
+  },
+
+  /**
    * Resolve one Markdown file named in agent prose. Paired devices get this
    * narrow read instead of fileExplorer access: only Work/Chat, only the
    * selected run's managed directory, and only bounded text files.
@@ -653,6 +754,29 @@ export const runsService = {
     const updated = await runsRepo.moveToCollection(
       run.id,
       collectionId ?? null,
+    );
+    if (!updated) throw new Error("Run not found");
+    emit("runs:updated", { runId: run.id, ts: Date.now() });
+    return updated;
+  },
+
+  /**
+   * Pinning is a chat-sidebar affordance, so it carries the same account and
+   * mode guards as filing a chat under a collection — a developer run lives in
+   * the workspace list, which has no pinned group to be hoisted into.
+   */
+  async setRunPinned(payload: SetRunPinnedPayload): Promise<RunResponse> {
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.accountId !== payload.accountId) {
+      throw new Error("Run does not belong to this account");
+    }
+    if (run.mode === "developer") {
+      throw new Error("Developer runs cannot be pinned");
+    }
+    const updated = await runsRepo.setPinned(
+      run.id,
+      payload.pinned ? new Date() : null,
     );
     if (!updated) throw new Error("Run not found");
     emit("runs:updated", { runId: run.id, ts: Date.now() });
@@ -1093,7 +1217,6 @@ export const runsService = {
             accountId: payload.accountId,
             execution: { cwd: workspace.rootPath, workspaceId: workspace.id },
             target: payload.target,
-            delivery: payload.delivery,
             model: payload.model,
           },
           eventCallback,
@@ -1177,6 +1300,7 @@ export const runsService = {
         (max, t) => Math.max(max, t.turnIndex),
         -1,
       );
+      const previousModel = latestKnownModel(existingTurns, run.model);
 
       if (workspace) {
         await workspaceService.update(workspace.id, { status: "in_progress" });
@@ -1244,9 +1368,9 @@ export const runsService = {
           accountId,
           execution,
           message,
-          // The run's own model unless the caller names another: a phone that
-          // sends none means "as before", not "whatever the adapter has".
-          model: payload.model ?? run.model ?? undefined,
+          // An omitted model means "as before". `runs.model` is the initial
+          // snapshot; a conversation may have switched since then.
+          model: payload.model ?? previousModel,
           systemPrompt: run.systemPrompt,
           mode: run.mode,
           extraInstructions: composeExtraInstructions(run.mode, space?.systemPrompt),
@@ -1323,6 +1447,9 @@ export const runsService = {
         }
       }
 
+      const sourceTurns = await runsRepo.findTurnsByRun(sourceRunId);
+      const sourceModel = latestKnownModel(sourceTurns, sourceRun.model);
+
       if (workspace) {
         await workspaceService.update(workspace.id, { status: "in_progress" });
       }
@@ -1345,7 +1472,7 @@ export const runsService = {
         spaceId: sourceRun.spaceId ?? undefined,
         providerId: sourceRun.providerId,
         mode: sourceRun.mode,
-        model: sourceRun.model ?? undefined,
+        model: sourceModel,
         goal: message,
         status: "running",
         systemPrompt: sourceRun.systemPrompt ?? undefined,
@@ -1405,10 +1532,9 @@ export const runsService = {
           accountId,
           execution,
           message,
-          // The forked run row inherits the source's model; the request has to
-          // carry it too, or the provider picks its own default for a
-          // conversation that was already running on something else.
-          model: sourceRun.model ?? undefined,
+          // Fork from the model that handled the latest source turn, not the
+          // model the source happened to start with.
+          model: sourceModel,
           mode: sourceRun.mode,
           extraInstructions: composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
           toolPolicy,
@@ -1489,6 +1615,62 @@ export const runsService = {
 
   async getTurnsByRun(runId: string): Promise<RunTurnResponse[]> {
     return runsRepo.findTurnsByRun(runId);
+  },
+
+  async getTurnChangesDiff(
+    runId: string,
+    turnId: number,
+  ): Promise<RunTurnChangesDiffResponse | null> {
+    return runsRepo.findTurnChanges(runId, turnId);
+  },
+
+  /**
+   * Reverse-apply one turn's stored patch to its workspace. Refused while the
+   * run is live (the agent may be editing the same files) and when any file
+   * the turn touched has moved on since — `git apply --check` decides that,
+   * and a failed check writes nothing. See CONTEXT.md "turn changes".
+   */
+  async undoTurnChanges(
+    runId: string,
+    turnId: number,
+  ): Promise<RunTurnChangesSummary> {
+    const run = await runsRepo.findRunById(runId);
+    if (!run) throw new Error("Run not found");
+    if (runSessionRegistry.get(runId)) {
+      throw new Error("Wait for the run to finish before undoing its changes.");
+    }
+    const changes = await runsRepo.findTurnChanges(runId, turnId);
+    if (!changes) throw new Error("This turn has no recorded changes.");
+    if (changes.undoneAt) throw new Error("These changes were already undone.");
+    if (changes.truncated) {
+      throw new Error(
+        "This turn's changes were too large to store in full, so they can't be undone.",
+      );
+    }
+    const workspace = run.workspaceId
+      ? await workspaceService.get(run.workspaceId)
+      : null;
+    if (!workspace) throw new Error("Workspace not found");
+
+    const { diffText, ...summary } = changes;
+    const applies = await gitService.canApplyPatch(workspace.rootPath, diffText, {
+      reverse: true,
+    });
+    if (!applies) {
+      throw new Error(
+        "Some of these files changed after this turn, so its changes can't be undone automatically.",
+      );
+    }
+    await gitService.applyPatch(workspace.rootPath, diffText, { reverse: true });
+    const undoneAt = new Date();
+    await runsRepo.markTurnChangesUndone(changes.id, undoneAt);
+
+    // The workspace's own diff (sidebar count, Changes tab) moved underneath it.
+    await workspaceService.resyncDiff(workspace.id).catch((err) =>
+      console.error(`[RunsService] resyncDiff after undo failed for ${runId}:`, err),
+    );
+    emit("runs:diffUpdated", { runId, workspaceId: workspace.id, ts: Date.now() });
+    return { ...summary, undoneAt };
   },
 
   async deleteRunSession(runId: string): Promise<void> {

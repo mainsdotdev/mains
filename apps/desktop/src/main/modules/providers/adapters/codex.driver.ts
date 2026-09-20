@@ -38,6 +38,9 @@ import type {
   RateLimitInfo,
   WorkRunContextItem,
 } from "../../../../shared/adapter.types";
+import {
+  getCodexReserveModelSlugs,
+} from "../../../../shared/codex-model-availability";
 import { runsRepo } from "../../runs/runs.repo";
 import { logWorkspaceActivity } from "../../workspace";
 // Direct repo import — a known driver egress-seam leak (see CONTEXT.md
@@ -57,6 +60,7 @@ import {
 } from "./codex-run-coordinator";
 import {
   createCodexSessionAcquisition,
+  isCodexMissingThreadError,
   isCodexUnavailableThreadError,
 } from "./codex-session-acquisition";
 import type { CodexSubAgentRunMeta } from "./codex-event-mapper";
@@ -74,9 +78,9 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.153.4";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.154.0";
 /** Oldest CLI whose app-server contract Mains accepts. */
-export const CODEX_MIN_CLI_VERSION = "0.147.0";
+export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
 function compareCodexVersions(left: string, right: string): number | null {
   const parse = (value: string): [number, number, number] | null => {
@@ -409,6 +413,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   let appServerStartPromise: Promise<CodexAppServer> | null = null;
   let codexVersionPromise: Promise<string | null> | null = null;
   let codexCompatibilityPromise: Promise<void> | null = null;
+  const mcpThreadResumePromises = new Map<string, Promise<void>>();
   // One-shot generation model (titles, commit messages, PR bodies): Codex's
   // "fast and affordable agentic coding model" tier, at medium effort.
   const titleGenerationModel = "gpt-5.6-luna";
@@ -432,6 +437,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       await runsRepo.updateRun(runId, { sessionId: threadId });
     },
     establishGoal: maybeSetThreadGoal,
+    resolveModel: resolveRunModel,
     resolveDefaultModel: catalogDefaultModel,
     logger: codexLogger,
   });
@@ -443,6 +449,36 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     getCliHealth: () => getCodexCliHealth(),
     logger: codexLogger,
   });
+
+  /**
+   * A persisted renderer selection can outlive the ordinary usage allowance.
+   *
+   * Codex 0.154 exposes the Reserve bucket and model slug to app-server
+   * clients, but it does not expose the TUI's Reserve accept/recovery action.
+   * Starting `gpt-5.6-luna` directly therefore still consumes the exhausted
+   * ordinary bucket and fails with a generic usage-limit error. Stop before
+   * creating a misleading thread until app-server gains that recovery verb.
+   *
+   * Upstream: https://github.com/openai/codex/issues/45132
+   */
+  async function resolveRunModel(
+    requestedModel: string | null | undefined,
+  ): Promise<string | undefined> {
+    const preferredModel = requestedModel || config.defaultModel || undefined;
+    await ensureServer();
+    const rateLimits = await capabilities.getRateLimits();
+    if (rateLimits?.ordinaryUsageAllowed === false) {
+      if (getCodexReserveModelSlugs(rateLimits).length > 0) {
+        throw new Error(
+          "Luna Reserve is available on this account, but Codex App Server 0.154.0 cannot start Reserve turns yet. Continue in the Codex app or wait for the normal usage limit to reset.",
+        );
+      }
+      throw new Error(
+        "Your Codex usage limit has been reached. Wait for the normal usage limit to reset.",
+      );
+    }
+    return preferredModel ?? catalogDefaultModel();
+  }
 
   /**
    * The catalog's own default — what the other drivers reach through
@@ -553,7 +589,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     });
   }
 
-  /** Read the installed Codex CLI version (e.g. "0.147.0" from "codex-cli 0.147.0"). */
+  /** Read the installed Codex CLI version (e.g. "0.153.0" from "codex-cli 0.153.0"). */
   function getCodexVersion(): Promise<string | null> {
     codexVersionPromise ??= (async () => {
       try {
@@ -648,6 +684,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       if (appServer === server) {
         appServer = null;
       }
+      mcpThreadResumePromises.clear();
       capabilities.onServerClosed();
       runCoordinator.handleServerClose();
     });
@@ -703,6 +740,21 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           | Record<string, unknown>
           | undefined;
         broadcastRateLimits(PROVIDER_IDS.codex, mapRateLimitSnapshot(rl));
+        // `model/list` is a catalog. The Codex adapter combines it with the
+        // account snapshot, so a usage change also changes the effective list.
+        emit(CHANNELS.providers.modelsUpdated, {
+          providerId: PROVIDER_IDS.codex,
+        });
+      }
+
+      if (
+        method === "app/list/updated" ||
+        method === "mcpServer/oauthLogin/completed" ||
+        method === "mcpServer/startupStatus/updated"
+      ) {
+        emit(CHANNELS.providers.connectorsUpdated, {
+          providerId: PROVIDER_IDS.codex,
+        });
       }
 
       // Live goal updates — push to the renderer so the goal card above the
@@ -765,6 +817,40 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       (await runsRepo.findRunById(runId))?.sessionId ??
       null
     );
+  }
+
+  async function resumeMcpThread(
+    server: CodexAppServer,
+    threadId: string,
+  ): Promise<void> {
+    const pending = mcpThreadResumePromises.get(threadId);
+    if (pending) return pending;
+
+    const resume = server
+      .sendRequest("thread/resume", { threadId, excludeTurns: true })
+      .then(() => undefined);
+    mcpThreadResumePromises.set(threadId, resume);
+    try {
+      await resume;
+    } finally {
+      if (mcpThreadResumePromises.get(threadId) === resume) {
+        mcpThreadResumePromises.delete(threadId);
+      }
+    }
+  }
+
+  async function withLoadedMcpThread<Result>(
+    threadId: string,
+    operation: (server: CodexAppServer) => Promise<Result>,
+  ): Promise<Result> {
+    const server = await ensureServer();
+    try {
+      return await operation(server);
+    } catch (error) {
+      if (!isCodexMissingThreadError(error)) throw error;
+      await resumeMcpThread(server, threadId);
+      return operation(server);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -837,6 +923,52 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       runCoordinator.deleteRun(runId);
     },
 
+    async readMcpAppResource(request) {
+      const threadId = await findThreadIdForRun(request.runId);
+      if (!threadId) {
+        throw new Error(`No Codex thread found for run ${request.runId}`);
+      }
+      const params: CodexAppServerParams<"mcpServer/resource/read"> = {
+        threadId,
+        server: request.server,
+        uri: request.uri,
+        ...(request.originCallId
+          ? { originCallId: request.originCallId }
+          : {}),
+        ...(request.connectorId
+          ? { connectorId: request.connectorId }
+          : {}),
+      };
+      return withLoadedMcpThread(threadId, (server) =>
+        server.sendRequest("mcpServer/resource/read", params),
+      );
+    },
+
+    async callMcpAppTool(request) {
+      const threadId = await findThreadIdForRun(request.runId);
+      if (!threadId) {
+        throw new Error(`No Codex thread found for run ${request.runId}`);
+      }
+      const params: CodexAppServerParams<"mcpServer/tool/call"> = {
+        threadId,
+        server: request.server,
+        tool: request.tool,
+        ...(request.arguments !== undefined
+          ? {
+              arguments: request.arguments as CodexAppServerParams<"mcpServer/tool/call">["arguments"],
+            }
+          : {}),
+        ...(request.meta !== undefined
+          ? {
+              _meta: request.meta as CodexAppServerParams<"mcpServer/tool/call">["_meta"],
+            }
+          : {}),
+      };
+      return withLoadedMcpThread(threadId, (server) =>
+        server.sendRequest("mcpServer/tool/call", params, 60_000),
+      );
+    },
+
     // Settings writes land here instead of rebuilding the driver: a second
     // instance would spawn a second `codex app-server`, and the first still
     // holds the writer lock on every thread it opened, so the next
@@ -871,6 +1003,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     getRateLimits: capabilities.getRateLimits,
+
+    consumeRateLimitResetCredit:
+      capabilities.consumeRateLimitResetCredit,
 
     // ── Thread goal controls (Codex `thread/goal/*`) ──
     // threadId is resolved from the coordinator, falling back to the
@@ -1216,5 +1351,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     installPlugin: capabilities.installPlugin,
     uninstallPlugin: capabilities.uninstallPlugin,
     setPluginEnabled: capabilities.setPluginEnabled,
+    listConnectors: capabilities.listConnectors,
+    startConnectorOAuth: capabilities.startConnectorOAuth,
   };
 }

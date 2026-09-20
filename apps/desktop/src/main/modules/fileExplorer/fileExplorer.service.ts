@@ -583,7 +583,9 @@ export const fileExplorerService = {
   /**
    * Recursive substring search across the workspace tree. Matches against the
    * filename and the workspace-relative path; stops as soon as `max` matches
-   * are collected. No `fs.stat` per match — keeps the hot keystroke path cheap.
+   * are collected. Directories are opt-in so file-only consumers keep their
+   * existing result shape. No `fs.stat` per match — keeps the hot keystroke
+   * path cheap.
    *
    * Unlike the tree listings, search skips hidden files by default and — in a
    * git repository — everything .gitignore ignores (VS Code parity: the
@@ -595,6 +597,7 @@ export const fileExplorerService = {
       query,
       max = DEFAULT_SEARCH_FILES_MAX,
       includeHidden = false,
+      includeDirectories = false,
       // Non-git fallback recurses the whole tree — the wider search exclude
       // list keeps it out of node_modules (VS Code `search.exclude` parity).
       excludePatterns = DEFAULT_SEARCH_EXCLUDE_PATTERNS,
@@ -606,6 +609,7 @@ export const fileExplorerService = {
     const normalizedRoot = rootPath.replace(/\/$/, "");
     const rootPrefix = normalizedRoot + path.sep;
     const results: DirEntry[] = [];
+    const seenDirectories = new Set<string>();
 
     const walk = async (dirPath: string): Promise<void> => {
       if (results.length >= max) return;
@@ -623,6 +627,22 @@ export const fileExplorerService = {
         const fullPath = path.join(dirPath, name);
 
         if (entry.isDirectory()) {
+          const relativePath = fullPath.startsWith(rootPrefix)
+            ? fullPath.slice(rootPrefix.length)
+            : fullPath;
+          if (
+            includeDirectories &&
+            (name.toLowerCase().includes(needle) ||
+              relativePath.toLowerCase().includes(needle))
+          ) {
+            results.push({
+              name,
+              fullPath,
+              type: "directory",
+              hasChildren: true,
+            });
+            if (results.length >= max) return;
+          }
           await walk(fullPath);
         } else if (entry.isFile()) {
           const relativePath = fullPath.startsWith(rootPrefix)
@@ -671,6 +691,31 @@ export const fileExplorerService = {
           ) {
             continue;
           }
+
+          if (includeDirectories) {
+            const directorySegments: string[] = [];
+            for (const segment of segments.slice(0, -1)) {
+              directorySegments.push(segment);
+              const relativeDirectory = directorySegments.join("/");
+              if (
+                seenDirectories.has(relativeDirectory) ||
+                (!segment.toLowerCase().includes(needle) &&
+                  !relativeDirectory.toLowerCase().includes(needle))
+              ) {
+                continue;
+              }
+              seenDirectories.add(relativeDirectory);
+              results.push({
+                name: segment,
+                fullPath: path.join(normalizedRoot, relativeDirectory),
+                type: "directory",
+                hasChildren: true,
+              });
+              if (results.length >= max) break;
+            }
+            if (results.length >= max) break;
+          }
+
           const name = segments[segments.length - 1];
           if (
             !name.toLowerCase().includes(needle) &&

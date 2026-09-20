@@ -78,6 +78,57 @@ export function getModelPrettyName(
   return model.displayName;
 }
 
+type ModelDisplayInfo = {
+  id: string;
+  displayName: string;
+  description?: string;
+};
+
+const CLAUDE_MODEL_FAMILIES = ["fable", "sonnet", "opus", "haiku"] as const;
+
+function claudeModelFamily(model: string): string | undefined {
+  const tokens = model.toLowerCase().split(/[-_\s[\]]+/).filter(Boolean);
+  return CLAUDE_MODEL_FAMILIES.find((family) => tokens.includes(family));
+}
+
+/**
+ * Resolve a persisted/provider-reported model id through the same catalogue
+ * labels used by ModelSelectDropdown.
+ *
+ * Claude reports canonical usage ids (`claude-haiku-4-5-20251001`) while its
+ * picker exposes rolling aliases (`haiku`). When there is no exact id match,
+ * match that canonical id back to its family alias so the transcript still
+ * gets the dropdown's current user-facing name and description.
+ */
+export function resolveModelDisplayName(
+  modelId: string,
+  models: ModelDisplayInfo[],
+  variant?: ModelIconVariant,
+): string {
+  const normalizedId = modelId.trim().toLowerCase();
+  const exact = models.find(
+    (model) => model.id.trim().toLowerCase() === normalizedId,
+  );
+  if (exact) return getModelPrettyName(exact, variant);
+
+  if (variant === "claude") {
+    const family = claudeModelFamily(normalizedId);
+    if (family) {
+      const familyModels = models.filter(
+        (model) => claudeModelFamily(model.id) === family,
+      );
+      const wantsExtendedContext = normalizedId.includes("[1m]");
+      const familyMatch = wantsExtendedContext
+        ? familyModels.find((model) => model.id.toLowerCase().includes("[1m]"))
+        : familyModels.find((model) => model.id.toLowerCase() === family) ??
+          familyModels.find((model) => !model.id.toLowerCase().includes("[1m]"));
+      if (familyMatch) return getModelPrettyName(familyMatch, variant);
+    }
+  }
+
+  return formatModelDisplayName(modelId, variant);
+}
+
 /**
  * Narrow a list of model display names down to the ones worth offering in the
  * picker.

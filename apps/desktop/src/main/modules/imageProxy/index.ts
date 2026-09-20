@@ -5,3 +5,4 @@ export {
 } from "./imageProxy.protocol";
 export { registerImageProxyIpc, unregisterImageProxyIpc } from "./imageProxy.ipc";
 export { serveLocalImage, serveLocalDocument } from "./imageProxy.local-serve";
+export { serveLocalVisualization } from "./imageProxy.visualization-serve";

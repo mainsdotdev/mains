@@ -77,7 +77,7 @@ Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). C
 - React app with Redux Toolkit, React Router (HashRouter), `@/` alias → `src/renderer/`
 - Routes: `/` (default route), `/code[/:workspaceId]` (unified agent workspace — all providers), `/settings`, `/plugins`, `/pulse`, `/relay`, `/tasks` (issue + pull-request inbox)
 - `/code` hosts every agent provider; which provider it drives comes from the active space's `providerId` column (`claude_code`, `copilot_cli`, `codex`, `cursor`) — switching space via the space picker switches the provider. There are no per-provider routes.
-- The space's `mode` column (`developer`, `work`, `chat` — see `@mains/contracts/modes`) selects the UI shape via `src/renderer/lib/mode-config.ts` (`MODE_CONFIGS`, read through `useModeConfig`): which route `/` redirects to, plus per-mode capability flags (`showGitActions`, `showTerminal`, `showChangesTab`, `showPermissionControls`, `showPlanControls`, `showGoalControls`). Developer is all-true; work hides the git ceremony; chat hides every write-adjacent affordance. The agent-side half of a mode is the **mode harness** (`src/shared/mode-harness.ts`, see Provider Adapters)
+- The space's `mode` column (`developer`, `work`, `chat` — see `@mains/contracts/modes`) selects the UI shape via `src/renderer/lib/mode-config.ts` (`MODE_CONFIGS`, read through `useModeConfig`): which route `/` redirects to, plus per-mode capability flags (`showGitActions`, `showSources`, `showDeliverables`, `showTerminal`, `showChangesTab`, `showPermissionControls`, `showPlanControls`, `showGoalControls`). Developer shows the coding surface plus run sources; work replaces git with sources and deliverables; chat hides the session panel and every write-adjacent affordance. The agent-side half of a mode is the **mode harness** (`src/shared/mode-harness.ts`, see Provider Adapters)
 - Route table lives in `src/renderer/components/layout/main/main-routes.tsx`; page components in `src/renderer/routes/`
 
 ### IPC Transport (`src/main/ipc-kit/`, `@mains/contracts`)
@@ -168,6 +168,7 @@ Core tables:
 - `connections` / `connectionTokens` / `connectionResources` / `connectionStates` — External service connections, encrypted token blobs, linked resources, integration state
 - `spaces` — User-defined UI/prompt configurations; `providerId` (agent engine) and `mode` (developer/work/chat) drive `/code`. Which modes a provider offers lives in `PROVIDER_MODES` (`@mains/contracts/modes`) — claude and codex drive all three, copilot and cursor are developer-only for now
 - `runs` / `runTurns` / `runContext` / `runArtifacts` — Agent run flow with session resumption via `sessionId` and turn tracking
+- `runTurnChanges` — What each turn did to the working tree: the turn's patch (binary hunks included), per-file stats, and `undoneAt`
 - `toolCalls` — Tool invocation tracking with nested calls (`parentToolCallId`). There is no `tools` table — the registry is in-code.
 - `automations` / `automationRuns` — Scheduled/triggered automation definitions and their execution records
 - `pulses` — Scheduled automation definitions backing the `/pulse` route; each carries a `mode` (fixed at creation) and targets a workspace (developer) or an optional collection (work/chat)
@@ -193,9 +194,25 @@ Core tables:
 - Runs track agent sessions with turns, context, artifacts, and tool calls
 - `run-session.ts` / `run-session-registry.ts` own the live session lifecycle and event persistence
 - Tool approval broker (`user-input-broker.ts`) bridges main↔renderer for interactive tool approvals
+- **Approval notifications**: the broker's OS notification can answer on its own — Allow/Deny for a tool permission, option buttons for a single-choice question, inline reply for an open one (`approval-notification.ts`, pure; `run-notifications.ts`, Electron). Plan review, forms, multi-select and secrets stay click-to-open. Every settlement closes the notification. A click opens the run through a window request (see Menu Bar)
 - Runs support session resumption and continuation via `sessionId`
 - Every run snapshots its space's `mode` (`runs.mode`) at start; `resolveRunMode` + the mode-harness composition in `runs.service` decide the prompt delta, tool policy, and config snapshot a run carries — resume and fork re-derive from the row, so a run keeps its harness even if the space's mode changes
 - Run archiving: `runs:archive` / `runs:listArchived` / `runs:unarchive`, surfaced in Settings → Archive alongside archived workspaces. The service keeps the provider-side session in sync via the adapter's optional `archiveSession` / `unarchiveSession` (Codex threads are archived/unarchived on the app server)
+- **Turn changes**: `RunSession` snapshots the working tree (`gitService.snapshotWorkingTree`) at each turn boundary and stores the turn's patch in `run_turn_changes`; the summary rides on `RunTurnResponse.changes`, `runTurns:getChangesDiff` loads the patch for Review, `runTurns:undoChanges` reverse-applies it. Rendered by `turn-changes-card.tsx`, gated by the mode flag `showTurnChanges`. See CONTEXT.md "turn changes"
+
+**Menu Bar & Dock** (`src/main/status/`)
+- Not a domain module: app shell like `windows/`. Two surfaces over one **status feed** (`status-feed.ts`): an event-bus sink (`runs:statusChanged`, approval request/resolved, `updates:status` — no call site knows it exists) plus a 60s heartbeat for what nothing announces; it runs only while subscribed. `status-actions.ts` is what their items do
+- Menu bar icon (`tray.ts`, setting `showMenuBarIcon`): running-run count as title, a badged icon while a request waits (`drawBadge` on the template bitmap). Its menu is built fresh on every open: Needs you (answered with the same `describeApprovalNotification` / `responseFromNotification` as the notification), Running (Open / Stop), Recently finished, next pulse, remote access, New Chat, Lens capture, Prevent Sleep, update
+- Dock menu (`dock.ts`, always on for the GUI app): Needs you, Running, Recent Workspaces, New Chat — re-set on every status change, since macOS reads it ahead of time. Section titles are greyed rows (the Dock skips header items); no Show / Quit (macOS adds its own)
+- Both layouts are pure functions in `status-menus.ts` (`buildTrayMenu`, `buildDockMenu`). Settings the menu bar writes are announced on `appSettings:changed`
+- **Window requests** (`windows/window-requests.ts`, `shared/window-request.ts`): how the menu bar, the Dock menu and notifications drive the window — `openRun` / `openWorkspace` / `newChat` / `navigate`. `requestWindow` re-opens the window, parks the request and pings `app:windowRequest`; the renderer's `useWindowRequests` collects it over local-only `app:consumeWindowRequest` (never on WS), so it survives a window that had to be re-created. Runs open via `useJumpToRun`, shared with the background-run dock
+
+**Native theme** (`src/main/windows/theme-source.ts`)
+- The renderer's theme preference (`use-dark-mode.ts`) only styles our content; AppKit-drawn chrome — vibrancy behind transparent surfaces, menus (tray included), dialogs — follows `nativeTheme.themeSource`. The renderer hands its preference over `app:setThemeSource` (local only); main saves it to `userData/theme-source.json` and re-applies it before the splash on the next launch
+- `themeSource` also drives the renderer's `prefers-color-scheme`, which `use-dark-mode` reads only for "system" — exactly when main leaves it tracking the OS
+
+**Window crash recovery** (`src/main/windows/crash-recovery.ts`)
+- A crashed main-window renderer reloads on its own (Cmd+R is disabled, so there is no other way back); 3 crashes within a minute stop that and ask Reload / Quit. A hung renderer (`unresponsive`) gets a Wait / Reload prompt that closes itself on `responsive`; Reload kills the renderer (`forcefullyCrashRenderer`) so the reload gets a fresh process. Quitting and clean exits are ignored. Other helper processes (GPU, utilities) are logged via `child-process-gone`
 
 **Projects System** (`src/main/modules/projects/`)
 - Groups workspaces by shared git remote origin; owns `project_resources`
@@ -278,12 +295,12 @@ Core tables:
 **Image Proxy** (`src/main/modules/imageProxy/`)
 - Custom protocol handler that fetches and serves remote images to the renderer (avoids CSP / mixed-content issues)
 - Pairs with `src/renderer/lib/proxied-image-src.ts` + `local-image-url.ts` and the `useLocalImageUrl` hook — use these instead of `<img src={remoteUrl}>`
-- Backs the in-app **document viewer** too (`documents:sign`): Office formats (`.docx/.xlsx/.pptx`) render from bytes behind a shadow root, markdown renders as React through the shared markdown components. `classifyDocType` (`renderer/lib/document-viewer.ts`) is the one table saying what the viewer can show
+- Backs the in-app **document viewer** too (`documents:sign`): Office formats (`.docx/.xlsx/.pptx`) render from bytes behind a shadow root, PDFs render page by page onto canvases via lazily loaded `pdfjs-dist` (`document-viewer/pdf-document.tsx`), markdown renders as React through the shared markdown components. `classifyDocType` (`renderer/lib/document-viewer.ts`) is the one table saying what the viewer can show
 - Also backs the `api.documents` namespace (`documents:sign`) for serving local document files
 
 **Stats Module** (`src/main/modules/stats/`) — Dashboard statistics and analytics (joins `workspace_diffs` via its own repo)
 
-**Updates Module** (`src/main/modules/updates/`) — Application update checking and management
+**Updates Module** (`src/main/modules/updates/`) — Application update checking and management. Self-update only works from `/Applications`: a copy run from the DMG or a translocated zip in Downloads can't replace itself, so `src/main/move-to-applications.ts` offers the move at launch (before the splash; packaged macOS only; "Don't ask again" persists in `userData/move-to-applications.json`)
 
 **Database Seeding** (`src/main/db/seeds/`)
 - Not a domain module and has no IPC surface. A versioned, idempotent runner: each `v{N}.ts` exports `run(db)`, the runner tracks `appSettings.seedVersion`, and `db/client.ts` calls `runSeeds(db)` at init. Fixtures live in `src/main/db/data/` (accounts, connectionStates, providers, spaces).
@@ -304,7 +321,7 @@ Core tables:
 - **Components**: `kebab-case.tsx` filenames in feature dirs under `src/renderer/features/{name}/components/`
 - **Feature dirs**: `onboarding`, `pulse`, `relay`, `settings`, `stats`, `tasks`, `workspace`
 - **Feature internals**: a feature dir holds `components/`, `hooks/`, `lib/`, and `types/`. Non-component logic goes in `lib/` — there is no separate `utils/` (`features/workspace` had both, with no rule telling them apart, and they imported each other). Tests sit next to the file under test.
-- **Layering**: `components/ui/` holds feature-agnostic primitives and may NOT import from `@/features/` (ESLint-enforced). `components/layout/` is the app shell — `main/`, `sidebar/`, `right-panel/`, `page-shell`, `resize-handle` — and composing features there is correct. Feature panels do not belong in `layout/`: the session panel (git actions) and subagent panel live under `features/workspace/components/` and are rendered from `App.tsx`.
+- **Layering**: `components/ui/` holds feature-agnostic primitives and may NOT import from `@/features/` (ESLint-enforced). `components/layout/` is the app shell — `main/`, `sidebar/`, `right-panel/`, `page-shell`, `resize-handle` — and composing features there is correct. Feature panels do not belong in `layout/`: the session panel (environment, sources, deliverables) and subagent panel live under `features/workspace/components/` and are rendered from `App.tsx`.
 - **Shared input UI**: `src/renderer/components/ui/input/` (`input-form`, `rich-input-form`, `permission-mode-dropdown`, `model-select-dropdown`, `fast-mode-button`, `goal-button`, `dictation-button`, `file-upload-dropdown`, `compact-composer-controls`, `send-button`)
 - **Routing**: HashRouter — page components in `src/renderer/routes/`
 - **Settings Routing**: `/settings?section={id}` — section ids live in `src/renderer/features/settings/settings-sections.tsx`: `general`, `git`, `connections`, `backends`, `dashboard`, `archive`, `claude`, `codex`, `codex-plugins`, `copilot`, `cursor`, `notifications`, `personalization`, `schedules`, `security`, `projects`
@@ -357,12 +374,19 @@ iconutil -c icns icon.iconset -o icon.icns
 
 ### Composer Context (renderer)
 
-Everything the composer attaches to the next message — files, issues, signals, skills, browser selections, code selections — is one tagged union, not six parallel lists. See CONTEXT.md for the vocabulary.
+Everything the composer attaches to the next message — files, issues, signals, skills, browser selections, Lens captures, code selections — is one tagged union, not parallel lists. See CONTEXT.md for the vocabulary.
 
 - `features/workspace/lib/composer-context.ts` — the `ContextItem` union plus its identity rules (`contextItemKey` for removal, `isSameContextItem` for dedupe) and `groupContextItems` for the per-kind views. The only home for these types.
-- `features/workspace/hooks/use-composer-context.ts` — the read path (`items`, the grouped views, `add` / `remove` / `clear`). Components read it directly; never pass context lists or `onRemoveContextX` down as props. A component that only attaches dispatches `addContextItem` instead of subscribing.
+- `features/workspace/hooks/use-composer-context.ts` — the read path (`items`, the grouped views, `add` / `remove` / `clear` / route reset). Route reset preserves global Lens captures and drops workspace-scoped context. Components read it directly; never pass context lists or `onRemoveContextX` down as props. A component that only attaches dispatches `addContextItem` instead of subscribing.
 - `features/workspace/lib/run-context-payload.ts` — `buildRunContextPayload(items, uploads)` shapes context for `runs:execute` / `runs:continue`. `executeRun` / `continueRun` take one `ContextItem[]`, never per-kind parameters.
 - Store side: a single `workspace.contextItems` array behind `addContextItem` / `removeContextItem` / `clearContextItems`.
+
+### Lens (macOS desktop; internal name `appshots`)
+
+- `features/settings/components/lens.tsx` owns the standalone Settings › Lens page (`?section=lens`). Keep Lens controls out of General.
+- `main/modules/appshots` owns the global shortcut, frontmost-window capture, permissions, and pending delivery. It is local Electron IPC only; do not add it to the WebSocket handler registry.
+- `renderer/hooks/use-appshots.ts` is the one main→composer bridge. A capture adds draft context and navigates to `/code`; it never starts or continues a run.
+- Lens PNGs live in the existing trusted, size-bounded `userData/browser-captures` directory. Explicit removal and route discard delete unused captures; a successfully sent capture stays cached long enough for the background provider session to copy it, then normal cache eviction removes it.
 
 ### Code Style
 

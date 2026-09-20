@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.153.4",
+  "cliVersion": "0.154.0",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -20,6 +20,10 @@
     {
       "path": "CollaborationMode.ts",
       "sha256": "b45d07e3c94550cff97e3d57d33045bd2d47b26a5f25a918fe2978cb08e0948f"
+    },
+    {
+      "path": "ConfigurationReasoning.ts",
+      "sha256": "9124b255877edd617a7fc9b794b4e30d97f1cdc4e329256ec2e63e37c1cf21f2"
     },
     {
       "path": "ContentItem.ts",
@@ -82,6 +86,10 @@
       "sha256": "8b302c2b183668ed0f67a753befb4aaa2c998d316cc5ff7be4ca442cd5a4c741"
     },
     {
+      "path": "McpServerInfo.ts",
+      "sha256": "a0ddc79efd0eaa7a348dd88a74743f5c3dbac5869b51e09d120098c9be7200e7"
+    },
+    {
       "path": "MessagePhase.ts",
       "sha256": "9b9cac40f1eb1d9c9c387b90fd9f87873727e010f46e478230aff17fd3ec460c"
     },
@@ -118,8 +126,20 @@
       "sha256": "1d56c8b72bf6806438e612e1a14a567ceab91be91a4bcb0ca192f898fe0bf9bc"
     },
     {
+      "path": "Resource.ts",
+      "sha256": "d5b8c1e68332e96ac9281075a30bc231810ceafea795c0a388d8fe0d54596bf1"
+    },
+    {
+      "path": "ResourceContent.ts",
+      "sha256": "fea0c6f29fbdbabae62e543234b7a1380507d18d843f771be32a461ed1fbce4c"
+    },
+    {
+      "path": "ResourceTemplate.ts",
+      "sha256": "f9da8918d1cad3998ee31a01c719f3cecf17ae20eac49910e77b4a7954b472a5"
+    },
+    {
       "path": "ResponseItem.ts",
-      "sha256": "ae0a7c84d2f3ab004a74b60a78827b5911901cf7cdb64789a3f11faacee6720c"
+      "sha256": "1dd5e9c56cdbf1140c4bd090e503dae701f60d4f1b4dad1557a4aa45e968bb68"
     },
     {
       "path": "ResponseItemId.ts",
@@ -140,6 +160,10 @@
     {
       "path": "ThreadId.ts",
       "sha256": "7ffbbefebc5e49a3215dacf4639d4fdd79c5577f9cebdf46760bdfa7312a1109"
+    },
+    {
+      "path": "Tool.ts",
+      "sha256": "d5e9e622156040df012f8a0769258093132854b64e30b6ec45c8831c11231d92"
     },
     {
       "path": "WebSearchAction.ts",
@@ -174,6 +198,26 @@
       "sha256": "2fa497987aab791b697c9dee5cdd634ec566bf0b82cd56b5a796f26241a95957"
     },
     {
+      "path": "v2/AppBranding.ts",
+      "sha256": "1eb1ff2f491854bfe5cb34299199f3fd83299d923e1eb1e2cb1c7d128ed29877"
+    },
+    {
+      "path": "v2/AppInfo.ts",
+      "sha256": "ed00502e1ee180aa55b8f527ea336e8a439c00684ffd61e41e81f13b81dcad11"
+    },
+    {
+      "path": "v2/AppMetadata.ts",
+      "sha256": "dca2dce3740cfa96d8fd7dd668971d41cf6b42cd6057ccb1348875ca505dc720"
+    },
+    {
+      "path": "v2/AppReview.ts",
+      "sha256": "767582bf5790544cff44374246f188074b4eaa02b2e252df6d11efae75d9e7ec"
+    },
+    {
+      "path": "v2/AppScreenshot.ts",
+      "sha256": "e0e4dc885793fd98f526ccf9df34cddb4fe6311b899026638c390f2efce21031"
+    },
+    {
       "path": "v2/AppSummary.ts",
       "sha256": "3825614f91f7972243c725c3d0a58aaafadf46b22a005a071696b121ec4ae857"
     },
@@ -186,8 +230,36 @@
       "sha256": "f90a3acfbf57668293da13eeb80ff9933038a63b51c0f03ae4f737a27d7e28a6"
     },
     {
+      "path": "v2/AppToolSummary.ts",
+      "sha256": "d7a94bc5357bc37ae06cfeb6561517f71bb0df065b71a2658663e00b890f8c4a"
+    },
+    {
       "path": "v2/ApprovalsReviewer.ts",
       "sha256": "0ba0d2403a6987128af58e825fb0d0e05d61891ce5a35e7ba1f94afe51a57630"
+    },
+    {
+      "path": "v2/AppsInstalledParams.ts",
+      "sha256": "a0bb17b43e3694724bdeea1b5c41a18d381951ddc4a47227eb0aff657ea38624"
+    },
+    {
+      "path": "v2/AppsInstalledResponse.ts",
+      "sha256": "22b7a90f0d3e2419455484c6f017cecc411fb429b972851274a76b7c9a57bfbc"
+    },
+    {
+      "path": "v2/AppsListParams.ts",
+      "sha256": "c071b62665a1bd1011656ac45c640cc1194f03fc0023c3082f9bc9fbafcc5c34"
+    },
+    {
+      "path": "v2/AppsListResponse.ts",
+      "sha256": "9f07d522af5a6534e60b8b4165cc1e541c7506d187cc79d9c90f4033ecfe2e5a"
+    },
+    {
+      "path": "v2/AppsReadParams.ts",
+      "sha256": "38637cb46e3528da2c043bbcff1a1894ad15d733c6c8529ba4414aa7f2fc4d18"
+    },
+    {
+      "path": "v2/AppsReadResponse.ts",
+      "sha256": "2e9967dd4d786feaf821f302fab2be76a4c75cf00197959951df88beef6b31b3"
     },
     {
       "path": "v2/AskForApproval.ts",
@@ -254,6 +326,22 @@
       "sha256": "62c3b082b9ecb53ca8abb9fd65c7e3216b0875cce72db7dec3b1ecfdbfda121c"
     },
     {
+      "path": "v2/ConnectorMetadata.ts",
+      "sha256": "1da7c3044670ae8e5727951194a68de72536cb212c9cc53259bc4bde17d99a18"
+    },
+    {
+      "path": "v2/ConsumeAccountRateLimitResetCreditOutcome.ts",
+      "sha256": "2fc33514e9745ffeeefada2c51362dc66e6f9c5f6f76d28b0a9a8cf278a2e8fe"
+    },
+    {
+      "path": "v2/ConsumeAccountRateLimitResetCreditParams.ts",
+      "sha256": "f5f79c58b90a126b7620b38bc88d09a3b096543f71cdd949d19bac3c2b03399d"
+    },
+    {
+      "path": "v2/ConsumeAccountRateLimitResetCreditResponse.ts",
+      "sha256": "3240fe476768362847266693ffdfb4fdd8d8f0d7b628962255b229a182d76682"
+    },
+    {
       "path": "v2/CreditsSnapshot.ts",
       "sha256": "e56bf82bc93959ed95748dc7363520d4cf477d9c7ac2b8e40e48c91b03c2575a"
     },
@@ -311,7 +399,7 @@
     },
     {
       "path": "v2/GetAccountRateLimitsResponse.ts",
-      "sha256": "de058b798d1506dfe3962b83b10ec5af26a8626ad4ca90d69863d7872ef5196e"
+      "sha256": "a046fcd60782ace2b87517d43bdeaf9ceaec4ad06f67b84ca3d1a83c251bc9d1"
     },
     {
       "path": "v2/GetAccountResponse.ts",
@@ -330,12 +418,68 @@
       "sha256": "391260c67d7fbd0aaf3f641c3764892f655871047085df45048057066db1d0ea"
     },
     {
+      "path": "v2/InstalledApp.ts",
+      "sha256": "85049cd062a9f535f4573d57c5a0d92de3ea9d454078e0fd6f5b81402b73b9f6"
+    },
+    {
+      "path": "v2/ListMcpServerStatusParams.ts",
+      "sha256": "3a9c49be8082cefbe9e7b0839181c36e590499c4b4bd7f80d00d6edf63932530"
+    },
+    {
+      "path": "v2/ListMcpServerStatusResponse.ts",
+      "sha256": "30a823dce1d1f7a8d94e03e4716c1a8bf7dab253d222286ee5316f2982c1df27"
+    },
+    {
       "path": "v2/MarketplaceInterface.ts",
       "sha256": "78ae2a328d099b27ea2816b0950c545ddfd484cbf2ced69bafb9ce02d1b6a99e"
     },
     {
       "path": "v2/MarketplaceLoadErrorInfo.ts",
       "sha256": "8cdc3a063208916e1131bcc61770d755bcc0956c30498927d2ce2dcd40d7c434"
+    },
+    {
+      "path": "v2/McpAuthStatus.ts",
+      "sha256": "567dad6dbb3bc81cee7103965cf31fbfafec2d2e5c61bbc872630cbae9c380c8"
+    },
+    {
+      "path": "v2/McpResourceReadParams.ts",
+      "sha256": "1842e7dca854501d4cb80f2eb3f5786dddbb38d2304b1841f91f6fde5d99c1ad"
+    },
+    {
+      "path": "v2/McpResourceReadResponse.ts",
+      "sha256": "65f26c31e9b713ef755bf92affa7a423057619508f51a7afeffaa9f80b44cff2"
+    },
+    {
+      "path": "v2/McpServerConnectionStatus.ts",
+      "sha256": "e8a1ab81bca6c3623e08d8c62cdce50cf98d7a68ea406e711eceb1c890c5045c"
+    },
+    {
+      "path": "v2/McpServerOauthClientRegistration.ts",
+      "sha256": "bffadacfff8f73e4e96879152b1746c91fea36b29224ac00f6eef872a70febc6"
+    },
+    {
+      "path": "v2/McpServerOauthLoginParams.ts",
+      "sha256": "19195d51b8c0d5147e93e1c3bddd53e54446fa93c6fe81a818aeacecadb020ce"
+    },
+    {
+      "path": "v2/McpServerOauthLoginResponse.ts",
+      "sha256": "0a0fc60ee64195866fee1b99cc593854975bf8e2472fe24fa08fac23b5286c84"
+    },
+    {
+      "path": "v2/McpServerStatus.ts",
+      "sha256": "ce67de1c40f618d1c61ce147a2712a2af6f7a0dd7b48527f2bf777a10dacc593"
+    },
+    {
+      "path": "v2/McpServerStatusDetail.ts",
+      "sha256": "8faec4faebac7fa38696408b4f1386bbf8b07ae721242ce475a2b6d7a894aee0"
+    },
+    {
+      "path": "v2/McpServerToolCallParams.ts",
+      "sha256": "bc2c9772b2b5e59a1c91d2b57b259616aae409b56cd04d6acd2394eb2888ddda"
+    },
+    {
+      "path": "v2/McpServerToolCallResponse.ts",
+      "sha256": "6846847691a9239c8fab35c8ad094a5f2e2e88a0fbb2884a9fd75a1e89efb195"
     },
     {
       "path": "v2/McpToolCallAppContext.ts",
@@ -551,7 +695,7 @@
     },
     {
       "path": "v2/RateLimitSnapshot.ts",
-      "sha256": "22d541aabad555d5ff02bae11acbcdd1d54c3a61496a1e05562a18aae64c4b6b"
+      "sha256": "491f3b9351b49e67d0cf6abcf86e6e86775d4cad3bc20d8e44abc9055565c813"
     },
     {
       "path": "v2/RateLimitWindow.ts",
@@ -567,7 +711,7 @@
     },
     {
       "path": "v2/ReviewStartParams.ts",
-      "sha256": "d041aa94791b825ff519bb495069583006f9acede88978fb67b06d53f25a3f1c"
+      "sha256": "68a36a37871bde50981d684b03366ab99ed201c08a1ab0c7e80248335a82b96f"
     },
     {
       "path": "v2/ReviewStartResponse.ts",
@@ -663,7 +807,7 @@
     },
     {
       "path": "v2/Thread.ts",
-      "sha256": "9a2a7ab942bbc6d2a8c0757e991ab81ed6d3e55d70439b228c1f202db42cd3dc"
+      "sha256": "a90071210b958953a9dca7b3884c2ab788d29c3a2cb346f72327377456436d8e"
     },
     {
       "path": "v2/ThreadActiveFlag.ts",
@@ -684,6 +828,10 @@
     {
       "path": "v2/ThreadDeleteResponse.ts",
       "sha256": "a5f8fde2ad89346d0ec7f2b0ea4c7c952790823c276dd6a6b221f7810806f44c"
+    },
+    {
+      "path": "v2/ThreadEnvironment.ts",
+      "sha256": "1e3cd027e31e5e6d3846cf5e8a5e1620be66b833ff773ef8d6b84a78cb399faa"
     },
     {
       "path": "v2/ThreadExtra.ts",

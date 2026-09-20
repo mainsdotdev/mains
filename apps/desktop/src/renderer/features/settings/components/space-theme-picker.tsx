@@ -20,7 +20,7 @@ export function SpaceThemePicker({
   const { darkMode } = useDarkMode();
 
   return (
-    <div className="flex items-center justify-center gap-4">
+    <div className="flex flex-wrap items-center gap-3">
       {solidColors.map((colorPair, index) => {
         const isSelected = selectedColorIndex === index;
         const preview = getThemeVariant(colorPair, darkMode).preview;

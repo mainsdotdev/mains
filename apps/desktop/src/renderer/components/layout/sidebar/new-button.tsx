@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Button, Caption, DropdownMenu, DropdownMenuItem, Text } from "@/components/ui";
+import { useKeyboardShortcut } from "@/providers/keyboard-shortcuts-provider";
 
 interface NewButtonProps {
   onClick: () => void;
   title: string;
   actionPrefix?: string;
   icon?: React.ReactNode;
-  dropdownItems?: { label: string; icon?: React.ReactNode; shortcut?: string; shortcutLabel?: string; onClick: () => void }[];
+  shortcutLabel?: string;
+  dropdownItems?: { label: string; icon?: React.ReactNode; shortcutLabel?: string; onClick: () => void }[];
 }
 
 export default function NewButton({
@@ -14,6 +16,7 @@ export default function NewButton({
   title,
   icon,
   actionPrefix = "New",
+  shortcutLabel,
   dropdownItems,
 }: NewButtonProps) {
   const [menuState, setMenuState] = useState<{
@@ -36,31 +39,13 @@ export default function NewButton({
     }
   };
 
+  useKeyboardShortcut("app.newItem", handleClick, {
+    allowInEditable: true,
+  });
+
   const handleCloseMenu = () => {
     setMenuState({ isOpen: false, position: { x: 0, y: 0 } });
   };
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.metaKey && e.key === "n") {
-        e.preventDefault();
-        handleClick();
-      }
-
-      if (e.metaKey && e.shiftKey && dropdownItems) {
-        const key = e.key.toLowerCase();
-        const matched = dropdownItems.find((item) => item.shortcut === key);
-        if (matched) {
-          e.preventDefault();
-          matched.onClick();
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClick, dropdownItems]);
 
   return (
     <>
@@ -68,7 +53,7 @@ export default function NewButton({
         ref={buttonRef}
         tooltip={`${actionPrefix} ${title}`}
         variant="subtle"
-        tooltipShortcut="⌘N"
+        tooltipShortcut={shortcutLabel}
         onClick={handleClick}
         aria-haspopup={dropdownItems ? "menu" : undefined}
         aria-expanded={dropdownItems ? menuState.isOpen : undefined}
@@ -81,7 +66,7 @@ export default function NewButton({
         <Text as="span" size="inherit" weight="normal">
           {actionPrefix} {title}
         </Text>
-        <Caption className="ml-auto">⌘ N</Caption>
+        {shortcutLabel && <Caption className="ml-auto">{shortcutLabel}</Caption>}
       </Button>
 
       {dropdownItems && (

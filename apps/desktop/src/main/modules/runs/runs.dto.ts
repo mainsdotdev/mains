@@ -3,10 +3,11 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ModeId } from "../../../shared/modes";
+import type { TreeDiffFile } from "../git";
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type RunContextKind = "file" | "selection" | "diff" | "git" | "terminal" | "env" | "note";
-export type RunArtifactKind = "patch" | "file" | "log" | "report" | "command_result" | "result" | "prompt_suggestion" | "image" | "document";
+export type RunArtifactKind = "patch" | "file" | "log" | "report" | "command_result" | "result" | "prompt_suggestion" | "image" | "document" | "visualization";
 export type ToolCallStatus = "queued" | "running" | "done" | "error" | "canceled";
 
 // ─────────────────────────────────────────────────────────────
@@ -80,8 +81,17 @@ export interface RunResponse {
   stopReason: string | null;
   sessionId: string | null;
   isArchived: boolean;
+  /** When the chat was pinned to the top of the sidebar; null when it is not. */
+  pinnedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/** What a run is called outside the app (notifications, the menu bar): its title, else the goal's first line. */
+export function formatRunLabel(run: Pick<RunResponse, "title" | "goal">): string | null {
+  const title = run.title?.trim();
+  if (title) return title;
+  return run.goal?.split("\n").find((line) => line.trim())?.trim() ?? null;
 }
 
 export interface ArchivedRunWorkspaceResponse {
@@ -282,7 +292,39 @@ export interface RunTurnResponse {
   model: string | null;
   modelUsage: Record<string, ModelUsageEntry> | null;
   metadata: Record<string, unknown> | null;
+  /** What this turn did to the working tree; null when it changed nothing or wasn't tracked. */
+  changes: RunTurnChangesSummary | null;
   createdAt: Date;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Run Turn Changes DTOs
+// ─────────────────────────────────────────────────────────────
+export type TurnFileChange = TreeDiffFile;
+
+/** The transcript card's view of a turn's changes — everything but the patch. */
+export interface RunTurnChangesSummary {
+  id: string;
+  files: TurnFileChange[];
+  additions: number;
+  deletions: number;
+  /** Legacy records may have an incomplete patch; new records are stored in full. */
+  truncated: boolean;
+  undoneAt: Date | null;
+}
+
+export interface RunTurnChangesDiffResponse extends RunTurnChangesSummary {
+  diffText: string;
+}
+
+export interface CreateRunTurnChangesPayload {
+  runId: string;
+  turnId: number;
+  diffText: string;
+  files: TurnFileChange[];
+  additions: number;
+  deletions: number;
+  truncated: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -292,7 +334,7 @@ export interface RunTurnResponse {
 /** A file attachment serialized for IPC transport.
  *
  * Memory optimization: prefer `sourcePath` over inline base64 `data` whenever the
- * attachment already lives on disk (e.g. browser captures). Providing `sourcePath`
+ * attachment already lives on disk (e.g. trusted browser/Appshot captures). Providing `sourcePath`
  * lets the adapter copy the file byte-for-byte instead of roundtripping base64
  * through IPC and Redux. Provide `data` only for in-memory payloads. */
 export interface FileAttachment {
@@ -340,11 +382,12 @@ export interface StartRunPayload {
   /** Structured context signals (error reports, displayed as chips in the UI) */
   contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
   /** Structured context files (displayed as chips in the UI, injected into LLM prompt by adapter) */
-  contextFiles?: Array<{ path: string }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
   /** User-selected skills to invoke (displayed as chips in the UI, injected by adapter) */
   contextSkills?: Array<{
     name: string;
     path?: string;
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -377,11 +420,12 @@ export interface ContinueRunPayload {
   /** Structured context signals (error reports) to inject into this follow-up */
   contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
   /** Structured context files to inject into this follow-up */
-  contextFiles?: Array<{ path: string }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
   /** User-selected skills to invoke for this follow-up */
   contextSkills?: Array<{
     name: string;
     path?: string;
+    mentionPath?: string;
     displayName?: string;
     description?: string;
     shortDescription?: string;
@@ -402,6 +446,13 @@ export interface MoveRunToCollectionPayload {
   runId: string;
   accountId: string;
   collectionId: string | null;
+}
+
+/** Payload for pinning a chat to the top of the sidebar, or releasing it. */
+export interface SetRunPinnedPayload {
+  runId: string;
+  accountId: string;
+  pinned: boolean;
 }
 
 /** Payload for forking an existing run's session into a new run */
@@ -441,7 +492,6 @@ export interface ReviewRunPayload {
   spaceId?: string;
   providerId: string;
   target: ReviewTarget;
-  delivery?: "inline" | "detached";
   model?: string;
   systemPrompt?: string;
   configSnapshot?: Record<string, unknown>;

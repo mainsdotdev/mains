@@ -25,6 +25,7 @@ const LOCALDOC_EXT_MIME: Record<string, string> = {
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".pdf": "application/pdf",
 };
 
 export async function serveLocalImage(requestUrl: URL): Promise<Response> {

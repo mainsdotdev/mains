@@ -1,17 +1,28 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 
 import { AgentMarkdown } from "./agent-markdown";
-import { isRemoteImageSrc } from "./markdown-components";
+import {
+  faviconUrlForHref,
+  isRemoteImageSrc,
+} from "./markdown-components";
+
+const linkHarness = vi.hoisted(() => ({
+  openLink: vi.fn(),
+}));
 
 vi.mock("@/features/workspace/hooks/use-open-file-in-editor", () => ({
   useOpenFileInEditor: () => vi.fn(),
 }));
+vi.mock("@/hooks/use-open-link", () => ({
+  useOpenLink: () => linkHarness.openLink,
+}));
 
 afterEach(cleanup);
+beforeEach(() => vi.clearAllMocks());
 
 function renderMarkdown(source: string) {
   return render(createElement(AgentMarkdown, null, source));
@@ -116,6 +127,17 @@ describe("assistant markdown / math", () => {
 });
 
 describe("markdownComponents / links", () => {
+  it("derives favicon requests from the origin only", () => {
+    expect(
+      faviconUrlForHref(
+        "https://user:secret@news.ycombinator.com/item?id=49717558#top",
+      ),
+    ).toBe("https://news.ycombinator.com/favicon.ico");
+    expect(faviconUrlForHref("mailto:hello@example.com")).toBeNull();
+    expect(faviconUrlForHref("#footnote-1")).toBeNull();
+    expect(faviconUrlForHref("not a url")).toBeNull();
+  });
+
   it("keeps a long external URL inline with the surrounding prompt text", () => {
     const url =
       "https://www.nair.sh/guides-and-opinions/communicating-your-expertise/why-senior-developers-fail-to-communicate-their-expertise";
@@ -128,6 +150,18 @@ describe("markdownComponents / links", () => {
     expect(link.parentElement?.textContent).toBe(
       `${url} Could you give me a summary?`,
     );
+    expect(link.querySelector("img")?.getAttribute("src")).toContain(
+      encodeURIComponent("https://www.nair.sh/favicon.ico"),
+    );
+  });
+
+  it("opens assistant web links through the in-app browser flow", () => {
+    const url = "https://news.ycombinator.com/item?id=49717558";
+    renderMarkdown(`[Top comment thread](${url})`);
+
+    fireEvent.click(screen.getByRole("link", { name: "Top comment thread" }));
+
+    expect(linkHarness.openLink).toHaveBeenCalledWith(url);
   });
 });
 

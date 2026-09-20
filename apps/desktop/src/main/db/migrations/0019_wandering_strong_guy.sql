@@ -1,0 +1,1 @@
+ALTER TABLE `app_settings` ADD `keep_awake_for_remote_access` integer DEFAULT false NOT NULL;

@@ -1,12 +1,12 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useRef,
   useState,
+  type MouseEvent,
   type PointerEvent,
 } from "react";
-import { Button, Modal, Text } from "@/components/ui";
+import { Button, Modal } from "@/components/ui";
 import { Close, Download, Plus, Minus } from "@/components/ui/icons";
 
 interface ImagePreviewModalProps {
@@ -23,12 +23,20 @@ function clampScale(value: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
 }
 
+const floatingButtonClass =
+  "flex size-9 items-center justify-center rounded-full bg-black/55 text-white/80 backdrop-blur-md hover:bg-black/75 hover:text-white";
+
+const zoomButtonClass =
+  "p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-40";
+
 export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps) {
-  const titleId = useId();
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  // Modal focuses its first focusable on open; that would be Download, whose
+  // tooltip opens on focus. Close has no tooltip, so it takes initial focus.
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const dragOrigin = useRef<{
     pointerX: number;
     pointerY: number;
@@ -85,10 +93,10 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
     return () => window.removeEventListener("keydown", handler);
   }, [zoomIn, zoomOut, resetZoom]);
 
-  // Wheel-to-zoom. Attached natively (non-passive) so preventDefault can stop
-  // the trackpad pinch from zooming the whole app.
+  // Wheel-to-zoom anywhere on the stage. Attached natively (non-passive) so
+  // preventDefault can stop the trackpad pinch from zooming the whole app.
   useEffect(() => {
-    const el = containerRef.current;
+    const el = stageRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -102,7 +110,7 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
+  const onPointerDown = (e: PointerEvent<HTMLImageElement>) => {
     if (!canPan) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     dragOrigin.current = {
@@ -114,7 +122,7 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
     setDragging(true);
   };
 
-  const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
+  const onPointerMove = (e: PointerEvent<HTMLImageElement>) => {
     const origin = dragOrigin.current;
     if (!origin) return;
     setOffset({
@@ -126,6 +134,11 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
   const endDrag = () => {
     dragOrigin.current = null;
     setDragging(false);
+  };
+
+  // The stage covers the Modal backdrop, so it takes over click-outside-to-close.
+  const onStageClick = (e: MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) onClose();
   };
 
   const handleDownload = useCallback(async () => {
@@ -155,62 +168,58 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
       isOpen
       onClose={onClose}
       backdrop="media"
-      aria-labelledby={titleId}
-      className="w-fit min-w-80 max-w-[92vw]"
+      surface="bare"
+      aria-label={name || "Image preview"}
+      initialFocusRef={closeButtonRef}
+      className="h-full w-full max-h-none"
     >
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-primary-200 dark:border-primary-800  shrink-0">
-        <Text
-          as="span"
-          id={titleId}
-          size="xs"
-          tone="subtle"
-          className="font-mono truncate"
-        >
-          {name}
-        </Text>
-        <div className="flex items-center gap-1 ml-3 shrink-0 glass-surface p-1 rounded-full">
-          <Button
-            onClick={handleDownload}
-            aria-label="Download image"
-            tooltip="Download"
-            className="p-1 rounded-full hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5 text-primary-500" />
-          </Button>
-          <Button
-            onClick={onClose}
-            aria-label="Close"
-            className="p-1 rounded-full hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
-          >
-            <Close className="w-3.5 h-3.5 text-primary-500" />
-          </Button>
-        </div>
-      </div>
       <div
-        ref={containerRef}
-        className="relative flex-1 min-h-0 bg-primary-100 dark:bg-primary-900 flex items-center justify-center p-2 overflow-hidden"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        ref={stageRef}
+        className="relative flex h-full w-full items-center justify-center"
+        onClick={onStageClick}
       >
         <img
           src={src}
           alt={name}
           draggable={false}
-          className="max-h-[80vh] max-w-full object-contain rounded select-none"
+          className="block max-h-[70vh] max-w-[70vw] object-contain rounded-lg shadow-2xl select-none"
           style={{
             transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
             transition: dragging ? "none" : "transform 120ms ease-out",
             cursor: canPan ? (dragging ? "grabbing" : "grab") : "default",
           }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
         />
-        <div className="absolute bottom-3 glass-surface left-1/2 -translate-x-1/2 flex items-center gap-0.5 rounded-full px-1.5 py-1 shadow-lg">
+
+        <div className="absolute right-0 top-0 z-10 flex items-center gap-2">
+          <Button
+            onClick={handleDownload}
+            aria-label="Download image"
+            tooltip="Download"
+            tooltipPosition="bottom"
+            className={floatingButtonClass}
+          >
+            <Download className="size-4" />
+          </Button>
+          <Button
+            ref={closeButtonRef}
+            onClick={onClose}
+            aria-label="Close"
+            className={floatingButtonClass}
+          >
+            <Close className="size-4" />
+          </Button>
+        </div>
+
+        <div className="absolute bottom-0 left-1/2 z-10 -translate-x-1/2 flex items-center gap-0.5 rounded-full bg-black/55 p-1 backdrop-blur-md">
           <Button
             onClick={zoomOut}
             disabled={scale <= MIN_SCALE}
             aria-label="Zoom out"
-            className="p-1.5 rounded-full text-primary-200 hover:bg-primary-100/10 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className={zoomButtonClass}
           >
             <Minus className="w-3.5 h-3.5" />
           </Button>
@@ -218,7 +227,7 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
             onClick={resetZoom}
             aria-label="Reset zoom"
             title="Reset zoom"
-            className="min-w-12 px-1 text-xs font-medium tabular-nums text-primary-100 hover:text-primary cursor-pointer"
+            className="min-w-12 px-1 text-xs font-medium tabular-nums text-white/85 hover:text-white"
           >
             {Math.round(scale * 100)}%
           </Button>
@@ -226,7 +235,7 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
             onClick={zoomIn}
             disabled={scale >= MAX_SCALE}
             aria-label="Zoom in"
-            className="p-1.5 rounded-full text-primary-200 hover:bg-primary-100/10 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className={zoomButtonClass}
           >
             <Plus className="w-3.5 h-3.5" />
           </Button>

@@ -120,6 +120,7 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_PLUGINS_ENABLED;
   delete process.env.MAINS_CODEX_FIXTURE_ACCOUNT;
   delete process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS;
+  delete process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -155,6 +156,63 @@ describe("codex.driver / app-server protocol", () => {
       },
     });
   }, 15_000);
+
+  it("sends selected plugins as structured app-server mentions", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+
+    const driver = createCodexDriver({
+      binary: fixtureBinary,
+      timeout: 2000,
+    });
+    drivers.push(driver);
+
+    const acquired = await driver.createSession({
+      ...request("run-plugin-mention"),
+      goal: "$app-694546cd042881919bb746a8dc300f38 Find the cheapest flight",
+      skills: [{
+        name: "app-694546cd042881919bb746a8dc300f38",
+        displayName: "Skyscanner",
+        scope: "plugin",
+        mentionPath:
+          "plugin://app-694546cd042881919bb746a8dc300f38@openai-curated-remote",
+      }, {
+        name: "flight-helper",
+        path: "/tmp/flight-helper/SKILL.md",
+      }],
+    });
+    await driver.executePrompt(
+      acquired.session,
+      acquired.prompt,
+      async () => undefined,
+      new AbortController().signal,
+    );
+
+    const turnStart = readProtocolLog(logPath).find(
+      (message) => message.method === "turn/start",
+    );
+    expect(turnStart?.params).toMatchObject({
+      input: [
+        {
+          type: "text",
+          text: "$app-694546cd042881919bb746a8dc300f38 Find the cheapest flight",
+          text_elements: [],
+        },
+        {
+          type: "mention",
+          name: "Skyscanner",
+          path: "plugin://app-694546cd042881919bb746a8dc300f38@openai-curated-remote",
+        },
+        {
+          type: "skill",
+          name: "flight-helper",
+          path: "/tmp/flight-helper/SKILL.md",
+        },
+      ],
+    });
+  });
 
   it("sends Codex thread archive, unarchive, and delete lifecycle requests", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
@@ -194,8 +252,131 @@ describe("codex.driver / app-server protocol", () => {
     );
   });
 
+  it("reads MCP App resources and calls their tools on the run's existing thread", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+
+    const driver = createCodexDriver({
+      binary: fixtureBinary,
+      timeout: 2000,
+    });
+    drivers.push(driver);
+
+    await driver.createSession(request("run-mcp-app"));
+    const resource = await driver.readMcpAppResource?.({
+      runId: "run-mcp-app",
+      server: "fixture-mcp",
+      uri: "ui://fixture/card.html",
+      originCallId: "call-1",
+      connectorId: "connector-1",
+    });
+    const result = await driver.callMcpAppTool?.({
+      runId: "run-mcp-app",
+      server: "fixture-mcp",
+      tool: "select-flight",
+      arguments: { itineraryId: "flight-1" },
+      meta: { source: "fixture-card" },
+    });
+
+    expect(resource).toMatchObject({
+      originCallId: "call-1",
+      contents: [{
+        uri: "ui://fixture/card.html",
+        mimeType: "text/html;profile=mcp-app",
+        text: expect.stringContaining("Fixture MCP App"),
+      }],
+    });
+    expect(result).toMatchObject({
+      structuredContent: { echoed: { itineraryId: "flight-1" } },
+      isError: false,
+    });
+    expect(readProtocolLog(logPath)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "mcpServer/resource/read",
+          params: {
+            threadId: "thread-1",
+            server: "fixture-mcp",
+            uri: "ui://fixture/card.html",
+            originCallId: "call-1",
+            connectorId: "connector-1",
+          },
+        }),
+        expect.objectContaining({
+          method: "mcpServer/tool/call",
+          params: {
+            threadId: "thread-1",
+            server: "fixture-mcp",
+            tool: "select-flight",
+            arguments: { itineraryId: "flight-1" },
+            _meta: { source: "fixture-card" },
+          },
+        }),
+      ]),
+    );
+  });
+
+  it("resumes an unsubscribed thread before retrying MCP App operations", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD = "1";
+
+    const driver = createCodexDriver({
+      binary: fixtureBinary,
+      timeout: 2000,
+    });
+    drivers.push(driver);
+
+    const resourceSession = await driver.createSession(request("run-mcp-resource-remount"));
+    await driver.cleanup?.(resourceSession.session);
+    const resource = await driver.readMcpAppResource?.({
+      runId: "run-mcp-resource-remount",
+      server: "fixture-mcp",
+      uri: "ui://fixture/card.html",
+      originCallId: "call-remount",
+    });
+
+    const toolSession = await driver.createSession(request("run-mcp-tool-remount"));
+    await driver.cleanup?.(toolSession.session);
+    const result = await driver.callMcpAppTool?.({
+      runId: "run-mcp-tool-remount",
+      server: "fixture-mcp",
+      tool: "select-flight",
+      arguments: { itineraryId: "flight-remount" },
+    });
+
+    expect(resource?.contents[0]).toMatchObject({
+      uri: "ui://fixture/card.html",
+      text: expect.stringContaining("Fixture MCP App"),
+    });
+    expect(result).toMatchObject({
+      structuredContent: { echoed: { itineraryId: "flight-remount" } },
+      isError: false,
+    });
+
+    const log = readProtocolLog(logPath);
+    expect(
+      log.filter((message) => message.method === "thread/resume").map(
+        (message) => message.params,
+      ),
+    ).toEqual([
+      expect.objectContaining({ threadId: "thread-1", excludeTurns: true }),
+      expect.objectContaining({ threadId: "thread-2", excludeTurns: true }),
+    ]);
+    expect(
+      log.filter((message) => message.method === "mcpServer/resource/read"),
+    ).toHaveLength(2);
+    expect(
+      log.filter((message) => message.method === "mcpServer/tool/call"),
+    ).toHaveLength(2);
+  });
+
   it("rejects Codex CLI versions older than the supported protocol", async () => {
-    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.145.0";
+    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.152.9";
 
     const driver = createCodexDriver({
       binary: fixtureBinary,
@@ -206,12 +387,12 @@ describe("codex.driver / app-server protocol", () => {
     await expect(
       driver.createSession(request("run-old-codex")),
     ).rejects.toThrow(
-      "Codex CLI 0.145.0 is not supported. Mains requires 0.147.0 or newer.",
+      "Codex CLI 0.152.9 is not supported. Mains requires 0.153.0 or newer.",
     );
   });
 
   it("reports an unsupported Codex CLI in account health metadata", async () => {
-    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.145.0";
+    process.env.MAINS_CODEX_FIXTURE_VERSION = "0.152.9";
 
     const driver = createCodexDriver({
       binary: fixtureBinary,
@@ -222,10 +403,10 @@ describe("codex.driver / app-server protocol", () => {
     const accountInfo = await driver.getAccountInfo?.();
 
     expect(accountInfo?.cli).toMatchObject({
-      version: "0.145.0",
+      version: "0.152.9",
       outdated: true,
       compatibility: "unsupported",
-      minimumVersion: "0.147.0",
+      minimumVersion: "0.153.0",
       testedProtocolVersion: CODEX_APP_SERVER_PROTOCOL_VERSION,
     });
   });
@@ -273,12 +454,18 @@ describe("codex.driver / app-server protocol", () => {
       usesCodexManagedCredentials: true,
     });
     expect(rateLimits).toMatchObject({
+      ordinaryUsageAllowed: true,
       limitId: "codex",
       primary: { usedPercent: 10 },
       rateLimitsByLimitId: {
         codex: {
           limitId: "codex",
           primary: { usedPercent: 10 },
+        },
+        base_model_inference: {
+          limitId: "base_model_inference",
+          normalModelSlug: "gpt-5.6-luna",
+          primary: { usedPercent: 2 },
         },
       },
       rateLimitResetCredits: {
@@ -484,7 +671,7 @@ describe("codex.driver / app-server protocol", () => {
     });
   });
 
-  it("follows the reviewThreadId returned for a detached review", async () => {
+  it("runs a review inline on its dedicated review thread", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
@@ -505,7 +692,6 @@ describe("codex.driver / app-server protocol", () => {
         cwd: process.cwd(),
       },
       target: { type: "uncommittedChanges" },
-      delivery: "detached",
       model: "gpt-5.4",
     });
     expect(acquired).toBeDefined();
@@ -532,15 +718,16 @@ describe("codex.driver / app-server protocol", () => {
       (message) => message.method === "review/start",
     );
     expect(reviewStart?.params).not.toHaveProperty("model");
+    expect(reviewStart?.params).toMatchObject({
+      threadId: "thread-1",
+      delivery: "inline",
+    });
     const unsubscribedThreadIds = readProtocolLog(logPath)
       .filter((message) => message.method === "thread/unsubscribe")
       .map((message) => (
         message.params as { threadId?: string } | undefined
       )?.threadId);
-    expect(unsubscribedThreadIds).toEqual([
-      "thread-1",
-      "thread-1-review",
-    ]);
+    expect(unsubscribedThreadIds).toEqual(["thread-1"]);
   });
 
   it("lets the run's mode-resolved snapshot set the thread personality", async () => {

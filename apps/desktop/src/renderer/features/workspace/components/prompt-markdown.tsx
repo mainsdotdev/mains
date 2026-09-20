@@ -13,6 +13,7 @@ import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 export interface PromptMarkdownSkill {
   name: string;
   path?: string;
+  mentionPath?: string;
   displayName?: string;
   description?: string;
   shortDescription?: string;
@@ -25,6 +26,7 @@ export interface PromptMarkdownSkill {
 export interface PromptMarkdownFile {
   fullPath: string;
   basename: string;
+  isDirectory?: boolean;
 }
 
 interface MarkdownNode {
@@ -194,6 +196,7 @@ function PromptFileChip({ file }: { file: PromptMarkdownFile }) {
       <FileIconComponent
         extension={extension}
         fileName={file.basename}
+        isDirectory={file.isDirectory}
         className="size-3.5 shrink-0"
       />
       <span className="leading-none">{file.basename}</span>
@@ -279,7 +282,7 @@ export function PromptMarkdown({
           return <PromptCodeChip token={context.value} />;
         }
         return (
-          <MarkdownLink href={href}>
+          <MarkdownLink href={href} openWebLinksInApp>
             {linkChildren as ReactNode}
           </MarkdownLink>
         );

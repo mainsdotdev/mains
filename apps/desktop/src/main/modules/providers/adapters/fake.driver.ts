@@ -30,6 +30,8 @@ export interface FakeDriverScript {
   prompt?: string;
   /** Override the sessionId the acquisition methods report (undefined to omit). */
   sessionId?: string | null;
+  /** Model resolved by the fake acquisition method. */
+  model?: string;
   /** When set, the matching acquire method throws. */
   acquireThrows?: Error;
 }
@@ -78,6 +80,7 @@ export function createFakeDriver(initial?: FakeDriverScript): FakeDriverHandle {
         current.sessionId === null
           ? undefined
           : (current.sessionId ?? `session-${request.runId}`),
+      model: current.model,
     };
   };
 

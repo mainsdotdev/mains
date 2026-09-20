@@ -93,6 +93,12 @@ export interface ProviderVariantDescriptor {
   // ── /code page wiring (was per-route props before the agent routes unified) ──
   planExit: PlanExitConfig;
   enableForkRun: boolean;
+  /**
+   * Whether the provider offers follow-ups at the end of a turn. Claude and
+   * Cursor emit them as their own event; Codex writes them into the message as
+   * `:codex-followup[…]{prompt="…"}` directives, which the event mapper lifts
+   * onto the same channel.
+   */
   enableSuggestions: boolean;
 }
 
@@ -159,7 +165,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsPlugins: true,
     planExit: { key: "planMode", planValue: true, nextValue: false },
     enableForkRun: true,
-    enableSuggestions: false,
+    enableSuggestions: true,
   },
   cursor: {
     variant: "cursor",

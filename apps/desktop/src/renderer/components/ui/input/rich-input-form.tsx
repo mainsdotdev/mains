@@ -5,6 +5,7 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
@@ -32,6 +33,8 @@ export interface RichFileChipData {
   path: string;
   /** Short label rendered inside the chip. */
   basename: string;
+  /** Render a folder icon while keeping the same path-token semantics. */
+  isDirectory?: boolean;
 }
 
 export interface RichCodeChipData {
@@ -76,6 +79,8 @@ interface RichInputFormProps {
   /** Fires whenever the caret moves or content changes; receives the serialized text from start to caret. */
   onCaretContextChange?: (textBeforeCaret: string) => void;
   placeholder?: string;
+  placeholderIcon?: ReactNode;
+  focusShortcutLabel?: string;
   /** Maps skill name → display data so `$<name>` tokens can be rebuilt as chips when query changes externally. */
   skillChipMap?: ReadonlyMap<string, RichSkillChipData>;
   /** Maps file path → display data so `@<path>` tokens can be rebuilt as chips when query changes externally. */
@@ -241,14 +246,19 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
 
 const fileIconMarkupCache = new Map<string, string>();
 
-function getFileIconMarkup(basename: string): string {
-  const cacheKey = basename;
+function getFileIconMarkup(basename: string, isDirectory = false): string {
+  const cacheKey = `${isDirectory ? "directory" : "file"}:${basename}`;
   const cached = fileIconMarkupCache.get(cacheKey);
   if (cached !== undefined) return cached;
   const dotIdx = basename.lastIndexOf(".");
   const extension = dotIdx > 0 && dotIdx < basename.length - 1 ? basename.slice(dotIdx + 1) : undefined;
   const markup = renderToStaticMarkup(
-    <FileIconComponent extension={extension} fileName={basename} className="size-3.5" />,
+    <FileIconComponent
+      extension={extension}
+      fileName={basename}
+      isDirectory={isDirectory}
+      className="size-3.5"
+    />,
   );
   fileIconMarkupCache.set(cacheKey, markup);
   return markup;
@@ -266,7 +276,7 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
 
   const iconSlot = document.createElement("span");
   iconSlot.className = "inline-flex items-center justify-center size-3.5 shrink-0";
-  iconSlot.innerHTML = getFileIconMarkup(file.basename);
+  iconSlot.innerHTML = getFileIconMarkup(file.basename, file.isDirectory);
   chip.appendChild(iconSlot);
 
   const label = document.createElement("span");
@@ -723,6 +733,8 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onCodeChipsChange,
       onCaretContextChange,
       placeholder,
+      placeholderIcon,
+      focusShortcutLabel,
       skillChipMap,
       fileChipMap,
       codeChipMap,
@@ -731,7 +743,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
   ) {
     const editorRef = useRef<HTMLDivElement | null>(null);
     const [isEmpty, setIsEmpty] = useState(query.length === 0);
-    // The ⌘P focus hint is keyboard-only — useless (and overlaps the placeholder)
+    // The focus hint is keyboard-only — useless (and overlaps the placeholder)
     // on touch/mobile and in the browser.
     const showFocusHint = !useIsMobile() && !isWeb;
     // Sentinel that no real query string can equal — forces an initial DOM rebuild on mount.
@@ -954,19 +966,27 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           <Text
             as="div"
             tone="subtle"
-            className="pointer-events-none absolute left-5 top-4"
+            className={`pointer-events-none absolute left-5 top-4 flex items-start gap-1.5 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}
           >
-            {placeholder}
+            {placeholderIcon ? (
+              <span
+                className="mt-0.5 inline-flex size-3.75 shrink-0 items-center justify-center opacity-60"
+                aria-hidden
+              >
+                {placeholderIcon}
+              </span>
+            ) : null}
+            <span>{placeholder}</span>
           </Text>
         )}
-        {showFocusHint && (
+        {showFocusHint && focusShortcutLabel && (
           <Text
             as="kbd"
             size="xxs"
             tone="muted"
             className="absolute cursor-default right-3 top-3 px-1.5 py-0.5 font-sans"
           >
-            ⌘ P to focus
+            {focusShortcutLabel} to focus
           </Text>
         )}
       </div>

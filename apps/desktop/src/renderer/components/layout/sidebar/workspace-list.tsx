@@ -301,7 +301,14 @@ export default function WorkspacesList({
         onSettings={
           workspace.projectId
             ? () =>
-                navigate(`/settings?section=projects&id=${workspace.projectId}`)
+                navigate(
+                  `/settings?section=projects&kind=code&id=${workspace.projectId}`,
+                )
+            : undefined
+        }
+        onCreateWorktree={
+          projectData
+            ? () => handleCreateWorktreeForProject(projectData)
             : undefined
         }
       />
@@ -317,7 +324,7 @@ export default function WorkspacesList({
         // onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIsExpanded(!isExpanded); } }}
         className="w-full flex items-center justify-between transition-all duration-200 bg-transparent px-2 py-1 "
       >
-            <Text as="span" size="xs" tone="secondary" weight="medium">
+            <Text as="span" size="s" tone="muted" weight="medium">
             Workspaces
         </Text>
         <div className="flex items-center ">

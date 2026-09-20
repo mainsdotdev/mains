@@ -58,6 +58,32 @@ describe("groupEvents", () => {
     expect(result[0]).not.toBe(first[0]);
     expect(result[0].events).toHaveLength(2);
   });
+
+  it("keeps MCP Apps out of surrounding tool-call groups", () => {
+    const groups = groupEvents([
+      ev({ id: "t1", type: "tool_call", content: "Bash: prepare" }),
+      ev({
+        id: "app1",
+        type: "tool_call",
+        content: "mcp__skyscanner__search: Tokyo to Seoul",
+        metadata: {
+          mcpApp: {
+            server: "skyscanner",
+            tool: "search",
+            resourceUri: "ui://skyscanner/flights.html",
+          },
+        },
+      }),
+      ev({ id: "t2", type: "tool_call", content: "Read: result.json" }),
+    ]);
+
+    expect(groups.map((group) => group.type)).toEqual([
+      "tool_calls",
+      "mcp_app",
+      "tool_calls",
+    ]);
+    expect(groups[1].events.map((event) => event.id)).toEqual(["app1"]);
+  });
 });
 
 describe("reconcileEventGroups", () => {

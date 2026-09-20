@@ -19,9 +19,18 @@ export function registerImageProxyIpc() {
     }
     return ok(url);
   });
+
+  ipcMain.handle(CHANNELS.visualizations.sign, (_, rawPath: string) => {
+    const url = imageProxyService.signLocalVisualizationUrl(rawPath);
+    if (!url) {
+      return fail("Invalid path");
+    }
+    return ok(url);
+  });
 }
 
 export function unregisterImageProxyIpc() {
   ipcMain.removeHandler(CHANNELS.imageProxy.sign);
   ipcMain.removeHandler(CHANNELS.documents.sign);
+  ipcMain.removeHandler(CHANNELS.visualizations.sign);
 }

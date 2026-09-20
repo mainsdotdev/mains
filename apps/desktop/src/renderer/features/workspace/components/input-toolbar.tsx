@@ -172,17 +172,6 @@ export function InputToolbar({
     [uploadedFiles, onUploadedFilesChange],
   );
 
-  const handleRemoveFile = useCallback(
-    (index: number) => {
-      const file = uploadedFiles[index];
-      if (file.preview) {
-        URL.revokeObjectURL(file.preview);
-      }
-      onUploadedFilesChange(uploadedFiles.filter((_, i) => i !== index));
-    },
-    [uploadedFiles, onUploadedFilesChange],
-  );
-
   return (
     <div className="flex items-start space-x-2 px-3 pt-6">
       <div className="flex items-center justify-between w-full">
@@ -198,8 +187,6 @@ export function InputToolbar({
               onDocumentUpload={handleDocumentUpload}
               dropdownRef={fileDropdownRef}
               openUpward={true}
-              uploadedFiles={uploadedFiles}
-              onRemoveFile={handleRemoveFile}
               variant={variant}
             />
           <Input

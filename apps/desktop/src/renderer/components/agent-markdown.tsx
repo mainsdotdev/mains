@@ -9,7 +9,7 @@ import "katex/dist/katex.min.css";
 import { Text } from "@/components/ui";
 import { normalizeMathMarkdown } from "@/lib/math-markdown";
 
-import { markdownComponents } from "./markdown-components";
+import { agentMarkdownComponents } from "./markdown-components";
 
 /** The assistant renderer shared by settled and streaming report artifacts. */
 export function AgentMarkdown({
@@ -25,7 +25,7 @@ export function AgentMarkdown({
     // those generated spans inherit the correct light/dark foreground.
     <Text as="div" size="sm" className={className}>
       <ReactMarkdown
-        components={markdownComponents}
+        components={agentMarkdownComponents}
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
       >

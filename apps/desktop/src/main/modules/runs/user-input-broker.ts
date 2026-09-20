@@ -1,4 +1,3 @@
-import { BrowserWindow, Notification } from "electron";
 import type {
   PendingApproval,
   ToolApprovalRequest,
@@ -7,6 +6,10 @@ import type {
 import { appSettingsService } from "../appSettings";
 import { emit } from "../../ipc-kit";
 import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import {
+  showApprovalNotification,
+  type ApprovalNotificationHandle,
+} from "./run-notifications";
 
 /**
  * Singleton broker that manages pending tool-approval requests.
@@ -19,6 +22,11 @@ import { CHANNELS } from "../../../shared/ipc-kit/channels";
  *  4. The renderer calls `window.api.runs.respondToolApproval(response)`.
  *  5. The main-process IPC handler calls `handleToolApprovalResponse(resp)`.
  *  6. The stored resolve fn fires → the awaiting hook gets the result.
+ *
+ * The OS notification is a second place to answer from (see
+ * `run-notifications.ts`): its buttons call `handleToolApprovalResponse` like
+ * the dialog does, and every settlement — from any client, a timeout, or a
+ * cancel — takes the notification down with it.
  */
 
 const REQUEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -30,9 +38,56 @@ interface PendingRequest {
   expiresAt: number;
   resolve: (response: ToolApprovalResponse) => void;
   timer: NodeJS.Timeout;
+  /** The OS notification for this request, once shown. */
+  notification?: ApprovalNotificationHandle;
 }
 
 const pending = new Map<string, PendingRequest>();
+
+/**
+ * Resolve one pending request and take down its notification. `broadcast`
+ * tells every client it is settled; only shutdown skips that, since nobody is
+ * left to tell.
+ */
+function settle(
+  requestId: string,
+  response: ToolApprovalResponse,
+  { broadcast = true }: { broadcast?: boolean } = {},
+): void {
+  const entry = pending.get(requestId);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  pending.delete(requestId);
+  entry.notification?.close();
+  entry.resolve(response);
+  if (broadcast) {
+    emit(
+      CHANNELS.runs.toolApprovalResolved,
+      { requestId },
+      { runId: entry.runId },
+    );
+  }
+}
+
+function notifyRequest(req: ToolApprovalRequest): void {
+  appSettingsService
+    .getSettings()
+    .then(async (settings) => {
+      if (!settings?.notifyOnToolApproval) return;
+      const notification = await showApprovalNotification(req, {
+        isPending: () => pending.has(req.requestId),
+        respond: handleToolApprovalResponse,
+      });
+      if (!notification) return;
+      const entry = pending.get(req.requestId);
+      // Settled while the notification was going up — take it straight down.
+      if (entry) entry.notification = notification;
+      else notification.close();
+    })
+    .catch((error) => {
+      console.warn("[runs] could not show the approval notification:", error);
+    });
+}
 
 /**
  * Broadcast a tool-approval request to all renderer windows and
@@ -51,13 +106,7 @@ export function requestToolApproval(
         : REQUEST_TIMEOUT_MS;
     // Auto-deny after timeout
     const timer = setTimeout(() => {
-      pending.delete(req.requestId);
-      resolve({ requestId: req.requestId, approved: false });
-      emit(
-        CHANNELS.runs.toolApprovalResolved,
-        { requestId: req.requestId },
-        { runId: req.runId },
-      );
+      settle(req.requestId, { requestId: req.requestId, approved: false });
     }, timeoutMs);
 
     pending.set(req.requestId, {
@@ -71,24 +120,7 @@ export function requestToolApproval(
     // Push to all clients via the event bus (local renderer and/or remote).
     emit(CHANNELS.runs.toolApprovalRequest, req, { runId: req.runId });
 
-    // Send desktop notification if enabled
-    appSettingsService.getSettings().then((settings) => {
-      if (settings?.notifyOnToolApproval) {
-        const notification = new Notification({
-          title: "Tool Approval Needed",
-          body: req.toolName,
-        });
-        notification.on("click", () => {
-          const windows = BrowserWindow.getAllWindows();
-          if (windows.length > 0) {
-            const win = windows[0];
-            if (win.isMinimized()) win.restore();
-            win.focus();
-          }
-        });
-        notification.show();
-      }
-    }).catch(() => {});
+    notifyRequest(req);
   });
 }
 
@@ -113,38 +145,21 @@ export function listPendingApprovals(runId?: string): PendingApproval[] {
  * Called from the IPC handler when the renderer sends back a decision.
  */
 export function handleToolApprovalResponse(resp: ToolApprovalResponse): void {
-  const entry = pending.get(resp.requestId);
-  if (!entry) return;
-
-  clearTimeout(entry.timer);
-  pending.delete(resp.requestId);
-  entry.resolve(resp);
   // The client that answered already dismissed its dialog; every other client
   // (a phone showing the same request) learns here that it is settled.
-  emit(
-    CHANNELS.runs.toolApprovalResolved,
-    { requestId: resp.requestId },
-    { runId: entry.runId },
-  );
+  settle(resp.requestId, resp);
 }
 
 /** Resolve one provider-owned request as denied when the provider closes it. */
 export function cancelPendingRequest(requestId: string): void {
-  for (const [pendingId, entry] of pending) {
+  for (const pendingId of [...pending.keys()]) {
     if (
       pendingId !== requestId &&
       !pendingId.startsWith(`${requestId}-q`)
     ) {
       continue;
     }
-    clearTimeout(entry.timer);
-    pending.delete(pendingId);
-    entry.resolve({ requestId: pendingId, approved: false });
-    emit(
-      CHANNELS.runs.toolApprovalResolved,
-      { requestId: pendingId },
-      { runId: entry.runId },
-    );
+    settle(pendingId, { requestId: pendingId, approved: false });
   }
 }
 
@@ -153,12 +168,9 @@ export function cancelPendingRequest(requestId: string): void {
  * Each pending request resolves as denied.
  */
 export function cancelPendingRequests(runId: string): void {
-  for (const [requestId, entry] of pending) {
+  for (const [requestId, entry] of [...pending]) {
     if (entry.runId === runId) {
-      clearTimeout(entry.timer);
-      pending.delete(requestId);
-      entry.resolve({ requestId, approved: false });
-      emit(CHANNELS.runs.toolApprovalResolved, { requestId }, { runId });
+      settle(requestId, { requestId, approved: false });
     }
   }
 }
@@ -167,9 +179,7 @@ export function cancelPendingRequests(runId: string): void {
  * Cancel every pending request (e.g. on shutdown).
  */
 export function clearAllPendingRequests(): void {
-  for (const [requestId, entry] of pending) {
-    clearTimeout(entry.timer);
-    entry.resolve({ requestId, approved: false });
+  for (const requestId of [...pending.keys()]) {
+    settle(requestId, { requestId, approved: false }, { broadcast: false });
   }
-  pending.clear();
 }

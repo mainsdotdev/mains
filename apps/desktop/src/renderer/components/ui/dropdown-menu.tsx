@@ -22,6 +22,39 @@ const MENU_ITEM_SELECTOR = [
   '[role="menuitemcheckbox"]',
 ].join(",");
 
+const VIEWPORT_PADDING = 8;
+const SUBMENU_GAP = 4;
+const SUBMENU_WIDTH_ESTIMATE = 180;
+const SUBMENU_HEIGHT_ESTIMATE = 160;
+
+function clampToViewport(value: number, size: number, viewportSize: number) {
+  return Math.max(
+    VIEWPORT_PADDING,
+    Math.min(value, viewportSize - size - VIEWPORT_PADDING),
+  );
+}
+
+function placeSubmenu(
+  anchor: Pick<DOMRect, "top" | "right" | "left">,
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+) {
+  const spaceRight =
+    viewport.width - VIEWPORT_PADDING - anchor.right - SUBMENU_GAP;
+  const spaceLeft = anchor.left - VIEWPORT_PADDING - SUBMENU_GAP;
+  const opensRight =
+    size.width <= spaceRight ||
+    (size.width > spaceLeft && spaceRight >= spaceLeft);
+  const desiredLeft = opensRight
+    ? anchor.right + SUBMENU_GAP
+    : anchor.left - size.width - SUBMENU_GAP;
+
+  return {
+    top: clampToViewport(anchor.top, size.height, viewport.height),
+    left: clampToViewport(desiredLeft, size.width, viewport.width),
+  };
+}
+
 function getEnabledMenuItems(container: HTMLElement | null): HTMLElement[] {
   if (!container) return [];
   return Array.from(
@@ -81,7 +114,12 @@ const DropdownContext = createContext<{
 
 interface DropdownMenuBaseProps {
   isOpen: boolean;
-  position: { x: number; y: number };
+  position: {
+    x: number;
+    y: number;
+    /** Top edge of the trigger, used when the menu needs to open upward. */
+    anchorTop?: number;
+  };
   onClose: () => void;
   // Optional like its siblings (DropdownMenuSub, DropdownMenuItem): a menu
   // whose every row is conditional can legitimately render none of them.
@@ -115,6 +153,10 @@ export function DropdownMenu({
   const submenuRefs = useRef<Set<HTMLElement>>(new Set());
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const shouldRestoreFocus = useRef(true);
+  const [menuSize, setMenuSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   const registerSubmenu = useCallback((element: HTMLElement) => {
     submenuRefs.current.add(element);
@@ -154,12 +196,36 @@ export function DropdownMenu({
     };
   }, [initialFocus, isOpen]);
 
+  useLayoutEffect(() => {
+    if (!isOpen || !menuRef.current) return;
+
+    // Layout dimensions ignore the scale used by the opening animation.
+    const { offsetWidth: width, offsetHeight: height } = menuRef.current;
+    if (width <= 0 || height <= 0) return;
+
+    setMenuSize((current) =>
+      current?.width === width && current.height === height
+        ? current
+        : { width, height },
+    );
+  }, [children, isOpen, minWidth]);
+
   useEffect(() => {
     if (!isOpen) return;
 
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
       if (menuRef.current?.contains(target)) return;
+      if (target instanceof Element) {
+        const dropdownPortal = target.closest<HTMLElement>(
+          '[data-dropdown-portal="true"]',
+        );
+        const labelledBy = dropdownPortal?.getAttribute("aria-labelledby");
+        const portalTrigger = labelledBy
+          ? document.getElementById(labelledBy)
+          : null;
+        if (portalTrigger && menuRef.current?.contains(portalTrigger)) return;
+      }
       for (const submenu of submenuRefs.current) {
         if (submenu.contains(target)) return;
       }
@@ -201,9 +267,25 @@ export function DropdownMenu({
 
   if (!isOpen) return null;
 
+  const viewportPadding = VIEWPORT_PADDING;
+  const menuWidth = Math.max(minWidth, menuSize?.width ?? minWidth);
+  // Keep the previous estimate for the first render. The layout effect above
+  // replaces it with the real size before the browser paints.
+  const menuHeight = menuSize?.height ?? 125;
+  const spaceBelow = window.innerHeight - viewportPadding - position.y;
+  const upwardAnchor = position.anchorTop ?? position.y;
+  const spaceAbove = upwardAnchor - viewportPadding;
+  const opensUpward = menuHeight > spaceBelow && spaceAbove > spaceBelow;
+  const desiredY = opensUpward ? upwardAnchor - menuHeight : position.y;
   const adjustedPosition = {
-    x: Math.max(8, Math.min(position.x, window.innerWidth - minWidth - 8)),
-    y: Math.max(8, Math.min(position.y, window.innerHeight - 125)),
+    x: Math.max(
+      viewportPadding,
+      Math.min(position.x, window.innerWidth - menuWidth - viewportPadding),
+    ),
+    y: Math.max(
+      viewportPadding,
+      Math.min(desiredY, window.innerHeight - menuHeight - viewportPadding),
+    ),
   };
 
   const getTransformOrigin = () => {
@@ -218,10 +300,9 @@ export function DropdownMenu({
     }
 
     const isRight = position.x > window.innerWidth / 2;
-    const isBottom = position.y > window.innerHeight / 2;
 
-    if (isBottom && isRight) return "bottom right";
-    if (isBottom) return "bottom left";
+    if (opensUpward && isRight) return "bottom right";
+    if (opensUpward) return "bottom left";
     if (isRight) return "top right";
     return "top left";
   };
@@ -235,7 +316,7 @@ export function DropdownMenu({
         aria-labelledby={ariaLabelledBy}
         onKeyDown={handleMenuKeyDown}
         className={cn(
-          "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in",
+          "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in p-1.5",
           className,
         )}
         style={{
@@ -274,6 +355,22 @@ export function DropdownMenuSub({
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [submenuPosition, setSubmenuPosition] = useState({ top: 0, left: 0 });
 
+  const updateSubmenuPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const submenu = submenuElementRef.current;
+    const width = submenu?.offsetWidth || SUBMENU_WIDTH_ESTIMATE;
+    const height = submenu?.offsetHeight || SUBMENU_HEIGHT_ESTIMATE;
+    const next = placeSubmenu(
+      trigger.getBoundingClientRect(),
+      { width, height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    setSubmenuPosition((current) =>
+      current.top === next.top && current.left === next.left ? current : next,
+    );
+  }, []);
+
   const submenuRefCallback = useCallback(
     (element: HTMLDivElement | null) => {
       if (submenuElementRef.current) {
@@ -303,22 +400,14 @@ export function DropdownMenuSub({
   const openSubmenu = useCallback(
     (moveFocusInside: boolean) => {
       clearCloseTimer();
-      if (triggerRef.current) {
-        const rect = triggerRef.current.getBoundingClientRect();
-        const submenuWidth = 180;
-        const opensRight =
-          rect.right + 4 + submenuWidth <= window.innerWidth - 8;
-        setSubmenuPosition({
-          top: Math.max(8, Math.min(rect.top, window.innerHeight - 160)),
-          left: opensRight
-            ? rect.right + 4
-            : Math.max(8, rect.left - submenuWidth - 4),
-        });
-      }
+      // Repeated pointer/click opens can happen while the submenu is already
+      // mounted. Reuse its real dimensions instead of resetting the corrected
+      // position back to the first-render estimate.
+      updateSubmenuPosition();
       focusSubmenuOnOpen.current = moveFocusInside;
       setIsOpen(true);
     },
-    [clearCloseTimer],
+    [clearCloseTimer, updateSubmenuPosition],
   );
 
   const startCloseTimer = useCallback(() => {
@@ -327,10 +416,26 @@ export function DropdownMenuSub({
   }, [clearCloseTimer]);
 
   useLayoutEffect(() => {
-    if (!isOpen || !focusSubmenuOnOpen.current) return;
-    focusSubmenuOnOpen.current = false;
-    getEnabledMenuItems(submenuElementRef.current)[0]?.focus();
-  }, [isOpen]);
+    if (!isOpen) return;
+    // The first position uses an estimate because the portal does not exist
+    // yet. Measure the real submenu before paint and correct both axes.
+    updateSubmenuPosition();
+    if (focusSubmenuOnOpen.current) {
+      focusSubmenuOnOpen.current = false;
+      getEnabledMenuItems(submenuElementRef.current)[0]?.focus();
+    }
+  }, [children, isOpen, updateSubmenuPosition]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const update = () => updateSubmenuPosition();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [isOpen, updateSubmenuPosition]);
 
   useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
 
@@ -372,17 +477,14 @@ export function DropdownMenuSub({
         onMouseEnter={() => openSubmenu(false)}
         onMouseLeave={startCloseTimer}
         className={cn(
-          "flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-s",
+          "flex w-full cursor-pointer items-center gap-3 px-1.5 rounded-xl py-1.5 text-s",
           "text-primary-700 transition-colors hover:bg-primary-200/40 hover:text-primary-900",
           "dark:text-primary-300 dark:hover:bg-primary/5 dark:hover:text-primary-100",
           className,
         )}
       >
         {label}
-        <ArrowUp
-          aria-hidden="true"
-          className="ml-auto size-3 rotate-90"
-        />
+        <ArrowUp aria-hidden="true" className="ml-auto size-3 rotate-90" />
       </Button>
       {isOpen &&
         createPortal(
@@ -394,11 +496,13 @@ export function DropdownMenuSub({
             onKeyDown={handleSubmenuKeyDown}
             onMouseEnter={clearCloseTimer}
             onMouseLeave={startCloseTimer}
-            className="fixed z-(--z-dropdown-sub) overflow-hidden rounded-2xl glass-surface animate-dropdown-sub-in "
+            className="fixed z-(--z-dropdown-sub) overflow-x-hidden overflow-y-auto p-1.5 rounded-2xl glass-surface animate-dropdown-sub-in"
             style={{
               top: submenuPosition.top,
               left: submenuPosition.left,
-              minWidth: 180,
+              minWidth: SUBMENU_WIDTH_ESTIMATE,
+              maxWidth: window.innerWidth - VIEWPORT_PADDING * 2,
+              maxHeight: window.innerHeight - VIEWPORT_PADDING * 2,
             }}
           >
             {children}
@@ -416,12 +520,6 @@ export interface DropdownMenuItemProps {
   className?: string;
   disabled?: boolean;
   selected?: boolean;
-  /**
-   * How the selected row is drawn: a leading check, or a filled row. "none"
-   * suits menus whose rows already carry an icon, where a second glyph would
-   * only crowd them. Either way the radio semantics stay — role,
-   * `aria-checked`, and the menu's focus-the-selected-row-on-open.
-   */
   indicator?: "check" | "none";
 }
 
@@ -451,18 +549,11 @@ export function DropdownMenuItem({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "flex w-full items-center gap-3 px-3 py-2 text-s",
-        // Button's standalone focus ring does not survive here: the row runs
-        // edge to edge inside an `overflow-hidden rounded-2xl` menu, so the
-        // ring's sides are clipped away and its offset band reads as two thick
-        // bars across the row. A menu marks the keyboard position by filling the
-        // row instead — which also needs to outrank hover, or the two states
-        // look identical while arrowing over a row the pointer happens to sit on.
+        "flex w-full items-center gap-3 px-2 py-1.5 rounded-xl text-s",
         "focus-visible:ring-0 focus-visible:ring-offset-0",
         "transition-colors hover:bg-primary-200/40 ",
         "dark:hover:bg-primary/5 ",
-        // With the check suppressed the selection still has to be visible, so
-        // the row carries it as a fill — the same tint hover uses.
+
         indicator === "none" && selected
           ? "bg-primary-200/40 dark:bg-primary/5"
           : "",

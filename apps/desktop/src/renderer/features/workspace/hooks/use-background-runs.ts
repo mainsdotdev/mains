@@ -11,30 +11,24 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { appEvents } from "@/lib/transport";
 import { toast } from "@/components/ui";
-import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
+import { useAppSelector } from "@/lib/redux/hooks";
 import {
   useAbortRunMutation,
   useListActiveRunsQuery,
-  useSetActiveSpaceMutation,
-  useUpdateSpaceMutation,
   type ActiveRun,
 } from "@/lib/redux/api";
-import {
-  setPendingRunId,
-  setSelectedCollectionId,
-} from "@/lib/redux/slices/workspaceSlice";
 import { useActiveSpace } from "@/hooks/use-active-space";
-import { getRouteRunId, getRouteType, WORKSPACE_BASE_PATH } from "@/lib/route-utils";
+import { getRouteRunId, getRouteType } from "@/lib/route-utils";
 import {
   mergeLingeringRuns,
-  resolveRunSpaceTarget,
   selectBackgroundRuns,
 } from "../lib/background-runs";
 import { isRunTab } from "../lib/repo-utils";
 import { useBackgroundRunActivity } from "./use-background-run-activity";
+import { useJumpToRun } from "./use-jump-to-run";
 
 /** Fallback refresh: picks up generated titles and any missed status push. */
 const REFRESH_INTERVAL_MS = 10_000;
@@ -55,12 +49,8 @@ export interface BackgroundRunsView {
 }
 
 export function useBackgroundRuns(): BackgroundRunsView {
-  const navigate = useNavigate();
   const location = useLocation();
-  const dispatch = useAppDispatch();
-  const { activeSpaceId, activeSpace, spaces } = useActiveSpace();
-  const [setActiveSpace] = useSetActiveSpaceMutation();
-  const [updateSpace] = useUpdateSpaceMutation();
+  const { activeSpace } = useActiveSpace();
   const [abortRun] = useAbortRunMutation();
   const [requestedStops, setRequestedStops] = useState<string[]>([]);
 
@@ -154,52 +144,7 @@ export function useBackgroundRuns(): BackgroundRunsView {
   const runIds = useMemo(() => runs.map((run) => run.id), [runs]);
   const activityByRunId = useBackgroundRunActivity(runIds);
 
-  const jumpToRun = useCallback(
-    async (run: ActiveRun) => {
-      // The page shows one provider and one mode at a time, so landing on the
-      // workspace is only half the jump — without the right space, the run is
-      // filtered out of the tab list and the page falls back to the newest one
-      // it can show.
-      const target = resolveRunSpaceTarget(run, spaces, activeSpaceId || null);
-      if (!target) {
-        toast.error("No space is set up for this run's agent");
-        return;
-      }
-
-      dispatch(setPendingRunId(run.id));
-      dispatch(setSelectedCollectionId(run.collectionId));
-
-      const needsSpaceSwitch = target.spaceId !== activeSpaceId;
-      if (needsSpaceSwitch || target.modeSwitch) {
-        try {
-          // Same ordering as the space picker: leave `/code/:workspaceId`
-          // before switching, so the incoming space's provider never renders
-          // against the outgoing space's workspace param.
-          navigate("/", { replace: true });
-          // The dock is the one surface that spans modes, so it is also the one
-          // that has to put a space back into the mode its run was started in.
-          if (target.modeSwitch) {
-            await updateSpace({
-              id: target.spaceId,
-              payload: { mode: target.modeSwitch },
-            }).unwrap();
-          }
-          if (needsSpaceSwitch) await setActiveSpace(target.spaceId).unwrap();
-        } catch (error) {
-          console.error("Failed to switch space for background run:", error);
-          toast.error("Failed to switch space");
-          return;
-        }
-      }
-
-      navigate(
-        run.mode === "developer" && run.workspaceId
-          ? `${WORKSPACE_BASE_PATH}/${run.workspaceId}`
-          : `${WORKSPACE_BASE_PATH}/runs/${run.id}`,
-      );
-    },
-    [activeSpaceId, spaces, dispatch, navigate, setActiveSpace, updateSpace],
-  );
+  const jumpToRun = useJumpToRun();
 
   const stopRun = useCallback(
     async (run: ActiveRun) => {

@@ -38,6 +38,7 @@ export const appSettingsService = {
     backendRemoteAccess?: boolean;
     backendLanAccess?: boolean;
     backendTailscaleHttps?: boolean;
+    keepAwakeForRemoteAccess?: boolean;
   }): Promise<void> {
     await this.ensureSettings();
     await appSettingsRepo.update(SETTINGS_ID, patch);
@@ -50,6 +51,37 @@ export const appSettingsService = {
   async setBackendId(backendId: string): Promise<void> {
     await this.ensureSettings();
     await appSettingsRepo.update(SETTINGS_ID, { backendId });
+  },
+
+  /**
+   * Internal write for the Appshots runtime. Keeping these fields out of the
+   * renderer settings allowlist prevents the database and the registered
+   * global shortcut from drifting apart.
+   */
+  async updateAppshotsSettings(patch: {
+    appshotsEnabled?: boolean;
+    appshotsShortcut?: string;
+  }): Promise<AppSettingsRecord> {
+    await this.ensureSettings();
+    const updated = await appSettingsRepo.update(SETTINGS_ID, patch);
+    if (!updated) throw new Error("Failed to update Lens settings");
+    return updated;
+  },
+
+  /**
+   * Internal write for the desktop shortcut registry. Renderer settings use
+   * the local-only keyboardShortcuts IPC surface so a remote client cannot
+   * rewrite shortcuts on the host Mac.
+   */
+  async updateKeyboardShortcutOverrides(
+    keyboardShortcutOverrides: string,
+  ): Promise<AppSettingsRecord> {
+    await this.ensureSettings();
+    const updated = await appSettingsRepo.update(SETTINGS_ID, {
+      keyboardShortcutOverrides,
+    });
+    if (!updated) throw new Error("Failed to update keyboard shortcuts");
+    return updated;
   },
 
   async updateSettings(patch: unknown): Promise<AppSettingsRecord> {

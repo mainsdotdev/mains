@@ -14,6 +14,7 @@ import {
   buildClaudeSessionIdOptions,
   classifyOutcome,
   createClaudePermissionBridge,
+  createClaudePermissionModeRef,
   createClaudeElicitationHandler,
   removeClaudeRuntimeSettings,
   writeClaudeRuntimeSettings,
@@ -30,6 +31,7 @@ import {
   buildSubagentCompletionEvent,
   mapSDKMessage,
   resolveClaudeDefaultModelId,
+  resolveClaudeTurnModel,
 } from "./claude.driver";
 import type { ClaudeTaskIndex, SDKSystemMessage } from "./claude.driver";
 import fs from "node:fs";
@@ -89,6 +91,96 @@ describe("claude.driver / resolveClaudeDefaultModelId", () => {
   it("still resolves when the synthetic entry is the only model offered", () => {
     expect(resolveClaudeDefaultModelId([{ value: "default" }])).toBe("default");
     expect(resolveClaudeDefaultModelId([])).toBeUndefined();
+  });
+});
+
+describe("claude.driver / turn model resolution", () => {
+  it("keeps a Haiku subagent from replacing the top-level Opus model", () => {
+    let model: string | undefined;
+    model = resolveClaudeTurnModel(model, {
+      type: "assistant",
+      parent_tool_use_id: null,
+      message: { model: "claude-opus-5" },
+    });
+    model = resolveClaudeTurnModel(model, {
+      type: "assistant",
+      parent_tool_use_id: "toolu_agent",
+      message: { model: "claude-haiku-4-5-20251001" },
+    });
+    model = resolveClaudeTurnModel(model, {
+      type: "result",
+      modelUsage: {
+        "claude-haiku-4-5-20251001": { contextWindow: 200_000 },
+        "claude-opus-5": { contextWindow: 1_000_000 },
+      },
+    });
+
+    expect(model).toBe("claude-opus-5");
+  });
+
+  it("uses a unique largest context window for an older usage-only stream", () => {
+    expect(
+      resolveClaudeTurnModel(
+        undefined,
+        {
+          type: "result",
+          modelUsage: {
+            "claude-spark-1": { contextWindow: 200_000 },
+            "claude-nebula-7": { contextWindow: 1_000_000 },
+          },
+        },
+        "nebula",
+      ),
+    ).toBe("claude-nebula-7");
+  });
+
+  it("matches an exact configured ID without knowing its model family", () => {
+    expect(
+      resolveClaudeTurnModel(
+        undefined,
+        {
+          type: "result",
+          modelUsage: {
+            "claude-nebula-7": { contextWindow: 1_000_000 },
+            "claude-orbit-3": { contextWindow: 1_000_000 },
+          },
+        },
+        "claude-orbit-3",
+      ),
+    ).toBe("claude-orbit-3");
+  });
+
+  it("tracks an explicit model-refusal fallback", () => {
+    expect(
+      resolveClaudeTurnModel("claude-opus-5", {
+        type: "system",
+        subtype: "model_refusal_fallback",
+        fallback_model: "claude-sonnet-5",
+      }),
+    ).toBe("claude-sonnet-5");
+  });
+
+  it("ignores a subagent-local model-refusal fallback", () => {
+    expect(
+      resolveClaudeTurnModel("claude-opus-5", {
+        type: "system",
+        subtype: "model_refusal_fallback",
+        scope: "local",
+        fallback_model: "claude-sonnet-5",
+      }),
+    ).toBe("claude-opus-5");
+  });
+
+  it("leaves equally plausible usage-only models unknown", () => {
+    expect(
+      resolveClaudeTurnModel(undefined, {
+        type: "result",
+        modelUsage: {
+          "claude-opus-5": { contextWindow: 1_000_000 },
+          "claude-sonnet-5": { contextWindow: 1_000_000 },
+        },
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -243,7 +335,7 @@ describe("claude.driver / permission bridge", () => {
     const bridge = createClaudePermissionBridge({
       runId: "run-workflow",
       allowedTools: ALLOWED_TOOLS_SET,
-      bypassMode: true,
+      permissionMode: createClaudePermissionModeRef("bypassPermissions"),
     });
 
     expect(bridge).toEqual({
@@ -257,7 +349,7 @@ describe("claude.driver / permission bridge", () => {
     const bridge = createClaudePermissionBridge({
       runId: "run-1",
       allowedTools: new Set(["Read"]),
-      bypassMode: false,
+      permissionMode: createClaudePermissionModeRef("default"),
       requestApproval,
     });
 
@@ -288,7 +380,7 @@ describe("claude.driver / permission bridge", () => {
     const bridge = createClaudePermissionBridge({
       runId: "run-2",
       allowedTools: new Set(),
-      bypassMode: false,
+      permissionMode: createClaudePermissionModeRef("default"),
       requestApproval,
     });
 
@@ -324,7 +416,7 @@ describe("claude.driver / permission bridge", () => {
     const bridge = createClaudePermissionBridge({
       runId: "run-mcp-default",
       allowedTools: ALLOWED_TOOLS_SET,
-      bypassMode: false,
+      permissionMode: createClaudePermissionModeRef("default"),
       requestApproval,
     });
 
@@ -357,7 +449,7 @@ describe("claude.driver / permission bridge", () => {
     const bridge = createClaudePermissionBridge({
       runId: "run-mcp-chat",
       allowedTools: new Set(["Read", "Glob", "Grep"]),
-      bypassMode: false,
+      permissionMode: createClaudePermissionModeRef("default"),
       restrictedToolset: true,
       requestApproval,
     });
@@ -383,15 +475,158 @@ describe("claude.driver / permission bridge", () => {
     );
   });
 
+  it("sends a file write to the user while a bypass run is planning", async () => {
+    // SDK >= 0.3.269 asks canUseTool about plan-mode writes even under
+    // allowDangerouslySkipPermissions — bypass must not answer for the user.
+    const requestApproval = vi.fn().mockResolvedValue({
+      requestId: "plan-write-1",
+      approved: false,
+    });
+    const bridge = createClaudePermissionBridge({
+      runId: "run-bypass-plan",
+      allowedTools: ALLOWED_TOOLS_SET,
+      permissionMode: { current: "plan", beforePlan: "bypassPermissions" },
+      requestApproval,
+    });
+
+    const decision = await bridge.canUseTool(
+      "Write",
+      { file_path: "/tmp/hero.tsx", content: "x" },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "tool-plan-write",
+        requestId: "plan-write-1",
+      },
+    );
+
+    expect(decision?.behavior).toBe("deny");
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "Write", kind: "tool_approval" }),
+    );
+  });
+
+  it("does not let the allowlist approve a file-changing tool while planning", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({
+      requestId: "plan-bash-1",
+      approved: true,
+    });
+    const bridge = createClaudePermissionBridge({
+      runId: "run-plan-bash",
+      allowedTools: ALLOWED_TOOLS_SET,
+      permissionMode: createClaudePermissionModeRef("plan"),
+      requestApproval,
+    });
+
+    await bridge.canUseTool(
+      "Bash",
+      { command: "rm -rf dist" },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "tool-plan-bash",
+        requestId: "plan-bash-1",
+      },
+    );
+
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "Bash", kind: "tool_approval" }),
+    );
+  });
+
+  it("still lets a bypass run write outside plan mode", async () => {
+    const requestApproval = vi.fn();
+    const bridge = createClaudePermissionBridge({
+      runId: "run-bypass-write",
+      allowedTools: ALLOWED_TOOLS_SET,
+      permissionMode: createClaudePermissionModeRef("bypassPermissions"),
+      requestApproval,
+    });
+
+    const decision = await bridge.canUseTool(
+      "Write",
+      { file_path: "/tmp/hero.tsx", content: "x" },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "tool-bypass-write",
+        requestId: "bypass-write-1",
+      },
+    );
+
+    expect(decision?.behavior).toBe("allow");
+    expect(requestApproval).not.toHaveBeenCalled();
+  });
+
+  it("asks the user to review the plan in a bypass run and returns to bypass once applied", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({
+      requestId: "plan-approval-bypass",
+      approved: true,
+    });
+    const permissionMode = { current: "plan" as const, beforePlan: "bypassPermissions" as const };
+    const bridge = createClaudePermissionBridge({
+      runId: "run-bypass-plan-review",
+      allowedTools: ALLOWED_TOOLS_SET,
+      permissionMode,
+      requestApproval,
+    });
+
+    await expect(
+      bridge.canUseTool(
+        "ExitPlanMode",
+        { plan: "# Proposed plan" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-plan-bypass",
+          requestId: "plan-approval-bypass",
+        },
+      ),
+    ).resolves.toMatchObject({
+      behavior: "allow",
+      updatedPermissions: [
+        { type: "setMode", mode: "bypassPermissions", destination: "session" },
+      ],
+    });
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "ExitPlanMode", kind: "tool_approval" }),
+    );
+    expect(permissionMode).toEqual({ current: "bypassPermissions" });
+  });
+
+  it("keeps the session planning when the user dismisses the plan", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({
+      requestId: "plan-dismissed",
+      approved: false,
+    });
+    const permissionMode = { current: "plan" as const, beforePlan: "bypassPermissions" as const };
+    const bridge = createClaudePermissionBridge({
+      runId: "run-plan-dismissed",
+      allowedTools: ALLOWED_TOOLS_SET,
+      permissionMode,
+      requestApproval,
+    });
+
+    const decision = await bridge.canUseTool(
+      "ExitPlanMode",
+      { plan: "# Proposed plan" },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "tool-plan-dismissed",
+        requestId: "plan-dismissed",
+      },
+    );
+
+    expect(decision?.behavior).toBe("deny");
+    expect(permissionMode.current).toBe("plan");
+  });
+
   it("switches the active SDK session to acceptEdits after the user applies the plan", async () => {
     const requestApproval = vi.fn().mockResolvedValue({
       requestId: "plan-approval-1",
       approved: true,
     });
+    const permissionMode = createClaudePermissionModeRef("plan");
     const bridge = createClaudePermissionBridge({
       runId: "run-plan",
       allowedTools: ALLOWED_TOOLS_SET,
-      bypassMode: false,
+      permissionMode,
       requestApproval,
     });
 
@@ -425,6 +660,7 @@ describe("claude.driver / permission bridge", () => {
         kind: "tool_approval",
       }),
     );
+    expect(permissionMode.current).toBe("acceptEdits");
   });
 
   it("cancels a parked broker request when the SDK permission stream aborts", async () => {
@@ -436,7 +672,7 @@ describe("claude.driver / permission bridge", () => {
     const bridge = createClaudePermissionBridge({
       runId: "run-aborted-permission",
       allowedTools: new Set(),
-      bypassMode: false,
+      permissionMode: createClaudePermissionModeRef("default"),
       requestApproval,
       cancelApproval,
     });
@@ -1554,9 +1790,41 @@ describe("claude.driver / mapContextUsageResponse", () => {
     ],
   };
 
-  it("classifies rows the control reply leaves undiscriminated", () => {
-    // Unlike the /context payload, this shape carries no `kind` — deferred rows
-    // are flagged and the two space rows are known only by name.
+  it("classifies rows by the kind the CLI stamps on them", () => {
+    // Claude Code >= 2.1.268 says what each row is; the name is display text.
+    const event = mapContextUsageResponse(
+      {
+        ...response,
+        categories: [
+          { name: "Unused window", tokens: 100, kind: "free" },
+          { name: "Free space", tokens: 50, kind: "used" },
+        ],
+      },
+      7,
+    );
+
+    expect(event).toMatchObject({
+      categories: [
+        { name: "Unused window", tokens: 100, kind: "free" },
+        { name: "Free space", tokens: 50, kind: "used" },
+      ],
+    });
+  });
+
+  it("falls back to the row name for a kind it does not know", () => {
+    const event = mapContextUsageResponse(
+      { ...response, categories: [{ name: "Free space", tokens: 50, kind: "reserved" }] },
+      7,
+    );
+
+    expect(event).toMatchObject({
+      categories: [{ name: "Free space", tokens: 50, kind: "free" }],
+    });
+  });
+
+  it("classifies rows by name when the CLI predates kind", () => {
+    // An older CLI (a configured binary) sends no `kind` — deferred rows are
+    // flagged and the two space rows are known only by name.
     const event = mapContextUsageResponse(response, 7);
 
     expect(event).toEqual({
@@ -1586,8 +1854,8 @@ describe("claude.driver / mapContextUsageResponse", () => {
   });
 
   it("keeps an unrecognized space row as a plain category", () => {
-    // Name matching is the only discriminator available; a rename upstream must
-    // not drop the row or its tokens.
+    // Without `kind`, name matching is the only discriminator; a rename upstream
+    // must not drop the row or its tokens.
     const event = mapContextUsageResponse(
       { ...response, categories: [{ name: "Unused window", tokens: 100 }] },
       7,
@@ -1879,12 +2147,72 @@ describe("normalizeSubagentOutput", () => {
 // Subagent event sequence (spawn → children → ack/result)
 // ─────────────────────────────────────────────────────────────
 
+describe("claude.driver / permission mode tracking", () => {
+  it("follows the permission mode the CLI reports", () => {
+    const permissionMode = createClaudePermissionModeRef("bypassPermissions");
+    const cs = makeClaudeSession({ permissionMode });
+
+    mapSDKMessage({ type: "system", subtype: "status", status: null, permissionMode: "plan" } as any, cs);
+    expect(permissionMode).toEqual({ current: "plan", beforePlan: "bypassPermissions" });
+
+    mapSDKMessage(
+      { type: "system", subtype: "status", status: null, permissionMode: "bypassPermissions" } as any,
+      cs,
+    );
+    expect(permissionMode).toEqual({ current: "bypassPermissions" });
+  });
+
+  it("enters plan mode as soon as EnterPlanMode succeeds", () => {
+    const permissionMode = createClaudePermissionModeRef("auto");
+    const cs = makeClaudeSession({ permissionMode });
+    cs.toolCallIndex.set("tool-enter", { toolName: "EnterPlanMode" });
+
+    mapSDKMessage(
+      {
+        type: "user",
+        session_id: "s",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool-enter", content: "Entered plan mode." }],
+        },
+      } as any,
+      cs,
+    );
+
+    expect(permissionMode).toEqual({ current: "plan", beforePlan: "auto" });
+  });
+
+  it("ignores a failed EnterPlanMode and a mode it does not know", () => {
+    const permissionMode = createClaudePermissionModeRef("bypassPermissions");
+    const cs = makeClaudeSession({ permissionMode });
+    cs.toolCallIndex.set("tool-enter", { toolName: "EnterPlanMode" });
+
+    mapSDKMessage(
+      {
+        type: "user",
+        session_id: "s",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool-enter", content: "denied", is_error: true }],
+        },
+      } as any,
+      cs,
+    );
+    mapSDKMessage({ type: "system", subtype: "status", status: null, permissionMode: "yolo" } as any, cs);
+
+    expect(permissionMode).toEqual({ current: "bypassPermissions" });
+  });
+});
+
 function makeClaudeSession(overrides: Record<string, unknown> = {}) {
   return {
     runId: "run-1",
     options: {},
     abortController: new AbortController(),
     fastModeRequested: false,
+    permissionMode: createClaudePermissionModeRef("default"),
     ...overrides,
     state: { hasAssistantContent: false },
     toolCallIndex: new Map(),

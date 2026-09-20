@@ -36,6 +36,7 @@ import {
 } from "@/features/workspace/components/unified-context-dropdown";
 import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
 import { ContextChips } from "./context-chips";
+import { ComposerAttachments } from "./composer-attachments";
 import { InputToolbar } from "./input-toolbar";
 import { ContextUsageRing } from "./context-usage-meter";
 import {
@@ -46,6 +47,16 @@ import { useContextUsage } from "../hooks/use-context-usage";
 import { useProviderModels } from "../hooks/use-provider-models";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { useGetProviderAccountInfoQuery } from "@/lib/redux/api";
+import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import {
+  VISUALIZATION_FOLLOW_UP_EVENT,
+  type VisualizationFollowUpDetail,
+} from "../lib/visualization-bridge";
+import {
+  useKeyboardShortcut,
+  useKeyboardShortcutBinding,
+} from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 
@@ -152,6 +163,10 @@ interface WorkspaceInputProps {
   onStop?: () => void;
   /** When true (e.g. new-run draft tab active), focus the prompt after layout. */
   isNewRunTabActive?: boolean;
+  /** Work/Chat project that will own the new conversation. */
+  newChatProjectName?: string;
+  /** Project glyph rendered as part of the empty placeholder. */
+  newChatProjectIcon?: React.ReactNode;
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
   layout?: "default" | "centered";
 }
@@ -174,6 +189,8 @@ export function WorkspaceInput({
   onUploadedFilesChange,
   onStop,
   isNewRunTabActive = false,
+  newChatProjectName,
+  newChatProjectIcon,
   layout = "default",
 }: WorkspaceInputProps) {
   const inputRef = useRef<RichInputFormHandle>(null);
@@ -183,6 +200,7 @@ export function WorkspaceInput({
     files: contextFiles,
     skills: contextSkills,
     codeSelections: contextCodeSelections,
+    browserSelections: contextBrowserSelections,
     add: addContext,
     remove: removeContext,
   } = useComposerContext();
@@ -263,17 +281,14 @@ export function WorkspaceInput({
   const activeDescriptor =
     getProviderVariantById(activeProviderId) ?? spaceProvider;
 
-  // Cmd+P to focus input
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "p") {
-        e.preventDefault();
-        inputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  useKeyboardShortcut(
+    "app.focusComposer",
+    () => inputRef.current?.focus(),
+    { allowInEditable: true },
+  );
+  const focusComposerShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.focusComposer"),
+  );
 
   useEffect(() => {
     if (!isNewRunTabActive) return;
@@ -283,6 +298,28 @@ export function WorkspaceInput({
     return () => cancelAnimationFrame(id);
   }, [isNewRunTabActive]);
 
+  // Interactive visualizations never submit autonomously. A drill-down action
+  // places its proposed follow-up in the composer so the user can review,
+  // edit, and explicitly send it.
+  useEffect(() => {
+    const handleVisualizationFollowUp = (event: Event) => {
+      const detail = (event as CustomEvent<VisualizationFollowUpDetail>).detail;
+      if (!detail?.prompt) return;
+      onGoalChange(detail.prompt);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener(
+      VISUALIZATION_FOLLOW_UP_EVENT,
+      handleVisualizationFollowUp,
+    );
+    return () => {
+      window.removeEventListener(
+        VISUALIZATION_FOLLOW_UP_EVENT,
+        handleVisualizationFollowUp,
+      );
+    };
+  }, [onGoalChange]);
+
   const [unifiedMenu, updateUnifiedMenu] = useReducer(
     (prev: UnifiedMenuState, next: Partial<UnifiedMenuState>) => {
       const merged = { ...prev, ...next };
@@ -291,14 +328,16 @@ export function WorkspaceInput({
     { visible: false, filter: "", trigger: "@", bucket: null },
   );
 
-  // Toolbar plugins picker: opens the "$" menu narrowed to plugins without a
-  // token in the text — the chip lands at the caret on select.
+  // The toolbar plugin picker is a Codex-only capability. Other providers may
+  // still expose skills through the context menu, but they do not show this button.
   const pluginSkills = useMemo(
     () =>
-      providerSkills.filter(
-        (skill) => skill.scope === "plugin" && skill.userInvokable !== false,
-      ),
-    [providerSkills],
+      activeProviderId === PROVIDER_IDS.codex
+        ? providerSkills.filter(
+            (skill) => skill.scope === "plugin" && skill.userInvokable !== false,
+          )
+        : [],
+    [activeProviderId, providerSkills],
   );
   const pluginsMenuOpen = unifiedMenu.visible && unifiedMenu.bucket === "plugins";
   const handleTogglePluginsMenu = useCallback(() => {
@@ -375,6 +414,7 @@ export function WorkspaceInput({
         kind: "skill",
         name: skill.name,
         path: skill.path,
+        mentionPath: skill.mentionPath,
         description: skill.description,
         displayName: skill.displayName,
         shortDescription: skill.shortDescription,
@@ -472,7 +512,11 @@ export function WorkspaceInput({
   const fileChipMap = useMemo(() => {
     const m = new Map<string, RichFileChipData>();
     for (const f of contextFiles) {
-      m.set(f.fullPath, { path: f.fullPath, basename: f.name });
+      m.set(f.fullPath, {
+        path: f.fullPath,
+        basename: f.name,
+        isDirectory: f.type === "directory",
+      });
     }
     return m;
   }, [contextFiles]);
@@ -536,6 +580,7 @@ export function WorkspaceInput({
         inputRef.current?.replaceTokenWithFileChip(t, {
           path: node.fullPath,
           basename: node.name,
+          isDirectory: node.type === "directory",
         }) ?? false;
       if (!ok) {
         const next = replaceMentionInGoal(
@@ -649,11 +694,33 @@ export function WorkspaceInput({
     [uploadedFiles, onUploadedFilesChange],
   );
 
+  const handleRemoveUploadedFile = useCallback(
+    (index: number) => {
+      const removed = uploadedFiles[index];
+      if (removed?.preview) URL.revokeObjectURL(removed.preview);
+      onUploadedFilesChange?.(uploadedFiles.filter((_, i) => i !== index));
+    },
+    [uploadedFiles, onUploadedFilesChange],
+  );
+
   const isMobile = useIsMobile();
+  const contextBrowserSelectionCount = contextBrowserSelections.length;
   const inputPlaceholder = useMemo(() => {
     if (isFileDragOver) {
       return "Drop images or documents here";
     }
+    const withProjectContext = (hint: string) => {
+      if (!newChatProjectName) return hint;
+      const dash = hint.indexOf(" — ");
+      if (dash >= 0) {
+        return `${hint.slice(0, dash)} in ${newChatProjectName}${hint.slice(dash)}`;
+      }
+      const comma = hint.indexOf(", ");
+      if (comma >= 0) {
+        return `${hint.slice(0, comma)} in ${newChatProjectName} — ${hint.slice(comma + 2)}`;
+      }
+      return `${hint} in ${newChatProjectName}`;
+    };
     // Short, calm placeholder on mobile — the long hint wraps to 2–3 lines on a phone.
     const baseHint = isMobile
       ? "Do anything"
@@ -661,25 +728,43 @@ export function WorkspaceInput({
         ? composerPlaceholder.followUp
         : composerPlaceholder.initial;
 
-    if (uploadedFiles.length === 0) {
-      return baseHint;
+    const imageCount =
+      uploadedFiles.filter((file) => file.type === "image").length +
+      contextBrowserSelectionCount;
+    const documentCount = uploadedFiles.filter(
+      (file) => file.type === "document",
+    ).length;
+
+    if (imageCount === 0 && documentCount === 0) {
+      return withProjectContext(baseHint);
     }
 
-    const hasImages = uploadedFiles.some((f) => f.type === "image");
-    const hasDocs = uploadedFiles.some((f) => f.type === "document");
-
-    if (hasImages && hasDocs) {
-      return "Ask about your attachments — drop more images or documents here";
+    if (imageCount > 0 && documentCount > 0) {
+      return withProjectContext(
+        "Ask about your attachments — drop more images or documents here",
+      );
     }
-    if (hasImages) {
-      return uploadedFiles.length === 1
-        ? "Ask about this image — drop more files here anytime"
-        : "Ask about these images — drop more files here anytime";
+    if (imageCount > 0) {
+      return withProjectContext(
+        imageCount === 1
+          ? "Ask about this image — drop more files here anytime"
+          : "Ask about these images — drop more files here anytime",
+      );
     }
-    return uploadedFiles.length === 1
-      ? "Ask about this document — drop more files here anytime"
-      : "Ask about these documents — drop more files here anytime";
-  }, [isFileDragOver, uploadedFiles, canResume, isMobile, composerPlaceholder]);
+    return withProjectContext(
+      documentCount === 1
+        ? "Ask about this document — drop more files here anytime"
+        : "Ask about these documents — drop more files here anytime",
+    );
+  }, [
+    isFileDragOver,
+    uploadedFiles,
+    contextBrowserSelectionCount,
+    canResume,
+    isMobile,
+    composerPlaceholder,
+    newChatProjectName,
+  ]);
 
   //Copilot related TODO:
   const authErrorMessage = (() => {
@@ -806,6 +891,10 @@ export function WorkspaceInput({
           </div>
         )}
         <ContextChips />
+        <ComposerAttachments
+          files={uploadedFiles}
+          onRemove={handleRemoveUploadedFile}
+        />
         <div className="relative">
           <RichInputForm
             ref={inputRef}
@@ -822,6 +911,8 @@ export function WorkspaceInput({
             fileChipMap={fileChipMap}
             codeChipMap={codeChipMap}
             placeholder={inputPlaceholder}
+            placeholderIcon={newChatProjectName ? newChatProjectIcon : undefined}
+            focusShortcutLabel={focusComposerShortcut}
           />
           <UnifiedContextDropdown
             isOpen={unifiedMenu.visible}

@@ -857,3 +857,154 @@ describe("listNonIgnoredFiles", () => {
     expect(files).not.toContain("README.md");
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// Working-tree snapshots (turn changes)
+// ─────────────────────────────────────────────────────────────
+
+/** Repo with a committed base the turn tests edit: three text files. */
+function makeTurnRepo(): string {
+  const repo = makeRepo();
+  write(repo, "keep.ts", "a\nb\nc\n");
+  write(repo, "gone.ts", "bye\n");
+  write(repo, "move-me.ts", "line1\nline2\nline3\nline4\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "-m", "base");
+  return repo;
+}
+
+/** A turn's worth of edits: modify, delete, move, add text, add binary. */
+function makeTurnEdits(repo: string): void {
+  write(repo, "keep.ts", "a\nB\nc\n");
+  fs.rmSync(path.join(repo, "gone.ts"));
+  fs.renameSync(path.join(repo, "move-me.ts"), path.join(repo, "moved.ts"));
+  write(repo, "new.ts", "x\ny\n");
+  fs.writeFileSync(path.join(repo, "pixel.bin"), Buffer.from([0, 1, 2, 0, 255]));
+}
+
+describe("snapshotWorkingTree", () => {
+  it("captures untracked and unstaged changes without touching the index", async () => {
+    const repo = makeTurnRepo();
+    write(repo, "staged.ts", "staged\n");
+    git(repo, "add", "staged.ts");
+
+    const before = await gitService.snapshotWorkingTree(repo);
+    write(repo, "keep.ts", "changed\n");
+    write(repo, "fresh.ts", "new\n");
+    const after = await gitService.snapshotWorkingTree(repo);
+
+    expect(after).not.toBe(before);
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("staged.ts");
+    expect(git(repo, "status", "--porcelain")).toContain("?? fresh.ts");
+  });
+
+  it("returns the same tree when nothing changed", async () => {
+    const repo = makeTurnRepo();
+    write(repo, "dirty.ts", "carried over\n");
+
+    const first = await gitService.snapshotWorkingTree(repo);
+    const second = await gitService.snapshotWorkingTree(repo);
+    expect(second).toBe(first);
+  });
+
+  it("ignores gitignored files", async () => {
+    const repo = makeTurnRepo();
+    write(repo, ".gitignore", "ignored.log\n");
+    write(repo, "ignored.log", "one\n");
+
+    const before = await gitService.snapshotWorkingTree(repo);
+    write(repo, "ignored.log", "two\n");
+    const after = await gitService.snapshotWorkingTree(repo);
+    expect(after).toBe(before);
+  });
+
+  it("refuses a working tree with too many untracked files", async () => {
+    const repo = makeTurnRepo();
+    const dir = path.join(repo, "node_modules_not_ignored");
+    fs.mkdirSync(dir);
+    for (let i = 0; i <= 5_000; i++) {
+      fs.writeFileSync(path.join(dir, `f${i}.js`), "");
+    }
+
+    await expect(gitService.snapshotWorkingTree(repo)).rejects.toThrow(
+      /Too many untracked files/,
+    );
+  });
+});
+
+describe("diffTrees", () => {
+  it("reports each file's status and line counts", async () => {
+    const repo = makeTurnRepo();
+    const before = await gitService.snapshotWorkingTree(repo);
+    makeTurnEdits(repo);
+    const after = await gitService.snapshotWorkingTree(repo);
+
+    const diff = await gitService.diffTrees(repo, before, after);
+    const byPath = Object.fromEntries(diff.files.map((f) => [f.path, f]));
+
+    expect(byPath["keep.ts"]).toMatchObject({ status: "modified", additions: 1, deletions: 1 });
+    expect(byPath["gone.ts"]).toMatchObject({ status: "deleted", additions: 0, deletions: 1 });
+    expect(byPath["moved.ts"]).toMatchObject({
+      status: "renamed",
+      oldPath: "move-me.ts",
+      additions: 0,
+      deletions: 0,
+    });
+    expect(byPath["new.ts"]).toMatchObject({ status: "added", additions: 2, deletions: 0 });
+    expect(byPath["pixel.bin"]).toMatchObject({ status: "added", binary: true, additions: 0 });
+    expect(diff.additions).toBe(3);
+    expect(diff.deletions).toBe(2);
+    expect(diff.truncated).toBe(false);
+    expect(diff.diffText).toContain("diff --git a/keep.ts b/keep.ts");
+  });
+
+  it("keeps non-ASCII paths readable", async () => {
+    const repo = makeTurnRepo();
+    fs.mkdirSync(path.join(repo, "belgeler"));
+    const before = await gitService.snapshotWorkingTree(repo);
+    write(repo, "belgeler/özet.md", "merhaba\n");
+    const after = await gitService.snapshotWorkingTree(repo);
+
+    const diff = await gitService.diffTrees(repo, before, after);
+    expect(diff.files.map((f) => f.path)).toEqual(["belgeler/özet.md"]);
+  });
+});
+
+describe("canApplyPatch / applyPatch", () => {
+  it("reverse-applies a turn, restoring edits, deletions, moves, and new files", async () => {
+    const repo = makeTurnRepo();
+    const before = await gitService.snapshotWorkingTree(repo);
+    makeTurnEdits(repo);
+    const after = await gitService.snapshotWorkingTree(repo);
+    const { diffText } = await gitService.diffTrees(repo, before, after);
+
+    expect(await gitService.canApplyPatch(repo, diffText, { reverse: true })).toBe(true);
+    await gitService.applyPatch(repo, diffText, { reverse: true });
+
+    expect(fs.readFileSync(path.join(repo, "keep.ts"), "utf-8")).toBe("a\nb\nc\n");
+    expect(fs.readFileSync(path.join(repo, "gone.ts"), "utf-8")).toBe("bye\n");
+    expect(fs.existsSync(path.join(repo, "new.ts"))).toBe(false);
+    expect(fs.existsSync(path.join(repo, "pixel.bin"))).toBe(false);
+    expect(fs.existsSync(path.join(repo, "moved.ts"))).toBe(false);
+    expect(git(repo, "status", "--porcelain")).toBe("");
+  });
+
+  it("refuses when a touched file changed afterwards, and writes nothing", async () => {
+    const repo = makeTurnRepo();
+    const before = await gitService.snapshotWorkingTree(repo);
+    makeTurnEdits(repo);
+    const after = await gitService.snapshotWorkingTree(repo);
+    const { diffText } = await gitService.diffTrees(repo, before, after);
+
+    // A later edit to the very line the turn changed.
+    write(repo, "keep.ts", "a\nZ\nc\n");
+
+    expect(await gitService.canApplyPatch(repo, diffText, { reverse: true })).toBe(false);
+    await expect(
+      gitService.applyPatch(repo, diffText, { reverse: true }),
+    ).rejects.toThrow();
+    // Atomic: the files the turn touched that still matched are untouched too.
+    expect(fs.existsSync(path.join(repo, "new.ts"))).toBe(true);
+    expect(fs.readFileSync(path.join(repo, "keep.ts"), "utf-8")).toBe("a\nZ\nc\n");
+  });
+});

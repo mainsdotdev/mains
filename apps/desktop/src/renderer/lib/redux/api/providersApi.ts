@@ -4,52 +4,26 @@ import type {
   PluginAvailability,
   PluginDisabledReason,
 } from "../../../../shared/plugin-install-availability";
+import type {
+  ConsumeRateLimitResetCreditOutcome,
+  ConsumeRateLimitResetCreditParams,
+  ConnectorMcpServerInfo,
+  ConnectorOAuthStartResult,
+  RateLimitInfo,
+} from "../../../../shared/adapter.types";
 
-export interface RateLimitWindow {
-  usedPercent: number;
-  windowDurationMins?: number;
-  resetsAt?: number;
-  /** Optional human label for the window (e.g. Copilot quota type). */
-  label?: string;
-  /** Optional raw counts (e.g. Copilot requests used / entitlement). */
-  used?: number;
-  total?: number;
-}
-
-export interface SpendControlLimitInfo {
-  limit: string;
-  used: string;
-  remainingPercent: number;
-  resetsAt: number;
-}
-
-export interface RateLimitSnapshotInfo {
-  limitId?: string;
-  limitName?: string;
-  planType?: string;
-  primary?: RateLimitWindow;
-  secondary?: RateLimitWindow;
-  credits?: { hasCredits: boolean; balance?: string; unlimited: boolean };
-  individualLimit?: SpendControlLimitInfo;
-  spendControlReached?: boolean;
-  rateLimitReachedType?: string;
-}
-
-export interface RateLimitInfo extends RateLimitSnapshotInfo {
-  rateLimitsByLimitId?: Record<string, RateLimitSnapshotInfo>;
-  rateLimitResetCredits?: {
-    availableCount: number;
-    credits?: Array<{
-      id: string;
-      resetType: string;
-      status: string;
-      grantedAt: number;
-      expiresAt?: number;
-      title?: string;
-      description?: string;
-    }>;
-  };
-}
+export type {
+  RateLimitInfo,
+  RateLimitSnapshotInfo,
+  RateLimitWindow,
+  SpendControlLimitInfo,
+  ConsumeRateLimitResetCreditOutcome,
+  ConsumeRateLimitResetCreditParams,
+  ConnectorInfo,
+  ConnectorMcpServerInfo,
+  ConnectorOAuthStartResult,
+  ConnectorOverview,
+} from "../../../../shared/adapter.types";
 
 /** A Codex thread goal (mirrors `GoalInfo` in shared/adapter.types). */
 export interface GoalInfo {
@@ -167,6 +141,7 @@ export interface SkillInfo {
   forked?: boolean;
   agent?: string;
   path?: string;
+  mentionPath?: string;
   displayName?: string;
   shortDescription?: string;
   iconSmall?: string;
@@ -251,6 +226,10 @@ export interface PluginAppSummary {
   category?: string;
   /** Remote logo URL resolved from the codex connector directory cache. */
   iconUrl?: string;
+  /** Runtime state from app/installed; absent when the CLI lacks that RPC. */
+  installed?: boolean;
+  runtimeEnabled?: boolean;
+  callable?: boolean;
 }
 
 export interface PluginDetailResponse {
@@ -261,6 +240,8 @@ export interface PluginDetailResponse {
   skills: PluginSkillSummary[];
   apps: PluginAppSummary[];
   mcpServers: string[];
+  /** Live status for mcpServers when the provider exposes runtime inventory. */
+  mcpServerStatuses?: ConnectorMcpServerInfo[];
   /** Marketplace-reported install count — only known for catalog-indexed plugins. */
   uniqueInstalls?: number | null;
   /** ISO timestamp of the plugin's last marketplace update, if known. */
@@ -468,6 +449,16 @@ export const providersApi = baseApi.injectEndpoints({
       keepUnusedDataFor: 300,
     }),
 
+    startProviderConnectorOAuth: builder.mutation<
+      ConnectorOAuthStartResult,
+      { providerId: string; serverName: string }
+    >({
+      query: ({ providerId, serverName }) => ({
+        handler: CHANNELS.providers.startConnectorOAuth,
+        args: [providerId, serverName],
+      }),
+    }),
+
     readProviderPlugin: builder.query<
       PluginDetailResponse,
       { providerId: string; pluginName: string; marketplacePath: string }
@@ -537,6 +528,23 @@ export const providersApi = baseApi.injectEndpoints({
         handler: CHANNELS.providers.getRateLimits,
         args: [id],
       }),
+      providesTags: (_result, _error, providerId) => [
+        { type: "ProviderRateLimits", id: providerId },
+      ],
+    }),
+
+    consumeProviderRateLimitResetCredit: builder.mutation<
+      ConsumeRateLimitResetCreditOutcome,
+      { providerId: string; params: ConsumeRateLimitResetCreditParams }
+    >({
+      query: ({ providerId, params }) => ({
+        handler: CHANNELS.providers.consumeRateLimitResetCredit,
+        args: [providerId, params],
+      }),
+      invalidatesTags: (_result, _error, { providerId }) => [
+        { type: "ProviderRateLimits", id: providerId },
+        { type: "ProviderModels", id: providerId },
+      ],
     }),
 
     getProviderGoal: builder.query<GoalInfo | null, { providerId: string; runId: string }>({
@@ -595,12 +603,14 @@ export const {
   useUpdateProviderCliMutation,
   useGetProviderPluginsQuery,
   useGetProviderInstalledPluginsQuery,
+  useStartProviderConnectorOAuthMutation,
   useReadProviderPluginQuery,
   useInstallProviderPluginMutation,
   useUninstallProviderPluginMutation,
   useSetProviderPluginEnabledMutation,
   useUpdateProviderPluginMutation,
   useGetProviderRateLimitsQuery,
+  useConsumeProviderRateLimitResetCreditMutation,
   useGetProviderGoalQuery,
   useLazyGetProviderGoalQuery,
   useSetProviderGoalMutation,

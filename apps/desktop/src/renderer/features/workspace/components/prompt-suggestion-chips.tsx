@@ -1,8 +1,15 @@
 import { LazyMotion, m, domAnimation, MotionConfig } from "motion/react";
 import { Text } from "@/components/ui";
 
+export interface PromptSuggestion {
+  /** Sent on click. */
+  prompt: string;
+  /** Shown on the chip when the provider gave a short form for it. */
+  label?: string;
+}
+
 interface PromptSuggestionChipsProps {
-  suggestions: string[];
+  suggestions: PromptSuggestion[];
   onSelect: (suggestion: string) => void;
   disabled?: boolean;
 }
@@ -14,18 +21,22 @@ export function PromptSuggestionChips({
 }: PromptSuggestionChipsProps) {
   if (suggestions.length === 0) return null;
 
-  const suggestion = suggestions[suggestions.length - 1];
-
   return (
     <LazyMotion features={domAnimation}>
       <MotionConfig reducedMotion="user">
       <div className="w-full py-2 flex flex-col items-end gap-1">
+        {/* Every offer, not just the last: Codex ends a turn with three
+            different directions, and picking one for the user is picking
+            wrong two times out of three. */}
+        {suggestions.map((suggestion, index) => (
         <m.button
+          key={`${suggestion.prompt}-${index}`}
           initial={{ opacity: 0, transform: "translateY(8px)" }}
           animate={{ opacity: 1, transform: "translateY(0px)" }}
-          transition={{ duration: 0.25, ease: "easeOut" }}
-          onClick={() => !disabled && onSelect(suggestion)}
+          transition={{ duration: 0.25, ease: "easeOut", delay: index * 0.05 }}
+          onClick={() => !disabled && onSelect(suggestion.prompt)}
           disabled={disabled}
+          title={suggestion.label ? suggestion.prompt : undefined}
           className="shooting-star-border group rounded-2xl max-w-[80%] text-left
             cursor-pointer
             disabled:opacity-40 disabled:cursor-not-allowed"
@@ -35,9 +46,12 @@ export function PromptSuggestionChips({
           <Text as="span" size="sm" tone="default" className="relative z-10 flex items-start gap-2 px-4 py-2.5">
             {/* Wraps rather than truncates: a suggestion you can't read is one
                 you can't judge before sending it. */}
-            <span className="wrap-break-word">{suggestion}</span>
+            <span className="wrap-break-word">
+              {suggestion.label || suggestion.prompt}
+            </span>
           </Text>
         </m.button>
+        ))}
         <m.span
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

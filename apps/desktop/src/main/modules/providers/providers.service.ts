@@ -27,7 +27,10 @@ import {
   uninstallPluginForProvider,
   setPluginEnabledForProvider,
   updatePluginForProvider,
+  listConnectorsForProvider,
+  startConnectorOAuthForProvider,
   getRateLimitsForProvider,
+  consumeRateLimitResetCreditForProvider,
   setGoalForProvider,
   getGoalForProvider,
   clearGoalForProvider,
@@ -39,9 +42,13 @@ import {
   type PluginDetail,
   type AccountInfo,
   type CliUpdateResult,
+  type ConnectorOAuthStartResult,
+  type ConnectorOverview,
 } from "./adapters";
 import type { PluginScope } from "../../../shared/adapter.types";
 import type {
+  ConsumeRateLimitResetCreditOutcome,
+  ConsumeRateLimitResetCreditParams,
   RateLimitInfo,
   GoalInfo,
   GoalSetParams,
@@ -218,6 +225,21 @@ export const providersService = {
     return getRateLimitsForProvider(provider);
   },
 
+  async consumeRateLimitResetCredit(
+    id: string,
+    params: ConsumeRateLimitResetCreditParams,
+  ): Promise<ConsumeRateLimitResetCreditOutcome> {
+    if (
+      !params ||
+      typeof params.idempotencyKey !== "string" ||
+      !params.idempotencyKey.trim()
+    ) {
+      throw new Error("A reset idempotency key is required.");
+    }
+    const provider = await requireEnabledProvider(id);
+    return consumeRateLimitResetCreditForProvider(provider, params);
+  },
+
   async setGoal(
     id: string,
     runId: string,
@@ -292,6 +314,22 @@ export const providersService = {
   async updatePlugin(id: string, pluginId: string): Promise<void> {
     const provider = await requireEnabledProvider(id);
     await updatePluginForProvider(provider, pluginId);
+  },
+
+  async getConnectors(
+    id: string,
+    forceRefresh = false,
+  ): Promise<ConnectorOverview> {
+    const provider = await requireEnabledProvider(id);
+    return listConnectorsForProvider(provider, forceRefresh);
+  },
+
+  async startConnectorOAuth(
+    id: string,
+    serverName: string,
+  ): Promise<ConnectorOAuthStartResult> {
+    const provider = await requireEnabledProvider(id);
+    return startConnectorOAuthForProvider(provider, serverName);
   },
 
   async detectInstalled(): Promise<DetectedClisResponse> {

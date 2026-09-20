@@ -1,17 +1,6 @@
 import type { RunEvent } from "../types";
 import { resolveTool } from "./resolve-tool";
 
-export interface ToolSubGroup {
-  id: string;
-  /** Human-readable label rendered in the accordion header. */
-  displayName: string;
-  /** Stable comparison key — events sharing this key collapse into one group. */
-  groupKey: string;
-  /** Icon rendered next to the displayName in the accordion header. */
-  icon: React.ReactNode;
-  events: RunEvent[];
-}
-
 /**
  * Collapse consecutive Edit events targeting the same file into one entry.
  * Cursor (and other agents) often emit multiple edits to the same file back-to-back;
@@ -81,7 +70,7 @@ function collapseEditsByFilePath(events: RunEvent[]): RunEvent[] {
 
 /**
  * Backwards-compatible accessor — returns the resolved displayName for an
- * event's content. Callers that need grouping logic should use
+ * event's content. Callers that need classification should use
  * `resolveTool(content).groupKey` directly.
  */
 export function getToolType(content: string): string {
@@ -102,66 +91,40 @@ function stripTaskPlanEvents(events: RunEvent[]): RunEvent[] {
   );
 }
 
-export function groupConsecutiveToolCalls(events: RunEvent[]): ToolSubGroup[] {
+export function prepareToolCalls(events: RunEvent[]): RunEvent[] {
   // Pre-process: drop Task plan events — the pinned summary bar above the
   // input is the single source of truth for plan state.
   const processedEvents = stripTaskPlanEvents(events);
 
-  const subGroups: ToolSubGroup[] = [];
-  let currentGroup: RunEvent[] = [];
-  let currentKey: string | null = null;
-  let currentLabel = "";
-  let currentIcon: React.ReactNode = null;
+  const preparedEvents: RunEvent[] = [];
+  let currentEdits: RunEvent[] = [];
+  let currentEditKey: "edit" | "write" | null = null;
 
-  const flushGroup = () => {
-    if (currentGroup.length === 0 || currentKey === null) return;
-    const events =
-      currentKey === "edit" || currentKey === "write"
-        ? collapseEditsByFilePath(currentGroup)
-        : [...currentGroup];
-    subGroups.push({
-      id: `subgroup-${currentGroup[0].id}`,
-      groupKey: currentKey,
-      displayName: currentLabel,
-      icon: currentIcon,
-      events,
-    });
-    currentGroup = [];
-    currentKey = null;
-    currentLabel = "";
-    currentIcon = null;
+  const flushEdits = () => {
+    if (currentEdits.length === 0) return;
+    preparedEvents.push(...collapseEditsByFilePath(currentEdits));
+    currentEdits = [];
+    currentEditKey = null;
   };
 
   for (const event of processedEvents) {
-    const resolved = resolveTool(event.content);
+    const groupKey = resolveTool(event.content).groupKey;
+    const editKey =
+      groupKey === "edit" || groupKey === "write" ? groupKey : null;
 
-    // MCP vendor tools render their own header (with input preview) via
-    // `McpDisplay`, so collapsing consecutive calls into a single accordion
-    // hides the per-call input. Keep each MCP call as its own sub-group.
-    const isStandalone = resolved.isSpecialGroup || resolved.vendorId !== undefined;
-    if (isStandalone) {
-      flushGroup();
-      subGroups.push({
-        id: `subgroup-${event.id}`,
-        groupKey: resolved.groupKey,
-        displayName: resolved.groupLabel,
-        icon: resolved.icon,
-        events: [event],
-      });
+    if (editKey === null) {
+      flushEdits();
+      preparedEvents.push(event);
       continue;
     }
 
-    if (resolved.groupKey === currentKey) {
-      currentGroup.push(event);
-    } else {
-      flushGroup();
-      currentKey = resolved.groupKey;
-      currentLabel = resolved.groupLabel;
-      currentIcon = resolved.icon;
-      currentGroup = [event];
+    if (currentEditKey !== editKey) {
+      flushEdits();
+      currentEditKey = editKey;
     }
+    currentEdits.push(event);
   }
 
-  flushGroup();
-  return subGroups;
+  flushEdits();
+  return preparedEvents;
 }

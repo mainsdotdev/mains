@@ -27,6 +27,8 @@ export interface Capabilities {
   preventSleep: boolean;
   /** OS notifications fired on the host machine. */
   nativeNotifications: boolean;
+  /** macOS global front-window capture into composer context. */
+  appshots: boolean;
   /** Interactive terminal (works over WS too). */
   terminal: boolean;
 }
@@ -42,6 +44,7 @@ const ELECTRON: Capabilities = {
   windowChrome: true,
   preventSleep: true,
   nativeNotifications: true,
+  appshots: true,
   terminal: true,
 };
 
@@ -56,6 +59,7 @@ const WEB: Capabilities = {
   windowChrome: false,
   preventSleep: false,
   nativeNotifications: false,
+  appshots: false,
   terminal: true, // runs on the backend, streamed over WS
 };
 

@@ -4,6 +4,24 @@ const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 const { AutoUnpackNativesPlugin } = require('@electron-forge/plugin-auto-unpack-natives');
 
+// Mach-O magic numbers: 32/64-bit thin binaries in both byte orders, plus
+// universal (fat) binaries.
+const MACH_O_MAGICS = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]);
+
+// True for a regular file that is not Mach-O code (.pak, .dat, .asar, .wasm…).
+// Directories — the .app/.framework bundles osx-sign seals — are never data.
+const isDataFile = (filePath) => {
+  const fs = require('fs');
+  if (!fs.statSync(filePath).isFile()) return false;
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const magic = Buffer.alloc(4);
+    return fs.readSync(fd, magic, 0, 4, 0) < 4 || !MACH_O_MAGICS.has(magic.readUInt32BE(0));
+  } finally {
+    fs.closeSync(fd);
+  }
+};
+
 module.exports = {
   hooks: {
     packageAfterPrune: async (_forgeConfig, buildPath, electronVersion, platform, arch) => {
@@ -209,6 +227,15 @@ module.exports = {
           // misleading "code has no resources but signature indicates they must
           // be present". Fail at the step that actually broke instead.
           continueOnError: false,
+          // osx-sign codesigns every non-text file it finds, one
+          // `codesign --timestamp` call — and so one round-trip to Apple's
+          // timestamp server — each. Electron 41 ships 220 locale.pak files
+          // (gendered variants), so Electron alone cost ~240 round-trips, and
+          // one dropped reply failed the whole build: "A timestamp was expected
+          // but was not found". Data files need no signature of their own —
+          // the enclosing bundle's seal (_CodeSignature/CodeResources) covers
+          // them — so sign Mach-O code only.
+          ignore: isDataFile,
           // Signing cert comes from the env so forks/CI aren't tied to one
           // person's certificate. When unset, osx-sign auto-discovers the
           // Developer ID identity in the keychain.

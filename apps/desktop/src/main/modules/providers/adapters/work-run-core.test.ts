@@ -217,6 +217,42 @@ describe("createWorkRunAdapter", () => {
       expect(userPrompt.content).toBe("ship it");
     });
 
+    it("adds the provider-resolved model to the user-prompt artifact", async () => {
+      const fake = createFakeDriver({
+        model: "gpt-5.6-terra",
+        outcome: { status: "succeeded" },
+      });
+      const adapter = createWorkRunAdapter(fake.driver);
+      const events: WorkRunEvent[] = [];
+
+      await adapter.startRun(
+        makeStartReq({ model: "gpt-5.6-sol" }),
+        (event) => {
+          events.push(event);
+        },
+      );
+
+      const userPrompt = events.find(
+        (event) => event.type === "artifact" && event.kind === "user-prompt",
+      ) as Extract<WorkRunEvent, { type: "artifact" }> | undefined;
+      expect(userPrompt?.metadata?.model).toBe("gpt-5.6-terra");
+    });
+
+    it("does not treat a requested model alias as a resolved model", async () => {
+      const fake = createFakeDriver({ outcome: { status: "succeeded" } });
+      const adapter = createWorkRunAdapter(fake.driver);
+      const events: WorkRunEvent[] = [];
+
+      await adapter.startRun(makeStartReq({ model: "sonnet" }), (event) => {
+        events.push(event);
+      });
+
+      const userPrompt = events.find(
+        (event) => event.type === "artifact" && event.kind === "user-prompt",
+      ) as Extract<WorkRunEvent, { type: "artifact" }> | undefined;
+      expect(userPrompt?.metadata).not.toHaveProperty("model");
+    });
+
     it("translates a Driver-thrown error into status=failed", async () => {
       const fake = createFakeDriver({
         throws: new Error("SDK connection lost"),

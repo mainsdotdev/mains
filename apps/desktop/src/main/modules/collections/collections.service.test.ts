@@ -63,6 +63,77 @@ describe("collectionsService", () => {
     expect(shared.every((collection) => !("mode" in collection))).toBe(true);
   });
 
+  it("persists an account's complete manual Collection order", async () => {
+    createCollection(db, { id: "health", name: "Health", sortOrder: 0 });
+    createCollection(db, { id: "history", name: "History", sortOrder: 1 });
+    createCollection(db, { id: "home", name: "Home", sortOrder: 2 });
+
+    await collectionsService.reorder({
+      accountId: "default",
+      orderedIds: ["home", "health", "history"],
+    });
+
+    const reordered = await collectionsService.list({ accountId: "default" });
+    expect(reordered.map((collection) => collection.id)).toEqual([
+      "home",
+      "health",
+      "history",
+    ]);
+    expect(reordered.map((collection) => collection.sortOrder)).toEqual([
+      0, 1, 2,
+    ]);
+  });
+
+  it("keeps the legacy alphabetical order until a manual order is saved", async () => {
+    createCollection(db, { id: "zulu", name: "Zulu", sortOrder: 0 });
+    createCollection(db, { id: "alpha", name: "Alpha", sortOrder: 0 });
+
+    const collections = await collectionsService.list({ accountId: "default" });
+    expect(collections.map((collection) => collection.id)).toEqual([
+      "alpha",
+      "zulu",
+    ]);
+  });
+
+  it("rejects partial or cross-account Collection orders", async () => {
+    createCollection(db, { id: "first", sortOrder: 0 });
+    createCollection(db, { id: "second", sortOrder: 1 });
+    createAccount(db, { id: "other" });
+    createCollection(db, { id: "private", accountId: "other" });
+
+    await expect(
+      collectionsService.reorder({
+        accountId: "default",
+        orderedIds: ["first"],
+      }),
+    ).rejects.toThrow("every active project");
+    await expect(
+      collectionsService.reorder({
+        accountId: "default",
+        orderedIds: ["first", "private"],
+      }),
+    ).rejects.toThrow("every active project");
+
+    await expect(
+      collectionsService.list({ accountId: "default" }),
+    ).resolves.toMatchObject([
+      { id: "first", sortOrder: 0 },
+      { id: "second", sortOrder: 1 },
+    ]);
+  });
+
+  it("appends a newly created Collection after the existing manual order", async () => {
+    createCollection(db, { id: "first", sortOrder: 4 });
+
+    const created = await collectionsService.create({
+      id: "second",
+      accountId: "default",
+      name: "Second",
+    });
+
+    expect(created.sortOrder).toBe(5);
+  });
+
   it("hides archived Collections unless requested", async () => {
     createCollection(db, { id: "archived", isArchived: true });
 
@@ -75,6 +146,26 @@ describe("collectionsService", () => {
         includeArchived: true,
       }),
     ).resolves.toHaveLength(1);
+  });
+
+  it("restores an archived Collection at the end of the manual order", async () => {
+    createCollection(db, { id: "first", sortOrder: 0 });
+    createCollection(db, {
+      id: "restored",
+      isArchived: true,
+      sortOrder: 0,
+    });
+
+    await collectionsService.unarchive({
+      id: "restored",
+      accountId: "default",
+    });
+
+    const collections = await collectionsService.list({ accountId: "default" });
+    expect(collections.map((collection) => collection.id)).toEqual([
+      "first",
+      "restored",
+    ]);
   });
 
   it("reads and mutates an owned Collection through the account-scoped identity", async () => {

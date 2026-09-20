@@ -1,6 +1,7 @@
 import { lazy, type ComponentType, type ElementType } from "react";
 import {
   Archive,
+  Bell,
   Branch,
   Chart,
   Codex,
@@ -8,9 +9,11 @@ import {
   CopilotStatic,
   Cursor,
   General,
+  Keyboard,
   Relay,
 } from "@/components/ui/icons";
-import { Claude } from "@/components/ui/icons/space";
+import { capabilities } from "@/lib/platform";
+import { Claude, Scan } from "@/components/ui/icons/space";
 import GeneralSettings from "./components/general";
 import GitSettings from "./components/git";
 import { PlaceholderSection } from "./components/settings-layout";
@@ -28,6 +31,13 @@ const CodexSettings = lazy(() => import("./components/codex"));
 // its default (codex) provider.
 const CodexPlugins = lazy(() => import("./components/provider-plugins"));
 const CursorSettings = lazy(() => import("./components/cursor"));
+const LensSettings = lazy(() => import("./components/lens"));
+const KeyboardShortcutsSettings = lazy(
+  () => import("./components/keyboard-shortcuts"),
+);
+const NotificationsSettings = lazy(
+  () => import("./components/notifications"),
+);
 const ProjectsSettings = lazy(() => import("./components/projects"));
 const ArchiveSettings = lazy(() => import("./components/archive"));
 const BackendsSettings = lazy(() => import("@/features/relay/components/backends"));
@@ -35,12 +45,13 @@ const DashboardPage = lazy(
   () => import("@/features/stats/components/dashboard-page"),
 );
 
-const NotificationsSettings = () => <PlaceholderSection title="Notifications" />;
 const SchedulesSettings = () => <PlaceholderSection title="Schedules" />;
 const SecuritySettings = () => <PlaceholderSection title="Security" />;
 
 export type SettingsRouteId =
   | "general"
+  | "lens"
+  | "shortcuts"
   | "notifications"
   | "personalization"
   | "connections"
@@ -57,11 +68,15 @@ export type SettingsRouteId =
   | "archive"
   | "dashboard";
 
+/** Which heading a nav entry sits under; entries without one are top-level. */
+export type SettingsNavGroup = "providers";
+
 export type SettingsSection = {
   id: SettingsRouteId;
   label: string;
   icon?: ElementType;
   showInNav?: boolean;
+  navGroup?: SettingsNavGroup;
   activeIds?: SettingsRouteId[];
   Component: ComponentType;
 };
@@ -75,25 +90,29 @@ export type SettingsNavItem = {
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "general", label: "General", icon: General, showInNav: true, Component: GeneralSettings },
+  { id: "notifications", label: "Notifications", icon: Bell, showInNav: capabilities.nativeNotifications, Component: NotificationsSettings },
   { id: "git", label: "Git", icon: Branch, showInNav: true, Component: GitSettings },
+  { id: "lens", label: "Lens", icon: Scan, showInNav: capabilities.appshots, Component: LensSettings },
+  { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard, showInNav: capabilities.windowChrome, Component: KeyboardShortcutsSettings },
   { id: "connections", label: "Connections", icon: Connect, showInNav: true, Component: ConnectionsSettings },
   // Hidden from the Settings nav — surfaced as the top-level "Relay" route instead.
   { id: "backends", label: "Relay", icon: Relay, Component: BackendsSettings },
   { id: "dashboard", label: "Dashboard", icon: Chart, showInNav: true, Component: DashboardPage },
   { id: "archive", label: "Archive", icon: Archive, showInNav: true, Component: ArchiveSettings },
 
-  { id: "claude", label: "Claude", icon: Claude, Component: ClaudeSettings },
+  { id: "claude", label: "Claude", icon: Claude, showInNav: true, navGroup: "providers", Component: ClaudeSettings },
   {
     id: "codex",
     label: "Codex",
     icon: Codex,
+    showInNav: true,
+    navGroup: "providers",
     activeIds: ["codex", "codex-plugins"],
     Component: CodexSettings,
   },
-  { id: "copilot", label: "Copilot", icon: CopilotStatic, Component: CopilotSettings },
-  { id: "cursor", label: "Cursor", icon: Cursor, Component: CursorSettings },
+  { id: "copilot", label: "Copilot", icon: CopilotStatic, showInNav: true, navGroup: "providers", Component: CopilotSettings },
+  { id: "cursor", label: "Cursor", icon: Cursor, showInNav: true, navGroup: "providers", Component: CursorSettings },
 
-  { id: "notifications", label: "Notifications", Component: NotificationsSettings },
   { id: "personalization", label: "Personalization", Component: PersonalizationSettings },
   { id: "schedules", label: "Schedules", Component: SchedulesSettings },
   { id: "security", label: "Security", Component: SecuritySettings },
@@ -112,8 +131,16 @@ const toNavItem = (section: SettingsSection): SettingsNavItem => ({
   activeIds: section.activeIds,
 });
 
+const navItemsIn = (group: SettingsNavGroup | undefined) =>
+  SETTINGS_SECTIONS.filter((s) => s.showInNav && s.navGroup === group).map(
+    toNavItem,
+  );
+
 export const SETTINGS_MAIN_NAV_ITEMS: readonly SettingsNavItem[] =
-  SETTINGS_SECTIONS.filter((s) => s.showInNav).map(toNavItem);
+  navItemsIn(undefined);
+
+export const SETTINGS_PROVIDER_NAV_ITEMS: readonly SettingsNavItem[] =
+  navItemsIn("providers");
 
 const SETTINGS_ROUTE_ID_SET = new Set<string>(
   SETTINGS_SECTIONS.map((section) => section.id),

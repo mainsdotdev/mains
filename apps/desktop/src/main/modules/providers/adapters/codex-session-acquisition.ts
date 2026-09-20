@@ -80,6 +80,13 @@ interface CodexSessionAcquisitionOptions {
    * ("missing field `model`"), so this is what keeps a continued run alive.
    */
   resolveDefaultModel?: () => Promise<string | undefined>;
+  /**
+   * Resolve a requested/persisted model against live account availability.
+   * Codex uses this to move exhausted ordinary usage onto a reserve model.
+   */
+  resolveModel?: (
+    requestedModel: string | null | undefined,
+  ) => Promise<string | undefined>;
   establishGoal: (
     server: CodexAppServer,
     threadId: string | undefined,
@@ -103,7 +110,7 @@ export function isCodexArchivedThreadError(
   );
 }
 
-function isCodexMissingThreadError(error: unknown): boolean {
+export function isCodexMissingThreadError(error: unknown): boolean {
   return (
     /\b(?:session|thread)\b[^\n]*\bnot found\b/i.test(
       codexErrorMessage(error),
@@ -280,7 +287,13 @@ function buildTurnInput(
   }];
 
   for (const skill of request.skills ?? []) {
-    if (skill.name && skill.path) {
+    if (skill.name && skill.mentionPath) {
+      input.push({
+        type: "mention",
+        name: skill.displayName || skill.name,
+        path: skill.mentionPath,
+      });
+    } else if (skill.name && skill.path) {
       input.push({
         type: "skill",
         name: skill.name,
@@ -351,7 +364,7 @@ function reviewPromptEvent(
       source: "user",
       isReview: true,
       reviewTarget: request.target.type,
-      delivery: request.delivery ?? "inline",
+      delivery: "inline",
     },
   };
 }
@@ -396,6 +409,10 @@ export function createCodexSessionAcquisition(
   async function effectiveModel(
     requestedModel: string | null | undefined,
   ): Promise<string | undefined> {
+    if (options.resolveModel) {
+      const resolved = await options.resolveModel(requestedModel);
+      if (resolved) return resolved;
+    }
     return (
       requestedModel ||
       config.defaultModel ||
@@ -550,6 +567,7 @@ export function createCodexSessionAcquisition(
       session: makeSession(runId, model, startTurn),
       prompt: request.goal,
       sessionId: threadId,
+      model,
     };
   }
 
@@ -676,6 +694,7 @@ export function createCodexSessionAcquisition(
       session: makeSession(runId, model, startTurn),
       prompt: message,
       sessionId: threadId,
+      model,
     };
   }
 
@@ -759,6 +778,7 @@ export function createCodexSessionAcquisition(
       session: makeSession(runId, model, startTurn),
       prompt: message,
       sessionId: forkedThreadId,
+      model,
     };
   }
 
@@ -796,13 +816,11 @@ export function createCodexSessionAcquisition(
       CodexAppServerParams<"review/start"> = {
         threadId,
         target,
-        ...(request.delivery
-          ? { delivery: request.delivery }
-          : {}),
+        delivery: "inline",
       };
     const startTurn = async () => {
       logger.info(
-        `Starting review: target=${request.target.type}, delivery=${request.delivery ?? "inline"}`,
+        `Starting review: target=${request.target.type}, delivery=inline`,
       );
       const result = await server.sendRequest(
         "review/start",
@@ -818,7 +836,7 @@ export function createCodexSessionAcquisition(
         void persistSession(runId, reviewThreadId).catch(
           (error) =>
             logger.warn(
-              "Failed to persist detached review thread:",
+              "Failed to persist unexpected review thread:",
               error instanceof Error
                 ? error.message
                 : error,
@@ -836,6 +854,7 @@ export function createCodexSessionAcquisition(
       ),
       prompt: "",
       sessionId: threadId,
+      model,
     };
   }
 

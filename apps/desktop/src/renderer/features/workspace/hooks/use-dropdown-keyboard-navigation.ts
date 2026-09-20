@@ -66,6 +66,16 @@ export function useDropdownKeyboardNavigation({
 
       if (!isPlainEnter(event)) return;
 
+      // Composite rows may expose a focused secondary action (for example,
+      // browsing into a folder while the row itself mentions that folder).
+      // Let the button handle Enter instead of turning it into row selection.
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-dropdown-secondary-action]")
+      ) {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();

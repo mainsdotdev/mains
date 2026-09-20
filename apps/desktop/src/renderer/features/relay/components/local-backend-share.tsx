@@ -13,6 +13,7 @@ import { Eye, EyeClosed, Refresh } from "@/components/ui/icons";
 import {
   SettingsSection,
   SettingsDivider,
+  SettingsRow,
 } from "@/features/settings/components/settings-layout";
 import { PhonePairing } from "./phone-pairing";
 
@@ -33,6 +34,7 @@ interface Status {
   tailscaleWebUrl: string | null;
   tailscaleWsUrl: string | null;
   webUiAvailable: boolean;
+  keepAwakeForRemoteAccess: boolean;
 }
 
 type Busy = "remote" | "lan" | "tailscale" | "rotate" | null;
@@ -268,6 +270,62 @@ export function LocalBackendShare() {
       <SettingsDivider />
 
       <PhonePairing canPair={lanOn || tailscaleOn} />
+    </SettingsSection>
+  );
+}
+
+export function RemoteKeepAwakeSetting() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    window.api.localBackend
+      .getStatus()
+      .then((res) => {
+        if (active && res?.success) {
+          setEnabled(!!(res.data as Status).keepAwakeForRemoteAccess);
+        }
+      })
+      .catch(() => {
+        if (active) setEnabled(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleChange = async (next: boolean) => {
+    setBusy(true);
+    try {
+      const res = await window.api.localBackend.setKeepAwakeForRemoteAccess(next);
+      if (res?.success) {
+        setEnabled(!!(res.data as Status).keepAwakeForRemoteAccess);
+      } else {
+        toast.error(res?.error ?? "Failed to update keep awake");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update keep awake",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsSection title="Other settings">
+      <SettingsRow
+        title="Keep this computer awake"
+        description="Prevent sleep while plugged in and remote access is enabled."
+      >
+        <Toggle
+          enabled={enabled ?? false}
+          aria-label="Keep this computer awake for remote access"
+          onChange={handleChange}
+          disabled={enabled === null || busy}
+        />
+      </SettingsRow>
     </SettingsSection>
   );
 }

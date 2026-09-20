@@ -928,7 +928,7 @@ describe("runsService", () => {
       ]);
     });
 
-    it("refuses a sourcePath outside browser captures before the adapter runs", async () => {
+    it("refuses a sourcePath outside trusted captures before the adapter runs", async () => {
       createSpace(db, {
         id: "sp-attach-src",
         accountId: "default",
@@ -948,7 +948,7 @@ describe("runsService", () => {
             { name: "shot.png", type: "image", mimeType: "image/png", sourcePath: "/etc/passwd" },
           ],
         }),
-      ).rejects.toThrow("browser capture");
+      ).rejects.toThrow("trusted Mains capture");
       expect(startRun).not.toHaveBeenCalled();
     });
 
@@ -978,7 +978,7 @@ describe("runsService", () => {
             { name: "key.png", type: "image", mimeType: "image/png", sourcePath: "/Users/me/.ssh/id_ed25519" },
           ],
         }),
-      ).rejects.toThrow("browser capture");
+      ).rejects.toThrow("trusted Mains capture");
       expect(continueRun).not.toHaveBeenCalled();
       expect((await runsService.getRunById("run-attach"))?.status).toBe("succeeded");
     });
@@ -1118,6 +1118,70 @@ describe("runsService", () => {
           collectionId: null,
         }),
       ).rejects.toThrow("Developer runs");
+    });
+  });
+
+  describe("setRunPinned", () => {
+    it("pins a chat and releases it again", async () => {
+      createRun(db, { id: "chat-run", mode: "chat" });
+
+      const pinned = await runsService.setRunPinned({
+        runId: "chat-run",
+        accountId: "default",
+        pinned: true,
+      });
+      expect(pinned.pinnedAt).toBeInstanceOf(Date);
+
+      const released = await runsService.setRunPinned({
+        runId: "chat-run",
+        accountId: "default",
+        pinned: false,
+      });
+      expect(released.pinnedAt).toBeNull();
+    });
+
+    it("keeps the chat filed under its Collection", async () => {
+      createCollection(db, { id: "shared-project" });
+      createRun(db, {
+        id: "work-run",
+        mode: "work",
+        collectionId: "shared-project",
+      });
+
+      const pinned = await runsService.setRunPinned({
+        runId: "work-run",
+        accountId: "default",
+        pinned: true,
+      });
+
+      // Pinning only changes where the sidebar draws the row; unpinning has to
+      // drop it back into the project it never left.
+      expect(pinned.collectionId).toBe("shared-project");
+    });
+
+    it("rejects Developer runs", async () => {
+      createRun(db, { id: "dev-run", mode: "developer" });
+
+      await expect(
+        runsService.setRunPinned({
+          runId: "dev-run",
+          accountId: "default",
+          pinned: true,
+        }),
+      ).rejects.toThrow("Developer runs");
+    });
+
+    it("rejects a run belonging to another account", async () => {
+      createAccount(db, { id: "other" });
+      createRun(db, { id: "chat-run", accountId: "other", mode: "chat" });
+
+      await expect(
+        runsService.setRunPinned({
+          runId: "chat-run",
+          accountId: "default",
+          pinned: true,
+        }),
+      ).rejects.toThrow("does not belong to this account");
     });
   });
 
@@ -1505,6 +1569,63 @@ describe("runsService", () => {
     it("returns error when repo throws", async () => {
       vi.spyOn(runsRepo, "findArtifactsByRun").mockRejectedValueOnce(new Error("db error"));
       await expect(runsService.getArtifactsByRun("r1")).rejects.toThrow("db error");
+    });
+  });
+
+  describe("listRunOutputFiles", () => {
+    it("lists visible files from a Work run and excludes internal context", async () => {
+      createRun(db, {
+        id: "run-outputs",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      const root = managedRunDir("run-outputs", "work");
+      const outside = "/tmp/mains-output-outside.md";
+      mkdirSync(`${root}/outputs`, { recursive: true });
+      mkdirSync(`${root}/.mains/sources`, { recursive: true });
+      writeFileSync(`${root}/notes.md`, "# Notes");
+      writeFileSync(`${root}/outputs/chart.csv`, "x,y\n1,2");
+      writeFileSync(`${root}/.mains/sources/brief.pdf`, "source");
+      writeFileSync(`${root}/.hidden.txt`, "hidden");
+      writeFileSync(outside, "outside");
+      symlinkSync(outside, `${root}/linked.md`);
+
+      try {
+        const files = await runsService.listRunOutputFiles("run-outputs");
+
+        expect(files.map((file) => file.relativePath).sort()).toEqual([
+          "notes.md",
+          "outputs/chart.csv",
+        ]);
+        expect(files).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              fileName: "notes.md",
+              absolutePath: `${root}/notes.md`,
+              size: 7,
+            }),
+          ]),
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+        rmSync(outside, { force: true });
+      }
+    });
+
+    it("does not scan a Developer workspace or a missing run", async () => {
+      createWorkspace(db, { id: "ws-output" });
+      createRun(db, {
+        id: "run-developer-output",
+        workspaceId: "ws-output",
+        mode: "developer",
+      });
+
+      await expect(
+        runsService.listRunOutputFiles("run-developer-output"),
+      ).resolves.toEqual([]);
+      await expect(
+        runsService.listRunOutputFiles("missing-run"),
+      ).resolves.toEqual([]);
     });
   });
 
@@ -2292,6 +2413,68 @@ describe("runsService", () => {
       await flushBackground();
     });
 
+    it("continues with the latest turn model when the caller omits one", async () => {
+      createWorkspace(db, { id: "ws-model" });
+      createRun(db, {
+        id: "run-model",
+        accountId: "default",
+        workspaceId: "ws-model",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "run-model",
+        turnIndex: 0,
+        status: "completed",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "run-model",
+        turnIndex: 1,
+        status: "completed",
+        model: "gpt-5.6-terra",
+      });
+      const mockAdapter = setupContinueAdapter();
+
+      await runsService.continueRun({
+        runId: "run-model",
+        accountId: "default",
+        message: "keep going",
+      });
+
+      expect(mockAdapter.continueRun.mock.calls[0][0].model).toBe(
+        "gpt-5.6-terra",
+      );
+      await flushBackground();
+    });
+
+    it("lets an explicit continue model override the latest turn model", async () => {
+      createRun(db, {
+        id: "run-explicit-model",
+        accountId: "default",
+        mode: "work",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "run-explicit-model",
+        turnIndex: 0,
+        status: "completed",
+        model: "gpt-5.6-terra",
+      });
+      const mockAdapter = setupContinueAdapter();
+
+      await runsService.continueRun({
+        runId: "run-explicit-model",
+        accountId: "default",
+        message: "switch again",
+        model: "gpt-5.6-luna",
+      });
+
+      expect(mockAdapter.continueRun.mock.calls[0][0].model).toBe(
+        "gpt-5.6-luna",
+      );
+      await flushBackground();
+    });
+
     it("updates run status to running", async () => {
       createWorkspace(db, { id: "ws1" });
       createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1", status: "succeeded" });
@@ -2545,6 +2728,42 @@ describe("runsService", () => {
       const callArgs = mockAdapter.forkRun.mock.calls[0][0];
       expect(callArgs.sourceRunId).toBe("r1");
       expect(callArgs.message).toBe("fork");
+      await flushBackground();
+    });
+
+    it("forks from the source's latest turn model", async () => {
+      createRun(db, {
+        id: "source-model",
+        accountId: "default",
+        mode: "work",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "source-model",
+        turnIndex: 0,
+        status: "completed",
+        model: "gpt-5.6-sol",
+      });
+      createRunTurn(db, {
+        runId: "source-model",
+        turnIndex: 1,
+        status: "completed",
+        model: "gpt-5.6-terra",
+      });
+      const mockAdapter = setupForkAdapter();
+
+      const result = await runsService.forkRun({
+        sourceRunId: "source-model",
+        accountId: "default",
+        message: "branch here",
+      });
+
+      expect(mockAdapter.forkRun.mock.calls[0][0].model).toBe(
+        "gpt-5.6-terra",
+      );
+      expect((await runsRepo.findRunById(result.runId))?.model).toBe(
+        "gpt-5.6-terra",
+      );
       await flushBackground();
     });
 

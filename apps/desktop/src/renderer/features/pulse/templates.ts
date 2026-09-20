@@ -1,4 +1,39 @@
 import type { ModeId } from "../../../shared/modes";
+import type { IconComponent } from "@/lib/icon-registry";
+import {
+  BookOpen,
+  Box,
+  Branch,
+  Bug,
+  Calendar,
+  Chart,
+  Chat,
+  Clock,
+  Commit,
+  Danger,
+  Diff,
+  Document,
+  Feed,
+  Goal,
+  Notes,
+  Plan,
+  PullRequest,
+  Question,
+  Search,
+  Sparkles,
+  Sun as Sunrise,
+  Task,
+  Tools,
+  Workflow,
+  Write,
+} from "@/components/ui/icons";
+import {
+  Broadcast,
+  Compass,
+  Lightbulb,
+  Moon,
+  Sun,
+} from "@/components/ui/icons/space";
 
 export type PulseTemplateCategory =
   | "status-reports"
@@ -10,15 +45,27 @@ export type PulseTemplateCategory =
   | "briefings"
   | "research";
 
+/** A subset of `ICON_COLORS` names — resolved with `iconColorClass`. */
+export type PulseTemplateTint =
+  | "violet"
+  | "rose"
+  | "orange"
+  | "amber"
+  | "green"
+  | "sky"
+  | "olive";
+
 export interface PulseTemplate {
   id: string;
   category: PulseTemplateCategory;
   title: string;
-  /** One-line hint on the template card (picker UI). */
+  /** One-line hint under the title on the suggestion row. */
   description: string;
   /** Full instruction passed to the agent as the run goal. */
   prompt: string;
-  emoji: string;
+  /** Line icon for the suggestion row, drawn in `tint`. */
+  icon: IconComponent;
+  tint: PulseTemplateTint;
   /** Which experience modes offer this template. Absent = every mode. */
   modes?: ModeId[];
   defaultFrequency: "hourly" | "daily" | "weekdays" | "weekly";
@@ -56,7 +103,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Use git history for this workspace. Summarize work useful for a daily standup: commits since yesterday (subjects, authors, touched areas). Call out anything that looks risky (large diffs, migrations, lockfile-only changes). Keep bullets short; no speculation beyond what git shows.",
     modes: DEVELOPER,
-    emoji: "📰",
+    icon: Sunrise,
+    tint: "amber",
     defaultFrequency: "weekdays",
     defaultHour: 9,
     defaultMinute: 0,
@@ -70,7 +118,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "From git logs and repo state (last ~7 days), draft a weekly engineering update: shipped themes, recurring actors or modules, infra/tooling changes, and open risks. If conventional commits exist, lean on them; otherwise infer themes from messages and paths. End with 3 bullet \"asks\" or follow-ups grounded in the repo.",
     modes: DEVELOPER,
-    emoji: "📝",
+    icon: Notes,
+    tint: "olive",
     defaultFrequency: "weekly",
     defaultHour: 17,
     defaultMinute: 0,
@@ -85,7 +134,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Review recent integration activity via git (merge commits or main-line history over ~7 days). Group changes by subsystem or top-level folder. Highlight regressions-prone zones (auth, billing, migrations, CI configs). Mention dependency or lockfile churn explicitly. Stay factual to git; note when something needs human CI/issue tracker context.",
     modes: DEVELOPER,
-    emoji: "📒",
+    icon: PullRequest,
+    tint: "green",
     defaultFrequency: "weekly",
     defaultHour: 9,
     defaultMinute: 0,
@@ -100,7 +150,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Inspect git remotes/branches for this workspace. Summarize how the current branch relates to the default branch (ahead/behind if determinable locally, notable divergence). List files or dirs with the most churn vs default branch using git diff stats if available. Suggest a minimal merge/rebase or QA focus — reporting only unless the user expects edits.",
     modes: DEVELOPER,
-    emoji: "🔀",
+    icon: Diff,
+    tint: "sky",
     defaultFrequency: "weekdays",
     defaultHour: 8,
     defaultMinute: 30,
@@ -116,7 +167,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Draft release notes from recent merged work in git (since last tag if tags exist, otherwise last ~2 weeks). Group into Features, Fixes, Breaking changes, Internal. Use PR/commit titles when present; avoid inventing ticket URLs. Call out DB migrations, env vars, or config changes explicitly.",
     modes: DEVELOPER,
-    emoji: "📕",
+    icon: Write,
+    tint: "sky",
     defaultFrequency: "weekly",
     defaultHour: 10,
     defaultMinute: 0,
@@ -131,7 +183,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Build a pre-release checklist grounded in this repository: locate changelog/release docs, migration folders (e.g. Drizzle/prisma), feature-flag patterns, version files (package.json, Cargo.toml, etc.). Mark each item verify/not-applicable. Include suggested smoke tests inferred from README or scripts — no promises about external CI dashboards.",
     modes: DEVELOPER,
-    emoji: "✅",
+    icon: Task,
+    tint: "green",
     defaultFrequency: "weekly",
     defaultHour: 14,
     defaultMinute: 0,
@@ -146,7 +199,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Find CHANGELOG.md or similar. Propose new bullets for an [Unreleased] section based on git history since the last changelog header or tag. Follow the file’s existing style. Separate noteworthy vs internal-only lines; flag anything uncertain.",
     modes: DEVELOPER,
-    emoji: "🟡",
+    icon: Commit,
+    tint: "amber",
     defaultFrequency: "weekly",
     defaultHour: 16,
     defaultMinute: 0,
@@ -161,7 +215,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Scan for database migration folders and schema definitions (ORM configs, SQL migrations). Summarize pending migrations vs main branch if comparable. Flag risky patterns (data backfills, destructive drops, missing rollbacks). Do not apply migrations — analysis and checklist only.",
     modes: DEVELOPER,
-    emoji: "🗄️",
+    icon: Workflow,
+    tint: "olive",
     defaultFrequency: "weekly",
     defaultHour: 11,
     defaultMinute: 0,
@@ -178,7 +233,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Locate CI configs (.github/workflows, .gitlab-ci.yml, Azure/build YAML, etc.). Summarize workflows touching tests/build/deploy; flag brittle patterns (unpinned actions, missing caches, reliance on secrets without fallbacks, heavy integration suites on every push). Propose incremental hardening — you cannot query live CI status unless CLI/network is available.",
     modes: DEVELOPER,
-    emoji: "🛠️",
+    icon: Tools,
+    tint: "sky",
     defaultFrequency: "weekly",
     defaultHour: 8,
     defaultMinute: 0,
@@ -193,7 +249,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Using git diff vs the repo’s default integration branch when available (--stat and high-level paths), propose a concise QA brief: surfaces to exercise, edge cases suggested by changed files, and regression hotspots. If diff scope is huge, prioritize top directories and public APIs. Note limitations if branches aren’t fetched.",
     modes: DEVELOPER,
-    emoji: "📋",
+    icon: Danger,
+    tint: "orange",
     defaultFrequency: "daily",
     defaultHour: 9,
     defaultMinute: 30,
@@ -207,7 +264,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Read CONTRIBUTING.md, issue templates (.github/ISSUE_TEMPLATE), SECURITY.md if present. Produce a reusable bug triage worksheet: severity definitions aligned with this project, repro steps checklist, info to request from reporters, and suggested labels/categories inferred from docs — not from external trackers Pulse cannot see.",
     modes: DEVELOPER,
-    emoji: "💬",
+    icon: Bug,
+    tint: "rose",
     defaultFrequency: "weekdays",
     defaultHour: 10,
     defaultMinute: 0,
@@ -223,7 +281,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Inspect package manifests and lockfiles present (npm/yarn/pnpm, Cargo, go.mod, etc.). Report duplicate/conflicting dependency declarations, engines/node constraints, workspace boundaries if monorepo, and scripts that look outdated vs README. Avoid requiring network installs — flag places where maintainers should run `outdated` or audits manually.",
     modes: DEVELOPER,
-    emoji: "📦",
+    icon: Box,
+    tint: "amber",
     defaultFrequency: "weekly",
     defaultHour: 10,
     defaultMinute: 0,
@@ -238,7 +297,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Compare README (and docs/getting-started) with declared scripts and tooling configs (package.json scripts, Makefile, task runners). List mismatches: documented commands that don’t exist, missing prerequisites (Node version, DB), stale paths. Suggest minimal doc patches as bullet points.",
     modes: DEVELOPER,
-    emoji: "📖",
+    icon: BookOpen,
+    tint: "sky",
     defaultFrequency: "weekly",
     defaultHour: 15,
     defaultMinute: 0,
@@ -253,7 +313,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Using git branch listings (prefer read-only inspection), identify remote branches likely merged into the default branch or stale with no recent commits. Produce a table: branch name, last activity hint if visible, recommendation (candidate for deletion vs investigate). Explicitly do not delete branches — reporting only.",
     modes: DEVELOPER,
-    emoji: "🌿",
+    icon: Branch,
+    tint: "green",
     defaultFrequency: "weekly",
     defaultHour: 16,
     defaultMinute: 0,
@@ -268,7 +329,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Search the codebase for TODO, FIXME, HACK, XXX markers (respect .gitignore). Group by directory or package; estimate urgency from surrounding code comments only. Exclude vendor/build dirs if obvious. Summarize top 10 hotspots maintainers should schedule — no automatic edits.",
     modes: DEVELOPER,
-    emoji: "🎯",
+    icon: Goal,
+    tint: "violet",
     defaultFrequency: "weekdays",
     defaultHour: 16,
     defaultMinute: 30,
@@ -283,7 +345,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Review the project source documents available to you. Produce a short morning digest: what each document covers, anything that looks new or changed, and up to three items that deserve attention today. Write it as a polished summary document the user can skim in one minute.",
     modes: WORK,
-    emoji: "🗞️",
+    icon: Feed,
+    tint: "sky",
     defaultFrequency: "weekdays",
     defaultHour: 8,
     defaultMinute: 30,
@@ -297,7 +360,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Draft a weekly status report from the project source documents available to you. Structure it as: accomplishments, in-progress items, blockers, and next week's focus. Where the sources are thin, mark the section as needing the user's input rather than inventing content. Save the draft as a document the user can edit and share.",
     modes: WORK,
-    emoji: "📝",
+    icon: Notes,
+    tint: "olive",
     defaultFrequency: "weekly",
     defaultHour: 16,
     defaultMinute: 0,
@@ -312,7 +376,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Find meeting notes among the project source documents. Rewrite each set as structured minutes: attendees (if stated), decisions, action items with owners, and open questions. Keep the original files untouched; produce cleaned versions as new documents and list what you produced.",
     modes: WORK,
-    emoji: "🧹",
+    icon: Sparkles,
+    tint: "amber",
     defaultFrequency: "weekly",
     defaultHour: 17,
     defaultMinute: 0,
@@ -327,7 +392,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Review the documents you have produced in this project so far, together with the project sources. Report per deliverable: finished, in progress, or stale (untouched lately), and whether anything blocks completion. End with a short prioritized list of what to finish next.",
     modes: WORK,
-    emoji: "📊",
+    icon: Chart,
+    tint: "green",
     defaultFrequency: "weekly",
     defaultHour: 9,
     defaultMinute: 30,
@@ -342,7 +408,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Go through the project source documents and the documents you have produced here, and pull out every action item, promise, or follow-up you can find. Consolidate them into a single list with owner, what was asked for, and any date mentioned; mark the ones where the owner or date is unstated. Save it as one document, replacing your previous sweep if there is one, and name the most urgent few in your reply.",
     modes: WORK,
-    emoji: "📌",
+    icon: Task,
+    tint: "violet",
     defaultFrequency: "weekdays",
     defaultHour: 9,
     defaultMinute: 0,
@@ -356,7 +423,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Cross-read the project source documents against each other. Report figures, dates, names, or claims that disagree between documents, plus anything that reads as out of date. For each conflict, quote both sides and say which document appears more recent when that is knowable. Save the findings as a short discrepancy report — flag the conflicts, don't resolve them yourself.",
     modes: WORK,
-    emoji: "🔍",
+    icon: Search,
+    tint: "orange",
     defaultFrequency: "weekly",
     defaultHour: 11,
     defaultMinute: 0,
@@ -371,7 +439,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Condense the project source documents into a one-page brief for someone with no prior context: what this is, where it stands, what has been decided, and what is still open. No jargon, no filler, one page. Save it as a document and say in your reply what you had to leave out to make it fit.",
     modes: WORK,
-    emoji: "🗒️",
+    icon: Document,
+    tint: "sky",
     defaultFrequency: "weekly",
     defaultHour: 15,
     defaultMinute: 0,
@@ -386,7 +455,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Look at the open action items and recent meeting material in the project sources. Draft the follow-up messages they imply: one short, sendable draft per recipient, each with a subject line and a single clear ask. Never invent facts, names, or dates the material doesn't support — leave a bracketed blank instead. Save the drafts as one document.",
     modes: WORK,
-    emoji: "✉️",
+    icon: Chat,
+    tint: "olive",
     defaultFrequency: "weekdays",
     defaultHour: 16,
     defaultMinute: 30,
@@ -400,7 +470,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Maintain a plain-language glossary and FAQ for this project. Read the project source documents, add terms, acronyms, and recurring questions that aren't covered yet, and correct entries the material has outgrown. Edit the existing document in place if one exists; otherwise create it. Report what you added or changed rather than restating the whole file.",
     modes: WORK,
-    emoji: "📚",
+    icon: BookOpen,
+    tint: "green",
     defaultFrequency: "weekly",
     defaultHour: 10,
     defaultMinute: 0,
@@ -415,7 +486,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Turn the current project material into a presentation outline: a title, then slide-by-slide bullets with a one-line speaker note under each. Ten slides or fewer, conclusion first. Where the material can't support a slide the story needs, say so instead of filling it in. Save the outline as a document.",
     modes: WORK,
-    emoji: "🎞️",
+    icon: Plan,
+    tint: "amber",
     defaultFrequency: "weekly",
     defaultHour: 14,
     defaultMinute: 0,
@@ -431,7 +503,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Plan the week ahead. Read the project source documents and the documents you have produced here, then propose a prioritized plan: what to finish, what to start, what can wait, with a rough effort estimate for each. Mark anything that depends on someone else answering first. Save the plan as a document the user can edit, and keep the reply to the top three items.",
     modes: WORK,
-    emoji: "🗓️",
+    icon: Calendar,
+    tint: "sky",
     defaultFrequency: "weekly",
     defaultHour: 8,
     defaultMinute: 30,
@@ -446,7 +519,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Scan the project source documents for dates, deadlines, and time-bound promises. Build one chronological timeline of what falls due when, noting the document each came from, and flag everything inside the next two weeks. When a date is relative or ambiguous (\"next month\", \"after the review\"), record it as such rather than guessing a day. Save it as a document.",
     modes: WORK,
-    emoji: "⏳",
+    icon: Clock,
+    tint: "orange",
     defaultFrequency: "weekdays",
     defaultHour: 8,
     defaultMinute: 0,
@@ -460,7 +534,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Maintain a decision log for this project. Read the project source documents for decisions that have been made — what was decided, when, by whom, and the reasoning given — and append the ones the log doesn't already record. Keep each entry to a few lines and quote the sentence you took it from. Create the log if it doesn't exist yet.",
     modes: WORK,
-    emoji: "⚖️",
+    icon: Write,
+    tint: "olive",
     defaultFrequency: "weekly",
     defaultHour: 15,
     defaultMinute: 30,
@@ -476,7 +551,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Give a concise morning briefing based on the project source documents available to you: the key themes, anything time-sensitive, and up to three suggested focus points for today. Answer entirely in chat — do not create or modify any files.",
     modes: CHAT,
-    emoji: "☀️",
+    icon: Sun,
+    tint: "amber",
     defaultFrequency: "weekdays",
     defaultHour: 8,
     defaultMinute: 0,
@@ -490,7 +566,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Give an end-of-week recap based on the project source documents available to you: what the week's material covered, patterns worth noticing, and open questions going into next week. Answer entirely in chat — do not create or modify any files.",
     modes: CHAT,
-    emoji: "🌇",
+    icon: Notes,
+    tint: "sky",
     defaultFrequency: "weekly",
     defaultHour: 17,
     defaultMinute: 30,
@@ -505,7 +582,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Wind the day down. Based on the project source documents available to you, walk through what the day's material amounted to, what still looks unfinished, and the two or three things worth carrying into tomorrow. Keep it conversational and short — this is a check-in, not a report. Answer entirely in chat — do not create or modify any files.",
     modes: CHAT,
-    emoji: "🌙",
+    icon: Moon,
+    tint: "olive",
     defaultFrequency: "weekdays",
     defaultHour: 18,
     defaultMinute: 0,
@@ -519,7 +597,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Take the opposing view. Read the project source documents available to you, work out the plan or position they assume, and argue against it: the assumptions that could be wrong, the risks being waved away, and what would have to be true for this to fail. Be specific and point at the material rather than offering generic caution. Answer entirely in chat — do not create or modify any files.",
     modes: CHAT,
-    emoji: "🥊",
+    icon: Chat,
+    tint: "orange",
     defaultFrequency: "weekly",
     defaultHour: 11,
     defaultMinute: 0,
@@ -534,7 +613,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Ask one sharp question. Read the project source documents available to you and raise the single question the material most needs answered — the one whose answer would change what happens next. Add a short paragraph on why it matters, then stop and leave the user to think. Answer entirely in chat — do not create or modify any files.",
     modes: CHAT,
-    emoji: "❓",
+    icon: Question,
+    tint: "green",
     defaultFrequency: "weekdays",
     defaultHour: 13,
     defaultMinute: 0,
@@ -549,7 +629,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Work out the main topics, products, or organizations the project source documents revolve around. If you can reach the web, look for what is genuinely new about them and report the handful that matter, with links and one line each on why. If you have no web access, say so plainly and instead summarize what the material itself assumes about those topics. Answer entirely in chat — do not create or modify any files.",
     modes: CHAT,
-    emoji: "📡",
+    icon: Broadcast,
+    tint: "sky",
     defaultFrequency: "weekdays",
     defaultHour: 9,
     defaultMinute: 0,
@@ -563,7 +644,8 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Work out which market or field the project source documents place this work in. If you can reach the web, sweep for what has changed there lately — announcements, competitors, notable writing — and report only the few items that would actually affect this work, with links. Say plainly when you cannot reach the web. Answer entirely in chat — do not create or modify any files.",
     modes: CHAT,
-    emoji: "🧭",
+    icon: Compass,
+    tint: "green",
     defaultFrequency: "weekly",
     defaultHour: 9,
     defaultMinute: 30,
@@ -578,10 +660,18 @@ export const PULSE_TEMPLATES: PulseTemplate[] = [
     prompt:
       "Pick the densest or least approachable of the project source documents available to you and explain it as if the user were meeting this project for the first time: what it covers, why it exists, and the three things worth remembering. Plain language, no jargon, no summary of the summary. Answer entirely in chat — do not create or modify any files.",
     modes: CHAT,
-    emoji: "🧑‍🏫",
+    icon: Lightbulb,
+    tint: "amber",
     defaultFrequency: "weekly",
     defaultHour: 10,
     defaultMinute: 0,
     defaultDayOfWeek: 4,
   },
 ];
+
+/** The templates a mode offers — a template without `modes` is offered everywhere. */
+export function templatesForMode(mode: ModeId): PulseTemplate[] {
+  return PULSE_TEMPLATES.filter(
+    (template) => !template.modes || template.modes.includes(mode),
+  );
+}

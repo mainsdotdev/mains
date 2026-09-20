@@ -6,6 +6,7 @@ import {
   type ThemePreference,
 } from "@/lib/redux/slices/appSettingsSlice";
 import { readPersistedAppSetting } from "@/lib/redux/persist-boot";
+import { capabilities } from "@/lib/platform";
 
 /**
  * Theme preference is redux state (persisted with the rest of `appSettings`),
@@ -48,6 +49,31 @@ const resolveDarkMode = (
   systemDark: boolean,
 ): boolean => (theme === "system" ? systemDark : theme === "dark");
 
+// ─────────────────────────────────────────────────────────────
+// Native theme (main process)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * The `dark` class themes our content; what AppKit draws — the vibrancy behind
+ * transparent surfaces, menus, dialogs — follows main's `nativeTheme`. Hand it
+ * the same preference. Many components use this hook, so send only changes.
+ *
+ * Side effect worth knowing: `nativeTheme` also drives `prefers-color-scheme`
+ * here. That is only read for "system", and "system" is exactly when main
+ * leaves it tracking the OS.
+ */
+let sentThemeSource: ThemePreference | null = null;
+
+function syncNativeTheme(theme: ThemePreference): void {
+  // No preload (tests, a stubbed shell) means no main process to tell.
+  const setThemeSource = window.api?.app?.setThemeSource;
+  if (!capabilities.windowChrome || !setThemeSource || sentThemeSource === theme) return;
+  sentThemeSource = theme;
+  setThemeSource(theme).catch(() => {
+    sentThemeSource = null;
+  });
+}
+
 if (typeof window !== "undefined") {
   // Pre-paint seed. Whatever redux rehydrates a tick later agrees with this in
   // every case except a corrupt blob, where the effect below corrects it.
@@ -57,6 +83,7 @@ if (typeof window !== "undefined") {
     "system",
   );
   updateDOM(resolveDarkMode(bootTheme, systemPrefersDark));
+  syncNativeTheme(bootTheme);
 
   window
     .matchMedia("(prefers-color-scheme: dark)")
@@ -81,6 +108,10 @@ export function useDarkMode() {
   useEffect(() => {
     updateDOM(darkMode);
   }, [darkMode]);
+
+  useEffect(() => {
+    syncNativeTheme(theme);
+  }, [theme]);
 
   const setTheme = useCallback(
     (value: ThemePreference) => {

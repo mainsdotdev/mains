@@ -21,6 +21,12 @@ export interface ModalProps {
   className?: string;
   /** "dim" matches Alert/WizardModal; "media" darkens + blurs for image/screenshot previews. */
   backdrop?: "dim" | "media";
+  /** "panel" is the glass card; "bare" drops the fill, rim, radius, and shadow so media content floats on the backdrop. */
+  surface?: "panel" | "bare";
+  /** Vertical placement; command/search surfaces sit near the top edge. */
+  placement?: "center" | "top";
+  /** Command surfaces use a restrained entrance without spring overshoot. */
+  motion?: "default" | "command";
   /** Name the dialog when its content does not use ModalHeader. */
   "aria-label"?: string;
   /** Link the dialog to a visible title when its content does not use ModalHeader. */
@@ -45,6 +51,9 @@ export function Modal({
   children,
   className,
   backdrop = "dim",
+  surface = "panel",
+  placement = "center",
+  motion = "default",
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
@@ -66,12 +75,17 @@ export function Modal({
   if (!isOpen) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-(--z-modal) flex items-center justify-center p-4">
+    <div
+      className={cn(
+        "fixed inset-0 z-(--z-modal) flex justify-center p-4",
+        placement === "top" ? "items-start pt-[12vh]" : "items-center",
+      )}
+    >
       <div
         className={cn(
           "absolute inset-0",
           backdrop === "media"
-            ? "bg-black/70 backdrop-blur-sm"
+            ? "bg-black/80 "
             : "dark:bg-primary-950/60 bg-primary/80",
         )}
         role="presentation"
@@ -89,11 +103,16 @@ export function Modal({
         tabIndex={-1}
         onKeyDown={handleKeyDown}
         className={cn(
-          "relative flex flex-col glass-surface rounded-xl shadow-2xl overflow-hidden max-h-[92vh] focus:outline-none",
+          "relative flex flex-col max-h-[92vh] focus:outline-none",
+          surface === "panel" &&
+            "glass-surface rounded-xl shadow-2xl overflow-hidden",
           className,
         )}
         style={{
-          animation: "wizardModalIn 250ms cubic-bezier(0.22, 1, 0.36, 1) both",
+          animation:
+            motion === "command"
+              ? "commandMenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1) both"
+              : "wizardModalIn 20ms cubic-bezier(0.22, 1, 0.36, 1) both",
         }}
       >
         <ModalTitleContext.Provider value={generatedTitleId}>
@@ -122,7 +141,7 @@ export function ModalHeader({ onClose, children }: ModalHeaderProps) {
       <Button
         onClick={onClose}
         aria-label="Close"
-        className="ml-3 shrink-0 p-1.5 rounded-full glass-button hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
+        className="ml-3 shrink-0 p-1.5 rounded-full  hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
       >
         <Close className="size-4 text-primary-500" />
       </Button>
