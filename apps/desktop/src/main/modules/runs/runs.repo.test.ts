@@ -184,6 +184,64 @@ describe("runsRepo", () => {
 
       expect(result.map((run) => run.id)).toEqual(["match"]);
     });
+
+    it("hoists pinned chats above the newest ones", async () => {
+      createRun(db, {
+        id: "fresh",
+        mode: "work",
+        updatedAt: new Date("2026-09-20T12:00:00Z"),
+      });
+      createRun(db, {
+        id: "pinned-old",
+        mode: "work",
+        updatedAt: new Date("2026-01-01T00:00:00Z"),
+        pinnedAt: new Date("2026-09-01T00:00:00Z"),
+      });
+      createRun(db, {
+        id: "pinned-recent",
+        mode: "work",
+        updatedAt: new Date("2026-02-01T00:00:00Z"),
+        pinnedAt: new Date("2026-09-10T00:00:00Z"),
+      });
+
+      const result = await runsRepo.findRecentRunsByExperience({
+        accountId: "default",
+        providerId: "copilot_cli",
+        mode: "work",
+      });
+
+      // Pinned first, newest pin on top; everything else by activity.
+      expect(result.map((run) => run.id)).toEqual([
+        "pinned-recent",
+        "pinned-old",
+        "fresh",
+      ]);
+    });
+
+    it("keeps a pinned chat inside the limit window", async () => {
+      createRun(db, {
+        id: "pinned",
+        mode: "work",
+        updatedAt: new Date("2026-01-01T00:00:00Z"),
+        pinnedAt: new Date("2026-09-01T00:00:00Z"),
+      });
+      for (let i = 0; i < 3; i++) {
+        createRun(db, {
+          id: `noise-${i}`,
+          mode: "work",
+          updatedAt: new Date(`2026-09-0${i + 1}T00:00:00Z`),
+        });
+      }
+
+      const result = await runsRepo.findRecentRunsByExperience({
+        accountId: "default",
+        providerId: "copilot_cli",
+        mode: "work",
+        limit: 2,
+      });
+
+      expect(result[0].id).toBe("pinned");
+    });
   });
 
   describe("moveToCollection", () => {
@@ -208,6 +266,27 @@ describe("runsRepo", () => {
       const moved = await runsRepo.moveToCollection("run-1", "collection-1");
 
       expect(moved?.updatedAt).toEqual(before);
+    });
+  });
+
+  describe("setPinned", () => {
+    it("pins and releases a chat", async () => {
+      createRun(db, { id: "run-1", mode: "work" });
+      const pinnedAt = new Date("2026-09-20T09:00:00Z");
+
+      expect((await runsRepo.setPinned("run-1", pinnedAt))?.pinnedAt).toEqual(
+        pinnedAt,
+      );
+      expect((await runsRepo.setPinned("run-1", null))?.pinnedAt).toBeNull();
+    });
+
+    it("leaves updatedAt alone — pinning is not activity", async () => {
+      createRun(db, { id: "run-1", mode: "work" });
+      const before = (await runsRepo.findRunById("run-1"))?.updatedAt;
+
+      const pinned = await runsRepo.setPinned("run-1", new Date());
+
+      expect(pinned?.updatedAt).toEqual(before);
     });
   });
 

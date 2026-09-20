@@ -2,27 +2,26 @@ import { SidebarOpen, SidebarClose } from "@/components/ui/icons";
 import { Button } from "@/components/ui";
 import { useState, useEffect } from "react";
 import { useCapabilities } from "@/lib/platform";
-import { SpaceModePicker } from "@/features/workspace/components/space-mode-picker";
-import type { ModeId } from "../../../../shared/modes";
+import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SidebarToggleButtonProps {
   isOpen: boolean;
   onClick: () => void;
-  mode?: ModeId;
-  /** Active space's provider — the picker narrows its list with it. */
-  providerId?: string;
-  onModeChange?: (mode: ModeId) => void;
 }
 
 export function SidebarToggleButton({
   isOpen,
   onClick,
-  mode,
-  providerId,
-  onModeChange,
 }: SidebarToggleButtonProps) {
   const { windowChrome } = useCapabilities();
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const shortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.toggleSidebar"),
+  );
+  const tooltip = `${isOpen ? "Close" : "Open"} sidebar${
+    shortcut ? ` (${shortcut})` : ""
+  }`;
 
   useEffect(() => {
     return window.api.app.onFullscreenChange(setIsFullscreen);
@@ -39,9 +38,9 @@ export function SidebarToggleButton({
         left: reserveTrafficLights ? "5.5rem" : "0.75rem",
       }}
     >
-      <div className="rounded-full  glass-outline">
+      <div className="rounded-full ">
         <Button
-          tooltip={isOpen ? "Close sidebar" : "Open sidebar"}
+          tooltip={tooltip}
           tooltipPosition="right"
           onClick={onClick}
           className="rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 px-1.75 py-1.5 text-primary-700 dark:text-primary-300 transition-all duration-300 ease-out"
@@ -54,13 +53,6 @@ export function SidebarToggleButton({
           )}
         </Button>
       </div>
-      {mode && onModeChange && (
-        <SpaceModePicker
-          value={mode}
-          providerId={providerId}
-          onChange={onModeChange}
-        />
-      )}
     </div>
   );
 }

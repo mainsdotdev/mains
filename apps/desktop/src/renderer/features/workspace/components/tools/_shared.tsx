@@ -21,9 +21,8 @@ export type ToolStatus = "queued" | "running" | "done" | "error" | "canceled";
 
 /**
  * Status of the currently-rendered tool call. `ToolCallItem` provides the value
- * for a single call; `ToolSubGroupAccordion` provides the aggregate for a
- * collapsed multi-call group. Defaults to `done` so historical/legacy events
- * (no status) render exactly as before.
+ * for a single call. Defaults to `done` so historical/legacy events (no status)
+ * render exactly as before.
  */
 const ToolStatusContext = createContext<ToolStatus>("done");
 export const ToolStatusProvider = ToolStatusContext.Provider;
@@ -88,39 +87,6 @@ export function demoteStaleRunningTools(events: RunEvent[]): RunEvent[] {
     return e;
   });
   return changed ? next : events;
-}
-
-/**
- * Roll several tool calls up into one status for a group header. Severity order:
- * error > running > done > canceled. A group with any failure reads as failed;
- * any in-flight call reads as running; everything else settles to done.
- */
-export function aggregateToolStatus(events: RunEvent[]): ToolStatus {
-  let hasRunning = false;
-  let hasError = false;
-  let hasDone = false;
-  let hasCanceled = false;
-  for (const event of events) {
-    switch (eventToolStatus(event)) {
-      case "error":
-        hasError = true;
-        break;
-      case "running":
-      case "queued":
-        hasRunning = true;
-        break;
-      case "canceled":
-        hasCanceled = true;
-        break;
-      default:
-        hasDone = true;
-    }
-  }
-  if (hasError) return "error";
-  if (hasRunning) return "running";
-  if (hasDone) return "done";
-  if (hasCanceled) return "canceled";
-  return "done";
 }
 
 /**
@@ -196,7 +162,7 @@ export function toPresentTense(label: string): string {
  * being retyped in each of the thirty-odd tool displays.
  */
 export const TOOL_ROW_TEXT =
-  "text-primary-500 group-hover:text-primary-950 group-hover:dark:text-primary";
+  "text-primary-500 dark:text-primary-400 group-hover:text-primary-950 group-hover:dark:text-primary";
 
 /** Muted-until-hover text treatment for the icon/verb slots of a tool header. */
 const headerSlotClass =
@@ -341,7 +307,7 @@ export function ToolCollapse({
 }: {
   isExpanded: boolean;
   children: ReactNode;
-  /** Extra classes merged onto the outer grid (e.g. border/rounded for diff bodies). */
+  /** Extra classes applied inside the clipper (e.g. border/rounded for diffs). */
   className?: string;
 }) {
   // Do not mount expensive output bodies for the hundreds of historical rows
@@ -352,12 +318,12 @@ export function ToolCollapse({
 
   return (
     <div
-      className={`grid transition-all duration-200 ease-out ${
+      className={`grid overflow-hidden transition-all duration-200 ease-out ${
         isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-      } ${className}`}
+      }`}
     >
       <div className="min-h-0 overflow-hidden">
-        {hasOpened ? children : null}
+        <div className={className}>{hasOpened ? children : null}</div>
       </div>
     </div>
   );

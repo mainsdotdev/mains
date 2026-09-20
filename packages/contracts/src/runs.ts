@@ -88,7 +88,8 @@ export type RunArtifactKind =
   | "result"
   | "prompt_suggestion"
   | "image"
-  | "document";
+  | "document"
+  | "visualization";
 
 /**
  * `runArtifacts:getByRun` row. `metadata.kind` is the transcript's real
@@ -142,6 +143,18 @@ export interface RunTextFile {
   /** Path relative to the run directory, useful for resolving another local link. */
   relativePath: string;
   content: string;
+}
+
+/**
+ * One user-facing file found in a Work/Chat run's managed execution directory.
+ * Internal context snapshots and hidden files are excluded by the backend.
+ */
+export interface RunOutputFile {
+  fileName: string;
+  relativePath: string;
+  absolutePath: string;
+  size: number;
+  modifiedAt: number;
 }
 
 /** `space:getAll` row — a run's home: it pins the provider and the mode. */

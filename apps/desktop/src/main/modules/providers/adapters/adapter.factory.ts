@@ -4,7 +4,25 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ProviderResponse } from "../providers.dto";
-import type { WorkRunAdapter, AdapterConfig, CopilotAdapterConfig, ClaudeCodeAdapterConfig, CodexAdapterConfig, CursorAdapterConfig, ModelInfo, CommandInfo, SkillInfo, PluginListResponse, PluginDetail, PluginScope, AccountInfo } from "../../../../shared/adapter.types";
+import type {
+  WorkRunAdapter,
+  AdapterConfig,
+  CopilotAdapterConfig,
+  ClaudeCodeAdapterConfig,
+  CodexAdapterConfig,
+  CursorAdapterConfig,
+  ModelInfo,
+  CommandInfo,
+  SkillInfo,
+  PluginListResponse,
+  PluginDetail,
+  PluginScope,
+  AccountInfo,
+  ConsumeRateLimitResetCreditParams,
+  ConsumeRateLimitResetCreditOutcome,
+  ConnectorOAuthStartResult,
+  ConnectorOverview,
+} from "../../../../shared/adapter.types";
 import { createClaudeDriver } from "./claude.driver";
 import { createCodexDriver } from "./codex.driver";
 import { createCopilotDriver } from "./copilot.driver";
@@ -107,6 +125,7 @@ function pluginListToSkillInfo(pluginList: PluginListResponse): SkillInfo[] {
 
       skills.push({
         name: plugin.name,
+        mentionPath: `plugin://${plugin.id}`,
         description:
           plugin.interface?.shortDescription ||
           plugin.interface?.longDescription ||
@@ -440,12 +459,49 @@ export async function updatePluginForProvider(provider: ProviderResponse, plugin
   return adapter.updatePlugin(pluginId);
 }
 
+export async function listConnectorsForProvider(
+  provider: ProviderResponse,
+  forceRefresh = false,
+): Promise<ConnectorOverview> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.listConnectors) {
+    return { supported: false, apps: [], mcpServers: [] };
+  }
+  return adapter.listConnectors(forceRefresh);
+}
+
+export async function startConnectorOAuthForProvider(
+  provider: ProviderResponse,
+  serverName: string,
+): Promise<ConnectorOAuthStartResult> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.startConnectorOAuth) {
+    throw new Error(
+      `Provider "${provider.displayName}" does not support connector OAuth.`,
+    );
+  }
+  return adapter.startConnectorOAuth(serverName);
+}
+
 export async function getRateLimitsForProvider(
   provider: ProviderResponse,
 ): Promise<import("../../../../shared/adapter.types").RateLimitInfo | null> {
   const adapter = createWorkAdapter(provider);
   if (!adapter.getRateLimits) return null;
   return adapter.getRateLimits();
+}
+
+export async function consumeRateLimitResetCreditForProvider(
+  provider: ProviderResponse,
+  params: ConsumeRateLimitResetCreditParams,
+): Promise<ConsumeRateLimitResetCreditOutcome> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.consumeRateLimitResetCredit) {
+    throw new Error(
+      `Provider "${provider.displayName}" does not support rate-limit resets.`,
+    );
+  }
+  return adapter.consumeRateLimitResetCredit(params);
 }
 
 type GoalInfo = import("../../../../shared/adapter.types").GoalInfo;

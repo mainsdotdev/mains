@@ -17,6 +17,11 @@ import type {
   ServiceResponse,
   WriteFileTextResponse,
 } from "@/features/workspace/types/file-explorer";
+import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
+import {
+  keyboardShortcutLabel,
+  matchesKeyboardShortcut,
+} from "../../../../shared/keyboard-shortcuts";
 
 const AUTOSAVE_DELAY_MS = 750;
 // Must match the optimistic-concurrency error thrown by fileExplorerService.
@@ -74,6 +79,10 @@ export function CodeViewer({
   // Saves are sequenced through this promise chain; each save reads the
   // latest draft when it runs, so a slow write can never clobber a newer one.
   const chainRef = useRef<Promise<void>>(Promise.resolve());
+  const saveShortcut = useKeyboardShortcutBinding("editor.save");
+  const addSelectionShortcut = useKeyboardShortcutBinding(
+    "editor.addSelection",
+  );
 
   // The editor caches its working document by cacheKey and substitutes the
   // cached text on re-render — this is what keeps the live buffer (and the
@@ -193,7 +202,7 @@ export function CodeViewer({
   );
 
   // The live selection-action context while the widget is visible — lets the
-  // ⌘L shortcut reuse the same action as clicking the button.
+  // The configured editor shortcut reuses the same action as the button.
   const selectionActionRef = useRef<SelectionActionCtx | null>(null);
 
   // Without a path the selection has no resolvable reference — the agent would
@@ -264,23 +273,26 @@ export function CodeViewer({
         label.textContent = "Add to Chat";
         button.appendChild(label);
 
-        const kbd = document.createElement("span");
-        kbd.textContent = "⌘L";
-        Object.assign(kbd.style, {
-          padding: "3px 5px",
-          borderRadius: "6px",
-          background: "color-mix(in lab, currentColor 12%, transparent)",
-          color: "color-mix(in lab, currentColor 65%, transparent)",
-          font: "500 11px ui-sans-serif, system-ui, sans-serif",
-          lineHeight: "1",
-        } satisfies Partial<CSSStyleDeclaration>);
-        button.appendChild(kbd);
+        const shortcutLabel = keyboardShortcutLabel(addSelectionShortcut);
+        if (shortcutLabel) {
+          const kbd = document.createElement("span");
+          kbd.textContent = shortcutLabel;
+          Object.assign(kbd.style, {
+            padding: "3px 5px",
+            borderRadius: "6px",
+            background: "color-mix(in lab, currentColor 12%, transparent)",
+            color: "color-mix(in lab, currentColor 65%, transparent)",
+            font: "500 11px ui-sans-serif, system-ui, sans-serif",
+            lineHeight: "1",
+          } satisfies Partial<CSSStyleDeclaration>);
+          button.appendChild(kbd);
+        }
 
         button.onclick = () => addSelectionToChat(ctx);
         return button;
       },
     }),
-    [schedule, addSelectionToChat, filePath],
+    [addSelectionShortcut, schedule, addSelectionToChat, filePath],
   );
 
   const handleReload = useCallback(async () => {
@@ -318,11 +330,13 @@ export function CodeViewer({
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "s") {
+      if (matchesKeyboardShortcut(event.nativeEvent, saveShortcut)) {
         event.preventDefault();
         void flush();
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "l") {
+      if (
+        matchesKeyboardShortcut(event.nativeEvent, addSelectionShortcut)
+      ) {
         const ctx = selectionActionRef.current;
         if (ctx) {
           event.preventDefault();
@@ -330,7 +344,7 @@ export function CodeViewer({
         }
       }
     },
-    [flush, addSelectionToChat],
+    [addSelectionShortcut, flush, addSelectionToChat, saveShortcut],
   );
 
   return (

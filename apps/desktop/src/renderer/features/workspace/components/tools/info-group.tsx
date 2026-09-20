@@ -1,10 +1,17 @@
-import { memo, useMemo, useState, useEffect, useRef, type MouseEvent } from "react";
+import {
+  memo,
+  useMemo,
+  useState,
+  useEffect,
+  useRef,
+  type MouseEvent,
+} from "react";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import type { EventGroup } from "../../lib/group-events";
 import { Code } from "@/components/ui/icons/space";
 import {
   Picture,
-  Document,
+  FileIconComponent,
   Codex,
   External,
   ArrowUp,
@@ -13,20 +20,17 @@ import {
 } from "@/components/ui/icons";
 import { ProviderIcon } from "../provider-icon";
 import { ImagePreviewModal } from "../image-preview-modal";
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuItem,
-  Text,
-} from "@/components/ui";
+import { Button, DropdownMenu, DropdownMenuItem, Text } from "@/components/ui";
 import { useLazyGetAppsForFileQuery } from "@/lib/redux/api";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useDarkMode } from "@/hooks/use-dark-mode";
 import { spaceUserMessageBackground } from "@/lib/space-themes";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
+import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useCapabilities } from "@/lib/platform";
 import { DocumentArtifact } from "@/features/workspace/components/tools/document-artifact";
 import { ImageGenerationLoader } from "@/features/workspace/components/tools/image-generation-loader";
+import { VisualizationArtifact } from "@/features/workspace/components/tools/visualization-artifact";
 import { classifyDocType, type DocType } from "@/lib/document-viewer";
 import { useSmoothText } from "../../hooks/use-smooth-text";
 import {
@@ -77,7 +81,7 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
     name: string;
     dataUrl: string;
   } | null>(null);
-    // User bubble is tinted from the space theme at runtime, so it can't be a
+  // User bubble is tinted from the space theme at runtime, so it can't be a
   // static Tailwind class; null keeps the neutral fallback classes.
   const { activeSpace } = useActiveSpace();
   const { darkMode } = useDarkMode();
@@ -101,7 +105,10 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
       title: string;
     }>;
     const files = (
-      (event.metadata?.files ?? []) as Array<{ path: string }>
+      (event.metadata?.files ?? []) as Array<{
+        path: string;
+        type?: "file" | "directory";
+      }>
     ).map((f) => {
       const lastSlash = f.path.lastIndexOf("/");
       const fileName = f.path.substring(lastSlash + 1);
@@ -111,6 +118,7 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
       return {
         fullPath: f.path,
         basename: fileName,
+        isDirectory: f.type === "directory",
         displayName: parent ? `${parent}/${fileName}` : fileName,
       };
     });
@@ -121,6 +129,8 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
       dataUrl?: string;
       captureName?: string;
       sourcePath?: string;
+      /** On-disk copy of an uploaded document (absent on older prompts). */
+      path?: string;
     }>;
     const skills = (event.metadata?.skills ?? []) as PromptMarkdownSkill[];
 
@@ -138,12 +148,14 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
       return (
         <div className="w-full overflow-hidden">
           <div className="w-full py-2 flex justify-end">
-          <div
+            <div
               className="px-3.5 py-2 rounded-2xl bg-primary-50 dark:bg-primary/5"
               style={
                 userBubbleBg ? { backgroundColor: userBubbleBg } : undefined
               }
-            >              <div className="px-4 py-2 rounded-2xl bg-accent/10 dark:bg-accent/10 border border-accent/60 dark:border-accent/10">
+            >
+              {" "}
+              <div className="px-4 py-2 rounded-2xl bg-accent/10 dark:bg-accent/10 border border-accent/60 dark:border-accent/10">
                 <div className="flex items-center gap-2 text-accent">
                   <Codex className="size-3.5 shrink-0" />
                   <div className="flex items-center gap-1.5">
@@ -167,17 +179,68 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
     const externalFiles = files.filter(
       (file) => !promptMessageMentionsFile(message, file.fullPath),
     );
+    const imageAttachments = attachments.filter((att) => att.type === "image");
+    const documentAttachments = attachments.filter(
+      (att) => att.type !== "image",
+    );
     return (
       <div className="w-full overflow-hidden">
         <div className="w-full py-2 flex justify-end">
           <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-2">
-            <div className="min-w-0 max-w-full px-3.5 py-2 rounded-2xl bg-primary-50 dark:bg-primary/5">
-              <div className="prose prose-sm dark:prose-invert max-w-none text-left">
-                <PromptMarkdown skills={skills} files={files}>
-                  {message}
-                </PromptMarkdown>
+            {imageAttachments.length > 0 && (
+              <div className="flex flex-wrap justify-end gap-2">
+                {imageAttachments.map((att, index) => {
+                  const imgSrc =
+                    att.dataUrl ||
+                    (att.captureName
+                      ? `mains-capture://cap/${att.captureName}`
+                      : undefined);
+                  return imgSrc ? (
+                    <Button
+                      key={`${att.name}-${index}`}
+                      type="button"
+                      onClick={() =>
+                        setPreviewAtt({ name: att.name, dataUrl: imgSrc })
+                      }
+                      className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary-400"
+                      title={`Click to preview · ${att.name}`}
+                      aria-label={`Preview ${att.name}`}
+                    >
+                      <img
+                        src={imgSrc}
+                        alt={att.name}
+                        draggable={false}
+                        className="size-full object-cover"
+                      />
+                    </Button>
+                  ) : (
+                    <div
+                      key={`${att.name}-${index}`}
+                      className="flex size-20 shrink-0 items-center justify-center rounded-2xl border border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900"
+                      title={att.name}
+                    >
+                      <Picture className="size-5 text-primary-500" />
+                    </div>
+                  );
+                })}
               </div>
-            </div>
+            )}
+            {documentAttachments.map((att, index) => (
+              <AttachmentDocumentCard
+                key={`${att.name}-${index}`}
+                name={att.name}
+                filePath={att.path}
+              />
+            ))}
+            {message && (
+              <div className="min-w-0 max-w-full px-3.5 py-2 rounded-2xl bg-primary-50 dark:bg-primary/5">
+                <div className="prose prose-sm dark:prose-invert max-w-none text-left">
+                  <PromptMarkdown skills={skills} files={files}>
+                    {message}
+                  </PromptMarkdown>
+                </div>
+              </div>
+            )}
             {previewAtt && (
               <ImagePreviewModal
                 name={previewAtt.name}
@@ -186,7 +249,6 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
               />
             )}
             {(externalFiles.length > 0 ||
-              attachments.length > 0 ||
               issues.length > 0 ||
               signals.length > 0) && (
               <div className="flex flex-wrap gap-1.5 justify-end">
@@ -231,47 +293,6 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
                     </Text>
                   </div>
                 ))}
-                {attachments.map((att) => {
-                  const imgSrc =
-                    att.dataUrl ||
-                    (att.captureName
-                      ? `mains-capture://cap/${att.captureName}`
-                      : undefined);
-                  return att.type === "image" && imgSrc ? (
-                    <Button
-                      key={att.name}
-                      onClick={() =>
-                        setPreviewAtt({ name: att.name, dataUrl: imgSrc })
-                      }
-                      className="flex items-center gap-1.5 pl-2 pr-2 py-1 rounded-xl bg-primary-200/40 dark:bg-primary-200/20 text-xs text-primary-800 dark:text-primary-200 hover:bg-primary-100 dark:hover:bg-primary-700/30 transition-colors cursor-pointer"
-                      title={`Click to preview · ${att.name}`}
-                    >
-                      <img
-                        src={imgSrc}
-                        alt={att.name}
-                        className="h-6 w-6 rounded-lg object-cover  border border-primary-200/60 dark:border-primary-700/40"
-                      />
-                      <Text as="span" size="inherit" tone="muted" className="truncate max-w-40">
-                        {att.name}
-                      </Text>
-                    </Button>
-                  ) : (
-                    <div
-                      key={att.name}
-                      className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-primary-50 dark:bg-primary-700/10 text-xs"
-                      title={att.name}
-                    >
-                      {att.type === "image" ? (
-                        <Picture className="size-3 dark:text-primary-300 text-primary-700" />
-                      ) : (
-                        <Document className="size-3 dark:text-primary-300 text-primary-700" />
-                      )}
-                      <Text as="span" size="inherit" tone="muted">
-                        {att.name}
-                      </Text>
-                    </div>
-                  );
-                })}
               </div>
             )}
           </div>
@@ -289,9 +310,7 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
     // `groupEvents`) — a single image keeps the file-card layout, several
     // render side by side as a gallery of tiles.
     const images = group.events
-      .filter(
-        (e) => e.type === "artifact" && e.metadata?.kind === "image",
-      )
+      .filter((e) => e.type === "artifact" && e.metadata?.kind === "image")
       .map((e) => {
         const absPath = (e.metadata?.path as string | undefined) ?? "";
         return {
@@ -341,7 +360,10 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
     );
   }
 
-  if (event.type === "artifact" && event.metadata?.kind === "image_generation") {
+  if (
+    event.type === "artifact" &&
+    event.metadata?.kind === "image_generation"
+  ) {
     return <ImageGenerationLoader startedAt={event.timestamp} />;
   }
 
@@ -353,12 +375,31 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
       absPath.split("/").pop() ??
       "document";
     const docType =
-      (event.metadata?.docType as DocType | undefined) ?? classifyDocType(fileName);
+      (event.metadata?.docType as DocType | undefined) ??
+      classifyDocType(fileName);
     if (!docType) return null;
     return (
       <div className="overflow-hidden">
-        <DocumentArtifact absPath={absPath} fileName={fileName} docType={docType} />
+        <DocumentArtifact
+          absPath={absPath}
+          fileName={fileName}
+          docType={docType}
+        />
       </div>
+    );
+  }
+
+  if (event.type === "artifact" && event.metadata?.kind === "visualization") {
+    const absPath = (event.metadata?.path as string | undefined) ?? "";
+    if (!absPath) return null;
+    const title = event.metadata?.title as string | undefined;
+    const mode = event.metadata?.mode === "wide" ? "wide" : undefined;
+    return (
+      <VisualizationArtifact
+        absPath={absPath}
+        title={title}
+        mode={mode}
+      />
     );
   }
 
@@ -381,7 +422,11 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
   // it does not wear the same recessive tone as the rest of the system chrome.
   const logLevel = event.type === "log" ? event.metadata?.level : undefined;
   const tone =
-    logLevel === "error" ? "danger" : logLevel === "warn" ? "warning" : "subtle";
+    logLevel === "error"
+      ? "danger"
+      : logLevel === "warn"
+        ? "warning"
+        : "subtle";
 
   return (
     <div className="py-1.5 flex items-start gap-2">
@@ -392,17 +437,75 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
   );
 }
 
+/**
+ * A document attached to a sent prompt: type icon, file name, and type label.
+ * Opens in the document viewer when the prompt recorded its on-disk copy and
+ * the viewer can render the format.
+ */
+function AttachmentDocumentCard({
+  name,
+  filePath,
+}: {
+  name: string;
+  filePath?: string;
+}) {
+  const { open } = useDocumentViewer();
+  const dot = name.lastIndexOf(".");
+  const extension = dot > 0 ? name.slice(dot + 1) : undefined;
+  const docType = filePath ? classifyDocType(name) : null;
+  const className =
+    "flex w-60 max-w-full glass-card items-center gap-3 rounded-2xl  p-1.5 pr-3  ";
+  const content = (
+    <>
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary-100 dark:bg-primary-950">
+        <FileIconComponent
+          fileName={name}
+          extension={extension}
+          className="size-5"
+        />
+      </div>
+      <div className="flex min-w-0 flex-col text-left">
+        <Text as="span" size="sm" tone="contrast" className="truncate">
+          {name}
+        </Text>
+        <Text as="span" size="xs" tone="subtle">
+          {extension ? extension.toUpperCase() : "Document"}
+        </Text>
+      </div>
+    </>
+  );
+
+  if (!filePath || !docType) {
+    return (
+      <div className={className} title={name}>
+        {content}
+      </div>
+    );
+  }
+  return (
+    <Button
+      type="button"
+      onClick={() => open({ path: filePath, fileName: name, docType })}
+      className={`${className} cursor-pointer outline-none transition-colors hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-primary-400 dark:hover:bg-primary-800/60`}
+      title={`Open ${name}`}
+      aria-label={`Open ${name}`}
+    >
+      {content}
+    </Button>
+  );
+}
+
 function ImageArtifact({
   absPath,
   fileName,
   onPreview,
-  variant = "card",
+  variant = "preview",
 }: {
   absPath: string;
   fileName: string;
   onPreview: (att: { name: string; dataUrl: string }) => void;
-  /** `card` = full-width file row; `tile` = compact gallery cell for multi-image groups. */
-  variant?: "card" | "tile";
+  /** `preview` = open image; `tile` = compact gallery cell for multi-image groups. */
+  variant?: "preview" | "tile";
 }) {
   const url = useLocalImageUrl(absPath);
   const { revealInFolder } = useCapabilities();
@@ -412,10 +515,6 @@ function ImageArtifact({
   const openBtnRef = useRef<HTMLButtonElement>(null);
   const [fetchApps, { data: handlerApps = [], isFetching }] =
     useLazyGetAppsForFileQuery();
-
-  const ext = fileName.includes(".")
-    ? (fileName.split(".").pop() ?? "").toUpperCase()
-    : "";
 
   useEffect(() => {
     if (menuOpen) {
@@ -526,7 +625,12 @@ function ImageArtifact({
           </div>
         </Button>
         <div className="absolute inset-x-0 bottom-0 px-2.5 pb-2 pt-6 bg-linear-to-t from-black/60 to-transparent opacity-0 group-hover/image-tile:opacity-100 transition-opacity pointer-events-none">
-          <Text as="span" size="xs" tone="inherit" className="block text-white truncate">
+          <Text
+            as="span"
+            size="xs"
+            tone="inherit"
+            className="block text-white truncate"
+          >
             {fileName}
           </Text>
         </div>
@@ -548,41 +652,31 @@ function ImageArtifact({
 
   return (
     <div
-      className="relative flex items-center gap-3 w-full max-w-xl rounded-2xl bg-primary-50 dark:bg-primary-900/85 px-3 py-2.5 shadow-sm"
+      className="group/image-preview relative my-4 w-fit max-w-full"
       title={absPath}
     >
       <Button
         type="button"
         onClick={openInMains}
-        className="shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary-400 overflow-hidden"
+        className="block max-w-full overflow-hidden rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
         aria-label={`Preview ${fileName} in Mains`}
       >
-        <div className="size-10 rounded-lg border border-primary-700/40 dark:border-primary-600/30 bg-primary-900 dark:bg-primary-950/80 flex items-center justify-center overflow-hidden">
+        <div className="flex max-h-144 max-w-[24rem] items-center justify-center overflow-hidden">
           {url && !thumbFailed ? (
             <img
               src={url}
-              alt=""
-              className="size-full object-cover"
+              alt={fileName}
+              className="block h-auto max-h-144 w-auto max-w-full object-contain"
               loading="lazy"
               draggable={false}
               onError={() => setThumbFailed(true)}
             />
           ) : (
-            <Picture className="size-5 text-primary-100 dark:text-primary-200" />
+            <div className="flex h-44 w-72 items-center justify-center rounded-2xl bg-primary-100/70 dark:bg-primary-900/70">
+              <Picture className="size-7 text-primary-500" />
+            </div>
           )}
         </div>
-      </Button>
-      <Button
-        type="button"
-        onClick={openInMains}
-        className="flex-1 min-w-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary-400 rounded-md"
-      >
-        <Text as="div" tone="contrast" weight="medium" className="truncate">
-          {fileName}
-        </Text>
-        <Text as="div" size="xs" tone="subtle" className="mt-0.5">
-          Image{ext ? ` · ${ext}` : ""}
-        </Text>
       </Button>
       <Button
         ref={openBtnRef}
@@ -590,7 +684,8 @@ function ImageArtifact({
         onClick={openMenu}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-medium text-primary-800 dark:text-primary-200  bg-primary-100/80 dark:bg-primary-800/40 hover:bg-primary-200/60 dark:hover:bg-primary-700/35 transition-colors cursor-pointer"
+        aria-label={`Open actions for ${fileName}`}
+        className="absolute right-2 top-2 flex items-center gap-1 rounded-lg glass-outline bg-primary-950/20 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 backdrop-blur-sm transition-opacity hover:bg-primary-950/50 group-hover/image-preview:opacity-100 group-focus-within/image-preview:opacity-100 focus-visible:opacity-100"
       >
         Open
         <ArrowUp className="size-3.5  rotate-180" />

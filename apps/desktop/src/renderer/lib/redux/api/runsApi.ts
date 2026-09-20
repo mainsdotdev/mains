@@ -1,6 +1,9 @@
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { ModeId } from "../../../../shared/modes";
+import type { RunOutputFile } from "@mains/contracts/runs";
+
+export type { RunOutputFile } from "@mains/contracts/runs";
 
 export type RunStatus =
   | "queued"
@@ -21,7 +24,12 @@ export type RunArtifactKind =
   | "file"
   | "log"
   | "report"
-  | "command_result";
+  | "command_result"
+  | "result"
+  | "prompt_suggestion"
+  | "image"
+  | "document"
+  | "visualization";
 
 export interface Run {
   id: string;
@@ -44,6 +52,12 @@ export interface Run {
   lastError: string | null;
   sessionId: string | null;
   isArchived: boolean;
+  /**
+   * When the chat was pinned to the top of the sidebar; null when it is not.
+   * Typed as the rest of the run's timestamps are — see `toEpochMs` in
+   * chat-item.tsx for what actually arrives over each transport.
+   */
+  pinnedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -185,7 +199,41 @@ export interface RunTurn {
   model: string | null;
   modelUsage: Record<string, ModelUsageEntry> | null;
   metadata: Record<string, unknown> | null;
+  /** What this turn did to the working tree; null when it changed nothing. */
+  changes?: RunTurnChanges | null;
   createdAt: number;
+}
+
+export type TurnFileChangeStatus = "added" | "modified" | "deleted" | "renamed";
+
+export interface TurnFileChange {
+  path: string;
+  /** Path before the move — set only when `status` is "renamed". */
+  oldPath?: string;
+  status: TurnFileChangeStatus;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+/** A turn's changes as the transcript card shows them (see CONTEXT.md "turn changes"). */
+export interface RunTurnChanges {
+  id: string;
+  files: TurnFileChange[];
+  additions: number;
+  deletions: number;
+  /** Legacy records may have an incomplete patch; new records are stored in full. */
+  truncated: boolean;
+  undoneAt: number | null;
+}
+
+export interface RunTurnChangesDiff extends RunTurnChanges {
+  diffText: string;
+}
+
+export interface RunTurnRef {
+  runId: string;
+  turnId: number;
 }
 
 export const runsApi = baseApi.injectEndpoints({
@@ -234,6 +282,16 @@ export const runsApi = baseApi.injectEndpoints({
         args: [id],
       }),
       providesTags: (_result, _error, id) => [{ type: "Runs", id }],
+    }),
+
+    listRunOutputFiles: builder.query<RunOutputFile[], string>({
+      query: (runId) => ({
+        handler: CHANNELS.runs.listOutputFiles,
+        args: [runId],
+      }),
+      providesTags: (_result, _error, runId) => [
+        { type: "RunOutputs", id: runId },
+      ],
     }),
 
     getRunsByAccount: builder.query<
@@ -307,6 +365,17 @@ export const runsApi = baseApi.injectEndpoints({
         args: [payload],
       }),
       invalidatesTags: ["Runs", "RunsRecent", "Collections"],
+    }),
+
+    setRunPinned: builder.mutation<
+      Run,
+      { runId: string; accountId: string; pinned: boolean }
+    >({
+      query: (payload) => ({
+        handler: CHANNELS.runs.setPinned,
+        args: [payload],
+      }),
+      invalidatesTags: ["Runs", "RunsRecent"],
     }),
 
     startRun: builder.mutation<Run, string>({
@@ -455,7 +524,6 @@ export const runsApi = baseApi.injectEndpoints({
           title?: string;
           instructions?: string;
         };
-        delivery?: "inline" | "detached";
         model?: string;
         systemPrompt?: string;
         configSnapshot?: Record<string, unknown>;
@@ -479,6 +547,26 @@ export const runsApi = baseApi.injectEndpoints({
       ],
     }),
 
+    getRunTurnChangesDiff: builder.query<RunTurnChangesDiff | null, RunTurnRef>({
+      query: ({ runId, turnId }) => ({
+        handler: CHANNELS.runTurns.getChangesDiff,
+        args: [runId, turnId],
+      }),
+      providesTags: (_result, _error, { runId }) => [
+        { type: "RunTurns", id: runId },
+      ],
+    }),
+
+    undoRunTurnChanges: builder.mutation<RunTurnChanges, RunTurnRef>({
+      query: ({ runId, turnId }) => ({
+        handler: CHANNELS.runTurns.undoChanges,
+        args: [runId, turnId],
+      }),
+      invalidatesTags: (_result, _error, { runId }) => [
+        { type: "RunTurns", id: runId },
+      ],
+    }),
+
   }),
 });
 
@@ -490,6 +578,7 @@ export const {
   useListRecentRunsQuery,
   useGetRunByIdQuery,
   useLazyGetRunByIdQuery,
+  useListRunOutputFilesQuery,
   useGetRunsByAccountQuery,
   useLazyGetRunsByAccountQuery,
   useGetRunsByWorkspaceQuery,
@@ -499,6 +588,7 @@ export const {
   useCreateRunMutation,
   useUpdateRunMutation,
   useMoveRunToCollectionMutation,
+  useSetRunPinnedMutation,
   useStartRunMutation,
   useCompleteRunMutation,
   useFailRunMutation,
@@ -517,5 +607,7 @@ export const {
   useRemoveRunArtifactMutation,
   useGetRunTurnsQuery,
   useLazyGetRunTurnsQuery,
+  useGetRunTurnChangesDiffQuery,
+  useUndoRunTurnChangesMutation,
   useExecuteReviewMutation,
 } = runsApi;

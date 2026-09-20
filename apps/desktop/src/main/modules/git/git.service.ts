@@ -3,6 +3,14 @@ import { app } from "electron";
 import path from "path";
 import fs from "fs";
 import { captureDiffSnapshot, openGit, type DiffSnapshot } from "./git-snapshot";
+import {
+  applyPatch,
+  canApplyPatch,
+  diffTrees,
+  snapshotWorkingTree,
+  type ApplyPatchOptions,
+  type TreeDiff,
+} from "./git-tree-snapshot";
 
 // ─────────────────────────────────────────────────────────────
 // git service — main-process-internal deep module.
@@ -315,6 +323,43 @@ export const gitService = {
     baseRef: string,
   ): Promise<DiffSnapshot> {
     return captureDiffSnapshot(rootPath, baseRef);
+  },
+
+  /**
+   * Write the working tree (tracked + untracked, .gitignore honoured) as a
+   * tree object through a throwaway index; HEAD, the index, and the files are
+   * untouched. Throws when untracked files exceed the snapshot guard. See
+   * CONTEXT.md "turn changes".
+   */
+  async snapshotWorkingTree(rootPath: string): Promise<string> {
+    return snapshotWorkingTree(rootPath);
+  },
+
+  /** Patch, per-file stats, and totals between two tree objects. */
+  async diffTrees(
+    rootPath: string,
+    fromTree: string,
+    toTree: string,
+  ): Promise<TreeDiff> {
+    return diffTrees(rootPath, fromTree, toTree);
+  },
+
+  /** Whether `patch` applies cleanly to the working tree right now. */
+  async canApplyPatch(
+    rootPath: string,
+    patch: string,
+    options?: ApplyPatchOptions,
+  ): Promise<boolean> {
+    return canApplyPatch(rootPath, patch, options);
+  },
+
+  /** Apply `patch` to the working tree only (atomic across files). */
+  async applyPatch(
+    rootPath: string,
+    patch: string,
+    options?: ApplyPatchOptions,
+  ): Promise<void> {
+    return applyPatch(rootPath, patch, options);
   },
 
   /** Whether the path is inside a git repository. */

@@ -20,6 +20,7 @@ export default function HelpMenu({ isOpen, position, onClose }: HelpMenuProps) {
 
   return (
     <DropdownMenu
+      origin="bottom-left"
       isOpen={isOpen}
       aria-label="Help"
       position={adjustedPosition}

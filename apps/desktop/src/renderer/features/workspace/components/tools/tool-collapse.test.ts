@@ -1,39 +1,33 @@
 // @vitest-environment jsdom
 
-import { createElement } from "react";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { createElement, type ComponentProps } from "react";
+import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ToolCollapse } from "./_shared";
 
 afterEach(cleanup);
 
 describe("ToolCollapse", () => {
-  it("defers collapsed content until its first expansion, then retains it", async () => {
-    let mounts = 0;
-    function ExpensiveBody() {
-      mounts++;
-      return createElement("div", { "data-testid": "body" }, "body");
-    }
+  it("keeps body decoration inside the zero-height clipping grid", () => {
+    const props = {
+      isExpanded: false,
+      className: "rounded-md border",
+    } as ComponentProps<typeof ToolCollapse>;
+    const { container } = render(
+      createElement(
+        ToolCollapse,
+        props,
+        createElement("div", null, "details"),
+      ),
+    );
 
-    const body = createElement(ExpensiveBody);
-    const collapse = (isExpanded: boolean) => {
-      const props: Parameters<typeof ToolCollapse>[0] = {
-        isExpanded,
-        children: body,
-      };
-      return createElement(ToolCollapse, props);
-    };
-    const view = render(collapse(false));
+    const outer = container.firstElementChild as HTMLElement;
+    const clipper = outer.firstElementChild as HTMLElement;
+    const body = clipper.firstElementChild as HTMLElement;
 
-    expect(view.queryByTestId("body")).toBeNull();
-    expect(mounts).toBe(0);
-
-    view.rerender(collapse(true));
-    await waitFor(() => expect(view.getByTestId("body")).toBeTruthy());
-    expect(mounts).toBe(1);
-
-    view.rerender(collapse(false));
-    expect(view.getByTestId("body")).toBeTruthy();
-    expect(mounts).toBe(1);
+    expect(outer.className).toContain("overflow-hidden");
+    expect(clipper.className).toContain("min-h-0 overflow-hidden");
+    expect(clipper.className).not.toContain("border");
+    expect(body.className).toContain("rounded-md border");
   });
 });

@@ -155,10 +155,10 @@ function PickerOption({
       role="menuitemradio"
       aria-checked={selected}
       onClick={onSelect}
-      className={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 text-sm cursor-pointer transition-colors first:rounded-t-xl last:rounded-b-xl ${
+      className={`w-full flex items-center gap-2 text-left px-1.5 py-1.5 text-s cursor-pointer transition-colors rounded-xl ${
         selected
-          ? "bg-primary-200/60 dark:bg-primary-200/10 text-primary-700 dark:text-primary-300"
-          : "hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300"
+          ? "bg-primary-200/60 dark:bg-primary/5 text-primary-700 dark:text-primary-300"
+          : "hover:bg-primary-200/30 dark:hover:bg-primary/5 text-primary-700 dark:text-primary-300"
       } ${className}`}
     >
       {children}
@@ -225,7 +225,7 @@ function WorkspacePickRows({
           as="div"
           size="xxs"
           tone="subtle"
-          className="truncate"
+          className="truncate leading-tight"
           title={currentBranch}
         >
           {currentBranch}
@@ -294,7 +294,7 @@ export function CollectionPicker({
         )}
       </PickerTrigger>
       <DropdownWrapper isOpen={open} aria-label="Project" minWidth="min-w-44">
-        <div className="max-h-64 overflow-auto noscrollbar">
+        <div className="max-h-64 overflow-auto noscrollbar space-y-0.5 p-1.5">
           <PickerOption
             selected={!value}
             onSelect={() => {
@@ -385,7 +385,7 @@ export function WorkspacePicker({
             No active workspaces
           </PickerEmpty>
         )}
-        <div className="max-h-64 overflow-auto noscrollbar">
+        <div className="max-h-64 overflow-auto noscrollbar space-y-0.5 p-1.5">
           {active.map((w) => (
             <PickerOption
               key={w.id}
@@ -449,6 +449,7 @@ export function ProviderPicker({
             No enabled providers
           </PickerEmpty>
         )}
+        <div className="p-1.5 space-y-0.5">
         {eligible.map((p) => (
           <PickerOption
             key={p.id}
@@ -462,6 +463,7 @@ export function ProviderPicker({
             <span>{providerLabel(p.id, p.displayName)}</span>
           </PickerOption>
         ))}
+        </div>
       </DropdownWrapper>
     </div>
   );
@@ -518,7 +520,7 @@ export function ModelPicker({
             {providerId ? "Loading models…" : "Select a provider first"}
           </PickerEmpty>
         )}
-        <div className="max-h-64 overflow-auto noscrollbar">
+        <div className="max-h-64 overflow-auto noscrollbar p-1.5 space-y-0.5">
           {selectableModels.map((m) => {
             const displayName = getModelPrettyName(m, variant);
             return (
@@ -730,6 +732,7 @@ export function PulseEffortPicker({
         aria-label="Thinking effort"
         minWidth="min-w-32"
       >
+        <div className="p-1.5">
         {variant !== "codex" && (
           <PickerOption
             selected={!thinkingMode}
@@ -741,6 +744,8 @@ export function PulseEffortPicker({
             Off
           </PickerOption>
         )}
+        </div>
+        <div className="px-1.5 pb-1.5">
         {supported.map((level) => (
           <PickerOption
             key={level}
@@ -755,6 +760,7 @@ export function PulseEffortPicker({
             {formatEffortLevel(level)}
           </PickerOption>
         ))}
+        </div>
       </DropdownWrapper>
     </div>
   );

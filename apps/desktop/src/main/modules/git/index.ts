@@ -17,3 +17,9 @@ export {
   type DiffSnapshot,
   type FileDiffStat,
 } from "./git-snapshot";
+export type {
+  TreeDiff,
+  TreeDiffFile,
+  TreeDiffStatus,
+  ApplyPatchOptions,
+} from "./git-tree-snapshot";

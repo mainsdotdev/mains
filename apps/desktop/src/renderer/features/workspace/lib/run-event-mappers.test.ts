@@ -30,6 +30,34 @@ function toolCall(
   } as ToolCall;
 }
 
+describe("mapArtifactToEvent", () => {
+  it("preserves an empty prompt when the user sends only an attachment", () => {
+    const prompt = {
+      id: 397,
+      runId: "r1",
+      kind: "user-prompt",
+      content: "",
+      metadata: JSON.stringify({
+        source: "user",
+        attachments: [
+          {
+            name: "photo.jpg",
+            type: "image",
+            mimeType: "image/jpeg",
+            dataUrl: "data:image/jpeg;base64,abc",
+          },
+        ],
+      }),
+      createdAt: new Date(10_000),
+    } as RunArtifact;
+
+    const event = mapArtifactToEvent(prompt);
+
+    expect(event.content).toBe("");
+    expect(event.metadata?.attachments).toHaveLength(1);
+  });
+});
+
 describe("mergeRunEvents", () => {
   it("returns the same array reference when there are no deltas", () => {
     const existing = [mapArtifactToEvent(artifact(1, "hi", 10))];
@@ -113,11 +141,18 @@ describe("mapToolCallToEvent", () => {
     const ev = mapToolCallToEvent(tc);
 
     expect(ev?.metadata).toMatchObject({
+      runId: "r1",
       planStatus: "applied",
       phase: "complete",
       status: "done",
       toolName: "ExitPlanMode",
     });
+  });
+
+  it("carries the run id needed by an MCP App host", () => {
+    const event = mapToolCallToEvent(toolCall(11, "done", 10, 12));
+
+    expect(event?.metadata?.runId).toBe("r1");
   });
 
   it("returns a degraded fallback event (never null) when mapping throws", () => {
@@ -156,4 +191,3 @@ describe("mapToolCallToEvent parent linkage", () => {
     expect(event?.metadata?.parentToolCallId).toBeUndefined();
   });
 });
-

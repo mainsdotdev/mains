@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../shared/ipc-kit/channels";
 import {
   clearEventSinks,
@@ -13,6 +13,25 @@ import {
   listPendingApprovals,
   requestToolApproval,
 } from "./user-input-broker";
+import type { ToolApprovalResponse } from "./runs.dto";
+
+const mocks = vi.hoisted(() => ({
+  getSettings: vi.fn(),
+  showApprovalNotification: vi.fn(),
+}));
+
+vi.mock("../appSettings", () => ({
+  appSettingsService: { getSettings: mocks.getSettings },
+}));
+
+vi.mock("./run-notifications", () => ({
+  showApprovalNotification: mocks.showApprovalNotification,
+}));
+
+beforeEach(() => {
+  mocks.getSettings.mockResolvedValue({ notifyOnToolApproval: false });
+  mocks.showApprovalNotification.mockReset();
+});
 
 afterEach(() => {
   clearAllPendingRequests();
@@ -159,5 +178,120 @@ describe("user-input-broker", () => {
       { requestId: "request-1" },
       { runId: "run-1" },
     );
+  });
+});
+
+describe("approval notification", () => {
+  type Handlers = {
+    isPending: () => boolean;
+    respond: (response: ToolApprovalResponse) => void;
+  };
+
+  /** Let the settings read and the notification's async setup finish. */
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  const request = (requestId = "req-1") =>
+    requestToolApproval({
+      requestId,
+      runId: "run-1",
+      toolName: "Bash",
+      kind: "tool_approval",
+      timestamp: Date.now(),
+    });
+
+  /** Show a notification whose handle the test can watch. */
+  function showNotifications() {
+    const close = vi.fn();
+    const shown: Handlers[] = [];
+    mocks.getSettings.mockResolvedValue({ notifyOnToolApproval: true });
+    mocks.showApprovalNotification.mockImplementation(
+      async (_req: unknown, handlers: Handlers) => {
+        shown.push(handlers);
+        return { close };
+      },
+    );
+    return { close, shown };
+  }
+
+  it("is not shown when approval notifications are off", async () => {
+    void request();
+    await flush();
+    expect(mocks.showApprovalNotification).not.toHaveBeenCalled();
+  });
+
+  it("settles the request from its buttons, and tells every client", async () => {
+    const { shown, close } = showNotifications();
+    const send = vi.fn();
+    registerEventSink({ kind: "test", send });
+
+    const promise = request();
+    await flush();
+    expect(shown).toHaveLength(1);
+    expect(shown[0].isPending()).toBe(true);
+
+    shown[0].respond({ requestId: "req-1", approved: true });
+
+    await expect(promise).resolves.toEqual({ requestId: "req-1", approved: true });
+    expect(send).toHaveBeenCalledWith(
+      CHANNELS.runs.toolApprovalResolved,
+      { requestId: "req-1" },
+      { runId: "run-1" },
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(shown[0].isPending()).toBe(false);
+  });
+
+  it("comes down however the request is settled elsewhere", async () => {
+    const { close } = showNotifications();
+
+    const answered = request("answered");
+    const canceled = request("canceled");
+    await flush();
+
+    handleToolApprovalResponse({ requestId: "answered", approved: false });
+    await answered;
+    expect(close).toHaveBeenCalledTimes(1);
+
+    cancelPendingRequests("run-1");
+    await canceled;
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it("comes down when the request times out", async () => {
+    const { close } = showNotifications();
+    const promise = requestToolApproval({
+      requestId: "expiring",
+      runId: "run-1",
+      toolName: "Bash",
+      kind: "tool_approval",
+      timestamp: Date.now(),
+      autoResolutionMs: 20,
+    });
+    await flush();
+
+    await expect(promise).resolves.toMatchObject({ approved: false });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("is taken straight down if the request settled while it was going up", async () => {
+    const close = vi.fn();
+    let finishShowing: (() => void) | undefined;
+    mocks.getSettings.mockResolvedValue({ notifyOnToolApproval: true });
+    mocks.showApprovalNotification.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishShowing = () => resolve({ close });
+        }),
+    );
+
+    const promise = request();
+    await flush();
+    handleToolApprovalResponse({ requestId: "req-1", approved: true });
+    await promise;
+    expect(close).not.toHaveBeenCalled();
+
+    finishShowing?.();
+    await flush();
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

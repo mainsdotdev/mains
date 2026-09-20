@@ -26,6 +26,7 @@ import {
   External,
   OpenWith,
   Edit,
+  Plus,
   WorkspaceStatusIcon,
   ProjectFolder,
 } from "@/components/ui/icons";
@@ -47,6 +48,16 @@ const STATUS_ORDER: WorkspaceStatus[] = [
   "duplicate",
 ];
 
+function WorkspaceMenuSeparator() {
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      className="mx-1.5 my-1 h-px bg-primary-200/70 dark:bg-primary-700/40"
+    />
+  );
+}
+
 interface WorkspaceItemProps {
   id: string;
   name: string;
@@ -65,6 +76,7 @@ interface WorkspaceItemProps {
   onLinkIssues?: () => void;
   onArchive?: () => void;
   onSettings?: () => void;
+  onCreateWorktree?: () => void;
   onStatusChange?: (status: WorkspaceStatus) => void;
   onRenameBranch?: (newBranchName: string) => void;
 }
@@ -86,6 +98,7 @@ export default function WorkspaceItem({
   onLinkIssues,
   onArchive,
   onSettings,
+  onCreateWorktree,
   onStatusChange,
   onRenameBranch,
 }: WorkspaceItemProps) {
@@ -102,6 +115,8 @@ export default function WorkspaceItem({
     useGetInstalledAppsQuery(undefined, {
       skip: !hasHovered && !isDropdownOpen,
     });
+  const hasOpenWithActions =
+    !!rootPath && (isLoadingApps || installedApps.length > 0);
   const [dropdownPosition, setDropdownPosition] = useState({ x: 0, y: 0 });
   const [isRenamingBranch, setIsRenamingBranch] = useState(false);
   const [renameBranchValue, setRenameBranchValue] = useState(branch || "");
@@ -145,6 +160,11 @@ export default function WorkspaceItem({
   const handleSettingsClick = () => {
     setIsDropdownOpen(false);
     onSettings?.();
+  };
+
+  const handleCreateWorktreeClick = () => {
+    setIsDropdownOpen(false);
+    onCreateWorktree?.();
   };
 
   const handleRenameBranchClick = () => {
@@ -328,50 +348,54 @@ export default function WorkspaceItem({
         aria-label="Workspace actions"
         position={dropdownPosition}
         onClose={() => setIsDropdownOpen(false)}
+        minWidth={180}
       >
-        {rootPath && (isLoadingApps || installedApps.length > 0) && (
-          <DropdownMenuSub
-            label={
-              <>
-                <OpenWith className="size-3.5" />
-                <span>Open with</span>
-              </>
-            }
-          >
-            {isLoadingApps && (
-              // Keep the row mounted while detecting so the menu doesn't reflow
-              // when the app list lands.
-              <DropdownMenuItem onClick={() => {}} disabled>
-                <SquareSpinner className="size-3.5" />
-                <span>Detecting apps…</span>
-              </DropdownMenuItem>
-            )}
-            {installedApps.map((detectedApp) => (
-              <DropdownMenuItem
-                key={detectedApp.id}
-                onClick={() => {
-                  setIsDropdownOpen(false);
-                  if (detectedApp.id === "finder") {
-                    window.api.shell.openPath(rootPath);
-                  } else {
-                    window.api.shell.openInApp(detectedApp.id, rootPath);
-                  }
-                }}
-              >
-                {detectedApp.icon ? (
-                  <img
-                    src={detectedApp.icon}
-                    alt=""
-                    draggable={false}
-                    className="size-4 shrink-0 rounded-sm"
-                  />
-                ) : (
-                  <External className="size-4 shrink-0" />
-                )}
-                <span>{detectedApp.name}</span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuSub>
+        {hasOpenWithActions && (
+          <>
+            <DropdownMenuSub
+              label={
+                <>
+                  <OpenWith className="size-3.5" />
+                  <span>Open with</span>
+                </>
+              }
+            >
+              {isLoadingApps && (
+                // Keep the row mounted while detecting so the menu doesn't reflow
+                // when the app list lands.
+                <DropdownMenuItem onClick={() => {}} disabled>
+                  <SquareSpinner className="size-3.5" />
+                  <span>Detecting apps…</span>
+                </DropdownMenuItem>
+              )}
+              {installedApps.map((detectedApp) => (
+                <DropdownMenuItem
+                  key={detectedApp.id}
+                  onClick={() => {
+                    setIsDropdownOpen(false);
+                    if (detectedApp.id === "finder") {
+                      window.api.shell.openPath(rootPath);
+                    } else {
+                      window.api.shell.openInApp(detectedApp.id, rootPath);
+                    }
+                  }}
+                >
+                  {detectedApp.icon ? (
+                    <img
+                      src={detectedApp.icon}
+                      alt=""
+                      draggable={false}
+                      className="size-4 shrink-0 rounded-sm"
+                    />
+                  ) : (
+                    <External className="size-4 shrink-0" />
+                  )}
+                  <span>{detectedApp.name}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSub>
+            <WorkspaceMenuSeparator />
+          </>
         )}
         <DropdownMenuSub
           label={
@@ -394,7 +418,7 @@ export default function WorkspaceItem({
                   onStatusChange?.(s);
                 }}
                 className={
-                  s === status ? "bg-primary-950/10 dark:bg-primary/10" : ""
+                  s === status ? "bg-primary-200/40 dark:bg-primary/5" : ""
                 }
               >
                 <WorkspaceStatusIcon
@@ -406,22 +430,30 @@ export default function WorkspaceItem({
             );
           })}
         </DropdownMenuSub>
-        {projectId && (
-          <DropdownMenuItem onClick={handleSettingsClick}>
-            <Settings className="size-3.5" />
-            <span>Project settings</span>
-          </DropdownMenuItem>
-        )}
         {branch && onRenameBranch && (
           <DropdownMenuItem onClick={handleRenameBranchClick}>
             <Edit className="size-3.5" />
             <span>Rename branch</span>
           </DropdownMenuItem>
         )}
+        <WorkspaceMenuSeparator />
+        {projectId && onCreateWorktree && (
+          <DropdownMenuItem onClick={handleCreateWorktreeClick}>
+            <Plus className="size-3.5" />
+            <span>New worktree</span>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={handleLinkIssuesClick}>
           <Connect className="size-3.5" />
           <span>Link resources</span>
         </DropdownMenuItem>
+        {projectId && (
+          <DropdownMenuItem onClick={handleSettingsClick}>
+            <Settings className="size-3.5" />
+            <span>Project settings</span>
+          </DropdownMenuItem>
+        )}
+        <WorkspaceMenuSeparator />
         <DropdownMenuItem onClick={handleArchiveClick}>
           <Archive className="size-3.5" />
           <span>Archive</span>

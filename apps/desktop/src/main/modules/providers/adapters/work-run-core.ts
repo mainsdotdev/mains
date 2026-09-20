@@ -130,6 +130,13 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
           contextSignals: r.contextSignals,
           contextFiles: r.contextFiles,
           contextSkills: r.skills,
+          runId,
+          // Only publish a provider-resolved model here. Requested values may
+          // be aliases (for example `sonnet` → `claude-sonnet-5`) and would
+          // create a false model-change marker until final usage canonicalizes
+          // the turn. Providers without an acquisition result fill this from
+          // final usage instead.
+          model: acquired.model,
         });
       }
 
@@ -240,6 +247,9 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.generateText = driver.generateText.bind(driver);
   if (driver.getRateLimits)
     adapter.getRateLimits = driver.getRateLimits.bind(driver);
+  if (driver.consumeRateLimitResetCredit)
+    adapter.consumeRateLimitResetCredit =
+      driver.consumeRateLimitResetCredit.bind(driver);
   if (driver.setGoal) adapter.setGoal = driver.setGoal.bind(driver);
   if (driver.getGoal) adapter.getGoal = driver.getGoal.bind(driver);
   if (driver.clearGoal) adapter.clearGoal = driver.clearGoal.bind(driver);
@@ -258,6 +268,14 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.setPluginEnabled = driver.setPluginEnabled.bind(driver);
   if (driver.updatePlugin)
     adapter.updatePlugin = driver.updatePlugin.bind(driver);
+  if (driver.listConnectors)
+    adapter.listConnectors = driver.listConnectors.bind(driver);
+  if (driver.startConnectorOAuth)
+    adapter.startConnectorOAuth = driver.startConnectorOAuth.bind(driver);
+  if (driver.readMcpAppResource)
+    adapter.readMcpAppResource = driver.readMcpAppResource.bind(driver);
+  if (driver.callMcpAppTool)
+    adapter.callMcpAppTool = driver.callMcpAppTool.bind(driver);
 
   return adapter;
 }

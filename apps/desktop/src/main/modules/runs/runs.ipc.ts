@@ -16,6 +16,7 @@ import type {
   RunExperienceOptions,
   WorkspaceRunListOptions,
   MoveRunToCollectionPayload,
+  SetRunPinnedPayload,
 } from "./runs.dto";
 import {
   handleToolApprovalResponse,
@@ -52,6 +53,11 @@ export function registerRunsIpc(): void {
   ipcMain.handle(
     CHANNELS.runs.getExecutionRoot,
     handle((runId: string) => runsService.getRunExecutionRoot(runId)),
+  );
+
+  ipcMain.handle(
+    CHANNELS.runs.listOutputFiles,
+    handle((runId: string) => runsService.listRunOutputFiles(runId)),
   );
 
   ipcMain.handle(
@@ -103,6 +109,11 @@ export function registerRunsIpc(): void {
     handle((payload: MoveRunToCollectionPayload) =>
       runsService.moveRunToCollection(payload),
     ),
+  );
+
+  ipcMain.handle(
+    CHANNELS.runs.setPinned,
+    handle((payload: SetRunPinnedPayload) => runsService.setRunPinned(payload)),
   );
 
   ipcMain.handle(
@@ -229,6 +240,18 @@ export function registerRunsIpc(): void {
     CHANNELS.runTurns.getByRun,
     handle((runId: string) => runsService.getTurnsByRun(runId)),
   );
+  ipcMain.handle(
+    CHANNELS.runTurns.getChangesDiff,
+    handle((runId: string, turnId: number) =>
+      runsService.getTurnChangesDiff(runId, turnId),
+    ),
+  );
+  ipcMain.handle(
+    CHANNELS.runTurns.undoChanges,
+    handle((runId: string, turnId: number) =>
+      runsService.undoTurnChanges(runId, turnId),
+    ),
+  );
 
   // Tool Approval (interactive)
   ipcMain.handle(
@@ -253,6 +276,7 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.listArchived,
     CHANNELS.runs.listActive,
     CHANNELS.runs.getExecutionRoot,
+    CHANNELS.runs.listOutputFiles,
     CHANNELS.runs.readTextFile,
     CHANNELS.runs.listRecent,
     CHANNELS.runs.getById,
@@ -262,6 +286,7 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.create,
     CHANNELS.runs.update,
     CHANNELS.runs.moveToCollection,
+    CHANNELS.runs.setPinned,
     CHANNELS.runs.start,
     CHANNELS.runs.complete,
     CHANNELS.runs.fail,
@@ -286,6 +311,8 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runArtifacts.remove,
     CHANNELS.runToolCalls.getByRun,
     CHANNELS.runTurns.getByRun,
+    CHANNELS.runTurns.getChangesDiff,
+    CHANNELS.runTurns.undoChanges,
     CHANNELS.runs.toolApprovalResponse,
     CHANNELS.runs.listPendingApprovals,
   ].forEach((channel) => ipcMain.removeHandler(channel));

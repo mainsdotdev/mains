@@ -40,7 +40,7 @@ export function FilterChoiceSection<T extends string>({
   onSelect: (value: T) => void;
 }) {
   return (
-    <div>
+    <div className="p-1.5">
       <FilterTitle>
         {title}
       </FilterTitle>
@@ -48,7 +48,7 @@ export function FilterChoiceSection<T extends string>({
         <Button
           key={opt.value}
           onClick={() => onSelect(opt.value)}
-          className="w-full flex items-center gap-2 px-3 py-1.5 text-left cursor-pointer transition-colors hover:bg-primary-200/30 dark:hover:bg-primary-800"
+          className="w-full flex items-center rounded-lg gap-2 px-3 py-1.5 text-left cursor-pointer transition-colors hover:bg-primary-200/30 dark:hover:bg-primary/5"
         >
           <FilterLabel>
             {opt.label}
@@ -78,7 +78,7 @@ export function FilterSection({
 }) {
   if (entries.length === 0) return null;
   return (
-    <div>
+    <div className="p-1.5">
       <FilterTitle>
         {title}
       </FilterTitle>
@@ -88,7 +88,7 @@ export function FilterSection({
           <Button
             key={value}
             onClick={() => onToggle(value)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left cursor-pointer transition-colors hover:bg-primary-200/30 dark:hover:bg-primary-800"
+            className="w-full flex items-center rounded-lg gap-2 px-3 py-1.5 text-left cursor-pointer transition-colors hover:bg-primary-200/30 dark:hover:bg-primary/5"
           >
             {renderIcon?.(value)}
             <FilterLabel>

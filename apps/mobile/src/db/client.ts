@@ -4,8 +4,8 @@ import { openDatabaseSync } from "expo-sqlite";
 import { MIGRATIONS } from "./migrations";
 import * as schema from "./schema";
 
-// Change listener on: `useLiveQuery` in screens depends on sqlite's update hook
-// to know when a sync wrote something.
+// Live-query subscriptions depend on sqlite's update hook to know when a sync
+// wrote something.
 const expo = openDatabaseSync("mains.db", { enableChangeListener: true });
 
 function migrate(): void {

@@ -9,8 +9,8 @@ import type { FileAttachment } from "./runs.dto";
 // to `<tmp>/mains-uploads/<runId>/<name>` and read `sourcePath` straight off
 // disk, so both fields are narrowed here, before a run starts:
 //  - `name` is a display filename, never a path — only its last segment stays.
-//  - `sourcePath` exists for the browser inspector's screenshots, which the
-//    main process has already written under `browser-captures`. An image path
+//  - `sourcePath` exists for main-process-owned browser/Appshot screenshots,
+//    which are already written under `browser-captures`. An image path
 //    that resolves anywhere else — directly or through a symlink — is refused.
 // ─────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ export function attachmentFileName(raw: string): string {
 }
 
 function allowedSourcePath(raw: string, captureDir: string): string {
-  const refused = new Error("Attachment source must be a browser capture");
+  const refused = new Error("Attachment source must be a trusted Mains capture");
   if (raw.includes("\0")) throw refused;
   const resolved = path.resolve(raw);
   if (!isInside(captureDir, resolved)) throw refused;
@@ -88,9 +88,9 @@ export function sanitizeRunAttachments(
     if (typeof data === "string") out.data = data;
 
     if (sourcePath !== undefined && sourcePath !== null && sourcePath !== "") {
-      // Browser captures are screenshots; a document never comes from disk.
+      // Trusted captures are screenshots; a document never comes from disk.
       if (typeof sourcePath !== "string" || out.type !== "image") {
-        throw new Error("Attachment source must be a browser capture");
+        throw new Error("Attachment source must be a trusted Mains capture");
       }
       out.sourcePath = allowedSourcePath(sourcePath, captureDir);
     }

@@ -2,7 +2,11 @@ import * as os from "os";
 import * as path from "path";
 import * as dns from "dns";
 import { getConnectionWithSecrets } from "../connections";
-import { signLocalImagePath, signLocalDocumentPath } from "./imageProxy.signing";
+import {
+  signLocalDocumentPath,
+  signLocalImagePath,
+  signLocalVisualizationPath,
+} from "./imageProxy.signing";
 
 // ─────────────────────────────────────────────────────────────
 // Domain Map
@@ -13,7 +17,7 @@ const GITHUB_API_HOSTS = new Set(["api.github.com", "uploads.github.com"]);
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
 
-const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx"]);
+const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf"]);
 
 function expandTilde(p: string): string {
   if (p === "~") return os.homedir();
@@ -137,8 +141,8 @@ export const imageProxyService = {
 
   /**
    * Returns a signed `mains-localdoc://` URL the renderer can `fetch()` to get
-   * the raw bytes of an Office document. Mirrors {@link signLocalImageUrl} but
-   * with an Office-extension allowlist. The HMAC signature authorizes the path;
+   * the raw bytes of an Office document or PDF. Mirrors {@link signLocalImageUrl}
+   * but with a document-extension allowlist. The HMAC signature authorizes the path;
    * the protocol handler re-stats the file (symlink/size/mime guards).
    */
   signLocalDocumentUrl(rawPath: string, ttlMs?: number): string | null {
@@ -150,6 +154,21 @@ export const imageProxyService = {
     const ext = path.extname(resolved).toLowerCase();
     if (!DOCUMENT_EXTENSIONS.has(ext)) return null;
     return signLocalDocumentPath(resolved, ttlMs);
+  },
+
+  /**
+   * Authorize one Codex visualization fragment for the `mains-visualize://`
+   * iframe protocol. The protocol handler performs the authoritative file,
+   * symlink, size, and fragment-shape checks when it serves the request.
+   */
+  signLocalVisualizationUrl(rawPath: string, ttlMs?: number): string | null {
+    if (typeof rawPath !== "string" || rawPath.length === 0) return null;
+    const expanded = expandTilde(rawPath);
+    if (!path.isAbsolute(expanded)) return null;
+    const resolved = path.resolve(expanded);
+    if (resolved.includes("\0")) return null;
+    if (path.extname(resolved).toLowerCase() !== ".html") return null;
+    return signLocalVisualizationPath(resolved, ttlMs);
   },
 
   matchUrlToGithub(url: string): boolean {

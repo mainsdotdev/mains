@@ -69,6 +69,17 @@ export type {
   HookCallback,
   HookMatcher,
   HooksConfig,
+  ConsumeRateLimitResetCreditParams,
+  ConsumeRateLimitResetCreditOutcome,
+  ConnectorInfo,
+  ConnectorMcpServerInfo,
+  ConnectorOAuthStartResult,
+  ConnectorOverview,
+  McpAppReadResourceRequest,
+  McpAppReadResourceResult,
+  McpAppResourceContent,
+  McpAppCallToolRequest,
+  McpAppCallToolResult,
 } from "../../../../shared/adapter.types";
 
 // Factory
@@ -92,7 +103,10 @@ export {
   uninstallPluginForProvider,
   setPluginEnabledForProvider,
   updatePluginForProvider,
+  listConnectorsForProvider,
+  startConnectorOAuthForProvider,
   getRateLimitsForProvider,
+  consumeRateLimitResetCreditForProvider,
   setGoalForProvider,
   getGoalForProvider,
   clearGoalForProvider,

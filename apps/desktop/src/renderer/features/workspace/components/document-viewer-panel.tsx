@@ -18,6 +18,7 @@ import {
 import { DOC_VIEWER_LABELS, isTextDocType } from "@/lib/document-viewer";
 import { DocumentRenderHost } from "./document-viewer/document-render-host";
 import { MarkdownDocument } from "./document-viewer/markdown-document";
+import { PdfDocument } from "./document-viewer/pdf-document";
 
 type AnimationState = "closed" | "opening" | "open" | "closing";
 
@@ -150,7 +151,7 @@ export function DocumentViewerPanel() {
               tooltip="Reset zoom"
               tooltipPosition="bottom"
               onClick={() => setZoom(1)}
-              className="min-w-10 px-1 text-xxs tabular-nums rounded-md cursor-pointer hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
+              className="min-w-10 px-1 text-xxs tabular-nums rounded-full cursor-pointer hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
               aria-label="Reset zoom"
             >
               {Math.round(zoom * 100)}%
@@ -160,7 +161,7 @@ export function DocumentViewerPanel() {
               tooltipPosition="bottom"
               onClick={zoomIn}
               disabled={zoom >= ZOOM_MAX}
-              className="size-6 flex items-center justify-center rounded-md cursor-pointer disabled:opacity-40 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
+              className="size-6 flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
               aria-label="Zoom in"
             >
               <Text as="span" size="sm" tone="inherit" className="leading-none">+</Text>
@@ -168,34 +169,40 @@ export function DocumentViewerPanel() {
           </Text>
         )}
 
-        <Button
-          tooltip="Save a copy…"
-          tooltipPosition="bottom"
-          onClick={() => void saveCopy()}
-          disabled={!currentDoc || isSaving}
-          className="p-1 rounded-full glass-button cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60 disabled:opacity-40"
-          aria-label="Save a copy of this document"
-        >
-          <Download className="size-4" />
-        </Button>
+        {/* A draft attachment from the composer is a blob URL — not a file on
+            disk yet, so there is nothing to copy. */}
+        {!currentDoc?.path.startsWith("blob:") && (
+          <Button
+            tooltip="Save a copy…"
+            tooltipPosition="bottom"
+            onClick={() => void saveCopy()}
+            disabled={!currentDoc || isSaving}
+            className="p-1 rounded-full cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60 disabled:opacity-40"
+            aria-label="Save a copy of this document"
+          >
+            <Download className="size-4" />
+          </Button>
+        )}
 
         <Button
           tooltip="Close"
           tooltipPosition="bottom-left"
           onClick={close}
-          className="p-1 rounded-full glass-button cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
+          className="p-1 rounded-full  cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
           aria-label="Close document viewer"
         >
           <Close className="size-4" />
         </Button>
       </div>
 
-      {/* Body — text formats render as React, Office bytes go to the shadow
-          host. The two never mix, so the branch lives here rather than inside
-          the host. */}
+      {/* Body — text formats render as React, PDFs as pdf.js canvases, Office
+          bytes go to the shadow host. They never mix, so the branch lives here
+          rather than inside the host. */}
       {currentDoc ? (
         isTextDocType(currentDoc.docType) ? (
           <MarkdownDocument key={currentDoc.path} path={currentDoc.path} />
+        ) : currentDoc.docType === "pdf" ? (
+          <PdfDocument key={currentDoc.path} doc={currentDoc} zoom={zoom} />
         ) : (
           <DocumentRenderHost
             doc={{ ...currentDoc, docType: currentDoc.docType }}

@@ -6,7 +6,7 @@ import process from "node:process";
 import { setTimeout } from "node:timers";
 
 const fixtureCliVersion =
-  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.147.0";
+  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.153.0";
 
 if (process.argv.includes("--version")) {
   process.stdout.write(`codex-cli ${fixtureCliVersion}\n`);
@@ -15,6 +15,7 @@ if (process.argv.includes("--version")) {
 
 const logPath = process.env.MAINS_CODEX_FIXTURE_LOG;
 let nextThreadId = 1;
+const activeThreads = new Set();
 
 function log(message) {
   if (!logPath) return;
@@ -27,6 +28,10 @@ function send(message) {
 
 function respond(id, result) {
   send({ jsonrpc: "2.0", id, result });
+}
+
+function respondError(id, code, message) {
+  send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
 function fixtureResponseModel(params) {
@@ -136,6 +141,7 @@ input.on("line", (line) => {
 
     case "thread/start": {
       const threadId = `thread-${nextThreadId++}`;
+      activeThreads.add(threadId);
       respond(id, {
         model: fixtureResponseModel(params),
         thread: {
@@ -163,6 +169,7 @@ input.on("line", (line) => {
     }
 
     case "thread/resume":
+      activeThreads.add(params.threadId);
       respond(id, {
         model: fixtureResponseModel(params),
         thread: {
@@ -190,6 +197,7 @@ input.on("line", (line) => {
 
     case "thread/fork": {
       const threadId = `${params.threadId}-fork`;
+      activeThreads.add(threadId);
       respond(id, {
         model: fixtureResponseModel(params),
         thread: {
@@ -589,6 +597,7 @@ input.on("line", (line) => {
     }
 
     case "thread/unsubscribe":
+      activeThreads.delete(params.threadId);
       respond(id, { status: "unsubscribed" });
       break;
 
@@ -634,9 +643,11 @@ input.on("line", (line) => {
 
     case "account/rateLimits/read":
       respond(id, {
+        ordinaryUsageAllowed: true,
         rateLimits: {
           limitId: "codex",
           limitName: "Codex",
+          normalModelSlug: null,
           primary: {
             usedPercent: 10,
             windowDurationMins: 300,
@@ -653,10 +664,27 @@ input.on("line", (line) => {
           codex: {
             limitId: "codex",
             limitName: "Codex",
+            normalModelSlug: null,
             primary: {
               usedPercent: 10,
               windowDurationMins: 300,
               resetsAt: 1717200000,
+            },
+            secondary: null,
+            credits: null,
+            individualLimit: null,
+            spendControlReached: false,
+            planType: "pro",
+            rateLimitReachedType: null,
+          },
+          base_model_inference: {
+            limitId: "base_model_inference",
+            limitName: "gpt-reserve",
+            normalModelSlug: "gpt-5.6-luna",
+            primary: {
+              usedPercent: 2,
+              windowDurationMins: 10080,
+              resetsAt: 1717800000,
             },
             secondary: null,
             credits: null,
@@ -670,6 +698,13 @@ input.on("line", (line) => {
           availableCount: 1,
           credits: null,
         },
+      });
+      break;
+
+    case "account/rateLimitResetCredit/consume":
+      respond(id, {
+        outcome:
+          process.env.MAINS_CODEX_FIXTURE_RESET_OUTCOME ?? "reset",
       });
       break;
 
@@ -816,6 +851,46 @@ input.on("line", (line) => {
         version: "1",
         filePath: "/tmp/mains-test-codex-home/config.toml",
         overriddenMetadata: null,
+      });
+      break;
+
+    case "mcpServer/resource/read":
+      if (
+        process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD === "1" &&
+        !activeThreads.has(params.threadId)
+      ) {
+        respondError(id, -32600, `thread not found: ${params.threadId}`);
+        break;
+      }
+      respond(id, {
+        contents: [{
+          uri: params.uri,
+          mimeType: "text/html;profile=mcp-app",
+          text: "<!doctype html><html><body>Fixture MCP App</body></html>",
+          _meta: {
+            ui: {
+              csp: { resourceDomains: ["https://cdn.example.com"] },
+              prefersBorder: true,
+            },
+          },
+        }],
+        originCallId: params.originCallId ?? null,
+      });
+      break;
+
+    case "mcpServer/tool/call":
+      if (
+        process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD === "1" &&
+        !activeThreads.has(params.threadId)
+      ) {
+        respondError(id, -32600, `thread not found: ${params.threadId}`);
+        break;
+      }
+      respond(id, {
+        content: [{ type: "text", text: "Fixture tool completed" }],
+        structuredContent: { echoed: params.arguments ?? null },
+        isError: false,
+        _meta: { fixture: true },
       });
       break;
 

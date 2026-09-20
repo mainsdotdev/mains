@@ -74,7 +74,7 @@ export const seedProviders: CreateProviderPayload[] = [
       tools: true,
       streaming: true,
       workspaceAware: true,
-      artifacts: ["patch", "file", "log", "command_result"],
+      artifacts: ["patch", "file", "log", "command_result", "visualization"],
       notes: "OpenAI Codex adapter using @openai/codex-sdk",
     },
   },

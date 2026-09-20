@@ -112,3 +112,44 @@ describe("WorkspaceItem branch rename", () => {
     expect(queryBranchEditor()).toBeNull();
   });
 });
+
+describe("WorkspaceItem project actions", () => {
+  it("separates workspace, project, and lifecycle actions", async () => {
+    const user = userEvent.setup();
+    render(
+      createElement(WorkspaceItem, {
+        id: "ws-1",
+        name: "mains",
+        projectId: "project-1",
+        branch: "feature/x",
+        onRenameBranch: vi.fn(),
+        onCreateWorktree: vi.fn(),
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Workspace options" }));
+
+    expect(screen.getAllByRole("separator")).toHaveLength(2);
+  });
+
+  it("creates a worktree from the workspace menu", async () => {
+    const user = userEvent.setup();
+    const onCreateWorktree = vi.fn();
+    render(
+      createElement(WorkspaceItem, {
+        id: "ws-1",
+        name: "mains",
+        projectId: "project-1",
+        onCreateWorktree,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Workspace options" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: "New worktree" }),
+    );
+
+    expect(onCreateWorktree).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu", { name: "Workspace actions" })).toBeNull();
+  });
+});

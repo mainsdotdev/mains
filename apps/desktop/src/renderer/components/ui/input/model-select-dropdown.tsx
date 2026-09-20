@@ -382,7 +382,7 @@ export function ModelSelectDropdown({
                   onToggle();
                 }
           }
-          className={`text-sm  px-2 py-1.5 flex items-center gap-1.5 ${
+          className={`text-s  px-2 py-1.5 flex items-center gap-1.5 ${
             noModels
               ? "text-primary-600 dark:text-primary-400 cursor-not-allowed"
               : "cursor-pointer text-primary-950 dark:text-primary"
@@ -428,7 +428,7 @@ export function ModelSelectDropdown({
         dropdownRef={mainMenuRef}
       >
         <div
-          className="max-h-80 overflow-auto noscrollbar "
+          className="max-h-80 overflow-auto noscrollbar p-1"
           onMouseMove={(e) => {
             pointerRef.current = { x: e.clientX, y: e.clientY };
           }}
@@ -459,9 +459,9 @@ export function ModelSelectDropdown({
                   openEffortMenu(m, e.currentTarget.getBoundingClientRect().top)
                 }
                 onBlur={scheduleEffortMenuClose}
-                className={`w-full text-left px-3 py-2 cursor-pointer text-sm transition-colors flex items-center gap-2 ${
+                className={`w-full text-left px-3 py-1.5 rounded-xl cursor-pointer text-s transition-colors flex items-center gap-2 my-0.5 ${
                   isEffortMenuAnchor
-                    ? "bg-primary-200/70 dark:bg-primary-800 text-primary-950 dark:text-primary"
+                    ? "bg-primary-200/70 dark:bg-primary-800 text-primary-950 dark:text-primary "
                     : isSelected
                     ? "bg-primary-200/60 dark:bg-primary-200/10 text-primary-950 dark:text-primary "
                     : "hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300"
@@ -493,7 +493,7 @@ export function ModelSelectDropdown({
               clearEffortCloseTimer();
             }}
             onMouseLeave={scheduleEffortMenuClose}
-            className="fixed z-(--z-dropdown-sub) min-w-36 overflow-hidden rounded-2xl glass-card animate-dropdown-in"
+            className="fixed z-(--z-dropdown-sub) min-w-36 overflow-hidden rounded-2xl glass-card animate-dropdown-in p-1"
             style={{
               top: effortMenuPosition.top,
               left: effortMenuPosition.left,
@@ -511,7 +511,7 @@ export function ModelSelectDropdown({
               size="xxs"
               tone="subtle"
               weight="medium"
-              className="flex items-center gap-1.5 px-3 pb-1.5 pt-2 tracking-wide"
+              className="flex items-center gap-1.5 px-2 pb-1 pt-1 tracking-wide"
             >
               <span className="shrink-0">
                 {getModelIcon(hoveredModelDisplayName, variant)}
@@ -536,7 +536,7 @@ export function ModelSelectDropdown({
                       key={level}
                       type="button"
                       onClick={() => selectEffortForHoveredModel(level)}
-                      className={`w-full flex items-center gap-3 px-3 py-1.5 text-left text-sm capitalize transition-colors ${
+                      className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-xl text-left text-s capitalize transition-colors my-0.5 ${
                         isSelected
                           ? "bg-primary-200/60 text-primary-950 dark:bg-primary-200/10 dark:text-primary"
                           : "text-primary-700 hover:bg-primary-200/30 dark:text-primary-300 dark:hover:bg-primary-800"
@@ -558,7 +558,7 @@ export function ModelSelectDropdown({
                     onClick={() =>
                       selectEffortForHoveredModel("ultracode")
                     }
-                    className={`w-full flex items-center gap-3 px-3 py-1.5 text-left text-sm transition-colors ${
+                    className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-xl text-left text-s transition-colors ${
                       hoveredModelHasSelectedUltracode
                         ? "bg-primary-200/60 dark:bg-primary-200/10"
                         : "hover:bg-primary-200/30 dark:hover:bg-primary-800"
@@ -593,7 +593,7 @@ export function ModelSelectDropdown({
                       onClick={() =>
                         selectThinkingForHoveredModel(enabled)
                       }
-                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
+                      className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-left text-s transition-colors ${
                         isSelected
                           ? "bg-primary-200/60 text-primary-950 dark:bg-primary-200/10 dark:text-primary"
                           : "text-primary-700 hover:bg-primary-200/30 dark:text-primary-300 dark:hover:bg-primary-800"

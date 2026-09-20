@@ -128,6 +128,8 @@ export { default as Terminal } from "./terminal";
 export { default as TerminalOpen } from "./terminal-open";
 export { default as BrowserCursor } from "./browser-cursor";
 export { default as Crop } from "./crop";
+export { default as DeviceMobile } from "./device-mobile";
+export { default as RotateDevice } from "./rotate-device";
 export { default as Gmail } from "./gmail";
 export { default as GoogleCalendar } from "./google-calendar";
 export { default as Slack } from "./slack";
@@ -156,6 +158,13 @@ export { default as Write} from "./write"
 export { default as Box} from "./box"
 export { default as New} from "./new"
 export { default as Link} from "./link"
+export { default as Quit} from "./quit"
+export { default as Keyboard } from "./keyboard";
+export { default as Pin} from "./pin"
+export { default as PinFilled} from "./pin-filled"
+
+
+
 
 
 

@@ -4,7 +4,10 @@ import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { useIsMobile } from "@/lib/platform";
 import { LAYOUT_PANEL_ANIM_MS, SESSION_PANEL_GUTTER } from "@/lib/layout";
+import { Text } from "@/components/ui";
+import { useModeConfig } from "@/hooks/use-mode-config";
 import { GitActionsSection } from "./git-actions";
+import { SessionResourcesSection } from "./session-resources-section";
 
 /** Overshoots slightly past full size — the "pop" as the box inflates. */
 const POP_EASE = "cubic-bezier(0.34, 1.56, 0.64, 1)";
@@ -13,6 +16,8 @@ const COLLAPSE_EASE = "cubic-bezier(0.4, 0, 1, 1)";
 
 interface SessionPanelProps {
   providerId?: string;
+  /** The run whose sources and deliverables the panel describes. */
+  runId: string | null;
   /**
    * Width of whatever else occupies the right lane (browser, document viewer,
    * right panel), as a CSS length. The box aligns just inside it.
@@ -27,8 +32,9 @@ interface SessionPanelProps {
 }
 
 /**
- * The session box: the active workspace's working tree, the git actions on it,
- * and the subagents the open run has spawned.
+ * The session box: the active workspace's environment plus the sources and
+ * deliverables belonging to the open run. Sections are mode-driven: Code gets
+ * Environment + Sources; Work gets Sources + Deliverables.
  *
  * A standalone box pinned to the top-right corner. It always sits *over* the
  * content surface rather than taking a column out of it — shrinking the content
@@ -43,6 +49,7 @@ interface SessionPanelProps {
  */
 export function SessionPanel({
   providerId,
+  runId,
   laneOffset,
   floating,
 }: SessionPanelProps) {
@@ -52,9 +59,13 @@ export function SessionPanel({
     (state) => state.workspace.activeWorkspaceId,
   );
   const isOpen = useAppSelector((state) => state.appSettings.sessionPanelOpen);
+  const { showGitActions, showSources, showDeliverables } = useModeConfig();
+  const showEnvironment = showGitActions && !!activeWorkspaceId;
+  const showRunResources = showSources && !!runId;
+  const hasContent = showEnvironment || showRunResources;
 
   const { isVisible, isAnimatedIn } = usePanelAnimation(
-    isOpen && !!activeWorkspaceId,
+    isOpen && hasContent,
   );
 
   const close = useCallback(
@@ -62,7 +73,7 @@ export function SessionPanel({
     [dispatch],
   );
 
-  if (!isVisible || !activeWorkspaceId) return null;
+  if (!isVisible || !hasContent) return null;
 
   return (
     <div
@@ -95,8 +106,31 @@ export function SessionPanel({
     >
       {/* Rows open their forms in place, so the box grows with its content —
           capped short of the viewport so it never runs off the bottom. */}
-      <div className="max-h-[calc(100vh-5rem)] overflow-y-auto noscrollbar">
-        <GitActionsSection providerId={providerId} onClose={close} />
+      <div className="max-h-[calc(100vh-5rem)] overflow-y-auto noscrollbar p-1.5">
+        {showEnvironment && (
+          <section aria-labelledby="session-environment-heading">
+            <Text
+              id="session-environment-heading"
+              as="h2"
+              size="xs"
+              tone="subtle"
+              weight="medium"
+              className="px-2 pb-1 pt-2"
+            >
+              Environment
+            </Text>
+            <GitActionsSection providerId={providerId} onClose={close} />
+          </section>
+        )}
+        {showRunResources && runId && (
+          <SessionResourcesSection
+            key={runId}
+            runId={runId}
+            showDeliverables={showDeliverables}
+            hideWhenEmpty={showGitActions}
+            separated={showEnvironment}
+          />
+        )}
       </div>
     </div>
   );

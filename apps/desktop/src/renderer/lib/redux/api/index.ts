@@ -27,6 +27,7 @@ export * from "./providersApi";
 export * from "./pullRequestsApi";
 export * from "./pulseApi";
 export * from "./runsApi";
+export * from "./searchApi";
 export * from "./shellApi";
 export * from "./signalsApi";
 export * from "./spaceApi";

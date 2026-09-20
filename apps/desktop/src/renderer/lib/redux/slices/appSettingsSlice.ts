@@ -35,7 +35,7 @@ export interface AppSettingsState {
   rightPanelOpen: boolean;
   browserPanelOpen: boolean;
   /**
-   * Whether the session panel (changes / git actions / subagents) is open.
+   * Whether the session panel (environment / sources / deliverables) is open.
    * Deliberately not persisted: it reads the run open in the workspace, and
    * that isn't restored on boot — reopening onto an empty panel would confuse.
    */

@@ -1,5 +1,6 @@
 import {
   Bash,
+  BrowserCursor,
   Check,
   Document,
   Edit,
@@ -61,11 +62,22 @@ export interface BuiltinTool {
    * earlier entries win when matched via prefix/contains rules.
    */
   aliases: string[];
+}
+
+/** One clause of a tool group's summary sentence — see `PHRASES_BY_GROUP_KEY`. */
+export interface ToolPhrase {
+  /** Past tense, exactly one call: "edited a file". */
+  one: string;
+  /** Past tense, several calls: "edited files". Same as `one` when uncountable. */
+  many: string;
   /**
-   * `true` for tools that should always start a new group on their own
-   * (Task, TaskCreate/TaskUpdate). Mirrors the legacy `isSpecial` behavior.
+   * Where the clause sits in the sentence; lower comes first. Ordering by rank
+   * rather than by when the call happened keeps the header still while a group
+   * is streaming in — a late `Bash` does not reshuffle the words in front of
+   * it — and reads as a summary ("Edited a file, read files, ran commands")
+   * rather than as a log.
    */
-  isSpecialGroup?: boolean;
+  rank: number;
 }
 
 /** Past-tense verb labels used for any vendor that doesn't override them. */
@@ -98,22 +110,19 @@ export const DEFAULT_VERBS: Record<string, VerbInfo> = {
  * `{verb}_{entity}` automatically and rendered through `McpDisplay` without
  * any further wiring.
  */
-/**
- * Tools whose point is producing or changing a file, by the `displayName`
- * `resolveTool()` resolves them to — so every provider's spelling
- * (`write` / `create_file` / `apply_patch` / …) collapses to one name here.
- *
- * Read is absent on purpose: this is the set whose output is a deliverable,
- * not the set that touches the filesystem.
- */
-export const FILE_WRITING_TOOLS: ReadonlySet<string> = new Set([
-  "Write",
-  "Edit",
-  "Create",
-  "Apply Patch",
-]);
-
 export const VENDORS: VendorInfo[] = [
+  {
+    // The computer-use REPL. Registered for its label alone: without it the
+    // generic MCP path names the group after the server slug ("Cua repl"),
+    // which matches neither the rows underneath nor the composer's pill.
+    // Its single tool (`js`) renders through CuaReplDisplay, matched on the
+    // `vendorId` this entry fixes.
+    id: "cua_repl",
+    label: "Computer use",
+    category: "MCP",
+    prefixes: ["mcp__cua_repl__"],
+    icon: <BrowserCursor className="size-4" />,
+  },
   {
     id: "mains",
     label: "Mains",
@@ -141,14 +150,13 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   // TaskUpdate (taskId/status). They share the `task-plan` groupKey so
   // `stripTaskPlanEvents` strips them from the timeline and the
   // `TodoSummaryBar` aggregator picks them up as the source of truth.
-  // TaskGet / TaskList are read-only queries → own keys, not isSpecialGroup.
+  // TaskGet / TaskList are read-only queries → own keys.
   {
     displayName: "TaskCreate",
     groupKey: "task-plan",
     category: "Todo",
     icon: <Check className="size-4" />,
     aliases: ["taskcreate"],
-    isSpecialGroup: true,
   },
   {
     displayName: "TaskUpdate",
@@ -156,7 +164,6 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     category: "Todo",
     icon: <Check className="size-4" />,
     aliases: ["taskupdate"],
-    isSpecialGroup: true,
   },
   // Copilot's full-snapshot todo writes (synthesized from session.todos_changed).
   // Shares the `task-plan` groupKey so `stripTaskPlanEvents` removes the raw
@@ -167,7 +174,6 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     category: "Todo",
     icon: <Check className="size-4" />,
     aliases: ["updatetodos"],
-    isSpecialGroup: true,
   },
   {
     displayName: "TaskGet",
@@ -189,7 +195,6 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     category: "Agent",
     icon: <Task className="size-4" />,
     aliases: ["task"],
-    isSpecialGroup: true,
   },
   {
     displayName: "Agent",
@@ -229,6 +234,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     icon: <Infinite className="size-4" />,
     aliases: ["monitor"],
   },
+  // Input is always `{}`; output is the CLI's plan-mode instructions to the
+  // model. Rendered by EnterPlanDisplay in tool-call-item.tsx.
   {
     displayName: "EnterPlanMode",
     groupKey: "enterplanmode",
@@ -376,9 +383,8 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     icon: <Grep className="size-3.5" />,
     aliases: ["grep"],
   },
-  // Copilot CLI's ripgrep tool. Shares the grep groupKey so consecutive
-  // content searches collapse together; rendered by GrepDisplay (timeline) and
-  // the Rg renderer (approval).
+  // Copilot CLI's ripgrep tool. Shares Grep's classification key and is
+  // rendered by GrepDisplay (timeline) and the Rg renderer (approval).
   {
     displayName: "Search",
     groupKey: "grep",
@@ -431,3 +437,65 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     aliases: ["savefindings"],
   },
 ];
+
+/**
+ * What a tool group's header says the agent *did*, keyed by `groupKey` rather
+ * than by builtin entry: two entries can share a key (`Grep` and Copilot's
+ * `rg`), and they must never produce two different clauses for the same work.
+ *
+ * A key with no entry here still gets a clause — `summarizeToolCalls` falls
+ * back to the resolved label ("used Glob") — so an unregistered tool degrades
+ * to a duller sentence instead of vanishing from the header.
+ */
+export const PHRASES_BY_GROUP_KEY: Record<string, ToolPhrase> = {
+  // Setup / intent — what the agent reached for before doing the work.
+  skill: { one: "loaded a tool", many: "loaded tools", rank: 10 },
+  intent: { one: "stated its intent", many: "stated its intent", rank: 10 },
+  enterplanmode: { one: "entered plan mode", many: "entered plan mode", rank: 12 },
+  exitplanmode: { one: "shared a plan", many: "shared a plan", rank: 12 },
+  plan: { one: "wrote a plan", many: "wrote plans", rank: 12 },
+  taskget: { one: "checked the plan", many: "checked the plan", rank: 12 },
+  tasklist: { one: "listed the plan", many: "listed the plan", rank: 12 },
+
+  // Writes.
+  edit: { one: "edited a file", many: "edited files", rank: 20 },
+  write: { one: "wrote a file", many: "wrote files", rank: 20 },
+  create: { one: "created a file", many: "created files", rank: 20 },
+  apply_patch: { one: "applied a patch", many: "applied patches", rank: 20 },
+  delete: { one: "deleted a file", many: "deleted files", rank: 22 },
+
+  // Reads and searches.
+  read: { one: "read a file", many: "read files", rank: 30 },
+  view: { one: "viewed a file", many: "viewed files", rank: 30 },
+  glob: { one: "looked for files", many: "looked for files", rank: 32 },
+  grep: { one: "searched the code", many: "searched the code", rank: 32 },
+  search: { one: "searched", many: "searched", rank: 32 },
+  toolsearch: { one: "looked up a tool", many: "looked up tools", rank: 32 },
+  webfetch: { one: "read a page", many: "read pages", rank: 35 },
+  websearch: { one: "searched the web", many: "searched the web", rank: 35 },
+
+  // Shell and data.
+  bash: { one: "ran a command", many: "ran commands", rank: 40 },
+  shell: { one: "ran a command", many: "ran commands", rank: 40 },
+  monitor: { one: "watched a command", many: "watched commands", rank: 42 },
+  sql: { one: "ran a query", many: "ran queries", rank: 42 },
+
+  // Delegation and interaction.
+  task: { one: "ran an agent", many: "ran agents", rank: 50 },
+  agent: { one: "ran an agent", many: "ran agents", rank: 50 },
+  workflow: { one: "ran a workflow", many: "ran workflows", rank: 50 },
+  sendmessage: { one: "messaged an agent", many: "messaged agents", rank: 52 },
+  askuserquestion: { one: "asked a question", many: "asked questions", rank: 54 },
+
+  // Mains' own review tools.
+  checkpackage: { one: "checked a package", many: "checked packages", rank: 60 },
+  savereview: { one: "saved a review", many: "saved reviews", rank: 60 },
+  savefinding: { one: "saved a finding", many: "saved findings", rank: 60 },
+  savefindings: { one: "saved findings", many: "saved findings", rank: 60 },
+};
+
+/**
+ * Where "used the X integration" sits. Ahead of the writes: which outside
+ * system the agent went through frames everything that follows.
+ */
+export const VENDOR_PHRASE_RANK = 15;

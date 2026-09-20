@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildRunContextPayload } from "./run-context-payload";
 import type {
   ContextBrowserItem,
+  ContextAppshotItem,
   ContextCodeItem,
   ContextItem,
 } from "./composer-context";
@@ -35,6 +36,24 @@ const codeSel = (overrides: Partial<ContextCodeItem> = {}): ContextCodeItem => (
   startLine: 10,
   endLine: 12,
   text: "const a = 1;",
+  ...overrides,
+});
+
+const appshot = (
+  overrides: Partial<ContextAppshotItem> = {},
+): ContextAppshotItem => ({
+  kind: "appshot",
+  id: "shot123456",
+  appName: "Safari",
+  bundleIdentifier: "com.apple.Safari",
+  windowTitle: "API docs",
+  timestamp: "2026-01-01T00:00:00Z",
+  screenshotPath: "/caps/appshot.png",
+  screenshotCaptureName: "appshot-shot123456-1.png",
+  screenshotMimeType: "image/png",
+  accessibilityText: "[AXButton] Save",
+  accessibilityStatus: "captured",
+  accessibilityTruncated: false,
   ...overrides,
 });
 
@@ -79,11 +98,19 @@ describe("buildRunContextPayload", () => {
         stackTrace: "at foo()",
         eventCount: 12,
       },
-      { kind: "skill", name: "reviewer", scope: "project" },
+      {
+        kind: "skill",
+        name: "flight-search",
+        displayName: "Flight Search",
+        mentionPath: "plugin://flight-search@marketplace",
+        scope: "plugin",
+      },
     ];
     const payload = buildRunContextPayload(items);
 
-    expect(payload.contextFiles).toEqual([{ path: "/repo/a.ts" }]);
+    expect(payload.contextFiles).toEqual([
+      { path: "/repo/a.ts", type: "file" },
+    ]);
     // `labels` and `entityId` are composer-only — they don't cross to the run.
     expect(payload.contextIssues).toEqual([
       { provider: "github", number: 7, title: "Bug", body: "details" },
@@ -100,9 +127,26 @@ describe("buildRunContextPayload", () => {
       },
     ]);
     expect(payload.contextSkills?.[0]).toMatchObject({
-      name: "reviewer",
-      scope: "project",
+      name: "flight-search",
+      displayName: "Flight Search",
+      mentionPath: "plugin://flight-search@marketplace",
+      scope: "plugin",
     });
+  });
+
+  it("preserves directory context so folder mentions stay identifiable", () => {
+    const payload = buildRunContextPayload([
+      {
+        kind: "file",
+        name: "components",
+        fullPath: "/repo/src/components",
+        type: "directory",
+      },
+    ]);
+
+    expect(payload.contextFiles).toEqual([
+      { path: "/repo/src/components", type: "directory" },
+    ]);
   });
 
   it("turns a code selection into a `selection` item whose ref matches its chip token", () => {
@@ -127,18 +171,14 @@ describe("buildRunContextPayload", () => {
       [
         browserSel({
           screenshotPath: "/caps/el.png",
-          surroundingScreenshotPath: "/caps/ctx.png",
         }),
       ],
       uploads,
     );
 
-    expect(payload.attachments).toHaveLength(3);
+    expect(payload.attachments).toHaveLength(2);
     expect(payload.attachments?.[0]).toBe(uploads[0]);
-    expect(payload.attachments?.slice(1).map((a) => a.sourcePath)).toEqual([
-      "/caps/el.png",
-      "/caps/ctx.png",
-    ]);
+    expect(payload.attachments?.[1].sourcePath).toBe("/caps/el.png");
     // Named by host + element + a slice of the selection id.
     expect(payload.attachments?.[1].name).toBe(
       "browser-example.com-button-abcdef.png",
@@ -158,9 +198,35 @@ describe("buildRunContextPayload", () => {
     });
   });
 
-  it("orders browser context ahead of code selections", () => {
-    const payload = buildRunContextPayload([codeSel(), browserSel()]);
+  it("sends an Appshot image and its accessibility snapshot together", () => {
+    const payload = buildRunContextPayload([appshot()]);
+    expect(payload.attachments).toEqual([
+      expect.objectContaining({
+        name: "lens-safari-api-docs-shot12.png",
+        sourcePath: "/caps/appshot.png",
+        mimeType: "image/png",
+      }),
+    ]);
+    expect(payload.initialContext[0]).toMatchObject({
+      kind: "selection",
+      ref: "Safari — API docs",
+      metadata: {
+        source: "appshot",
+        appName: "Safari",
+        accessibilityStatus: "captured",
+      },
+    });
+    expect(payload.initialContext[0].content).toContain("[AXButton] Save");
+  });
+
+  it("orders captured-window and browser context ahead of code selections", () => {
+    const payload = buildRunContextPayload([
+      codeSel(),
+      browserSel(),
+      appshot(),
+    ]);
     expect(payload.initialContext.map((c) => c.metadata?.source)).toEqual([
+      "appshot",
       "browser",
       "editor",
     ]);

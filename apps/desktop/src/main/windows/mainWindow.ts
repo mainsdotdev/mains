@@ -2,8 +2,11 @@ import { app, BrowserWindow, nativeImage, screen, shell } from "electron";
 import path from "path";
 import fs, { existsSync } from "fs";
 import { CHANNELS } from "../../shared/ipc-kit/channels";
+import { attachCrashRecovery } from "./crash-recovery";
 
 let mainWindow: BrowserWindow | null = null;
+/** Whether this process has ever shown a main window (false under `--serve`). */
+let hasOpenedMainWindow = false;
 
 // ── Window state persistence ──────────────────────────────────
 
@@ -105,6 +108,7 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
     }
   }
 
+  hasOpenedMainWindow = true;
   mainWindow = new BrowserWindow({
     width: useSaved ? saved.width : defaults.width,
     height: useSaved ? saved.height : defaults.height,
@@ -173,6 +177,9 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
     console.error(`Failed to load: ${errorDescription} (${errorCode})`);
   });
 
+  // A crashed or hung renderer must not leave an empty window behind.
+  attachCrashRecovery(mainWindow);
+
   // Load the app
   // In development, Electron Forge's Vite plugin injects the dev server URL
   // via compile-time define (process.env.RENDERER_VITE_DEV_SERVER_URL)
@@ -235,5 +242,21 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
 }
 
 export function getMainWindow(): BrowserWindow | null {
+  return mainWindow;
+}
+
+/**
+ * Bring the main window to the front, re-creating it if the user closed it
+ * (macOS keeps the app running with no window). Returns null in a process that
+ * never opened one — a headless `--serve` backend must not grow a window
+ * because someone clicked a notification.
+ */
+export function reopenMainWindow(): BrowserWindow | null {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return hasOpenedMainWindow ? createMainWindow({ show: true }) : null;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
   return mainWindow;
 }

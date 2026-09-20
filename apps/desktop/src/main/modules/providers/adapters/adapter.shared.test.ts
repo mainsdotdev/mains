@@ -390,6 +390,36 @@ describe("emitUserPromptArtifact", () => {
     expect(event.metadata.attachments[0].name).toBe("img.png");
   });
 
+  it("points each written document at the copy saveAttachments made", async () => {
+    const runId = `test-${randomUUID()}`;
+    const attachments = [
+      { name: "Blueprint.pdf", type: "document" as const, data: "eA==", mimeType: "application/pdf" },
+      { name: "notes.txt", type: "document" as const, data: "eA==", mimeType: "text/plain" },
+      { name: "img.png", type: "image" as const, data: "eA==", mimeType: "image/png" },
+    ];
+    try {
+      const { savedPaths } = saveAttachments(attachments, runId);
+      const onEvent = vi.fn().mockResolvedValue(undefined);
+      await emitUserPromptArtifact(onEvent, "content", { attachments, runId });
+      const [pdf, txt, img] = onEvent.mock.calls[0][0].metadata.attachments;
+      expect(savedPaths).toContain(pdf.path);
+      expect(fs.existsSync(pdf.path)).toBe(true);
+      // .txt is inlined into the prompt, never written; images carry a data URL.
+      expect(txt.path).toBeUndefined();
+      expect(img.path).toBeUndefined();
+    } finally {
+      fs.rmSync(path.join(os.tmpdir(), "mains-uploads", runId), { recursive: true, force: true });
+    }
+  });
+
+  it("omits document paths when the run is unknown", async () => {
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    await emitUserPromptArtifact(onEvent, "content", {
+      attachments: [{ name: "a.pdf", type: "document", data: "", mimeType: "application/pdf" }],
+    });
+    expect(onEvent.mock.calls[0][0].metadata.attachments[0].path).toBeUndefined();
+  });
+
   it("includes issues and files metadata", async () => {
     const onEvent = vi.fn().mockResolvedValue(undefined);
     await emitUserPromptArtifact(onEvent, "content", {

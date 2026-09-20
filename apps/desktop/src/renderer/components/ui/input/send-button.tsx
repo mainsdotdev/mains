@@ -44,7 +44,7 @@ export function SendButton({ loading, onSubmit, onStop, disabled = false }: Send
         </span>
       )}
       <ChevronUp
-        className={`w-5 h-5 text-primary-800 dark:text-primary transition-opacity ${
+        className={`size-4.5 text-primary-800 dark:text-primary transition-opacity ${
           loading ? "opacity-0" : "opacity-100"
         }`}
       />

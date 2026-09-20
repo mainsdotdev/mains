@@ -9,6 +9,13 @@ const pkg = JSON.parse(readFileSync(path.resolve(import.meta.dirname, 'package.j
 //  https://vitejs.dev/config
 export default defineConfig({
   plugins: [react()],
+  // `@mains/contracts` is a live `file:` dependency shared with the mobile app.
+  // Pre-bundling it makes additions to the channel map invisible to an already
+  // running renderer, so new IPC endpoints can be invoked with an `undefined`
+  // channel until Vite's dependency cache is rebuilt.
+  optimizeDeps: {
+    exclude: ['@mains/contracts'],
+  },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -20,6 +27,12 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, 'src/renderer'),
+      // Through the node_modules symlink, Vite serves the contracts source as a
+      // dependency: `?v=<browserHash>` plus a year-long immutable cache header.
+      // The hash ignores the file's content, so the renderer's HTTP cache keeps
+      // the old channel map across restarts and a new channel reads as
+      // `undefined`. Aliasing to the real path serves it as plain source.
+      '@mains/contracts': path.resolve(import.meta.dirname, '../../packages/contracts/src'),
     },
   },
   css: {

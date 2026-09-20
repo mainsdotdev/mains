@@ -6,10 +6,14 @@ import {
   useState,
   type FunctionComponent,
 } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DropdownMenu, DropdownMenuItem } from "./dropdown-menu";
+import {
+  DropdownMenu,
+  DropdownMenuItem,
+  DropdownMenuSub,
+} from "./dropdown-menu";
 
 // The menu restores focus one frame after it closes, so these tests need to
 // control when that frame runs — a synchronous rAF stub would fire the restore
@@ -33,6 +37,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -131,5 +136,132 @@ describe("DropdownMenu focus handoff", () => {
     flushFrames();
 
     expect(document.activeElement).not.toBe(trigger);
+  });
+});
+
+describe("DropdownMenu viewport placement", () => {
+  it("flips a tall menu above an anchor near the bottom edge", () => {
+    vi.stubGlobal("innerWidth", 1_200);
+    vi.stubGlobal("innerHeight", 800);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.getAttribute("role") === "menu" ? 180 : 0;
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.getAttribute("role") === "menu" ? 220 : 0;
+      },
+    );
+
+    render(
+      createElement(
+        DropdownMenu,
+        {
+          isOpen: true,
+          position: { x: 200, y: 760, anchorTop: 730 },
+          onClose: () => undefined,
+          "aria-label": "Bottom actions",
+        },
+        createElement(DropdownMenuItem, { onClick: () => undefined }, "Rename"),
+        createElement(DropdownMenuItem, { onClick: () => undefined }, "Move"),
+        createElement(
+          DropdownMenuItem,
+          { onClick: () => undefined },
+          "Archive",
+        ),
+        createElement(DropdownMenuItem, { onClick: () => undefined }, "Delete"),
+      ),
+    );
+
+    const menu = screen.getByRole("menu", { name: "Bottom actions" });
+    expect(menu.style.top).toBe("510px");
+    expect(menu.style.transformOrigin).toBe("bottom left");
+  });
+
+  it("keeps a tall submenu above the viewport bottom edge", async () => {
+    vi.stubGlobal("innerWidth", 1_200);
+    vi.stubGlobal("innerHeight", 600);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.getAttribute("aria-labelledby") ? 180 : 160;
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.getAttribute("aria-labelledby") ? 260 : 160;
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this.getAttribute("role") === "menuitem") {
+          return {
+            x: 200,
+            y: 520,
+            top: 520,
+            right: 300,
+            bottom: 550,
+            left: 200,
+            width: 100,
+            height: 30,
+            toJSON: () => ({}),
+          };
+        }
+        return {
+          x: 0,
+          y: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          width: 0,
+          height: 0,
+          toJSON: () => ({}),
+        };
+      },
+    );
+
+    render(
+      createElement(
+        DropdownMenu,
+        {
+          isOpen: true,
+          position: { x: 200, y: 300 },
+          onClose: () => undefined,
+          "aria-label": "Chat actions",
+        },
+        createElement(
+          DropdownMenuSub,
+          { label: "Move" },
+          createElement(
+            DropdownMenuItem,
+            { onClick: () => undefined },
+            "No project",
+          ),
+          createElement(
+            DropdownMenuItem,
+            { onClick: () => undefined },
+            "Making Stuff",
+          ),
+          createElement(
+            DropdownMenuItem,
+            { onClick: () => undefined },
+            "Trips & Things",
+          ),
+        ),
+      ),
+    );
+
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("menuitem", { name: "Move" });
+    await user.hover(trigger);
+
+    const submenu = screen.getByRole("menu", { name: "Move" });
+    await waitFor(() => expect(submenu.style.top).toBe("332px"));
+
+    // Clicking an already-open hover submenu must not reset it to the initial
+    // 160px height estimate.
+    await user.click(trigger);
+    await waitFor(() => expect(submenu.style.top).toBe("332px"));
   });
 });

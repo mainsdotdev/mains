@@ -64,6 +64,9 @@ export const appEvents = {
     onGoalUpdated: bind<typeof window.api.providers.onGoalUpdated>(
       CHANNELS.providers.goalUpdated,
     ),
+    onConnectorsUpdated: bind<typeof window.api.providers.onConnectorsUpdated>(
+      CHANNELS.providers.connectorsUpdated,
+    ),
   },
   workspace: {
     onScriptComplete: bind<typeof window.api.workspace.onScriptComplete>(

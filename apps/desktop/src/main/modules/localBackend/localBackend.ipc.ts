@@ -50,6 +50,21 @@ export function registerLocalBackendIpc() {
     },
   );
 
+  ipcMain.handle(
+    CHANNELS.localBackend.setKeepAwakeForRemoteAccess,
+    async (_e, enabled: boolean) => {
+      try {
+        return ok(
+          await localBackendService.setKeepAwakeForRemoteAccess(enabled),
+        );
+      } catch (error) {
+        return fail(
+          error instanceof Error ? error.message : "Failed to update keep awake",
+        );
+      }
+    },
+  );
+
   ipcMain.handle(CHANNELS.localBackend.rotateToken, async () => {
     try {
       return ok(await localBackendService.rotateToken());
@@ -102,6 +117,7 @@ export function unregisterLocalBackendIpc() {
   ipcMain.removeHandler(CHANNELS.localBackend.setRemoteAccess);
   ipcMain.removeHandler(CHANNELS.localBackend.setLanAccess);
   ipcMain.removeHandler(CHANNELS.localBackend.setTailscaleHttps);
+  ipcMain.removeHandler(CHANNELS.localBackend.setKeepAwakeForRemoteAccess);
   ipcMain.removeHandler(CHANNELS.localBackend.rotateToken);
   ipcMain.removeHandler(CHANNELS.localBackend.createPairingCode);
   ipcMain.removeHandler(CHANNELS.localBackend.listPairedDevices);

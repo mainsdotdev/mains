@@ -2,7 +2,7 @@ if (process.platform === "win32") {
   if (require("electron-squirrel-startup")) process.exit(0);
 }
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 
 // Disable background Chromium features we never use. `CalculateNativeWinOcclusion`
 // in particular can cause steady CPU churn on Windows when the window is hidden.
@@ -82,13 +82,27 @@ import {
   createSplashWindow,
   closeSplashWindow,
   openAboutWindow,
+  registerWindowRequestIpc,
+  unregisterWindowRequestIpc,
+  applySavedThemeSource,
+  registerThemeSourceIpc,
+  unregisterThemeSourceIpc,
+  watchChildProcesses,
 } from "./windows";
+import { showTray, hideTray, startDockMenu, stopDockMenu } from "./status";
+import { offerMoveToApplications } from "./move-to-applications";
 import {
   registerImageProxyScheme,
   registerImageProxyHandler,
   registerImageProxyIpc,
   unregisterImageProxyIpc,
 } from "./modules/imageProxy";
+import {
+  registerMcpAppsIpc,
+  unregisterMcpAppsIpc,
+  registerMcpAppsProtocolHandler,
+  unregisterMcpAppsProtocolHandler,
+} from "./modules/mcpApps";
 import {
   registerUpdatesIpc,
   unregisterUpdatesIpc,
@@ -118,6 +132,16 @@ import {
   unregisterBrowserIpc,
   browserService,
 } from "./modules/browser";
+import {
+  registerAppshotsIpc,
+  unregisterAppshotsIpc,
+  appshotsService,
+} from "./modules/appshots";
+import {
+  registerKeyboardShortcutsIpc,
+  unregisterKeyboardShortcutsIpc,
+  keyboardShortcutsService,
+} from "./modules/keyboardShortcuts";
 import { registerSshIpc, unregisterSshIpc, sshService } from "./modules/ssh";
 import { tailscaleService } from "./modules/tailscale";
 import {
@@ -130,6 +154,7 @@ import {
   unregisterRemoteBackendsIpc,
 } from "./modules/remoteBackends";
 import { registerBackendIpc, unregisterBackendIpc } from "./modules/backend";
+import { registerSearchIpc, unregisterSearchIpc } from "./modules/search";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 
 // ─────────────────────────────────────────────────────────────
@@ -201,7 +226,6 @@ interface DetectedApp {
 let isShuttingDown = false;
 let hasUnsavedChanges = false;
 let quitConfirmed = false;
-let tray: Tray | null = null;
 let installedAppsCache: DetectedApp[] | null = null;
 let installedAppsCacheTime = 0;
 let detectInFlight: Promise<DetectedApp[]> | null = null;
@@ -596,89 +620,6 @@ async function detectInstalledApps(): Promise<DetectedApp[]> {
 }
 
 /**
- * The 1x menu-bar asset. macOS loads the `@2x` file sitting beside it on its
- * own, so this path is the only one anything needs to name — and the image
- * must not be resized afterwards, or the crisp representation is thrown away.
- * `menu-icon.png` in the same folder is the master the two are cut from
- * (`sips -z 16 16` / `-z 32 32`). Both must be **black + clear**: a template
- * image is shape, not artwork, and AppKit takes that shape from the black
- * content — the white master rendered as a pale smudge next to the system's
- * own icons until it was recoloured.
- */
-function resolveTrayIconPath(): string {
-  if (!app.isPackaged) {
-    return path.join(app.getAppPath(), "src/renderer/public/menu-iconTemplate.png");
-  }
-  const packed = path.join(process.resourcesPath, "menu-iconTemplate.png");
-  if (fs.existsSync(packed)) return packed;
-  return path.join(app.getAppPath(), ".vite/renderer/menu-iconTemplate.png");
-}
-
-function focusMainWindow() {
-  const win = BrowserWindow.getAllWindows()[0];
-  if (!win) {
-    createMainWindow({ show: true });
-    return;
-  }
-  if (win.isMinimized()) win.restore();
-  if (!win.isVisible()) win.show();
-  win.focus();
-}
-
-function destroyTray() {
-  if (tray) {
-    tray.destroy();
-    tray = null;
-  }
-}
-
-function createTray() {
-  if (tray) return;
-
-  const sourceImage = nativeImage.createFromPath(resolveTrayIconPath());
-  const isMac = process.platform === "darwin";
-  // The asset is already menu-bar sized (16pt, with its @2x beside it), so on
-  // macOS it goes through untouched: `resize` returns a new image that drops
-  // both the extra representation and the template flag. Windows and Linux
-  // have no template concept and take whatever they are given, so they keep
-  // the explicit 16px.
-  const trayImage = isMac
-    ? sourceImage
-    : sourceImage.resize({ width: 16, height: 16 });
-
-  // Template = the alpha channel is a mask, not artwork: macOS paints it black
-  // on a light menu bar and white on a dark one, which is why every other icon
-  // up there is crisp and this one used to sit there as a pale glyph. Set
-  // explicitly rather than relying on the `…Template.png` filename, which only
-  // marks the image at load time.
-  if (isMac) trayImage.setTemplateImage(true);
-
-  // Which file this actually resolved to, and whether it arrived as a mask.
-  // The three-way path fallback above and the packaging step are both easy to
-  // get wrong in a way that only shows up as a pale glyph in the menu bar.
-  const trayPath = resolveTrayIconPath();
-  console.log(
-    `Tray icon: ${trayPath} (exists=${fs.existsSync(trayPath)}, ` +
-      `empty=${trayImage.isEmpty()}, template=${trayImage.isTemplateImage()})`,
-  );
-
-  tray = new Tray(trayImage);
-  tray.setToolTip("Mains");
-
-  const contextMenu = Menu.buildFromTemplate([
-    { label: "Show Mains", click: () => focusMainWindow() },
-    {
-      label: "Check for Updates…",
-      click: () => updatesService.checkForUpdates(),
-    },
-    { type: "separator" },
-    { label: "Quit Mains", role: "quit" },
-  ]);
-  tray.setContextMenu(contextMenu);
-  tray.on("click", () => focusMainWindow());
-}
-
-/**
  * Headless backend mode. Enabled with `--serve` (or MAINS_SERVE=1); optional
  * `--port=<n>` / `--host=<h>` (or MAINS_SERVE_PORT / MAINS_SERVE_HOST). When on,
  * the app boots the WebSocket backend and creates no window.
@@ -727,6 +668,7 @@ const SERVE = parseServeOptions();
 async function initializeApp() {
   try {
     console.log("Initializing application...");
+    watchChildProcesses();
 
     // Augment PATH early so provider binaries are discoverable in packaged app.
     // The login-shell read only runs packaged: dev inherits the terminal's PATH.
@@ -748,6 +690,14 @@ async function initializeApp() {
       return;
     }
 
+    // Native chrome (vibrancy, menus, dialogs) in the user's theme from the
+    // first frame — before the renderer is up to say which one it is.
+    applySavedThemeSource();
+
+    // Running from the DMG or Downloads breaks auto-update: offer the move
+    // before anything boots. On a move the app quits and relaunches itself.
+    if (await offerMoveToApplications()) return;
+
     // Show splash screen immediately
     createSplashWindow();
 
@@ -757,6 +707,7 @@ async function initializeApp() {
       enableWAL: true,
       busyTimeout: 5000,
     });
+    await keyboardShortcutsService.start();
 
     // Wire the outbound event bus to the local renderer before any module can
     // emit. A headless `mains serve` would register a WebSocket sink instead.
@@ -780,6 +731,8 @@ async function initializeApp() {
     registerTerminalIpc();
     registerImageProxyHandler();
     registerImageProxyIpc();
+    registerMcpAppsProtocolHandler();
+    registerMcpAppsIpc();
     registerStatsIpc();
     registerUpdatesIpc();
     updatesService.initialize();
@@ -788,10 +741,13 @@ async function initializeApp() {
     registerGuardsIpc();
     registerPullRequestsIpc();
     registerBrowserIpc();
+    registerAppshotsIpc();
+    registerKeyboardShortcutsIpc();
     registerSshIpc();
     registerRemoteBackendsIpc();
     registerBackendIpc();
     registerLocalBackendIpc();
+    registerSearchIpc();
     // Re-apply any persisted "This machine" exposure (survives app restarts).
     void localBackendService.restore();
     automationsService.start();
@@ -927,6 +883,11 @@ async function initializeApp() {
     ipcMain.handle(CHANNELS.app.setUnsavedChanges, (_, value: boolean) => {
       hasUnsavedChanges = value;
     });
+    ipcMain.handle(CHANNELS.app.quit, () => {
+      app.quit();
+    });
+    registerWindowRequestIpc();
+    registerThemeSourceIpc();
 
     // Build custom application menu
     const template: Electron.MenuItemConstructorOptions[] = [
@@ -999,18 +960,19 @@ async function initializeApp() {
     // Create menu bar (tray) icon — respects user preference
     try {
       const settings = await appSettingsService.ensureSettings();
-      if (settings.showMenuBarIcon) createTray();
+      if (settings.showMenuBarIcon) showTray();
     } catch (err) {
       console.warn("Failed to read menu bar icon preference, defaulting to shown:", err);
-      createTray();
+      showTray();
     }
+    startDockMenu();
 
     // IPC: toggle menu bar icon visibility at runtime
     ipcMain.handle(CHANNELS.app.setMenuBarIconVisible, (_, visible: boolean) => {
       if (visible) {
-        createTray();
+        showTray();
       } else {
-        destroyTray();
+        hideTray();
       }
     });
 
@@ -1039,6 +1001,8 @@ async function initializeApp() {
       },
     });
 
+    await appshotsService.start();
+
     console.log("Application initialized successfully");
   } catch (error) {
     console.error("Failed to initialize application:", error);
@@ -1054,8 +1018,9 @@ async function cleanupApp() {
   try {
     console.log("Cleaning up application...");
 
-    // Destroy tray
-    destroyTray();
+    // Destroy tray and the Dock menu's status feed
+    hideTray();
+    stopDockMenu();
 
     // Destroy all terminal PTY instances
     destroyAllTerminals();
@@ -1092,6 +1057,8 @@ async function cleanupApp() {
     unregisterGitFlowIpc();
     unregisterTerminalIpc();
     unregisterImageProxyIpc();
+    unregisterMcpAppsIpc();
+    unregisterMcpAppsProtocolHandler();
     unregisterStatsIpc();
     unregisterUpdatesIpc();
     automationsService.stop();
@@ -1103,10 +1070,14 @@ async function cleanupApp() {
     await shutdownAllGuardAdapters();
     try { browserService.destroy(); } catch { /* ignore */ }
     unregisterBrowserIpc();
+    appshotsService.stop();
+    unregisterAppshotsIpc();
+    unregisterKeyboardShortcutsIpc();
     unregisterSshIpc();
     unregisterRemoteBackendsIpc();
     unregisterBackendIpc();
     unregisterLocalBackendIpc();
+    unregisterSearchIpc();
     ipcMain.removeHandler(CHANNELS.shell.openExternal);
     ipcMain.removeHandler(CHANNELS.shell.openPath);
     ipcMain.removeHandler(CHANNELS.shell.showItemInFolder);
@@ -1116,6 +1087,9 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.shell.openFileWithBundle);
     ipcMain.removeHandler(CHANNELS.app.setUnsavedChanges);
     ipcMain.removeHandler(CHANNELS.app.setMenuBarIconVisible);
+    ipcMain.removeHandler(CHANNELS.app.quit);
+    unregisterWindowRequestIpc();
+    unregisterThemeSourceIpc();
 
     // Close database
     await closeDatabase();

@@ -8,6 +8,7 @@ import {
   toolEventPlanName,
   type EventGroup,
 } from "./tools/tool-call-group";
+import { ToolCallItem } from "./tools/tool-call-item";
 import { PlanDisplay } from "./tools/plan-display";
 import { demoteStaleRunningTools } from "./tools/_shared";
 import { EditorContent } from "./editor-content";
@@ -18,14 +19,19 @@ import { WorkspaceEmptyState } from "./workspace-empty-state";
 import { TurnRail } from "./turn-rail";
 import { CONTENT_COLUMN_GUTTER } from "../lib/content-column";
 import { buildTurnMarkers, type TurnMarker } from "../lib/turn-markers";
-import { FILE_WRITING_TOOLS } from "../lib/tool-registry";
-import { resolveTool } from "../lib/resolve-tool";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import type { Run, RunEvent, Workspace } from "../types";
-import type { IssueWithEntity, SignalWithEntity, RunTurn, ModelUsageEntry } from "@/lib/redux/api";
+import type {
+  IssueWithEntity,
+  SignalWithEntity,
+  RunTurn,
+  ModelInfo,
+  ModelUsageEntry,
+} from "@/lib/redux/api";
 import {
   buildTurnRenderRows,
   matchTurnsToGroups,
+  matchModelChangesToPromptGroups,
   isUserPromptGroup,
   type SessionInfo,
 } from "../lib/transcript-rows";
@@ -35,13 +41,19 @@ import { isIssueTab, getIssueEntityId, isSignalTab, getSignalEntityId, isNoteTab
 import { AsciiLoader } from "./ascii-loader";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
-import { ArrowUp, Fork } from "@/components/ui/icons";
-import { useGetAppSettingsQuery, useGetProviderAccountInfoQuery } from "@/lib/redux/api";
+import { ArrowUp, Box, Fork } from "@/components/ui/icons";
+import {
+  useGetAppSettingsQuery,
+  useGetProviderAccountInfoQuery,
+  useGetProviderModelsQuery,
+} from "@/lib/redux/api";
 import { getProviderVariant } from "@/lib/provider-variants";
 import { isDocumentRenderImage } from "@/lib/document-viewer";
+import { resolveModelDisplayName } from "@/lib/model-icons";
 import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
+import { TurnChangesCard } from "./turn-changes-card";
 
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
@@ -144,6 +156,61 @@ function UsageTooltipContent({ turn }: { turn: RunTurn }) {
         </Text>
       )}
     </Text>
+  );
+}
+
+function ModelChangeNotice({
+  fromModel,
+  toModel,
+  variant,
+  models,
+}: {
+  fromModel: string;
+  toModel: string;
+  variant: NonNullable<WorkspaceEventsProps["variant"]>;
+  models: ModelInfo[];
+}) {
+  const fromLabel = resolveModelDisplayName(fromModel, models, variant);
+  const toLabel = resolveModelDisplayName(toModel, models, variant);
+
+  return (
+    <div
+      role="note"
+      aria-label={`Model changed from ${fromLabel} to ${toLabel}`}
+      className="flex items-center gap-3 py-1"
+    >
+      <div className="min-w-6 flex-1 border-t border-dashed border-primary-300/80 dark:border-primary-800" />
+      <Text
+        as="div"
+        size="s"
+        tone="faint"
+        className="flex shrink-0 items-center gap-1.5"
+      >
+        <Box className="size-4 shrink-0" aria-hidden />
+        <span>
+          Model changed from {fromLabel} to {toLabel}.
+        </span>
+        <Tooltip
+          position="top-left"
+          className="max-w-72 whitespace-normal px-3 py-2 text-center"
+          content={
+            <span>
+              A different model may interpret the conversation differently.
+              <br />
+              Earlier context may be condensed to fit the new model.
+            </span>
+          }
+        >
+          <Button
+            aria-label="About changing models"
+            className="flex size-4 shrink-0 items-center justify-center rounded-full border border-current text-[10px] font-semibold leading-none opacity-90 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
+          >
+            i
+          </Button>
+        </Tooltip>
+      </Text>
+      <div className="min-w-6 flex-1 border-t border-dashed border-primary-300/80 dark:border-primary-800" />
+    </div>
   );
 }
 
@@ -336,6 +403,8 @@ interface WorkspaceEventsProps {
   runs: Run[];
   activeTab: "editor" | string;
   currentEvents: RunEvent[];
+  /** The active run's events haven't arrived yet — not the same as having none. */
+  isTranscriptLoading?: boolean;
   currentWorkspace: Workspace | null;
   eventsEndRef: RefObject<HTMLDivElement>;
   issueTabs: IssueWithEntity[];
@@ -353,6 +422,7 @@ export function WorkspaceEvents({
   runs,
   activeTab,
   currentEvents,
+  isTranscriptLoading = false,
   currentWorkspace,
   eventsEndRef,
   issueTabs,
@@ -383,6 +453,10 @@ export function WorkspaceEvents({
 
   // Check if current run is still running
   const activeRun = runs.find((r) => r.id === activeTab);
+  const { data: providerModels = [] } = useGetProviderModelsQuery(
+    activeRun?.providerId ?? "",
+    { skip: !activeRun?.providerId },
+  );
 
   // Being signed out entirely is already reported above the composer, with a
   // recheck the run-anchored notice does not offer. The notice below is for the
@@ -468,6 +542,10 @@ export function WorkspaceEvents({
     () => matchTurnsToGroups(eventGroups, turns, activeRun?.startedAt, isRunCompleted),
     [eventGroups, turns, activeRun?.startedAt, isRunCompleted],
   );
+  const modelChanges = useMemo(
+    () => matchModelChangesToPromptGroups(eventGroups, turns),
+    [eventGroups, turns],
+  );
 
   // Last session time index — fork button only shown on the last one
   const lastSessionIndex = useMemo(() => {
@@ -503,27 +581,10 @@ export function WorkspaceEvents({
     [activeRun, onForkRun],
   );
 
-  // Work calls a written file the deliverable, so its Write row has to stay
-  // reachable: the agent names the file in prose but only that row opens it.
-  const { keepFileWritesVisible } = useModeConfig();
-  const isDeliverableGroup = useMemo(
-    () =>
-      keepFileWritesVisible
-        ? (group: EventGroup) =>
-            group.events.some(
-              (e) =>
-                e.type === "tool_call" &&
-                typeof e.metadata?.toolName === "string" &&
-                FILE_WRITING_TOOLS.has(
-                  resolveTool(e.metadata.toolName).displayName,
-                ),
-            )
-        : undefined,
-    [keepFileWritesVisible],
-  );
+  const { showTurnChanges } = useModeConfig();
   const turnRenderRows = useMemo(
-    () => buildTurnRenderRows(eventGroups, { isDeliverableGroup }),
-    [eventGroups, isDeliverableGroup],
+    () => buildTurnRenderRows(eventGroups),
+    [eventGroups],
   );
 
   // Left-edge navigator: one tick per user message. Built from the same groups
@@ -556,6 +617,7 @@ export function WorkspaceEvents({
     (index: number) => {
       const group = eventGroups[index];
       if (!group) return null;
+      const modelChange = modelChanges.get(index);
       const isLastSuggestion =
         group.type === "prompt_suggestion" &&
         onSuggestionSelect &&
@@ -568,11 +630,32 @@ export function WorkspaceEvents({
         group.type === "tool_calls" && group.events.length === 1
           ? toolEventPlanName(group.events[0])
           : null;
+      // The turn's changes card sits where its session bar does: right after
+      // the turn's last group, so it reads as the turn's outcome.
+      const turnForBar = sessionBarForThis?.turn;
+      const turnChangesCard =
+        showTurnChanges && activeRun && turnForBar?.changes ? (
+          <TurnChangesCard
+            runId={activeRun.id}
+            turnId={turnForBar.id}
+            changes={turnForBar.changes}
+            canUndo={!isRunning}
+          />
+        ) : null;
 
       return (
         <Fragment key={group.id}>
+          {modelChange && (
+            <ModelChangeNotice
+              fromModel={modelChange.fromModel}
+              toModel={modelChange.toModel}
+              variant={variant}
+              models={providerModels}
+            />
+          )}
           {group.type === "prompt_suggestion" ? (
             <>
+              {turnChangesCard}
               {sessionBarForThis && (
                 <SessionTimeBar
                   info={sessionBarForThis}
@@ -581,11 +664,21 @@ export function WorkspaceEvents({
               )}
               {isLastSuggestion ? (
                 <PromptSuggestionChips
-                  suggestions={group.events.map((e) => e.content).filter(Boolean)}
+                  suggestions={group.events
+                    .filter((e) => Boolean(e.content))
+                    .map((e) => ({
+                      prompt: e.content,
+                      label:
+                        typeof e.metadata?.label === "string"
+                          ? e.metadata.label
+                          : undefined,
+                    }))}
                   onSelect={onSuggestionSelect}
                 />
               ) : null}
             </>
+          ) : group.type === "mcp_app" ? (
+            <ToolCallItem event={group.events[0]} isCompact={false} />
           ) : group.type === "tool_calls" ? (
             planToolName === "plan" ||
             planToolName === "create plan" ||
@@ -612,6 +705,7 @@ export function WorkspaceEvents({
           ) : (
             <InfoGroup group={group} workspaceRootPath={currentWorkspace?.rootPath} />
           )}
+          {group.type !== "prompt_suggestion" && turnChangesCard}
           {group.type !== "prompt_suggestion" && sessionBarForThis && (
             <SessionTimeBar
               info={sessionBarForThis}
@@ -622,6 +716,8 @@ export function WorkspaceEvents({
       );
     },
     [
+      showTurnChanges,
+      activeRun,
       eventGroups,
       onSuggestionSelect,
       isRunCompleted,
@@ -636,6 +732,8 @@ export function WorkspaceEvents({
       hasPendingPlanApproval,
       isRunning,
       currentWorkspace?.rootPath,
+      modelChanges,
+      providerModels,
     ],
   );
 
@@ -665,7 +763,9 @@ export function WorkspaceEvents({
   // Run content stays mounted whenever there are events for the active run,
   // just hidden when a non-run tab is active. Preserves accordion open state,
   // scroll position, and other local UI state across tab switches.
-  const showEmpty = isRunTabActive && currentEvents.length === 0;
+  // A transcript still loading stays blank instead of flashing the empty state.
+  const showEmpty =
+    isRunTabActive && currentEvents.length === 0 && !isTranscriptLoading;
 
   return (
     <Text as="div" size="sm" tone="inherit" className="h-full flex flex-col">
@@ -755,7 +855,11 @@ export function WorkspaceEvents({
           </div>
         )}
         {hasRunContent && (
-          <TurnRail markers={turnMarkers} onSelect={scrollToTurn} />
+          <TurnRail
+            markers={turnMarkers}
+            onSelect={scrollToTurn}
+            transcriptRef={transcriptRef}
+          />
         )}
         {showEmpty && <WorkspaceEmptyState workspace={currentWorkspace} />}
         {/* Top/bottom fade overlays — only shown on run content (chat), not on editor/issue/note tabs.

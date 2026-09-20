@@ -2,6 +2,18 @@ import * as dns from "dns";
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { imageProxyService, isBlockedIp, isImageContentType } from "./imageProxy.service";
 
+describe("signLocalVisualizationUrl", () => {
+  it("signs absolute HTML paths and rejects other inputs", () => {
+    expect(
+      imageProxyService.signLocalVisualizationUrl("/tmp/chart.html"),
+    ).toMatch(/^mains-visualize:\/\/view\//);
+    expect(imageProxyService.signLocalVisualizationUrl("chart.html")).toBeNull();
+    expect(
+      imageProxyService.signLocalVisualizationUrl("/tmp/chart.svg"),
+    ).toBeNull();
+  });
+});
+
 describe("matchUrlToGithub (B1: token-leak host match)", () => {
   it("matches real GitHub image hosts", () => {
     for (const url of [

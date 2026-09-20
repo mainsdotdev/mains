@@ -17,6 +17,7 @@
 // re-export — going through the component would pull the whole React/UI tree
 // (and its browser-global-touching deps) into this React-free module.
 import { isPlanToolCallGroup, type EventGroup } from "./group-events";
+import { documentDeliverableKey } from "./deliverable-identity";
 import type { RunTurn } from "@/lib/redux/api";
 
 export interface SessionInfo {
@@ -99,9 +100,16 @@ export function matchTurnsToGroups(
 
     // Skip if this group is a user-prompt itself
     const groupAtBest = groups[bestIdx];
-    if (groupAtBest?.type === "info" && groupAtBest.events[0]?.metadata?.kind === "user-prompt") {
-      if (bestIdx > 0) bestIdx--;
+    if (groupAtBest && isUserPromptGroup(groupAtBest)) {
+      bestIdx--;
     }
+
+    // An abandoned attempt — a continue that died before the provider emitted
+    // anything — owns no groups: its end time falls before the next prompt, so
+    // the step back above lands on the *previous* turn's last group. Placing it
+    // there would overwrite that turn's bar with this turn's (tiny) elapsed
+    // time. Nothing to attach it to, so it gets no bar and claims no groups.
+    if (bestIdx < lastGroupIdx) continue;
 
     result.set(bestIdx, {
       elapsed: turn.elapsedMs,
@@ -187,6 +195,44 @@ export function isUserPromptGroup(g: EventGroup): boolean {
   return g.type === "info" && g.events[0]?.metadata?.kind === "user-prompt";
 }
 
+export interface ModelChangeMarker {
+  fromModel: string;
+  toModel: string;
+}
+
+/**
+ * Attach adjacent turn-model changes to the user prompt that started the new
+ * turn. Unknown historical models stay silent — guessing would create a false
+ * change marker in older transcripts whose turn rows predate model capture.
+ */
+export function matchModelChangesToPromptGroups(
+  groups: EventGroup[],
+  turns: RunTurn[],
+): Map<number, ModelChangeMarker> {
+  const result = new Map<number, ModelChangeMarker>();
+  const promptGroupIndices = groups.reduce<number[]>((indices, group, index) => {
+    if (isUserPromptGroup(group)) indices.push(index);
+    return indices;
+  }, []);
+  const orderedTurns = [...turns].sort((a, b) => a.turnIndex - b.turnIndex);
+  const comparableCount = Math.min(promptGroupIndices.length, orderedTurns.length);
+
+  for (let i = 1; i < comparableCount; i++) {
+    const fromModel = orderedTurns[i - 1]?.model?.trim();
+    const toModel = orderedTurns[i]?.model?.trim();
+    if (
+      !fromModel ||
+      !toModel ||
+      fromModel.toLowerCase() === toModel.toLowerCase()
+    ) {
+      continue;
+    }
+    result.set(promptGroupIndices[i]!, { fromModel, toModel });
+  }
+
+  return result;
+}
+
 function expandIndexRange(r: { start: number; end: number }): number[] {
   const out: number[] = [];
   for (let i = r.start; i <= r.end; i++) out.push(i);
@@ -253,8 +299,8 @@ export type TurnRenderRow =
       /** Plan tool groups — pulled out of `previousSegments` so they stay outside the collapsed bucket. */
       planBreakoutIndices: number[];
       /**
-       * Groups whose output is the turn's deliverable — generated media, plus
-       * file writes in modes that say so. Kept visible rather than folded into
+       * Groups whose output is the turn's deliverable — generated media and
+       * the documents a turn produced. Kept visible rather than folded into
        * the collapsed bucket.
        */
       messageBreakoutIndices: number[];
@@ -263,34 +309,73 @@ export type TurnRenderRow =
       previousToolSummary: string;
     };
 
-function groupHasMediaArtifact(g: EventGroup): boolean {
-  return g.events.some(
-    (e) =>
-      e.type === "artifact" &&
-      (
-        e.metadata?.kind === "image" ||
-        e.metadata?.kind === "image_generation" ||
-        e.metadata?.kind === "document"
-      ),
-  );
+/**
+ * Material the turn worked *with* rather than produced, tagged at the source
+ * (see `isWorkingCopy` and the `viewed` gate in codex-event-mapper): a scratch
+ * copy under a hidden build directory, or an image that already existed when
+ * the run started and was only opened.
+ *
+ * It still reaches the transcript, so nothing is lost — it stays inside the
+ * turn's collapsed bucket instead of claiming a place beside what the turn
+ * actually produced.
+ */
+function isSupportingArtifact(event: EventGroup["events"][number]): boolean {
+  if (event.type !== "artifact") return false;
+  return event.metadata?.working === true || event.metadata?.viewed === true;
+}
+
+function documentArtifactKey(event: EventGroup["events"][number]): string | null {
+  if (event.type !== "artifact" || event.metadata?.kind !== "document") {
+    return null;
+  }
+  const candidate =
+    (typeof event.metadata.fileName === "string" && event.metadata.fileName) ||
+    (typeof event.metadata.path === "string" && event.metadata.path) ||
+    event.content;
+  return candidate ? documentDeliverableKey(candidate) : null;
+}
+
+function latestDocumentGroups(
+  groups: EventGroup[],
+  turnStart: number,
+  turnEnd: number,
+): Map<string, number> {
+  const latest = new Map<string, number>();
+  for (let groupIndex = turnStart; groupIndex <= turnEnd; groupIndex++) {
+    for (const event of groups[groupIndex]?.events ?? []) {
+      // A supporting artifact must not claim the key: it is never broken out,
+      // so letting a late scratch render win would take the real card down
+      // with it and leave the turn showing no document at all.
+      if (isSupportingArtifact(event)) continue;
+      const key = documentArtifactKey(event);
+      if (key) latest.set(key, groupIndex);
+    }
+  }
+  return latest;
+}
+
+function groupHasMediaArtifact(
+  group: EventGroup,
+  groupIndex: number,
+  latestDocumentGroup: ReadonlyMap<string, number>,
+): boolean {
+  return group.events.some((event) => {
+    if (event.type !== "artifact") return false;
+    if (isSupportingArtifact(event)) return false;
+    if (event.metadata?.kind === "document") {
+      const key = documentArtifactKey(event);
+      return !key || latestDocumentGroup.get(key) === groupIndex;
+    }
+    return (
+      event.metadata?.kind === "image" ||
+      event.metadata?.kind === "image_generation" ||
+      event.metadata?.kind === "visualization"
+    );
+  });
 }
 
 /** Linear plan: every group index appears exactly once, in order. */
-export interface TurnRenderOptions {
-  /**
-   * Extra groups to keep out of the collapsed bucket, beyond plans and media.
-   *
-   * Injected rather than decided here: what counts as a deliverable is a
-   * question about tool vocabulary and the active mode, and this module is the
-   * layout plan — React-free, and deliberately ignorant of both.
-   */
-  isDeliverableGroup?: (group: EventGroup) => boolean;
-}
-
-export function buildTurnRenderRows(
-  groups: EventGroup[],
-  options: TurnRenderOptions = {},
-): TurnRenderRow[] {
+export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
   const rows: TurnRenderRow[] = [];
   let idx = 0;
   while (idx < groups.length) {
@@ -305,6 +390,11 @@ export function buildTurnRenderRows(
     if (turnStart > turnEnd) continue;
 
     const { prefix, segments } = partitionAgentTurn(groups, turnStart, turnEnd);
+    const latestDocumentGroup = latestDocumentGroups(
+      groups,
+      turnStart,
+      turnEnd,
+    );
     const prefixIndices = prefix.flatMap(expandIndexRange);
 
     if (segments.length === 0) {
@@ -329,8 +419,9 @@ export function buildTurnRenderRows(
       prevRanges[0] = [...prefixIndices, ...prevRanges[0]!];
     }
 
-    // Plan (PlanDisplay) must stay out of the collapsed region so Apply / Dismiss stay usable.
-    // Image/document artifacts also stay outside — generated media shouldn't be hidden behind the accordion.
+    // Plans and MCP Apps must stay out of the collapsed region so their
+    // interactions remain reachable. Generated media/documents stay outside
+    // for the same reason: these are turn deliverables, not execution detail.
     const planBreakout: number[] = [];
     const messageBreakout: number[] = [];
     for (const range of prevRanges) {
@@ -338,7 +429,10 @@ export function buildTurnRenderRows(
         const g = groups[gIdx]!;
         if (isPlanToolCallGroup(g)) {
           planBreakout.push(gIdx);
-        } else if (groupHasMediaArtifact(g) || options.isDeliverableGroup?.(g)) {
+        } else if (
+          g.type === "mcp_app" ||
+          groupHasMediaArtifact(g, gIdx, latestDocumentGroup)
+        ) {
           messageBreakout.push(gIdx);
         }
       }

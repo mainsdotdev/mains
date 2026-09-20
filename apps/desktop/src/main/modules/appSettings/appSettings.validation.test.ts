@@ -44,6 +44,15 @@ describe("sanitizeAppSettingsPatch", () => {
     expect(result).toEqual({ enableWorktrees: false });
   });
 
+  it("keeps Appshots runtime settings behind its dedicated IPC", () => {
+    expect(
+      sanitizeAppSettingsPatch({
+        appshotsEnabled: false,
+        appshotsShortcut: "Command+Shift+A",
+      }),
+    ).toEqual({});
+  });
+
   it("preserves null for activeSpaceId", () => {
     expect(sanitizeAppSettingsPatch({ activeSpaceId: null })).toEqual({
       activeSpaceId: null,

@@ -261,7 +261,7 @@ export function WizardModal<
             onClick={() => !isSubmitting && close()}
             disabled={isSubmitting}
             aria-label="Close modal"
-        className="rounded-full cursor-pointer hover:bg-primary-100 dark:hover:bg-primary/10 p-1.5 glass-button text-primary-900 dark:text-primary-100 transition-all duration-300 ease-out"
+        className="rounded-full cursor-pointer hover:bg-primary-100 dark:hover:bg-primary/10 p-1.5 text-primary-900 dark:text-primary-100 transition-all duration-300 ease-out"
           >
             <Close className="size-4" />
           </Button>

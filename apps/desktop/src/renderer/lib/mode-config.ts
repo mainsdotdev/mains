@@ -43,6 +43,8 @@ export interface ModeConfigDescriptor {
   mode: ModeId;
   /** Human-facing name for the mode picker. */
   label: string;
+  /** Supporting copy shown under the mode name in the picker menu. */
+  description: string;
   sidebar: ModeSidebarConfig;
   /**
    * Composer placeholder per mode: developer advertises files because the
@@ -50,8 +52,12 @@ export interface ModeConfigDescriptor {
    */
   composerPlaceholder: ModeComposerPlaceholder;
   rightPanel: ModeRightPanelConfig;
-  /** Session panel with the git-actions menu, and its trigger. */
+  /** Git/environment section inside the session panel. */
   showGitActions: boolean;
+  /** Sources used by the active run, and the session-panel trigger for them. */
+  showSources: boolean;
+  /** Files/media produced by the active run, kept separate from its sources. */
+  showDeliverables: boolean;
   /** Terminal section + the right-panel terminal toggle. */
   showTerminal: boolean;
   /** The right panel's Changes (git diff) tab. */
@@ -77,20 +83,18 @@ export interface ModeConfigDescriptor {
    */
   showRightPanel: boolean;
   /**
-   * Keep file-writing tool calls out of the turn accordion.
-   *
-   * In Code a turn is dozens of edits and collapsing them is the whole point.
-   * In Work the file *is* the deliverable — the agent names it in prose but the
-   * only way to open it is the Write row, which is exactly what the accordion
-   * was hiding. Same reasoning that already keeps generated media visible.
+   * The changes card under a turn (Edited N files, Undo, Review). Work keeps
+   * it even without the git ceremony — its deliverables are files, and undoing
+   * a turn is not a git action. Chat's read-only harness changes nothing.
    */
-  keepFileWritesVisible: boolean;
+  showTurnChanges: boolean;
 }
 
 export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
   developer: {
     mode: "developer",
     label: "Code",
+    description: "Shape and ship your codebase",
     sidebar: {
       title: "Project",
       itemType: "workspace",
@@ -105,6 +109,8 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     },
     rightPanel: { component: "workspace" },
     showGitActions: true,
+    showSources: true,
+    showDeliverables: false,
     showTerminal: true,
     showChangesTab: true,
     showPermissionControls: true,
@@ -114,7 +120,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showTabs: true,
     showPluginsButton: false,
     showRightPanel: true,
-    keepFileWritesVisible: false,
+    showTurnChanges: true,
   },
   // Work: same surfaces minus the developer ceremony — no git actions, no
   // terminal, no diff tab, no permission dropdown (the harness pins
@@ -124,6 +130,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
   work: {
     mode: "work",
     label: "Work",
+    description: "Turn tasks into finished work",
     sidebar: {
       title: "chat",
       itemType: "chat",
@@ -136,6 +143,8 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     },
     rightPanel: { component: "workspace" },
     showGitActions: false,
+    showSources: true,
+    showDeliverables: true,
     showTerminal: false,
     showChangesTab: false,
     showPermissionControls: false,
@@ -145,13 +154,14 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showTabs: false,
     showPluginsButton: true,
     showRightPanel: false,
-    keepFileWritesVisible: true,
+    showTurnChanges: true,
   },
   // Chat: plain conversation — read-only harness, so every write-adjacent
   // affordance goes. Files tab stays for viewing.
   chat: {
     mode: "chat",
     label: "Chat",
+    description: "Think, explore, and get answers",
     sidebar: {
       title: "chat",
       itemType: "chat",
@@ -164,6 +174,8 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     },
     rightPanel: { component: "workspace" },
     showGitActions: false,
+    showSources: false,
+    showDeliverables: false,
     showTerminal: false,
     showChangesTab: false,
     showPermissionControls: false,
@@ -173,7 +185,7 @@ export const MODE_CONFIGS: Record<ModeId, ModeConfigDescriptor> = {
     showTabs: false,
     showPluginsButton: false,
     showRightPanel: false,
-    keepFileWritesVisible: false,
+    showTurnChanges: false,
   },
 };
 

@@ -2,6 +2,81 @@ import { contextBridge, ipcRenderer } from "electron";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 import type { ModeId } from "../shared/modes";
+import type {
+  AppshotCapture,
+  AppshotsConfiguration,
+  AppshotsSystemSettingsPane,
+} from "../shared/appshots";
+import type {
+  KeyboardShortcutId,
+} from "../shared/keyboard-shortcuts";
+
+type BrowserDownloadState =
+  | "progressing"
+  | "paused"
+  | "completed"
+  | "cancelled"
+  | "interrupted";
+
+interface BrowserDownload {
+  id: string;
+  tabId: string | null;
+  fileName: string;
+  savePath: string;
+  sourceUrl: string;
+  mimeType: string;
+  state: BrowserDownloadState;
+  receivedBytes: number;
+  totalBytes: number;
+  speedBytesPerSecond: number;
+  startedAt: string;
+  updatedAt: string;
+}
+
+interface BrowserHistoryEntry {
+  id: string;
+  url: string;
+  title: string;
+  faviconUrl: string | null;
+  visitedAt: string;
+  visitCount: number;
+}
+
+type BrowserDevicePresetId =
+  | "responsive"
+  | "iphone-se"
+  | "iphone-14-pro"
+  | "iphone-14-pro-max"
+  | "pixel-7"
+  | "galaxy-s20-ultra"
+  | "surface-duo"
+  | "ipad-mini"
+  | "ipad-air"
+  | "nest-hub";
+
+interface BrowserDeviceEmulation {
+  enabled: boolean;
+  presetId: BrowserDevicePresetId;
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  scale: number;
+}
+
+type BrowserClearDataTimeRange =
+  | "last-hour"
+  | "last-day"
+  | "last-week"
+  | "last-four-weeks"
+  | "all-time";
+
+interface BrowserClearDataOptions {
+  timeRange: BrowserClearDataTimeRange;
+  history: boolean;
+  cookiesAndSiteData: boolean;
+  cache: boolean;
+  downloads: boolean;
+}
 
 // Expose IPC methods to renderer process
 const api = {
@@ -20,6 +95,13 @@ const api = {
     delete: (id: string) => ipcRenderer.invoke(CHANNELS.entities.delete, id),
     search: (query: string, options?: { kind?: string; limit?: number }) =>
       ipcRenderer.invoke(CHANNELS.entities.search, query, options),
+  },
+  search: {
+    query: (input: {
+      query: string;
+      accountId?: string;
+      limitPerKind?: number;
+    }) => ipcRenderer.invoke(CHANNELS.search.query, input),
   },
   // Task operations (actionable domain)
   tasks: {
@@ -162,6 +244,11 @@ const api = {
         enabled,
         httpsPort,
       ),
+    setKeepAwakeForRemoteAccess: (enabled: boolean) =>
+      ipcRenderer.invoke(
+        CHANNELS.localBackend.setKeepAwakeForRemoteAccess,
+        enabled,
+      ),
     // Replace the shared token; clients using the old one are disconnected
     rotateToken: () => ipcRenderer.invoke(CHANNELS.localBackend.rotateToken),
     // Phone pairing — mint a QR code, list/revoke the phones that used one
@@ -226,6 +313,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.collections.create, payload),
     update: (options: { id: string; accountId: string }, payload: unknown) =>
       ipcRenderer.invoke(CHANNELS.collections.update, options, payload),
+    reorder: (payload: { accountId: string; orderedIds: string[] }) =>
+      ipcRenderer.invoke(CHANNELS.collections.reorder, payload),
     archive: (options: { id: string; accountId: string }) =>
       ipcRenderer.invoke(CHANNELS.collections.archive, options),
     unarchive: (options: { id: string; accountId: string }) =>
@@ -264,6 +353,56 @@ const api = {
       return () => ipcRenderer.removeListener(CHANNELS.space.changed, listener);
     },
   },
+  // macOS global window capture (local desktop only)
+  appshots: {
+    getStatus: () => ipcRenderer.invoke(CHANNELS.appshots.getStatus),
+    configure: (configuration: AppshotsConfiguration) =>
+      ipcRenderer.invoke(CHANNELS.appshots.configure, configuration),
+    captureNow: () => ipcRenderer.invoke(CHANNELS.appshots.captureNow),
+    consumePending: () =>
+      ipcRenderer.invoke(CHANNELS.appshots.consumePending),
+    acknowledge: (captureId: string) =>
+      ipcRenderer.invoke(CHANNELS.appshots.acknowledge, captureId),
+    deleteCapture: (captureName: string) =>
+      ipcRenderer.invoke(CHANNELS.appshots.deleteCapture, captureName),
+    requestAccessibility: () =>
+      ipcRenderer.invoke(CHANNELS.appshots.requestAccessibility),
+    openSystemSettings: (pane: AppshotsSystemSettingsPane) =>
+      ipcRenderer.invoke(CHANNELS.appshots.openSystemSettings, pane),
+    onCaptured: (callback: (capture: AppshotCapture) => void) => {
+      const listener = (_event: unknown, capture: AppshotCapture) =>
+        callback(capture);
+      ipcRenderer.on(CHANNELS.appshots.captured, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.appshots.captured, listener);
+    },
+    onError: (callback: (message: string) => void) => {
+      const listener = (_event: unknown, payload: { message?: unknown }) =>
+        callback(
+          typeof payload?.message === "string"
+            ? payload.message
+            : "Lens capture failed",
+        );
+      ipcRenderer.on(CHANNELS.appshots.error, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.appshots.error, listener);
+    },
+  },
+  // In-app keyboard shortcuts (local desktop only; Lens remains separate).
+  keyboardShortcuts: {
+    get: () => ipcRenderer.invoke(CHANNELS.keyboardShortcuts.get),
+    update: (input: {
+      id: KeyboardShortcutId;
+      binding: string | null;
+    }) => ipcRenderer.invoke(CHANNELS.keyboardShortcuts.update, input),
+    resetAll: () => ipcRenderer.invoke(CHANNELS.keyboardShortcuts.resetAll),
+  } satisfies {
+    get: () => Promise<unknown>;
+    update: (input: {
+      id: KeyboardShortcutId;
+      binding: string | null;
+    }) => Promise<unknown>;
+    resetAll: () => Promise<unknown>;
+  },
   // Provider operations
   providers: {
     getAll: () => ipcRenderer.invoke(CHANNELS.providers.getAll),
@@ -300,6 +439,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.providers.getCommands, id, workspacePath),
     getSkills: (id: string, workspacePath?: string) => ipcRenderer.invoke(CHANNELS.providers.getSkills, id, workspacePath),
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
+    consumeRateLimitResetCredit: (id: string, params: unknown) =>
+      ipcRenderer.invoke(CHANNELS.providers.consumeRateLimitResetCredit, id, params),
     // Fired when the provider streams a fresh rate-limit snapshot during a run
     // (Codex `account/rateLimits/updated`). Carries the mapped snapshot so the
     // renderer can patch its cache without a round-trip.
@@ -323,6 +464,16 @@ const api = {
     updateCli: (id: string) => ipcRenderer.invoke(CHANNELS.providers.updateCli, id),
     getPlugins: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getPlugins, id),
     getInstalledPlugins: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getInstalledPlugins, id),
+    getConnectors: (id: string, forceRefresh?: boolean) =>
+      ipcRenderer.invoke(CHANNELS.providers.getConnectors, id, forceRefresh),
+    startConnectorOAuth: (id: string, serverName: string) =>
+      ipcRenderer.invoke(CHANNELS.providers.startConnectorOAuth, id, serverName),
+    onConnectorsUpdated: (callback: (data: { providerId: string }) => void) => {
+      const listener = (_: any, data: { providerId: string }) => callback(data);
+      ipcRenderer.on(CHANNELS.providers.connectorsUpdated, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.providers.connectorsUpdated, listener);
+    },
     readPlugin: (id: string, pluginName: string, marketplacePath: string) => ipcRenderer.invoke(CHANNELS.providers.readPlugin, id, pluginName, marketplacePath),
     installPlugin: (id: string, pluginId: string, scope?: string) => ipcRenderer.invoke(CHANNELS.providers.installPlugin, id, pluginId, scope),
     uninstallPlugin: (id: string, pluginId: string) => ipcRenderer.invoke(CHANNELS.providers.uninstallPlugin, id, pluginId),
@@ -489,6 +640,8 @@ const api = {
     getById: (id: string) => ipcRenderer.invoke(CHANNELS.runs.getById, id),
     getExecutionRoot: (runId: string) =>
       ipcRenderer.invoke(CHANNELS.runs.getExecutionRoot, runId),
+    listOutputFiles: (runId: string) =>
+      ipcRenderer.invoke(CHANNELS.runs.listOutputFiles, runId),
     getByAccount: (accountId: string, limit?: number) =>
       ipcRenderer.invoke(CHANNELS.runs.getByAccount, accountId, limit),
     getByWorkspace: (
@@ -507,6 +660,11 @@ const api = {
       accountId: string;
       collectionId: string | null;
     }) => ipcRenderer.invoke(CHANNELS.runs.moveToCollection, payload),
+    setPinned: (payload: {
+      runId: string;
+      accountId: string;
+      pinned: boolean;
+    }) => ipcRenderer.invoke(CHANNELS.runs.setPinned, payload),
     start: (id: string) => ipcRenderer.invoke(CHANNELS.runs.start, id),
     complete: (id: string) => ipcRenderer.invoke(CHANNELS.runs.complete, id),
     fail: (id: string, error: string) =>
@@ -538,8 +696,8 @@ const api = {
       attachments?: Array<{ name: string; type: string; data?: string; sourcePath?: string; mimeType: string }>;
       contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
       contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
-      contextFiles?: Array<{ path: string }>;
-      contextSkills?: Array<{ name: string; path?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
+      contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
+      contextSkills?: Array<{ name: string; path?: string; mentionPath?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
     }) => ipcRenderer.invoke(CHANNELS.runs.execute, payload),
     abort: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.abort, runId),
     getToolCalls: (runId: string, sinceUpdatedAt?: Date) =>
@@ -559,8 +717,8 @@ const api = {
       attachments?: Array<{ name: string; type: string; data?: string; sourcePath?: string; mimeType: string }>;
       contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
       contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
-      contextFiles?: Array<{ path: string }>;
-      contextSkills?: Array<{ name: string; path?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
+      contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
+      contextSkills?: Array<{ name: string; path?: string; mentionPath?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
     canResume: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.canResume, runId),
     fork: (payload: {
@@ -587,7 +745,6 @@ const api = {
         title?: string;
         instructions?: string;
       };
-      delivery?: "inline" | "detached";
       model?: string;
       systemPrompt?: string;
       configSnapshot?: Record<string, unknown>;
@@ -696,6 +853,10 @@ const api = {
   // Run turns operations
   runTurns: {
     getByRun: (runId: string) => ipcRenderer.invoke(CHANNELS.runTurns.getByRun, runId),
+    getChangesDiff: (runId: string, turnId: number) =>
+      ipcRenderer.invoke(CHANNELS.runTurns.getChangesDiff, runId, turnId),
+    undoChanges: (runId: string, turnId: number) =>
+      ipcRenderer.invoke(CHANNELS.runTurns.undoChanges, runId, turnId),
   },
   // File explorer operations
   fileExplorer: {
@@ -746,6 +907,7 @@ const api = {
       query: string;
       max?: number;
       includeHidden?: boolean;
+      includeDirectories?: boolean;
       excludePatterns?: string[];
     }) => ipcRenderer.invoke(CHANNELS.fileExplorer.searchFiles, options),
     /**
@@ -832,6 +994,17 @@ const api = {
   documents: {
     sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.documents.sign, absPath),
   },
+  visualizations: {
+    sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.visualizations.sign, absPath),
+  },
+  mcpApps: {
+    readResource: (payload: unknown) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.readResource, payload),
+    callTool: (payload: unknown) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.callTool, payload),
+    sendMessage: (payload: unknown) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.sendMessage, payload),
+  },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(CHANNELS.shell.openExternal, url),
     openPath: (path: string) => ipcRenderer.invoke(CHANNELS.shell.openPath, path),
@@ -847,10 +1020,21 @@ const api = {
     getDashboard: (filter?: string) => ipcRenderer.invoke(CHANNELS.stats.getDashboard, filter),
   },
   app: {
+    quit: () => ipcRenderer.invoke(CHANNELS.app.quit),
+    // A notification or the menu bar asked the window for something: collect it.
+    onWindowRequest: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on(CHANNELS.app.windowRequest, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.app.windowRequest, listener);
+    },
+    consumeWindowRequest: () =>
+      ipcRenderer.invoke(CHANNELS.app.consumeWindowRequest),
     setUnsavedChanges: (hasChanges: boolean) =>
       ipcRenderer.invoke(CHANNELS.app.setUnsavedChanges, hasChanges),
     setMenuBarIconVisible: (visible: boolean) =>
       ipcRenderer.invoke(CHANNELS.app.setMenuBarIconVisible, visible),
+    setThemeSource: (theme: "system" | "light" | "dark") =>
+      ipcRenderer.invoke(CHANNELS.app.setThemeSource, theme),
     onFlushAndQuit: (callback: () => void) => {
       const listener = () => callback();
       ipcRenderer.on(CHANNELS.app.flushAndQuit, listener);
@@ -878,6 +1062,12 @@ const api = {
 
   // Embedded browser panel operations
   browser: {
+    createTab: (url?: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.createTab, url),
+    closeTab: (tabId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.closeTab, tabId),
+    activateTab: (tabId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.activateTab, tabId),
     attach: (bounds: { x: number; y: number; width: number; height: number }) =>
       ipcRenderer.invoke(CHANNELS.browser.attach, bounds),
     detach: () => ipcRenderer.invoke(CHANNELS.browser.detach),
@@ -894,21 +1084,120 @@ const api = {
     setSelectMode: (enabled: boolean) =>
       ipcRenderer.invoke(CHANNELS.browser.setSelectMode, enabled),
     getNavState: () => ipcRenderer.invoke(CHANNELS.browser.getNavState),
+    getState: () => ipcRenderer.invoke(CHANNELS.browser.getState),
+    getDownloads: () => ipcRenderer.invoke(CHANNELS.browser.getDownloads),
+    getHistory: () => ipcRenderer.invoke(CHANNELS.browser.getHistory),
+    removeHistoryEntry: (historyEntryId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.removeHistoryEntry, historyEntryId),
+    clearBrowsingData: (input: BrowserClearDataOptions) =>
+      ipcRenderer.invoke(CHANNELS.browser.clearBrowsingData, input),
+    clearHistory: () => ipcRenderer.invoke(CHANNELS.browser.clearHistory),
+    cancelDownload: (downloadId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.cancelDownload, downloadId),
+    clearDownloads: () => ipcRenderer.invoke(CHANNELS.browser.clearDownloads),
+    openDownload: (downloadId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.openDownload, downloadId),
+    showDownloadInFolder: (downloadId: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.showDownloadInFolder, downloadId),
+    setZoomFactor: (factor: number) =>
+      ipcRenderer.invoke(CHANNELS.browser.setZoomFactor, factor),
+    setDeviceEmulation: (input: BrowserDeviceEmulation) =>
+      ipcRenderer.invoke(CHANNELS.browser.setDeviceEmulation, input),
+    findInPage: (input: {
+      query: string;
+      forward?: boolean;
+      findNext?: boolean;
+    }) => ipcRenderer.invoke(CHANNELS.browser.findInPage, input),
+    stopFindInPage: (
+      action: "clearSelection" | "keepSelection" = "clearSelection",
+    ) => ipcRenderer.invoke(CHANNELS.browser.stopFindInPage, action),
+    printPage: () => ipcRenderer.invoke(CHANNELS.browser.printPage),
+    captureScreenshot: (mode: "viewport" | "fullPage") =>
+      ipcRenderer.invoke(CHANNELS.browser.captureScreenshot, mode),
     /** Remove a browser capture PNG from userData/browser-captures. Pass the basename only. */
     deleteCapture: (captureName: string) =>
       ipcRenderer.invoke(CHANNELS.browser.deleteCapture, captureName),
     onNavState: (
       callback: (state: {
+        tabId: string;
         url: string;
         title: string;
+        faviconUrl: string | null;
         canGoBack: boolean;
         canGoForward: boolean;
         isLoading: boolean;
+        zoomFactor: number;
+        deviceEmulation: BrowserDeviceEmulation;
       }) => void,
     ) => {
       const listener = (_: any, state: any) => callback(state);
       ipcRenderer.on(CHANNELS.browser.navState, listener);
       return () => ipcRenderer.removeListener(CHANNELS.browser.navState, listener);
+    },
+    onStateChanged: (
+      callback: (state: {
+        activeTabId: string;
+        tabs: Array<{
+          tabId: string;
+          url: string;
+          title: string;
+          faviconUrl: string | null;
+          canGoBack: boolean;
+          canGoForward: boolean;
+          isLoading: boolean;
+          isCrashed: boolean;
+          zoomFactor: number;
+          deviceEmulation: BrowserDeviceEmulation;
+        }>;
+      }) => void,
+    ) => {
+      const listener = (_: any, state: any) => callback(state);
+      ipcRenderer.on(CHANNELS.browser.stateChanged, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.stateChanged, listener);
+    },
+    onFindResult: (
+      callback: (result: {
+        tabId: string;
+        activeMatchOrdinal: number;
+        matches: number;
+        finalUpdate: boolean;
+      }) => void,
+    ) => {
+      const listener = (_: any, result: any) => callback(result);
+      ipcRenderer.on(CHANNELS.browser.findResult, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.findResult, listener);
+    },
+    onShortcut: (
+      callback: (data:
+        | { action: "focus-location" | "find" }
+        | { action: "app-shortcut"; shortcutId: KeyboardShortcutId }
+      ) => void,
+    ) => {
+      const listener = (_: any, data: any) => callback(data);
+      ipcRenderer.on(CHANNELS.browser.shortcut, listener);
+      return () => {
+        ipcRenderer.removeListener(CHANNELS.browser.shortcut, listener);
+      };
+    },
+    onDownloadsChanged: (
+      callback: (downloads: BrowserDownload[]) => void,
+    ) => {
+      const listener = (_: any, downloads: BrowserDownload[]) =>
+        callback(downloads);
+      ipcRenderer.on(CHANNELS.browser.downloadsChanged, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.downloadsChanged, listener);
+    },
+    onHistoryChanged: (
+      callback: (entries: BrowserHistoryEntry[]) => void,
+    ) => {
+      const listener = (_: any, entries: BrowserHistoryEntry[]) =>
+        callback(entries);
+      ipcRenderer.on(CHANNELS.browser.historyChanged, listener);
+      return () =>
+        ipcRenderer.removeListener(CHANNELS.browser.historyChanged, listener);
     },
     onSelectModeChanged: (callback: (data: { enabled: boolean }) => void) => {
       const listener = (_: any, data: any) => callback(data);

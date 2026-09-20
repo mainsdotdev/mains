@@ -11,6 +11,7 @@ import {
 } from "@/backend/streaming-messages";
 import { db } from "@/db/client";
 import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { buildTranscript } from "@/lib/transcript";
 import { useModelSelection } from "@/lib/use-model-selection";
 import { useNow } from "@/lib/use-now";
@@ -43,20 +44,22 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     db.select().from(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).limit(1),
     [backendId, runId],
   );
-  const artifactQuery = useLiveQuery(
+  const artifactQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(runArtifacts)
       .where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId)))
       .orderBy(asc(runArtifacts.createdAt), asc(runArtifacts.id)),
+    runArtifacts,
     [backendId, runId],
   );
-  const callQuery = useLiveQuery(
+  const callQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(toolCalls)
       .where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId)))
       .orderBy(asc(toolCalls.createdAt), asc(toolCalls.id)),
+    toolCalls,
     [backendId, runId],
   );
   const approvalQuery = useLiveQuery(

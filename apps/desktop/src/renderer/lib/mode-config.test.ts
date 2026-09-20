@@ -20,9 +20,11 @@ describe("MODE_CONFIGS table invariants", () => {
     }
   });
 
-  it("locks developer to the full surface — every flag true", () => {
+  it("locks developer to the full coding surface", () => {
     const dev = MODE_CONFIGS.developer;
     expect(dev.showGitActions).toBe(true);
+    expect(dev.showSources).toBe(true);
+    expect(dev.showDeliverables).toBe(false);
     expect(dev.showTerminal).toBe(true);
     expect(dev.showChangesTab).toBe(true);
     expect(dev.showPermissionControls).toBe(true);
@@ -31,6 +33,20 @@ describe("MODE_CONFIGS table invariants", () => {
     expect(dev.showTasksNav).toBe(true);
     expect(dev.showTabs).toBe(true);
     expect(dev.showRightPanel).toBe(true);
+    expect(dev.showTurnChanges).toBe(true);
+  });
+
+  it("shows turn changes wherever the agent can write", () => {
+    expect(MODE_CONFIGS.work.showTurnChanges).toBe(true);
+    expect(MODE_CONFIGS.chat.showTurnChanges).toBe(false);
+  });
+
+  it("shows session sources in code and work, with work deliverables separate", () => {
+    expect(MODE_CONFIGS.developer.showSources).toBe(true);
+    expect(MODE_CONFIGS.work.showSources).toBe(true);
+    expect(MODE_CONFIGS.work.showDeliverables).toBe(true);
+    expect(MODE_CONFIGS.chat.showSources).toBe(false);
+    expect(MODE_CONFIGS.chat.showDeliverables).toBe(false);
   });
 
   it("locks developer's sidebar shape — the pixel-identity tripwire", () => {

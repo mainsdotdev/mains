@@ -127,6 +127,55 @@
       "when": 1787665753486,
       "tag": "0017_command_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1789495754218,
+      "tag": "0018_run_turn_changes",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1789544269318,
+      "tag": "0019_wandering_strong_guy",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1789687573591,
+      "tag": "0020_special_psylocke",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1789745762176,
+      "tag": "0021_chat_search_fts",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1789762863287,
+      "tag": "0022_early_ulik",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1789807616853,
+      "tag": "0023_damp_nightshade",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1789903039518,
+      "tag": "0024_giant_red_shift",
+      "breakpoints": true
     }
   ]
 }

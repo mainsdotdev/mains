@@ -1,7 +1,11 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { Body, Button, Text } from "@/components/ui";
 import { ChevronUp, ProjectFolder } from "@/components/ui/icons";
-import { useListProjectsQuery } from "@/lib/redux/api";
+import {
+  useGetAccountQuery,
+  useListCollectionsQuery,
+  useListProjectsQuery,
+} from "@/lib/redux/api";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { useIsMobile } from "@/lib/platform";
@@ -10,8 +14,16 @@ import {
   getSettingsRouteId,
   isSettingsNavItemActive,
   SETTINGS_MAIN_NAV_ITEMS,
+  SETTINGS_PROVIDER_NAV_ITEMS,
+  type SettingsNavItem,
   type SettingsRouteId,
 } from "@/features/settings/settings-sections";
+import { useActiveSpace } from "@/hooks/use-active-space";
+import {
+  useKeyboardShortcut,
+  useKeyboardShortcutBinding,
+} from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SettingsViewProps {
   onClose: () => void;
@@ -22,6 +34,14 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const location = useLocation();
   const dispatch = useAppDispatch();
   const isMobile = useIsMobile();
+  const { activeSpace } = useActiveSpace();
+  const showCollections = activeSpace?.mode !== "developer";
+  const closeSettingsShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.closeSettings"),
+  );
+  useKeyboardShortcut("app.closeSettings", onClose, {
+    allowInEditable: true,
+  });
 
   // The settings nav lives in the sidebar; on mobile that's an overlay drawer, so
   // close it after picking a section/project to reveal the content underneath.
@@ -35,10 +55,46 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const activeSection = getSettingsRouteId(searchParams.get("section"));
   const activeId = searchParams.get("id");
 
-  const { data: projects = [] } = useListProjectsQuery();
+  const { data: account } = useGetAccountQuery();
+  const { data: codeProjects = [] } = useListProjectsQuery(undefined, {
+    skip: showCollections,
+  });
+  const { data: collections = [] } = useListCollectionsQuery(
+    { accountId: account?.id ?? "" },
+    { skip: !showCollections || !account?.id },
+  );
+  const projects = showCollections
+    ? collections.filter((collection) => !collection.isArchived)
+    : codeProjects;
+  const projectKind = showCollections ? "collection" : "code";
 
   const handleSectionClick = (sectionId: SettingsRouteId) => {
     goTo(`/settings?section=${sectionId}`);
+  };
+
+  const renderSectionButton = (item: SettingsNavItem) => {
+    const IconComponent = item.icon;
+    const isActive = isOnSettingsPage && isSettingsNavItemActive(item, activeSection);
+    return (
+      <Button
+        key={item.id}
+        onClick={() => handleSectionClick(item.id)}
+        className={`w-full cursor-pointer text-left px-2.5 py-1.5 rounded-xl text-sm  transition-all flex items-center gap-2
+          ${
+            isActive
+              ? " glass-outline bg-primary/80 dark:bg-primary/5 text-primary-900 dark:text-primary-100"
+              : "text-primary-800 dark:text-primary-200 bg-transparent hover:bg-primary/50 dark:hover:bg-primary/5"
+          }
+          `}
+      >
+        {IconComponent ? (
+          <IconComponent className={`size-3.5 `} />
+        ) : (
+          <div className="size-4 rounded bg-primary-300 dark:bg-primary-700" />
+        )}
+        <span className="">{item.label}</span>
+      </Button>
+    );
   };
 
   return (
@@ -54,31 +110,20 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
 
       <div className="flex-1 px-3 mb-1 mt-2 overflow-y-auto noscrollbar">
         <nav className="space-y-0.5">
-          {SETTINGS_MAIN_NAV_ITEMS.map((item) => {
-            const IconComponent = item.icon;
-            const isActive = isOnSettingsPage && isSettingsNavItemActive(item, activeSection);
-            return (
-              <Button
-                key={item.id}
-                onClick={() => handleSectionClick(item.id)}
-                className={`w-full cursor-pointer text-left px-3 py-1.5 rounded-xl text-sm  transition-all flex items-center gap-2
-                  ${
-                    isActive
-                      ? " glass-outline bg-primary/80 dark:bg-primary/5 text-primary-900 dark:text-primary-100"
-                      : "text-primary-800 dark:text-primary-200 bg-transparent hover:bg-primary/50 dark:hover:bg-primary/5"
-                  }
-                  `}
-              >
-                {IconComponent ? (
-                  <IconComponent className={`size-3.5 `} />
-                ) : (
-                  <div className="size-4 rounded bg-primary-300 dark:bg-primary-700" />
-                )}
-                <span className="">{item.label}</span>
-              </Button>
-            );
-          })}
+          {SETTINGS_MAIN_NAV_ITEMS.map(renderSectionButton)}
         </nav>
+
+        {/* Providers section */}
+        <div className="mt-2">
+          <div className="px-3 mb-1">
+            <Text as="span" size="xs">
+              Providers
+            </Text>
+          </div>
+          <nav className="space-y-0.5">
+            {SETTINGS_PROVIDER_NAV_ITEMS.map(renderSectionButton)}
+          </nav>
+        </div>
 
         {/* Projects section */}
         {projects.length > 0 && (
@@ -114,7 +159,9 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
                   <Button
                     key={project.id}
                     onClick={() =>
-                      goTo(`/settings?section=projects&id=${project.id}`)
+                      goTo(
+                        `/settings?section=projects&kind=${projectKind}&id=${encodeURIComponent(project.id)}`,
+                      )
                     }
                     className={`w-full cursor-pointer text-left px-3 py-1.5 rounded-xl text-sm transition-all flex items-center gap-2
                       ${
@@ -144,6 +191,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
       >
         <Button
           tooltip={"Close settings"}
+          tooltipShortcut={closeSettingsShortcut}
           variant="bare"
           tooltipPosition="top-right"
           onClick={onClose}

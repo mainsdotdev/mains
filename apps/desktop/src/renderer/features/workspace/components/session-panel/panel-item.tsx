@@ -57,10 +57,10 @@ export interface PanelItemProps {
  * expanded section — shares them, so all icons line up in one column.
  * `PANEL_ROW_X` is exported for the form blocks that sit between rows.
  */
-export const PANEL_ROW_X = "px-3";
+export const PANEL_ROW_X = "px-2";
 const ROW_Y = "py-1.5";
-const ROW_TEXT = "text-left text-s text-primary-700 dark:text-primary-300";
-const ROW_BASE = `flex w-full items-center gap-2 ${PANEL_ROW_X} ${ROW_Y} ${ROW_TEXT}`;
+const ROW_TEXT = "text-left text-s text-primary-700  dark:text-primary-300 rounded-lg";
+const ROW_BASE = `flex w-full items-center rounded-lg gap-2 ${PANEL_ROW_X} ${ROW_Y} ${ROW_TEXT}`;
 const ROW_HOVER =
   "transition-colors hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-primary/5";
 
@@ -241,7 +241,7 @@ export function PanelCollapse({
       }`}
     >
       <div className="min-h-0 overflow-hidden">
-        <div className="bg-primary-50 dark:bg-primary/5">{children}</div>
+        <div className="bg-primary-50 mt-0.5 mb-0.5 dark:bg-primary/5 rounded-lg">{children}</div>
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import type { RefObject } from "react";
@@ -21,8 +21,11 @@ import {
 } from "@/features/workspace/hooks";
 import { CONTENT_COLUMN_GUTTER } from "@/features/workspace/lib/content-column";
 import { isFirstWorkspaceTabActive } from "@/features/workspace/lib/is-first-workspace-tab-active";
+import { projectForNewChat } from "@/features/workspace/lib/run-collection-context";
 import {
   useAbortRunMutation,
+  useGetAccountQuery,
+  useGetCollectionQuery,
   useGetProviderByIdQuery,
   useUpdateProviderMutation,
 } from "@/lib/redux/api";
@@ -31,6 +34,7 @@ import { useSetMainHeader } from "@/hooks/use-main-header";
 import { useWorkspaceRouteTopRounding } from "@/hooks/use-workspace-route-top-rounding";
 import { useBottomTerminal } from "@/hooks/use-bottom-terminal";
 import { useModeConfig } from "@/hooks/use-mode-config";
+import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import {
   isExitPlanApproval,
   respondToExitPlanApproval,
@@ -55,11 +59,28 @@ export function WorkspaceProviderPage({
     label: providerLabel,
   } = getProviderVariant(variant);
   const modeConfig = useModeConfig();
+  const selectedCollectionId = useAppSelector(
+    (state) => state.workspace.selectedCollectionId,
+  );
   const onboardingCompleted = useAppSelector(
     (state) => state.appSettings.onboardingCompleted,
   );
+  const { data: account } = useGetAccountQuery();
+  const showProjectContext =
+    modeConfig.mode !== "developer" && selectedCollectionId !== null;
+  const { data: selectedCollection } = useGetCollectionQuery(
+    {
+      id: selectedCollectionId ?? "",
+      accountId: account?.id ?? "",
+    },
+    { skip: !account || !showProjectContext },
+  );
+  const newChatProject = projectForNewChat(
+    modeConfig.mode,
+    selectedCollectionId,
+    selectedCollection,
+  );
   const ws = useWorkspacePage(providerId);
-  const [customizeRequested, setCustomizeRequested] = useState(false);
   const [abortRun] = useAbortRunMutation();
   const { data: providerData } = useGetProviderByIdQuery(providerId);
   const [updateProvider] = useUpdateProviderMutation();
@@ -78,8 +99,6 @@ export function WorkspaceProviderPage({
 
   const useCenteredPromptLayout =
     (ws.showEmptyState && onboardingCompleted) || ws.showNewRunTab;
-  const customizing =
-    customizeRequested && (ws.showEmptyState || ws.showNewRunTab);
 
   const currentApproval = ws.activeRunId
     ? pendingApprovals.find((approval) => approval.runId === ws.activeRunId)
@@ -261,31 +280,36 @@ export function WorkspaceProviderPage({
             <WorkspaceEmptyState
               workspace={ws.currentWorkspace}
               presentation="headline"
-              isCustomizing={customizing}
-              onToggleCustomize={() => setCustomizeRequested((prev) => !prev)}
             />
-            {customizing ? null : (
-              <div className="w-full flex flex-col items-center gap-3">
-                <WorkspaceInput
-                  goal={ws.goal}
-                  onGoalChange={ws.setGoal}
-                  onSubmit={ws.handleExecute}
-                  isLoading={ws.isLoading}
-                  activeRun={ws.activeRun}
-                  canResume={ws.canResume ?? false}
-                  providerId={providerId}
-                  selectedModel={ws.selectedModel}
-                  onModelChange={ws.handleModelChange}
-                  workspacePath={ws.currentWorkspace?.rootPath}
-                  projectId={ws.currentWorkspace?.projectId ?? undefined}
-                  uploadedFiles={ws.uploadedFiles}
-                  onUploadedFilesChange={ws.setUploadedFiles}
-                  onStop={handleStop}
-                  isNewRunTabActive={ws.showNewRunTab}
-                  layout="centered"
-                />
-              </div>
-            )}
+            <div className="w-full flex flex-col items-center gap-3">
+              <WorkspaceInput
+                goal={ws.goal}
+                onGoalChange={ws.setGoal}
+                onSubmit={ws.handleExecute}
+                isLoading={ws.isLoading}
+                activeRun={ws.activeRun}
+                canResume={ws.canResume ?? false}
+                providerId={providerId}
+                selectedModel={ws.selectedModel}
+                onModelChange={ws.handleModelChange}
+                workspacePath={ws.currentWorkspace?.rootPath}
+                projectId={ws.currentWorkspace?.projectId ?? undefined}
+                uploadedFiles={ws.uploadedFiles}
+                onUploadedFilesChange={ws.setUploadedFiles}
+                onStop={handleStop}
+                isNewRunTabActive={ws.showNewRunTab}
+                newChatProjectName={newChatProject?.name}
+                newChatProjectIcon={
+                  newChatProject ? (
+                    <ProjectIcon
+                      icon={newChatProject.icon}
+                      projectName={newChatProject.name}
+                    />
+                  ) : undefined
+                }
+                layout="centered"
+              />
+            </div>
           </div>
         ) : ws.showEmptyState ? (
           <WorkspaceEmptyState workspace={ws.currentWorkspace} />
@@ -294,6 +318,7 @@ export function WorkspaceProviderPage({
             runs={ws.runs}
             activeTab={ws.activeTab}
             currentEvents={ws.currentEvents}
+            isTranscriptLoading={ws.isTranscriptLoading}
             currentWorkspace={ws.currentWorkspace}
             eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
             issueTabs={ws.openIssueTabs}

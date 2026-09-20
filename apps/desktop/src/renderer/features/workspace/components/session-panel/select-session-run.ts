@@ -10,7 +10,7 @@ interface SessionTabState {
  * The run the session panel is describing: the workspace's active tab.
  *
  * Falls back to the tab the editor was opened from, so opening a changed file
- * out of the panel doesn't empty its own subagent list. Other non-run tabs (an
+ * out of the panel doesn't empty its own run resources. Other non-run tabs (an
  * issue, a note, the new-run prompt) genuinely have no session, and neither
  * does a workspace with no runs at all — the panel still has the working tree
  * to show, but nothing to sit beside.

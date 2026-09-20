@@ -1,6 +1,5 @@
-import { Suspense, useEffect } from "react";
+import { Suspense } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import {
   getSettingsRouteId,
   getSettingsSection,
@@ -13,12 +12,6 @@ export default function SettingsPage() {
   const activeSection = getSettingsRouteId(searchParams.get("section"));
   const section = getSettingsSection(activeSection);
   const { Component } = section;
-
-  const { close: closeBrowserPanel } = useBrowserPanel();
-
-  useEffect(() => {
-    closeBrowserPanel();
-  }, [closeBrowserPanel]);
 
   return (
     <PageShell>

@@ -32,6 +32,7 @@ function makeRun(overrides: Partial<ActiveRun> = {}): ActiveRun {
     lastError: null,
     sessionId: null,
     isArchived: false,
+    pinnedAt: null,
     createdAt: 0,
     updatedAt: 0,
     workspace: { id: "ws1", name: "mains" },

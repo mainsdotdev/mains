@@ -17,6 +17,79 @@ export interface CodexThreadItem {
   [key: string]: unknown;
 }
 
+interface CodexMcpAppMetadata {
+  server: string;
+  tool: string;
+  resourceUri: string;
+  originCallId: string;
+  connectorId?: string;
+  linkId?: string;
+  appName?: string;
+  actionName?: string;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : undefined;
+}
+
+/**
+ * Codex has exposed the MCP App URI in three places over time: the current
+ * item appContext, the deprecated item-level field, and the tool result's
+ * standard/ChatGPT compatibility metadata. Keep all three readable so old
+ * persisted threads gain widgets too.
+ */
+function mcpAppMetadata(
+  item: ThreadItem,
+  result: unknown,
+  server: string,
+  tool: string,
+): CodexMcpAppMetadata | undefined {
+  const appContext = objectRecord(item.appContext ?? item.app_context);
+  const resultMeta = objectRecord(objectRecord(result)?._meta);
+  const uiMeta = objectRecord(resultMeta?.ui);
+  const resourceUri = [
+    appContext?.resourceUri,
+    appContext?.resource_uri,
+    item.mcpAppResourceUri,
+    item.mcp_app_resource_uri,
+    uiMeta?.resourceUri,
+    uiMeta?.resource_uri,
+    resultMeta?.["ui/resourceUri"],
+    resultMeta?.["openai/outputTemplate"],
+  ].map(optionalString).find((value) => value?.startsWith("ui://"));
+
+  if (!resourceUri) return undefined;
+
+  const optional = {
+    connectorId: optionalString(
+      appContext?.connectorId ?? appContext?.connector_id,
+    ),
+    linkId: optionalString(appContext?.linkId ?? appContext?.link_id),
+    appName: optionalString(appContext?.appName ?? appContext?.app_name),
+    actionName: optionalString(
+      appContext?.actionName ?? appContext?.action_name,
+    ),
+  };
+
+  return {
+    server,
+    tool,
+    resourceUri,
+    originCallId: item.id,
+    ...Object.fromEntries(
+      Object.entries(optional).filter(([, value]) => value !== undefined),
+    ),
+  };
+}
+
 export type CodexThreadItemPhase = "start" | "update" | "complete";
 type ThreadItem = CodexThreadItem;
 type ThreadItemPhase = CodexThreadItemPhase;
@@ -147,9 +220,89 @@ function settleSubAgent(
 const ANNOTATION_MARKER = /[\uE200-\uE20F]/;
 const ANNOTATION_BLOCK = /[ \t]*\uE200[\s\S]*?(?:\uE201|$)/g;
 
+const CONTENT_REFERENCE_BLOCK = /[ \t]*\uE200([\s\S]*?)(\uE201|$)/g;
+const CONTENT_REFERENCE_SEPARATOR = "\uE202";
+const VISUALIZATION_MAX_BYTES = 1024 * 1024;
+
+interface VisualizationReference {
+  path: string;
+  mode?: "wide";
+  title?: string;
+}
+
+type AgentMessagePart =
+  | { type: "text"; text: string }
+  | { type: "visualization"; reference: VisualizationReference };
+
 export function stripAnnotationMarkers(text: string): string {
   if (!ANNOTATION_MARKER.test(text)) return text;
   return text.replace(ANNOTATION_BLOCK, "").replace(/[\uE200-\uE20F]/g, "");
+}
+
+/**
+ * Codex uses the same private-use envelope for citations and rich content
+ * references. Citations remain invisible in Mains, while a complete
+ * `visualize` reference becomes a first-class transcript artifact. Keeping
+ * this parser separate from the streaming sanitizer is deliberate: a partial
+ * reference must stay hidden until its closing marker and valid JSON arrive.
+ */
+export function parseAgentMessageParts(text: string): AgentMessagePart[] {
+  if (!ANNOTATION_MARKER.test(text)) {
+    const plain = text.trim();
+    return plain ? [{ type: "text", text: plain }] : [];
+  }
+
+  const parts: AgentMessagePart[] = [];
+  let cursor = 0;
+  let pendingText = "";
+
+  const flushText = () => {
+    const plain = pendingText.replace(/[\uE200-\uE20F]/g, "").trim();
+    if (plain) parts.push({ type: "text", text: plain });
+    pendingText = "";
+  };
+
+  for (const match of text.matchAll(CONTENT_REFERENCE_BLOCK)) {
+    const index = match.index ?? 0;
+    pendingText += text.slice(cursor, index);
+    cursor = index + match[0].length;
+
+    // An unterminated streaming reference consumes the remainder and stays
+    // invisible. The completed notification will be parsed again in full.
+    if (match[2] !== "\uE201") continue;
+
+    const payload = match[1] ?? "";
+    const separatorIndex = payload.indexOf(CONTENT_REFERENCE_SEPARATOR);
+    if (separatorIndex < 0) continue;
+    const kind = payload.slice(0, separatorIndex).trim();
+    if (kind !== "visualize") continue;
+
+    try {
+      const raw = JSON.parse(
+        payload.slice(separatorIndex + CONTENT_REFERENCE_SEPARATOR.length),
+      ) as Record<string, unknown>;
+      if (typeof raw.path !== "string" || !raw.path.trim()) continue;
+      const title = typeof raw.title === "string"
+        ? raw.title.trim().slice(0, 200)
+        : "";
+      flushText();
+      parts.push({
+        type: "visualization",
+        reference: {
+          path: raw.path.trim(),
+          ...(raw.mode === "wide" ? { mode: "wide" as const } : {}),
+          ...(title ? { title } : {}),
+        },
+      });
+    } catch {
+      // Malformed rich-content references are transport syntax, not prose.
+      // Drop them just like an unresolvable citation.
+    }
+  }
+
+  pendingText += text.slice(cursor);
+  flushText();
+  return parts;
 }
 
 interface Usage {
@@ -184,6 +337,7 @@ export interface CodexEventRunState {
   commandOutputBuffers: Map<string, string>;
   emittedImagePaths: Set<string>;
   emittedDocPaths: Set<string>;
+  emittedVisualizationKeys: Set<string>;
   runStartedAt: number;
   planBuffers: Map<string, string>;
   lastPlanSnapshot: string | null;
@@ -247,6 +401,7 @@ export function createCodexEventRunState(
     commandOutputBuffers: new Map(),
     emittedImagePaths: new Set(),
     emittedDocPaths: new Set(),
+    emittedVisualizationKeys: new Set(),
     runStartedAt,
     planBuffers: new Map(),
     lastPlanSnapshot: null,
@@ -489,7 +644,13 @@ export function createCodexEventMapper(
 
   // Image path scanning helpers — used to surface generated images from tool outputs
   // even when the agent doesn't mention the path in chat text.
-  const IMAGE_PATH_SCAN_REGEX = /([~/][\w./\- ]+\.(?:png|jpe?g|webp|gif))/gi;
+  //
+  // Lazy, not greedy: the class has to allow spaces (every run directory sits
+  // under "Application Support"), and a greedy quantifier reads "wrote a.png
+  // and b.png" as one path that spans both. That path exists nowhere, so the
+  // existence check dropped it and BOTH images went missing. Stopping at the
+  // first extension yields `a.png`, and the scan resumes at `b.png`.
+  const IMAGE_PATH_SCAN_REGEX = /([~/][\w./\- ]+?\.(?:png|jpe?g|webp|gif))/gi;
 
   function expandHomeTilde(p: string): string {
     if (p === "~") return os.homedir();
@@ -529,6 +690,12 @@ export function createCodexEventMapper(
     return out;
   }
 
+  /** Codex writes what it generates here, so the directory is the provenance. */
+  function isCodexGeneratedImage(resolved: string): boolean {
+    const codexGenDir = path.join(os.homedir(), ".codex", "generated_images");
+    return resolved === codexGenDir || resolved.startsWith(codexGenDir + path.sep);
+  }
+
   /**
    * Only surface images that come from Codex's own generated_images dir or live
    * inside the active workspace. Random PNG path references picked up from grep
@@ -536,8 +703,7 @@ export function createCodexEventMapper(
    * artifact cards.
    */
   function isAllowedImagePath(resolved: string, workspaceRoot: string | null): boolean {
-    const codexGenDir = path.join(os.homedir(), ".codex", "generated_images");
-    if (resolved === codexGenDir || resolved.startsWith(codexGenDir + path.sep)) {
+    if (isCodexGeneratedImage(resolved)) {
       return true;
     }
     if (workspaceRoot) {
@@ -547,6 +713,34 @@ export function createCodexEventMapper(
       }
     }
     return false;
+  }
+
+  /**
+   * True for a file the agent parked in a hidden directory under the run root
+   * (`.mains-pitch-build/`, `.assets/`, …). Those are working material — the
+   * scratch copies and intermediate renders of one deliverable — not the
+   * deliverable itself, and a transcript that gives each of them its own card
+   * buries the file the answer actually points at.
+   *
+   * The same rule already decides what counts as output in
+   * `runs.service.listManagedOutputFiles`; this brings the transcript's
+   * scanners in line with it.
+   *
+   * Only segments *below the root* are read: the run directory itself lives
+   * under `~/Library/Application Support/…`, and Codex's own generated images
+   * sit in `~/.codex/generated_images` — dots above the root say nothing about
+   * the file.
+   */
+  function isWorkingCopy(resolved: string, workspaceRoot: string | null): boolean {
+    if (!workspaceRoot) return false;
+    const root = path.resolve(workspaceRoot);
+    const relative = path.relative(root, resolved);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      return false;
+    }
+    const segments = relative.split(path.sep);
+    // The basename is the file; a dotfile is not by itself working material.
+    return segments.slice(0, -1).some((segment) => segment.startsWith("."));
   }
 
   function emitImageArtifacts(
@@ -564,31 +758,57 @@ export function createCodexEventMapper(
       const resolved = path.resolve(expanded);
       if (rs.emittedImagePaths.has(resolved)) continue;
       if (!isAllowedImagePath(resolved, rs.mainsCtx.rootPath)) continue;
+      let stat: fs.Stats;
       try {
-        const stat = fs.lstatSync(resolved);
+        stat = fs.lstatSync(resolved);
         if (stat.isSymbolicLink() || !stat.isFile()) continue;
       } catch {
         continue;
       }
+      // Produced or merely looked at? Codex's own directory answers it
+      // outright; inside the workspace the answer is the file's age, the same
+      // gate the document scanner uses. A picture the agent opened to read —
+      // an icon in the repo, a screenshot it was pointed at — is something the
+      // turn worked *with*, and putting it inline next to what the turn
+      // produced is what made the transcript look nothing like Codex.
+      const viewed =
+        !isCodexGeneratedImage(resolved) &&
+        stat.mtimeMs < rs.runStartedAt - DOC_MTIME_SKEW_MS;
       rs.emittedImagePaths.add(resolved);
       events.push({
         type: "artifact",
         kind: "image",
         content: "",
-        metadata: { kind: "image", path: resolved, fileName: path.basename(resolved) },
+        metadata: {
+          kind: "image",
+          path: resolved,
+          fileName: path.basename(resolved),
+          ...(isWorkingCopy(resolved, rs.mainsCtx.rootPath)
+            ? { working: true }
+            : {}),
+          ...(viewed ? { viewed: true } : {}),
+        },
         ts,
       });
     }
   }
 
-  // Office document path scanning — mirror of the image scanner above. Surfaces
-  // generated .pptx/.docx/.xlsx files as artifact cards even when the agent only
-  // references them in prose. Reuses the same workspace allowlist + symlink guard.
-  function docTypeFromPath(p: string): "pptx" | "docx" | "xlsx" | null {
+  // Document path scanning — mirror of the image scanner above. Surfaces
+  // generated .pptx/.docx/.xlsx/.pdf/.md files as artifact cards even when the
+  // agent only references them in prose. Reuses the same workspace allowlist + symlink guard.
+  function docTypeFromPath(
+    p: string,
+  ): "pptx" | "docx" | "xlsx" | "pdf" | "md" | null {
     const ext = path.extname(p).toLowerCase();
     if (ext === ".pptx") return "pptx";
     if (ext === ".docx") return "docx";
     if (ext === ".xlsx") return "xlsx";
+    if (ext === ".pdf") return "pdf";
+    // Markdown is a deliverable like the rest — the viewer renders it, and a
+    // written note is as much the point of a turn as a written deck. The
+    // existence + workspace + "modified this run" gates below are what keep
+    // every README the agent merely read out of the transcript.
+    if (ext === ".md" || ext === ".markdown") return "md";
     return null;
   }
 
@@ -646,6 +866,7 @@ export function createCodexEventMapper(
         path: resolved,
         fileName: path.basename(resolved),
         docType,
+        ...(isWorkingCopy(resolved, rs.mainsCtx.rootPath) ? { working: true } : {}),
       },
       ts,
     });
@@ -677,7 +898,7 @@ export function createCodexEventMapper(
   // No spaces in the name portion so prose ("the report.docx") splits on the
   // word boundary and yields just "report.docx" rather than swallowing the
   // preceding word. (Paths with spaces are rare for generated docs.)
-  const DOC_NAME_SCAN_REGEX = /([~/]?[\w.\-/]*[\w-]\.(?:pptx|docx|xlsx))/gi;
+  const DOC_NAME_SCAN_REGEX = /([~/]?[\w.\-/]*[\w-]\.(?:pptx|docx|xlsx|pdf|markdown|md))/gi;
 
   function emitDocumentArtifactsFromText(
     events: WorkRunEvent[],
@@ -705,6 +926,215 @@ export function createCodexEventMapper(
       }
       emitDocAtResolvedPath(events, rs, resolved, ts);
     }
+  }
+
+  function isPathWithinOrEqual(root: string, candidate: string): boolean {
+    const relative = path.relative(root, candidate);
+    return relative === "" || (
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    );
+  }
+
+  function realPathOrNull(candidate: string): string | null {
+    try {
+      return fs.realpathSync.native(candidate);
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveAllowedVisualizationPath(
+    resolved: string,
+    workspaceRoot: string | null,
+  ): string | null {
+    const canonicalPath = realPathOrNull(resolved);
+    if (!canonicalPath) return null;
+
+    const allowedRoots = [
+      path.join(os.homedir(), ".codex", "visualizations"),
+      ...(workspaceRoot ? [path.resolve(workspaceRoot)] : []),
+    ];
+    for (const allowedRoot of allowedRoots) {
+      const canonicalRoot = realPathOrNull(allowedRoot);
+      if (
+        canonicalRoot &&
+        isPathWithinOrEqual(canonicalRoot, canonicalPath)
+      ) {
+        return canonicalPath;
+      }
+    }
+    return null;
+  }
+
+  function emitVisualizationArtifact(
+    events: WorkRunEvent[],
+    runId: string,
+    reference: VisualizationReference,
+    ts: number,
+    metadata: Record<string, unknown>,
+  ): boolean {
+    const rs = getRunState(runId);
+    if (!rs) return false;
+
+    const expanded = expandHomeTilde(reference.path);
+    if (!path.isAbsolute(expanded)) return false;
+    const resolved = path.resolve(expanded);
+    const canonicalPath = resolveAllowedVisualizationPath(
+      resolved,
+      rs.mainsCtx.rootPath,
+    );
+    const itemId = typeof metadata.itemId === "string"
+      ? metadata.itemId
+      : "unknown-item";
+    const dedupeKey = `${itemId}\0${canonicalPath ?? resolved}`;
+    if (
+      path.extname(resolved).toLowerCase() !== ".html" ||
+      !canonicalPath ||
+      rs.emittedVisualizationKeys.has(dedupeKey)
+    ) {
+      return false;
+    }
+
+    try {
+      const stat = fs.lstatSync(resolved);
+      if (stat.isSymbolicLink() || !stat.isFile()) return false;
+      if (stat.size <= 0 || stat.size > VISUALIZATION_MAX_BYTES) return false;
+    } catch {
+      return false;
+    }
+
+    rs.emittedVisualizationKeys.add(dedupeKey);
+    events.push({
+      type: "artifact",
+      kind: "visualization",
+      path: canonicalPath,
+      content: "",
+      metadata: {
+        ...metadata,
+        kind: "visualization",
+        source: "codex_visualize",
+        path: canonicalPath,
+        fileName: path.basename(canonicalPath),
+        ...(reference.mode ? { mode: reference.mode } : {}),
+        ...(reference.title ? { title: reference.title } : {}),
+      },
+      ts,
+    });
+    return true;
+  }
+
+  /**
+   * Persist a completed Codex assistant message in transport order. Plain text
+   * remains a report; `visualize` references become sandboxed HTML artifacts.
+   */
+  /**
+   * Codex writes its follow-up chips into the message as a remark-directive
+   * leaf: `:codex-followup[Make it investor-ready]{prompt="Expand this…"}`.
+   * Its own UI parses them; ours does not load remark-directive, so they were
+   * printed verbatim at the end of every answer.
+   *
+   * We lift them onto the `prompt_suggestion` channel the app already has —
+   * the one Claude emits natively — and take them out of the prose. The
+   * surrounding list markers go too: a bullet whose only content was the
+   * directive would otherwise be left behind as an empty item.
+   */
+  const FOLLOWUP_DIRECTIVE_REGEX =
+    /^[ \t]*(?:[-*+]|\d+[.)])?[ \t]*:codex-followup\[([^\]]*)\]\{prompt="((?:[^"\\]|\\.)*)"\}[ \t]*$/gm;
+
+  interface FollowupDirective {
+    label: string;
+    prompt: string;
+  }
+
+  function extractFollowupDirectives(text: string): {
+    text: string;
+    followups: FollowupDirective[];
+  } {
+    if (!text.includes(":codex-followup[")) return { text, followups: [] };
+    const followups: FollowupDirective[] = [];
+    const stripped = text.replace(
+      FOLLOWUP_DIRECTIVE_REGEX,
+      (_match, label: string, prompt: string) => {
+        const resolved = prompt.replace(/\\(["\\])/g, "$1").trim();
+        if (resolved) {
+          followups.push({ label: label.trim(), prompt: resolved });
+        }
+        return "\u0000";
+      },
+    );
+    if (followups.length === 0) return { text, followups: [] };
+    // Drop the placeholder lines and any blank tail they leave behind.
+    const cleaned = stripped
+      .split("\n")
+      .filter((line) => line !== "\u0000")
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trimEnd();
+    return { text: cleaned, followups };
+  }
+
+  function emitAgentMessageContent(
+    events: WorkRunEvent[],
+    runId: string,
+    rawText: string,
+    itemId: string | null,
+    ts: number,
+    extraMetadata: Record<string, unknown> = {},
+  ): boolean {
+    const { text: messageText, followups } = extractFollowupDirectives(rawText);
+    const parts = parseAgentMessageParts(messageText);
+    const documentText: string[] = [];
+    let emitted = false;
+    const metadata = {
+      source: "agent_message",
+      itemId,
+      ...extraMetadata,
+    };
+
+    for (const part of parts) {
+      if (part.type === "text") {
+        documentText.push(part.text);
+        events.push({
+          type: "artifact",
+          kind: "report",
+          content: part.text,
+          metadata,
+          ts,
+        });
+        emitted = true;
+        continue;
+      }
+      emitted = emitVisualizationArtifact(
+        events,
+        runId,
+        part.reference,
+        ts,
+        metadata,
+      ) || emitted;
+    }
+
+    if (documentText.length > 0) {
+      emitDocumentArtifactsFromText(
+        events,
+        runId,
+        documentText.join("\n"),
+        ts,
+      );
+    }
+
+    // After the message: the chips belong under the answer they follow.
+    for (const followup of followups) {
+      events.push({
+        type: "prompt_suggestion",
+        suggestion: followup.prompt,
+        ...(followup.label ? { label: followup.label } : {}),
+        ts,
+      });
+      emitted = true;
+    }
+    return emitted;
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1085,30 +1515,19 @@ export function createCodexEventMapper(
           runState.pendingFlush = [];
 
           // Emit remaining buffer
-          const messageText = stripAnnotationMarkers(
-            runState.agentMessageBuffer,
-          ).trim();
-          if (messageText) {
+          const rawMessage = runState.agentMessageBuffer.trim();
+          if (rawMessage) {
             const messageItemId = runState.currentMessageItemId;
-            events.push({
-              type: "artifact",
-              kind: "report",
-              content: messageText,
-              metadata: { source: "agent_message", itemId: messageItemId },
-            });
+            emitAgentMessageContent(
+              events,
+              runId,
+              rawMessage,
+              messageItemId,
+              ts,
+            );
             if (messageItemId) {
               runState.emittedAgentMessageItemIds.add(messageItemId);
             }
-            // The agent's closing summary is the most reliable reference to a
-            // generated document (e.g. "Done: report.docx") — surface it as a
-            // document artifact card even when the .png previews it produced
-            // live elsewhere.
-            emitDocumentArtifactsFromText(
-              events,
-              runId,
-              messageText,
-              ts,
-            );
             runState.agentMessageBuffer = "";
             runState.currentMessageItemId = null;
           }
@@ -1263,17 +1682,16 @@ export function createCodexEventMapper(
           // evidence that the foreground buffer ended.
           !isAsyncDelivery;
 
-        const competingText = rsItem
-          ? stripAnnotationMarkers(rsItem.agentMessageBuffer).trim()
-          : "";
+        const competingText = rsItem?.agentMessageBuffer.trim() ?? "";
         if (rsItem && competingText && isCompetingAgentMessage) {
           const completedItemId = rsItem.currentMessageItemId;
-          events.push({
-            type: "artifact",
-            kind: "report",
-            content: competingText,
-            metadata: { source: "agent_message", itemId: completedItemId },
-          });
+          emitAgentMessageContent(
+            events,
+            runId,
+            competingText,
+            completedItemId,
+            ts,
+          );
           if (completedItemId) {
             rsItem.emittedAgentMessageItemIds.add(completedItemId);
           }
@@ -1310,17 +1728,16 @@ export function createCodexEventMapper(
           if (runState) {
             // New message item started — flush previous one
             if (itemId && runState.currentMessageItemId && itemId !== runState.currentMessageItemId) {
-              const text = stripAnnotationMarkers(
-                runState.agentMessageBuffer,
-              ).trim();
+              const text = runState.agentMessageBuffer.trim();
               if (text) {
                 const completedItemId = runState.currentMessageItemId;
-                runState.pendingFlush.push({
-                  type: "artifact",
-                  kind: "report",
-                  content: text,
-                  metadata: { source: "agent_message", itemId: completedItemId },
-                });
+                emitAgentMessageContent(
+                  runState.pendingFlush,
+                  runId,
+                  text,
+                  completedItemId,
+                  ts,
+                );
                 runState.emittedAgentMessageItemIds.add(completedItemId);
               }
               runState.agentMessageBuffer = "";
@@ -1879,10 +2296,10 @@ export function createCodexEventMapper(
           if (rs) {
             const ownsBuffer = rs.currentMessageItemId === item.id;
             const bufferedText = ownsBuffer
-              ? stripAnnotationMarkers(rs.agentMessageBuffer).trim()
+              ? rs.agentMessageBuffer.trim()
               : "";
             const itemText = typeof item.text === "string"
-              ? stripAnnotationMarkers(item.text).trim()
+              ? item.text.trim()
               : "";
             const messageText = bufferedText || itemText;
             const questions = normalizeAsyncQuestions(item.questions);
@@ -1894,22 +2311,18 @@ export function createCodexEventMapper(
               : undefined;
 
             if (messageText && !rs.emittedAgentMessageItemIds.has(item.id)) {
-              events.push({
-                type: "artifact",
-                kind: "report",
-                content: messageText,
-                metadata: {
-                  source: "agent_message",
-                  itemId: item.id,
+              emitAgentMessageContent(
+                events,
+                runId,
+                messageText,
+                item.id,
+                ts,
+                {
                   ...(messagePhase ? { messagePhase } : {}),
                   ...(delivery ? { delivery } : {}),
                   ...(questions.length > 0 ? { questions } : {}),
                 },
-              });
-              // The agent's closing summary is the most reliable reference to a
-              // generated document (e.g. "Done: report.docx") — surface it as a
-              // document artifact card.
-              emitDocumentArtifactsFromText(events, runId, messageText, ts);
+              );
               rs.emittedAgentMessageItemIds.add(item.id);
             }
             if (
@@ -2233,6 +2646,13 @@ export function createCodexEventMapper(
         const args = item.arguments as Record<string, unknown> | undefined;
         const result = item.result as unknown;
         const error = (item.error as { message?: string } | undefined)?.message;
+        const app = mcpAppMetadata(item, result, server, tool);
+        const metadata = {
+          toolCallId: item.id,
+          itemId: item.id,
+          codexItemType: "mcp_tool_call" as const,
+          ...(app ? { mcpApp: app } : {}),
+        };
 
         if (phase === "start") {
           events.push({
@@ -2240,7 +2660,7 @@ export function createCodexEventMapper(
             toolName,
             input: args,
             startedAt: ts,
-            metadata: { phase: "start", toolCallId: item.id, itemId: item.id, codexItemType: "mcp_tool_call" },
+            metadata: { phase: "start", ...metadata },
           });
         } else if (phase === "complete") {
           events.push({
@@ -2250,7 +2670,7 @@ export function createCodexEventMapper(
             output: result,
             error,
             endedAt: ts,
-            metadata: { phase: "complete", toolCallId: item.id, itemId: item.id, codexItemType: "mcp_tool_call" },
+            metadata: { phase: "complete", ...metadata },
           });
         }
         break;

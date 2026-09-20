@@ -3,9 +3,15 @@
 declare module "pptx-preview" {
   export interface PptxPreviewer {
     preview: (data: ArrayBuffer) => Promise<void> | void;
+    readonly slideCount: number;
+    destroy: () => void;
   }
   export function init(
     container: HTMLElement,
-    options: { width: number; height: number },
+    options: {
+      width?: number;
+      height?: number;
+      mode?: "list" | "slide";
+    },
   ): PptxPreviewer;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { appEvents } from "@/lib/transport";
-import { Button, Select, Text, Toggle, toast } from "@/components/ui";
+import { Alert, Button, Select, Text, Toggle, toast } from "@/components/ui";
 import {
   SettingsSection,
   SettingsRow,
@@ -9,6 +9,7 @@ import {
 import {
   useGetProviderRateLimitsQuery,
   useGetProviderAccountInfoQuery,
+  useConsumeProviderRateLimitResetCreditMutation,
 } from "@/lib/redux/api";
 import { providersApi } from "@/lib/redux/api/providersApi";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -21,6 +22,7 @@ type CodexPersonality = NonNullable<CodexAdapterConfig["personality"]>;
 import {
   ProviderAccountSection,
   ProviderCliSection,
+  ProviderColorSection,
   ProviderSettingsLayout,
   ProviderUsageSection,
   selectedSchemaLabel,
@@ -32,6 +34,12 @@ import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import { getProviderVariant } from "@/lib/provider-variants";
 import { modeProviderSetting } from "../../../../shared/mode-harness";
 import { useModeConfig } from "@/hooks/use-mode-config";
+import { extractErrorMessage } from "@/lib/extract-error-message";
+import {
+  buildCodexResetCreditSummary,
+  buildCodexUsageRows,
+  mergeCodexRateLimitUpdate,
+} from "../lib/codex-usage";
 
 const APPROVAL_OPTIONS: Array<{
   value: CodexApprovalMode;
@@ -87,31 +95,8 @@ const SANDBOX_OPTIONS = CODEX_SANDBOX_MODES.map((m) => ({
   description: m.description,
 }));
 
-function usageLimitLabel(
-  windowDurationMins: number | undefined,
-  fallback: string,
-): string {
-  if (
-    windowDurationMins === undefined ||
-    !Number.isFinite(windowDurationMins) ||
-    windowDurationMins <= 0
-  ) {
-    return fallback;
-  }
-
-  if (windowDurationMins === 7 * 24 * 60) return "Weekly usage limit";
-  if (windowDurationMins === 24 * 60) return "Daily usage limit";
-  if (windowDurationMins % (24 * 60) === 0) {
-    return `${windowDurationMins / (24 * 60)} day usage limit`;
-  }
-  if (windowDurationMins % 60 === 0) {
-    return `${windowDurationMins / 60} hour usage limit`;
-  }
-  return `${windowDurationMins} minute usage limit`;
-}
-
 export default function CodexSettings() {
-  const { provider, isLoading, error, config, updateConfig } =
+  const { provider, isLoading, error, config, space, updateConfig } =
     useProviderSettings<CodexAdapterConfig>(PROVIDER_IDS.codex, "codex");
   const { data: rateLimits, isLoading: isLoadingRateLimits } =
     useGetProviderRateLimitsQuery(PROVIDER_IDS.codex, {
@@ -130,7 +115,8 @@ export default function CodexSettings() {
           providersApi.util.updateQueryData(
             "getProviderRateLimits",
             PROVIDER_IDS.codex,
-            () => next as RateLimitInfo,
+            (current) =>
+              mergeCodexRateLimitUpdate(current, next as RateLimitInfo),
           ),
         );
       },
@@ -145,6 +131,12 @@ export default function CodexSettings() {
 
   const [isStructuredOutputsModalOpen, setIsStructuredOutputsModalOpen] =
     useState(false);
+  const [resetAttempt, setResetAttempt] = useState<{
+    idempotencyKey: string;
+    creditId?: string;
+  } | null>(null);
+  const [consumeResetCredit, { isLoading: isConsumingResetCredit }] =
+    useConsumeProviderRateLimitResetCreditMutation();
 
   // Work and Chat pin the agent's tone through the mode harness, so the picker
   // would be a control that changes nothing there. Read the pin from the
@@ -170,32 +162,53 @@ export default function CodexSettings() {
 
   const account = accountInfo?.account;
 
-  const usageRows: ProviderUsageRow[] = [
-    ...(rateLimits?.primary
-      ? [
-          {
-            label: usageLimitLabel(
-              rateLimits.primary.windowDurationMins,
-              "5 hour usage limit",
-            ),
-            usedPercent: rateLimits.primary.usedPercent,
-            resetsAt: rateLimits.primary.resetsAt,
-          },
-        ]
-      : []),
-    ...(rateLimits?.secondary
-      ? [
-          {
-            label: usageLimitLabel(
-              rateLimits.secondary.windowDurationMins,
-              "Weekly usage limit",
-            ),
-            usedPercent: rateLimits.secondary.usedPercent,
-            resetsAt: rateLimits.secondary.resetsAt,
-          },
-        ]
-      : []),
-  ];
+  const usageRows: ProviderUsageRow[] = buildCodexUsageRows(rateLimits);
+  const resetCreditSummary = buildCodexResetCreditSummary(rateLimits);
+  const resetCredits = rateLimits?.rateLimitResetCredits;
+  const availableResetCredit = resetCredits?.credits?.find(
+    (credit) => credit.status === "available",
+  );
+  const coreUsage = rateLimits?.rateLimitsByLimitId?.codex ?? rateLimits;
+  const canResetUsage = [coreUsage?.primary, coreUsage?.secondary].some(
+    (window) => window !== undefined && window.usedPercent >= 90,
+  );
+  const canUseResetCredit =
+    (resetCredits?.availableCount ?? 0) > 0 && canResetUsage;
+
+  const openResetConfirmation = () => {
+    if (!canUseResetCredit) return;
+    setResetAttempt({
+      idempotencyKey: globalThis.crypto.randomUUID(),
+      ...(availableResetCredit?.id
+        ? { creditId: availableResetCredit.id }
+        : {}),
+    });
+  };
+
+  const confirmReset = async () => {
+    if (!resetAttempt || isConsumingResetCredit) return;
+    try {
+      const outcome = await consumeResetCredit({
+        providerId: PROVIDER_IDS.codex,
+        params: resetAttempt,
+      }).unwrap();
+
+      setResetAttempt(null);
+      if (outcome === "reset") {
+        toast.success("Codex usage limit reset.");
+      } else if (outcome === "alreadyRedeemed") {
+        toast.success("This reset was already applied.");
+      } else if (outcome === "noCredit") {
+        toast.error("No reset credit is available.");
+      } else {
+        toast.error("No eligible usage limit can be reset yet.");
+      }
+    } catch (err: unknown) {
+      // Keep the dialog and idempotency key alive: retrying an uncertain call
+      // must not create a second redemption attempt.
+      toast.error(extractErrorMessage(err, "Failed to use reset credit"));
+    }
+  };
 
   return (
     <ProviderSettingsLayout
@@ -242,7 +255,7 @@ export default function CodexSettings() {
         {cli?.compatibility === "unsupported" && (
           <SettingsRow
             title="Update required"
-            description={`Mains requires Codex CLI ${cli.minimumVersion ?? "0.146.0"} or newer.`}
+            description={`Mains requires Codex CLI ${cli.minimumVersion ?? "0.153.0"} or newer.`}
           >
             <Text as="span" size="xs" tone="danger" weight="medium">
               Unsupported
@@ -260,6 +273,8 @@ export default function CodexSettings() {
           </SettingsRow>
         )}
       </ProviderCliSection>
+
+      <ProviderColorSection space={space} />
 
       <SettingsSection title="Configuration">
         <SettingsRow
@@ -391,12 +406,45 @@ export default function CodexSettings() {
         isLoading={isLoadingRateLimits}
         rows={usageRows}
         readout="percentLeft"
+        summary={resetCreditSummary}
+        summaryAction={
+          (resetCredits?.availableCount ?? 0) > 0 ? (
+            <Button
+              variant="secondary"
+              onClick={openResetConfirmation}
+              disabled={!canUseResetCredit}
+              tooltip={
+                canUseResetCredit
+                  ? "Spend one earned reset credit"
+                  : "A five-hour or weekly limit can be reset at 10% remaining"
+              }
+            >
+              Use reset
+            </Button>
+          ) : undefined
+        }
+        notice={
+          rateLimits?.ordinaryUsageAllowed === false
+            ? "Advanced usage is temporarily unavailable for this account."
+            : undefined
+        }
       />
 
       <StructuredOutputsModal
         isOpen={isStructuredOutputsModalOpen}
         onClose={() => setIsStructuredOutputsModalOpen(false)}
         providerId={PROVIDER_IDS.codex}
+      />
+
+      <Alert
+        isOpen={resetAttempt !== null}
+        title="Use a reset credit?"
+        description="This spends one earned credit to reset an eligible Codex usage window. The credit cannot be restored."
+        primaryButtonText="Use reset"
+        secondaryButtonText="Cancel"
+        onPrimary={confirmReset}
+        onSecondary={() => setResetAttempt(null)}
+        isPrimaryLoading={isConsumingResetCredit}
       />
     </ProviderSettingsLayout>
   );

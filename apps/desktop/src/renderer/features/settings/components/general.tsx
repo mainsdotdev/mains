@@ -23,8 +23,6 @@ import {
   useGetAppSettingsQuery,
   useSetShowToolCallsMutation,
   useSetPreventSleepDuringRunsMutation,
-  useSetNotifyOnRunCompleteMutation,
-  useSetNotifyOnToolApprovalMutation,
   useSetShowMenuBarIconMutation,
 } from "@/lib/redux/api";
 import {
@@ -169,19 +167,6 @@ function PreventSleepToggle() {
   );
 }
 
-function NotifyRunCompleteToggle() {
-  const { data: settings } = useGetAppSettingsQuery();
-  const [setNotifyOnRunComplete] = useSetNotifyOnRunCompleteMutation();
-
-  return (
-    <Toggle
-      enabled={settings?.notifyOnRunComplete ?? true}
-      aria-label="Notify when runs complete"
-      onChange={(val) => setNotifyOnRunComplete(val)}
-    />
-  );
-}
-
 function MenuBarIconToggle() {
   const { data: settings } = useGetAppSettingsQuery();
   const [setShowMenuBarIcon] = useSetShowMenuBarIconMutation();
@@ -221,19 +206,6 @@ function AgentsSection() {
         );
       })}
     </div>
-  );
-}
-
-function NotifyToolApprovalToggle() {
-  const { data: settings } = useGetAppSettingsQuery();
-  const [setNotifyOnToolApproval] = useSetNotifyOnToolApprovalMutation();
-
-  return (
-    <Toggle
-      enabled={settings?.notifyOnToolApproval ?? true}
-      aria-label="Notify when a tool needs approval"
-      onChange={(val) => setNotifyOnToolApproval(val)}
-    />
   );
 }
 
@@ -367,24 +339,6 @@ export default function GeneralSettings() {
             description="Show the Mains icon in the system menu bar"
           >
             <MenuBarIconToggle />
-          </SettingsRow>
-        </SettingsSection>
-      )}
-
-      {caps.nativeNotifications && (
-        <SettingsSection title="Notifications">
-          <SettingsRow
-            title="Run Complete"
-            description="Get notified when a run finishes"
-          >
-            <NotifyRunCompleteToggle />
-          </SettingsRow>
-          <SettingsDivider />
-          <SettingsRow
-            title="Tool Approval"
-            description="Get notified when a tool needs your approval"
-          >
-            <NotifyToolApprovalToggle />
           </SettingsRow>
         </SettingsSection>
       )}

@@ -40,7 +40,7 @@ export interface SelectOption<T extends string = string> {
 export type SelectSize = "sm" | "md";
 
 const TRIGGER_SIZE: Record<SelectSize, string> = {
-  md: "min-w-52 px-2.5 py-2 text-sm",
+  md: "min-w-52 px-2.5 py-2 text-s",
   sm: "px-3 py-2 text-xs",
 };
 
@@ -59,6 +59,7 @@ interface SelectBaseProps<T extends string = string> {
   /** Inert trigger — for a control an in-flight action has taken over. */
   disabled?: boolean;
   size?: SelectSize;
+  onOpenChange?: (open: boolean) => void;
 }
 
 export type SelectProps<T extends string = string> = SelectBaseProps<T> &
@@ -76,6 +77,7 @@ export default function Select<T extends string = string>({
   title,
   disabled,
   size = "md",
+  onOpenChange,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
 }: SelectProps<T>) {
@@ -91,6 +93,8 @@ export default function Select<T extends string = string>({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const initialFocusIndex = useRef(-1);
+  const notifiedOpenRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
   const [dropdownPosition, setDropdownPosition] = useState({
     top: 0,
     left: 0,
@@ -112,10 +116,21 @@ export default function Select<T extends string = string>({
   const selectedOption =
     selectedIndex >= 0 ? options[selectedIndex] : undefined;
 
+  const setOpen = (open: boolean) => {
+    if (open === notifiedOpenRef.current) return;
+    notifiedOpenRef.current = open;
+    setIsOpen(open);
+    onOpenChangeRef.current?.(open);
+  };
+
   const updateDropdownPosition = () => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    setDropdownPosition({ top: rect.bottom, left: rect.left, width: rect.width });
+    setDropdownPosition({
+      top: rect.bottom,
+      left: rect.left,
+      width: rect.width,
+    });
   };
 
   const openMenu = (preferredIndex: number) => {
@@ -125,11 +140,11 @@ export default function Select<T extends string = string>({
         : Math.min(options.length - 1, Math.max(0, preferredIndex));
     initialFocusIndex.current = nextIndex;
     setActiveIndex(nextIndex);
-    setIsOpen(true);
+    setOpen(true);
   };
 
   const closeMenu = (restoreTriggerFocus: boolean) => {
-    setIsOpen(false);
+    setOpen(false);
     if (restoreTriggerFocus) {
       requestAnimationFrame(() => triggerRef.current?.focus());
     }
@@ -154,53 +169,61 @@ export default function Select<T extends string = string>({
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
+        event.stopPropagation();
         openMenu(selectedIndex >= 0 ? selectedIndex : 0);
         break;
       case "ArrowUp":
         event.preventDefault();
+        event.stopPropagation();
         openMenu(selectedIndex >= 0 ? selectedIndex : options.length - 1);
         break;
       case "Home":
         event.preventDefault();
+        event.stopPropagation();
         openMenu(0);
         break;
       case "End":
         event.preventDefault();
+        event.stopPropagation();
         openMenu(options.length - 1);
         break;
       case "Enter":
       case " ":
         event.preventDefault();
+        event.stopPropagation();
         if (isOpen) closeMenu(true);
         else openMenu(selectedIndex >= 0 ? selectedIndex : 0);
         break;
       case "Escape":
         if (isOpen) {
           event.preventDefault();
+          event.stopPropagation();
           closeMenu(true);
         }
         break;
     }
   };
 
-  const handleListboxKeyDown = (
-    event: React.KeyboardEvent<HTMLDivElement>,
-  ) => {
+  const handleListboxKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
+        event.stopPropagation();
         focusOption(activeIndex + 1);
         break;
       case "ArrowUp":
         event.preventDefault();
+        event.stopPropagation();
         focusOption(activeIndex - 1);
         break;
       case "Home":
         event.preventDefault();
+        event.stopPropagation();
         focusOption(0);
         break;
       case "End":
         event.preventDefault();
+        event.stopPropagation();
         focusOption(options.length - 1);
         break;
       case "Escape":
@@ -212,7 +235,8 @@ export default function Select<T extends string = string>({
         // Continue from the trigger rather than from a portaled option, which
         // would otherwise disappear before the browser resolves its next stop.
         event.preventDefault();
-        setIsOpen(false);
+        event.stopPropagation();
+        setOpen(false);
         requestAnimationFrame(() =>
           focusNextFrom(triggerRef.current, event.shiftKey),
         );
@@ -267,9 +291,20 @@ export default function Select<T extends string = string>({
   useClickOutside(
     containerRef,
     () => {
-      if (isOpen) setIsOpen(false);
+      if (isOpen) setOpen(false);
     },
     dropdownRef,
+  );
+
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  }, [onOpenChange]);
+
+  useEffect(
+    () => () => {
+      if (notifiedOpenRef.current) onOpenChangeRef.current?.(false);
+    },
+    [],
   );
 
   return (
@@ -292,7 +327,8 @@ export default function Select<T extends string = string>({
         onKeyDown={handleTriggerKeyDown}
         className={`
           w-full ${TRIGGER_SIZE[size]}
-          glass-button
+          glass-input
+          pl-4.5 pr-2.5
           text-primary-900 dark:text-primary
           cursor-pointer
           disabled:cursor-not-allowed disabled:opacity-60
@@ -310,7 +346,9 @@ export default function Select<T extends string = string>({
             tone={selectedOption ? "inherit" : "subtle"}
             className="truncate"
           >
-            {selectedOption?.selectedLabel || selectedOption?.label || placeholder}
+            {selectedOption?.selectedLabel ||
+              selectedOption?.label ||
+              placeholder}
           </Text>
         </div>
         <Caption
@@ -330,6 +368,7 @@ export default function Select<T extends string = string>({
           <div
             ref={dropdownRef}
             id={listboxId}
+            data-dropdown-portal="true"
             role="listbox"
             aria-labelledby={triggerId}
             onKeyDown={handleListboxKeyDown}
@@ -338,14 +377,14 @@ export default function Select<T extends string = string>({
               overflow-hidden rounded-b-xl border border-t-0 border-primary-950/10 shadow-lg dark:border-primary/10
               ${animateIn ? "animate-dropdown-in" : "dropdown-prewarm"}
               origin-top
-              bg-linear-to-b from-primary to-primary-50 dark:from-primary-900 dark:to-primary-950`}
+               bg-primary-50  dark:bg-primary-950`}
             style={{
               top: dropdownPosition.top,
               left: dropdownPosition.left,
               width: dropdownPosition.width,
             }}
           >
-            <div className="max-h-60 overflow-auto noscrollbar">
+            <div className="max-h-60 overflow-auto noscrollbar space-y-0.5 p-1.5">
               {options.map((option, index) => {
                 const isSelected = value === option.value;
                 const isActive = activeIndex === index;
@@ -364,7 +403,7 @@ export default function Select<T extends string = string>({
                     onFocus={() => setActiveIndex(index)}
                     onClick={() => selectOption(option)}
                     className={`
-                      flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left ${OPTION_SIZE[size]}
+                      flex w-full cursor-pointer items-center gap-1 px-3 py-1 rounded-xl text-left ${OPTION_SIZE[size]}
                       text-primary-900 transition-colors focus:outline-none dark:text-primary
                       hover:bg-primary-950/5 focus:bg-primary-950/5 dark:hover:bg-primary/5 dark:focus:bg-primary/5
                       ${isSelected || isActive ? "bg-primary-950/5 dark:bg-primary/10" : ""}
@@ -372,7 +411,7 @@ export default function Select<T extends string = string>({
                   >
                     {option.icon}
                     <div className="flex min-w-0 flex-col">
-                      <span className="my-0.5 truncate">{option.label}</span>
+                      <span className=" truncate">{option.label}</span>
                       {option.description && (
                         <Text
                           as="span"

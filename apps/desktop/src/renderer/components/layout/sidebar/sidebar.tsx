@@ -32,6 +32,7 @@ import { useActiveSpace } from "@/hooks/use-active-space";
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import { useScriptNotifications } from "@/hooks/use-script-notifications";
 import { useSidebarSpaceSwipe } from "@/hooks/use-sidebar-space-swipe";
+import { useUpdateSpaceMutation } from "@/lib/redux/api";
 import { UpdateBanner } from "./update-banner";
 import { BackgroundRunsDock } from "@/features/workspace/components/background-runs";
 import { Button, Text, Tooltip } from "@/components/ui";
@@ -47,6 +48,13 @@ import {
   SIDEBAR_WIDTH_DEFAULT,
 } from "@/lib/layout";
 import { Clock } from "@/components/ui/icons/space";
+import type { ModeId } from "../../../../shared/modes";
+import { listenForCommandMenuQuickActions } from "@/features/command-menu/command-menu-bridge";
+import {
+  useKeyboardShortcut,
+  useKeyboardShortcutBinding,
+} from "@/providers/keyboard-shortcuts-provider";
+import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -60,16 +68,11 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const sidebarConfig = useSidebarConfig();
   const modeConfig = useModeConfig();
   const isChatShell = sidebarConfig.itemType === "chat";
-  const { spaces, activeSpaceId } = useActiveSpace();
+  const { spaces, activeSpaceId, activeSpace } = useActiveSpace();
+  const [updateSpace] = useUpdateSpaceMutation();
   const spaceProvider = useSpaceProviderVariant();
 
-  const {
-    searchQuery,
-    isSearchExpanded,
-    setSearchQuery,
-    handleSearchExpand,
-    handleSearchClear,
-  } = useSidebarSearch();
+  const { searchQuery } = useSidebarSearch();
 
   const { isSettingsOpen, handleOpenSettings, handleCloseSettings } =
     useSettingsNavigation();
@@ -96,7 +99,6 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   };
 
   const {
-    account,
     workspaces,
     gitStateByWorkspaceId,
     isLoadingWorkspaces,
@@ -128,6 +130,57 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     isCreateCollectionModalOpen,
     isCreatingCollection,
   } = useSidebarActions();
+
+  useKeyboardShortcut("projects.addLocal", () => void handleAddProject(), {
+    enabled: !isChatShell && nativeDialogs,
+    allowInEditable: true,
+  });
+  useKeyboardShortcut("projects.clone", handleOpenCloneModal, {
+    enabled: !isChatShell,
+    allowInEditable: true,
+  });
+  useKeyboardShortcut("projects.create", handleOpenCreateProjectModal, {
+    enabled: !isChatShell,
+    allowInEditable: true,
+  });
+  const newItemShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("app.newItem"),
+  );
+  const addLocalShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("projects.addLocal"),
+  );
+  const cloneShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("projects.clone"),
+  );
+  const createShortcut = keyboardShortcutLabel(
+    useKeyboardShortcutBinding("projects.create"),
+  );
+
+  useEffect(
+    () =>
+      listenForCommandMenuQuickActions((action) => {
+        switch (action) {
+          case "add-project-from-local":
+            void handleAddProject();
+            break;
+          case "clone-project-from-url":
+            handleOpenCloneModal();
+            break;
+          case "create-code-project":
+            handleOpenCreateProjectModal();
+            break;
+          case "create-collection-project":
+            handleOpenCreateCollectionModal();
+            break;
+        }
+      }),
+    [
+      handleAddProject,
+      handleOpenCloneModal,
+      handleOpenCreateCollectionModal,
+      handleOpenCreateProjectModal,
+    ],
+  );
 
   const deleteWorkspace = useDeleteWorkspace();
   const archiveWorkspace = useArchiveWorkspace();
@@ -168,6 +221,11 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     location.pathname === "/relay" || location.pathname.startsWith("/relay/");
   const isPluginsDisabledForAgent = !spaceProvider.supportsPlugins;
 
+  const handleModeChange = (mode: ModeId) => {
+    if (!activeSpace || mode === activeSpace.mode) return;
+    void updateSpace({ id: activeSpace.id, payload: { mode } });
+  };
+
   return (
     <>
       <aside
@@ -190,17 +248,14 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         ) : (
           <div className="h-full overflow-hidden flex flex-col">
             <SidebarHeader
-              avatarUrl={account?.avatarUrl}
-              displayName={account?.displayName}
-              isSearchExpanded={isSearchExpanded}
-              searchQuery={searchQuery}
-              onSearchExpand={handleSearchExpand}
-              onSearchChange={setSearchQuery}
-              onSearchClear={handleSearchClear}
+              mode={activeSpace?.mode}
+              providerId={activeSpace?.providerId}
+              onModeChange={handleModeChange}
             />
             <div className="px-3 py-px">
               <NewButton
                 onClick={isChatShell ? () => handleNewChat() : handleNewClick}
+                shortcutLabel={newItemShortcut}
                 icon={
                   isChatShell ? (
                     <New className="size-3.5 text-primary-900 dark:text-primary-100" />
@@ -223,8 +278,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                                 icon: (
                                   <Plus className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
                                 ),
-                                shortcut: "o",
-                                shortcutLabel: "\u2318\u21e7O",
+                                shortcutLabel: addLocalShortcut,
                                 onClick: handleAddProject,
                               },
                             ]
@@ -234,8 +288,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                           icon: (
                             <Connect className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
                           ),
-                          shortcut: "u",
-                          shortcutLabel: "\u2318\u21e7U",
+                          shortcutLabel: cloneShortcut,
                           onClick: handleOpenCloneModal,
                         },
                         {
@@ -243,8 +296,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                           icon: (
                             <Project className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
                           ),
-                          shortcut: "n",
-                          shortcutLabel: "\u2318\u21e7N",
+                          shortcutLabel: createShortcut,
                           onClick: handleOpenCreateProjectModal,
                         },
                       ]

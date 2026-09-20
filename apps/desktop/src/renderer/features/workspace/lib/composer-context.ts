@@ -1,10 +1,10 @@
 /**
  * Everything the composer can attach to the next message, as one tagged union.
  *
- * The six kinds — files, issues, signals, skills, browser selections, code
- * selections — are one concept ("what this message carries besides its text"),
- * but they used to be six state fields, six add/remove/clear reducer triplets,
- * and six props threaded down the page. Nothing forced them to stay in step, so
+ * The seven kinds — files, issues, signals, skills, browser selections,
+ * Appshots, and code selections — are one concept ("what this message carries
+ * besides its text"), but they used to be separate state fields and props.
+ * Nothing forced them to stay in step, so
  * they drifted: the browser-selection type existed in two copies and the second
  * one had already lost `scroll`, `viewport`, and `devicePixelRatio`.
  *
@@ -17,6 +17,7 @@
  */
 
 import type { FileNode } from "@/features/workspace/types/file-explorer";
+import type { AppshotCapture } from "../../../../shared/appshots";
 
 export interface ContextIssue {
   entityId: string;
@@ -41,6 +42,7 @@ export interface ContextSignal {
 export interface ContextSkill {
   name: string;
   path?: string;
+  mentionPath?: string;
   description?: string;
   displayName?: string;
   shortDescription?: string;
@@ -82,8 +84,6 @@ export interface ContextBrowserSelection {
   screenshotPath?: string;
   /** Basename used for `mains-capture://<name>` in `<img src>`. */
   screenshotCaptureName?: string;
-  surroundingScreenshotPath?: string;
-  surroundingScreenshotCaptureName?: string;
   screenshotMimeType: string;
 }
 
@@ -92,6 +92,7 @@ export type ContextIssueItem = { kind: "issue" } & ContextIssue;
 export type ContextSignalItem = { kind: "signal" } & ContextSignal;
 export type ContextSkillItem = { kind: "skill" } & ContextSkill;
 export type ContextBrowserItem = { kind: "browser" } & ContextBrowserSelection;
+export type ContextAppshotItem = { kind: "appshot" } & AppshotCapture;
 export type ContextCodeItem = { kind: "code" } & ContextCodeSelection;
 
 export type ContextItem =
@@ -100,6 +101,7 @@ export type ContextItem =
   | ContextSignalItem
   | ContextSkillItem
   | ContextBrowserItem
+  | ContextAppshotItem
   | ContextCodeItem;
 
 export type ContextKind = ContextItem["kind"];
@@ -107,8 +109,8 @@ export type ContextKind = ContextItem["kind"];
 /**
  * The handle an item is removed by. It differs per kind because each kind
  * arrives from somewhere different: a file from the explorer is its path, a
- * tracker issue is its entity id, a skill is its name, and the two selection
- * kinds carry a uuid minted where they were captured.
+ * tracker issue is its entity id, a skill is its name, and capture/selection
+ * kinds carry a uuid minted where they were created.
  */
 export function contextItemKey(item: ContextItem): string {
   switch (item.kind) {
@@ -120,6 +122,7 @@ export function contextItemKey(item: ContextItem): string {
     case "skill":
       return item.name;
     case "browser":
+    case "appshot":
     case "code":
       return item.id;
   }
@@ -150,6 +153,7 @@ export interface GroupedContext {
   readonly signals: readonly ContextSignalItem[];
   readonly skills: readonly ContextSkillItem[];
   readonly browserSelections: readonly ContextBrowserItem[];
+  readonly appshots: readonly ContextAppshotItem[];
   readonly codeSelections: readonly ContextCodeItem[];
 }
 
@@ -168,6 +172,7 @@ const EMPTY_GROUPED: GroupedContext = Object.freeze({
   signals: [],
   skills: [],
   browserSelections: [],
+  appshots: [],
   codeSelections: [],
 });
 
@@ -185,6 +190,7 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
     signals: [],
     skills: [],
     browserSelections: [],
+    appshots: [],
     codeSelections: [],
   };
   for (const item of items) {
@@ -203,6 +209,9 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
         break;
       case "browser":
         grouped.browserSelections.push(item);
+        break;
+      case "appshot":
+        grouped.appshots.push(item);
         break;
       case "code":
         grouped.codeSelections.push(item);

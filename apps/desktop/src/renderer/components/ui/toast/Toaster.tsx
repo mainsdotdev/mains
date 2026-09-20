@@ -81,10 +81,12 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
       data-exiting={exiting ? "" : undefined}
+      data-toast-type={toast.type}
       className="pointer-events-auto inline-flex items-center gap-3 px-5 py-3
-        rounded-full max-w-[calc(100vw-24px)] glass-outline bg-primary dark:bg-primary-950
+        rounded-full max-w-[calc(100vw-24px)] glass-input bg-primary dark:bg-primary-950
         text-primary-950 dark:text-primary toast-item"
     >
+      <span aria-hidden="true" className="toast-item-glow" />
       {icon && <span className="flex items-center">{icon}</span>}
       {/* Colour comes from the toast shell, which owns the surface it sits on. */}
       <Text as="span" tone="inherit" weight="medium" className="whitespace-nowrap">

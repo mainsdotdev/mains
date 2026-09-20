@@ -1,4 +1,8 @@
-import type { MouseEvent, ReactNode } from "react";
+import type {
+  DragEventHandler,
+  MouseEvent,
+  ReactNode,
+} from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceGroupExpanded } from "@/lib/redux/slices/appSettingsSlice";
 import { Button, Text } from "@/components/ui";
@@ -17,14 +21,25 @@ export const SIDEBAR_ACTION_ICON =
 export function SidebarGroupSection({
   groupKey,
   label,
+  labelTint,
   icon,
   // count,
   action,
   secondaryAction,
+  dragHandleProps,
+  onReorderKey,
   children,
 }: {
   groupKey: string;
   label: string;
+  /**
+   * Text colour class for the label. Two callers want one: a section whose
+   * icon carries a user tint the title should share, so the pair reads as one
+   * mark rather than a coloured glyph beside unrelated white text; and a
+   * section that names a shelf rather than a thing, which wants a quieter
+   * title than the default. Absent or empty keeps the `contrast` tone.
+   */
+  labelTint?: string;
   /** A function form gets the open state, so the glyph can track the accordion. */
   icon?: ReactNode | ((expanded: boolean) => ReactNode);
   count: number;
@@ -44,6 +59,14 @@ export function SidebarGroupSection({
     onClick: (event: MouseEvent<HTMLElement>) => void;
     icon: ReactNode;
   };
+  dragHandleProps?: {
+    draggable: boolean;
+    onDragStart: DragEventHandler<HTMLDivElement>;
+    onDragOver: DragEventHandler<HTMLDivElement>;
+    onDrop: DragEventHandler<HTMLDivElement>;
+    onDragEnd: DragEventHandler<HTMLDivElement>;
+  };
+  onReorderKey?: (direction: "up" | "down") => void;
   children: ReactNode;
 }) {
   const dispatch = useAppDispatch();
@@ -60,21 +83,51 @@ export function SidebarGroupSection({
       <div
         role="button"
         tabIndex={0}
+        draggable={dragHandleProps?.draggable}
+        onDragStart={(event) => {
+          if ((event.target as HTMLElement).closest("button")) {
+            event.preventDefault();
+            return;
+          }
+          dragHandleProps?.onDragStart(event);
+        }}
+        onDragOver={dragHandleProps?.onDragOver}
+        onDrop={dragHandleProps?.onDrop}
+        onDragEnd={dragHandleProps?.onDragEnd}
         onClick={toggleExpanded}
         onKeyDown={(e) => {
+          if (
+            onReorderKey &&
+            e.altKey &&
+            (e.key === "ArrowUp" || e.key === "ArrowDown")
+          ) {
+            e.preventDefault();
+            onReorderKey?.(e.key === "ArrowUp" ? "up" : "down");
+            return;
+          }
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             toggleExpanded();
           }
         }}
-        className="group/section w-full flex items-center gap-1.5 px-2 py-1 mb-px rounded-lg cursor-pointer hover:bg-primary/50 dark:hover:bg-primary/5 transition-colors"
+        className={`group/section w-full flex items-center gap-1.5 px-2 py-1 mb-px rounded-lg hover:bg-primary/50 dark:hover:bg-primary/5 transition-colors ${
+          dragHandleProps?.draggable
+            ? "cursor-grab active:cursor-grabbing"
+            : "cursor-pointer"
+        }`}
       >
         {icon && (
           <span className="shrink-0 text-xs">
             {typeof icon === "function" ? icon(expanded) : icon}
           </span>
         )}
-        <Text as="span" size="s" tone="contrast" className="truncate" weight="medium">
+        <Text
+          as="span"
+          size="s"
+          tone={labelTint ? "inherit" : "contrast"}
+          className={`truncate ${labelTint ?? ""}`}
+          weight="normal"
+        >
           {label}
         </Text>
         <div className="ml-auto flex items-center gap-1.5">

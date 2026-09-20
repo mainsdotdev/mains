@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
-import { markdownComponents } from "@/components/markdown-components";
+import { agentMarkdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import { Check, Close, Minimize, Stop } from "@/components/ui/icons";
 import { AgentGlyph, Button, Text } from "@/components/ui";
@@ -198,15 +198,13 @@ export function SubagentDetail({
                     rehypeRaw,
                     [rehypeSanitize, markdownSanitizeSchema],
                   ]}
-                  components={markdownComponents}
+                  components={agentMarkdownComponents}
                 >
                   {item.content}
                 </ReactMarkdown>
               </div>
             ) : (
-              // isCompact={false} — the compact variant is for rows inside a
-              // sub-group accordion whose header already carries the icon and
-              // tool name; standalone rows need both (see ToolSubGroupAccordion).
+              // Standalone rows carry their own icon and tool name.
               <ToolCallItem
                 key={item.key}
                 event={mapToolCallToEvent(item.call)!}
@@ -224,7 +222,7 @@ export function SubagentDetail({
                 rehypeRaw,
                 [rehypeSanitize, markdownSanitizeSchema],
               ]}
-              components={markdownComponents}
+              components={agentMarkdownComponents}
             >
               {resultText}
             </ReactMarkdown>

@@ -41,10 +41,14 @@ import { MainHeaderProvider } from "./hooks/use-main-header";
 import { useLayoutWidthVars } from "./hooks/use-layout-width-vars";
 import { useAppearanceFonts } from "./hooks/use-appearance-fonts";
 import { getProviderVariant } from "./lib/provider-variants";
-import { getRouteType } from "./lib/route-utils";
-import { useActiveSpace } from "./hooks/use-active-space";
-import { useUpdateSpaceMutation } from "./lib/redux/api";
-import type { ModeId } from "../shared/modes";
+import { CommandMenu } from "./features/command-menu/command-menu";
+import { useAppshots } from "./hooks/use-appshots";
+import { useWindowRequests } from "./hooks/use-window-requests";
+import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
+import {
+  KeyboardShortcutsProvider,
+  useKeyboardShortcut,
+} from "./providers/keyboard-shortcuts-provider";
 
 // First-run-only UI is a substantial graph (feature previews, provider cards,
 // and settings controls). Completed users should not parse it on every launch.
@@ -94,8 +98,10 @@ function AppContent() {
   useDropdownAnimationPrewarm();
   useLayoutWidthVars();
   useAppearanceFonts();
+  useAppshots();
+  useWindowRequests();
+  useAppSettingsEvents();
   const location = useLocation();
-  const showSpaceModePicker = getRouteType(location.pathname) !== "settings";
   const hideRightPanel = shouldHideRightPanel(location.pathname);
   const variant = useWorkspaceVariant();
   const activeProviderId =
@@ -104,8 +110,6 @@ function AppContent() {
   const browserPanel = useBrowserPanel();
   const docViewer = useDocumentViewer();
   const modeConfig = useModeConfig();
-  const { activeSpace } = useActiveSpace();
-  const [updateSpace] = useUpdateSpaceMutation();
   const showTerminalToggle = variant !== "default" && modeConfig.showTerminal;
   const showBrowserToggle = variant !== "default";
   const dispatch = useAppDispatch();
@@ -127,11 +131,6 @@ function AppContent() {
   );
   const isMobile = useIsMobile();
 
-  const handleSelectMode = (mode: ModeId) => {
-    if (!activeSpace || mode === activeSpace.mode) return;
-    void updateSpace({ id: activeSpace.id, payload: { mode } });
-  };
-
   // Chat/work hide the right panel entirely; a persisted rightPanelOpen from a
   // developer session must not inset the content there (and is left untouched
   // so switching back to developer restores it).
@@ -146,15 +145,17 @@ function AppContent() {
       : rightPanelVisible
         ? RIGHT_PANEL_WIDTH
         : EDGE_GUTTER;
-  // The box renders nothing without a workspace, and not at all on the routes
-  // that hide the right panel. Work/chat modes hide the git ceremony entirely
-  // (which also spares the panel's gitFlow status query — it throws on
-  // repo-less trees).
+  // The box has two independent targets: Code can describe a workspace before
+  // a run exists; Work can describe a workspace-less run. Git remains gated
+  // behind the workspace half so its status query never touches managed run
+  // directories.
+  const hasSessionPanelTarget =
+    (modeConfig.showGitActions && !!activeWorkspaceId) ||
+    (modeConfig.showSources && !!sessionRunId);
   const sessionPanelShown =
     isSessionPanelOpen &&
-    !!activeWorkspaceId &&
     !hideRightPanel &&
-    modeConfig.showGitActions;
+    hasSessionPanelTarget;
   // The box floats — overlays the content instead of taking a column — when
   // there is no room to share (another panel already holds the right edge), or
   // nothing to share *with*: the empty state and the other non-run tabs centre
@@ -204,6 +205,26 @@ function AppContent() {
     isMobile || sidebarCollapsed ? EDGE_GUTTER : SIDEBAR_WIDTH;
   const contentRight = isMobile ? EDGE_GUTTER : rightLaneWidth;
   const shellVisible = onboardingCompleted || isWeb;
+
+  useKeyboardShortcut("app.toggleSidebar", () => {
+    dispatch(setSidebarCollapsed(!sidebarCollapsed));
+  }, { allowInEditable: true });
+  useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
+    enabled:
+      showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
+    allowInEditable: true,
+  });
+  useKeyboardShortcut("app.toggleBrowser", () => {
+    if (!showBrowserToggle) return;
+    if (!browserPanel.isOpen) {
+      dispatch(setRightPanelOpen(false));
+      docViewer.close();
+    }
+    browserPanel.toggle();
+  }, {
+    enabled: showBrowserToggle && !hideRightPanel,
+    allowInEditable: true,
+  });
   useLayoutEffect(() => {
     const root = document.documentElement.style;
     if (!shellVisible) {
@@ -250,6 +271,7 @@ function AppContent() {
   return (
     <>
       <Toaster />
+      <CommandMenu />
       <MainLayout>
         {/* Mobile drawer scrims — tap to dismiss. Each sits just below its panel
             (sidebar z-30, right panel z-50) and above the full-width content. */}
@@ -276,9 +298,6 @@ function AppContent() {
           <SidebarToggleButton
             isOpen={!sidebarCollapsed}
             onClick={() => dispatch(setSidebarCollapsed(!sidebarCollapsed))}
-            mode={showSpaceModePicker ? activeSpace?.mode : undefined}
-            providerId={activeSpace?.providerId}
-            onModeChange={handleSelectMode}
           />
         )}
         <Sidebar collapsed={sidebarCollapsed} />
@@ -330,6 +349,7 @@ function AppContent() {
         {!hideRightPanel && (
           <SessionPanel
             providerId={activeProviderId}
+            runId={sessionRunId}
             laneOffset={rightLaneWidth}
             floating={sessionPanelFloating}
           />
@@ -349,13 +369,15 @@ export default function App() {
     <ErrorBoundary level="app">
       <ReduxProvider>
         <Router>
-          <MainHeaderProvider>
-            <BrowserPanelProvider>
-              <DocumentViewerProvider>
-                <AppContent />
-              </DocumentViewerProvider>
-            </BrowserPanelProvider>
-          </MainHeaderProvider>
+          <KeyboardShortcutsProvider>
+            <MainHeaderProvider>
+              <BrowserPanelProvider>
+                <DocumentViewerProvider>
+                  <AppContent />
+                </DocumentViewerProvider>
+              </BrowserPanelProvider>
+            </MainHeaderProvider>
+          </KeyboardShortcutsProvider>
         </Router>
       </ReduxProvider>
     </ErrorBoundary>

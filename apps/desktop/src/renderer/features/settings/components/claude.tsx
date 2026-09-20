@@ -5,6 +5,7 @@ import { useCapabilities } from "@/lib/platform";
 import {
   ProviderAccountSection,
   ProviderCliSection,
+  ProviderColorSection,
   ProviderSettingsLayout,
   selectedSchemaLabel,
   useProviderSettings,
@@ -34,6 +35,7 @@ export default function ClaudeSettings(
     error,
     updating,
     config,
+    space,
     updateConfig,
   } = useProviderSettings<ClaudeCodeAdapterConfig>(PROVIDER_IDS.claude, "claude");
 
@@ -90,6 +92,8 @@ export default function ClaudeSettings(
         shortName={getProviderVariant("claude").label}
         cli={cli}
       />
+
+      <ProviderColorSection space={space} />
 
       <SettingsSection  title="Configuration">
         <SettingsRow
