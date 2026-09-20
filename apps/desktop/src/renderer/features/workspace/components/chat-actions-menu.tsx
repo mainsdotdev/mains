@@ -82,7 +82,11 @@ export function ChatActionsMenu() {
     isRunTab(state.workspace.activeTab) ? state.workspace.activeTab : null,
   );
   const { data: account } = useGetAccountQuery();
-  const { data: run } = useGetRunByIdQuery(sessionRunId ?? "", {
+  // `currentData`, never `data`: RTK Query's `data` keeps the last successful
+  // result once the hook skips or its arg changes, so closing a chat for the
+  // new-chat screen would leave this menu on screen — still pointing at the
+  // chat that was left. `currentData` empties with the tab.
+  const { currentData: run } = useGetRunByIdQuery(sessionRunId ?? "", {
     skip: !sessionRunId,
   });
   const { data: collections } = useListCollectionsQuery(

@@ -1,4 +1,10 @@
-import { RightPanelOpen, RightPanelClose, Terminal, TerminalOpen, Web } from "@/components/ui/icons";
+import {
+  RightPanelOpen,
+  RightPanelClose,
+  Terminal,
+  TerminalOpen,
+  Web,
+} from "@/components/ui/icons";
 import { Button, toast } from "@/components/ui";
 import { useAppSelector } from "@/lib/redux/hooks";
 import { useCapabilities } from "@/lib/platform";
@@ -25,7 +31,9 @@ export function ToggleButton({
   browserOpen,
   onBrowserToggle,
 }: ToggleButtonProps) {
-  const activeWorkspaceId = useAppSelector((state) => state.workspace.activeWorkspaceId);
+  const activeWorkspaceId = useAppSelector(
+    (state) => state.workspace.activeWorkspaceId,
+  );
   const { embeddedBrowser } = useCapabilities();
   const { showGitActions, showSources, showRightPanel } = useModeConfig();
   const browserShortcut = keyboardShortcutLabel(
@@ -51,6 +59,8 @@ export function ToggleButton({
           : "0.8125rem",
       }}
     >
+      <ChatActionsMenu />
+
       {(showGitActions || showSources) && (
         <SessionPanelTrigger
           showGitActions={showGitActions}
@@ -58,59 +68,62 @@ export function ToggleButton({
         />
       )}
       <div className="flex items-center  rounded-full p-0.5">
-      {/* Ahead of the layout toggles: it acts on the chat, not on the window,
+        {/* Ahead of the layout toggles: it acts on the chat, not on the window,
           and decides for itself whether this mode has one. */}
-      <ChatActionsMenu />
-      {onBrowserToggle && embeddedBrowser && (
-        <Button
-          tooltip={browserTooltip}
-          tooltipPosition="left"
-          onClick={onBrowserToggle}
-          className={`p-1.5 transition-all duration-300 ease-out rounded-full cursor-pointer  hover:bg-primary-50 dark:hover:bg-primary/10 ${
-            browserOpen
-              ? "text-primary-800 dark:text-primary-200"
-              : "text-primary-700 dark:text-primary-300"
-          }`}
-          aria-label={browserOpen ? "Close browser" : "Open browser"}
-          aria-pressed={browserOpen}
-        >
-          <Web className="size-3.75" />
-        </Button>
-      )}
-      {onTerminalToggle && (
-        <Button
-          tooltip={terminalTooltip}
-          tooltipPosition="left"
-          onClick={() => {
-            if (!activeWorkspaceId && !terminalOpen) {
-              toast.error("Select a workspace first to use the terminal");
-              return;
-            }
-            onTerminalToggle();
-          }}
-          className={` p-1.5 transition-all duration-300 ease-out
+        {onBrowserToggle && embeddedBrowser && (
+          <Button
+            tooltip={browserTooltip}
+            tooltipPosition="left"
+            onClick={onBrowserToggle}
+            className={`p-1.5 transition-all duration-300 ease-out rounded-full cursor-pointer  hover:bg-primary-50 dark:hover:bg-primary/10 ${
+              browserOpen
+                ? "text-primary-800 dark:text-primary-200"
+                : "text-primary-700 dark:text-primary-300"
+            }`}
+            aria-label={browserOpen ? "Close browser" : "Open browser"}
+            aria-pressed={browserOpen}
+          >
+            <Web className="size-3.75" />
+          </Button>
+        )}
+        {onTerminalToggle && (
+          <Button
+            tooltip={terminalTooltip}
+            tooltipPosition="left"
+            onClick={() => {
+              if (!activeWorkspaceId && !terminalOpen) {
+                toast.error("Select a workspace first to use the terminal");
+                return;
+              }
+              onTerminalToggle();
+            }}
+            className={` p-1.5 transition-all duration-300 ease-out
              rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10
            `}
-          aria-label={terminalOpen ? "Close terminal" : "Open terminal"}
-        >
-          {terminalOpen ? <TerminalOpen className="size-4 text-primary-800 dark:text-primary-200" /> : <Terminal className="size-4 text-primary-700 dark:text-primary-300" />}
-        </Button>
-      )}
-      {showRightPanel && (
-        <Button
-          tooltip={isOpen ? "Close right panel" : "Open right panel"}
-          tooltipPosition="left"
-          onClick={onClick}
-          className="rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10 p-1.5  transition-all duration-300 ease-out"
-          aria-label={isOpen ? "Close right panel" : "Open right panel"}
-        >
-          {isOpen ? (
-            <RightPanelOpen className="size-4 text-primary-800 dark:text-primary-200" />
-          ) : (
-            <RightPanelClose className="size-4 text-primary-700 dark:text-primary-300" />
-          )}
-        </Button>
-      )}
+            aria-label={terminalOpen ? "Close terminal" : "Open terminal"}
+          >
+            {terminalOpen ? (
+              <TerminalOpen className="size-4 text-primary-800 dark:text-primary-200" />
+            ) : (
+              <Terminal className="size-4 text-primary-700 dark:text-primary-300" />
+            )}
+          </Button>
+        )}
+        {showRightPanel && (
+          <Button
+            tooltip={isOpen ? "Close right panel" : "Open right panel"}
+            tooltipPosition="left"
+            onClick={onClick}
+            className="rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10 p-1.5  transition-all duration-300 ease-out"
+            aria-label={isOpen ? "Close right panel" : "Open right panel"}
+          >
+            {isOpen ? (
+              <RightPanelOpen className="size-4 text-primary-800 dark:text-primary-200" />
+            ) : (
+              <RightPanelClose className="size-4 text-primary-700 dark:text-primary-300" />
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );

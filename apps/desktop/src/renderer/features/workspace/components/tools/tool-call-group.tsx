@@ -3,6 +3,7 @@ import { TOOL_ROW_TEXT } from "./_shared";
 import { ArrowUp } from "@/components/ui/icons";
 import { prepareToolCalls } from "../../lib/group-tool-calls";
 import { resolveTool } from "../../lib/resolve-tool";
+import { summarizeToolCalls } from "../../lib/tool-group-summary";
 import {
   normalizeSlug,
   renderPluginIcon,
@@ -71,11 +72,7 @@ function ToolCallGroupImpl({
     );
   }
 
-  const toolTypes = new Set(
-    toolEvents.map((event) => resolveTool(event.content).groupLabel),
-  );
-  const toolSummary = Array.from(toolTypes).slice(0, 3).join(", ");
-  const moreCount = toolTypes.size > 3 ? ` +${toolTypes.size - 3}` : "";
+  const toolSummary = summarizeToolCalls(toolEvents);
   const toolIcons = new Map<string, React.ReactNode>();
 
   for (const event of toolEvents) {
@@ -101,20 +98,23 @@ function ToolCallGroupImpl({
         onClick={() => setExpandedOverride(!isExpanded)}
         className="group w-full flex items-center gap-1 mb-1 text-s font-sans cursor-pointer"
       >
-        <div className="flex items-center transition-all duration-200">
+        {/* `min-w-0` so the sentence truncates inside the row instead of
+            pushing the chevron past the edge — the header now carries a
+            clause per kind of work, not three short tool names. */}
+        <div className="flex min-w-0 items-center transition-all duration-200">
           {/* Collapsing on `grid-template-columns` rather than `max-width` —
               the same trick `ToolCollapse` uses vertically. A max-width
               animation has to guess a cap (it was 5rem), and every pixel
               between the cap and the strip's real width is dead time: the
               strip sat still, then clipped in the last moment. `1fr` resolves
-              to the strip's own width, whether that is one icon or five, so
+              to the strip's own width, whether that is one icon or three, so
               the whole 200ms is the actual shrink. */}
           <span
             aria-hidden="true"
             className={`grid shrink-0 overflow-hidden transition-[grid-template-columns,opacity,margin] duration-200 ease-out ${ isExpanded ? "mr-0 grid-cols-[0fr] opacity-0" : "mr-1 grid-cols-[1fr] opacity-100" } ${TOOL_ROW_TEXT}`}
           >
             <span className="flex min-w-0 items-center gap-1 overflow-hidden">
-              {Array.from(toolIcons.entries()).slice(0, 5).map(([key, icon]) => (
+              {Array.from(toolIcons.entries()).slice(0, 3).map(([key, icon]) => (
                 <span
                   key={key}
                   className="flex size-4 items-center justify-center [&>svg]:size-4"
@@ -124,24 +124,11 @@ function ToolCallGroupImpl({
               ))}
             </span>
           </span>
-          <span className={`mr-0.5 ${TOOL_ROW_TEXT}`}>
-            {toolCount} tool call{toolCount !== 1 ? "s" : ""}
-          </span>
-          <span className={`truncate ${TOOL_ROW_TEXT}`}>
-            ({toolSummary}
-            {moreCount})
-          </span>
+          <span className={`truncate ${TOOL_ROW_TEXT}`}>{toolSummary}</span>
         </div>
         <ArrowUp
           className={`size-4 shrink-0 opacity-100 transition-all duration-200 group-hover:opacity-100 ${isExpanded ? "rotate-180" : "rotate-90"} ${TOOL_ROW_TEXT}`}
         />
-{/*
-        {group.isRunning && (
-          <Text as="span" size="xs" tone="muted" className="ml-auto flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-            Running
-          </Text>
-        )} */}
       </Button>
 
       <div className={`grid transition-all duration-200 ease-out ${isExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}>

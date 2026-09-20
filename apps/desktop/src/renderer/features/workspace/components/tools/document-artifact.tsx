@@ -76,7 +76,7 @@ export function DocumentArtifact({
 
   return (
     <div
-      className="relative flex items-center gap-3 w-full max-w-xl rounded-2xl bg-primary-50 dark:bg-primary-900/85 px-3 py-2.5 shadow-sm"
+      className="relative flex items-center gap-3 w-full max-w-xl rounded-2xl bg-primary-50 dark:bg-primary-900/85 px-3 py-2.5  mb-2 shadow-sm"
       title={absPath}
     >
       <Button

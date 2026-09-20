@@ -23,6 +23,12 @@ export interface ResolvedTool {
   icon: React.ReactNode;
   /** Defined for MCP tools that route through `McpDisplay`. */
   vendorId?: string;
+  /**
+   * The vendor's own name ("Linear", "Computer use"), without the verb that
+   * `groupLabel` carries. The summary sentence names the integration, not the
+   * call: "used the Computer use integration".
+   */
+  vendorLabel?: string;
   /** Verb extracted from the MCP tool name (e.g. "list"). */
   verb?: string;
   /** Entity extracted from the MCP tool name (e.g. "issues"). */
@@ -114,6 +120,7 @@ function resolveVendorTool(vendor: VendorInfo, rest: string): ResolvedTool {
       category: vendor.category,
       icon: vendor.icon,
       vendorId: vendor.id,
+      vendorLabel: vendor.label,
       verb: rawVerb,
       entity: entity.length > 0 ? entity : undefined,
       isBuiltin: false,
@@ -132,6 +139,7 @@ function resolveVendorTool(vendor: VendorInfo, rest: string): ResolvedTool {
     category: vendor.category,
     icon: vendor.icon,
     vendorId: vendor.id,
+    vendorLabel: vendor.label,
     entity: entity.length > 0 ? entity : undefined,
     isBuiltin: false,
   };
@@ -202,6 +210,7 @@ function resolveUnknownMcp(lower: string): ResolvedTool {
       category: "MCP",
       icon,
       vendorId: providerSlug,
+      vendorLabel: providerLabel,
       verb: rawVerb,
       entity: entity.length > 0 ? entity : undefined,
       isBuiltin: false,
@@ -219,6 +228,7 @@ function resolveUnknownMcp(lower: string): ResolvedTool {
     category: "MCP",
     icon,
     vendorId: providerSlug,
+    vendorLabel: providerLabel,
     entity: entity.length > 0 ? entity : undefined,
     isBuiltin: false,
   };

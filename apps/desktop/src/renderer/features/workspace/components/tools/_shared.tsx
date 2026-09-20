@@ -162,7 +162,7 @@ export function toPresentTense(label: string): string {
  * being retyped in each of the thirty-odd tool displays.
  */
 export const TOOL_ROW_TEXT =
-  "text-primary-500 group-hover:text-primary-950 group-hover:dark:text-primary";
+  "text-primary-500 dark:text-primary-400 group-hover:text-primary-950 group-hover:dark:text-primary";
 
 /** Muted-until-hover text treatment for the icon/verb slots of a tool header. */
 const headerSlotClass =

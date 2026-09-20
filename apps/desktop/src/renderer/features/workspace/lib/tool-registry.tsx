@@ -62,10 +62,22 @@ export interface BuiltinTool {
    * earlier entries win when matched via prefix/contains rules.
    */
   aliases: string[];
+}
+
+/** One clause of a tool group's summary sentence — see `PHRASES_BY_GROUP_KEY`. */
+export interface ToolPhrase {
+  /** Past tense, exactly one call: "edited a file". */
+  one: string;
+  /** Past tense, several calls: "edited files". Same as `one` when uncountable. */
+  many: string;
   /**
-   * `true` for tools that should always start a new group on their own
-   * (Task, TaskCreate/TaskUpdate). Mirrors the legacy `isSpecial` behavior.
+   * Where the clause sits in the sentence; lower comes first. Ordering by rank
+   * rather than by when the call happened keeps the header still while a group
+   * is streaming in — a late `Bash` does not reshuffle the words in front of
+   * it — and reads as a summary ("Edited a file, read files, ran commands")
+   * rather than as a log.
    */
+  rank: number;
 }
 
 /** Past-tense verb labels used for any vendor that doesn't override them. */
@@ -425,3 +437,65 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     aliases: ["savefindings"],
   },
 ];
+
+/**
+ * What a tool group's header says the agent *did*, keyed by `groupKey` rather
+ * than by builtin entry: two entries can share a key (`Grep` and Copilot's
+ * `rg`), and they must never produce two different clauses for the same work.
+ *
+ * A key with no entry here still gets a clause — `summarizeToolCalls` falls
+ * back to the resolved label ("used Glob") — so an unregistered tool degrades
+ * to a duller sentence instead of vanishing from the header.
+ */
+export const PHRASES_BY_GROUP_KEY: Record<string, ToolPhrase> = {
+  // Setup / intent — what the agent reached for before doing the work.
+  skill: { one: "loaded a tool", many: "loaded tools", rank: 10 },
+  intent: { one: "stated its intent", many: "stated its intent", rank: 10 },
+  enterplanmode: { one: "entered plan mode", many: "entered plan mode", rank: 12 },
+  exitplanmode: { one: "shared a plan", many: "shared a plan", rank: 12 },
+  plan: { one: "wrote a plan", many: "wrote plans", rank: 12 },
+  taskget: { one: "checked the plan", many: "checked the plan", rank: 12 },
+  tasklist: { one: "listed the plan", many: "listed the plan", rank: 12 },
+
+  // Writes.
+  edit: { one: "edited a file", many: "edited files", rank: 20 },
+  write: { one: "wrote a file", many: "wrote files", rank: 20 },
+  create: { one: "created a file", many: "created files", rank: 20 },
+  apply_patch: { one: "applied a patch", many: "applied patches", rank: 20 },
+  delete: { one: "deleted a file", many: "deleted files", rank: 22 },
+
+  // Reads and searches.
+  read: { one: "read a file", many: "read files", rank: 30 },
+  view: { one: "viewed a file", many: "viewed files", rank: 30 },
+  glob: { one: "looked for files", many: "looked for files", rank: 32 },
+  grep: { one: "searched the code", many: "searched the code", rank: 32 },
+  search: { one: "searched", many: "searched", rank: 32 },
+  toolsearch: { one: "looked up a tool", many: "looked up tools", rank: 32 },
+  webfetch: { one: "read a page", many: "read pages", rank: 35 },
+  websearch: { one: "searched the web", many: "searched the web", rank: 35 },
+
+  // Shell and data.
+  bash: { one: "ran a command", many: "ran commands", rank: 40 },
+  shell: { one: "ran a command", many: "ran commands", rank: 40 },
+  monitor: { one: "watched a command", many: "watched commands", rank: 42 },
+  sql: { one: "ran a query", many: "ran queries", rank: 42 },
+
+  // Delegation and interaction.
+  task: { one: "ran an agent", many: "ran agents", rank: 50 },
+  agent: { one: "ran an agent", many: "ran agents", rank: 50 },
+  workflow: { one: "ran a workflow", many: "ran workflows", rank: 50 },
+  sendmessage: { one: "messaged an agent", many: "messaged agents", rank: 52 },
+  askuserquestion: { one: "asked a question", many: "asked questions", rank: 54 },
+
+  // Mains' own review tools.
+  checkpackage: { one: "checked a package", many: "checked packages", rank: 60 },
+  savereview: { one: "saved a review", many: "saved reviews", rank: 60 },
+  savefinding: { one: "saved a finding", many: "saved findings", rank: 60 },
+  savefindings: { one: "saved findings", many: "saved findings", rank: 60 },
+};
+
+/**
+ * Where "used the X integration" sits. Ahead of the writes: which outside
+ * system the agent went through frames everything that follows.
+ */
+export const VENDOR_PHRASE_RANK = 15;
