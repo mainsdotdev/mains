@@ -21,6 +21,7 @@ export const SIDEBAR_ACTION_ICON =
 export function SidebarGroupSection({
   groupKey,
   label,
+  labelTint,
   icon,
   // count,
   action,
@@ -31,6 +32,14 @@ export function SidebarGroupSection({
 }: {
   groupKey: string;
   label: string;
+  /**
+   * Text colour class for the label. Two callers want one: a section whose
+   * icon carries a user tint the title should share, so the pair reads as one
+   * mark rather than a coloured glyph beside unrelated white text; and a
+   * section that names a shelf rather than a thing, which wants a quieter
+   * title than the default. Absent or empty keeps the `contrast` tone.
+   */
+  labelTint?: string;
   /** A function form gets the open state, so the glyph can track the accordion. */
   icon?: ReactNode | ((expanded: boolean) => ReactNode);
   count: number;
@@ -112,7 +121,13 @@ export function SidebarGroupSection({
             {typeof icon === "function" ? icon(expanded) : icon}
           </span>
         )}
-        <Text as="span" size="s" tone="contrast" className="truncate" weight="medium">
+        <Text
+          as="span"
+          size="s"
+          tone={labelTint ? "inherit" : "contrast"}
+          className={`truncate ${labelTint ?? ""}`}
+          weight="normal"
+        >
           {label}
         </Text>
         <div className="ml-auto flex items-center gap-1.5">

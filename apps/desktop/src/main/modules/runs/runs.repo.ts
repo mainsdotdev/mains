@@ -61,6 +61,12 @@ export const runsRepo = {
   /**
    * The chat sidebar's list: newest-touched non-archived runs of one
    * provider/mode experience.
+   *
+   * Pinned first — SQLite sorts NULLs last under DESC, so the ordering falls
+   * out of the column itself. It also keeps a pinned chat inside the `limit`
+   * window: pinning is a promise that the chat stays reachable, and one that
+   * had gone quiet enough to fall past the cut would otherwise vanish from the
+   * group the user pinned it into.
    */
   async findRecentRunsByExperience(
     options: RunExperienceOptions,
@@ -77,7 +83,7 @@ export const runsRepo = {
           eq(runs.isArchived, false),
         ),
       )
-      .orderBy(desc(runs.updatedAt))
+      .orderBy(desc(runs.pinnedAt), desc(runs.updatedAt))
       .limit(options.limit ?? 50);
     return rows.map(mapRunRowToResponse);
   },
@@ -228,6 +234,23 @@ export const runsRepo = {
     await db
       .update(runs)
       .set({ collectionId })
+      .where(eq(runs.id, id));
+    return this.findRunById(id);
+  },
+
+  /**
+   * Leaves `updatedAt` alone for the same reason `moveToCollection` does:
+   * pinning is organizing, not talking, and bumping the column would shoot an
+   * untouched chat to the top of the sidebar reading "now".
+   */
+  async setPinned(
+    id: string,
+    pinnedAt: Date | null,
+  ): Promise<RunResponse | null> {
+    const db = getDb();
+    await db
+      .update(runs)
+      .set({ pinnedAt })
       .where(eq(runs.id, id));
     return this.findRunById(id);
   },
@@ -585,6 +608,7 @@ function mapRunRowToResponse(row: typeof runs.$inferSelect): RunResponse {
     stopReason: row.stopReason,
     sessionId: row.sessionId,
     isArchived: row.isArchived,
+    pinnedAt: row.pinnedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

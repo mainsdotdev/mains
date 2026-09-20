@@ -81,6 +81,8 @@ export interface RunResponse {
   stopReason: string | null;
   sessionId: string | null;
   isArchived: boolean;
+  /** When the chat was pinned to the top of the sidebar; null when it is not. */
+  pinnedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -444,6 +446,13 @@ export interface MoveRunToCollectionPayload {
   runId: string;
   accountId: string;
   collectionId: string | null;
+}
+
+/** Payload for pinning a chat to the top of the sidebar, or releasing it. */
+export interface SetRunPinnedPayload {
+  runId: string;
+  accountId: string;
+  pinned: boolean;
 }
 
 /** Payload for forking an existing run's session into a new run */

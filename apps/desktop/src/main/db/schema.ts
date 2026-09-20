@@ -476,6 +476,11 @@ export const runs = sqliteTable(
       .notNull()
       .default(false),
 
+    // When the user pinned this chat to the top of the sidebar; null means
+    // unpinned. A timestamp rather than a flag because the pinned group has to
+    // be ordered somehow, and "most recently pinned first" comes free with it.
+    pinnedAt: integer("pinned_at", { mode: "timestamp" }),
+
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -492,6 +497,7 @@ export const runs = sqliteTable(
     index("idx_runs_collection").on(t.collectionId),
     index("idx_runs_space").on(t.spaceId),
     index("idx_runs_updated").on(t.updatedAt),
+    index("idx_runs_pinned").on(t.pinnedAt),
     check(
       "check_runs_config_snapshot_json",
       sql`json_valid(${t.configSnapshot}) OR ${t.configSnapshot} IS NULL`,

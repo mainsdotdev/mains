@@ -16,6 +16,7 @@ import type {
   RunExperienceOptions,
   WorkspaceRunListOptions,
   MoveRunToCollectionPayload,
+  SetRunPinnedPayload,
 } from "./runs.dto";
 import {
   handleToolApprovalResponse,
@@ -108,6 +109,11 @@ export function registerRunsIpc(): void {
     handle((payload: MoveRunToCollectionPayload) =>
       runsService.moveRunToCollection(payload),
     ),
+  );
+
+  ipcMain.handle(
+    CHANNELS.runs.setPinned,
+    handle((payload: SetRunPinnedPayload) => runsService.setRunPinned(payload)),
   );
 
   ipcMain.handle(
@@ -280,6 +286,7 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.create,
     CHANNELS.runs.update,
     CHANNELS.runs.moveToCollection,
+    CHANNELS.runs.setPinned,
     CHANNELS.runs.start,
     CHANNELS.runs.complete,
     CHANNELS.runs.fail,

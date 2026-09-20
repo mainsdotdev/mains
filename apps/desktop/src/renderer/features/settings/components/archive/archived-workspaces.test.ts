@@ -80,6 +80,7 @@ function archivedRun(overrides: Partial<ArchivedRun> = {}): ArchivedRun {
     lastError: null,
     sessionId: null,
     isArchived: true,
+    pinnedAt: null,
     createdAt: Date.parse("2026-08-01T00:00:00Z"),
     updatedAt: Date.parse("2026-08-02T00:00:00Z"),
     workspace: null,

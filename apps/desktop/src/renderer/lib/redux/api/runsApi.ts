@@ -52,6 +52,12 @@ export interface Run {
   lastError: string | null;
   sessionId: string | null;
   isArchived: boolean;
+  /**
+   * When the chat was pinned to the top of the sidebar; null when it is not.
+   * Typed as the rest of the run's timestamps are — see `toEpochMs` in
+   * chat-item.tsx for what actually arrives over each transport.
+   */
+  pinnedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -361,6 +367,17 @@ export const runsApi = baseApi.injectEndpoints({
       invalidatesTags: ["Runs", "RunsRecent", "Collections"],
     }),
 
+    setRunPinned: builder.mutation<
+      Run,
+      { runId: string; accountId: string; pinned: boolean }
+    >({
+      query: (payload) => ({
+        handler: CHANNELS.runs.setPinned,
+        args: [payload],
+      }),
+      invalidatesTags: ["Runs", "RunsRecent"],
+    }),
+
     startRun: builder.mutation<Run, string>({
       query: (id) => ({
         handler: CHANNELS.runs.start,
@@ -571,6 +588,7 @@ export const {
   useCreateRunMutation,
   useUpdateRunMutation,
   useMoveRunToCollectionMutation,
+  useSetRunPinnedMutation,
   useStartRunMutation,
   useCompleteRunMutation,
   useFailRunMutation,

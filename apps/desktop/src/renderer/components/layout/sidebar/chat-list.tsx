@@ -22,6 +22,7 @@ import {
   useMoveRunToCollectionMutation,
   useRemoveCollectionMutation,
   useReorderCollectionsMutation,
+  useSetRunPinnedMutation,
   useUpdateRunMutation,
   useSetActiveSpaceMutation,
   useUpdateCollectionMutation,
@@ -38,6 +39,7 @@ import { useActiveSpace } from "@/hooks/use-active-space";
 import { resolveRunSpaceTarget } from "@/features/workspace/lib/background-runs";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
+import { iconColorClass, splitStoredIcon } from "@/lib/icon-registry";
 import { SidebarGroupSection } from "./sidebar-group-section";
 import { ChatItem, chatLabel } from "./chat-item";
 import { ProjectIcon } from "./project-icon";
@@ -78,6 +80,7 @@ export function SidebarChatList({
   const [archiveRun] = useArchiveRunMutation();
   const [deleteRun] = useDeleteRunMutation();
   const [moveRunToCollection] = useMoveRunToCollectionMutation();
+  const [setRunPinned] = useSetRunPinnedMutation();
   const [updateRun] = useUpdateRunMutation();
   const [updateCollection] = useUpdateCollectionMutation();
   const [removeCollection] = useRemoveCollectionMutation();
@@ -119,17 +122,26 @@ export function SidebarChatList({
     return all.filter((run) => chatLabel(run).toLowerCase().includes(query));
   }, [recentRuns, query]);
 
+  // A pinned chat is lifted out of wherever it would otherwise sit — Recents or
+  // its project — and rendered once, at the top. Same rule as below: a run
+  // never appears in two places. Its `collectionId` is untouched, so unpinning
+  // drops it straight back into its project.
+  const pinnedRuns = useMemo(
+    () => runs.filter((run) => run.pinnedAt !== null),
+    [runs],
+  );
+
   // Project chats already render inside their collection group. Recents is the
   // flat home for standalone chats only, so a run never appears in both places.
   const standaloneRuns = useMemo(
-    () => runs.filter((run) => run.collectionId === null),
+    () => runs.filter((run) => run.collectionId === null && !run.pinnedAt),
     [runs],
   );
 
   const runsByCollection = useMemo(() => {
     const map = new Map<string, RecentRun[]>();
     for (const run of runs) {
-      if (!run.collectionId) continue;
+      if (!run.collectionId || run.pinnedAt) continue;
       const bucket = map.get(run.collectionId);
       if (bucket) bucket.push(run);
       else map.set(run.collectionId, [run]);
@@ -329,6 +341,20 @@ export function SidebarChatList({
     }
   };
 
+  const handleTogglePin = async (run: RecentRun) => {
+    if (!account) return;
+    try {
+      await setRunPinned({
+        runId: run.id,
+        accountId: account.id,
+        pinned: !run.pinnedAt,
+      }).unwrap();
+    } catch (error) {
+      console.error("Failed to pin chat:", error);
+      toast.error(run.pinnedAt ? "Failed to unpin chat" : "Failed to pin chat");
+    }
+  };
+
   const openCollectionMenu = (
     collection: Collection,
     event: ReactMouseEvent<HTMLElement>,
@@ -398,6 +424,8 @@ export function SidebarChatList({
       onRename={(title) => void handleRename(run, title)}
       collections={collections ?? []}
       onMove={(collectionId) => void handleMove(run, collectionId)}
+      isPinned={run.pinnedAt !== null}
+      onTogglePin={() => void handleTogglePin(run)}
     />
   );
 
@@ -412,7 +440,25 @@ export function SidebarChatList({
   }
 
   return (
-    <div className="flex flex-col gap-2 pb-2">
+    <div className="flex flex-col gap-2 pb-2 pt-2">
+      {/* No empty state: an unused Pinned header would be a permanent row
+          explaining a feature nobody asked for. */}
+      {pinnedRuns.length > 0 && (
+        <SidebarGroupSection
+          groupKey="pinned"
+          label="Pinned"
+          // Quieter than a project title: this header names a shelf, not
+          // something the user made and gave a colour to.
+          labelTint="text-primary-800 dark:text-primary-200"
+          count={pinnedRuns.length}
+        >
+          <div className="flex flex-col space-y-0.5 mt">
+            {/* Flush rows, like Recents: a pinned chat is shown outside its
+                project, so there is no gutter to indent under. */}
+            {pinnedRuns.map((run) => renderChat(run, true))}
+          </div>
+        </SidebarGroupSection>
+      )}
       {(collectionRows.length > 0 || !query) && (
         <div>
           <div className="flex items-center px-2 py-2">
@@ -452,6 +498,11 @@ export function SidebarChatList({
                   <SidebarGroupSection
                     groupKey={`collection-${collection.id}`}
                     label={collection.name}
+                    // The title wears the icon's tint: an emoji or an untinted
+                    // icon resolves to "", which leaves the neutral tone.
+                    labelTint={iconColorClass(
+                      splitStoredIcon(collection.icon).color,
+                    )}
                     icon={(expanded) => (
                       <ProjectIcon
                         icon={collection.icon}
@@ -492,7 +543,9 @@ export function SidebarChatList({
                       {collectionRuns.length > 0 ? (
                         collectionRuns.map((run) => renderChat(run))
                       ) : (
-                        <div className="px-2 py-1">
+                        // Same gutter a chat row inside a project takes, so
+                        // the placeholder sits where the missing chats would.
+                        <div className="pl-7 pr-2.5 py-1">
                           <Text as="span" size="xxs" tone="muted">
                             No chats
                           </Text>

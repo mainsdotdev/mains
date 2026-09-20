@@ -352,6 +352,7 @@ export const CHANNELS = {
     listPendingApprovals: "runs:listPendingApprovals",
     listRecent: "runs:listRecent",
     moveToCollection: "runs:moveToCollection",
+    setPinned: "runs:setPinned",
     start: "runs:start",
     statusChanged: "runs:statusChanged",
     toolApprovalRequest: "runs:toolApprovalRequest",

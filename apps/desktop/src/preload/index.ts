@@ -660,6 +660,11 @@ const api = {
       accountId: string;
       collectionId: string | null;
     }) => ipcRenderer.invoke(CHANNELS.runs.moveToCollection, payload),
+    setPinned: (payload: {
+      runId: string;
+      accountId: string;
+      pinned: boolean;
+    }) => ipcRenderer.invoke(CHANNELS.runs.setPinned, payload),
     start: (id: string) => ipcRenderer.invoke(CHANNELS.runs.start, id),
     complete: (id: string) => ipcRenderer.invoke(CHANNELS.runs.complete, id),
     fail: (id: string, error: string) =>

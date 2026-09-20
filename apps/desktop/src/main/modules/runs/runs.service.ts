@@ -66,6 +66,7 @@ import type {
   ForkRunPayload,
   ForkRunResponse,
   MoveRunToCollectionPayload,
+  SetRunPinnedPayload,
   ReviewRunPayload,
   RunDetailsResponse,
   RunTurnResponse,
@@ -753,6 +754,29 @@ export const runsService = {
     const updated = await runsRepo.moveToCollection(
       run.id,
       collectionId ?? null,
+    );
+    if (!updated) throw new Error("Run not found");
+    emit("runs:updated", { runId: run.id, ts: Date.now() });
+    return updated;
+  },
+
+  /**
+   * Pinning is a chat-sidebar affordance, so it carries the same account and
+   * mode guards as filing a chat under a collection — a developer run lives in
+   * the workspace list, which has no pinned group to be hoisted into.
+   */
+  async setRunPinned(payload: SetRunPinnedPayload): Promise<RunResponse> {
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.accountId !== payload.accountId) {
+      throw new Error("Run does not belong to this account");
+    }
+    if (run.mode === "developer") {
+      throw new Error("Developer runs cannot be pinned");
+    }
+    const updated = await runsRepo.setPinned(
+      run.id,
+      payload.pinned ? new Date() : null,
     );
     if (!updated) throw new Error("Run not found");
     emit("runs:updated", { runId: run.id, ts: Date.now() });

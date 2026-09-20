@@ -1121,6 +1121,70 @@ describe("runsService", () => {
     });
   });
 
+  describe("setRunPinned", () => {
+    it("pins a chat and releases it again", async () => {
+      createRun(db, { id: "chat-run", mode: "chat" });
+
+      const pinned = await runsService.setRunPinned({
+        runId: "chat-run",
+        accountId: "default",
+        pinned: true,
+      });
+      expect(pinned.pinnedAt).toBeInstanceOf(Date);
+
+      const released = await runsService.setRunPinned({
+        runId: "chat-run",
+        accountId: "default",
+        pinned: false,
+      });
+      expect(released.pinnedAt).toBeNull();
+    });
+
+    it("keeps the chat filed under its Collection", async () => {
+      createCollection(db, { id: "shared-project" });
+      createRun(db, {
+        id: "work-run",
+        mode: "work",
+        collectionId: "shared-project",
+      });
+
+      const pinned = await runsService.setRunPinned({
+        runId: "work-run",
+        accountId: "default",
+        pinned: true,
+      });
+
+      // Pinning only changes where the sidebar draws the row; unpinning has to
+      // drop it back into the project it never left.
+      expect(pinned.collectionId).toBe("shared-project");
+    });
+
+    it("rejects Developer runs", async () => {
+      createRun(db, { id: "dev-run", mode: "developer" });
+
+      await expect(
+        runsService.setRunPinned({
+          runId: "dev-run",
+          accountId: "default",
+          pinned: true,
+        }),
+      ).rejects.toThrow("Developer runs");
+    });
+
+    it("rejects a run belonging to another account", async () => {
+      createAccount(db, { id: "other" });
+      createRun(db, { id: "chat-run", accountId: "other", mode: "chat" });
+
+      await expect(
+        runsService.setRunPinned({
+          runId: "chat-run",
+          accountId: "default",
+          pinned: true,
+        }),
+      ).rejects.toThrow("does not belong to this account");
+    });
+  });
+
   describe("completeRun", () => {
     it("sets status to succeeded", async () => {
       createRun(db, { id: "r1", status: "running" });

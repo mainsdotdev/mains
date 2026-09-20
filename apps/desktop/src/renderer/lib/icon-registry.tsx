@@ -115,50 +115,50 @@ export const ICON_COLORS: IconColorOption[] = [
   {
     name: "default",
     label: "Default",
-    swatch: "bg-primary-900 dark:bg-primary-100",
+    swatch: "bg-primary-950 dark:bg-primary-50",
     className: "",
   },
   {
-    name: "pink",
-    label: "Pink",
-    swatch: "bg-pink-500",
-    className: "text-pink-600 dark:text-pink-500",
+    name: "violet",
+    label: "Violet",
+    swatch: "bg-violet-400",
+    className: "text-violet-600 dark:text-violet-400",
   },
   {
-    name: "red",
-    label: "Red",
-    swatch: "bg-red-400",
-    className: "text-red-500 dark:text-red-400",
+    name: "rose",
+    label: "Rose",
+    swatch: "bg-rose-400",
+    className: "text-rose-600 dark:text-rose-400",
   },
   {
     name: "orange",
     label: "Orange",
     swatch: "bg-orange-400",
-    className: "text-orange-500 dark:text-orange-400",
+    className: "text-orange-600 dark:text-orange-400",
   },
   {
     name: "amber",
-    label: "Yellow",
-    swatch: "bg-amber-300",
-    className: "text-amber-500 dark:text-amber-300",
+    label: "Amber",
+    swatch: "bg-amber-400",
+    className: "text-amber-600 dark:text-amber-400",
   },
   {
     name: "green",
     label: "Green",
-    swatch: "bg-lime-400",
-    className: "text-lime-500 dark:text-lime-400",
+    swatch: "bg-green-400",
+    className: "text-green-600 dark:text-green-500",
   },
   {
-    name: "blue",
-    label: "Blue",
-    swatch: "bg-blue-400",
-    className: "text-blue-500 dark:text-blue-400",
+    name: "sky",
+    label: "Sky",
+    swatch: "bg-sky-400",
+    className: "text-sky-600 dark:text-sky-500",
   },
   {
-    name: "purple",
-    label: "Purple",
-    swatch: "bg-indigo-500",
-    className: "text-indigo-500 dark:text-indigo-400",
+    name: "olive",
+    label: "Olive",
+    swatch: "bg-olive-400",
+    className: "text-olive-600 dark:text-olive-400",
   }
 ];
 
@@ -171,7 +171,7 @@ export function iconColorClass(color: string | null | undefined): string {
 }
 
 /** What an untinted registry icon is drawn in. */
-export const NEUTRAL_ICON_CLASS = "text-primary-700 dark:text-primary-300";
+export const NEUTRAL_ICON_CLASS = "text-primary-700 dark:text-primary-50";
 
 /**
  * The class to render a registry icon with. Unlike `iconColorClass`, never
