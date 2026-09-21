@@ -113,7 +113,7 @@ export const appSettings = sqliteTable("app_settings", {
     .default(false),
   // Stable identity of THIS install as a backend. Minted on first use and never
   // rotated: a paired phone keys its saved backend on it, so it must outlive
-  // restarts and pairing-token changes. Null until first minted.
+  // restarts and owner-token changes. Null until first minted.
   backendId: text("backend_id"),
 
   commitInstructions: text("commit_instructions").notNull().default(""),

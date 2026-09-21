@@ -10,7 +10,7 @@ export function proxiedImageSrc(src: string | undefined | null): string | undefi
   if (src.startsWith("https://") || src.startsWith("http://")) {
     // Web mode: route through the backend's same-origin HTTP image proxy instead
     // of the Electron `mains-img://` custom protocol.
-    // The proxy takes the pairing token; an <img> can only carry it in the URL.
+    // The proxy takes the owner token; an <img> can only carry it in the URL.
     if (isWeb) {
       const token = webToken();
       const auth = token ? `&token=${encodeURIComponent(token)}` : "";

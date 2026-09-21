@@ -11,21 +11,44 @@ export interface CliOptions {
   rotateToken: boolean;
   tailscaleServe: boolean;
   tailscaleServePort?: number;
+  publicUrls: string[];
+  printPairing: boolean;
 }
 
-function defaultDataDir(): string {
+export interface PairCliOptions {
+  dataDir: string;
+  token?: string;
+  controlUrl?: string;
+  endpoints: string[];
+  printQr: boolean;
+}
+
+export function defaultServerDataDir(): string {
+  return path.dirname(defaultDesktopDatabasePath());
+}
+
+export function defaultDesktopDatabasePath(): string {
   if (process.platform === "darwin") {
-    return path.join(os.homedir(), "Library", "Application Support", "Mains Server");
+    return path.join(
+      os.homedir(),
+      "Library",
+      "Application Support",
+      "mains",
+      "mains.db",
+    );
   }
   if (process.platform === "win32") {
     return path.join(
-      process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
-      "Mains Server",
+      process.env.APPDATA ??
+        path.join(os.homedir(), "AppData", "Roaming"),
+      "mains",
+      "mains.db",
     );
   }
   return path.join(
-    process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"),
-    "mains-server",
+    process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"),
+    "mains",
+    "mains.db",
   );
 }
 
@@ -34,6 +57,20 @@ function readValue(argv: string[], name: string): string | undefined {
   if (equals) return equals.slice(name.length + 1);
   const index = argv.indexOf(name);
   return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function readValues(argv: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value.startsWith(`${name}=`)) {
+      values.push(value.slice(name.length + 1));
+    } else if (value === name && argv[index + 1] !== undefined) {
+      values.push(argv[index + 1]);
+      index += 1;
+    }
+  }
+  return values;
 }
 
 function parsePort(value: string | undefined, fallback: number, name: string): number {
@@ -46,11 +83,18 @@ function parsePort(value: string | undefined, fallback: number, name: string): n
 }
 
 export function parseServerCliOptions(argv: string[]): CliOptions {
+  const configuredHost =
+    readValue(argv, "--host") ?? process.env.MAINS_SERVE_HOST;
+  if (argv.includes("--lan") && configuredHost && configuredHost !== "0.0.0.0") {
+    throw new Error("--lan cannot be combined with a different --host");
+  }
   const tailscalePort =
     readValue(argv, "--tailscale-serve-port") ??
     process.env.MAINS_TAILSCALE_SERVE_PORT;
   return {
-    host: readValue(argv, "--host") ?? process.env.MAINS_SERVE_HOST ?? "127.0.0.1",
+    host: argv.includes("--lan")
+      ? "0.0.0.0"
+      : (configuredHost ?? "127.0.0.1"),
     port: parsePort(
       readValue(argv, "--port") ?? process.env.MAINS_SERVE_PORT,
       8787,
@@ -61,7 +105,7 @@ export function parseServerCliOptions(argv: string[]): CliOptions {
     dataDir:
       readValue(argv, "--data-dir") ??
       process.env.MAINS_SERVER_DATA_DIR ??
-      defaultDataDir(),
+      defaultServerDataDir(),
     rotateToken: argv.includes("--rotate-token"),
     tailscaleServe:
       argv.includes("--tailscale-serve") ||
@@ -70,6 +114,28 @@ export function parseServerCliOptions(argv: string[]): CliOptions {
       tailscalePort === undefined
         ? undefined
         : parsePort(tailscalePort, 443, "--tailscale-serve-port"),
+    publicUrls: [
+      ...readValues(argv, "--public-url"),
+      ...(process.env.MAINS_PUBLIC_URL ? [process.env.MAINS_PUBLIC_URL] : []),
+    ],
+    printPairing: !argv.includes("--no-pairing"),
+  };
+}
+
+export function parsePairCliOptions(argv: string[]): PairCliOptions {
+  return {
+    dataDir:
+      readValue(argv, "--data-dir") ??
+      process.env.MAINS_SERVER_DATA_DIR ??
+      defaultServerDataDir(),
+    token: readValue(argv, "--token") ?? process.env.MAINS_SERVE_TOKEN,
+    controlUrl:
+      readValue(argv, "--server-url") ?? process.env.MAINS_SERVER_URL,
+    endpoints: [
+      ...readValues(argv, "--endpoint"),
+      ...readValues(argv, "--public-url"),
+    ],
+    printQr: !argv.includes("--no-qr"),
   };
 }
 

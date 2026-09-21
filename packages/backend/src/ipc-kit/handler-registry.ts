@@ -26,7 +26,7 @@ export interface IpcInvokeContext {
   clientId?: string;
   /**
    * The paired device the WS client authenticated as, when it presented a
-   * device token rather than the shared pairing token. Undefined locally.
+   * device token rather than the unrestricted owner token. Undefined locally.
    */
   deviceId?: string;
 }

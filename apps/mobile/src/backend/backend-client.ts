@@ -29,7 +29,7 @@ function errorFromClose(event: CloseEvent): Error {
   const reason = event.reason ?? "";
   if (/\b401\b|unauthorized/i.test(reason)) {
     return new BackendRefusedError(
-      "Your Mac refused the connection — was this phone revoked?",
+      "Your Mains Server refused the connection — was this phone revoked?",
     );
   }
   if (reason) return new Error(`Connection failed (${reason})`);

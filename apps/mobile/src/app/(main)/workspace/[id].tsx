@@ -136,7 +136,7 @@ export default function WorkspaceScreen() {
         ListEmptyComponent={
           <ThemedText variant="subhead" style={{ paddingVertical: spacing.md, fontWeight: 600 }}>
             {!session.backend
-              ? "Pair a Mac to see its runs here."
+              ? "Pair a Mains Server to see its runs here."
               : query
                 ? "No runs match."
                 : "No runs in this workspace yet."}

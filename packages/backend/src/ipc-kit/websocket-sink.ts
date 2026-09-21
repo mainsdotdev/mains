@@ -4,7 +4,7 @@ import type { EventScope, EventSink } from "./event-bus";
 /** A connected client the sink can write event frames to. */
 export interface WsClientConnection {
   readonly id: string;
-  /** Events a paired device may receive; undefined = all (the shared token). */
+  /** Events a paired device may receive; undefined = all (the owner token). */
   readonly eventChannels?: ReadonlySet<string>;
   send(data: string): void;
 }

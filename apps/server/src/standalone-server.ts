@@ -57,7 +57,9 @@ export async function startStandaloneServer(
     sink: server.sink,
     port: server.port,
     token: server.token,
+    tailscaleUrl: server.tailscaleUrl,
     dataDir,
+    createPairingCode: (endpoints) => server.createPairingCode(endpoints),
     disconnectDevice: (deviceId) => server.disconnectDevice(deviceId),
     close() {
       if (closePromise) return closePromise;

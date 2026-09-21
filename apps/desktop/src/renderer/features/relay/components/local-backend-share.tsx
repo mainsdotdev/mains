@@ -171,15 +171,15 @@ export function LocalBackendShare() {
           ))}
           {status.token && (
             <div className="flex items-center gap-2">
-              <Caption className="w-28 shrink-0">Pairing token</Caption>
+              <Caption className="w-28 shrink-0">Owner token</Caption>
               {/* Keyed by the token so a rotated token starts masked again. */}
-              <SecretField key={status.token} value={status.token} label="Pairing token" />
+              <SecretField key={status.token} value={status.token} label="Owner token" />
               <CopyButton value={status.token} tooltip="Copy token" />
               <Button
                 type="button"
                 variant="bare"
                 tooltip="Rotate token"
-                aria-label="Rotate pairing token"
+                aria-label="Rotate owner token"
                 onClick={() => setConfirmRotate(true)}
                 disabled={busy !== null}
                 className="text-primary-900 dark:text-primary-100"
@@ -191,7 +191,7 @@ export function LocalBackendShare() {
 
           <Alert
             isOpen={confirmRotate}
-            title="Rotate pairing token?"
+            title="Rotate owner token?"
             description="Browsers, SSH tunnels and other mains apps using the current token are disconnected and need the new one. Paired phones use their own tokens and reconnect on their own."
             primaryButtonText="Rotate"
             secondaryButtonText="Cancel"
@@ -201,7 +201,7 @@ export function LocalBackendShare() {
               void run(
                 "rotate",
                 window.api.localBackend.rotateToken(),
-                "Pairing token rotated",
+                "Owner token rotated",
               ).finally(() => setConfirmRotate(false))
             }
             onSecondary={() => setConfirmRotate(false)}

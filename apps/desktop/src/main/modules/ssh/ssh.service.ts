@@ -41,7 +41,7 @@ export interface TunnelHandle {
   localPort: number;
   localUrl: string;
   /**
-   * Ephemeral pairing token generated when this tunnel auto-launches the backend
+   * Ephemeral owner token generated when this tunnel auto-launches the backend
    * (via `remoteCommand`). The renderer must present it on the WS connection.
    * Absent when connecting to an already-running backend.
    */
@@ -159,7 +159,7 @@ const NODE_LAUNCH_PREAMBLE = [
 
 /**
  * Wrap a user-provided launch command with the node-discovery preamble and the
- * ephemeral pairing token, so the remote `mains serve` starts even from a bare
+ * ephemeral owner token, so the remote `mains serve` starts even from a bare
  * non-interactive SSH shell. Pure + testable.
  */
 export function wrapRemoteLaunch(userCommand: string, token: string): string {

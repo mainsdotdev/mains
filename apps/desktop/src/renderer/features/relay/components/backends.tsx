@@ -223,7 +223,7 @@ function AddBackendForm({
         type="password"
         autoComplete="off"
         onChange={(e) => setToken(e.target.value)}
-        placeholder="Pairing token"
+        placeholder="Owner token"
       />
       <Caption>
         {mode === "ssh"

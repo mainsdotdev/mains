@@ -122,17 +122,22 @@ The plain-Node backend composed by `apps/server/src/standalone-server.ts` and
 `apps/server/src/server-cli.ts`. The application owns one SQLite database,
 handler registry, schedulers, provider processes, terminals and WebSocket host
 for its lifetime, then drains them in reverse order on shutdown. Its default
-`userData` is separate from Electron and its credentials use a server-local
-AES-GCM key. The Electron-free implementation lives in `packages/backend` and
+`userData` is Electron's existing canonical Mains directory, so both hosts see
+one database and managed-file history without an import. They use it serially:
+the shared **database ownership** seam claims a process lock before SQLite opens
+and rejects Desktop/Server overlap because each host also runs schedulers,
+provider processes and automations. Existing Electron-encrypted integration
+credentials stay preserved; the Node host cannot decrypt those records yet,
+while secrets created by Node use a local AES-GCM key. The Electron-free
+implementation lives in `packages/backend` and
 is consumed by both hosts through `@mains/backend`; server-only entry, CLI,
 build and packaging code live in `apps/server`, while native UI adapters live in
-`apps/desktop`. One backend process
-owns one data directory; Electron and Node must not concurrently open the same
-Mains database.
+`apps/desktop`. One backend process owns the canonical data directory at a time.
 _Avoid_: treating standalone as an Electron `--serve` alias; pointing it at the
-desktop data directory before a credential migration exists; starting another
-server against the same state directory; adding server-only composition code
-back under `apps/desktop`.
+desktop data directory without ownership enforcement; deleting or disabling
+Electron-encrypted credentials merely because Node cannot read them; starting
+another server against the same state directory; adding server-only composition
+code back under `apps/desktop`.
 
 ## Operations
 

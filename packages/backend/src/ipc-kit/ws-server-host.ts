@@ -26,7 +26,7 @@ import {
 /** A device token the host accepted at the handshake. */
 export interface VerifiedDevice {
   deviceId: string;
-  /** Channels the device may invoke; undefined = everything the shared token can. */
+  /** Channels the device may invoke; undefined = everything the owner token can. */
   channels?: ReadonlySet<string>;
   /** Mutations the device may issue, each only with a `commandId`. */
   commandChannels?: ReadonlySet<string>;
@@ -51,7 +51,7 @@ export interface WsHostOptions {
   port: number;
   host?: string;
   /**
-   * Pairing token clients must present (via WS subprotocol); the handshake is
+   * Owner token clients must present (via WS subprotocol); the handshake is
    * rejected (401) unless it matches. Required on every bind, loopback included:
    * a browser lets any web page open a WebSocket to 127.0.0.1, so a tokenless
    * loopback host is reachable from every site the user visits.
@@ -89,6 +89,16 @@ export interface WsHostOptions {
    */
   pairDevice?: (body: unknown) => Promise<unknown>;
   /**
+   * Mint a one-time pairing code for a trusted local administrator. The
+   * standalone CLI calls this over the token-authenticated control route so
+   * the code is created inside the already-running server process.
+   */
+  createPairingCode?: (endpoints: string[]) => Promise<unknown>;
+  /** List device sessions for authenticated local administration. */
+  listPairedDevices?: () => Promise<unknown>;
+  /** Revoke one device session for authenticated local administration. */
+  revokePairedDevice?: (deviceId: string) => Promise<void>;
+  /**
    * Receipt store that makes a paired device's commands idempotent: a repeated
    * `commandId` replays the stored result instead of running the handler
    * again. Without it, device commands run every time they arrive.
@@ -98,10 +108,57 @@ export interface WsHostOptions {
 
 const MAX_PROXY_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_PAIR_BODY_BYTES = 16 * 1024;
+const MAX_PAIRING_ENDPOINTS = 8;
 
 function writeJson(res: ServerResponse, status: number, payload: unknown): void {
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  });
   res.end(JSON.stringify(payload));
+}
+
+function bearerToken(req: IncomingMessage): string | null {
+  const raw = req.headers.authorization;
+  if (!raw || Array.isArray(raw)) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(raw);
+  return match?.[1] ?? null;
+}
+
+function parsePairingEndpoints(body: unknown): string[] {
+  if (!body || typeof body !== "object") {
+    throw new Error("Pairing request must be an object");
+  }
+  const raw = (body as { endpoints?: unknown }).endpoints;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error("At least one reachable endpoint is required");
+  }
+  if (raw.length > MAX_PAIRING_ENDPOINTS) {
+    throw new Error(`At most ${MAX_PAIRING_ENDPOINTS} endpoints may be advertised`);
+  }
+
+  const endpoints: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") {
+      throw new Error("Every pairing endpoint must be an HTTP(S) URL");
+    }
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error(`Invalid pairing endpoint: ${value}`);
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error(`Pairing endpoint must use HTTP or HTTPS: ${value}`);
+    }
+    if (url.username || url.password || url.search || url.hash) {
+      throw new Error(`Pairing endpoint must be a base URL: ${value}`);
+    }
+    const normalized = url.toString().replace(/\/$/, "");
+    if (!endpoints.includes(normalized)) endpoints.push(normalized);
+  }
+  return endpoints;
 }
 
 function readJsonBody(req: IncomingMessage, limit: number): Promise<unknown> {
@@ -151,9 +208,72 @@ async function handlePairing(
   }
 }
 
+async function handleCreatePairingCode(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  createPairingCode: (endpoints: string[]) => Promise<unknown>,
+): Promise<void> {
+  if (!tokensMatch(token, bearerToken(req))) {
+    writeJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req, MAX_PAIR_BODY_BYTES);
+    const endpoints = parsePairingEndpoints(body);
+    writeJson(res, 200, await createPairingCode(endpoints));
+  } catch (error) {
+    writeJson(res, 400, {
+      error: error instanceof Error ? error.message : "Pairing code creation failed",
+    });
+  }
+}
+
+async function handleListPairedDevices(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  listPairedDevices: () => Promise<unknown>,
+): Promise<void> {
+  if (!tokensMatch(token, bearerToken(req))) {
+    writeJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  try {
+    writeJson(res, 200, await listPairedDevices());
+  } catch (error) {
+    writeJson(res, 500, {
+      error: error instanceof Error ? error.message : "Could not list devices",
+    });
+  }
+}
+
+async function handleRevokePairedDevice(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  deviceId: string,
+  revokePairedDevice: (deviceId: string) => Promise<void>,
+): Promise<void> {
+  if (!tokensMatch(token, bearerToken(req))) {
+    writeJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  try {
+    await revokePairedDevice(deviceId);
+    writeJson(res, 200, { revoked: true });
+  } catch (error) {
+    writeJson(res, 404, {
+      error: error instanceof Error ? error.message : "Could not revoke device",
+    });
+  }
+}
+
 /**
  * Proxied images and signed local files are served same-origin with the web UI,
- * which keeps its pairing token in localStorage: an SVG opened directly must not
+ * which keeps its owner token in localStorage: an SVG opened directly must not
  * run script on this origin, and no response may be sniffed into another type.
  */
 const UNTRUSTED_CONTENT_HEADERS: Record<string, string> = {
@@ -195,7 +315,7 @@ async function handleImageProxy(
   try {
     const params = new URL(req.url ?? "/", "http://localhost").searchParams;
     // The proxy spends this machine's network position and its GitHub token, so
-    // it takes the same shared token as the WS handshake — as a query parameter,
+    // it takes the same owner token as the WS handshake — as a query parameter,
     // since an `<img>` can't send a subprotocol. Paired phones don't use it.
     if (!tokensMatch(token, params.get("token"))) {
       res.writeHead(401);
@@ -300,7 +420,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   // Checked at runtime too: an empty string type-checks and would open the host.
   if (!token) {
     return Promise.reject(
-      new Error("Refusing to start the backend without a pairing token."),
+      new Error("Refusing to start the backend without an owner token."),
     );
   }
 
@@ -315,12 +435,59 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
 
   const httpServer: Server = createServer((req, res) => {
     const url = req.url ?? "";
+    const pathname = url.split("?")[0];
     if (
       options.pairDevice &&
       req.method === "POST" &&
-      url.split("?")[0] === "/pair"
+      pathname === "/pair"
     ) {
       void handlePairing(req, res, options.pairDevice);
+    } else if (
+      options.createPairingCode &&
+      req.method === "POST" &&
+      pathname === "/__mains/admin/pairing-code"
+    ) {
+      void handleCreatePairingCode(
+        req,
+        res,
+        token,
+        options.createPairingCode,
+      );
+    } else if (
+      options.listPairedDevices &&
+      req.method === "GET" &&
+      pathname === "/__mains/admin/devices"
+    ) {
+      void handleListPairedDevices(
+        req,
+        res,
+        token,
+        options.listPairedDevices,
+      );
+    } else if (
+      options.revokePairedDevice &&
+      req.method === "DELETE" &&
+      pathname.startsWith("/__mains/admin/devices/")
+    ) {
+      const rawId = pathname.slice("/__mains/admin/devices/".length);
+      let deviceId = "";
+      try {
+        deviceId = decodeURIComponent(rawId);
+      } catch {
+        writeJson(res, 400, { error: "Invalid device id" });
+        return;
+      }
+      if (!deviceId || deviceId.includes("/")) {
+        writeJson(res, 400, { error: "Invalid device id" });
+        return;
+      }
+      void handleRevokePairedDevice(
+        req,
+        res,
+        token,
+        deviceId,
+        options.revokePairedDevice,
+      );
     } else if (options.fetchProxiedImage && url.startsWith("/__img")) {
       void handleImageProxy(req, res, options.fetchProxiedImage, token);
     } else if (options.serveLocalImage && url.startsWith("/__localimg")) {

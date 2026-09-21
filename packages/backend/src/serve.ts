@@ -82,6 +82,7 @@ import {
 import { tailscaleService } from "./modules/tailscale";
 import { resolveWebRoot } from "./web-root";
 import { registerSearchIpc, unregisterSearchIpc } from "./modules/search";
+import type { PairingCode } from "./modules/backend";
 
 export interface ServeOptions {
   /** Port to listen on. Default 8787. */
@@ -89,7 +90,7 @@ export interface ServeOptions {
   /** Interface to bind. Default loopback (127.0.0.1) — pair via SSH tunnel. */
   host?: string;
   /**
-   * Pairing token clients must present. Falls back to MAINS_SERVE_TOKEN, then to
+   * Owner token full-access clients must present. Falls back to MAINS_SERVE_TOKEN, then to
    * a freshly generated one that is printed. Never optional, loopback included:
    * any web page the user visits can open a WebSocket to 127.0.0.1.
    */
@@ -102,7 +103,7 @@ export interface ServeOptions {
   /**
    * Expose the backend over the tailnet's HTTPS endpoint via `tailscale serve`
    * (auto TLS, no port-forward). The backend still binds loopback; Tailscale
-   * proxies tailnet → 127.0.0.1. Implies a pairing token (tailnet peers can reach
+   * proxies tailnet → 127.0.0.1. Implies an owner token (tailnet peers can reach
    * it). Requires the `tailscale` CLI installed + logged in + HTTPS enabled.
    */
   tailscaleServe?: boolean;
@@ -111,8 +112,12 @@ export interface ServeOptions {
 }
 
 export interface BackendServer extends WsHost {
-  /** Shared token accepted by the WebSocket host. */
+  /** Full-access owner token accepted by the WebSocket host. */
   readonly token: string;
+  /** HTTPS base URL installed by Tailscale Serve, when enabled successfully. */
+  readonly tailscaleUrl: string | null;
+  /** Mint a short-lived, single-use device pairing link in this process. */
+  createPairingCode(endpoints: string[]): Promise<PairingCode>;
 }
 
 const DEFAULT_PORT = 8787;
@@ -226,6 +231,13 @@ export async function startBackendServer(
       verifyDeviceToken: (deviceToken) =>
         backendService.verifyDeviceToken(deviceToken),
       pairDevice: (body) => backendService.pairDevice(body),
+      createPairingCode: (endpoints) =>
+        backendService.createPairingCode(endpoints),
+      listPairedDevices: () => backendService.listPairedDevices(),
+      revokePairedDevice: async (deviceId) => {
+        await backendService.revokePairedDevice(deviceId);
+        wsHost?.disconnectDevice(deviceId);
+      },
       commandReceipts: backendService.commandReceipts,
     });
   } catch (error) {
@@ -236,7 +248,7 @@ export async function startBackendServer(
     throw error;
   }
   console.log(`[serve] mains backend listening on ws://${host}:${wsHost.port}`);
-  console.log(`[serve] pairing token: ${token}`);
+  console.log(`[serve] owner token: ${token}`);
   if (webRoot) {
     console.log(
       `[serve] web UI: open http://${host}:${wsHost.port}/?token=${token} (serving ${webRoot})`,
@@ -247,6 +259,7 @@ export async function startBackendServer(
     );
   }
 
+  let tailscaleUrl: string | null = null;
   if (options.tailscaleServe) {
     const httpsPort = options.tailscaleServePort ?? 443;
     try {
@@ -257,6 +270,7 @@ export async function startBackendServer(
           status.magicDnsName,
           httpsPort,
         );
+        tailscaleUrl = httpsUrl;
         console.log(`[serve] Tailscale HTTPS web UI: ${httpsUrl}/?token=${token}`);
         console.log(
           `[serve] Tailscale connect (WS): ${httpsUrl.replace(/^https:/, "wss:")}`,
@@ -296,6 +310,9 @@ export async function startBackendServer(
     sink: wsHost.sink,
     port: wsHost.port,
     token,
+    tailscaleUrl,
+    createPairingCode: (endpoints) =>
+      backendService.createPairingCode(endpoints),
     disconnectDevice: (deviceId) => wsHost.disconnectDevice(deviceId),
     close,
   };

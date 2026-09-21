@@ -17,7 +17,7 @@ export interface WsConnection extends WsClientConnection {
   readonly deviceId?: string;
   /**
    * Channels a paired device may invoke; undefined means unrestricted (the
-   * shared pairing token, which grants full control by design).
+   * owner token, which grants full control by design).
    */
   readonly allowedChannels?: ReadonlySet<string>;
   /** Mutations a paired device may issue — only with a `commandId`. */

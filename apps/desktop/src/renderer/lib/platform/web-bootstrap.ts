@@ -10,7 +10,7 @@ import { webToken } from "./web-token";
  * Under Electron this is a no-op. In a plain browser (the renderer served by
  * `mains serve` over HTTP) there is no preload: install the `window.api` shim and
  * connect to the backend that served this page (same origin) over WebSocket. The
- * pairing token comes from a `?token=` query param (persisted to localStorage).
+ * owner token comes from a `?token=` query param (persisted to localStorage).
  *
  * See docs/design/remote-backend.md (web client).
  */

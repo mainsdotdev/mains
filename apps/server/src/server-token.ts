@@ -19,7 +19,7 @@ function generateToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-function readStoredToken(tokenPath: string): string | null {
+function readStoredTokenFile(tokenPath: string): string | null {
   try {
     const token = fs.readFileSync(tokenPath, "utf8").trim();
     return token || null;
@@ -27,6 +27,13 @@ function readStoredToken(tokenPath: string): string | null {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+/** Read the persisted root token without creating one. */
+export function readStandaloneServerToken(dataDir: string): string | null {
+  return readStoredTokenFile(
+    path.join(path.resolve(dataDir), TOKEN_FILE_NAME),
+  );
 }
 
 function replaceTokenFile(tokenPath: string, token: string): void {
@@ -45,7 +52,7 @@ function replaceTokenFile(tokenPath: string, token: string): void {
 }
 
 /**
- * Resolve the standalone server's pairing token.
+ * Resolve the standalone server's full-access owner token.
  *
  * An explicit CLI/environment token is intentionally ephemeral. Otherwise the
  * generated token is stored beside the standalone database so saved Mains
@@ -74,7 +81,7 @@ export function resolveStandaloneServerToken(
   const tokenPath = path.join(resolvedDataDir, TOKEN_FILE_NAME);
 
   if (!options.rotate) {
-    const storedToken = readStoredToken(tokenPath);
+    const storedToken = readStoredTokenFile(tokenPath);
     if (storedToken) {
       fs.chmodSync(tokenPath, 0o600);
       return { token: storedToken, path: tokenPath, created: false };

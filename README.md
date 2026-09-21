@@ -100,19 +100,39 @@ npm install --global https://github.com/mainsdotdev/mains/releases/latest/downlo
 mains-server
 ```
 
-The first run creates a persistent pairing token and prints a local browser URL.
-Use `mains-server --help` for bind, port, data-directory, token-rotation, and
-Tailscale options.
+The first run creates a persistent full-access owner token. To connect a phone
+on the same trusted network, expose private interfaces and scan the printed,
+five-minute pairing QR:
 
-For remote access, keep the default loopback bind and use **Settings → Mains
-Connect → SSH** from the desktop app. A typical SSH launch command is
-`mains-server --port 8787`; Mains creates the tunnel and supplies an ephemeral
-token. For an already-running server reached through Tailscale or another TLS
-proxy, add its `wss://` URL and the token printed by the server.
+```bash
+mains-server --lan
+```
 
-The standalone server currently targets macOS and Linux. It uses a separate
-state directory by default; never point it and the Electron app at the same
-SQLite database concurrently.
+The phone exchanges that one-time code for its own revocable device token. Use
+`mains-server pair` for another link and `mains-server auth list|revoke` to
+manage access without restarting the backend.
+
+For remote access, use `mains-server --tailscale-serve`, or keep the default
+loopback bind and use **Settings → Mains Connect → SSH** from the desktop app.
+The standalone server can stay available without Electron or an open terminal:
+
+```bash
+mains-server service install --tailscale-serve
+```
+
+This installs a macOS LaunchAgent or Linux systemd user service. Direct public
+exposure should sit behind a TLS proxy and be advertised explicitly with
+`--public-url`.
+
+The standalone server currently targets macOS and Linux. By default it opens
+the installed desktop app's canonical Mains data directory, so existing
+workspaces, collections, and run history appear without an import. Quit Desktop
+before starting Server, and stop Server before reopening Desktop; an ownership
+lock rejects concurrent backend access. `--data-dir` opts into isolated data.
+
+Electron-encrypted integration credentials remain preserved but cannot yet be
+decrypted by the plain-Node host. CLI-backed providers use their normal host
+authentication.
 
 ## Development
 
@@ -131,9 +151,11 @@ Standalone server commands (from `apps/server`; packaging also needs
 ```bash
 npm --prefix ../desktop install
 npm install
-npm run serve -- --port 8787  # Build and run without Electron
-npm run package               # Build dist/mains-server.tgz
-npm run smoke:package         # Clean-install and exercise WS + HTTP
+npm run serve -- --lan         # Build, run, and print a phone pairing QR
+npm run pair                    # Refresh the one-time pairing link
+npm run service -- status       # Inspect the background service
+npm run package                 # Build dist/mains-server.tgz
+npm run smoke:package           # Clean-install and exercise WS/HTTP/CLI flows
 ```
 
 The standalone development server exposes the Mains protocol over a

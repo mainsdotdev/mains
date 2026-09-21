@@ -46,11 +46,11 @@ function emailSupport(): void {
 function connectionHint(state: ConnectionState): string | null {
   switch (state.kind) {
     case "unreachable":
-      return "Make sure Mains is open on the Mac and this phone can reach it — the same Wi‑Fi, or Tailscale on both.";
+      return "Make sure Mains Server is running and this phone can reach it — the same Wi‑Fi, or Tailscale on both.";
     case "authBlocked":
-      return "The Mac no longer accepts this phone's pairing. Pair again from Relay › This machine on the Mac.";
+      return "The server no longer accepts this phone's pairing. Create a new pairing link on the server.";
     case "incompatible":
-      return "One side is on an older Mains. Update the phone app or the Mac, then try again.";
+      return "One side is on an older Mains. Update the phone app or server, then try again.";
     case "offline":
       return "Chats from the last sync are still here; they update once you're back online.";
     default:
@@ -82,8 +82,8 @@ function diagnostics(session: SessionSnapshot): string {
     `Mains iOS ${Constants.expoConfig?.version ?? "0.0.0"} (${String(Constants.expoConfig?.extra?.appVariant ?? "production")}) · protocol ${WS_PROTOCOL_VERSION}`,
     `Phone: ${Constants.deviceName ?? "unknown"}${backend ? ` · device ${backend.deviceId}` : ""}`,
     backend
-      ? `Mac: ${backend.name} · Mains ${macVersion} · protocol ${backend.protocolVersion}`
-      : "Mac: not paired",
+      ? `Server: ${backend.name} · Mains ${macVersion} · protocol ${backend.protocolVersion}`
+      : "Server: not paired",
     `Connection: ${connectionLabel(connection)}${connectionDetail(connection) ? ` — ${connectionDetail(connection)}` : ""}`,
     backend ? `Endpoints: ${backend.endpoints.join(", ")}` : null,
     backend ? `Paired: ${backend.pairedAt}` : null,
@@ -121,8 +121,8 @@ export default function SettingsScreen() {
 
   const forget = () => {
     Alert.alert(
-      "Forget this Mac?",
-      "The pairing and everything cached from it will be removed from this phone. Revoke it on the Mac too if the phone is lost.",
+      "Forget this server?",
+      "The pairing and everything cached from it will be removed from this phone. Revoke it on the server too if the phone is lost.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -155,7 +155,7 @@ export default function SettingsScreen() {
     >
       <View style={{ gap: spacing.sm }}>
         <ThemedText variant="title3" style={{ paddingHorizontal: spacing.xs }}>
-          This Mac
+          This server
         </ThemedText>
         {backend ? (
           <>
@@ -192,7 +192,7 @@ export default function SettingsScreen() {
                 }
                 value={activeEndpoint ? endpointHost(activeEndpoint) : "—"}
               />
-              <Row first={false} title="Mains on the Mac" value={macVersion ?? "—"} />
+              <Row first={false} title="Mains Server version" value={macVersion ?? "—"} />
               <Row
                 first={false}
                 title="Paired"
@@ -211,7 +211,7 @@ export default function SettingsScreen() {
               <Row
                 first
                 title={refreshing ? "Syncing…" : "Sync now"}
-                subtitle={connected ? "Pull the latest runs, workspaces and settings" : "Available once the Mac is live"}
+                subtitle={connected ? "Pull the latest runs, workspaces and settings" : "Available once the server is live"}
                 disabled={!connected || refreshing}
                 trailing={refreshing ? <AsciiSpinner kind="square" size={12} /> : undefined}
                 onPress={() => void backendSession.refresh().catch(() => {})}
@@ -220,7 +220,7 @@ export default function SettingsScreen() {
                 <Row
                   first={false}
                   title="Try again"
-                  subtitle="Reconnect to the Mac now rather than on the next timer"
+                  subtitle="Reconnect to the server now rather than on the next timer"
                   onPress={() => backendSession.retry()}
                 />
               ) : null}
@@ -228,7 +228,7 @@ export default function SettingsScreen() {
                 <Row
                   first={false}
                   title="Pair again"
-                  subtitle="Scan a new pairing code from the Mac"
+                  subtitle="Scan a new pairing code from the server"
                   chevron="chevron.right"
                   onPress={() => router.push("/pair" as Href)}
                 />
@@ -245,9 +245,9 @@ export default function SettingsScreen() {
         ) : (
           <Card>
             <View style={{ padding: spacing.md, gap: spacing.xs }}>
-              <ThemedText variant="headline">No Mac paired</ThemedText>
+              <ThemedText variant="headline">No Mains Server paired</ThemedText>
               <ThemedText variant="footnote" style={{ color: colors.secondaryLabel }}>
-                Open Mains on the desktop, turn on network access or Tailscale HTTPS, and scan its pairing code.
+                Start Mains Server with LAN or Tailscale access, then scan its pairing code.
               </ThemedText>
             </View>
             <Row
@@ -277,7 +277,7 @@ export default function SettingsScreen() {
             <Row
               first={false}
               title="Device ID"
-              subtitle="As listed under Devices on the Mac"
+              subtitle="As listed by Mains Server"
               value={backend.deviceId.slice(0, 8)}
             />
           ) : null}
@@ -336,7 +336,7 @@ export default function SettingsScreen() {
 
       {backend ? (
         <Card>
-          <Row first title="Forget this Mac" tone="destructive" onPress={forget} />
+          <Row first title="Forget this server" tone="destructive" onPress={forget} />
         </Card>
       ) : null}
     </ScrollView>

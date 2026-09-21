@@ -80,9 +80,9 @@ describe("startWsHost (integration)", () => {
     expect(decoded.result.success).toBe(false);
   });
 
-  it("refuses to start without a pairing token, loopback included", async () => {
+  it("refuses to start without an owner token, loopback included", async () => {
     await expect(startWsHost({ port: 0, host: "127.0.0.1", token: "" })).rejects.toThrow(
-      "without a pairing token",
+      "without an owner token",
     );
   });
 
@@ -108,7 +108,7 @@ describe("startWsHost HTTP image proxy", () => {
   const imageFetcher = () =>
     vi.fn(async (_url: string) => new Response("png", { headers: { "content-type": "image/png" } }));
 
-  it("refuses a request without the pairing token before fetching anything", async () => {
+  it("refuses a request without the owner token before fetching anything", async () => {
     const fetchProxiedImage = imageFetcher();
     host = await startWsHost({ port: 0, host: "127.0.0.1", token: "secret", fetchProxiedImage });
     const base = `http://127.0.0.1:${host.port}/__img?url=${target}`;

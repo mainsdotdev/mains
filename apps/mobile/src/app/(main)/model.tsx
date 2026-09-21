@@ -56,7 +56,7 @@ export default function ModelSheet() {
           <ThemedText variant="subhead" style={{ padding: spacing.md }}>
             {session.connection.kind === "connected"
               ? "No models reported by this provider yet."
-              : "Connect to your Mac to load its models."}
+              : "Connect to your Mains Server to load its models."}
           </ThemedText>
         ) : (
           selection.models.map((model, index) => (

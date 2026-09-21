@@ -28,7 +28,7 @@ export default function AiDataSharingScreen() {
   const revoke = (providerId: string, serviceName: string) => {
     Alert.alert(
       `Revoke ${serviceName} permission?`,
-      `Mains will ask again before this Mac sends data to ${serviceName}.`,
+      `Mains will ask again before this server sends data to ${serviceName}.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -43,7 +43,7 @@ export default function AiDataSharingScreen() {
   const resetAll = () => {
     Alert.alert(
       "Reset all AI permissions?",
-      "Mains will ask again before this Mac sends data to any AI provider.",
+      "Mains will ask again before this server sends data to any AI provider.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -61,15 +61,15 @@ export default function AiDataSharingScreen() {
       contentContainerStyle={{ padding: spacing.md, gap: spacing.lg, paddingBottom: spacing.xxl }}
     >
       <ThemedText variant="subhead" selectable style={{ color: colors.secondaryLabel }}>
-        Before your Mac sends a request to a third-party AI service, Mains asks
-        for permission for that Mac and provider. Switching providers asks
+        Before your Mains Server sends a request to a third-party AI service,
+        Mains asks for permission for that server and provider. Switching providers asks
         again. These choices are stored only on this phone.
       </ThemedText>
 
       {backendId ? (
         <View style={{ gap: spacing.sm }}>
           <ThemedText variant="title3" style={{ paddingHorizontal: spacing.xs }}>
-            This Mac
+            This server
           </ThemedText>
           <Card>
             {AI_PROVIDER_DISCLOSURES.map((disclosure, index) => {
@@ -103,9 +103,9 @@ export default function AiDataSharingScreen() {
       ) : (
         <Card>
           <View style={{ padding: spacing.md, gap: spacing.xs }}>
-            <ThemedText variant="headline">No Mac paired</ThemedText>
+            <ThemedText variant="headline">No Mains Server paired</ThemedText>
             <ThemedText variant="footnote" style={{ color: colors.secondaryLabel }}>
-              Provider permissions appear here after you pair this phone with a Mac.
+              Provider permissions appear here after you pair this phone with a Mains Server.
             </ThemedText>
           </View>
         </Card>

@@ -8,7 +8,10 @@ Run every command from `apps/server`.
 
 ```bash
 npm install
-npm run serve -- --port 8787
+npm run serve -- --lan --port 8787
+npm run pair
+npm run auth -- list
+npm run service -- status
 npm run build
 npm test
 npm run typecheck
@@ -26,4 +29,4 @@ Serving and packaging also build `apps/desktop/dist-web`, so install the desktop
 - Consume backend implementation only through `@mains/backend`. Domain modules, database code, provider runtimes, and transport-neutral IPC/WebSocket plumbing belong in `packages/backend`; Electron adapters belong in `apps/desktop`.
 - `packages/contracts` owns the wire protocol and DTO contract. It is bundled into the server artifact and must not become a published runtime dependency.
 - Keep this package's version aligned with `apps/desktop/package.json`; release CI enforces both against the tag.
-- One server process owns one data directory. Never point Electron and the standalone server at the same SQLite database concurrently.
+- Desktop and standalone use the canonical Mains data directory by default. Exactly one backend process may own it; keep the database ownership lock in the shared backend and never bypass it.

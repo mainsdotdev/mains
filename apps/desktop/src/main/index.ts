@@ -30,6 +30,7 @@ import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 import { initializeDatabase, closeDatabase } from "@mains/backend/db/client";
+import { DatabaseOwnershipError } from "@mains/backend/db/database-ownership";
 import { registerBrowserWindowSink } from "./ipc-kit/browser-window-sink";
 import { startBackendServer } from "@mains/backend/serve";
 import { registerAccountIpc, unregisterAccountIpc } from "@mains/backend/modules/account";
@@ -1027,6 +1028,9 @@ async function initializeApp() {
   } catch (error) {
     console.error("Failed to initialize application:", error);
     closeSplashWindow();
+    if (error instanceof DatabaseOwnershipError) {
+      dialog.showErrorBox("Mains data is already in use", error.message);
+    }
     app.quit();
   }
 }

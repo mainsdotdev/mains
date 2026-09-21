@@ -329,9 +329,9 @@ export default function NewRunScreen() {
                 gap: spacing.sm,
               }}
             >
-              <ThemedText variant="headline">No Mac paired</ThemedText>
+              <ThemedText variant="headline">No Mains Server paired</ThemedText>
               <ThemedText variant="subhead">
-                Open Mains on the desktop, turn on network access or Tailscale HTTPS, and scan its pairing code.
+                Start Mains Server with LAN or Tailscale access, then scan its pairing code.
               </ThemedText>
               <Button title="Scan pairing code" onPress={() => router.push("/pair" as Href)} />
               <Button

@@ -108,7 +108,7 @@ export async function describeBackend(transport: WsTransport): Promise<BackendDe
   const descriptor = await invoke<BackendDescriptor>(transport, CHANNELS.backend.describe);
   if (descriptor.protocolVersion !== WS_PROTOCOL_VERSION) {
     throw new ProtocolMismatchError(
-      `Your Mac speaks protocol ${descriptor.protocolVersion}; this app speaks ${WS_PROTOCOL_VERSION}. Update the older one.`,
+      `Your Mains Server speaks protocol ${descriptor.protocolVersion}; this app speaks ${WS_PROTOCOL_VERSION}. Update the older one.`,
     );
   }
   return descriptor;

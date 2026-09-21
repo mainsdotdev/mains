@@ -93,13 +93,13 @@ export function useBackendConnection() {
           url = backend.wsUrl;
         }
 
-        // Fall back to the stored pairing token (direct mode, or SSH to a
+        // Fall back to the stored owner token (direct mode, or SSH to a
         // pre-running token-protected backend).
         if (!token && backend.hasToken) {
           const stored = await window.api.remoteBackends.getToken(id);
           if (!stored.success) throw new Error(stored.error);
           if (!stored.data) {
-            throw new Error("The saved pairing token is missing.");
+            throw new Error("The saved owner token is missing.");
           }
           token = stored.data;
         }

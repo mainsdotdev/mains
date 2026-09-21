@@ -4,7 +4,7 @@ let resolved = false;
 let cached: string | undefined;
 
 /**
- * The pairing token a web client (the renderer served by the backend over
+ * The owner token a web client (the renderer served by the backend over
  * HTTP) presents. It arrives once as a `?token=` query param and is kept in
  * localStorage so a reload still connects. Read by the WS handshake and by URLs
  * the browser loads on its own — an `<img src="/__img?…">` can't send a

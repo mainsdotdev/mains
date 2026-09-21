@@ -175,7 +175,7 @@ export class ConnectionSupervisor {
               this.teardown();
               this.setState({
                 kind: "authBlocked",
-                reason: "Your Mac refused this phone's token — pair it again",
+                reason: "Your Mains Server refused this phone's token — pair it again",
               });
             }
             return;
@@ -232,7 +232,7 @@ export class ConnectionSupervisor {
       this.failedEndpointsThisCycle = 0;
       this.setState({
         kind: "unreachable",
-        reason: "Could not reach your Mac on any of its addresses",
+        reason: "Could not reach your Mains Server on any of its addresses",
       });
       this.cancelRetry = this.schedule(() => this.evaluate(), UNREACHABLE_RETRY_MS);
       return;

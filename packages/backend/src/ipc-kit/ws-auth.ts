@@ -1,11 +1,10 @@
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
 
 /**
- * Pairing-token helpers for the WebSocket backend. The token guards the backend
- * against unauthorized clients on every bind — loopback included, since any web
- * page the user opens can reach 127.0.0.1 — and for a directly-exposed backend
- * it's the only thing standing between the network and full control. See
- * docs/design/remote-backend.md (Phase: pairing token).
+ * Bearer-token helpers for the WebSocket backend. The owner token guards the
+ * unrestricted admin/browser path; paired clients receive separate device
+ * tokens with a restricted channel set. Authentication is required on every
+ * bind — loopback included, since any page the user opens can reach 127.0.0.1.
  */
 
 function digest(value: string): Buffer {
@@ -21,7 +20,7 @@ export function tokensMatch(expected: string, presented: string | null): boolean
   return timingSafeEqual(digest(expected), digest(presented));
 }
 
-/** Generate a fresh URL-safe pairing token. */
+/** Generate a fresh URL-safe bearer token. */
 export function generateToken(): string {
   return randomBytes(32).toString("base64url");
 }

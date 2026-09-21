@@ -17,6 +17,9 @@
   },
   "scripts": {
     "serve": "npm run build && npm run build:web && node .vite/server/server.cjs",
+    "pair": "npm run build && node .vite/server/server.cjs pair",
+    "auth": "npm run build && node .vite/server/server.cjs auth",
+    "service": "npm run build && node .vite/server/server.cjs service",
     "build": "vite build --config vite.config.mjs",
     "start": "node .vite/server/server.cjs",
     "build:web": "npm --prefix ../desktop run build:web",
@@ -29,6 +32,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.272",
+    "@github/copilot": "1.0.79",
     "@github/copilot-sdk": "1.0.11",
     "@linear/sdk": "94.0.0",
     "@octokit/rest": "22.0.1",
@@ -36,6 +40,7 @@
     "drizzle-orm": "0.45.2",
     "nanoid": "6.0.1",
     "node-pty": "1.1.0",
+    "qrcode-terminal": "0.12.0",
     "simple-git": "3.36.0",
     "ws": "8.21.3",
     "zod": "4.5.4"
@@ -46,6 +51,7 @@
     "@mains/contracts": "file:../../packages/contracts",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.0",
+    "@types/qrcode-terminal": "0.12.2",
     "@types/ws": "^8.18.1",
     "eslint": "^9.39.5",
     "globals": "^17.12.0",

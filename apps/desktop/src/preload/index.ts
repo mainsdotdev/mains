@@ -222,7 +222,7 @@ const api = {
     closeTunnel: (id: string) =>
       ipcRenderer.invoke(CHANNELS.ssh.closeTunnel, id),
   },
-  // Encrypted at-rest storage for direct-mode backend pairing tokens (local-only)
+  // Encrypted at-rest storage for direct-mode backend owner tokens (local-only)
   remoteBackends: {
     setToken: (id: string, token: string) =>
       ipcRenderer.invoke(CHANNELS.remoteBackends.setToken, id, token),
@@ -249,7 +249,7 @@ const api = {
         CHANNELS.localBackend.setKeepAwakeForRemoteAccess,
         enabled,
       ),
-    // Replace the shared token; clients using the old one are disconnected
+    // Replace the owner token; clients using the old one are disconnected
     rotateToken: () => ipcRenderer.invoke(CHANNELS.localBackend.rotateToken),
     // Phone pairing — mint a QR code, list/revoke the phones that used one
     createPairingCode: () =>

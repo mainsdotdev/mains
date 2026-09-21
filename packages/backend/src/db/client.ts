@@ -5,6 +5,10 @@ import crypto from "node:crypto";
 import path from "path";
 import fs from "fs";
 import { getBackendRuntime } from "../runtime/backend-runtime";
+import {
+  acquireDatabaseOwnership,
+  type DatabaseOwnership,
+} from "./database-ownership";
 import * as schema from "./schema";
 import type {
   DatabaseInstance,
@@ -24,6 +28,7 @@ class DatabaseClient {
   private dbPath: string | null = null;
   private isInitialized = false;
   private initializePromise: Promise<DatabaseInitResult> | null = null;
+  private ownership: DatabaseOwnership | null = null;
 
   private constructor() {}
 
@@ -76,6 +81,12 @@ class DatabaseClient {
 
       // Ensure directory exists
       this.ensureDirectoryExists(this.dbPath);
+
+      const runtime = getBackendRuntime();
+      this.ownership = acquireDatabaseOwnership(
+        this.dbPath,
+        runtime.kind === "electron" ? "Mains Desktop" : "Mains Server",
+      );
 
       // Create SQLite instance
       this.sqlite = new Database(this.dbPath, {});
@@ -611,6 +622,8 @@ class DatabaseClient {
    * Clean up resources
    */
   private cleanup(): void {
+    this.ownership?.release();
+    this.ownership = null;
     this.db = null;
     this.sqlite = null;
     this.dbPath = null;

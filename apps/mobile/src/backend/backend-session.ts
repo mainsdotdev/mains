@@ -361,7 +361,7 @@ class BackendSession {
   }): Promise<ServiceResponse<StartRunResponse>> {
     const { accountId, backend, selectedSpaceId } = this.snapshot;
     if (!accountId || !backend) {
-      return { success: false, error: "Not connected to your Mac yet" };
+      return { success: false, error: "Not connected to your Mains Server yet" };
     }
     if (!selectedSpaceId) {
       return { success: false, error: "Pick a space in the sidebar first" };
@@ -372,7 +372,7 @@ class BackendSession {
       .where(and(eq(spaces.backendId, backend.backendId), eq(spaces.id, selectedSpaceId)))
       .get();
     if (!space) {
-      return { success: false, error: "That space no longer exists on your Mac" };
+      return { success: false, error: "That space no longer exists on your Mains Server" };
     }
     if (
       backend.backendId !== DEMO_BACKEND_ID &&
@@ -461,7 +461,7 @@ class BackendSession {
   ): Promise<ServiceResponse<ContinueRunResponse>> {
     const { accountId, backend } = this.snapshot;
     if (!accountId || !backend) {
-      return { success: false, error: "Not connected to your Mac yet" };
+      return { success: false, error: "Not connected to your Mains Server yet" };
     }
     const run = db
       .select({ providerId: runs.providerId })
@@ -507,7 +507,7 @@ class BackendSession {
   ): Promise<ServiceResponse<ForkRunResponse>> {
     const { accountId, backend } = this.snapshot;
     if (!accountId || !backend) {
-      return { success: false, error: "Not connected to your Mac yet" };
+      return { success: false, error: "Not connected to your Mains Server yet" };
     }
     const run = db
       .select({ providerId: runs.providerId })
@@ -543,7 +543,7 @@ class BackendSession {
    */
   async abortRun(runId: string): Promise<ServiceResponse<void>> {
     if (!this.snapshot.backend) {
-      return { success: false, error: "Not connected to your Mac yet" };
+      return { success: false, error: "Not connected to your Mains Server yet" };
     }
     const backendId = this.snapshot.backend.backendId;
     const result = await this.command<void>(CHANNELS.runs.abort, [runId]);
@@ -556,7 +556,7 @@ class BackendSession {
   /** An image artifact's pixels, from the Mac; rejects while it is out of reach. */
   readArtifactImage(artifactId: number): Promise<ArtifactImage> {
     if (!this.isConnected() || !this.transport) {
-      return Promise.reject(new Error("Connect to your Mac to load this image"));
+      return Promise.reject(new Error("Connect to your Mains Server to load this image"));
     }
     return readArtifactImage(this.transport, artifactId);
   }
@@ -564,7 +564,7 @@ class BackendSession {
   /** A Markdown file linked from one Work/Chat transcript. */
   readRunTextFile(runId: string, filePath: string): Promise<RunTextFile> {
     if (!this.isConnected() || !this.transport) {
-      return Promise.reject(new Error("Connect to your Mac to load this document"));
+      return Promise.reject(new Error("Connect to your Mains Server to load this document"));
     }
     return readRunTextFile(this.transport, runId, filePath);
   }
@@ -625,7 +625,7 @@ class BackendSession {
           connection.kind === "authBlocked" ||
           connection.kind === "incompatible"
         ) {
-          reject(new Error(`Not connected to your Mac (${connection.kind})`));
+          reject(new Error(`Not connected to your Mains Server (${connection.kind})`));
           return true;
         }
         return false;

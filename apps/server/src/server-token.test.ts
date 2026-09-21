@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveStandaloneServerToken } from "./server-token";
+import {
+  readStandaloneServerToken,
+  resolveStandaloneServerToken,
+} from "./server-token";
 
 const temporaryDirectories: string[] = [];
 
@@ -27,11 +30,18 @@ describe("resolveStandaloneServerToken", () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.token).toBe(first.token);
+    expect(readStandaloneServerToken(dataDir)).toBe(first.token);
     expect(second.path).toBe(first.path);
     expect(fs.readFileSync(first.path!, "utf8").trim()).toBe(first.token);
     if (process.platform !== "win32") {
       expect(fs.statSync(first.path!).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it("does not create a token while only reading", () => {
+    const dataDir = makeDataDir();
+    expect(readStandaloneServerToken(dataDir)).toBeNull();
+    expect(fs.existsSync(path.join(dataDir, "server-token"))).toBe(false);
   });
 
   it("rotates the persisted token", () => {

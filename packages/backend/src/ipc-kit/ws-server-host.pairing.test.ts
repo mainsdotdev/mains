@@ -408,4 +408,110 @@ describe("startWsHost — paired devices and POST /pair", () => {
       expect(res.status).toBe(426);
     });
   });
+
+  describe("POST /__mains/admin/pairing-code", () => {
+    it("mints a code through the running host with bearer authentication", async () => {
+      host = await startWsHost({
+        port: 0,
+        host: "127.0.0.1",
+        token: SHARED_TOKEN,
+        createPairingCode: async (endpoints) => ({
+          link: `mains://pair#endpoint=${encodeURIComponent(endpoints[0])}`,
+          endpoints,
+        }),
+      });
+
+      const res = await fetch(
+        `http://127.0.0.1:${host.port}/__mains/admin/pairing-code`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${SHARED_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            endpoints: ["http://192.168.1.12:8787/"],
+          }),
+        },
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(await res.json()).toEqual({
+        link: "mains://pair#endpoint=http%3A%2F%2F192.168.1.12%3A8787",
+        endpoints: ["http://192.168.1.12:8787"],
+      });
+    });
+
+    it("rejects a missing token and malformed endpoints", async () => {
+      host = await startWsHost({
+        port: 0,
+        host: "127.0.0.1",
+        token: SHARED_TOKEN,
+        createPairingCode: async (endpoints) => ({ endpoints }),
+      });
+      const url = `http://127.0.0.1:${host.port}/__mains/admin/pairing-code`;
+
+      const unauthorized = await fetch(url, {
+        method: "POST",
+        body: JSON.stringify({ endpoints: ["http://192.168.1.12:8787"] }),
+      });
+      expect(unauthorized.status).toBe(401);
+
+      const malformed = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SHARED_TOKEN}` },
+        body: JSON.stringify({ endpoints: ["file:///tmp/mains"] }),
+      });
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toEqual({
+        error: "Pairing endpoint must use HTTP or HTTPS: file:///tmp/mains",
+      });
+    });
+  });
+
+  describe("paired-device administration", () => {
+    it("lists and revokes sessions with the owner token", async () => {
+      const devices = [{ id: "device-1", name: "Phone" }];
+      host = await startWsHost({
+        port: 0,
+        host: "127.0.0.1",
+        token: SHARED_TOKEN,
+        listPairedDevices: async () => devices,
+        revokePairedDevice: async (id) => {
+          const index = devices.findIndex((device) => device.id === id);
+          if (index === -1) throw new Error("Paired device not found");
+          devices.splice(index, 1);
+        },
+      });
+      const base = `http://127.0.0.1:${host.port}/__mains/admin/devices`;
+      const headers = { Authorization: `Bearer ${SHARED_TOKEN}` };
+
+      const listed = await fetch(base, { headers });
+      expect(listed.status).toBe(200);
+      expect(await listed.json()).toEqual([{ id: "device-1", name: "Phone" }]);
+
+      const revoked = await fetch(`${base}/device-1`, {
+        method: "DELETE",
+        headers,
+      });
+      expect(revoked.status).toBe(200);
+      expect(await revoked.json()).toEqual({ revoked: true });
+      expect(devices).toEqual([]);
+    });
+
+    it("does not expose the device list without the owner token", async () => {
+      host = await startWsHost({
+        port: 0,
+        host: "127.0.0.1",
+        token: SHARED_TOKEN,
+        listPairedDevices: async () => [],
+      });
+
+      const res = await fetch(
+        `http://127.0.0.1:${host.port}/__mains/admin/devices`,
+      );
+      expect(res.status).toBe(401);
+    });
+  });
 });

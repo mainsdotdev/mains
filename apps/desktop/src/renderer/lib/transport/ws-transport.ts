@@ -22,7 +22,7 @@ const OPEN = 1;
 export interface WsTransportOptions {
   /** Factory for the socket; defaults to the global `WebSocket`. Injectable for tests. */
   factory?: (url: string, protocols?: string[]) => WebSocketLike;
-  /** Pairing token; sent as a WS subprotocol so the backend can authorize. */
+  /** Bearer token; sent as a WS subprotocol so the backend can authorize. */
   token?: string | null;
   /** How long an invoke waits for its response before rejecting. Default 30s. */
   invokeTimeoutMs?: number;

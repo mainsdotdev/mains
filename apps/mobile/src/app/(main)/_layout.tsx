@@ -53,7 +53,7 @@ export default function MainLayout() {
           />
           <Stack.Screen
             name="pair"
-            options={{ title: "Pair a Mac", presentation: "modal", headerLargeTitle: false }}
+            options={{ title: "Pair a Mains Server", presentation: "modal", headerLargeTitle: false }}
           />
           <Stack.Screen
             name="target"

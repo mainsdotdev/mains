@@ -69,7 +69,7 @@ export default function TargetSheet() {
         <ThemedText variant="title2">{isCode ? "Workspace" : "Project"}</ThemedText>
         <ThemedText variant="subhead">
           {isCode
-            ? "Code runs work inside a workspace on your Mac."
+            ? "Code runs work inside a workspace on your Mains Server."
             : "Optional — file this run under a project, or leave it standalone."}
         </ThemedText>
       </View>
@@ -98,7 +98,7 @@ export default function TargetSheet() {
             ))
           ) : (
             <ThemedText variant="subhead" style={{ padding: spacing.md }}>
-              No workspaces on this Mac yet.
+              No workspaces on this server yet.
             </ThemedText>
           )
         ) : (

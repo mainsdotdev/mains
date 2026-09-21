@@ -73,8 +73,8 @@ export default function AiDataConsentSheet() {
             style={{ color: colors.secondaryLabel, textAlign: "center" }}
           >
             {isDemo
-              ? "This run uses bundled sample data. Nothing is sent to your Mac or a third-party AI service."
-              : "Your Mac will share the following with this third-party AI service to complete your request."}
+              ? "This run uses bundled sample data. Nothing is sent to a Mains Server or third-party AI service."
+              : "Your Mains Server will share the following with this third-party AI service to complete your request."}
           </ThemedText>
         </View>
 
@@ -90,7 +90,7 @@ export default function AiDataConsentSheet() {
           style={{ color: colors.secondaryLabel, paddingHorizontal: spacing.sm }}
         >
           {isDemo
-            ? "Demo Mode stays on this phone. Review these policies before using a connected Mac."
+            ? "Demo Mode stays on this phone. Review these policies before using a connected Mains Server."
             : `${disclosure.recipientDetail} Mains sends nothing until you choose Allow & Send.`}
         </ThemedText>
 

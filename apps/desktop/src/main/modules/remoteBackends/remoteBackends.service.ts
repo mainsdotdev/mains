@@ -3,13 +3,13 @@ import { readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
 
 /**
- * Encrypted at-rest storage for direct-mode backend pairing tokens, keyed by
+ * Encrypted at-rest storage for direct-mode backend owner tokens, keyed by
  * backend id. Tokens are encrypted with the OS keychain via Electron
  * `safeStorage` (same approach as connection credentials) and kept in a small
  * JSON map under userData — never in the renderer's localStorage.
  *
  * SSH-launch tokens are ephemeral and never reach here (see ssh.service).
- * See docs/design/remote-backend.md (pairing token).
+ * See docs/design/remote-backend.md (owner token).
  */
 
 function tokenFilePath(): string {

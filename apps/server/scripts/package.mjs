@@ -21,6 +21,10 @@ const appPackage = JSON.parse(
 // report a useful "not installed" error. They still belong in the archive.
 const dynamicRuntimeDependencies = [
   "@anthropic-ai/claude-agent-sdk",
+  // SDK 1.0.11 expects the platform package's /sdk export. Keep the compatible
+  // CLI meta-package explicit instead of accepting a newer CLI-only layout via
+  // the SDK's broad transitive range.
+  "@github/copilot",
   "@github/copilot-sdk",
 ];
 

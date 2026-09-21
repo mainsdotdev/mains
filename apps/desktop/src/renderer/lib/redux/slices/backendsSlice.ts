@@ -19,7 +19,7 @@ export interface KnownBackend {
   wsUrl?: string;
   /** SSH config. Set for tunneled backends; the ws URL is derived per connect. */
   ssh?: BackendSshConfig;
-  /** Whether a pairing token is stored (encrypted) in main for this backend. */
+  /** Whether an owner token is stored (encrypted) in main for this backend. */
   hasToken?: boolean;
   /** Last successful connect time (epoch ms), or null if never connected. */
   lastConnectedAt: number | null;
