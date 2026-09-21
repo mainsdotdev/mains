@@ -11,13 +11,21 @@
  * npm, so `npm ls` cannot see them — are declared in VENDORED below.
  *
  * Run after dependency changes: npm run licenses:generate
+ * Pass `--output <path>` to generate a package-specific copy without touching
+ * the checked-in desktop notice.
  */
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
-const OUT = path.join(root, "THIRD-PARTY-NOTICES.txt");
+const outputIndex = process.argv.indexOf("--output");
+if (outputIndex >= 0 && !process.argv[outputIndex + 1]) {
+  throw new Error("--output requires a path");
+}
+const OUT = outputIndex >= 0
+  ? path.resolve(process.argv[outputIndex + 1])
+  : path.join(root, "THIRD-PARTY-NOTICES.txt");
 
 const LICENSE_FILES = /^(licen[sc]e|copying|notice)(\.(md|txt|markdown))?$/i;
 

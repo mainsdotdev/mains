@@ -56,6 +56,20 @@ jobs:
       - run: npm rebuild better-sqlite3
       - run: npm test
 
+  standalone-server:
+    name: Standalone server package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+      - run: npm run package:server
+      - run: npm run smoke:server-package
+
   codex-app-server:
     name: Codex app-server (${{ matrix.codex-version }})
     runs-on: ubuntu-latest

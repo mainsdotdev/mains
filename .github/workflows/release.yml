@@ -123,3 +123,27 @@ jobs:
           # the personal-access-token tab still works.
           MAINS_GITHUB_CLIENT_ID: ${{ secrets.MAINS_GITHUB_CLIENT_ID }}
         run: npx electron-forge publish --platform darwin --arch ${{ matrix.arch }}
+
+  standalone-server:
+    name: Publish standalone server
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - run: npm ci
+      - run: npm run package:server
+      - run: npm run smoke:server-package
+
+      - name: Upload standalone server assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" dist-server/*.tgz --clobber

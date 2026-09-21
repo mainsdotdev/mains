@@ -186,7 +186,7 @@ function AddBackendForm({
           <Input
             value={remoteCommand}
             onChange={(e) => setRemoteCommand(e.target.value)}
-            placeholder="Optional launch command (e.g. cd ~/mains && npm run serve -- --port=8787)"
+            placeholder="Optional launch command (e.g. mains-server --port 8787)"
           />
           {detected.length > 0 && (
             <div className="pt-1">
@@ -227,8 +227,8 @@ function AddBackendForm({
       />
       <Caption>
         {mode === "ssh"
-          ? "Leave blank when a launch command is set — a token is generated automatically. Otherwise paste the one `mains serve` printed."
-          : "Printed by `mains serve`, or shown under This machine."}
+          ? "Leave blank when a launch command is set — a token is generated automatically. Otherwise paste the one `mains-server` printed."
+          : "Printed by `mains-server`, or shown under This machine."}
       </Caption>
 
       <div className="flex justify-end">

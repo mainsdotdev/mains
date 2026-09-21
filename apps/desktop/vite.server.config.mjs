@@ -12,7 +12,7 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     lib: {
-      entry: "src/main/server-cli.ts",
+      entry: "src/main/server-entry.ts",
       formats: ["cjs"],
       fileName: () => "server.cjs",
     },

@@ -68,7 +68,8 @@ npm start
 
 ## Quick Start
 
-**Platform:** macOS only (Apple Silicon and Intel). Windows and Linux are not supported yet. 
+**Desktop platform:** macOS only (Apple Silicon and Intel). The standalone
+server below also targets Linux.
 
 **Prerequisites:** [Node.js](https://nodejs.org/) 22.12+, Git
 
@@ -88,6 +89,31 @@ For Claude, you'll need [Claude Code](https://docs.anthropic.com/en/docs/claude-
 For Codex, you'll need [Codex CLI](https://github.com/openai/codex) authenticated (`codex auth login`).
 For Cursor, you'll need the [Cursor Agent CLI](https://cursor.com/cli) installed (`curl https://cursor.com/install -fsS | bash`) and authenticated (`cursor-agent login`).
 
+## Standalone server
+
+Mains Server runs the backend and browser UI without Electron. Release builds
+are portable npm packages; platform-specific dependencies are installed for the
+host machine. Node.js 22.12+ is required.
+
+```bash
+npm install --global https://github.com/mainsdotdev/mains/releases/latest/download/mains-server.tgz
+mains-server
+```
+
+The first run creates a persistent pairing token and prints a local browser URL.
+Use `mains-server --help` for bind, port, data-directory, token-rotation, and
+Tailscale options.
+
+For remote access, keep the default loopback bind and use **Settings → Mains
+Connect → SSH** from the desktop app. A typical SSH launch command is
+`mains-server --port 8787`; Mains creates the tunnel and supplies an ephemeral
+token. For an already-running server reached through Tailscale or another TLS
+proxy, add its `wss://` URL and the token printed by the server.
+
+The standalone server currently targets macOS and Linux. It uses a separate
+state directory by default; never point it and the Electron app at the same
+SQLite database concurrently.
+
 ## Development
 
 ```bash
@@ -95,15 +121,15 @@ npm start              # Dev server
 npm run serve:node     # Standalone Node backend (no Electron)
 npm run build:server   # Build .vite/server/server.cjs
 npm run start:server   # Run the built standalone backend
+npm run package:server # Build the installable server tarball
+npm run smoke:server-package # Exercise the packaged server and web UI
 npm run lint:fix       # Lint with auto-fix
 npm run package        # Package for current platform
 npm run make           # Create distributable
 ```
 
-The standalone backend uses a separate state directory by default and exposes
-the Mains protocol over a token-gated WebSocket. Pass options after `--`, for
-example `npm run serve:node -- --port 8787 --token <token>`. Do not point the
-desktop app and standalone server at the same SQLite database concurrently.
+The development server exposes the Mains protocol over a token-gated WebSocket.
+Pass options after `--`, for example `npm run serve:node -- --port 8787`.
 
 ### Database
 
