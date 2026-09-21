@@ -1,9 +1,29 @@
-import { ipcMain as electronIpcMain } from "electron";
 import {
   registerHandler,
   unregisterHandler,
   type IpcHandler,
 } from "./handler-registry";
+
+export interface IpcMainAdapter {
+  handle(channel: string, handler: (...args: any[]) => unknown): void;
+  removeHandler(channel: string): void;
+}
+
+let localAdapter: IpcMainAdapter | null = null;
+
+/**
+ * Attach the Electron IPC adapter. The standalone server deliberately leaves
+ * this unset and registers handlers only in the transport-agnostic registry.
+ */
+export function configureIpcMainAdapter(
+  adapter: IpcMainAdapter | null,
+): () => void {
+  const previous = localAdapter;
+  localAdapter = adapter;
+  return () => {
+    localAdapter = previous;
+  };
+}
 
 /**
  * Drop-in replacement for the parts of Electron's `ipcMain` that `*.ipc.ts`
@@ -17,10 +37,8 @@ import {
  *   - import { ipcMain } from "electron";
  *   + import { ipcMain } from "../../ipc-kit/ipc-main";
  *
- * Electron is referenced only inside the methods (never at module load), so
- * importing a `*.ipc.ts` via a barrel does not require Electron to be present —
- * important for unit tests, which import service barrels but never call
- * `registerXxxIpc()`.
+ * Electron is supplied as an adapter by the desktop entry point; this module
+ * itself has no Electron dependency and is safe to load in the Node server.
  *
  * See docs/design/remote-backend.md (Pillar B).
  */
@@ -28,15 +46,12 @@ export const ipcMain = {
   /** Register a handler: into the registry (for WS) and on the real ipcMain (for the renderer). */
   handle(channel: string, handler: IpcHandler): void {
     registerHandler(channel, handler);
-    electronIpcMain.handle(
-      channel,
-      handler as Parameters<typeof electronIpcMain.handle>[1],
-    );
+    localAdapter?.handle(channel, handler);
   },
 
   /** Remove a handler from both the registry and the real ipcMain. */
   removeHandler(channel: string): void {
     unregisterHandler(channel);
-    electronIpcMain.removeHandler(channel);
+    localAdapter?.removeHandler(channel);
   },
 };

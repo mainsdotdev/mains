@@ -105,6 +105,29 @@ Three neighbouring modules are easy to confuse, so the split is by *direction*:
 - **remoteBackends** — *other* backends this desktop connects to: the encrypted at-rest store for their pairing tokens (`remoteBackends:setToken/getToken/deleteToken`; the catalog of `KnownBackend`s lives in the renderer). Formerly `backendAuth`.
 _Avoid_: t3code's vocabulary (`environmentId`, pairing grant, device session) — see `docs/design/mobile-app.md` §10.1 for the mapping; a `pairing` module (it was folded in: pairing always travelled with `describe`); moving identity into `localBackend` (headless `serve` needs it, and the trust boundary differs); registering `backend:describe` on raw `ipcMain` (it must be reachable over the wire).
 
+**backend runtime**:
+The small host-capability seam in `src/main/runtime/backend-runtime.ts`. Backend
+modules ask it for data paths, app metadata, credential encryption, URL opening,
+sleep inhibition and optional image previewing; they never import Electron for
+those capabilities. The desktop composition root installs the Electron adapter,
+while the standalone composition root installs the Node adapter. Native folder
+and Save As dialogs and OS run notifications are client adapters, not backend
+handlers, and are registered only by the desktop root.
+_Avoid_: importing `electron` from a module reachable through `serve.ts`; adding
+an Electron-shaped fake to the Node entry; exporting an Electron adapter through
+a barrel used by backend modules.
+
+**standalone server**:
+The plain-Node backend composed by `standalone-server.ts` and `server-cli.ts`.
+It owns one SQLite database, handler registry, schedulers, provider processes,
+terminals and WebSocket host for its lifetime, then drains them in reverse order
+on shutdown. Its default `userData` is separate from Electron and its credentials
+use a server-local AES-GCM key. One backend process owns one data directory;
+Electron and Node must not concurrently open the same Mains database.
+_Avoid_: treating standalone as an Electron `--serve` alias; pointing it at the
+desktop data directory before a credential migration exists; starting another
+server against the same state directory.
+
 ## Operations
 
 ### Workspace intake

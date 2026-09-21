@@ -74,7 +74,7 @@ npm start
 
 ```bash
 git clone https://github.com/mainsdotdev/mains.git
-cd mains
+cd mains/apps/desktop
 npm install
 npm start
 ```
@@ -92,10 +92,18 @@ For Cursor, you'll need the [Cursor Agent CLI](https://cursor.com/cli) installed
 
 ```bash
 npm start              # Dev server
+npm run serve:node     # Standalone Node backend (no Electron)
+npm run build:server   # Build .vite/server/server.cjs
+npm run start:server   # Run the built standalone backend
 npm run lint:fix       # Lint with auto-fix
 npm run package        # Package for current platform
 npm run make           # Create distributable
 ```
+
+The standalone backend uses a separate state directory by default and exposes
+the Mains protocol over a token-gated WebSocket. Pass options after `--`, for
+example `npm run serve:node -- --port 8787 --token <token>`. Do not point the
+desktop app and standalone server at the same SQLite database concurrently.
 
 ### Database
 

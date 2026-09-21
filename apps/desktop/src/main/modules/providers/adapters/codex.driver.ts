@@ -22,11 +22,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { app } from "electron";
 import { findCodexBinaryPath } from "../providers.utils";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import { emit } from "../../../ipc-kit";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import { getBackendRuntime } from "../../../runtime/backend-runtime";
 import type {
   CliUpdateResult,
   AccountInfo,
@@ -694,7 +694,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       clientInfo: {
         name: "mains",
         title: "Mains Desktop",
-        version: app.getVersion(),
+        version: getBackendRuntime().getAppVersion(),
       },
       capabilities: {
         experimentalApi: true,

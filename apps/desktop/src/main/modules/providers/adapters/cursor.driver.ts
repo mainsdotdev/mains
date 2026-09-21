@@ -26,6 +26,7 @@ import fs from "node:fs";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import { emit } from "../../../ipc-kit";
+import { getBackendRuntime } from "../../../runtime/backend-runtime";
 import { findCursorBinaryPath } from "../providers.utils";
 import type {
   AcquiredSession,
@@ -830,14 +831,10 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
   // ─────────────────────────────────────────────────────────────
 
   function capsCacheFile(): string {
-    try {
-      // Lazy require: keeps `electron` out of the module's load-time deps so the
-      // pure-function unit tests can import this file without an Electron runtime.
-      const { app } = require("electron") as typeof import("electron");
-      return path.join(app.getPath("userData"), "cursor-model-caps.json");
-    } catch {
-      return path.join(os.tmpdir(), "cursor-model-caps.json");
-    }
+    return path.join(
+      getBackendRuntime().getPath("userData"),
+      "cursor-model-caps.json",
+    );
   }
 
   function loadCapsCache(): void {

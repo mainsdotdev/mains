@@ -1,5 +1,3 @@
-import { powerSaveBlocker } from "electron";
-
 import {
   couldModifyFiles,
   type WorkRunEvent,
@@ -23,9 +21,10 @@ import {
 } from "../workspace";
 import { createWorkAdapter } from "../providers/adapters";
 import { runSessionRegistry } from "./run-session-registry";
-import { showRunFinishedNotification } from "./run-notifications";
+import { showRunFinishedNotification } from "./run-notification-sink";
 import { emit } from "../../ipc-kit";
 import type { RunArtifactKind } from "./runs.dto";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -207,15 +206,18 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       const settings = await appSettingsService.getSettings();
       if (!settings.preventSleepDuringRuns) return;
       if (sleepBlockerId === null) {
-        sleepBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+        sleepBlockerId = getBackendRuntime().powerInhibitor.start(
+          "prevent-app-suspension",
+        );
       }
     } catch (err) {
       console.error(`[RunSession ${runId}] Failed to acquire sleep blocker:`, err);
     }
   }
   function releaseSleepBlocker(): void {
-    if (sleepBlockerId !== null && powerSaveBlocker.isStarted(sleepBlockerId)) {
-      powerSaveBlocker.stop(sleepBlockerId);
+    const powerInhibitor = getBackendRuntime().powerInhibitor;
+    if (sleepBlockerId !== null && powerInhibitor.isStarted(sleepBlockerId)) {
+      powerInhibitor.stop(sleepBlockerId);
     }
     sleepBlockerId = null;
   }

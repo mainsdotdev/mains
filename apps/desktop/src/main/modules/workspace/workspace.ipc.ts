@@ -1,5 +1,3 @@
-import { ok } from "../../../shared/ipc-kit/service-response";
-import { dialog, BrowserWindow } from "electron";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { workspaceService } from "./workspace.service";
@@ -120,29 +118,6 @@ export function registerWorkspaceIpc(): void {
       workspaceService.discardPaths(id, paths),
     ),
   );
-
-  // Native dialog — needs the focused window, so it stays hand-written.
-  ipcMain.handle(CHANNELS.workspace.selectDirectory, async () => {
-    const window = BrowserWindow.getFocusedWindow();
-
-    const result = window
-      ? await dialog.showOpenDialog(window, {
-          properties: ["openDirectory"],
-          title: "Select Project Folder",
-          buttonLabel: "Select",
-        })
-      : await dialog.showOpenDialog({
-          properties: ["openDirectory"],
-          title: "Select Project Folder",
-          buttonLabel: "Select",
-        });
-
-    if (result.canceled || result.filePaths.length === 0) {
-      return ok(null);
-    }
-
-    return ok(result.filePaths[0]);
-  });
 
   // ── activity ──
   ipcMain.handle(
@@ -308,7 +283,6 @@ export function unregisterWorkspaceIpc(): void {
     CHANNELS.workspace.renameBranch,
     CHANNELS.workspace.switchBranch,
     CHANNELS.workspace.discardPaths,
-    CHANNELS.workspace.selectDirectory,
     // activity
     CHANNELS.workspace.listActivity,
     CHANNELS.workspace.createActivity,

@@ -24,7 +24,7 @@ vi.mock("../appSettings", () => ({
   appSettingsService: { getSettings: mocks.getSettings },
 }));
 
-vi.mock("./run-notifications", () => ({
+vi.mock("./run-notification-sink", () => ({
   showApprovalNotification: mocks.showApprovalNotification,
 }));
 

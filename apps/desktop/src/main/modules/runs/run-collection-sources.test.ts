@@ -1,19 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "../../../test/setup-db";
 import {
   createCollection,
   createRun,
 } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
+import { installTestBackendRuntime } from "../../../test/backend-runtime";
 
 const TEST_USER_DATA = path.join(os.tmpdir(), "mains-run-source-context-test");
-
-vi.mock("electron", () => ({
-  app: { getPath: () => TEST_USER_DATA },
-}));
 
 let db: DatabaseInstance;
 let cleanup: () => void;
@@ -25,6 +22,16 @@ import { runsRepo } from "./runs.repo";
 import { materializeCollectionSourceContext } from "./run-collection-sources";
 
 describe("materializeCollectionSourceContext", () => {
+  let restoreRuntime: () => void;
+
+  beforeAll(() => {
+    restoreRuntime = installTestBackendRuntime({
+      getPath: (name) =>
+        name === "userData" ? TEST_USER_DATA : path.join(TEST_USER_DATA, name),
+    });
+  });
+  afterAll(() => restoreRuntime());
+
   beforeEach(() => {
     ({ db, cleanup } = createTestDb());
     fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });

@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 // ─────────────────────────────────────────────────────────────
 // Logging
@@ -261,8 +262,8 @@ export function clearClaudeCliCache(): void {
  */
 export function findPackagedClaudeSdkBinary(): string | null {
   try {
-    const { app } = require("electron");
-    if (!app.isPackaged) return null;
+    const runtime = getBackendRuntime();
+    if (!runtime.isPackaged()) return null;
 
     if (cachedClaudeSdkCliPath && isExecutableFile(cachedClaudeSdkCliPath)) {
       return cachedClaudeSdkCliPath;
@@ -272,7 +273,7 @@ export function findPackagedClaudeSdkBinary(): string | null {
     const nativePkg =
       `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
     const binaryName = process.platform === "win32" ? "claude.exe" : "claude";
-    const appPath = app.getAppPath();
+    const appPath = runtime.getAppPath();
     const candidates = [
       path.join(
         appPath + ".unpacked",
@@ -474,8 +475,7 @@ export function findCopilotCliPath(): string | null {
   // RunAsNode fuse is only enforced in packaged builds, so dev is fine.
   // Return null to let the SDK use its default resolution.
   try {
-    const { app } = require("electron");
-    if (!app.isPackaged) {
+    if (!getBackendRuntime().isPackaged()) {
       return null;
     }
   } catch {
@@ -496,8 +496,7 @@ export function findCopilotCliPath(): string | null {
   // The binary name inside the package
   const binaryName = platform === "win32" ? "copilot.exe" : "copilot";
 
-  const { app } = require("electron");
-  const appPath = app.getAppPath();
+  const appPath = getBackendRuntime().getAppPath();
 
   const candidates: string[] = [
     // Unpacked ASAR location (native binaries must be outside ASAR to execute)

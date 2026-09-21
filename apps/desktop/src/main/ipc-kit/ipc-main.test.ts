@@ -1,15 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { handle, removeHandler } = vi.hoisted(() => ({
   handle: vi.fn(),
   removeHandler: vi.fn(),
 }));
-vi.mock("electron", () => ({ ipcMain: { handle, removeHandler } }));
-
-import { ipcMain } from "./ipc-main";
+import { configureIpcMainAdapter, ipcMain } from "./ipc-main";
 import { clearHandlers, hasHandler, invokeHandler } from "./handler-registry";
 
 describe("ipcMain shim", () => {
+  const restore = configureIpcMainAdapter({ handle, removeHandler });
+
+  afterAll(() => restore());
+
   afterEach(() => {
     clearHandlers();
     handle.mockClear();

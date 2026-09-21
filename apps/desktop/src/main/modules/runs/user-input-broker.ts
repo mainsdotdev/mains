@@ -9,7 +9,7 @@ import { CHANNELS } from "../../../shared/ipc-kit/channels";
 import {
   showApprovalNotification,
   type ApprovalNotificationHandle,
-} from "./run-notifications";
+} from "./run-notification-sink";
 
 /**
  * Singleton broker that manages pending tool-approval requests.

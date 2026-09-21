@@ -1,8 +1,8 @@
 import fs from "fs";
 import path from "path";
-import { app } from "electron";
 import type { ModeId } from "../../../shared/modes";
 import type { RunExecutionContext } from "../../../shared/adapter.types";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 interface WorkspaceExecutionSource {
   id: string;
@@ -10,7 +10,7 @@ interface WorkspaceExecutionSource {
 }
 
 function userDataRoot(): string {
-  return app?.getPath("userData") || path.join(process.cwd(), ".data");
+  return getBackendRuntime().getPath("userData");
 }
 
 function assertSafeRunId(runId: string): void {

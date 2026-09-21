@@ -1,4 +1,3 @@
-import { shell } from "electron";
 import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -14,6 +13,7 @@ import {
   createLogger,
   type AdapterLogger,
 } from "./adapter.shared";
+import { getBackendRuntime } from "../../../runtime/backend-runtime";
 
 export interface CodexServerResponder {
   respondToRequest(
@@ -82,7 +82,7 @@ export function createCodexRequestBroker(
     options.dispatchTool ?? dispatchMainsTool;
   const openExternal =
     options.openExternal ??
-    ((url: string) => shell.openExternal(url));
+    ((url: string) => getBackendRuntime().openExternal(url));
   const logger =
     options.logger ?? createLogger("[CodexRequestBroker]");
   const now = options.now ?? Date.now;

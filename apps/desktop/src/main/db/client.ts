@@ -1,10 +1,10 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { app } from "electron";
 import crypto from "node:crypto";
 import path from "path";
 import fs from "fs";
+import { getBackendRuntime } from "../runtime/backend-runtime";
 import * as schema from "./schema";
 import type {
   DatabaseInstance,
@@ -68,15 +68,7 @@ class DatabaseClient {
   private async doInitialize(
     config?: Partial<DatabaseConfig>,
   ): Promise<DatabaseInitResult> {
-    // Ensure Electron is ready before using app.getPath()
-    if (
-      app &&
-      app.isReady &&
-      typeof app.isReady === "function" &&
-      !app.isReady()
-    ) {
-      await app.whenReady();
-    }
+    await getBackendRuntime().whenReady();
 
     try {
       // Determine database path
@@ -413,6 +405,7 @@ class DatabaseClient {
    * Resolve migrations folder for dev/prod
    */
   private getMigrationsFolder(): string | null {
+    const resourcesPath = getBackendRuntime().getResourcesPath();
     // Try multiple paths in order
     const possiblePaths = [
       // Dev: adjacent to this file (if compiled in place)
@@ -420,9 +413,7 @@ class DatabaseClient {
       // Vite build: .vite/build/db/migrations
       path.join(__dirname, "db", "migrations"),
       // Prod: resources/migrations
-      process.resourcesPath
-        ? path.join(process.resourcesPath, "migrations")
-        : null,
+      resourcesPath ? path.join(resourcesPath, "migrations") : null,
     ].filter(Boolean) as string[];
 
     for (const migrationPath of possiblePaths) {
@@ -444,14 +435,14 @@ class DatabaseClient {
   }
 
   /**
-   * Get default database path in Electron userData directory
+   * Get the default database path for the installed host runtime.
    */
   private getDefaultDatabasePath(): string {
-    if (app && !app.isPackaged) {
+    const runtime = getBackendRuntime();
+    if (runtime.kind === "electron" && !runtime.isPackaged()) {
       return path.join(process.cwd(), ".data", "mains.db");
     }
-    const userDataPath =
-      app?.getPath("userData") || path.join(process.cwd(), ".data");
+    const userDataPath = runtime.getPath("userData");
     return path.join(userDataPath, "mains.db");
   }
 

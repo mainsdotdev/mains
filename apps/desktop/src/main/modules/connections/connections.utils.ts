@@ -1,8 +1,8 @@
 import crypto from "crypto";
 import os from "os";
-import { safeStorage } from "electron";
 import { fail } from "../../../shared/ipc-kit/service-response";
 import type { ParsedCredentials } from "./connections.dto";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 // ─────────────────────────────────────────────────────────────
 // Source Name Formatting
@@ -81,27 +81,26 @@ function fallbackDecrypt(buffer: Buffer): string {
 // Encryption Helpers
 // ─────────────────────────────────────────────────────────────
 function encryptToken(token: string): Buffer {
-  // Fail closed: only ever persist secrets under the OS keychain (safeStorage,
-  // Keychain-backed on macOS). The legacy AES fallback derived its key from
-  // public machine identifiers (hostname/homedir/username) — decryptable by
-  // anyone who can read the DB file — so we refuse to write under it rather
-  // than provide a false sense of at-rest encryption. On a healthy macOS
-  // install safeStorage is always available, so this never trips in practice;
-  // callers (e.g. saveCredentials) surface the thrown error as a failed save.
-  if (!safeStorage.isEncryptionAvailable()) {
+  // Fail closed: only persist secrets through the active host's secure store
+  // (Electron safeStorage on desktop, a protected file key on the standalone
+  // server). The legacy AES fallback derived its key from public machine
+  // identifiers, so it remains decrypt-only.
+  const secretStorage = getBackendRuntime().secretStorage;
+  if (!secretStorage.isEncryptionAvailable()) {
     throw new Error(
       "Secure credential storage is unavailable (OS keychain/safeStorage not ready); refusing to store credentials.",
     );
   }
-  return safeStorage.encryptString(token);
+  return secretStorage.encryptString(token);
 }
 
 function decryptToken(buffer: Buffer): string {
-  if (safeStorage.isEncryptionAvailable()) {
+  const secretStorage = getBackendRuntime().secretStorage;
+  if (secretStorage.isEncryptionAvailable()) {
     try {
-      return safeStorage.decryptString(buffer);
+      return secretStorage.decryptString(buffer);
     } catch (err) {
-      console.error("[Credentials] safeStorage decryption failed, attempting fallback:", err);
+      console.error("[Credentials] secure-store decryption failed, attempting fallback:", err);
     }
   }
   try {

@@ -2,7 +2,6 @@ export { registerRunsIpc, unregisterRunsIpc } from "./runs.ipc";
 export { runsService } from "./runs.service";
 export { runSessionRegistry } from "./run-session-registry";
 export { managedExecutionRoots } from "./run-execution";
-export { openRunInWindow } from "./run-notifications";
 export {
   handleToolApprovalResponse,
   listPendingApprovals,

@@ -1,7 +1,7 @@
 import { SimpleGit, StatusResult, LogResult, RemoteWithRefs } from "simple-git";
-import { app } from "electron";
 import path from "path";
 import fs from "fs";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { captureDiffSnapshot, openGit, type DiffSnapshot } from "./git-snapshot";
 import {
   applyPatch,
@@ -138,7 +138,7 @@ function getGit(rootPath: string): SimpleGit {
 
 /** The worktrees directory under app data (falls back to ./.data headless). */
 function worktreesDir(): string {
-  const userDataPath = app?.getPath("userData") || path.join(process.cwd(), ".data");
+  const userDataPath = getBackendRuntime().getPath("userData");
   return path.join(userDataPath, "worktrees");
 }
 
@@ -481,7 +481,7 @@ export const gitService = {
     projectName: string,
     parentPath?: string,
   ): Promise<{ rootPath: string; defaultBranch: string }> {
-    const targetParent = parentPath ?? app.getPath("desktop");
+    const targetParent = parentPath ?? getBackendRuntime().getPath("desktop");
     const rootPath = path.join(targetParent, projectName);
     if (fs.existsSync(rootPath)) throw new Error("Folder already exists");
     fs.mkdirSync(rootPath, { recursive: false });

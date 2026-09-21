@@ -7,10 +7,10 @@ import { appshotsService } from "../modules/appshots";
 import {
   handleToolApprovalResponse,
   listPendingApprovals,
-  openRunInWindow,
   responseFromNotification,
   runsService,
 } from "../modules/runs";
+import { openRunInWindow } from "../modules/runs/run-notifications";
 import { updatesService } from "../modules/updates";
 import type { TrayActions } from "./status-menus";
 

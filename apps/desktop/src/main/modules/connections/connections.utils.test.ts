@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
 import { assertOk, assertFail } from "../../../shared/ipc-kit/service-response";
+import { installTestBackendRuntime } from "../../../test/backend-runtime";
 
 const { safeStorageMock } = vi.hoisted(() => ({
   safeStorageMock: {
@@ -8,15 +9,6 @@ const { safeStorageMock } = vi.hoisted(() => ({
     isEncryptionAvailable: vi.fn(() => true),
     encryptString: (s: string) => Buffer.from(s),
     decryptString: (b: Buffer) => b.toString(),
-  },
-}));
-
-vi.mock("electron", () => ({
-  safeStorage: safeStorageMock,
-  app: {
-    getPath: () => "/tmp",
-    getName: () => "mains",
-    getVersion: () => "0.0.0",
   },
 }));
 
@@ -29,6 +21,12 @@ import {
   createTokenHash,
   parseProviderCredentials,
 } from "./connections.utils";
+
+let restoreRuntime: () => void;
+beforeAll(() => {
+  restoreRuntime = installTestBackendRuntime({ secretStorage: safeStorageMock });
+});
+afterAll(() => restoreRuntime());
 
 describe("formatSourceName", () => {
   it("maps known source names", () => {

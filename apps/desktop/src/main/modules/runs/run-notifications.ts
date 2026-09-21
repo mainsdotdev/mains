@@ -12,6 +12,10 @@ import {
   type ToolApprovalRequest,
   type ToolApprovalResponse,
 } from "./runs.dto";
+import type {
+  ApprovalNotificationHandle,
+  RunNotificationSink,
+} from "./run-notification-sink";
 
 /**
  * The run's OS notifications: a pending request (answerable from the banner
@@ -27,10 +31,6 @@ import {
 
 const MAX_RETAINED_FINISHED = 20;
 const retainedFinished: Notification[] = [];
-
-export interface ApprovalNotificationHandle {
-  close(): void;
-}
 
 async function findRun(runId: string): Promise<RunResponse | null> {
   try {
@@ -127,4 +127,11 @@ export function showRunFinishedNotification(runId: string, status: string): void
   retainedFinished.push(notification);
   if (retainedFinished.length > MAX_RETAINED_FINISHED) retainedFinished.shift();
   notification.show();
+}
+
+export function createElectronRunNotificationSink(): RunNotificationSink {
+  return {
+    showApproval: showApprovalNotification,
+    showFinished: showRunFinishedNotification,
+  };
 }

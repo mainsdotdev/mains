@@ -59,7 +59,13 @@ import {
   registerWorkspaceIpc,
   unregisterWorkspaceIpc,
 } from "./modules/workspace";
+import {
+  registerWorkspaceDialogIpc,
+  unregisterWorkspaceDialogIpc,
+} from "./modules/workspace/workspace.dialog.ipc";
 import { registerRunsIpc, unregisterRunsIpc } from "./modules/runs";
+import { configureRunNotificationSink } from "./modules/runs/run-notification-sink";
+import { createElectronRunNotificationSink } from "./modules/runs/run-notifications";
 import { runSessionRegistry } from "./modules/runs/run-session-registry";
 import { registerProjectsIpc, unregisterProjectsIpc } from "./modules/projects";
 import {
@@ -70,6 +76,10 @@ import {
   registerFileExplorerIpc,
   unregisterFileExplorerIpc,
 } from "./modules/fileExplorer";
+import {
+  registerFileExplorerDialogIpc,
+  unregisterFileExplorerDialogIpc,
+} from "./modules/fileExplorer/fileExplorer.dialog.ipc";
 import { registerGitFlowIpc, unregisterGitFlowIpc } from "./modules/gitFlow";
 import {
   registerTerminalIpc,
@@ -156,6 +166,13 @@ import {
 import { registerBackendIpc, unregisterBackendIpc } from "./modules/backend";
 import { registerSearchIpc, unregisterSearchIpc } from "./modules/search";
 import { CHANNELS } from "../shared/ipc-kit/channels";
+import { configureBackendRuntime } from "./runtime/backend-runtime";
+import { createElectronBackendRuntime } from "./runtime/electron-backend-runtime";
+import { configureIpcMainAdapter } from "./ipc-kit/ipc-main";
+
+configureBackendRuntime(createElectronBackendRuntime());
+configureIpcMainAdapter(ipcMain);
+configureRunNotificationSink(createElectronRunNotificationSink());
 
 // ─────────────────────────────────────────────────────────────
 // Installed app detection (macOS)
@@ -723,10 +740,12 @@ async function initializeApp() {
     registerProvidersIpc();
     registerToolsIpc();
     registerWorkspaceIpc();
+    registerWorkspaceDialogIpc();
     registerProjectsIpc();
     registerCollectionsIpc();
     registerRunsIpc();
     registerFileExplorerIpc();
+    registerFileExplorerDialogIpc();
     registerGitFlowIpc();
     registerTerminalIpc();
     registerImageProxyHandler();
@@ -1050,10 +1069,12 @@ async function cleanupApp() {
     unregisterProvidersIpc();
     unregisterToolsIpc();
     unregisterWorkspaceIpc();
+    unregisterWorkspaceDialogIpc();
     unregisterProjectsIpc();
     unregisterCollectionsIpc();
     unregisterRunsIpc();
     unregisterFileExplorerIpc();
+    unregisterFileExplorerDialogIpc();
     unregisterGitFlowIpc();
     unregisterTerminalIpc();
     unregisterImageProxyIpc();

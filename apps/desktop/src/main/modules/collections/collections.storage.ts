@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { app } from "electron";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 export interface StagedCollectionStorageRemoval {
   commit(): void;
@@ -9,7 +9,7 @@ export interface StagedCollectionStorageRemoval {
 }
 
 function userDataRoot(): string {
-  return app?.getPath("userData") || path.join(process.cwd(), ".data");
+  return getBackendRuntime().getPath("userData");
 }
 
 function assertStorageId(value: string, label: string): void {

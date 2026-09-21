@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 import { PROVIDER_IDS } from "../../../shared/provider-ids";
 import { runsRepo } from "./runs.repo";
@@ -97,6 +98,9 @@ const RUN_OUTPUT_EXCLUDES = new Set([
 ]);
 /** Image types the phone decodes on its own, by extension — `nativeImage` reads only PNG and JPEG. */
 const RAW_IMAGE_MIMES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
   webp: "image/webp",
   gif: "image/gif",
   heic: "image/heic",
@@ -190,9 +194,7 @@ async function listManagedOutputFiles(root: string): Promise<RunOutputFile[]> {
  * attachment's `sourcePath` may point into (see run-attachments.ts).
  */
 async function browserCaptureDir(): Promise<string> {
-  // Loaded here rather than at the top: the service also runs outside Electron (tests).
-  const { app } = await import("electron");
-  return path.join(app.getPath("userData"), "browser-captures");
+  return path.join(getBackendRuntime().getPath("userData"), "browser-captures");
 }
 
 /** Agent prose may append an editor line locator; it is not part of the path. */
@@ -894,39 +896,28 @@ export const runsService = {
       artifact.blobData ??
       (filePath && fs.existsSync(filePath) ? fs.readFileSync(filePath) : null);
     if (!bytes) throw new Error("Image file is missing");
-    // Loaded here rather than at the top: the service also runs outside
-    // Electron (tests), where the module is a stub.
-    const { nativeImage } = await import("electron");
-    const source = nativeImage.createFromBuffer(bytes);
-    if (source.isEmpty()) {
-      // Not PNG or JPEG, so nothing here can scale it — but the phone reads
-      // WebP and friends itself, so the file goes as it is, within reason.
+    const maxSide = Math.min(
+      Math.max(payload.maxSide ?? ARTIFACT_IMAGE_MAX_SIDE, 128),
+      ARTIFACT_IMAGE_MAX_SIDE,
+    );
+    const preview = getBackendRuntime().imagePreview?.resizeToJpeg(
+      bytes,
+      maxSide,
+    );
+    if (!preview) {
+      // The Node server intentionally has no image codec. Phones can decode
+      // these formats themselves, so send bounded original bytes instead.
       const ext = (filePath ?? "").split(".").pop()?.toLowerCase() ?? "";
       const mime = RAW_IMAGE_MIMES[ext];
       if (!mime) throw new Error("Unsupported image format");
       if (bytes.length > ARTIFACT_IMAGE_RAW_LIMIT) throw new Error("Image is too large to send");
       return { mime, base64: bytes.toString("base64"), width: null, height: null };
     }
-    const maxSide = Math.min(
-      Math.max(payload.maxSide ?? ARTIFACT_IMAGE_MAX_SIDE, 128),
-      ARTIFACT_IMAGE_MAX_SIDE,
-    );
-    const size = source.getSize();
-    const scale = Math.min(1, maxSide / Math.max(size.width, size.height, 1));
-    const scaled =
-      scale < 1
-        ? source.resize({
-            width: Math.round(size.width * scale),
-            height: Math.round(size.height * scale),
-            quality: "good",
-          })
-        : source;
-    const out = scaled.getSize();
     return {
       mime: "image/jpeg",
-      base64: scaled.toJPEG(82).toString("base64"),
-      width: out.width,
-      height: out.height,
+      base64: preview.jpeg.toString("base64"),
+      width: preview.width,
+      height: preview.height,
     };
   },
 

@@ -1,8 +1,5 @@
-import path from "path";
-import { BrowserWindow, dialog } from "electron";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
-import { ok, fail } from "../../../shared/ipc-kit/service-response";
 import { fileExplorerService } from "./fileExplorer.service";
 import { CHANNELS } from "../../../shared/ipc-kit/channels";
 import type {
@@ -58,37 +55,6 @@ export function registerFileExplorerIpc(): void {
     CHANNELS.fileExplorer.writeFileText,
     handle((options: WriteFileTextOptions) => fileExplorerService.writeFileText(options)),
   );
-
-  // Native dialog — needs the focused window, so it stays hand-written like
-  // `workspace:selectDirectory`. Returns the saved path, or null when the user
-  // cancels: cancelling is a choice, not a failure.
-  ipcMain.handle(
-    CHANNELS.fileExplorer.saveFileAs,
-    async (_, sourcePath: string, suggestedName?: string) => {
-      try {
-        const window = BrowserWindow.getFocusedWindow();
-        const defaultPath = suggestedName || path.basename(sourcePath);
-        const options = {
-          title: "Save File",
-          buttonLabel: "Save",
-          defaultPath,
-        };
-        const result = window
-          ? await dialog.showSaveDialog(window, options)
-          : await dialog.showSaveDialog(options);
-
-        if (result.canceled || !result.filePath) return ok(null);
-
-        await fileExplorerService.saveFileAs(sourcePath, result.filePath);
-        return ok(result.filePath);
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Failed to save file";
-        console.error("[FileExplorer] saveFileAs failed:", error);
-        return fail(message);
-      }
-    },
-  );
 }
 
 export function unregisterFileExplorerIpc(): void {
@@ -101,6 +67,5 @@ export function unregisterFileExplorerIpc(): void {
     CHANNELS.fileExplorer.listDir,
     CHANNELS.fileExplorer.searchFiles,
     CHANNELS.fileExplorer.writeFileText,
-    CHANNELS.fileExplorer.saveFileAs,
   ].forEach((channel) => ipcMain.removeHandler(channel));
 }

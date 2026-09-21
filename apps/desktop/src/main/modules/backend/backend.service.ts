@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { app } from "electron";
 import { CHANNELS } from "../../../shared/ipc-kit/channels";
 import { WS_PROTOCOL_VERSION } from "../../../shared/ipc-kit/ws-protocol";
 import { registeredChannels } from "../../ipc-kit";
@@ -8,6 +7,7 @@ import { generateToken, hashToken, tokensMatch } from "../../ipc-kit/ws-auth";
 import { appSettingsService } from "../appSettings";
 import { backendRepo } from "./backend.repo";
 import { parsePairDeviceInput } from "./backend.validation";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 import type {
   BackendDescriptor,
   PairDeviceResult,
@@ -240,7 +240,7 @@ export const backendService = {
     return {
       backendId,
       name: machineName(),
-      appVersion: app.getVersion(),
+      appVersion: getBackendRuntime().getAppVersion(),
       protocolVersion: WS_PROTOCOL_VERSION,
       capabilities,
       serverTime: new Date().toISOString(),

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,15 +9,12 @@ import {
   createRun,
 } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
+import { installTestBackendRuntime } from "../../../test/backend-runtime";
 
 let db: DatabaseInstance;
 let cleanup: () => void;
 
 const TEST_USER_DATA = path.join(os.tmpdir(), "mains-collection-sources-test");
-
-vi.mock("electron", () => ({
-  app: { getPath: () => TEST_USER_DATA },
-}));
 
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 
@@ -26,6 +23,16 @@ import { collectionsRepo } from "./collections.repo";
 import { runsRepo } from "../runs/runs.repo";
 
 describe("collectionsService", () => {
+  let restoreRuntime: () => void;
+
+  beforeAll(() => {
+    restoreRuntime = installTestBackendRuntime({
+      getPath: (name) =>
+        name === "userData" ? TEST_USER_DATA : path.join(TEST_USER_DATA, name),
+    });
+  });
+  afterAll(() => restoreRuntime());
+
   beforeEach(() => {
     ({ db, cleanup } = createTestDb());
     createAccount(db, { id: "default" });

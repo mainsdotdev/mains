@@ -1,4 +1,4 @@
-import { initializeDatabase } from "./db/client";
+import { closeDatabase, initializeDatabase } from "./db/client";
 import { startWsHost, type WsHost } from "./ipc-kit/ws-server-host";
 import { generateToken } from "./ipc-kit/ws-auth";
 
@@ -7,38 +7,77 @@ import { generateToken } from "./ipc-kit/ws-auth";
 // index.ts. Renderer-/shell-only modules are intentionally omitted from the
 // headless backend: browser (drives a local BrowserView), imageProxy (custom
 // protocol serving a local renderer), and updates (app self-update).
-import { registerAccountIpc } from "./modules/account";
-import { backendService, registerBackendIpc } from "./modules/backend";
-import { registerSyncIpc } from "./modules/sync";
-import { registerEntitiesHandlers } from "./modules/entities";
-import { registerConnectionsHandlers } from "./modules/connections";
-import { registerSpaceIpc } from "./modules/space";
-import { registerAppSettingsIpc } from "./modules/appSettings";
-import { registerProvidersIpc } from "./modules/providers";
-import { registerToolsIpc } from "./modules/tools";
-import { registerWorkspaceIpc } from "./modules/workspace";
-import { registerProjectsIpc } from "./modules/projects";
-import { registerCollectionsIpc } from "./modules/collections";
-import { registerRunsIpc } from "./modules/runs";
-import { registerFileExplorerIpc } from "./modules/fileExplorer";
-import { registerGitFlowIpc } from "./modules/gitFlow";
-import { registerTerminalIpc } from "./modules/terminal";
-import { registerStatsIpc } from "./modules/stats";
+import { registerAccountIpc, unregisterAccountIpc } from "./modules/account";
+import {
+  backendService,
+  registerBackendIpc,
+  unregisterBackendIpc,
+} from "./modules/backend";
+import { registerSyncIpc, unregisterSyncIpc } from "./modules/sync";
+import {
+  registerEntitiesHandlers,
+  unregisterEntitiesHandlers,
+} from "./modules/entities";
+import {
+  registerConnectionsHandlers,
+  unregisterConnectionsHandlers,
+} from "./modules/connections";
+import { registerSpaceIpc, unregisterSpaceIpc } from "./modules/space";
+import {
+  registerAppSettingsIpc,
+  unregisterAppSettingsIpc,
+} from "./modules/appSettings";
+import {
+  registerProvidersIpc,
+  shutdownAllWorkAdapters,
+  unregisterProvidersIpc,
+} from "./modules/providers";
+import { registerToolsIpc, unregisterToolsIpc } from "./modules/tools";
+import {
+  registerWorkspaceIpc,
+  unregisterWorkspaceIpc,
+} from "./modules/workspace";
+import { registerProjectsIpc, unregisterProjectsIpc } from "./modules/projects";
+import {
+  registerCollectionsIpc,
+  unregisterCollectionsIpc,
+} from "./modules/collections";
+import { registerRunsIpc, unregisterRunsIpc } from "./modules/runs";
+import { runSessionRegistry } from "./modules/runs/run-session-registry";
+import {
+  registerFileExplorerIpc,
+  unregisterFileExplorerIpc,
+} from "./modules/fileExplorer";
+import { registerGitFlowIpc, unregisterGitFlowIpc } from "./modules/gitFlow";
+import {
+  destroyAllTerminals,
+  registerTerminalIpc,
+  unregisterTerminalIpc,
+} from "./modules/terminal";
+import { registerStatsIpc, unregisterStatsIpc } from "./modules/stats";
 import {
   registerAutomationsIpc,
   automationsService,
+  unregisterAutomationsIpc,
 } from "./modules/automations";
-import { registerPulseIpc, pulseService } from "./modules/pulse";
-import { registerGuardsIpc } from "./modules/guards";
+import {
+  registerPulseIpc,
+  pulseService,
+  unregisterPulseIpc,
+} from "./modules/pulse";
+import { registerGuardsIpc, unregisterGuardsIpc } from "./modules/guards";
 import { imageProxyService } from "./modules/imageProxy/imageProxy.service";
 import {
   registerImageProxyIpc,
+  unregisterImageProxyIpc,
+} from "./modules/imageProxy/imageProxy.ipc";
+import {
   serveLocalImage,
   serveLocalDocument,
-} from "./modules/imageProxy";
+} from "./modules/imageProxy/imageProxy.local-serve";
 import { tailscaleService } from "./modules/tailscale";
 import { resolveWebRoot } from "./web-root";
-import { registerSearchIpc } from "./modules/search";
+import { registerSearchIpc, unregisterSearchIpc } from "./modules/search";
 
 export interface ServeOptions {
   /** Port to listen on. Default 8787. */
@@ -67,8 +106,58 @@ export interface ServeOptions {
   tailscaleServePort?: number;
 }
 
+export interface BackendServer extends WsHost {
+  /** Shared token accepted by the WebSocket host. */
+  readonly token: string;
+}
+
 const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = "127.0.0.1";
+
+interface BackendRegistration {
+  register(): void;
+  unregister(): void;
+}
+
+const BACKEND_REGISTRATIONS: readonly BackendRegistration[] = [
+  { register: registerAccountIpc, unregister: unregisterAccountIpc },
+  { register: registerBackendIpc, unregister: unregisterBackendIpc },
+  { register: registerSyncIpc, unregister: unregisterSyncIpc },
+  { register: registerEntitiesHandlers, unregister: unregisterEntitiesHandlers },
+  {
+    register: registerConnectionsHandlers,
+    unregister: unregisterConnectionsHandlers,
+  },
+  { register: registerSpaceIpc, unregister: unregisterSpaceIpc },
+  { register: registerAppSettingsIpc, unregister: unregisterAppSettingsIpc },
+  { register: registerProvidersIpc, unregister: unregisterProvidersIpc },
+  { register: registerToolsIpc, unregister: unregisterToolsIpc },
+  { register: registerWorkspaceIpc, unregister: unregisterWorkspaceIpc },
+  { register: registerProjectsIpc, unregister: unregisterProjectsIpc },
+  { register: registerCollectionsIpc, unregister: unregisterCollectionsIpc },
+  { register: registerRunsIpc, unregister: unregisterRunsIpc },
+  { register: registerFileExplorerIpc, unregister: unregisterFileExplorerIpc },
+  { register: registerGitFlowIpc, unregister: unregisterGitFlowIpc },
+  { register: registerTerminalIpc, unregister: unregisterTerminalIpc },
+  { register: registerStatsIpc, unregister: unregisterStatsIpc },
+  { register: registerAutomationsIpc, unregister: unregisterAutomationsIpc },
+  { register: registerPulseIpc, unregister: unregisterPulseIpc },
+  { register: registerGuardsIpc, unregister: unregisterGuardsIpc },
+  { register: registerSearchIpc, unregister: unregisterSearchIpc },
+  { register: registerImageProxyIpc, unregister: unregisterImageProxyIpc },
+];
+
+function unregisterBackendRegistrations(
+  registrations: readonly BackendRegistration[],
+): void {
+  for (const registration of [...registrations].reverse()) {
+    try {
+      registration.unregister();
+    } catch (error) {
+      console.warn("[serve] failed to unregister a backend module", error);
+    }
+  }
+}
 
 /**
  * Boot the mains backend headlessly and serve it over WebSocket.
@@ -79,49 +168,35 @@ const DEFAULT_HOST = "127.0.0.1";
  * BrowserWindows. The `*.ipc.ts` modules register through the `ipcMain` shim, so
  * every migrated handler lands in the handler-registry the WS router invokes.
  *
- * MUST run inside an Electron main process — the backend uses Electron APIs
- * (`app.getPath` for the DB path, `safeStorage` for credentials). Launch it as a
- * headless Electron entry (e.g. `electron . --serve`) after `app.whenReady()`.
+ * The composition root must install a BackendRuntime first. The desktop uses
+ * Electron capabilities; the standalone entry installs the plain-Node adapter.
  *
  * See docs/design/remote-backend.md.
  */
 export async function startBackendServer(
   options: ServeOptions = {},
-): Promise<WsHost> {
+): Promise<BackendServer> {
   await initializeDatabase({
     verbose: false,
     enableWAL: true,
     busyTimeout: 5000,
   });
 
-  registerAccountIpc();
-  registerBackendIpc();
-  registerSyncIpc();
-  registerEntitiesHandlers();
-  registerConnectionsHandlers();
-  registerSpaceIpc();
-  registerAppSettingsIpc();
-  registerProvidersIpc();
-  registerToolsIpc();
-  registerWorkspaceIpc();
-  registerProjectsIpc();
-  registerCollectionsIpc();
-  registerRunsIpc();
-  registerFileExplorerIpc();
-  registerGitFlowIpc();
-  registerTerminalIpc();
-  registerStatsIpc();
-  registerAutomationsIpc();
-  registerPulseIpc();
-  registerGuardsIpc();
-  registerSearchIpc();
-  // sign-only: the HMAC signing IPC (imageProxy:sign / documents:sign). The
-  // Electron custom-protocol handler isn't registered here — web mode serves the
-  // signed paths over HTTP (/__localimg, /__localdoc) instead.
-  registerImageProxyIpc();
-
-  automationsService.start();
-  pulseService.start();
+  const registered: BackendRegistration[] = [];
+  try {
+    for (const registration of BACKEND_REGISTRATIONS) {
+      registration.register();
+      registered.push(registration);
+    }
+    automationsService.start();
+    pulseService.start();
+  } catch (error) {
+    automationsService.stop();
+    pulseService.stop();
+    unregisterBackendRegistrations(registered);
+    await closeDatabase();
+    throw error;
+  }
 
   const host = options.host ?? DEFAULT_HOST;
   // Always token-gated, loopback included: a browser lets any web page open a
@@ -130,21 +205,28 @@ export async function startBackendServer(
 
   const webRoot = resolveWebRoot(options.webRoot);
 
-  const wsHost = await startWsHost({
-    port: options.port ?? DEFAULT_PORT,
-    host,
-    token,
-    webRoot,
-    fetchProxiedImage: (url) => imageProxyService.proxyImage(url),
-    serveLocalImage: (url) => serveLocalImage(url),
-    serveLocalDocument: (url) => serveLocalDocument(url),
-    // Phones paired through the desktop app share this machine's DB, so their
-    // device tokens work against the headless host too.
-    verifyDeviceToken: (deviceToken) =>
-      backendService.verifyDeviceToken(deviceToken),
-    pairDevice: (body) => backendService.pairDevice(body),
-    commandReceipts: backendService.commandReceipts,
-  });
+  let wsHost: WsHost;
+  try {
+    wsHost = await startWsHost({
+      port: options.port ?? DEFAULT_PORT,
+      host,
+      token,
+      webRoot,
+      fetchProxiedImage: (url) => imageProxyService.proxyImage(url),
+      serveLocalImage: (url) => serveLocalImage(url),
+      serveLocalDocument: (url) => serveLocalDocument(url),
+      verifyDeviceToken: (deviceToken) =>
+        backendService.verifyDeviceToken(deviceToken),
+      pairDevice: (body) => backendService.pairDevice(body),
+      commandReceipts: backendService.commandReceipts,
+    });
+  } catch (error) {
+    automationsService.stop();
+    pulseService.stop();
+    unregisterBackendRegistrations(registered);
+    await closeDatabase();
+    throw error;
+  }
   console.log(`[serve] mains backend listening on ws://${host}:${wsHost.port}`);
   console.log(`[serve] pairing token: ${token}`);
   if (webRoot) {
@@ -185,5 +267,28 @@ export async function startBackendServer(
     }
   }
 
-  return wsHost;
+  let stopPromise: Promise<void> | null = null;
+  const close = (): Promise<void> => {
+    if (stopPromise) return stopPromise;
+    stopPromise = (async () => {
+      await wsHost.close();
+      await tailscaleService.stopServeIfActive();
+      automationsService.stop();
+      pulseService.stop();
+      runSessionRegistry.shutdownAll("Standalone server stopped during run");
+      destroyAllTerminals();
+      await shutdownAllWorkAdapters();
+      unregisterBackendRegistrations(registered);
+      await closeDatabase();
+    })();
+    return stopPromise;
+  };
+
+  return {
+    sink: wsHost.sink,
+    port: wsHost.port,
+    token,
+    disconnectDevice: (deviceId) => wsHost.disconnectDevice(deviceId),
+    close,
+  };
 }

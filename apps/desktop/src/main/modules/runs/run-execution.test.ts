@@ -1,13 +1,10 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { installTestBackendRuntime } from "../../../test/backend-runtime";
 
 const TEST_USER_DATA = path.join(os.tmpdir(), "mains-run-execution-test");
-
-vi.mock("electron", () => ({
-  app: { getPath: () => TEST_USER_DATA },
-}));
 
 import {
   managedExecutionRoots,
@@ -15,6 +12,16 @@ import {
   removeManagedRunDir,
   resolveRunExecution,
 } from "./run-execution";
+
+let restoreRuntime: () => void;
+
+beforeAll(() => {
+  restoreRuntime = installTestBackendRuntime({
+    getPath: (name) =>
+      name === "userData" ? TEST_USER_DATA : path.join(TEST_USER_DATA, name),
+  });
+});
+afterAll(() => restoreRuntime());
 
 describe("resolveRunExecution", () => {
   beforeEach(() => fs.rmSync(TEST_USER_DATA, { recursive: true, force: true }));

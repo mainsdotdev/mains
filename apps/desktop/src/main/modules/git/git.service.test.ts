@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { installTestBackendRuntime } from "../../../test/backend-runtime";
 
 // ─────────────────────────────────────────────────────────────
 // git module tests — real temporary repos, no simple-git mock.
@@ -20,15 +21,9 @@ import path from "node:path";
 // kill-switch for hung processes, not a performance target.
 vi.setConfig({ testTimeout: 30_000 });
 
-// gitService reads app.getPath("userData") for the worktrees dir and
-// app.getPath("desktop") for initRepo's default parent; point both at the
-// test sandbox.
+// gitService reads host paths for the worktrees dir and initRepo's default
+// parent; point both at the test sandbox.
 const paths = vi.hoisted(() => ({ base: "" }));
-vi.mock("electron", () => ({
-  app: {
-    getPath: (name: string) => path.join(paths.base, name),
-  },
-}));
 
 import { gitService } from "./git.service";
 import {
@@ -38,6 +33,7 @@ import {
 } from "./git-snapshot";
 
 let sandbox: string;
+let restoreRuntime: () => void;
 
 /** Run git in a repo (isolated from the user's global/system config). */
 function git(cwd: string, ...args: string[]): string {
@@ -66,9 +62,13 @@ function write(repo: string, file: string, content: string): void {
 beforeAll(() => {
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "mains-git-test-"));
   paths.base = sandbox;
+  restoreRuntime = installTestBackendRuntime({
+    getPath: (name) => path.join(paths.base, name),
+  });
 });
 
 afterAll(() => {
+  restoreRuntime();
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
