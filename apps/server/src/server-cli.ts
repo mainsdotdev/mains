@@ -62,10 +62,10 @@ function findDevelopmentWebRoot(packageRoot: string): string | undefined {
 function printHelp(): void {
   console.log(`Mains standalone server
 
-Usage: mains-server [serve] [options]
-       mains-server pair [options]
-       mains-server auth <list|revoke> [options]
-       mains-server service <action> [options]
+Usage: mains [serve] [options]
+       mains pair [options]
+       mains auth <list|revoke> [options]
+       mains service <action> [options]
        npm run serve -- [options]  (development)
 
   --host <address>              Bind address (default: 127.0.0.1)
@@ -79,6 +79,7 @@ Usage: mains-server [serve] [options]
   --tailscale-serve             Publish through Tailscale Serve
   --tailscale-serve-port <port> Tailscale HTTPS port (default: 443)
   --no-pairing                  Do not print a startup pairing QR
+  --version                     Show the installed Mains version
   --help                        Show this help
 
 Pair options:
@@ -240,7 +241,7 @@ async function runAuthCommand(argv: string[]): Promise<void> {
   if (action === "revoke") {
     const deviceId = argv[1];
     if (!deviceId || deviceId.startsWith("-")) {
-      throw new Error("Usage: mains-server auth revoke <device-id>");
+      throw new Error("Usage: mains auth revoke <device-id>");
     }
     const { admin } = resolveAdminClient(parsePairCliOptions(argv.slice(2)));
     await revokePairedDevice(admin, deviceId);
@@ -251,6 +252,10 @@ async function runAuthCommand(argv: string[]): Promise<void> {
 }
 
 export async function runServerCli(argv = process.argv.slice(2)): Promise<void> {
+  if (argv.includes("--version") || argv.includes("-v")) {
+    console.log(readAppVersion(findPackageRoot(__dirname)));
+    return;
+  }
   if (argv.includes("--help") || argv.includes("-h") || argv[0] === "help") {
     printHelp();
     return;

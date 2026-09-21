@@ -21,7 +21,7 @@ function options(overrides: Partial<CliOptions> = {}): CliOptions {
 
 const definition = {
   nodePath: "/opt/node/bin/node",
-  scriptPath: "/opt/mains/bin/mains-server.cjs",
+  scriptPath: "/opt/mains/bin/mains.cjs",
   homeDir: "/Users/test",
   pathEnv: "/opt/homebrew/bin:/usr/bin:/bin",
 };

@@ -97,7 +97,7 @@ host machine. Node.js 22.12+ is required.
 
 ```bash
 npm install --global https://github.com/mainsdotdev/mains/releases/latest/download/mains-server.tgz
-mains-server
+mains serve
 ```
 
 The first run creates a persistent full-access owner token. To connect a phone
@@ -105,19 +105,19 @@ on the same trusted network, expose private interfaces and scan the printed,
 five-minute pairing QR:
 
 ```bash
-mains-server --lan
+mains serve --lan
 ```
 
 The phone exchanges that one-time code for its own revocable device token. Use
-`mains-server pair` for another link and `mains-server auth list|revoke` to
+`mains pair` for another link and `mains auth list|revoke` to
 manage access without restarting the backend.
 
-For remote access, use `mains-server --tailscale-serve`, or keep the default
+For remote access, use `mains serve --tailscale-serve`, or keep the default
 loopback bind and use **Settings → Mains Connect → SSH** from the desktop app.
 The standalone server can stay available without Electron or an open terminal:
 
 ```bash
-mains-server service install --tailscale-serve
+mains service install --tailscale-serve
 ```
 
 This installs a macOS LaunchAgent or Linux systemd user service. Direct public

@@ -4,6 +4,17 @@ The standalone Mains backend and browser UI. This app owns the Node entrypoint,
 CLI, distributable npm archive, and server release checks; it never imports
 Electron.
 
+Install a packaged release once, then use the product CLI without npm's
+argument separator:
+
+```bash
+npm install --global ./dist/mains-server.tgz
+mains serve --lan --port 8787
+```
+
+`mains-server` remains a compatibility alias. The commands below are the
+source-development equivalents and rebuild before starting.
+
 ```bash
 npm --prefix ../desktop install
 npm install
