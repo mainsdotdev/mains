@@ -173,6 +173,18 @@ describe("WsTransport", () => {
     expect(scheduled).toHaveLength(0);
   });
 
+  it("can enable reconnect after a verified preflight connection", () => {
+    const { transport, sockets, scheduled } = harness({ reconnect: false });
+    transport.connect();
+    sockets[0].open();
+
+    transport.enableReconnect();
+    sockets[0].serverClose();
+
+    expect(transport.status()).toBe("reconnecting");
+    expect(scheduled).toHaveLength(1);
+  });
+
   it("disposes: closes the socket, goes offline, rejects further invokes", async () => {
     const { transport, sockets } = harness();
     transport.connect();

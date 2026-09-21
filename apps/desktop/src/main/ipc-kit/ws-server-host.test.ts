@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { startWsHost, type WsHost } from "./ws-server-host";
@@ -125,5 +128,37 @@ describe("startWsHost HTTP image proxy", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("content-security-policy")).toContain("sandbox");
     expect(fetchProxiedImage).toHaveBeenCalledWith("https://example.com/a.png");
+  });
+});
+
+describe("startWsHost static web UI", () => {
+  let host: WsHost | null = null;
+  let webRoot: string | null = null;
+
+  afterEach(async () => {
+    if (host) await host.close();
+    host = null;
+    if (webRoot) fs.rmSync(webRoot, { recursive: true, force: true });
+    webRoot = null;
+  });
+
+  it("serves assets when the web root is a relative path", async () => {
+    webRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mains-web-root-"));
+    fs.mkdirSync(path.join(webRoot, "assets"));
+    fs.writeFileSync(path.join(webRoot, "index.html"), "<main>Mains</main>");
+    fs.writeFileSync(path.join(webRoot, "assets", "app.js"), "export const ok = true;");
+
+    host = await startWsHost({
+      port: 0,
+      host: "127.0.0.1",
+      token: TOKEN,
+      webRoot: path.relative(process.cwd(), webRoot),
+    });
+
+    const response = await fetch(
+      `http://127.0.0.1:${host.port}/assets/app.js`,
+    );
+    expect(response.headers.get("content-type")).toContain("text/javascript");
+    expect(await response.text()).toBe("export const ok = true;");
   });
 });

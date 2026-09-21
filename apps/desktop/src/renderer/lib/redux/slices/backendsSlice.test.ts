@@ -73,7 +73,19 @@ describe("backendsSlice", () => {
   it("records the last connected time", () => {
     let state = reducer(undefined, addBackend({ label: "A", wsUrl: "ws://a" }));
     const id = state.saved[0].id;
-    state = reducer(state, markConnected({ id, at: 1_700_000_000_000 }));
+    const descriptor = {
+      backendId: "backend-a",
+      name: "devbox",
+      appVersion: "0.11.0",
+      protocolVersion: 1,
+      capabilities: ["runs"],
+      serverTime: "2026-09-21T10:00:00.000Z",
+    };
+    state = reducer(
+      state,
+      markConnected({ id, at: 1_700_000_000_000, descriptor }),
+    );
     expect(state.saved[0].lastConnectedAt).toBe(1_700_000_000_000);
+    expect(state.saved[0].lastDescriptor).toEqual(descriptor);
   });
 });

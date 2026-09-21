@@ -20,7 +20,9 @@ export function resolveWebRoot(explicit?: string | null): string | null {
         path.join(process.cwd(), ".vite", "renderer"),
         path.join(appPath, ".vite", "renderer"),
       ];
-  return (
-    candidates.find((dir) => existsSync(path.join(dir, "index.html"))) ?? null
-  );
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (existsSync(path.join(resolved, "index.html"))) return resolved;
+  }
+  return null;
 }

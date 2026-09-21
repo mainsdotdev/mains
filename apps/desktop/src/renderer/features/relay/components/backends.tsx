@@ -220,6 +220,8 @@ function AddBackendForm({
 
       <Input
         value={token}
+        type="password"
+        autoComplete="off"
         onChange={(e) => setToken(e.target.value)}
         placeholder="Pairing token"
       />
@@ -249,7 +251,8 @@ function BackendRow({
   backend,
   isActive,
   status,
-  busy,
+  connecting,
+  controlsDisabled,
   onConnect,
   onDisconnect,
   onRename,
@@ -258,7 +261,8 @@ function BackendRow({
   backend: KnownBackend;
   isActive: boolean;
   status: TransportStatus;
-  busy: boolean;
+  connecting: boolean;
+  controlsDisabled: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
   onRename: (label: string) => void;
@@ -301,10 +305,21 @@ function BackendRow({
           </div>
         )}
         <Caption className="truncate block">{backendSubtitle(backend)}</Caption>
+        {backend.lastDescriptor && (
+          <Caption className="truncate block">
+            Last verified: {backend.lastDescriptor.name} · Mains v
+            {backend.lastDescriptor.appVersion}
+          </Caption>
+        )}
       </div>
       <div className="shrink-0 flex items-center gap-1">
         {isActive ? (
-          <Button type="button" variant="ghost" onClick={onDisconnect} disabled={busy}>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onDisconnect}
+            disabled={controlsDisabled}
+          >
             Disconnect
           </Button>
         ) : (
@@ -312,16 +327,26 @@ function BackendRow({
             type="button"
             variant="ghost"
             onClick={onConnect}
-            disabled={busy}
-            isLoading={busy}
+            disabled={controlsDisabled}
+            isLoading={connecting}
           >
             Connect
           </Button>
         )}
-        <Button type="button" variant="ghost" onClick={() => setEditing(true)}>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => setEditing(true)}
+          disabled={controlsDisabled}
+        >
           Rename
         </Button>
-        <Button type="button" variant="ghost" onClick={onRemove}>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={onRemove}
+          disabled={controlsDisabled}
+        >
           Remove
         </Button>
       </div>
@@ -346,8 +371,8 @@ export default function BackendsSettings() {
   const handleConnect = async (id: string) => {
     setBusyId(id);
     try {
-      await connect(id);
-      toast.success("Connected to remote backend.");
+      const descriptor = await connect(id);
+      toast.success(`Connected to ${descriptor.name}.`);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to connect.",
@@ -370,26 +395,26 @@ export default function BackendsSettings() {
   // page; adding/switching backends is a desktop-app concern.
   if (isWeb) {
     return (
-      <SettingsPageShell title="Remote Backends">
+      <SettingsPageShell title="Mains Connect">
         <Muted>
-          Web client — connected over WebSocket to the backend that served this
-          page (<code>{window.location.host}</code>). Adding or switching backends
-          is managed from the desktop app.
+          This web client is connected to the Mains server at{" "}
+          <code>{window.location.host}</code>. Add or switch servers from the
+          desktop app.
         </Muted>
       </SettingsPageShell>
     );
   }
 
   return (
-    <SettingsPageShell title="Relay">
+    <SettingsPageShell title="Mains Connect">
       <Muted className="mb-6 block">
-        Control a mains on another machine, or expose this one for another
-        device to drive.
+        Run on this machine or connect to Mains running somewhere else. You can
+        also make this machine available to your other devices.
       </Muted>
 
       <LocalBackendShare />
 
-      <SettingsSection title="Clients">
+      <SettingsSection title="Run on">
         <div className="flex items-center justify-between py-3 gap-4">
           <div className="min-w-0 flex-1 flex items-center gap-2">
             {!isRemote && <StatusDot status="connected" />}
@@ -420,7 +445,8 @@ export default function BackendsSettings() {
               backend={backend}
               isActive={backend.id === activeBackendId}
               status={status}
-              busy={busyId === backend.id}
+              connecting={busyId === backend.id}
+              controlsDisabled={busyId !== null}
               onConnect={() => handleConnect(backend.id)}
               onDisconnect={handleDisconnect}
               onRename={(label) => rename(backend.id, label)}
@@ -430,7 +456,7 @@ export default function BackendsSettings() {
         ))}
       </SettingsSection>
 
-      <SettingsSection title="Add">
+      <SettingsSection title="Add a remote backend">
         <AddBackendForm onAdd={add} />
       </SettingsSection>
 

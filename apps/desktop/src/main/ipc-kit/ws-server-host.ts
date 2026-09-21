@@ -254,14 +254,20 @@ const CONTENT_TYPES: Record<string, string> = {
  * Path traversal is prevented by resolving within `webRoot`.
  */
 function createStaticHandler(webRoot: string) {
-  const indexPath = path.join(webRoot, "index.html");
+  const root = path.resolve(webRoot);
+  const indexPath = path.join(root, "index.html");
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       const urlPath = decodeURIComponent((req.url ?? "/").split("?")[0]);
-      const candidate = path.join(webRoot, urlPath);
-      const resolved = path.normalize(candidate);
+      const resolved = path.resolve(root, `.${urlPath}`);
+      const relative = path.relative(root, resolved);
+      const isInsideRoot =
+        relative === "" ||
+        (relative !== ".." &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative));
       const isAsset =
-        resolved.startsWith(webRoot) &&
+        isInsideRoot &&
         existsSync(resolved) &&
         statSync(resolved).isFile();
       const filePath = isAsset ? resolved : indexPath;
@@ -298,9 +304,12 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     );
   }
 
+  const requestedWebRoot = options.webRoot
+    ? path.resolve(options.webRoot)
+    : null;
   const webRoot =
-    options.webRoot && existsSync(path.join(options.webRoot, "index.html"))
-      ? options.webRoot
+    requestedWebRoot && existsSync(path.join(requestedWebRoot, "index.html"))
+      ? requestedWebRoot
       : null;
   const staticHandler = webRoot ? createStaticHandler(webRoot) : null;
 
