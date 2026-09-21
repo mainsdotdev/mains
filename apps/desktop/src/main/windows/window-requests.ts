@@ -1,7 +1,7 @@
 import { ipcMain } from "electron";
-import { CHANNELS } from "../../shared/ipc-kit/channels";
+import { CHANNELS } from "@mains/contracts/channels";
 import type { WindowRequest } from "../../shared/window-request";
-import { handle } from "../ipc-kit/handle";
+import { handle } from "@mains/backend/ipc-kit";
 import { reopenMainWindow } from "./mainWindow";
 
 /** A click only counts if the window asks for it soon after. */

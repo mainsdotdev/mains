@@ -19,7 +19,7 @@ The two constructors for a **ServiceResponse**, called almost exclusively by **h
 _Avoid_: success(), error(), wrap(); inline `{ success: false, error }` literals.
 
 **handle**:
-The wrapper at the IPC seam (`src/main/ipc-kit/handle.ts`) that turns a throw-style service function into an `ipcMain.handle` handler: resolved value → `ok(data)`, throw → log + `fail(error.message)`. Every `*.ipc.ts` handler uses it except the handful that need the Electron event/invoke context (native dialog, terminal streaming, imageProxy, localBackend), which stay hand-written. **Raw-message policy**: the thrown error's message travels to the renderer as-is (local desktop app — debuggability beats leak risk); services throw explicit `Error("Workspace not found")`-style messages where the user should read them.
+The wrapper at the IPC seam (`packages/backend/src/ipc-kit/handle.ts`) that turns a throw-style service function into an `ipcMain.handle` handler: resolved value → `ok(data)`, throw → log + `fail(error.message)`. Every backend `*.ipc.ts` handler uses it except the handful that need the Electron event/invoke context (native dialog, terminal streaming, imageProxy protocol, localBackend), which stay in the desktop host. **Raw-message policy**: the thrown error's message travels to the renderer as-is (local desktop app — debuggability beats leak risk); services throw explicit `Error("Workspace not found")`-style messages where the user should read them.
 _Avoid_: try/catch-to-envelope inside service methods; mapping error messages to generic strings inside services.
 
 **absence rule**:
@@ -39,7 +39,7 @@ _Avoid_: expect-success, ok-or-throw, getData; re-introducing an unwrap helper o
 
 ## Module layout
 
-Each `src/main/modules/{name}/` follows a 6-file layout: `ipc.ts → service.ts → repo.ts → dto.ts → validation.ts → index.ts`. Earlier versions had a `controller.ts` between `ipc.ts` and `service.ts` — it was a pure pass-through across all 26 modules and has been removed. `ipc.ts` calls `service` directly; argument unpacking lives at the ipc call site when needed.
+Each `packages/backend/src/modules/{name}/` domain follows a 6-file layout: `ipc.ts → service.ts → repo.ts → dto.ts → validation.ts → index.ts`. Earlier versions had a `controller.ts` between `ipc.ts` and `service.ts` — it was a pure pass-through across all 26 modules and has been removed. `ipc.ts` calls `service` directly; argument unpacking lives at the ipc call site when needed. Electron-only adapters remain under `apps/desktop/src/main/modules/` and consume the package's public barrels.
 
 A module folder may own **more than one table**. The 6-file layout is per module, not per table. When several tables form one conceptual aggregate (see **workspace** below), they live in one folder under the flat 6-file shape, with each layer's file containing all tables' code.
 
@@ -47,7 +47,7 @@ A module folder may own **more than one table**. The 6-file layout is per module
 _Avoid_: re-exporting a repo from `index.ts`; importing another module's repo when a service method or named barrel function exists.
 
 **Seed runner**:
-Initial data seeding is *not* a domain module. It lives in `src/main/db/seeds/` as a versioned, idempotent runner: each `v{N}.ts` exports `run(db)`, the runner tracks `appSettings.seedVersion`, and `db/client.ts` invokes `runSeeds(db)` automatically at database init. The renderer plays no part. There is intentionally no `src/main/modules/seed/` — an earlier IPC-driven seed module was vestigial and was removed. Fixtures live in `src/main/db/data/`; v1.ts imports them.
+Initial data seeding is *not* a domain module. It lives in `packages/backend/src/db/seeds/` as a versioned, idempotent runner: each `v{N}.ts` exports `run(db)`, the runner tracks `appSettings.seedVersion`, and `db/client.ts` invokes `runSeeds(db)` automatically at database init. The renderer plays no part. There is intentionally no `modules/seed/` — an earlier IPC-driven seed module was vestigial and was removed. Fixtures live in `packages/backend/src/db/data/`; v1.ts imports them.
 _Avoid_: re-introducing an `api.seed.*` IPC surface, putting seed code under `db/queries/` (the directory no longer exists), or routing seeding through a domain module. See ADR-0003.
 
 ## Aggregate modules
@@ -106,7 +106,7 @@ Three neighbouring modules are easy to confuse, so the split is by *direction*:
 _Avoid_: t3code's vocabulary (`environmentId`, pairing grant, device session) — see `docs/design/mobile-app.md` §10.1 for the mapping; a `pairing` module (it was folded in: pairing always travelled with `describe`); moving identity into `localBackend` (headless `serve` needs it, and the trust boundary differs); registering `backend:describe` on raw `ipcMain` (it must be reachable over the wire).
 
 **backend runtime**:
-The small host-capability seam in `src/main/runtime/backend-runtime.ts`. Backend
+The small host-capability seam in `packages/backend/src/runtime/backend-runtime.ts`. Backend
 modules ask it for data paths, app metadata, credential encryption, URL opening,
 sleep inhibition and optional image previewing; they never import Electron for
 those capabilities. The desktop composition root installs the Electron adapter,
@@ -118,15 +118,21 @@ an Electron-shaped fake to the Node entry; exporting an Electron adapter through
 a barrel used by backend modules.
 
 **standalone server**:
-The plain-Node backend composed by `standalone-server.ts` and `server-cli.ts`.
-It owns one SQLite database, handler registry, schedulers, provider processes,
-terminals and WebSocket host for its lifetime, then drains them in reverse order
-on shutdown. Its default `userData` is separate from Electron and its credentials
-use a server-local AES-GCM key. One backend process owns one data directory;
-Electron and Node must not concurrently open the same Mains database.
+The plain-Node backend composed by `apps/server/src/standalone-server.ts` and
+`apps/server/src/server-cli.ts`. The application owns one SQLite database,
+handler registry, schedulers, provider processes, terminals and WebSocket host
+for its lifetime, then drains them in reverse order on shutdown. Its default
+`userData` is separate from Electron and its credentials use a server-local
+AES-GCM key. The Electron-free implementation lives in `packages/backend` and
+is consumed by both hosts through `@mains/backend`; server-only entry, CLI,
+build and packaging code live in `apps/server`, while native UI adapters live in
+`apps/desktop`. One backend process
+owns one data directory; Electron and Node must not concurrently open the same
+Mains database.
 _Avoid_: treating standalone as an Electron `--serve` alias; pointing it at the
 desktop data directory before a credential migration exists; starting another
-server against the same state directory.
+server against the same state directory; adding server-only composition code
+back under `apps/desktop`.
 
 ## Operations
 
@@ -154,7 +160,7 @@ The `git` module is **main-process-internal**: no IPC channels, no preload names
 _Avoid_: re-adding `git:*` IPC channels or a preload `api.git` namespace.
 
 **throw-style**:
-`gitService` methods return plain `T` and throw on failure — no **ServiceResponse** inside the service. The envelope is constructed only at the IPC seam by the shared `handle()` wrapper in `src/main/ipc-kit/` (catches, logs, normalizes the message, returns `fail(...)`; wraps the return in `ok(...)`). git pilots this convention; other modules still build envelopes in their services and migrate later. Internal callers (`gitFlow`, `workspace`, `runs`, `projects`) consume plain values — no `.success` unwrapping.
+`gitService` methods return plain `T` and throw on failure — no **ServiceResponse** inside the service. The envelope is constructed only at the IPC seam by the shared `handle()` wrapper in `packages/backend/src/ipc-kit/` (catches, logs, normalizes the message, returns `fail(...)`; wraps the return in `ok(...)`). Internal callers (`gitFlow`, `workspace`, `runs`, `projects`) consume plain values — no `.success` unwrapping.
 _Avoid_: returning ServiceResponse from `gitService` methods; hand-rolled unwrap helpers over git results (`expectOk`, `readOriginUrl`-style wrappers).
 
 **DiffSnapshot / captureDiffSnapshot**:

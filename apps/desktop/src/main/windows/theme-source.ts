@@ -1,8 +1,8 @@
 import { app, ipcMain, nativeTheme } from "electron";
 import fs from "fs";
 import path from "path";
-import { CHANNELS } from "../../shared/ipc-kit/channels";
-import { handle } from "../ipc-kit/handle";
+import { CHANNELS } from "@mains/contracts/channels";
+import { handle } from "@mains/backend/ipc-kit";
 
 /**
  * The window's theme, as macOS sees it. Mains paints its own content from the

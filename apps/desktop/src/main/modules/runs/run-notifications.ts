@@ -3,19 +3,15 @@ import { requestWindow } from "../../windows";
 import {
   describeApprovalNotification,
   responseFromNotification,
-  type NotificationInteraction,
-} from "./approval-notification";
-import { runsRepo } from "./runs.repo";
-import {
+  runsService,
   formatRunLabel,
+  type NotificationInteraction,
   type RunResponse,
   type ToolApprovalRequest,
   type ToolApprovalResponse,
-} from "./runs.dto";
-import type {
   ApprovalNotificationHandle,
   RunNotificationSink,
-} from "./run-notification-sink";
+} from "@mains/backend/modules/runs";
 
 /**
  * The run's OS notifications: a pending request (answerable from the banner
@@ -34,7 +30,7 @@ const retainedFinished: Notification[] = [];
 
 async function findRun(runId: string): Promise<RunResponse | null> {
   try {
-    return await runsRepo.findRunById(runId);
+    return await runsService.getRunById(runId);
   } catch {
     return null;
   }

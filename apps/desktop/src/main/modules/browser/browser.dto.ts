@@ -2,7 +2,7 @@
 // Browser DTOs
 // ─────────────────────────────────────────────────────────────
 
-export type { ServiceResponse } from "../../../shared/ipc-kit/service-response";
+export type { ServiceResponse } from "@mains/contracts/service-response";
 
 export interface BrowserBounds {
   x: number;

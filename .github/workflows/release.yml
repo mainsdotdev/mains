@@ -9,7 +9,7 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
-# The desktop app lives in apps/desktop; every npm command runs there.
+# Desktop jobs run in apps/desktop; the standalone job overrides this default.
 defaults:
   run:
     working-directory: apps/desktop
@@ -58,11 +58,16 @@ jobs:
       # electron-forge's GitHub publisher names the release from package.json
       # (`v${version}`), not from the pushed tag. When the two disagree, CI
       # quietly creates a release for a version nobody tagged.
-      - name: Ensure package.json matches the tag
+      - name: Ensure package versions match the tag
         run: |
           VERSION=$(node -p "require('./package.json').version")
           if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::package.json is $VERSION but the tag is $GITHUB_REF_NAME."
+            echo "::error::apps/desktop/package.json is $VERSION but the tag is $GITHUB_REF_NAME."
+            exit 1
+          fi
+          SERVER_VERSION=$(node -p "require('../server/package.json').version")
+          if [ "v$SERVER_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::apps/server/package.json is $SERVER_VERSION but the tag is $GITHUB_REF_NAME."
             exit 1
           fi
 
@@ -70,7 +75,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            packages/backend/package-lock.json
 
       - run: npm ci
 
@@ -130,6 +137,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    defaults:
+      run:
+        working-directory: apps/server
     steps:
       - uses: actions/checkout@v5
 
@@ -137,13 +147,28 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            apps/server/package-lock.json
+            packages/backend/package-lock.json
 
+      - name: Install desktop web dependencies
+        working-directory: apps/desktop
+        run: npm ci
       - run: npm ci
-      - run: npm run package:server
-      - run: npm run smoke:server-package
+
+      - name: Ensure server package.json matches the tag
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::apps/server/package.json is $VERSION but the tag is $GITHUB_REF_NAME."
+            exit 1
+          fi
+
+      - run: npm run package
+      - run: npm run smoke:package
 
       - name: Upload standalone server assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" dist-server/*.tgz --clobber
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.tgz --clobber

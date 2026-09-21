@@ -1,15 +1,15 @@
 import { Notification } from "electron";
-import { CHANNELS } from "../../shared/ipc-kit/channels";
-import { emit } from "../ipc-kit";
+import { CHANNELS } from "@mains/contracts/channels";
+import { emit } from "@mains/backend/ipc-kit";
 import { reopenMainWindow, requestWindow } from "../windows";
-import { appSettingsService } from "../modules/appSettings";
+import { appSettingsService } from "@mains/backend/modules/appSettings";
 import { appshotsService } from "../modules/appshots";
 import {
   handleToolApprovalResponse,
   listPendingApprovals,
   responseFromNotification,
   runsService,
-} from "../modules/runs";
+} from "@mains/backend/modules/runs";
 import { openRunInWindow } from "../modules/runs/run-notifications";
 import { updatesService } from "../modules/updates";
 import type { TrayActions } from "./status-menus";

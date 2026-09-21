@@ -1,7 +1,7 @@
 import { app, BrowserWindow, nativeImage, screen, shell } from "electron";
 import path from "path";
 import fs, { existsSync } from "fs";
-import { CHANNELS } from "../../shared/ipc-kit/channels";
+import { CHANNELS } from "@mains/contracts/channels";
 import { attachCrashRecovery } from "./crash-recovery";
 
 let mainWindow: BrowserWindow | null = null;

@@ -1,5 +1,5 @@
-import { ipcMain } from "../../ipc-kit/ipc-main";
-import { handle } from "../../ipc-kit/handle";
+import { ipcMain } from "@mains/backend/ipc-kit/ipc-main";
+import { handle } from "@mains/backend/ipc-kit";
 import { browserService } from "./browser.service";
 import type {
   BrowserBounds,
@@ -19,7 +19,7 @@ import {
   BROWSER_DEVICE_WIDTH_MAX,
   BROWSER_DEVICE_WIDTH_MIN,
 } from "./browser-device";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import { CHANNELS } from "@mains/contracts/channels";
 
 function requireBounds(input: unknown): BrowserBounds {
   if (!input || typeof input !== "object") throw new Error("Invalid bounds");

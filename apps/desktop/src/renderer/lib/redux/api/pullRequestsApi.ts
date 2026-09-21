@@ -1,7 +1,7 @@
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 
-// Mirrors src/main/modules/pullRequests/sources/source.types.ts — live view
+// Mirrors packages/backend/src/modules/pullRequests/sources/source.types.ts — live view
 // models, never persisted (see CONTEXT.md: PRs are not entities).
 
 export type PrRelationship = "all" | "authored" | "review_requested" | "reviewed";

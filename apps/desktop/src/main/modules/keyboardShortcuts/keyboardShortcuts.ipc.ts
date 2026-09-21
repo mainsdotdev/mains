@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
-import { fail, ok } from "../../../shared/ipc-kit/service-response";
+import { CHANNELS } from "@mains/contracts/channels";
+import { fail, ok } from "@mains/contracts/service-response";
 import { keyboardShortcutsService } from "./keyboardShortcuts.service";
 
 function messageOf(error: unknown): string {

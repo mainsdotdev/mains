@@ -8,10 +8,10 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outputRoot = path.join(
-  repoRoot,
-  "src/main/modules/providers/adapters/codex-app-server-protocol/generated",
+  desktopRoot,
+  "../../packages/backend/src/modules/providers/adapters/codex-app-server-protocol/generated",
 );
 const codexBinary = process.env.CODEX_BINARY || "codex";
 const temporaryRoot = fs.mkdtempSync(

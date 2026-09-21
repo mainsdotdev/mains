@@ -13,7 +13,7 @@ import {
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import { CHANNELS } from "@mains/contracts/channels";
 import {
   buildInspectorScript,
   INSPECTOR_SENTINEL,

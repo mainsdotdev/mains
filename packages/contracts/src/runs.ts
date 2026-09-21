@@ -1,6 +1,7 @@
 /**
  * Run / turn / tool-call / workspace wire shapes — mirrors of the response DTOs
- * in `mains/src/main/modules/runs/runs.dto.ts` and `workspace/workspace.dto.ts`.
+ * in `packages/backend/src/modules/runs/runs.dto.ts` and
+ * `workspace/workspace.dto.ts`.
  * Only fields the phone reads are guaranteed here; anything else that arrives
  * is ignored. Dates cross the wire tagged and are revived to `Date` by the
  * codec in ws-protocol.ts.

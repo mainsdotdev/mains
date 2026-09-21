@@ -116,20 +116,39 @@ SQLite database concurrently.
 
 ## Development
 
+Desktop commands (from `apps/desktop`):
+
 ```bash
-npm start              # Dev server
-npm run serve:node     # Standalone Node backend (no Electron)
-npm run build:server   # Build .vite/server/server.cjs
-npm run start:server   # Run the built standalone backend
-npm run package:server # Build the installable server tarball
-npm run smoke:server-package # Exercise the packaged server and web UI
+npm start              # Start the Electron app
 npm run lint:fix       # Lint with auto-fix
 npm run package        # Package for current platform
 npm run make           # Create distributable
 ```
 
-The development server exposes the Mains protocol over a token-gated WebSocket.
-Pass options after `--`, for example `npm run serve:node -- --port 8787`.
+Standalone server commands (from `apps/server`; packaging also needs
+`apps/desktop` dependencies installed):
+
+```bash
+npm --prefix ../desktop install
+npm install
+npm run serve -- --port 8787  # Build and run without Electron
+npm run package               # Build dist/mains-server.tgz
+npm run smoke:package         # Clean-install and exercise WS + HTTP
+```
+
+The standalone development server exposes the Mains protocol over a
+token-gated WebSocket. Its executable composition root stays in `apps/server`;
+the Electron-free database, domain services, provider runtimes, and transport
+implementation shared with desktop live in `packages/backend`.
+
+Shared backend checks (from `packages/backend`):
+
+```bash
+npm install
+npm run typecheck
+npm run lint
+npm test
+```
 
 ### Database
 

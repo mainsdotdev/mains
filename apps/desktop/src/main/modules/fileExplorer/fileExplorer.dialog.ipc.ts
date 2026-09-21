@@ -1,9 +1,9 @@
 import path from "node:path";
 import { BrowserWindow, dialog } from "electron";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
-import { fail, ok } from "../../../shared/ipc-kit/service-response";
-import { ipcMain } from "../../ipc-kit/ipc-main";
-import { fileExplorerService } from "./fileExplorer.service";
+import { CHANNELS } from "@mains/contracts/channels";
+import { fail, ok } from "@mains/contracts/service-response";
+import { ipcMain } from "@mains/backend/ipc-kit/ipc-main";
+import { fileExplorerService } from "@mains/backend/modules/fileExplorer";
 
 /** Desktop-only Save As dialog. It is intentionally absent from the server. */
 export function registerFileExplorerDialogIpc(): void {

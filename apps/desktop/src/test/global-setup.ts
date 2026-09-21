@@ -3,7 +3,7 @@
  * that are unavailable in the Vitest Node environment.
  */
 import { vi } from "vitest";
-import { configureBackendRuntime } from "../main/runtime/backend-runtime";
+import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime";
 
 const activePowerInhibitors = new Set<number>();
 let nextPowerInhibitorId = 1;

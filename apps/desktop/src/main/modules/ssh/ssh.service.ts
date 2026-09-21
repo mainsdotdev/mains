@@ -4,7 +4,7 @@ import { request as httpRequest } from "http";
 import { readFile } from "fs/promises";
 import { homedir } from "os";
 import path from "path";
-import { generateToken } from "../../ipc-kit/ws-auth";
+import { generateToken } from "@mains/backend/ipc-kit/ws-auth";
 
 /**
  * SSH access for remote backends. The `ssh` client runs on the LOCAL machine and

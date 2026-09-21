@@ -1,8 +1,8 @@
 import { BrowserWindow, dialog } from "electron";
 import type { OpenDialogOptions } from "electron";
-import { ok } from "../../../shared/ipc-kit/service-response";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
-import { ipcMain } from "../../ipc-kit/ipc-main";
+import { ok } from "@mains/contracts/service-response";
+import { CHANNELS } from "@mains/contracts/channels";
+import { ipcMain } from "@mains/backend/ipc-kit/ipc-main";
 
 /** Desktop-only directory picker. It is intentionally absent from the server. */
 export function registerWorkspaceDialogIpc(): void {

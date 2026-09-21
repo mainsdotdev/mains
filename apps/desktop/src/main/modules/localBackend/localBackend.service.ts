@@ -1,19 +1,22 @@
 import { networkInterfaces } from "node:os";
 import { powerMonitor, powerSaveBlocker } from "electron";
-import { emit } from "../../ipc-kit";
-import { startWsHost, type WsHost } from "../../ipc-kit/ws-server-host";
-import { generateToken } from "../../ipc-kit/ws-auth";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
-import { resolveWebRoot } from "../../web-root";
-import { imageProxyService } from "../imageProxy/imageProxy.service";
-import { serveLocalImage, serveLocalDocument } from "../imageProxy";
-import { tailscaleService } from "../tailscale";
-import { appSettingsService } from "../appSettings";
+import { emit } from "@mains/backend/ipc-kit";
+import { startWsHost, type WsHost } from "@mains/backend/ipc-kit/ws-server-host";
+import { generateToken } from "@mains/backend/ipc-kit/ws-auth";
+import { CHANNELS } from "@mains/contracts/channels";
+import { resolveWebRoot } from "@mains/backend/web-root";
+import {
+  imageProxyService,
+  serveLocalImage,
+  serveLocalDocument,
+} from "@mains/backend/modules/imageProxy";
+import { tailscaleService } from "@mains/backend/modules/tailscale";
+import { appSettingsService } from "@mains/backend/modules/appSettings";
 import {
   backendService,
   type PairedDevice,
   type PairingCode,
-} from "../backend";
+} from "@mains/backend/modules/backend";
 import { shouldKeepRemoteHostAwake } from "./localBackend.sleep";
 
 /**

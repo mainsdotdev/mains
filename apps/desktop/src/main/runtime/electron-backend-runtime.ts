@@ -5,7 +5,7 @@ import {
   safeStorage,
   shell,
 } from "electron";
-import type { BackendRuntime } from "./backend-runtime";
+import type { BackendRuntime } from "@mains/backend/runtime/backend-runtime";
 
 /** Electron host adapter used by the desktop app and its legacy --serve mode. */
 export function createElectronBackendRuntime(): BackendRuntime {

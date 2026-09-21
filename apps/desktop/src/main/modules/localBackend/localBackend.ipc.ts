@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
-import { ok, fail } from "../../../shared/ipc-kit/service-response";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import { ok, fail } from "@mains/contracts/service-response";
+import { CHANNELS } from "@mains/contracts/channels";
 import { localBackendService } from "./localBackend.service";
 
 // Registered via the REAL electron ipcMain (NOT the `ipcMain` shim) so these

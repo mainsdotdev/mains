@@ -59,7 +59,7 @@ export interface SelectedRepo {
   metadata: any;
 }
 
-// Mirrors src/main/modules/connections/github-device-flow.ts
+// Mirrors packages/backend/src/modules/connections/github-device-flow.ts
 export interface GitHubDeviceAuthorization {
   deviceCode: string;
   userCode: string;

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to coding agents (Codex CLI, Claude Code, Copilot CLI, Cursor) when working with code in this repository.
+This file provides guidance to coding agents working with code in this repository. It is kept byte-identical to its companion instruction file apart from the heading — update both together.
 
 `CONTEXT.md` is the companion document: it holds the shared domain vocabulary (ServiceResponse, handle, aggregate modules, provider adapters, provider variants, transcript rows, run cache) with explicit _Avoid_ rules. Read it before making architectural changes — this file describes *what exists*, CONTEXT.md describes *what the words mean and which shapes are forbidden*.
 
@@ -52,7 +52,10 @@ npm run hard-reset      # Full reset (reset + nuke node_modules + reinstall)
 npm run licenses:generate  # Regenerate THIRD-PARTY-NOTICES.txt
 ```
 
-Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the `test*` scripts handle this automatically, but running `vitest` directly will fail if you skip that step (use `npm rebuild better-sqlite3` first). Tests live next to the file under test as `*.test.ts`; vitest config is `vitest.config.mts`, shared fixtures/factories live in `src/test/`.
+The standalone Node application, CLI, packaging, and server release checks live
+in `../server`. Keep server-only composition code out of this Electron app.
+
+Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the `test*` scripts handle this automatically, but running `vitest` directly will fail if you skip that step (use `npm rebuild better-sqlite3` first). Desktop-adapter tests live next to the file under test; backend tests and shared fixtures/factories live in `../../packages/backend`.
 
 ## Architecture Overview
 
@@ -62,13 +65,14 @@ Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). C
 
 **Main Process** (`src/main/`)
 - Entry point: `src/main/index.ts` — initializes database, registers IPC handlers, registers the BrowserWindow event sink, creates the window
-- Database client: `src/main/db/client.ts` — singleton with better-sqlite3, Drizzle ORM; runs migrations + seeds at init
-- Modules: `src/main/modules/` — domain modules with layered architecture
-- IPC plumbing: `src/main/ipc-kit/` — see **IPC Transport** below
+- Database client: `../../packages/backend/src/db/client.ts` — singleton with better-sqlite3, Drizzle ORM; runs migrations + seeds at init
+- Backend: `../../packages/backend/` — Electron-free database, domains, provider runtimes, IPC/WebSocket transport, and serve lifecycle
+- Desktop adapters: `src/main/modules/` — Electron-only browser, dialogs, protocols, notifications, updates, capture, and remote-host integrations
+- IPC plumbing: `../../packages/backend/src/ipc-kit/` — see **IPC Transport** below
 
 **Preload** (`src/preload/index.ts`)
 - Exposes `window.api` object with typed IPC methods
-- Namespaced by domain: `api.account`, `api.app`, `api.appSettings`, `api.automations`, `api.backendAuth`, `api.browser`, `api.connections`, `api.documents`, `api.entities`, `api.fileExplorer`, `api.gitFlow`, `api.guards`, `api.imageProxy`, `api.issues`, `api.localBackend`, `api.platform`, `api.projects`, `api.providers`, `api.pullRequests`, `api.pulse`, `api.runs`, `api.runArtifacts`, `api.runContext`, `api.runTurns`, `api.shell`, `api.signals`, `api.space`, `api.ssh`, `api.stats`, `api.sync`, `api.tasks`, `api.terminal`, `api.toolCalls`, `api.updates`, `api.workspace`
+- Namespaced by domain: `api.account`, `api.app`, `api.appSettings`, `api.automations`, `api.browser`, `api.connections`, `api.documents`, `api.entities`, `api.fileExplorer`, `api.gitFlow`, `api.guards`, `api.imageProxy`, `api.issues`, `api.localBackend`, `api.platform`, `api.projects`, `api.providers`, `api.pullRequests`, `api.pulse`, `api.remoteBackends`, `api.runs`, `api.runArtifacts`, `api.runContext`, `api.runTurns`, `api.shell`, `api.signals`, `api.space`, `api.ssh`, `api.stats`, `api.sync`, `api.tasks`, `api.terminal`, `api.toolCalls`, `api.updates`, `api.workspace`
 - The `workspace` namespace is an aggregate — it covers workspace lifecycle plus reviews, review findings, diffs, and activity. Connection credentials/states are folded into `api.connections`; project resources and linked issues into `api.projects`.
 - **There is no `api.git`.** The `git` module is main-process-internal (see **Git Module**); renderer git effects go through `api.workspace.*`, `api.gitFlow.*`, and `projects:listBranches`.
 - After modifying preload, restart dev server to pick up changes
@@ -80,7 +84,7 @@ Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). C
 - The space's `mode` column (`developer`, `work`, `chat` — see `@mains/contracts/modes`) selects the UI shape via `src/renderer/lib/mode-config.ts` (`MODE_CONFIGS`, read through `useModeConfig`): which route `/` redirects to, plus per-mode capability flags (`showGitActions`, `showSources`, `showDeliverables`, `showTerminal`, `showChangesTab`, `showPermissionControls`, `showPlanControls`, `showGoalControls`). Developer shows the coding surface plus run sources; work replaces git with sources and deliverables; chat hides the session panel and every write-adjacent affordance. The agent-side half of a mode is the **mode harness** (`src/shared/mode-harness.ts`, see Provider Adapters)
 - Route table lives in `src/renderer/components/layout/main/main-routes.tsx`; page components in `src/renderer/routes/`
 
-### IPC Transport (`src/main/ipc-kit/`, `@mains/contracts`)
+### IPC Transport (`../../packages/backend/src/ipc-kit/`, `@mains/contracts`)
 
 The wire-level pieces — the channel map, the WS protocol, `ServiceResponse`, provider ids, modes, effort levels, run settings — live in the shared `@mains/contracts` package (`packages/contracts/src`, plain TS source linked via `file:`); `src/shared` keeps re-export shims at the old paths, so existing imports still resolve. New code imports from `@mains/contracts/...`.
 
@@ -94,9 +98,9 @@ The IPC layer is transport-agnostic so the same handlers can serve a local rende
 
 See `docs/design/remote-backend.md` for the full design.
 
-### Module Architecture (`src/main/modules/`)
+### Module Architecture (`../../packages/backend/src/modules/`)
 
-Each domain module follows a layered pattern (see `src/main/modules/account/` as reference):
+Each domain module follows a layered pattern (see `../../packages/backend/src/modules/account/` as reference):
 
 | File | Role |
 |------|------|
@@ -115,9 +119,9 @@ Each domain module follows a layered pattern (see `src/main/modules/account/` as
 
 **Cross-module access** goes through service methods or named barrel functions (`logWorkspaceActivity`, `recordWorkspaceDiff`, `getConnectionWithSecrets`, `getIssuesByResourceIds`) — never another module's repo.
 
-All modules: `account`, `appSettings`, `automations`, `backendAuth`, `browser`, `connections`, `entities`, `fileExplorer`, `git`, `gitFlow`, `guards`, `imageProxy`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `runs`, `space`, `ssh`, `stats`, `sync`, `tailscale`, `terminal`, `tools`, `updates`, `workspace`
+Shared backend domains: `account`, `appSettings`, `automations`, `backend`, `collections`, `connections`, `entities`, `fileExplorer`, `git`, `gitFlow`, `guards`, `imageProxy`, `projects`, `providers`, `pullRequests`, `pulse`, `runs`, `search`, `space`, `stats`, `sync`, `tailscale`, `terminal`, `tools`, `workspace`. Desktop-only adapters and integrations remain under `src/main/modules/`: `appshots`, `browser`, `keyboardShortcuts`, `localBackend`, `mcpApps`, `remoteBackends`, `ssh`, and `updates`, plus the native halves of split domains.
 
-Not every module has all six files. Modules that own no tables skip `repo`/`dto` (`guards`, `browser`, `terminal`, `ssh`, `backendAuth`, `localBackend`, `imageProxy`, `gitFlow`, `pullRequests`), and `git` / `tailscale` have no `ipc.ts` at all (no IPC surface). When adding a module, match a sibling with similar responsibilities rather than blindly copying `account/`.
+Not every domain has all six files. Domains that own no tables skip `repo`/`dto`, and `git` / `tailscale` have no `ipc.ts` at all. When adding a domain, match a sibling with similar responsibilities rather than blindly copying `account/`; keep native host adapters out of the backend package.
 
 **Aggregate modules** — one folder owns several tables (details in CONTEXT.md):
 - `workspace` → `workspaces`, `workspace_activity`, `workspace_diffs`, `reviews`, `review_findings`
@@ -131,10 +135,10 @@ Channel format: `"domain:action"` (e.g. `"entities:getAll"`). All channels are d
 Sites that reference the registry:
 
 1. `src/preload/index.ts` — `ipcRenderer.invoke(CHANNELS.entities.getAll, ...)`
-2. `src/main/modules/{name}/{name}.ipc.ts` — `ipcMain.handle(CHANNELS.entities.getAll, ...)`
+2. `../../packages/backend/src/modules/{name}/{name}.ipc.ts` — `ipcMain.handle(CHANNELS.entities.getAll, ...)`
 3. `src/renderer/lib/redux/api/{name}Api.ts` — `{ handler: CHANNELS.entities.getAll }`
 
-Channel namespaces: `account`, `app`, `appSettings`, `automations`, `backendAuth`, `browser`, `connections`, `documents`, `entities`, `fileExplorer`, `gitFlow`, `guards`, `imageProxy`, `issues`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `runArtifacts`, `runContext`, `runToolCalls`, `runTurns`, `runs`, `shell`, `signals`, `space`, `ssh`, `stats`, `sync`, `tasks`, `terminal`, `toolCalls`, `updates`, `workspace`.
+Channel namespaces: `account`, `app`, `appSettings`, `automations`, `backend`, `browser`, `connections`, `documents`, `entities`, `fileExplorer`, `gitFlow`, `guards`, `imageProxy`, `issues`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `remoteBackends`, `runArtifacts`, `runContext`, `runToolCalls`, `runTurns`, `runs`, `search`, `shell`, `signals`, `space`, `ssh`, `stats`, `sync`, `tasks`, `terminal`, `toolCalls`, `updates`, `workspace`.
 
 All IPC responses use the `ServiceResponse<T>` envelope: `{ success: true, data }` or `{ success: false, error }`, built by `ok()` / `fail()` from `@mains/contracts/service-response`. The renderer unwraps it exactly once, in `ipcBaseQuery` — never in `transformResponse`.
 
@@ -145,7 +149,7 @@ All IPC responses use the `ServiceResponse<T>` envelope: `{ success: true, data 
 3. **Redux Integration**: `src/renderer/lib/redux/api/baseApi.ts` wraps IPC in RTK Query with custom `ipcBaseQuery` (no HTTP)
 4. **State Management**: RTK Query for server state, Redux slices for UI state (`appSettingsSlice`, `backendsSlice`, `workspaceSlice`)
 
-### Database Schema (`src/main/db/schema.ts`)
+### Database Schema (`../../packages/backend/src/db/schema.ts`)
 
 Conventions:
 - Text primary keys (UUIDs or string literals), timestamps as `integer("col", { mode: "timestamp" })` with `default(sql\`(unixepoch())\`)`
@@ -178,19 +182,19 @@ Core tables:
 
 ### Key Subsystems
 
-**Sync System** (`src/main/modules/sync/`)
+**Sync System** (`../../packages/backend/src/modules/sync/`)
 - `sync.service.ts` — Orchestrates fetching from all connections
 - `connections/` — Provider-specific fetchers (GitHub, GitLab, Linear, Jira, Asana, Trello, Sentry), each with tests
 - Produces `EntityInput[]` which gets persisted to the `entities` table
 
-**Workspace System** (`src/main/modules/workspace/`)
+**Workspace System** (`../../packages/backend/src/modules/workspace/`)
 - Aggregate module: workspaces + activity + diffs + reviews + findings under one 6-file layout and one `workspace:*` channel namespace
 - **Workspace intake**: `workspace:createFromSource` turns a repo into a project + workspace pair. Four acquisitions (`folder`, `clone`, `init`, `worktree`) feed one shared intake tail (git import → `findOrCreateProject` → derive `workspacesPath` → assemble metadata → `createWorkspace`). Never re-inline this at call sites.
 - **Workspace git operations**: `workspace:createBranch`, `workspace:renameBranch`, `workspace:switchBranch`, `workspace:discardPaths`, `workspace:listGitStates` (+ the `workspace:gitStateChanged` watcher event). The current branch is never persisted — it is read live from git.
 - **Branch model**: `projects.defaultBranch` = repository integration branch; `workspaces.baseBranch` = that workspace's PR target (repointed at the parent branch by `workspace:createBranch`); the checked-out branch lives only in git.
 - Cross-module writers use the named barrel functions `logWorkspaceActivity`, `recordWorkspaceDiff`, `clearWorkspaceDiff`.
 
-**Runs System** (`src/main/modules/runs/`)
+**Runs System** (`../../packages/backend/src/modules/runs/`)
 - Runs track agent sessions with turns, context, artifacts, and tool calls
 - `run-session.ts` / `run-session-registry.ts` own the live session lifecycle and event persistence
 - Tool approval broker (`user-input-broker.ts`) bridges main↔renderer for interactive tool approvals
@@ -214,12 +218,12 @@ Core tables:
 **Window crash recovery** (`src/main/windows/crash-recovery.ts`)
 - A crashed main-window renderer reloads on its own (Cmd+R is disabled, so there is no other way back); 3 crashes within a minute stop that and ask Reload / Quit. A hung renderer (`unresponsive`) gets a Wait / Reload prompt that closes itself on `responsive`; Reload kills the renderer (`forcefullyCrashRenderer`) so the reload gets a fresh process. Quitting and clean exits are ignored. Other helper processes (GPU, utilities) are logged via `child-process-gone`
 
-**Projects System** (`src/main/modules/projects/`)
+**Projects System** (`../../packages/backend/src/modules/projects/`)
 - Groups workspaces by shared git remote origin; owns `project_resources`
 - Tracks rootPath, workspacesPath (worktree dir), branches, scripts (setup, run, archive)
 - `findByRemoteOrigin`, `findOrCreate`, archive, `listBranchNames`, and the cross-aggregate `projects:listIssues` (project → resources → entities, orchestrated at the service layer)
 
-**Provider Adapters** (`src/main/modules/providers/adapters/`)
+**Provider Adapters** (`../../packages/backend/src/modules/providers/adapters/`)
 - Unified `WorkRunAdapter` interface fronting four agent SDKs; typed events (log, tool_call, command, artifact, status, plan_update); optional `archiveSession` / `unarchiveSession` for providers with persisted server-side sessions (only the Codex driver implements them)
 - `adapter.factory.ts` — creates the correct driver by provider id
 - `claude.driver.ts` — Claude Code via `@anthropic-ai/claude-agent-sdk`
@@ -233,7 +237,7 @@ Core tables:
 - **Mode harness** (`src/shared/mode-harness.ts`) — per-mode prompt delta, tool policy, and per-provider config defaults/overrides, resolved once per run in `runs.service` (never inside a driver, never via the cached `AdapterConfig`). Drivers receive the resolved values on the per-run request (`extraInstructions`, `toolPolicy`, `configSnapshot`) and apply them natively: claude appends to the `claude_code` system-prompt preset + allow/disallow lists, copilot layers the session `systemMessage` + PreToolUse deny, codex sends `developerInstructions` + sandbox override (chat = `read-only`) + `personality` (work/chat = `friendly`) + `planMode`/`goalMode` pinned off (plan in work/chat, goal in chat — on create, resume, and fork), cursor prefixes the prompt + agent mode (chat = `ask`). Continue/fork re-derive the harness from the run row's `mode` snapshot.
 - Hook system for pre/post tool execution and subagent coordination; pre-approved tool list (Bash, Read, Glob, Grep, …) with interactive approval for others
 
-**Git Module** (`src/main/modules/git/`)
+**Git Module** (`../../packages/backend/src/modules/git/`)
 - **Main-process-internal**: no IPC channels, no preload namespace, no renderer caller. Do not re-add a `git:*` namespace.
 - Git operations via `simple-git`: status, log, diff, branches, remotes, worktree create/remove, clone/init/import
 - Throw-style pilot: methods return plain values and throw
@@ -241,42 +245,42 @@ Core tables:
 - `git-snapshot.ts` handles snapshot plumbing (including non-ASCII paths)
 - Semantics-bearing methods are tested against real temporary git repos, not a mocked `simple-git`
 
-**Git Flow Module** (`src/main/modules/gitFlow/`)
+**Git Flow Module** (`../../packages/backend/src/modules/gitFlow/`)
 - Deterministic commit / push / pull / PR orchestration for the UI git-actions panel: `getStatus`, `generateCommitMessage`, `generatePrBody`, `commit`, `push`, `pull`, `createPr`, `publish`, `getPublishPreflight`
 - The only home for that git work — there is no agent-facing commit/PR tool
 - Stages with `simple-git`, generates messages via a one-shot headless `adapter.generateText` call, creates PRs with `gh`
 - Renderer side: `features/workspace/components/session-panel/git-actions/` — one component per row (changes / branch / commit / pull / pr / publish), each owning its own form state (pull owns none — it is the one row that takes no input). `useGitActionsPanel` holds only what several rows share: the status query + `refreshStatus`, the accordion, and the single `pending` action. Publish replaces PR when the repo has no remote. See CONTEXT.md for the rules.
 
-**Remote Backend** (`src/main/modules/localBackend/`, `ssh/`, `tailscale/`, `backendAuth/`)
+**Remote Backend** (`src/main/modules/localBackend/`, `ssh/`, `remoteBackends/`; shared `../../packages/backend/src/modules/tailscale/` and `backend/`)
 - `localBackend` — turns the running desktop app into a backend other clients can drive (phone browser, LAN device, another mains over SSH), via an in-process WS host on a fixed port over the same handler registry + DB. Two access paths: network bind (token-gated) and Tailscale HTTPS.
 - `tailscale` — wraps the `tailscale` CLI (`tailscale serve`) to expose an HTTPS MagicDNS URL; no DB tables
 - `ssh` — local `ssh` client forwards a loopback port to a remote `mains serve`, so the renderer connects to `ws://127.0.0.1:<port>` with all traffic tunneled
-- `backendAuth` — pairing tokens encrypted at rest via Electron `safeStorage`, stored under userData (never in renderer localStorage)
+- `remoteBackends` — pairing tokens encrypted at rest via Electron `safeStorage`, stored under userData (never in renderer localStorage)
 - Renderer state lives in `backendsSlice`; design notes in `docs/design/remote-backend.md`
 
-**Terminal Module** (`src/main/modules/terminal/`)
+**Terminal Module** (`../../packages/backend/src/modules/terminal/`)
 - Pseudoterminal emulation via `node-pty`
 - IPC channels: `terminal:create`, `terminal:write`, `terminal:resize`, `terminal:destroy`
 - Streams output to renderer via `terminal:data` (hand-written handlers — these need the Electron `event.sender`)
 
-**File Explorer Module** (`src/main/modules/fileExplorer/`)
+**File Explorer Module** (`../../packages/backend/src/modules/fileExplorer/`; native Save As adapter in `src/main/modules/fileExplorer/`)
 - Secure filesystem operations within workspace boundaries
 - Path traversal prevention, symlink escape detection, file size limits (2MB), binary detection
 - `fileExplorer:writeFileText` backs auto-save in the code viewer: overwrites an existing regular file only (no creation), same 2MB cap as reads, optional `expectedMtimeMs` optimistic-concurrency guard ("File changed on disk") so a stale editor buffer can't clobber agent writes
 
-**Space System** (`src/main/modules/space/`)
+**Space System** (`../../packages/backend/src/modules/space/`)
 - User-defined profiles with systemPrompt, model, icon, themeConfig, `providerId`, `mode`, sortOrder, archive flag; `mode` is user-switchable via `SpaceModePicker` in the space customizer, and `systemPrompt` reaches every run through the mode-harness composition
 - Space-level overrides for connections, resources, apps, and tool permissions
 - Active space set via `appSettings.activeSpaceId`
 
-**Tools System** (`src/main/modules/tools/`)
+**Tools System** (`../../packages/backend/src/modules/tools/`)
 - Registry for local and provider-builtin tools; tool call tracking with nested calls (`parentToolCallId`)
 
-**Guards Module** (`src/main/modules/guards/`)
+**Guards Module** (`../../packages/backend/src/modules/guards/`)
 - Pluggable package-safety adapters (`adapters/socketdev.adapter.ts` behind `adapter.factory.ts`) that score npm/PyPI/etc. packages and scan a workspace's manifests for risky dependencies. No DB tables — results stream back per call.
 - Claude/Copilot enforce package safety through a PreToolUse Bash hook; Codex/Cursor expose the `CheckPackage` tool instead. This asymmetry is deliberate.
 
-**Pull Requests Module** (`src/main/modules/pullRequests/`)
+**Pull Requests Module** (`../../packages/backend/src/modules/pullRequests/`)
 - Live PR inbox behind the `/tasks` screen — no DB tables (PRs are view models, never entities; see CONTEXT.md). Channels: `pullRequests:getAvailability`, `pullRequests:search`, `pullRequests:getDetail`, `pullRequests:getDiff` (unified diff, truncated at a file boundary past 300k chars), plus the actions `pullRequests:merge`, `pullRequests:markReady`, `pullRequests:addComment`, `pullRequests:addReviewComment` (new review thread on a diff line), `pullRequests:replyToThread`, `pullRequests:resolveThread`.
 - `sources/` holds the per-provider `PrSource` interface (mirrors sync's `ResourceFetcher` pattern): `github.source.ts` runs GraphQL search/detail and the write mutations with the stored connection token via `getConnectionWithSecrets` — no `gh` CLI dependency. GitLab/Bitbucket land as new source files behind `source.factory.ts`.
 - Search defaults to the repos selected on the connection (the same set issue sync pulls from, via `getSelectedResources`); with none selected it falls back to a global `involves:@me` search. An explicit `repos` filter overrides the default scope.
@@ -285,25 +289,25 @@ Core tables:
 - Drives an embedded `WebContentsView` panel inside the Electron window — attach/detach, set bounds, navigate, capture screenshots
 - `inspector.script.ts` is injected into the guest page for select-mode (DOM element picking); `browser:navState` streams nav state changes to the renderer
 
-**Automations Module** (`src/main/modules/automations/`)
+**Automations Module** (`../../packages/backend/src/modules/automations/`)
 - User-defined scheduled / triggered automations (cron-style routines that fan out into runs) plus their run records
 
-**Pulse Module** (`src/main/modules/pulse/`)
+**Pulse Module** (`../../packages/backend/src/modules/pulse/`)
 - Scheduled prompts that fan out into runs — backs the `/pulse` route (templates, single-timer scheduler, catch-up on start)
 - Mode-aware: a pulse snapshots its `mode` at creation and executes under a space of that provider+mode pair. Developer pulses require a workspace; work/chat pulses run workspace-less (managed execution dir) and may target a collection, whose sources travel into the run. Templates carry a `modes` allowlist (`features/pulse/templates.ts`) — the original corpus is developer-only, work/chat get folder/source-centric sets
 
-**Image Proxy** (`src/main/modules/imageProxy/`)
+**Image Proxy** (`../../packages/backend/src/modules/imageProxy/`; Electron protocol adapter in `src/main/modules/imageProxy/`)
 - Custom protocol handler that fetches and serves remote images to the renderer (avoids CSP / mixed-content issues)
 - Pairs with `src/renderer/lib/proxied-image-src.ts` + `local-image-url.ts` and the `useLocalImageUrl` hook — use these instead of `<img src={remoteUrl}>`
 - Backs the in-app **document viewer** too (`documents:sign`): Office formats (`.docx/.xlsx/.pptx`) render from bytes behind a shadow root, PDFs render page by page onto canvases via lazily loaded `pdfjs-dist` (`document-viewer/pdf-document.tsx`), markdown renders as React through the shared markdown components. `classifyDocType` (`renderer/lib/document-viewer.ts`) is the one table saying what the viewer can show
 - Also backs the `api.documents` namespace (`documents:sign`) for serving local document files
 
-**Stats Module** (`src/main/modules/stats/`) — Dashboard statistics and analytics (joins `workspace_diffs` via its own repo)
+**Stats Module** (`../../packages/backend/src/modules/stats/`) — Dashboard statistics and analytics (joins `workspace_diffs` via its own repo)
 
 **Updates Module** (`src/main/modules/updates/`) — Application update checking and management. Self-update only works from `/Applications`: a copy run from the DMG or a translocated zip in Downloads can't replace itself, so `src/main/move-to-applications.ts` offers the move at launch (before the splash; packaged macOS only; "Don't ask again" persists in `userData/move-to-applications.json`)
 
-**Database Seeding** (`src/main/db/seeds/`)
-- Not a domain module and has no IPC surface. A versioned, idempotent runner: each `v{N}.ts` exports `run(db)`, the runner tracks `appSettings.seedVersion`, and `db/client.ts` calls `runSeeds(db)` at init. Fixtures live in `src/main/db/data/` (accounts, connectionStates, providers, spaces).
+**Database Seeding** (`../../packages/backend/src/db/seeds/`)
+- Not a domain module and has no IPC surface. A versioned, idempotent runner: each `v{N}.ts` exports `run(db)`, the runner tracks `appSettings.seedVersion`, and `db/client.ts` calls `runSeeds(db)` at init. Fixtures live in `../../packages/backend/src/db/data/` (accounts, connectionStates, providers, spaces).
 
 ### Configuration
 
@@ -399,7 +403,7 @@ Everything the composer attaches to the next message — files, issues, signals,
 
 Each connection type has:
 - Modal in `src/renderer/features/settings/components/connections/`
-- Fetcher in `src/main/modules/sync/connections/`
+- Fetcher in `../../packages/backend/src/modules/sync/connections/`
 - Channels under `connections:*` for credentials, resources, and states
 
 Supported: GitHub, GitLab, Linear, Jira, Asana, Trello, Sentry (+ Socket.dev for the guards module).

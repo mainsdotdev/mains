@@ -29,64 +29,63 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
-import { initializeDatabase, closeDatabase } from "./db/client";
+import { initializeDatabase, closeDatabase } from "@mains/backend/db/client";
 import { registerBrowserWindowSink } from "./ipc-kit/browser-window-sink";
-import { startBackendServer } from "./serve";
-import { registerAccountIpc, unregisterAccountIpc } from "./modules/account";
-import { registerSyncIpc, unregisterSyncIpc } from "./modules/sync";
+import { startBackendServer } from "@mains/backend/serve";
+import { registerAccountIpc, unregisterAccountIpc } from "@mains/backend/modules/account";
+import { registerSyncIpc, unregisterSyncIpc } from "@mains/backend/modules/sync";
 import {
   registerEntitiesHandlers,
   unregisterEntitiesHandlers,
-} from "./modules/entities";
+} from "@mains/backend/modules/entities";
 import {
   registerConnectionsHandlers,
   unregisterConnectionsHandlers,
-} from "./modules/connections";
-import { registerSpaceIpc, unregisterSpaceIpc } from "./modules/space";
+} from "@mains/backend/modules/connections";
+import { registerSpaceIpc, unregisterSpaceIpc } from "@mains/backend/modules/space";
 import {
   registerAppSettingsIpc,
   unregisterAppSettingsIpc,
   appSettingsService,
-} from "./modules/appSettings";
+} from "@mains/backend/modules/appSettings";
 import {
   registerProvidersIpc,
   unregisterProvidersIpc,
   shutdownAllWorkAdapters,
-} from "./modules/providers";
-import { augmentPathForPackagedApp } from "./modules/providers/providers.utils";
-import { registerToolsIpc, unregisterToolsIpc } from "./modules/tools";
+} from "@mains/backend/modules/providers";
+import { augmentPathForPackagedApp } from "@mains/backend/modules/providers/providers.utils";
+import { registerToolsIpc, unregisterToolsIpc } from "@mains/backend/modules/tools";
 import {
   registerWorkspaceIpc,
   unregisterWorkspaceIpc,
-} from "./modules/workspace";
+} from "@mains/backend/modules/workspace";
 import {
   registerWorkspaceDialogIpc,
   unregisterWorkspaceDialogIpc,
 } from "./modules/workspace/workspace.dialog.ipc";
-import { registerRunsIpc, unregisterRunsIpc } from "./modules/runs";
-import { configureRunNotificationSink } from "./modules/runs/run-notification-sink";
+import { registerRunsIpc, unregisterRunsIpc, configureRunNotificationSink } from "@mains/backend/modules/runs";
 import { createElectronRunNotificationSink } from "./modules/runs/run-notifications";
-import { runSessionRegistry } from "./modules/runs/run-session-registry";
-import { registerProjectsIpc, unregisterProjectsIpc } from "./modules/projects";
+import { runSessionRegistry } from "@mains/backend/modules/runs";
+import { registerProjectsIpc, unregisterProjectsIpc } from "@mains/backend/modules/projects";
 import {
   registerCollectionsIpc,
   unregisterCollectionsIpc,
-} from "./modules/collections";
+} from "@mains/backend/modules/collections";
 import {
   registerFileExplorerIpc,
   unregisterFileExplorerIpc,
-} from "./modules/fileExplorer";
+} from "@mains/backend/modules/fileExplorer";
 import {
   registerFileExplorerDialogIpc,
   unregisterFileExplorerDialogIpc,
 } from "./modules/fileExplorer/fileExplorer.dialog.ipc";
-import { registerGitFlowIpc, unregisterGitFlowIpc } from "./modules/gitFlow";
+import { registerGitFlowIpc, unregisterGitFlowIpc } from "@mains/backend/modules/gitFlow";
 import {
   registerTerminalIpc,
   unregisterTerminalIpc,
   destroyAllTerminals,
-} from "./modules/terminal";
-import { registerStatsIpc, unregisterStatsIpc } from "./modules/stats";
+} from "@mains/backend/modules/terminal";
+import { registerStatsIpc, unregisterStatsIpc } from "@mains/backend/modules/stats";
 import {
   createMainWindow,
   createSplashWindow,
@@ -104,9 +103,11 @@ import { offerMoveToApplications } from "./move-to-applications";
 import {
   registerImageProxyScheme,
   registerImageProxyHandler,
+} from "./modules/imageProxy/imageProxy.protocol";
+import {
   registerImageProxyIpc,
   unregisterImageProxyIpc,
-} from "./modules/imageProxy";
+} from "@mains/backend/modules/imageProxy";
 import {
   registerMcpAppsIpc,
   unregisterMcpAppsIpc,
@@ -122,21 +123,21 @@ import {
   registerAutomationsIpc,
   unregisterAutomationsIpc,
   automationsService,
-} from "./modules/automations";
+} from "@mains/backend/modules/automations";
 import {
   registerPulseIpc,
   unregisterPulseIpc,
   pulseService,
-} from "./modules/pulse";
+} from "@mains/backend/modules/pulse";
 import {
   registerGuardsIpc,
   unregisterGuardsIpc,
   shutdownAllGuardAdapters,
-} from "./modules/guards";
+} from "@mains/backend/modules/guards";
 import {
   registerPullRequestsIpc,
   unregisterPullRequestsIpc,
-} from "./modules/pullRequests";
+} from "@mains/backend/modules/pullRequests";
 import {
   registerBrowserIpc,
   unregisterBrowserIpc,
@@ -153,7 +154,7 @@ import {
   keyboardShortcutsService,
 } from "./modules/keyboardShortcuts";
 import { registerSshIpc, unregisterSshIpc, sshService } from "./modules/ssh";
-import { tailscaleService } from "./modules/tailscale";
+import { tailscaleService } from "@mains/backend/modules/tailscale";
 import {
   registerLocalBackendIpc,
   unregisterLocalBackendIpc,
@@ -163,12 +164,12 @@ import {
   registerRemoteBackendsIpc,
   unregisterRemoteBackendsIpc,
 } from "./modules/remoteBackends";
-import { registerBackendIpc, unregisterBackendIpc } from "./modules/backend";
-import { registerSearchIpc, unregisterSearchIpc } from "./modules/search";
-import { CHANNELS } from "../shared/ipc-kit/channels";
-import { configureBackendRuntime } from "./runtime/backend-runtime";
+import { registerBackendIpc, unregisterBackendIpc } from "@mains/backend/modules/backend";
+import { registerSearchIpc, unregisterSearchIpc } from "@mains/backend/modules/search";
+import { CHANNELS } from "@mains/contracts/channels";
+import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime";
 import { createElectronBackendRuntime } from "./runtime/electron-backend-runtime";
-import { configureIpcMainAdapter } from "./ipc-kit/ipc-main";
+import { configureIpcMainAdapter } from "@mains/backend/ipc-kit/ipc-main";
 
 configureBackendRuntime(createElectronBackendRuntime());
 configureIpcMainAdapter(ipcMain);

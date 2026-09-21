@@ -119,7 +119,7 @@ export default defineConfig(({ command }) => {
     {
       name: 'copy-migrations',
       closeBundle() {
-        const srcDir = 'src/main/db/migrations';
+        const srcDir = '../../packages/backend/src/db/migrations';
         const destDir = '.vite/build/db/migrations';
 
         if (existsSync(srcDir)) {
