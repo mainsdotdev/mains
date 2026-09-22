@@ -1,16 +1,125 @@
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const OWNER_FILE = "owner.json";
 const RECOVERY_FILE = "recovery.json";
+const RECOVERY_STALE_AFTER_MS = 30_000;
+const BOOT_TIME_TOLERANCE_MS = 5_000;
 
-interface OwnershipRecord {
-  version: 1;
+interface OwnershipRecordBase {
   token: string;
   pid: number;
   owner: string;
   acquiredAt: string;
+}
+
+interface LegacyOwnershipRecord extends OwnershipRecordBase {
+  version: 1;
+}
+
+interface IdentifiedOwnershipRecord extends OwnershipRecordBase {
+  version: 2;
+  // PID alone is reusable; this identifies the process instance within a boot.
+  processIdentity: string;
+}
+
+type OwnershipRecord = LegacyOwnershipRecord | IdentifiedOwnershipRecord;
+
+let bootIdentity: string | null | undefined;
+
+function runSystemCommand(command: string, args: string[]): string | null {
+  try {
+    const result = spawnSync(command, args, {
+      encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+      timeout: 1_000,
+      windowsHide: true,
+    });
+    if (result.error || result.status !== 0) return null;
+    const output = result.stdout.trim();
+    return output || null;
+  } catch {
+    return null;
+  }
+}
+
+function readBootIdentity(): string | null {
+  if (bootIdentity !== undefined) return bootIdentity;
+  try {
+    if (process.platform === "linux") {
+      const identity = fs
+        .readFileSync("/proc/sys/kernel/random/boot_id", "utf8")
+        .trim();
+      bootIdentity = identity || null;
+      return bootIdentity;
+    }
+    if (process.platform === "darwin") {
+      bootIdentity = runSystemCommand("/usr/sbin/sysctl", [
+        "-n",
+        "kern.bootsessionuuid",
+      ]);
+      return bootIdentity;
+    }
+  } catch {
+    // Fall through to the conservative PID-only compatibility path.
+  }
+  bootIdentity = null;
+  return null;
+}
+
+function readProcessIdentity(pid: number): string | null {
+  if (pid <= 0) return null;
+  if (process.platform === "linux") {
+    try {
+      const boot = readBootIdentity();
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const commandEnd = stat.lastIndexOf(")");
+      if (!boot || commandEnd < 0) return null;
+      // Fields after `(comm)` start at field 3; process start ticks are field 22.
+      const startTicks = stat.slice(commandEnd + 1).trim().split(/\s+/u)[19];
+      return startTicks && /^\d+$/u.test(startTicks)
+        ? `linux:${boot}:${startTicks}`
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform !== "darwin") return null;
+
+  const rawStartedAt = runSystemCommand("/bin/ps", [
+    "-o",
+    "lstart=",
+    "-p",
+    String(pid),
+  ]);
+  if (!rawStartedAt) return null;
+  const startedAt = rawStartedAt.replace(/\s+/gu, " ");
+  return `darwin:${readBootIdentity() ?? "unknown-boot"}:${startedAt}`;
+}
+
+function createOwnershipRecord(owner: string): OwnershipRecord {
+  const processIdentity = readProcessIdentity(process.pid);
+  const record = {
+    token: crypto.randomUUID(),
+    pid: process.pid,
+    owner,
+    acquiredAt: new Date().toISOString(),
+  };
+  return processIdentity
+    ? { ...record, version: 2, processIdentity }
+    : { ...record, version: 1 };
+}
+
+interface OwnershipRecordShape {
+  version?: unknown;
+  token: string;
+  pid: number;
+  owner: string;
+  acquiredAt: string;
+  processIdentity?: unknown;
 }
 
 export interface DatabaseOwnership {
@@ -35,13 +144,18 @@ export function databaseOwnershipPath(databasePath: string): string {
 
 function isOwnershipRecord(value: unknown): value is OwnershipRecord {
   if (!value || typeof value !== "object") return false;
-  const record = value as Partial<OwnershipRecord>;
-  return (
-    record.version === 1 &&
+  const record = value as Partial<OwnershipRecordShape>;
+  const hasBaseFields =
     typeof record.token === "string" &&
     Number.isInteger(record.pid) &&
     typeof record.owner === "string" &&
-    typeof record.acquiredAt === "string"
+    typeof record.acquiredAt === "string";
+  return (
+    hasBaseFields &&
+    (record.version === 1 ||
+      (record.version === 2 &&
+        typeof record.processIdentity === "string" &&
+        record.processIdentity.length > 0))
   );
 }
 
@@ -61,6 +175,105 @@ function processIsAlive(pid: number): boolean {
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function recordBelongsToRunningProcess(record: OwnershipRecord): boolean {
+  if (!processIsAlive(record.pid)) return false;
+
+  const currentIdentity = readProcessIdentity(record.pid);
+  if (record.version === 2 && currentIdentity) {
+    return currentIdentity === record.processIdentity;
+  }
+
+  const acquiredAtMs = Date.parse(record.acquiredAt);
+  if (Number.isFinite(acquiredAtMs)) {
+    const bootedAtMs = Date.now() - os.uptime() * 1_000;
+    if (acquiredAtMs + BOOT_TIME_TOLERANCE_MS < bootedAtMs) {
+      return false;
+    }
+  }
+
+  // Identity lookup is best-effort. If it is unavailable, keep the existing
+  // lock rather than risk running two backends against the same database.
+  return processIsAlive(record.pid);
+}
+
+function recoveryClaimIsStale(
+  recoveryPath: string,
+  record: OwnershipRecord | null,
+): boolean {
+  if (record) {
+    if (!recordBelongsToRunningProcess(record)) return true;
+    // Recovery is a synchronous rename/delete critical section. A live claim
+    // this old was suspended or abandoned and is safe to supersede after the
+    // owner token is revalidated below.
+    const acquiredAtMs = Date.parse(record.acquiredAt);
+    return (
+      Number.isFinite(acquiredAtMs) &&
+      Date.now() - acquiredAtMs > RECOVERY_STALE_AFTER_MS
+    );
+  }
+
+  try {
+    return (
+      Date.now() - fs.statSync(recoveryPath).mtimeMs > RECOVERY_STALE_AFTER_MS
+    );
+  } catch {
+    return true;
+  }
+}
+
+function removeObservedRecoveryClaim(
+  recoveryPath: string,
+  observed: OwnershipRecord | null,
+): boolean {
+  const current = readRecord(recoveryPath);
+  if (observed ? current?.token !== observed.token : current !== null) {
+    return false;
+  }
+  try {
+    fs.rmSync(recoveryPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+}
+
+function claimRecovery(
+  recoveryPath: string,
+  recoveryRecord: OwnershipRecord,
+): boolean {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      fs.writeFileSync(recoveryPath, `${JSON.stringify(recoveryRecord)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const existing = readRecord(recoveryPath);
+      if (
+        !recoveryClaimIsStale(recoveryPath, existing) ||
+        !removeObservedRecoveryClaim(recoveryPath, existing)
+      ) {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+function releaseRecoveryClaim(
+  recoveryPath: string,
+  recoveryRecord: OwnershipRecord,
+): void {
+  const current = readRecord(recoveryPath);
+  if (current?.token === recoveryRecord.token) {
+    fs.rmSync(recoveryPath, { force: true });
   }
 }
 
@@ -91,46 +304,33 @@ function recoverStaleLock(
   staleRecord: OwnershipRecord,
 ): boolean {
   const recoveryPath = path.join(lockPath, RECOVERY_FILE);
-  const recoveryRecord: OwnershipRecord = {
-    version: 1,
-    token: crypto.randomUUID(),
-    pid: process.pid,
-    owner: "Mains ownership recovery",
-    acquiredAt: new Date().toISOString(),
-  };
-
-  try {
-    fs.writeFileSync(recoveryPath, `${JSON.stringify(recoveryRecord)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw error;
-  }
+  const recoveryRecord = createOwnershipRecord("Mains ownership recovery");
+  if (!claimRecovery(recoveryPath, recoveryRecord)) return false;
 
   const quarantinePath = `${lockPath}.stale-${process.pid}-${recoveryRecord.token}`;
+  let quarantined = false;
   try {
     const current = readRecord(path.join(lockPath, OWNER_FILE));
     if (
       !current ||
       current.token !== staleRecord.token ||
-      processIsAlive(current.pid)
+      recordBelongsToRunningProcess(current)
     ) {
       return false;
     }
-    fs.renameSync(lockPath, quarantinePath);
+    try {
+      fs.renameSync(lockPath, quarantinePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    quarantined = true;
     return true;
   } finally {
-    fs.rmSync(quarantinePath, { recursive: true, force: true });
-    try {
-      const current = readRecord(path.join(lockPath, OWNER_FILE));
-      if (current?.token === staleRecord.token) {
-        fs.rmSync(recoveryPath, { force: true });
-      }
-    } catch {
-      // A competing process may have replaced the stale lock.
+    if (quarantined) {
+      fs.rmSync(quarantinePath, { recursive: true, force: true });
+    } else {
+      releaseRecoveryClaim(recoveryPath, recoveryRecord);
     }
   }
 }
@@ -152,13 +352,7 @@ export function acquireDatabaseOwnership(
 
   const resolvedDatabasePath = path.resolve(databasePath);
   const lockPath = databaseOwnershipPath(resolvedDatabasePath);
-  const record: OwnershipRecord = {
-    version: 1,
-    token: crypto.randomUUID(),
-    pid: process.pid,
-    owner,
-    acquiredAt: new Date().toISOString(),
-  };
+  const record = createOwnershipRecord(owner);
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (publishLock(lockPath, record)) {
@@ -183,7 +377,7 @@ export function acquireDatabaseOwnership(
           "If no Mains Desktop or Mains Server process is running, remove that lock and try again.",
       );
     }
-    if (processIsAlive(existing.pid)) {
+    if (recordBelongsToRunningProcess(existing)) {
       throw new DatabaseOwnershipError(
         `Mains data at "${resolvedDatabasePath}" is already in use by ` +
           `${existing.owner} (PID ${existing.pid}). Stop it before starting ${owner}; ` +
