@@ -285,7 +285,7 @@ export function PendingApprovalCard({
       ? "Fill this form in with Mains on your computer — the phone can only decline it."
       : compact && approval.kind !== "tool_approval"
         ? "Open the run to answer"
-        : "The server denies this if unanswered.";
+        : "Mains denies this if unanswered.";
 
   const risk = toolDisplay.riskLevel ? riskColors(toolDisplay.riskLevel, hues, soft) : null;
 

@@ -70,7 +70,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         // TestFlight stops asking about export compliance on every build.
         ITSAppUsesNonExemptEncryption: false,
         NSLocalNetworkUsageDescription:
-          "Mains connects to your Mains Server on the local network.",
+          "Mains connects to Mains running on your computer over the local network.",
         NSAppTransportSecurity: allowsDevelopmentLan
           ? { NSAllowsLocalNetworking: true }
           : undefined,

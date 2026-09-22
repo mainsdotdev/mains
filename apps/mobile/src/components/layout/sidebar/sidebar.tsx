@@ -112,7 +112,7 @@ export function Sidebar({ navigation }: { navigation: { closeDrawer(): void } })
   const items = useMemo<SidebarItem[]>(() => {
     const out: SidebarItem[] = [];
     if (!session.backend) {
-      out.push({ kind: "empty", key: "unpaired", text: "Pair a Mains Server to see its work here." });
+      out.push({ kind: "empty", key: "unpaired", text: "Pair a computer to see its work here." });
       return out;
     }
     if (isCode) {

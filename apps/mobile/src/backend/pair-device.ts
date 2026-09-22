@@ -33,7 +33,7 @@ async function postPair(
       throw new PairingRejectedError(message);
     }
     if (!isPairDeviceResult(payload)) {
-      throw new PairingRejectedError("Unexpected reply from your Mains Server");
+      throw new PairingRejectedError("Unexpected reply from Mains on your computer");
     }
     return payload;
   } finally {
@@ -72,7 +72,7 @@ export async function pairWithBackend(
   }
   throw new Error(
     lastError
-      ? `Could not reach your Mains Server (${lastError.message})`
-      : "Could not reach your Mains Server",
+      ? `Could not reach Mains on your computer (${lastError.message})`
+      : "Could not reach Mains on your computer",
   );
 }
