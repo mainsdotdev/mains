@@ -94,19 +94,26 @@ function encryptToken(token: string): Buffer {
   return secretStorage.encryptString(token);
 }
 
-function decryptToken(buffer: Buffer): string {
+function decryptToken(buffer: Buffer, reportFailures = true): string {
   const secretStorage = getBackendRuntime().secretStorage;
   if (secretStorage.isEncryptionAvailable()) {
     try {
       return secretStorage.decryptString(buffer);
     } catch (err) {
-      console.error("[Credentials] secure-store decryption failed, attempting fallback:", err);
+      if (reportFailures) {
+        console.error(
+          "[Credentials] secure-store decryption failed, attempting fallback:",
+          err,
+        );
+      }
     }
   }
   try {
     return fallbackDecrypt(buffer);
   } catch (err) {
-    console.error("[Credentials] Fallback decryption also failed:", err);
+    if (reportFailures) {
+      console.error("[Credentials] Fallback decryption also failed:", err);
+    }
     throw new Error("Failed to decrypt credentials — data may be corrupted");
   }
 }
@@ -122,6 +129,18 @@ export function decryptSecrets(buffer: Buffer): Record<string, string> {
   } catch (err) {
     console.error("[Credentials] Failed to parse decrypted secrets as JSON:", err);
     throw new Error("Decrypted credential data is not valid JSON — token may be corrupted");
+  }
+}
+
+/**
+ * Probe an unversioned credential without reporting an expected cross-runtime
+ * decryption failure as corruption. Used only while migrating pre-format rows.
+ */
+export function tryDecryptSecrets(buffer: Buffer): Record<string, string> | null {
+  try {
+    return JSON.parse(decryptToken(buffer, false)) as Record<string, string>;
+  } catch {
+    return null;
   }
 }
 

@@ -12,6 +12,7 @@ import {
   parseResourceMetadata,
   encryptSecrets,
   decryptSecrets,
+  tryDecryptSecrets,
   createTokenHash,
   parseProviderCredentials,
 } from "./connections.utils";
@@ -34,6 +35,7 @@ import type {
   CredentialsCheckResult,
   ConnectionStateResponse,
 } from "./connections.dto";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 // ─────────────────────────────────────────────────────────────
 // Non-secret metadata fields per provider
@@ -48,6 +50,26 @@ const PROVIDER_METADATA_FIELDS: Record<string, string[]> = {
 const PROVIDER_METADATA_DEFAULTS: Record<string, Record<string, string>> = {
   gitlab: { domain: "gitlab.com" },
 };
+
+async function getRuntimeCredentialSecrets(
+  connectionId: string,
+): Promise<Record<string, string> | null> {
+  const format = getBackendRuntime().secretStorage.format;
+  const current = await connectionsRepo.findCurrentToken(connectionId, format);
+  if (current?.accessTokenEnc) {
+    return decryptSecrets(current.accessTokenEnc as Buffer);
+  }
+
+  // Rows written before encryption formats were persisted are retained as an
+  // upgrade bridge. Either runtime may probe them; an incompatible host simply
+  // treats the credential as unavailable and asks for its own authorization.
+  const unversioned = await connectionsRepo.findCurrentToken(
+    connectionId,
+    "unversioned",
+  );
+  if (!unversioned?.accessTokenEnc) return null;
+  return tryDecryptSecrets(unversioned.accessTokenEnc as Buffer);
+}
 
 // ─────────────────────────────────────────────────────────────
 // Cross-module helper: hand callers a connection + decrypted secrets.
@@ -69,12 +91,12 @@ export async function getConnectionWithSecrets(
     : await connectionsRepo.findByProvider(provider);
   if (!connection || connection.provider !== provider) return null;
 
-  const token = await connectionsRepo.findCurrentToken(connection.id);
-  if (!token?.accessTokenEnc) return null;
+  const secrets = await getRuntimeCredentialSecrets(connection.id);
+  if (!secrets) return null;
 
   return {
     id: connection.id,
-    secrets: decryptSecrets(token.accessTokenEnc as Buffer),
+    secrets,
     metadata: parseConnectionMetadata(connection.metadata),
   };
 }
@@ -97,10 +119,12 @@ async function getConnectionAndSecrets(
   const connection = await connectionsRepo.findById(connectionId);
   if (!connection) throw new Error("Connection not found");
 
-  const token = await connectionsRepo.findCurrentToken(connectionId);
-  if (!token?.accessTokenEnc) throw new Error("Token not found");
+  const secrets = await getRuntimeCredentialSecrets(connectionId);
+  if (!secrets) {
+    throw new Error("Credentials are unavailable in this Mains runtime");
+  }
 
-  return { connection, secrets: decryptSecrets(token.accessTokenEnc as Buffer) };
+  return { connection, secrets };
 }
 
 async function upsertConnectionResource(params: {
@@ -806,6 +830,7 @@ export const connectionsService = {
         expiresAt: null,
         tokenHash,
         keyVersion: 1,
+        encryptionFormat: getBackendRuntime().secretStorage.format,
       });
 
       const currentMetadata = parseConnectionMetadata(connection.metadata);
@@ -848,8 +873,9 @@ export const connectionsService = {
       const connection = await connectionsRepo.findByProvider(provider);
       if (!connection) throw new Error("Connection not found");
 
-      const tokens = await connectionsRepo.findTokensByConnectionId(connection.id);
-      const hasCredentials = tokens && tokens.length > 0;
+      const hasCredentials = Boolean(
+        await getRuntimeCredentialSecrets(connection.id),
+      );
 
       return {
         hasCredentials,

@@ -176,6 +176,13 @@
       "when": 1789903039518,
       "tag": "0024_giant_red_shift",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1790063965370,
+      "tag": "0025_purple_warbird",
+      "breakpoints": true
     }
   ]
 }

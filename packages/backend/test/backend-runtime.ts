@@ -19,6 +19,7 @@ export function installTestBackendRuntime(
     getResourcesPath: () => null,
     openExternal: async () => {},
     secretStorage: {
+      format: "mns1-aes-gcm-v1",
       isEncryptionAvailable: () => true,
       encryptString: (value) => Buffer.from(value, "utf8"),
       decryptString: (value) => value.toString("utf8"),

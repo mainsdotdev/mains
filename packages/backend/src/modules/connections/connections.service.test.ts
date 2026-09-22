@@ -7,6 +7,7 @@ import {
 } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
 import type Database from "better-sqlite3";
+import { installTestBackendRuntime } from "../../../test/backend-runtime";
 
 let db: DatabaseInstance;
 let _sqlite: Database.Database;
@@ -29,8 +30,31 @@ vi.mock("../connectionCredentials/connectionCredentials.utils", () => ({
   decryptSecrets: vi.fn((buf: Buffer) => JSON.parse(buf.toString("utf-8"))),
 }));
 
-import { connectionsService } from "./connections.service";
+import {
+  connectionsService,
+  getConnectionWithSecrets,
+} from "./connections.service";
 import { connectionsRepo } from "./connections.repo";
+
+function installCredentialRuntime(
+  kind: "electron" | "node",
+  format: "electron-safe-storage-v1" | "mns1-aes-gcm-v1",
+  prefix: string,
+): () => void {
+  const secretStorage = {
+    format,
+    isEncryptionAvailable: () => true,
+    encryptString: (value: string) => Buffer.from(`${prefix}${value}`, "utf8"),
+    decryptString: (value: Buffer) => {
+      const stored = value.toString("utf8");
+      if (!stored.startsWith(prefix)) {
+        throw new Error(`Credential does not use ${format}`);
+      }
+      return stored.slice(prefix.length);
+    },
+  };
+  return installTestBackendRuntime({ kind, secretStorage });
+}
 
 describe("connectionsService", () => {
   beforeEach(() => {
@@ -462,6 +486,77 @@ describe("connectionsService", () => {
       const result: any = await connectionsService.getSelectedResources("trello");
       const data = result as any;
       expect(data.boards).toHaveLength(1);
+    });
+  });
+
+  describe("runtime-specific credentials", () => {
+    it("keeps Desktop and Server credentials usable after either host reauthorizes", async () => {
+      createConnection(db, { id: "c1", provider: "github" });
+
+      let restore = installCredentialRuntime(
+        "electron",
+        "electron-safe-storage-v1",
+        "desktop:",
+      );
+      try {
+        await connectionsService.saveCredentials({
+          provider: "github",
+          connectionId: "c1",
+          token: "desktop-token-1",
+        });
+      } finally {
+        restore();
+      }
+
+      restore = installCredentialRuntime(
+        "node",
+        "mns1-aes-gcm-v1",
+        "server:",
+      );
+      try {
+        expect(await getConnectionWithSecrets("github")).toBeNull();
+        expect(
+          await connectionsService.checkCredentials("github"),
+        ).toMatchObject({ hasCredentials: false });
+        await connectionsService.saveCredentials({
+          provider: "github",
+          connectionId: "c1",
+          token: "server-token",
+        });
+      } finally {
+        restore();
+      }
+
+      restore = installCredentialRuntime(
+        "electron",
+        "electron-safe-storage-v1",
+        "desktop:",
+      );
+      try {
+        expect((await getConnectionWithSecrets("github"))?.secrets).toEqual({
+          token: "desktop-token-1",
+        });
+        await connectionsService.saveCredentials({
+          provider: "github",
+          connectionId: "c1",
+          token: "desktop-token-2",
+        });
+      } finally {
+        restore();
+      }
+
+      restore = installCredentialRuntime(
+        "node",
+        "mns1-aes-gcm-v1",
+        "server:",
+      );
+      try {
+        expect((await getConnectionWithSecrets("github"))?.secrets).toEqual({
+          token: "server-token",
+        });
+      } finally {
+        restore();
+      }
     });
   });
 

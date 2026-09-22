@@ -51,9 +51,11 @@ server, and stop the server before reopening Desktop. A database ownership lock
 rejects concurrent backend processes before either can mutate SQLite.
 
 Existing Electron-encrypted integration credentials remain in the database but
-cannot yet be decrypted by the plain-Node host. CLI-backed providers continue
-to use their normal host authentication. Use `--data-dir` only when you
-intentionally want isolated data.
+cannot be decrypted by the plain-Node host. Reauthorizing an integration in
+Mains Server creates a separate `MNS1` credential for Server without replacing
+Desktop's `safeStorage` credential; Desktop reauthorization likewise leaves the
+Server credential intact. CLI-backed providers continue to use their normal host
+authentication. Use `--data-dir` only when you intentionally want isolated data.
 
 Keep the server available after closing the terminal:
 

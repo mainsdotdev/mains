@@ -48,7 +48,10 @@ export const connectionsRepo = {
   },
 
   // Token queries
-  async findCurrentToken(connectionId: string) {
+  async findCurrentToken(
+    connectionId: string,
+    encryptionFormat: (typeof connectionTokens.$inferSelect)["encryptionFormat"],
+  ) {
     const db = getDb();
     return db
       .select()
@@ -56,6 +59,7 @@ export const connectionsRepo = {
       .where(
         and(
           eq(connectionTokens.connectionId, connectionId),
+          eq(connectionTokens.encryptionFormat, encryptionFormat),
           eq(connectionTokens.isCurrent, true)
         )
       )
@@ -79,9 +83,9 @@ export const connectionsRepo = {
   },
 
   /**
-   * Atomically mark all existing tokens not current and insert a new one as
-   * current. Prevents races where concurrent saves leave multiple current
-   * rows.
+   * Atomically rotate the active host's encryption format. Credentials written
+   * by the other host stay current, so Desktop and Server cannot invalidate
+   * one another merely by reauthorizing the same connection.
    */
   rotateToken(data: {
     connectionId: string;
@@ -91,12 +95,18 @@ export const connectionsRepo = {
     expiresAt: Date | null;
     tokenHash: Buffer;
     keyVersion: number;
+    encryptionFormat: (typeof connectionTokens.$inferSelect)["encryptionFormat"];
   }): void {
     const db = getDb();
     db.transaction(() => {
       db.update(connectionTokens)
         .set({ isCurrent: false })
-        .where(eq(connectionTokens.connectionId, data.connectionId))
+        .where(
+          and(
+            eq(connectionTokens.connectionId, data.connectionId),
+            eq(connectionTokens.encryptionFormat, data.encryptionFormat),
+          ),
+        )
         .run();
 
       db.insert(connectionTokens)

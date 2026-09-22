@@ -4,6 +4,7 @@ import { installTestBackendRuntime } from "../../../test/backend-runtime";
 
 const { safeStorageMock } = vi.hoisted(() => ({
   safeStorageMock: {
+    format: "electron-safe-storage-v1" as const,
     // Default to available (matches a healthy macOS / Keychain install).
     // Individual tests flip this to false to exercise the fail-closed path (B3).
     isEncryptionAvailable: vi.fn(() => true),

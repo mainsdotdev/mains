@@ -21,6 +21,7 @@ export function createElectronBackendRuntime(): BackendRuntime {
     getResourcesPath: () => process.resourcesPath || null,
     openExternal: (url) => shell.openExternal(url),
     secretStorage: {
+      format: "electron-safe-storage-v1",
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value),

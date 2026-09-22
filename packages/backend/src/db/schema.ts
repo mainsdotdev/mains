@@ -989,6 +989,15 @@ export const connectionTokens = sqliteTable(
     expiresAt: integer("expires_at", { mode: "timestamp" }),
     tokenHash: blob("token_hash"),
     keyVersion: integer("key_version").notNull().default(1),
+    encryptionFormat: text("encryption_format", {
+      enum: [
+        "unversioned",
+        "electron-safe-storage-v1",
+        "mns1-aes-gcm-v1",
+      ],
+    })
+      .notNull()
+      .default("unversioned"),
     isCurrent: integer("is_current", { mode: "boolean" })
       .notNull()
       .default(true),
@@ -1002,8 +1011,9 @@ export const connectionTokens = sqliteTable(
     index("idx_ct_expires").on(t.expiresAt),
     index("idx_ct_created_at").on(t.createdAt),
     index("idx_ct_token_hash").on(t.tokenHash),
-    uniqueIndex("uniq_ct_conn_current")
-      .on(t.connectionId)
+    index("idx_ct_encryption_format").on(t.encryptionFormat),
+    uniqueIndex("uniq_ct_conn_format_current")
+      .on(t.connectionId, t.encryptionFormat)
       .where(sql`${t.isCurrent} = 1`),
   ],
 );

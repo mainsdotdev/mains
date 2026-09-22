@@ -96,7 +96,7 @@ describe("connectionsRepo", () => {
     it("returns undefined when no tokens", async () => {
       createConnection(db, { id: "c1" });
 
-      const result = await connectionsRepo.findCurrentToken("c1");
+      const result = await connectionsRepo.findCurrentToken("c1", "unversioned");
       expect(result).toBeUndefined();
     });
 
@@ -107,24 +107,80 @@ describe("connectionsRepo", () => {
         VALUES ('c1', X'deadbeef', 1)
       `);
 
-      const result = await connectionsRepo.findCurrentToken("c1");
+      const result = await connectionsRepo.findCurrentToken("c1", "unversioned");
       expect(result).toBeDefined();
       expect(result!.isCurrent).toBe(true);
     });
   });
 
-  describe("markTokensNotCurrent", () => {
-    it("marks all tokens as not current", async () => {
+  describe("rotateToken", () => {
+    it("rotates only the matching encryption format", async () => {
       createConnection(db, { id: "c1" });
       _sqlite.exec(`
-        INSERT INTO connection_tokens (connection_id, access_token_enc, is_current)
-        VALUES ('c1', X'deadbeef', 1)
+        INSERT INTO connection_tokens (
+          connection_id, access_token_enc, encryption_format, is_current
+        ) VALUES ('c1', X'01', 'electron-safe-storage-v1', 1)
+      `);
+
+      connectionsRepo.rotateToken({
+        connectionId: "c1",
+        accessTokenEnc: Buffer.from("server-1"),
+        refreshTokenEnc: null,
+        tokenType: "bearer",
+        expiresAt: null,
+        tokenHash: Buffer.from("hash-1"),
+        keyVersion: 1,
+        encryptionFormat: "mns1-aes-gcm-v1",
+      });
+      connectionsRepo.rotateToken({
+        connectionId: "c1",
+        accessTokenEnc: Buffer.from("server-2"),
+        refreshTokenEnc: null,
+        tokenType: "bearer",
+        expiresAt: null,
+        tokenHash: Buffer.from("hash-2"),
+        keyVersion: 1,
+        encryptionFormat: "mns1-aes-gcm-v1",
+      });
+
+      const rows = _sqlite
+        .prepare(`
+          SELECT encryption_format AS encryptionFormat, is_current AS isCurrent
+          FROM connection_tokens
+          WHERE connection_id = 'c1'
+          ORDER BY id
+        `)
+        .all();
+      expect(rows).toEqual([
+        { encryptionFormat: "electron-safe-storage-v1", isCurrent: 1 },
+        { encryptionFormat: "mns1-aes-gcm-v1", isCurrent: 0 },
+        { encryptionFormat: "mns1-aes-gcm-v1", isCurrent: 1 },
+      ]);
+    });
+  });
+
+  describe("markTokensNotCurrent", () => {
+    it("marks every encryption format as not current", async () => {
+      createConnection(db, { id: "c1" });
+      _sqlite.exec(`
+        INSERT INTO connection_tokens (
+          connection_id, access_token_enc, encryption_format, is_current
+        ) VALUES
+          ('c1', X'deadbeef', 'electron-safe-storage-v1', 1),
+          ('c1', X'4D4E533101', 'mns1-aes-gcm-v1', 1)
       `);
 
       await connectionsRepo.markTokensNotCurrent("c1");
 
-      const result = await connectionsRepo.findCurrentToken("c1");
-      expect(result).toBeUndefined();
+      expect(
+        await connectionsRepo.findCurrentToken(
+          "c1",
+          "electron-safe-storage-v1",
+        ),
+      ).toBeUndefined();
+      expect(
+        await connectionsRepo.findCurrentToken("c1", "mns1-aes-gcm-v1"),
+      ).toBeUndefined();
     });
   });
 

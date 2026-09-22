@@ -55,6 +55,7 @@ function createFileSecretStorage(dataDir: string): SecretStorageAdapter {
   }
 
   return {
+    format: "mns1-aes-gcm-v1",
     isEncryptionAvailable() {
       try {
         readOrCreateKey();

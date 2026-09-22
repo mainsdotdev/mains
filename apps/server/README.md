@@ -42,8 +42,11 @@ rejects a second backend before it can open SQLite.
 
 `--data-dir` remains available for tests or an intentionally isolated backend.
 Existing Electron-encrypted integration credentials are preserved in the
-shared database, but the plain-Node host cannot decrypt them yet. CLI-backed
-providers use their normal host authentication.
+shared database, but the plain-Node host cannot decrypt them. Reauthorizing an
+integration in Mains Server creates a separate `MNS1` credential for Server;
+it does not replace or deactivate Desktop's `safeStorage` credential. Desktop
+reauthorization likewise leaves Server's credential intact. CLI-backed providers
+use their normal host authentication.
 
 For access away from the LAN, prefer Tailscale HTTPS:
 

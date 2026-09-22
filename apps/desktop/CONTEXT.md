@@ -67,8 +67,8 @@ The `connections` module owns three tables: `connections`, `connection_tokens`, 
 
 IPC channels live under one namespace: the existing `connections:*` channels stay, plus `connections:listStates` and `connections:updateState` (formerly `connectionStates:*`). The renderer has one `connectionsApi.ts` with split RTK Query tag types (`Connection`, `ConnectionState`). The preload collapses to one `window.api.connections` section.
 
-Cross-module readers (`sync`, `guards`) import a single named function — `getConnectionWithSecrets` — from the module's barrel. The crypto helpers (`encryptSecrets`, `decryptSecrets`, `createTokenHash`, `parseProviderCredentials`, `parseConnectionMetadata`) live in `connections.utils.ts` as an internal seam — private to the module, used by its own tests, not re-exported from `index.ts`.
-_Avoid_: re-splitting into `connections` + `connectionStates` + `connectionCredentials`. Avoid importing crypto helpers across modules — call `getConnectionWithSecrets` instead. See ADR-0002.
+Cross-module readers (`sync`, `guards`) import a single named function — `getConnectionWithSecrets` — from the module's barrel. The crypto helpers (`encryptSecrets`, `decryptSecrets`, `createTokenHash`, `parseProviderCredentials`, `parseConnectionMetadata`) live in `connections.utils.ts` as an internal seam — private to the module, used by its own tests, not re-exported from `index.ts`. Credential rows carry an `encryption_format`, with one current row per connection + format: Electron `safeStorage` and standalone `MNS1` credentials coexist, and each runtime selects only its own current format. Pre-format rows remain `unversioned` and are probed as an upgrade bridge. Reauthorization rotates only the active runtime's format; explicit revoke retires every format.
+_Avoid_: re-splitting into `connections` + `connectionStates` + `connectionCredentials`; restoring one global-current credential index that lets Desktop and Server invalidate one another; importing crypto helpers across modules — call `getConnectionWithSecrets` instead. See ADR-0002.
 
 ### projects
 
@@ -127,15 +127,18 @@ one database and managed-file history without an import. They use it serially:
 the shared **database ownership** seam claims a process lock before SQLite opens
 and rejects Desktop/Server overlap because each host also runs schedulers,
 provider processes and automations. Existing Electron-encrypted integration
-credentials stay preserved; the Node host cannot decrypt those records yet,
-while secrets created by Node use a local AES-GCM key. The Electron-free
+credentials stay preserved; the Node host cannot decrypt those records and
+stores its local-key AES-GCM (`MNS1`) credential alongside them after
+reauthorization. Each host rotates and selects its own encryption format, so
+reauthorizing in Server no longer invalidates Desktop (or vice versa). The Electron-free
 implementation lives in `packages/backend` and
 is consumed by both hosts through `@mains/backend`; server-only entry, CLI,
 build and packaging code live in `apps/server`, while native UI adapters live in
 `apps/desktop`. One backend process owns the canonical data directory at a time.
 _Avoid_: treating standalone as an Electron `--serve` alias; pointing it at the
 desktop data directory without ownership enforcement; deleting or disabling
-Electron-encrypted credentials merely because Node cannot read them; starting
+Electron-encrypted credentials merely because Node cannot read them; returning
+to one global-current credential slot across incompatible encryption formats; starting
 another server against the same state directory; adding server-only composition
 code back under `apps/desktop`.
 

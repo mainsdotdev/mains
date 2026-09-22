@@ -9,7 +9,13 @@
 
 export type BackendPath = "userData" | "desktop";
 
+export type SecretStorageFormat =
+  | "electron-safe-storage-v1"
+  | "mns1-aes-gcm-v1";
+
 export interface SecretStorageAdapter {
+  /** Stable identifier persisted beside each encrypted credential blob. */
+  readonly format: SecretStorageFormat;
   isEncryptionAvailable(): boolean;
   encryptString(value: string): Buffer;
   decryptString(value: Buffer): string;
