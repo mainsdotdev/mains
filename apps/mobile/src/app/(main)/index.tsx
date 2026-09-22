@@ -331,7 +331,7 @@ export default function NewRunScreen() {
             >
               <ThemedText variant="headline">No computer paired</ThemedText>
               <ThemedText variant="subhead">
-                Open Mains Desktop or start Mains Server with LAN or Tailscale access, then scan its pairing code.
+                Start Mains on your computer with LAN or Tailscale access, then scan its pairing code.
               </ThemedText>
               <Button title="Scan pairing code" onPress={() => router.push("/pair" as Href)} />
               <Button

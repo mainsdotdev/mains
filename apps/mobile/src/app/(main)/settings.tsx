@@ -247,7 +247,7 @@ export default function SettingsScreen() {
             <View style={{ padding: spacing.md, gap: spacing.xs }}>
               <ThemedText variant="headline">No computer paired</ThemedText>
               <ThemedText variant="footnote" style={{ color: colors.secondaryLabel }}>
-                Open Mains Desktop or start Mains Server with LAN or Tailscale access, then scan its pairing code.
+                Start Mains on your computer with LAN or Tailscale access, then scan its pairing code.
               </ThemedText>
             </View>
             <Row

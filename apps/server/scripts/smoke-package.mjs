@@ -277,7 +277,7 @@ try {
   const duplicateOutput = `${duplicate.stdout}\n${duplicate.stderr}`;
   if (
     duplicate.status === 0 ||
-    !duplicateOutput.includes("already in use by Mains Server")
+    !duplicateOutput.includes("already in use by Mains CLI")
   ) {
     throw new Error(
       `Packaged ownership lock failed:\n${duplicateOutput || `exit ${duplicate.status}`}`,

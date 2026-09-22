@@ -44,17 +44,30 @@ describe("database ownership", () => {
     const desktop = acquireDatabaseOwnership(databasePath, "Mains Desktop");
 
     expect(() =>
-      acquireDatabaseOwnership(databasePath, "Mains Server"),
+      acquireDatabaseOwnership(databasePath, "Mains CLI"),
     ).toThrow(DatabaseOwnershipError);
     expect(() =>
-      acquireDatabaseOwnership(databasePath, "Mains Server"),
-    ).toThrow(/Mains Desktop.*PID/u);
+      acquireDatabaseOwnership(databasePath, "Mains CLI"),
+    ).toThrow(
+      /Mains Desktop.*PID.*Only one Mains backend can safely own the same data at a time/su,
+    );
 
     desktop.release();
-    const server = acquireDatabaseOwnership(databasePath, "Mains Server");
+    const server = acquireDatabaseOwnership(databasePath, "Mains CLI");
     expect(fs.existsSync(databaseOwnershipPath(databasePath))).toBe(true);
     server.release();
     expect(fs.existsSync(databaseOwnershipPath(databasePath))).toBe(false);
+  });
+
+  it("uses current terminology for a lock written by an older CLI", () => {
+    const databasePath = temporaryDatabasePath();
+    const legacyCli = acquireDatabaseOwnership(databasePath, "Mains Server");
+
+    expect(() =>
+      acquireDatabaseOwnership(databasePath, "Mains Desktop"),
+    ).toThrow(/already in use by Mains CLI.*before starting Mains Desktop/su);
+
+    legacyCli.release();
   });
 
   it("recovers an ownership record left by a dead process", () => {
@@ -72,9 +85,9 @@ describe("database ownership", () => {
       })}\n`,
     );
 
-    const server = acquireDatabaseOwnership(databasePath, "Mains Server");
+    const server = acquireDatabaseOwnership(databasePath, "Mains CLI");
     expect(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")).toContain(
-      "Mains Server",
+      "Mains CLI",
     );
     server.release();
   });
@@ -91,9 +104,9 @@ describe("database ownership", () => {
       acquiredAt: "2000-01-01T00:00:00.000Z",
     });
 
-    const server = acquireDatabaseOwnership(databasePath, "Mains Server");
+    const server = acquireDatabaseOwnership(databasePath, "Mains CLI");
     expect(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")).toContain(
-      "Mains Server",
+      "Mains CLI",
     );
     server.release();
   });
@@ -111,9 +124,9 @@ describe("database ownership", () => {
       processIdentity: "a-different-process-instance",
     });
 
-    const server = acquireDatabaseOwnership(databasePath, "Mains Server");
+    const server = acquireDatabaseOwnership(databasePath, "Mains CLI");
     expect(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")).toContain(
-      "Mains Server",
+      "Mains CLI",
     );
     server.release();
   });
@@ -137,7 +150,7 @@ describe("database ownership", () => {
       acquiredAt: "2026-01-01T00:00:00.000Z",
     });
 
-    const server = acquireDatabaseOwnership(databasePath, "Mains Server");
+    const server = acquireDatabaseOwnership(databasePath, "Mains CLI");
     expect(fs.existsSync(path.join(lockPath, "recovery.json"))).toBe(false);
     server.release();
   });
@@ -158,7 +171,7 @@ describe("database ownership", () => {
     const staleTime = new Date(Date.now() - 60_000);
     fs.utimesSync(recoveryPath, staleTime, staleTime);
 
-    const server = acquireDatabaseOwnership(databasePath, "Mains Server");
+    const server = acquireDatabaseOwnership(databasePath, "Mains CLI");
     expect(fs.existsSync(recoveryPath)).toBe(false);
     server.release();
   });
@@ -178,7 +191,7 @@ describe("database ownership", () => {
     fs.writeFileSync(recoveryPath, "");
 
     expect(() =>
-      acquireDatabaseOwnership(databasePath, "Mains Server"),
+      acquireDatabaseOwnership(databasePath, "Mains CLI"),
     ).toThrow(/another process is recovering/u);
     expect(fs.existsSync(recoveryPath)).toBe(true);
   });
@@ -208,7 +221,7 @@ describe("database ownership", () => {
     fs.writeFileSync(path.join(lockPath, "recovery.json"), liveRecoveryRecord);
 
     expect(() =>
-      acquireDatabaseOwnership(databasePath, "Mains Server"),
+      acquireDatabaseOwnership(databasePath, "Mains CLI"),
     ).toThrow(/another process is recovering/u);
     expect(fs.readFileSync(path.join(lockPath, "recovery.json"), "utf8")).toBe(
       liveRecoveryRecord,
@@ -216,7 +229,7 @@ describe("database ownership", () => {
   });
 
   it("does not create a filesystem lock for an in-memory database", () => {
-    const ownership = acquireDatabaseOwnership(":memory:", "Mains Server");
+    const ownership = acquireDatabaseOwnership(":memory:", "Mains CLI");
     expect(ownership.lockPath).toBeNull();
     ownership.release();
   });

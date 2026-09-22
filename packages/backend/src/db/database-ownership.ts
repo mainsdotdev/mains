@@ -9,6 +9,10 @@ const RECOVERY_FILE = "recovery.json";
 const RECOVERY_STALE_AFTER_MS = 30_000;
 const BOOT_TIME_TOLERANCE_MS = 5_000;
 
+function displayOwner(owner: string): string {
+  return owner === "Mains Server" ? "Mains CLI" : owner;
+}
+
 interface OwnershipRecordBase {
   token: string;
   pid: number;
@@ -374,14 +378,14 @@ export function acquireDatabaseOwnership(
     if (!existing) {
       throw new DatabaseOwnershipError(
         `The Mains data ownership lock at "${lockPath}" is unreadable. ` +
-          "If no Mains Desktop or Mains Server process is running, remove that lock and try again.",
+          "If no Mains process is running, remove that lock and try again.",
       );
     }
     if (recordBelongsToRunningProcess(existing)) {
       throw new DatabaseOwnershipError(
         `Mains data at "${resolvedDatabasePath}" is already in use by ` +
-          `${existing.owner} (PID ${existing.pid}). Stop it before starting ${owner}; ` +
-          "Desktop and Server cannot safely own the same data at the same time.",
+          `${displayOwner(existing.owner)} (PID ${existing.pid}). Stop it before starting ${displayOwner(owner)}; ` +
+          "Only one Mains backend can safely own the same data at a time.",
       );
     }
     if (!recoverStaleLock(lockPath, existing)) {

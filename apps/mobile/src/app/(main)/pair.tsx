@@ -149,7 +149,7 @@ export default function PairScreen() {
         {entryMode === "manual" ? (
           <>
             <ThemedText variant="subhead">
-              On your computer, open Mains Desktop or run “mains pair” with Mains Server, then paste the pairing link here.
+              On your computer, show a pairing link in Mains or run “mains pair”, then paste it here.
             </ThemedText>
             <TextInput
               accessibilityLabel="Pairing link"

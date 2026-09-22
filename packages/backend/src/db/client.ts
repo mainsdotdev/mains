@@ -85,7 +85,7 @@ class DatabaseClient {
       const runtime = getBackendRuntime();
       this.ownership = acquireDatabaseOwnership(
         this.dbPath,
-        runtime.kind === "electron" ? "Mains Desktop" : "Mains Server",
+        runtime.kind === "electron" ? "Mains Desktop" : "Mains CLI",
       );
 
       // Create SQLite instance
