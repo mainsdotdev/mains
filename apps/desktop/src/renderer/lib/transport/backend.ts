@@ -8,6 +8,23 @@ import { WsTransport, type WsTransportOptions } from "./ws-transport";
 let activeRemote: WsTransport | null = null;
 const REMOTE_BACKEND_HANDSHAKE_TIMEOUT_MS = 10_000;
 
+function withHandshakeTimeout<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new Error(
+          `Backend handshake timed out after ${REMOTE_BACKEND_HANDSHAKE_TIMEOUT_MS}ms`,
+        ),
+      );
+    }, REMOTE_BACKEND_HANDSHAKE_TIMEOUT_MS);
+  });
+
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
+}
+
 function disposeActiveRemote(): void {
   if (activeRemote) {
     activeRemote.dispose();
@@ -68,8 +85,6 @@ export async function connectRemoteBackend(
   const reconnect = options?.reconnect ?? true;
   const transport = new WsTransport(url, {
     ...options,
-    invokeTimeoutMs:
-      options?.invokeTimeoutMs ?? REMOTE_BACKEND_HANDSHAKE_TIMEOUT_MS,
     reconnect: false,
   });
   transport.connect();
@@ -79,7 +94,9 @@ export async function connectRemoteBackend(
       throw new Error("The WebSocket connection could not be opened.");
     }
 
-    const response = await transport.invoke(CHANNELS.backend.describe);
+    const response = await withHandshakeTimeout(
+      transport.invoke(CHANNELS.backend.describe),
+    );
     if (!response.success) {
       throw new Error(response.error || "The backend rejected the connection.");
     }

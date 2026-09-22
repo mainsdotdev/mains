@@ -1,5 +1,5 @@
 import type { BackendDescriptor } from "@mains/contracts/backend";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   connectRemoteBackend,
   disconnectRemoteBackend,
@@ -7,7 +7,7 @@ import {
   type RemoteBackendConnection,
 } from "./backend";
 import { getTransport } from "./registry";
-import type { WebSocketLike } from "./ws-transport";
+import type { WebSocketLike, WsTransportOptions } from "./ws-transport";
 
 class FakeSocket implements WebSocketLike {
   readyState = 0;
@@ -50,16 +50,21 @@ const descriptor: BackendDescriptor = {
   serverTime: "2026-09-21T10:00:00.000Z",
 };
 
-function startConnection(url = "ws://test") {
+function startConnection(
+  url = "ws://test",
+  options: Pick<WsTransportOptions, "invokeTimeoutMs"> = {
+    invokeTimeoutMs: 0,
+  },
+) {
   const sockets: FakeSocket[] = [];
   const promise = connectRemoteBackend(url, {
+    ...options,
     factory: () => {
       const socket = new FakeSocket();
       sockets.push(socket);
       return socket;
     },
     reconnect: false,
-    invokeTimeoutMs: 0,
   });
   return { promise, sockets };
 }
@@ -81,7 +86,49 @@ async function accept(
 
 describe("remote backend activation", () => {
   afterEach(() => {
+    vi.useRealTimers();
     disconnectRemoteBackend();
+  });
+
+  it("keeps the normal invoke timeout after verification", async () => {
+    vi.useFakeTimers();
+    const connection = await accept(startConnection("ws://test", {}));
+    let settled = false;
+    const pending = connection.transport.invoke("slow:operation");
+    const outcome = pending.then(
+      () => {
+        settled = true;
+        return "resolved";
+      },
+      (error: Error) => {
+        settled = true;
+        return `rejected: ${error.message}`;
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(outcome).resolves.toBe(
+      'rejected: Invoke "slow:operation" timed out after 30000ms',
+    );
+  });
+
+  it("limits backend verification to ten seconds", async () => {
+    vi.useFakeTimers();
+    const attempt = startConnection("ws://test", {});
+    attempt.sockets[0].open();
+
+    const outcome = attempt.promise.then(
+      () => "resolved",
+      (error: Error) => `rejected: ${error.message}`,
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(outcome).resolves.toContain(
+      "Backend handshake timed out after 10000ms",
+    );
+    expect(attempt.sockets[0].closed).toBe(true);
   });
 
   it("keeps the local transport active until the backend is verified", async () => {

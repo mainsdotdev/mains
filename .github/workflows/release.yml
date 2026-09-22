@@ -80,6 +80,9 @@ jobs:
             packages/backend/package-lock.json
 
       - run: npm ci
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
 
       # npm ci on the arm64 runner only installs the host-arch copilot binary
       # package (@github/copilot-darwin-arm64). The x64 build needs the x64
@@ -154,6 +157,9 @@ jobs:
 
       - name: Install desktop web dependencies
         working-directory: apps/desktop
+        run: npm ci
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
         run: npm ci
       - run: npm ci
 
