@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   listPairedDevices,
   requestPairingCode,
+  requestWebLogin,
   revokePairedDevice,
 } from "./pairing-client";
 
@@ -85,5 +86,59 @@ describe("requestPairingCode", () => {
       new URL("http://127.0.0.1:8787/__mains/admin/devices/device-1"),
     );
     expect(fetchImpl.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
+  });
+});
+
+describe("requestWebLogin", () => {
+  it("asks the running server for an origin-bound one-time login", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(
+          JSON.stringify({
+            link: "https://mains.example/#login=one-time",
+            expiresAt: "2026-09-21T10:05:00.000Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    await expect(
+      requestWebLogin({
+        controlUrl: "http://127.0.0.1:8787",
+        token: "root-token",
+        baseUrl: "https://mains.example",
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      link: "https://mains.example/#login=one-time",
+      expiresAt: "2026-09-21T10:05:00.000Z",
+    });
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(String(url)).toBe(
+      "http://127.0.0.1:8787/__mains/admin/web-login",
+    );
+    expect(init).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({ baseUrl: "https://mains.example" }),
+    });
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
+      "Bearer root-token",
+    );
+  });
+
+  it("rejects malformed responses", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ link: "missing-expiry" }), { status: 200 }),
+    );
+
+    await expect(
+      requestWebLogin({
+        controlUrl: "http://127.0.0.1:8787",
+        token: "root-token",
+        baseUrl: "http://127.0.0.1:8787",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("invalid browser login");
   });
 });

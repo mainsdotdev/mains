@@ -193,6 +193,7 @@ export const CHANNELS = {
     setTailscaleHttps: "localBackend:setTailscaleHttps",
     setKeepAwakeForRemoteAccess: "localBackend:setKeepAwakeForRemoteAccess",
     rotateToken: "localBackend:rotateToken",
+    createWebLogin: "localBackend:createWebLogin",
     createPairingCode: "localBackend:createPairingCode",
     listPairedDevices: "localBackend:listPairedDevices",
     revokePairedDevice: "localBackend:revokePairedDevice",

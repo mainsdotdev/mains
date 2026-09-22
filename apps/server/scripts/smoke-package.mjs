@@ -26,19 +26,19 @@ const installedCommand = path.join(
   process.platform === "win32" ? "mains.cmd" : "mains",
 );
 let child;
+let serverOutput = "";
 
 function waitForReady(processHandle) {
   return new Promise((resolve, reject) => {
-    let output = "";
     const timer = setTimeout(() => {
-      reject(new Error(`Server did not become ready:\n${output}`));
+      reject(new Error(`Server did not become ready:\n${serverOutput}`));
     }, 20_000);
 
     const onData = (chunk) => {
       const text = chunk.toString();
-      output += text;
+      serverOutput += text;
       process.stdout.write(text);
-      const match = output.match(/listening on ws:\/\/127\.0\.0\.1:(\d+)/);
+      const match = serverOutput.match(/listening on ws:\/\/127\.0\.0\.1:(\d+)/);
       if (!match) return;
       clearTimeout(timer);
       resolve(Number(match[1]));
@@ -46,14 +46,14 @@ function waitForReady(processHandle) {
     processHandle.stdout.on("data", onData);
     processHandle.stderr.on("data", (chunk) => {
       const text = chunk.toString();
-      output += text;
+      serverOutput += text;
       process.stderr.write(text);
     });
     processHandle.once("exit", (code, signal) => {
       clearTimeout(timer);
       reject(
         new Error(
-          `Server exited before it was ready (${signal ?? `code ${code}`}):\n${output}`,
+          `Server exited before it was ready (${signal ?? `code ${code}`}):\n${serverOutput}`,
         ),
       );
     });
@@ -82,6 +82,41 @@ function describeBackend(port) {
     const timer = setTimeout(() => {
       socket.terminate();
       reject(new Error("Timed out waiting for backend:describe"));
+    }, 10_000);
+    socket.once("open", () => {
+      socket.send(
+        JSON.stringify({
+          kind: "invoke",
+          id: 1,
+          channel: "backend:describe",
+          args: [],
+        }),
+      );
+    });
+    socket.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.kind !== "response" || message.id !== 1) return;
+      clearTimeout(timer);
+      socket.close();
+      resolve(message.result);
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+function describeBackendWithSession(port, origin, cookie) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${port}/__mains/ws`,
+      ["mains.v1"],
+      { headers: { Origin: origin, Cookie: cookie } },
+    );
+    const timer = setTimeout(() => {
+      socket.terminate();
+      reject(new Error("Timed out waiting for cookie-authenticated backend"));
     }, 10_000);
     socket.once("open", () => {
       socket.send(
@@ -259,6 +294,61 @@ try {
     );
   }
 
+  const browserOrigin = `http://127.0.0.1:${port}`;
+  const browserLogin = spawnSync(
+    process.execPath,
+    [
+      executable,
+      "web",
+      "--data-dir",
+      dataDir,
+      "--token",
+      token,
+      "--url",
+      browserOrigin,
+    ],
+    { cwd: temporaryRoot, encoding: "utf8" },
+  );
+  const loginOutput = `${browserLogin.stdout}\n${browserLogin.stderr}`;
+  const loginMatch = browserLogin.stdout.match(/(https?:\/\/\S+#login=[\w-]+)/);
+  if (browserLogin.status !== 0 || !loginMatch || loginOutput.includes(token)) {
+    throw new Error(
+      `Packaged browser login command failed:\n${loginOutput || `exit ${browserLogin.status}`}`,
+    );
+  }
+  const loginUrl = new URL(loginMatch[1]);
+  const loginCode = new URLSearchParams(loginUrl.hash.slice(1)).get("login");
+  const exchange = await fetch(`${browserOrigin}/__mains/web-session`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${loginCode}`,
+      Origin: browserOrigin,
+    },
+  });
+  const setCookies =
+    typeof exchange.headers.getSetCookie === "function"
+      ? exchange.headers.getSetCookie()
+      : (exchange.headers.get("set-cookie") ?? "").split(/,(?=\s*mains_)/);
+  const sessionCookie = setCookies
+    .find((value) => value.trim().startsWith("mains_web_"))
+    ?.trim()
+    .split(";", 1)[0];
+  if (exchange.status !== 204 || !sessionCookie) {
+    throw new Error(
+      `Packaged browser login exchange failed (${exchange.status})`,
+    );
+  }
+  const browserResponse = await describeBackendWithSession(
+    port,
+    browserOrigin,
+    sessionCookie,
+  );
+  if (!browserResponse?.success) {
+    throw new Error(
+      `Cookie-authenticated browser socket failed: ${JSON.stringify(browserResponse)}`,
+    );
+  }
+
   const duplicate = spawnSync(
     process.execPath,
     [
@@ -286,12 +376,16 @@ try {
 
   await stopChild(child);
   child = undefined;
+  // stdout is a pipe here, exactly like a service log file.
+  if (serverOutput.includes(token)) {
+    throw new Error("Packaged server wrote its owner token to non-interactive output");
+  }
   if (fs.existsSync(path.join(dataDir, "mains.db.backend.lock"))) {
     throw new Error("Packaged server left its database ownership lock behind");
   }
 
   console.log(
-    `Packaged server smoke test passed (${response.data.appVersion}, protocol ${response.data.protocolVersion}, pairing + ownership lock)`,
+    `Packaged server smoke test passed (${response.data.appVersion}, protocol ${response.data.protocolVersion}, pairing + browser login + ownership lock)`,
   );
 } finally {
   if (child) await stopChild(child);

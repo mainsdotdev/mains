@@ -90,9 +90,10 @@ export interface ServeOptions {
   /** Interface to bind. Default loopback (127.0.0.1) — pair via SSH tunnel. */
   host?: string;
   /**
-   * Owner token full-access clients must present. Falls back to MAINS_SERVE_TOKEN, then to
-   * a freshly generated one that is printed. Never optional, loopback included:
-   * any web page the user visits can open a WebSocket to 127.0.0.1.
+   * Owner token full-access clients must present. Falls back to MAINS_SERVE_TOKEN,
+   * then to a freshly generated one returned to the host for secure persistence.
+   * It is never placed in a browser URL. Never optional, loopback included: any
+   * web page the user visits can open a WebSocket to 127.0.0.1.
    */
   token?: string | null;
   /**
@@ -248,10 +249,9 @@ export async function startBackendServer(
     throw error;
   }
   console.log(`[serve] mains backend listening on ws://${host}:${wsHost.port}`);
-  console.log(`[serve] owner token: ${token}`);
   if (webRoot) {
     console.log(
-      `[serve] web UI: open http://${host}:${wsHost.port}/?token=${token} (serving ${webRoot})`,
+      `[serve] web UI ready at http://${host}:${wsHost.port}/ (serving ${webRoot})`,
     );
   } else {
     console.log(
@@ -271,7 +271,7 @@ export async function startBackendServer(
           httpsPort,
         );
         tailscaleUrl = httpsUrl;
-        console.log(`[serve] Tailscale HTTPS web UI: ${httpsUrl}/?token=${token}`);
+        console.log(`[serve] Tailscale HTTPS web UI: ${httpsUrl}/`);
         console.log(
           `[serve] Tailscale connect (WS): ${httpsUrl.replace(/^https:/, "wss:")}`,
         );
@@ -309,8 +309,10 @@ export async function startBackendServer(
   return {
     sink: wsHost.sink,
     port: wsHost.port,
+    webUiAvailable: wsHost.webUiAvailable,
     token,
     tailscaleUrl,
+    createWebLogin: (baseUrl) => wsHost.createWebLogin(baseUrl),
     createPairingCode: (endpoints) =>
       backendService.createPairingCode(endpoints),
     disconnectDevice: (deviceId) => wsHost.disconnectDevice(deviceId),

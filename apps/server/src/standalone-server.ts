@@ -56,8 +56,10 @@ export async function startStandaloneServer(
   return {
     sink: server.sink,
     port: server.port,
+    webUiAvailable: server.webUiAvailable,
     token: server.token,
     tailscaleUrl: server.tailscaleUrl,
+    createWebLogin: (baseUrl) => server.createWebLogin(baseUrl),
     dataDir,
     createPairingCode: (endpoints) => server.createPairingCode(endpoints),
     disconnectDevice: (deviceId) => server.disconnectDevice(deviceId),

@@ -75,6 +75,19 @@ export function registerLocalBackendIpc() {
     }
   });
 
+  ipcMain.handle(
+    CHANNELS.localBackend.createWebLogin,
+    async (_e, baseUrl: string) => {
+      try {
+        return ok(localBackendService.createWebLogin(baseUrl));
+      } catch (error) {
+        return fail(
+          error instanceof Error ? error.message : "Failed to create browser login",
+        );
+      }
+    },
+  );
+
   // Phone pairing rides on the exposure above, so it is local-only for the same
   // reason: a remote client must not be able to mint codes or revoke devices.
   ipcMain.handle(CHANNELS.localBackend.createPairingCode, async () => {
@@ -119,6 +132,7 @@ export function unregisterLocalBackendIpc() {
   ipcMain.removeHandler(CHANNELS.localBackend.setTailscaleHttps);
   ipcMain.removeHandler(CHANNELS.localBackend.setKeepAwakeForRemoteAccess);
   ipcMain.removeHandler(CHANNELS.localBackend.rotateToken);
+  ipcMain.removeHandler(CHANNELS.localBackend.createWebLogin);
   ipcMain.removeHandler(CHANNELS.localBackend.createPairingCode);
   ipcMain.removeHandler(CHANNELS.localBackend.listPairedDevices);
   ipcMain.removeHandler(CHANNELS.localBackend.revokePairedDevice);

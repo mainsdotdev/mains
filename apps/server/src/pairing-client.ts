@@ -11,6 +11,15 @@ export interface RequestPairingCodeOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface RemoteWebLogin {
+  link: string;
+  expiresAt: string;
+}
+
+export interface RequestWebLoginOptions extends AdminClientOptions {
+  baseUrl: string;
+}
+
 export interface RemotePairedDevice {
   id: string;
   name: string;
@@ -87,6 +96,36 @@ export async function requestPairingCode(
   );
   if (!isRemotePairingCode(payload)) {
     throw new Error("The running server returned an invalid pairing code");
+  }
+  return payload;
+}
+
+function isRemoteWebLogin(value: unknown): value is RemoteWebLogin {
+  if (!value || typeof value !== "object") return false;
+  const result = value as Record<string, unknown>;
+  return (
+    typeof result.link === "string" &&
+    typeof result.expiresAt === "string"
+  );
+}
+
+/** Ask the running process to mint an origin-bound, one-use browser login. */
+export async function requestWebLogin(
+  options: RequestWebLoginOptions,
+): Promise<RemoteWebLogin> {
+  const { payload } = await adminFetch(
+    options,
+    "/__mains/admin/web-login",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ baseUrl: options.baseUrl }),
+    },
+  );
+  if (!isRemoteWebLogin(payload)) {
+    throw new Error("The running server returned an invalid browser login");
   }
   return payload;
 }

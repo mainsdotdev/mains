@@ -8,6 +8,7 @@ import {
   findPackageRoot,
   parsePairCliOptions,
   parseServerCliOptions,
+  parseWebCliOptions,
 } from "./server-cli-options";
 
 const temporaryDirectories: string[] = [];
@@ -160,6 +161,31 @@ describe("parsePairCliOptions", () => {
     );
     expect(() => parsePairCliOptions(["--lan"])).toThrow(
       "Unknown option: --lan",
+    );
+  });
+});
+
+describe("parseWebCliOptions", () => {
+  it("parses the running server and browser origin", () => {
+    expect(
+      parseWebCliOptions([
+        "--server-url=http://127.0.0.1:9000",
+        "--url=https://mains.example.com",
+        "--token",
+        ownerToken,
+        "--data-dir=/tmp/mains",
+      ]),
+    ).toEqual({
+      controlUrl: "http://127.0.0.1:9000",
+      baseUrl: "https://mains.example.com",
+      token: ownerToken,
+      dataDir: "/tmp/mains",
+    });
+  });
+
+  it("rejects pairing-only options", () => {
+    expect(() => parseWebCliOptions(["--endpoint=https://mains.example"])).toThrow(
+      "Unknown option: --endpoint",
     );
   });
 });

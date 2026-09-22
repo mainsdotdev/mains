@@ -16,6 +16,12 @@ import {
 } from "@mains/contracts/ws-protocol";
 import { registerEventSink } from "./event-bus";
 import { tokensMatch } from "./ws-auth";
+import {
+  createWebSessionManager,
+  type WebLoginLink,
+  type WebSessionManager,
+} from "./web-session";
+export type { WebLoginLink } from "./web-session";
 import { WebSocketSink } from "./websocket-sink";
 import {
   serveConnection,
@@ -38,6 +44,10 @@ export interface WsHost {
   readonly sink: WebSocketSink;
   /** The actual listening port (resolved even when started with port 0). */
   readonly port: number;
+  /** Whether this host found a built renderer it can serve to browsers. */
+  readonly webUiAvailable: boolean;
+  /** Mint an origin-bound, five-minute, single-use browser login link. */
+  createWebLogin(baseUrl: string): WebLoginLink;
   /**
    * Drop every live connection authenticated as this paired device. Device
    * tokens are checked only at the handshake, so revoking one without this
@@ -65,7 +75,8 @@ export interface WsHostOptions {
   /**
    * Remote-image proxy for web mode — `GET /__img?url=<encoded>` pipes the result.
    * Lets a browser load remote images (avatars etc.) the way the Electron
-   * `mains-img://` protocol does. Injected to keep this module domain-agnostic.
+   * `mains-img://` protocol does. Requests authenticate with the cookie set by
+   * `POST /__mains/web-session`. Injected to keep this module domain-agnostic.
    */
   fetchProxiedImage?: (url: string) => Promise<Response>;
   /**
@@ -109,6 +120,9 @@ export interface WsHostOptions {
 const MAX_PROXY_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_PAIR_BODY_BYTES = 16 * 1024;
 const MAX_PAIRING_ENDPOINTS = 8;
+const WEB_SESSION_PATH = "/__mains/web-session";
+const WEB_SESSION_COOKIE_PATH = "/__mains";
+const IMAGE_COOKIE_PATH = "/__img";
 
 function writeJson(res: ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, {
@@ -124,6 +138,60 @@ function bearerToken(req: IncomingMessage): string | null {
   if (!raw || Array.isArray(raw)) return null;
   const match = /^Bearer\s+(.+)$/i.exec(raw);
   return match?.[1] ?? null;
+}
+
+function readCookie(req: IncomingMessage, name: string): string | null {
+  for (const part of (req.headers.cookie ?? "").split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() === name) {
+      return part.slice(separator + 1).trim();
+    }
+  }
+  return null;
+}
+
+function requestOrigin(req: IncomingMessage): string | null {
+  const raw = req.headers.origin;
+  if (!raw || Array.isArray(raw)) return null;
+  try {
+    const origin = new URL(raw);
+    if (origin.protocol !== "http:" && origin.protocol !== "https:") return null;
+    return origin.origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Origin of the document initiating a same-origin subresource request. */
+function requestDocumentOrigin(req: IncomingMessage): string | null {
+  const origin = requestOrigin(req);
+  if (origin) return origin;
+  const raw = req.headers.referer;
+  if (!raw || Array.isArray(raw)) return null;
+  try {
+    const referrer = new URL(raw);
+    if (referrer.protocol !== "http:" && referrer.protocol !== "https:") {
+      return null;
+    }
+    return referrer.origin;
+  } catch {
+    return null;
+  }
+}
+
+function serializeSessionCookie(params: {
+  name: string;
+  value: string;
+  path: string;
+  maxAgeSeconds: number;
+  secure: boolean;
+}): string {
+  return (
+    `${params.name}=${params.value}; Path=${params.path}; HttpOnly; ` +
+    `SameSite=Strict; Max-Age=${params.maxAgeSeconds}` +
+    (params.secure ? "; Secure" : "")
+  );
 }
 
 function parsePairingEndpoints(body: unknown): string[] {
@@ -231,6 +299,34 @@ async function handleCreatePairingCode(
   }
 }
 
+async function handleCreateWebLogin(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  createWebLogin: (baseUrl: string) => WebLoginLink,
+): Promise<void> {
+  if (!tokensMatch(token, bearerToken(req))) {
+    writeJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+
+  try {
+    const body = await readJsonBody(req, MAX_PAIR_BODY_BYTES);
+    const baseUrl =
+      body && typeof body === "object"
+        ? (body as { baseUrl?: unknown }).baseUrl
+        : undefined;
+    if (typeof baseUrl !== "string") {
+      throw new Error("Browser login request requires a baseUrl");
+    }
+    writeJson(res, 200, createWebLogin(baseUrl));
+  } catch (error) {
+    writeJson(res, 400, {
+      error: error instanceof Error ? error.message : "Browser login creation failed",
+    });
+  }
+}
+
 async function handleListPairedDevices(
   req: IncomingMessage,
   res: ServerResponse,
@@ -271,11 +367,7 @@ async function handleRevokePairedDevice(
   }
 }
 
-/**
- * Proxied images and signed local files are served same-origin with the web UI,
- * which keeps its owner token in localStorage: an SVG opened directly must not
- * run script on this origin, and no response may be sniffed into another type.
- */
+/** Proxied images and signed local files are untrusted active content. */
 const UNTRUSTED_CONTENT_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
   "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
@@ -306,18 +398,60 @@ async function handleLocalFile(
   }
 }
 
+/** Spend a browser login code for origin-bound WS and image-proxy cookies. */
+function handleWebSession(
+  req: IncomingMessage,
+  res: ServerResponse,
+  sessions: WebSessionManager,
+): void {
+  const credentials = sessions.exchange(bearerToken(req), requestOrigin(req));
+  if (!credentials) {
+    writeJson(res, 401, { error: "Unauthorized" });
+    return;
+  }
+  const maxAgeSeconds = Math.max(
+    1,
+    Math.floor((credentials.expiresAt - Date.now()) / 1000),
+  );
+  res.writeHead(204, {
+    "Set-Cookie": [
+      serializeSessionCookie({
+        name: sessions.sessionCookieName,
+        value: credentials.sessionToken,
+        path: WEB_SESSION_COOKIE_PATH,
+        maxAgeSeconds,
+        secure: credentials.secure,
+      }),
+      serializeSessionCookie({
+        name: sessions.imageCookieName,
+        value: credentials.imageToken,
+        path: IMAGE_COOKIE_PATH,
+        maxAgeSeconds,
+        secure: credentials.secure,
+      }),
+    ],
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  });
+  res.end();
+}
+
 async function handleImageProxy(
   req: IncomingMessage,
   res: ServerResponse,
   fetchProxiedImage: (url: string) => Promise<Response>,
-  token: string,
+  sessions: WebSessionManager,
 ): Promise<void> {
   try {
     const params = new URL(req.url ?? "/", "http://localhost").searchParams;
     // The proxy spends this machine's network position and its GitHub token, so
-    // it takes the same owner token as the WS handshake — as a query parameter,
-    // since an `<img>` can't send a subprotocol. Paired phones don't use it.
-    if (!tokensMatch(token, params.get("token"))) {
+    // it needs the web client's image-proxy cookie. Paired phones don't use it.
+    if (
+      !sessions.verifyImageSession(
+        readCookie(req, sessions.imageCookieName),
+        requestDocumentOrigin(req),
+      )
+    ) {
       res.writeHead(401);
       res.end("Unauthorized");
       return;
@@ -394,6 +528,8 @@ function createStaticHandler(webRoot: string) {
       const body = await readFile(filePath);
       res.writeHead(200, {
         "Content-Type": CONTENT_TYPES[path.extname(filePath)] ?? "application/octet-stream",
+        "Referrer-Policy": "same-origin",
+        "X-Content-Type-Options": "nosniff",
       });
       res.end(body);
     } catch {
@@ -432,6 +568,11 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       ? requestedWebRoot
       : null;
   const staticHandler = webRoot ? createStaticHandler(webRoot) : null;
+  const webSessions = createWebSessionManager();
+  const createWebLogin = (baseUrl: string): WebLoginLink => {
+    if (!webRoot) throw new Error("Web UI is not available on this backend");
+    return webSessions.createLogin(baseUrl);
+  };
 
   const httpServer: Server = createServer((req, res) => {
     const url = req.url ?? "";
@@ -453,6 +594,11 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         token,
         options.createPairingCode,
       );
+    } else if (
+      req.method === "POST" &&
+      pathname === "/__mains/admin/web-login"
+    ) {
+      void handleCreateWebLogin(req, res, token, createWebLogin);
     } else if (
       options.listPairedDevices &&
       req.method === "GET" &&
@@ -488,8 +634,17 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         deviceId,
         options.revokePairedDevice,
       );
-    } else if (options.fetchProxiedImage && url.startsWith("/__img")) {
-      void handleImageProxy(req, res, options.fetchProxiedImage, token);
+    } else if (
+      req.method === "POST" &&
+      pathname === WEB_SESSION_PATH
+    ) {
+      handleWebSession(req, res, webSessions);
+    } else if (
+      options.fetchProxiedImage &&
+      req.method === "GET" &&
+      pathname === IMAGE_COOKIE_PATH
+    ) {
+      void handleImageProxy(req, res, options.fetchProxiedImage, webSessions);
     } else if (options.serveLocalImage && url.startsWith("/__localimg")) {
       void handleLocalFile(req, res, options.serveLocalImage);
     } else if (options.serveLocalDocument && url.startsWith("/__localdoc")) {
@@ -508,6 +663,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   // Device identity survives from the handshake to the `connection` event via
   // the request object, which `ws` hands to both.
   const authenticatedDevices = new WeakMap<IncomingMessage, VerifiedDevice>();
+  const authenticatedWebSessions = new WeakMap<IncomingMessage, number>();
   const authorize = async (req: IncomingMessage): Promise<boolean> => {
     const raw = req.headers["sec-websocket-protocol"];
     const header = Array.isArray(raw) ? raw.join(",") : raw;
@@ -519,6 +675,18 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         authenticatedDevices.set(req, device);
         return true;
       }
+    }
+    const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+    const webSession =
+      requestPath === "/__mains/ws"
+        ? webSessions.verifySession(
+            readCookie(req, webSessions.sessionCookieName),
+            requestOrigin(req),
+          )
+        : null;
+    if (webSession) {
+      authenticatedWebSessions.set(req, webSession.expiresAt);
+      return true;
     }
     return false;
   };
@@ -543,6 +711,14 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
     const device = authenticatedDevices.get(req);
     if (device) socketDevices.set(socket, device.deviceId);
+    const webSessionExpiresAt = authenticatedWebSessions.get(req);
+    if (webSessionExpiresAt !== undefined) {
+      const expiryTimer = setTimeout(
+        () => socket.terminate(),
+        Math.max(0, webSessionExpiresAt - Date.now()),
+      );
+      socket.once("close", () => clearTimeout(expiryTimer));
+    }
     serveConnection(adaptSocket(socket, device), sink, {
       commandReceipts: options.commandReceipts,
     });
@@ -557,6 +733,8 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
       resolve({
         sink,
         port,
+        webUiAvailable: webRoot !== null,
+        createWebLogin,
         disconnectDevice: (deviceId) => {
           let dropped = 0;
           for (const client of wss.clients) {
@@ -571,6 +749,7 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         close: () =>
           new Promise<void>((res) => {
             unregisterSink();
+            webSessions.clear();
             // Force live connections closed first. httpServer.close() waits for
             // active sockets to drain, and wss.close() does NOT terminate its
             // clients — so a single connected WS client (the normal case for an

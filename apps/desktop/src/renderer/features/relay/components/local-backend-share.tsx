@@ -9,7 +9,8 @@ import {
   Toggle,
   toast,
 } from "@/components/ui";
-import { Eye, EyeClosed, Refresh } from "@/components/ui/icons";
+import { Check, Clipboard, Eye, EyeClosed, Refresh } from "@/components/ui/icons";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import {
   SettingsSection,
   SettingsDivider,
@@ -20,7 +21,6 @@ import { PhonePairing } from "./phone-pairing";
 interface Address {
   label: string;
   url: string;
-  webUrl: string;
   wsUrl: string;
 }
 
@@ -31,7 +31,7 @@ interface Status {
   token: string | null;
   addresses: Address[];
   tailscale: boolean;
-  tailscaleWebUrl: string | null;
+  tailscaleHttpsUrl: string | null;
   tailscaleWsUrl: string | null;
   webUiAvailable: boolean;
   keepAwakeForRemoteAccess: boolean;
@@ -86,6 +86,52 @@ function CopyButton({ value, tooltip }: { value: string; tooltip: string }) {
       variant="bare"
       className="text-primary-900 dark:text-primary-100"
     />
+  );
+}
+
+/** Mint the one-use login only when the user asks to copy it. */
+function BrowserLoginCopyButton({ baseUrl }: { baseUrl: string }) {
+  const { copy, isCopied } = useCopyToClipboard();
+  const [loading, setLoading] = useState(false);
+
+  const handleCopy = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const result = await window.api.localBackend.createWebLogin(baseUrl);
+      if (!result?.success) {
+        toast.error(result?.error ?? "Failed to create browser login");
+        return;
+      }
+      const login = result.data as { link?: unknown };
+      if (typeof login?.link !== "string") {
+        toast.error("Backend returned an invalid browser login");
+        return;
+      }
+      if (!(await copy(login.link))) {
+        toast.error("Could not copy browser login");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create browser login",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Button
+      type="button"
+      variant="bare"
+      tooltip={isCopied ? "Login link copied" : "Copy one-use browser login"}
+      aria-label="Copy one-use browser login"
+      onClick={() => void handleCopy()}
+      disabled={loading}
+      className="text-primary-900 dark:text-primary-100"
+    >
+      {isCopied ? <Check className="size-3.5" /> : <Clipboard className="size-3.5" />}
+    </Button>
   );
 }
 
@@ -165,7 +211,7 @@ export function LocalBackendShare() {
             <div key={a.label} className="flex items-center gap-2">
               <Caption className="w-28 shrink-0">{a.label}</Caption>
               <ValueField value={a.url} />
-              <CopyButton value={a.webUrl} tooltip="Copy browser link" />
+              <BrowserLoginCopyButton baseUrl={a.url} />
               {/* <CopyButton value={a.wsUrl} tooltip="Copy ws:// URL" /> */}
             </div>
           ))}
@@ -192,7 +238,7 @@ export function LocalBackendShare() {
           <Alert
             isOpen={confirmRotate}
             title="Rotate owner token?"
-            description="Browsers, SSH tunnels and other mains apps using the current token are disconnected and need the new one. Paired phones use their own tokens and reconnect on their own."
+            description="Active browser sessions and clients using the current owner token are disconnected. Paired phones use their own tokens and reconnect on their own."
             primaryButtonText="Rotate"
             secondaryButtonText="Cancel"
             primaryButtonVariant="danger"
@@ -256,11 +302,10 @@ export function LocalBackendShare() {
         />
       </div>
 
-      {tailscaleOn && status?.tailscaleWebUrl && (
+      {tailscaleOn && status?.tailscaleHttpsUrl && (
         <div className="flex items-center gap-2 pb-3">
-          {/* Shown without its `?token=` query — the copy button still copies the full link. */}
-          <ValueField value={status.tailscaleWebUrl.split("?")[0]} />
-          <CopyButton value={status.tailscaleWebUrl} tooltip="Copy browser link" />
+          <ValueField value={status.tailscaleHttpsUrl} />
+          <BrowserLoginCopyButton baseUrl={status.tailscaleHttpsUrl} />
           {/* {status.tailscaleWsUrl && (
             <CopyButton value={status.tailscaleWsUrl} tooltip="Copy ws:// URL" />
           )} */}

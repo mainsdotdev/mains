@@ -24,6 +24,13 @@ export interface PairCliOptions {
   printQr: boolean;
 }
 
+export interface WebCliOptions {
+  dataDir: string;
+  token?: string;
+  controlUrl?: string;
+  baseUrl?: string;
+}
+
 export function defaultServerDataDir(): string {
   return path.dirname(defaultDesktopDatabasePath());
 }
@@ -85,6 +92,13 @@ const PAIR_OPTION_SCHEMA = {
   "--endpoint": { kind: "value", repeatable: true },
   "--public-url": { kind: "value", repeatable: true },
   "--no-qr": { kind: "flag" },
+} satisfies CliOptionSchema;
+
+const WEB_OPTION_SCHEMA = {
+  "--data-dir": { kind: "value" },
+  "--token": { kind: "value" },
+  "--server-url": { kind: "value" },
+  "--url": { kind: "value" },
 } satisfies CliOptionSchema;
 
 function parseCliOptions(
@@ -242,6 +256,20 @@ export function parsePairCliOptions(argv: string[]): PairCliOptions {
       ...optionValues(parsed, "--public-url"),
     ],
     printQr: !parsed.flags.has("--no-qr"),
+  };
+}
+
+export function parseWebCliOptions(argv: string[]): WebCliOptions {
+  const parsed = parseCliOptions(argv, WEB_OPTION_SCHEMA);
+  return {
+    dataDir:
+      optionValue(parsed, "--data-dir") ??
+      process.env.MAINS_SERVER_DATA_DIR ??
+      defaultServerDataDir(),
+    token: ownerToken(parsed),
+    controlUrl:
+      optionValue(parsed, "--server-url") ?? process.env.MAINS_SERVER_URL,
+    baseUrl: optionValue(parsed, "--url"),
   };
 }
 

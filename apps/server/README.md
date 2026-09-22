@@ -30,9 +30,14 @@ Create another link or manage paired phones while the server keeps running:
 
 ```bash
 npm run pair
+npm run web
 npm run auth -- list
 npm run auth -- revoke <device-id>
 ```
+
+`mains web` (or `npm run web`) prints a five-minute, single-use browser login
+link. Pass `--url https://your-browser-facing-origin` when the browser reaches
+the server through an address that is not recorded in server state.
 
 The server uses the existing Mains user-data directory by default, including
 the same `mains.db`, workspaces, collections, and run history as the installed
@@ -85,5 +90,10 @@ has an ESLint guard against Electron imports, and this app's Vite build also
 treats any reachable Electron import as a hard failure.
 
 The generated owner token is stored mode `0600` in the server data directory.
-It grants full backend access and authenticates local CLI administration. Pairing
-links are separate, expire after five minutes, and may be redeemed only once.
+It grants full backend access and authenticates local CLI administration, but is
+never placed in a browser URL or browser storage. Phone pairing links and browser
+login links are separate credentials; both expire after five minutes and may be
+redeemed only once. A browser exchanges its origin-bound `#login=` code for
+random, eight-hour, HttpOnly, SameSite cookies used by the WebSocket and image
+proxy. `mains serve` service logs and redirected startup output never contain a
+browser login code.

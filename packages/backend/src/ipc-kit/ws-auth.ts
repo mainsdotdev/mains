@@ -2,9 +2,11 @@ import { createHash, randomBytes, timingSafeEqual } from "crypto";
 
 /**
  * Bearer-token helpers for the WebSocket backend. The owner token guards the
- * unrestricted admin/browser path; paired clients receive separate device
- * tokens with a restricted channel set. Authentication is required on every
- * bind — loopback included, since any page the user opens can reach 127.0.0.1.
+ * unrestricted direct-client and local-admin paths; browsers exchange a
+ * one-use code for an origin-bound session, while paired clients receive
+ * separate device tokens with a restricted channel set. Authentication is
+ * required on every bind — loopback included, since any page the user opens
+ * can reach 127.0.0.1.
  */
 
 function digest(value: string): Buffer {

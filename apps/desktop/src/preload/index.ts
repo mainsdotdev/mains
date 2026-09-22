@@ -251,6 +251,9 @@ const api = {
       ),
     // Replace the owner token; clients using the old one are disconnected
     rotateToken: () => ipcRenderer.invoke(CHANNELS.localBackend.rotateToken),
+    // Mint a one-use browser login without putting the owner token in its URL.
+    createWebLogin: (baseUrl: string) =>
+      ipcRenderer.invoke(CHANNELS.localBackend.createWebLogin, baseUrl),
     // Phone pairing — mint a QR code, list/revoke the phones that used one
     createPairingCode: () =>
       ipcRenderer.invoke(CHANNELS.localBackend.createPairingCode),

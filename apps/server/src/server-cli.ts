@@ -4,6 +4,7 @@ import {
   findPackageRoot,
   parsePairCliOptions,
   parseServerCliOptions,
+  parseWebCliOptions,
 } from "./server-cli-options";
 import {
   commitStandaloneServerToken,
@@ -24,6 +25,7 @@ import {
 import {
   listPairedDevices,
   requestPairingCode,
+  requestWebLogin,
   revokePairedDevice,
   type AdminClientOptions,
 } from "./pairing-client";
@@ -65,6 +67,7 @@ function printHelp(): void {
 
 Usage: mains [serve] [options]
        mains pair [options]
+       mains web [options]
        mains auth <list|revoke> [options]
        mains service <action> [options]
        npm run serve -- [options]  (development)
@@ -89,6 +92,12 @@ Pair options:
   --token <token>               Running server owner token (32+ URL-safe characters)
   --data-dir <path>             Server state directory
   --no-qr                       Print only the pairing link
+
+Browser login options:
+  --url <url>                   Browser-facing origin (defaults to server state)
+  --server-url <url>            Running server control URL (defaults to server state)
+  --token <token>               Running server owner token (32+ URL-safe characters)
+  --data-dir <path>             Server state directory
 
 Access management:
   auth list                     List paired phones
@@ -157,6 +166,23 @@ async function runServeCommand(argv: string[]): Promise<void> {
       startedAt: new Date().toISOString(),
     });
 
+    // A one-time browser code is a credential too. Only offer one
+    // automatically to a person at a terminal; services and redirected output
+    // can use `mains web` on demand without leaving secrets in logs.
+    if (
+      server.webUiAvailable &&
+      process.stdout.isTTY &&
+      process.env.MAINS_SERVER_SERVICE !== "1"
+    ) {
+      const browserBaseUrl =
+        endpoints.find((endpoint) => endpoint.startsWith("https://")) ??
+        resolveControlUrl(serverOptions.host, server.port);
+      const login = server.createWebLogin(browserBaseUrl);
+      console.log(
+        `[serve] browser login (single use, expires ${login.expiresAt.toISOString()}): ${login.link}`,
+      );
+    }
+
     if (printPairing && endpoints.length > 0) {
       const pairing = await server.createPairingCode(endpoints);
       printPairingCode(
@@ -211,8 +237,28 @@ async function runPairCommand(argv: string[]): Promise<void> {
   printPairingCode(pairing, { qr: options.printQr && process.stdout.isTTY });
 }
 
+async function runWebCommand(argv: string[]): Promise<void> {
+  const options = parseWebCliOptions(argv);
+  const { state, admin } = resolveAdminClient(options);
+  const baseUrl = normalizeEndpoint(
+    options.baseUrl ??
+      state?.endpoints.find((endpoint) => endpoint.startsWith("https://")) ??
+      admin.controlUrl,
+  );
+  const login = await requestWebLogin({
+    ...admin,
+    baseUrl,
+  });
+  console.log(login.link);
+  console.log(`Expires: ${login.expiresAt}`);
+}
+
 function resolveAdminClient(
-  options: ReturnType<typeof parsePairCliOptions>,
+  options: {
+    dataDir: string;
+    token?: string;
+    controlUrl?: string;
+  },
 ): { state: ReturnType<typeof readServerState>; admin: AdminClientOptions } {
   const state = readServerState(options.dataDir);
   const controlUrl = options.controlUrl ?? state?.controlUrl;
@@ -283,6 +329,10 @@ export async function runServerCli(argv = process.argv.slice(2)): Promise<void> 
   }
   if (command === "pair") {
     await runPairCommand(commandArgs);
+    return;
+  }
+  if (command === "web") {
+    await runWebCommand(commandArgs);
     return;
   }
   if (command === "auth") {

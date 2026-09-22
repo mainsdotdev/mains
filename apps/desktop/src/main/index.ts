@@ -697,7 +697,7 @@ async function initializeApp() {
     // window. startBackendServer handles DB init, module registration, and the WS
     // host (which registers the WebSocket event sink). See docs/design/remote-backend.md.
     if (SERVE.serve) {
-      await startBackendServer({
+      const server = await startBackendServer({
         port: SERVE.port,
         host: SERVE.host,
         token: SERVE.token,
@@ -705,6 +705,28 @@ async function initializeApp() {
         tailscaleServe: SERVE.tailscaleServe,
         tailscaleServePort: SERVE.tailscaleServePort,
       });
+      if (
+        server.webUiAvailable &&
+        process.stdout.isTTY &&
+        process.env.MAINS_SERVER_SERVICE !== "1"
+      ) {
+        const configuredHost = SERVE.host ?? "127.0.0.1";
+        const browserHost =
+          configuredHost === "0.0.0.0"
+            ? "127.0.0.1"
+            : configuredHost === "::" || configuredHost === "[::]"
+              ? "[::1]"
+              : configuredHost.includes(":") &&
+                  !configuredHost.startsWith("[")
+                ? `[${configuredHost}]`
+                : configuredHost;
+        const login = server.createWebLogin(
+          server.tailscaleUrl ?? `http://${browserHost}:${server.port}`,
+        );
+        console.log(
+          `Browser login (single use, expires ${login.expiresAt.toISOString()}): ${login.link}`,
+        );
+      }
       console.log("Running in headless --serve mode (no window).");
       return;
     }

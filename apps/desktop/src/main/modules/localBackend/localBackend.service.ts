@@ -1,7 +1,11 @@
 import { networkInterfaces } from "node:os";
 import { powerMonitor, powerSaveBlocker } from "electron";
 import { emit } from "@mains/backend/ipc-kit";
-import { startWsHost, type WsHost } from "@mains/backend/ipc-kit/ws-server-host";
+import {
+  startWsHost,
+  type WebLoginLink,
+  type WsHost,
+} from "@mains/backend/ipc-kit/ws-server-host";
 import { generateToken } from "@mains/backend/ipc-kit/ws-auth";
 import { CHANNELS } from "@mains/contracts/channels";
 import { resolveWebRoot } from "@mains/backend/web-root";
@@ -45,8 +49,6 @@ export interface BackendAddress {
   label: string;
   /** http://<host>:<port> */
   url: string;
-  /** http://<host>:<port>/?token=… — open in a browser. */
-  webUrl: string;
   /** ws://<host>:<port> — paste into another mains' Direct URL field. */
   wsUrl: string;
 }
@@ -65,7 +67,6 @@ export interface LocalBackendStatus {
   tailscale: boolean;
   magicDnsName: string | null;
   tailscaleHttpsUrl: string | null;
-  tailscaleWebUrl: string | null;
   /** wss://<magicdns> — paste into another mains' Direct URL field. */
   tailscaleWsUrl: string | null;
   /** False when no built web renderer was found (run `npm run build:web`). */
@@ -158,11 +159,9 @@ function localIps(): { lan: string | null; tailscale: string | null } {
 
 function buildAddresses(): BackendAddress[] {
   if (!wsHost) return [];
-  const q = sessionToken ? `?token=${sessionToken}` : "";
   const mk = (label: string, host: string): BackendAddress => ({
     label,
     url: `http://${host}:${port}`,
-    webUrl: `http://${host}:${port}/${q}`,
     wsUrl: `ws://${host}:${port}`,
   });
   const list = [mk("This machine", "127.0.0.1")];
@@ -187,9 +186,6 @@ function buildStatus(): LocalBackendStatus {
     tailscale: tailscale !== null,
     magicDnsName: tailscale?.magicDnsName ?? null,
     tailscaleHttpsUrl: httpsUrl,
-    tailscaleWebUrl: httpsUrl
-      ? `${httpsUrl}/${sessionToken ? `?token=${sessionToken}` : ""}`
-      : null,
     tailscaleWsUrl: httpsUrl ? httpsUrl.replace(/^https:/, "wss:") : null,
     webUiAvailable: webRoot() !== null,
     keepAwakeForRemoteAccess,
@@ -396,6 +392,26 @@ export const localBackendService = {
       throw new Error("Turn on remote access before pairing a phone");
     }
     return backendService.createPairingCode(pairingEndpoints());
+  },
+
+  /** Mint a five-minute, one-use browser login for one advertised origin. */
+  createWebLogin(baseUrl: string): WebLoginLink {
+    if (!wsHost) {
+      throw new Error("Turn on remote access before creating a browser login");
+    }
+    let origin: string;
+    try {
+      origin = new URL(baseUrl).origin;
+    } catch {
+      throw new Error("Invalid browser URL");
+    }
+    const allowed = new Set(buildAddresses().map((address) => address.url));
+    const status = buildStatus();
+    if (status.tailscaleHttpsUrl) allowed.add(status.tailscaleHttpsUrl);
+    if (!allowed.has(origin)) {
+      throw new Error("Browser login URL is not an advertised backend address");
+    }
+    return wsHost.createWebLogin(origin);
   },
 
   listPairedDevices(): Promise<PairedDevice[]> {

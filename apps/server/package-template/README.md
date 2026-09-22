@@ -19,14 +19,19 @@ mains serve
 ```
 
 The first run creates an owner token in the server data directory. It grants
-full access and stays on the host. Phones receive separate, revocable device
-tokens by redeeming five-minute, single-use pairing links.
+full access and stays on the host; it is never placed in a browser URL or browser
+storage. An interactive `mains serve`, or `mains web` on demand, prints a
+five-minute, single-use browser login link. The browser exchanges that
+origin-bound code for HttpOnly session cookies. The background service never
+writes login codes to its logs. Phones continue to receive separate, revocable
+device tokens by redeeming their own five-minute, single-use pairing links.
 
 Common options:
 
 ```bash
 mains --help
 mains serve --lan --port 8787
+mains web
 mains pair
 mains auth list
 mains auth revoke <device-id>
@@ -40,7 +45,9 @@ WebSocket and should only be used on a trusted network or behind a TLS proxy.
 
 `--lan` is the convenient `0.0.0.0` form. It prints a terminal QR code using
 the detected private LAN addresses. `mains pair` creates a fresh link
-without restarting the server.
+without restarting the server. `mains web` creates a fresh browser login without
+changing phone pairing; use `mains web --url https://mains.example` for an
+explicit reverse-proxy or Tailscale origin.
 
 ## Existing desktop data
 

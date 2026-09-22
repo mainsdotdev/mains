@@ -11,8 +11,7 @@ import { onTransportChange } from "../transport";
 // Renderer-persisted UI state lives in these slices and nowhere else: the
 // whitelists below are the complete list of what survives a restart. Anything
 // reaching for `localStorage` directly is a bug — add a field here instead.
-// (The sole exception is the web-mode owner token in `platform/web-bootstrap`,
-// which is read to open the transport before this store exists.)
+// Web authentication lives in HttpOnly cookies and is deliberately absent here.
 const appSettingsPersistConfig = {
   key: "appSettings",
   storage,

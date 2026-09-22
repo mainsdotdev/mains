@@ -96,38 +96,232 @@ describe("startWsHost (integration)", () => {
   });
 });
 
-describe("startWsHost HTTP image proxy", () => {
+describe("startWsHost browser sessions and HTTP image proxy", () => {
   let host: WsHost | null = null;
+  let webRoot: string | null = null;
 
   afterEach(async () => {
     if (host) await host.close();
     host = null;
+    if (webRoot) fs.rmSync(webRoot, { recursive: true, force: true });
+    webRoot = null;
   });
 
   const target = encodeURIComponent("https://example.com/a.png");
   const imageFetcher = () =>
     vi.fn(async (_url: string) => new Response("png", { headers: { "content-type": "image/png" } }));
 
-  it("refuses a request without the owner token before fetching anything", async () => {
+  async function startBrowserHost(fetchProxiedImage = imageFetcher()) {
+    webRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mains-web-session-"));
+    fs.writeFileSync(path.join(webRoot, "index.html"), "<main>Mains</main>");
+    host = await startWsHost({
+      port: 0,
+      host: "127.0.0.1",
+      token: "secret",
+      webRoot,
+      fetchProxiedImage,
+    });
+    return { host, fetchProxiedImage };
+  }
+
+  async function exchangeLogin(
+    currentHost: WsHost,
+    origin = `http://127.0.0.1:${currentHost.port}`,
+  ): Promise<Response> {
+    const login = currentHost.createWebLogin(origin);
+    const code = new URLSearchParams(new URL(login.link).hash.slice(1)).get("login");
+    return fetch(`http://127.0.0.1:${currentHost.port}/__mains/web-session`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${code}`,
+        Origin: origin,
+      },
+    });
+  }
+
+  function cookies(res: Response): string[] {
+    return (res.headers.get("set-cookie") ?? "")
+      .split(/,(?=\s*mains_)/)
+      .map((value) => value.trim());
+  }
+
+  function cookiePair(values: string[], prefix: string): string {
+    return (values.find((value) => value.startsWith(prefix)) ?? "").split(";")[0];
+  }
+
+  it("spends a login code for scoped HttpOnly cookies", async () => {
+    const { host: currentHost } = await startBrowserHost();
+    const origin = `http://127.0.0.1:${currentHost.port}`;
+    const login = currentHost.createWebLogin(origin);
+    const code = new URLSearchParams(new URL(login.link).hash.slice(1)).get("login");
+
+    const wrongOrigin = await fetch(
+      `http://127.0.0.1:${currentHost.port}/__mains/web-session`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${code}`,
+          Origin: "http://other.example",
+        },
+      },
+    );
+    expect(wrongOrigin.status).toBe(401);
+
+    const res = await fetch(
+      `http://127.0.0.1:${currentHost.port}/__mains/web-session`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${code}`, Origin: origin },
+      },
+    );
+    expect(res.status).toBe(204);
+    const issued = cookies(res);
+    expect(issued).toHaveLength(2);
+    expect(issued).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^mains_web_[\w-]+=[\w-]+; Path=\/__mains;/),
+        expect.stringMatching(/^mains_img_[\w-]+=[\w-]+; Path=\/__img;/),
+      ]),
+    );
+    for (const cookie of issued) {
+      expect(cookie).toContain("HttpOnly");
+      expect(cookie).toContain("SameSite=Strict");
+      expect(cookie).not.toContain("secret");
+      expect(cookie).not.toContain("Secure");
+    }
+
+    const reused = await fetch(
+      `http://127.0.0.1:${currentHost.port}/__mains/web-session`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${code}`, Origin: origin },
+      },
+    );
+    expect(reused.status).toBe(401);
+  });
+
+  it("mints browser logins only through the owner-authenticated admin route", async () => {
+    const { host: currentHost } = await startBrowserHost();
+    const origin = `http://127.0.0.1:${currentHost.port}`;
+    const endpoint = `${origin}/__mains/admin/web-login`;
+
+    const unauthenticated = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseUrl: origin }),
+    });
+    expect(unauthenticated.status).toBe(401);
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer secret",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ baseUrl: origin }),
+    });
+    expect(response.status).toBe(200);
+    const login = (await response.json()) as {
+      link: string;
+      expiresAt: string;
+    };
+    expect(login.link).toMatch(
+      new RegExp(`^${origin.replace(/\./g, "\\.")}/#login=[\\w-]+$`),
+    );
+    expect(Number.isNaN(Date.parse(login.expiresAt))).toBe(false);
+    expect(login.link).not.toContain("secret");
+  });
+
+  it("refuses a request without the image cookie before fetching anything", async () => {
     const fetchProxiedImage = imageFetcher();
-    host = await startWsHost({ port: 0, host: "127.0.0.1", token: "secret", fetchProxiedImage });
-    const base = `http://127.0.0.1:${host.port}/__img?url=${target}`;
+    const { host: currentHost } = await startBrowserHost(fetchProxiedImage);
+    const base = `http://127.0.0.1:${currentHost.port}/__img?url=${target}`;
 
     expect((await fetch(base)).status).toBe(401);
-    expect((await fetch(`${base}&token=wrong`)).status).toBe(401);
+    // The owner token itself is no longer an asset-URL credential.
+    expect((await fetch(`${base}&token=secret`)).status).toBe(401);
+    expect(
+      (await fetch(base, { headers: { Cookie: "mains_img_foreign=bogus" } }))
+        .status,
+    ).toBe(401);
     expect(fetchProxiedImage).not.toHaveBeenCalled();
   });
 
-  it("serves the image with the token, locked against sniffing and script", async () => {
+  it("serves the image with the cookie, locked against sniffing and script", async () => {
     const fetchProxiedImage = imageFetcher();
-    host = await startWsHost({ port: 0, host: "127.0.0.1", token: "secret", fetchProxiedImage });
+    const { host: currentHost } = await startBrowserHost(fetchProxiedImage);
+    const exchanged = await exchangeLogin(currentHost);
+    const cookie = cookiePair(cookies(exchanged), "mains_img_");
 
-    const res = await fetch(`http://127.0.0.1:${host.port}/__img?url=${target}&token=secret`);
+    const res = await fetch(`http://127.0.0.1:${currentHost.port}/__img?url=${target}`, {
+      headers: {
+        Cookie: `unrelated=1; ${cookie}`,
+        Referer: `http://127.0.0.1:${currentHost.port}/`,
+      },
+    });
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("png");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("content-security-policy")).toContain("sandbox");
     expect(fetchProxiedImage).toHaveBeenCalledWith("https://example.com/a.png");
+
+    const otherPort = await fetch(
+      `http://127.0.0.1:${currentHost.port}/__img?url=${target}`,
+      {
+        headers: {
+          Cookie: cookie,
+          Referer: "http://127.0.0.1:9999/",
+        },
+      },
+    );
+    expect(otherPort.status).toBe(401);
+  });
+
+  it("accepts a web session cookie only from the login link's origin", async () => {
+    const { host: currentHost } = await startBrowserHost();
+    const origin = `http://127.0.0.1:${currentHost.port}`;
+    const exchanged = await exchangeLogin(currentHost, origin);
+    const sessionCookie = cookiePair(cookies(exchanged), "mains_web_");
+
+    const browser = new WebSocket(
+      `ws://127.0.0.1:${currentHost.port}/__mains/ws`,
+      buildSubprotocols(),
+      { headers: { Cookie: sessionCookie, Origin: origin } },
+    );
+    await opened(browser);
+    browser.close();
+
+    const wrongPath = new WebSocket(
+      `ws://127.0.0.1:${currentHost.port}/`,
+      buildSubprotocols(),
+      { headers: { Cookie: sessionCookie, Origin: origin } },
+    );
+    const wrongPathError = await new Promise<string>((resolve) =>
+      wrongPath.once("error", (reason) => resolve(reason.message)),
+    );
+    expect(wrongPathError).toBe("Unexpected server response: 401");
+
+    const crossOrigin = new WebSocket(
+      `ws://127.0.0.1:${currentHost.port}/__mains/ws`,
+      buildSubprotocols(),
+      {
+        headers: {
+          Cookie: sessionCookie,
+          Origin: "http://attacker.example",
+        },
+      },
+    );
+    const error = await new Promise<string>((resolve) =>
+      crossOrigin.once("error", (reason) => resolve(reason.message)),
+    );
+    expect(error).toBe("Unexpected server response: 401");
+  });
+
+  it("marks cookies Secure when the login link is HTTPS", async () => {
+    const { host: currentHost } = await startBrowserHost();
+    const exchanged = await exchangeLogin(currentHost, "https://mains.example");
+    expect(cookies(exchanged)).toHaveLength(2);
+    for (const cookie of cookies(exchanged)) expect(cookie).toContain("; Secure");
   });
 });
 
