@@ -1125,3 +1125,183 @@ html.mains-web.dark #root {
     opacity: 0;
   }
 }
+
+/*
+ * Onboarding feature cards (`features/onboarding/components/feature-previews.tsx`):
+ * the mini-UI behind each card plays while that card is hovered. Every loop's
+ * 0% frame is the resting picture; it sits parked there until the card
+ * (`[data-feature-card]`) is hovered, and parks again wherever it is when the
+ * pointer leaves — freezing mid-motion reads calmer than snapping back.
+ * Longhands only below: the `animation` shorthand would reset the play state
+ * these rules own.
+ *
+ * Loops that must stay in step share one duration and start together (every
+ * loop in a card starts on the same hover). Staggered members of a set use
+ * negative delays, which place them mid-cycle without leaving the rest frame.
+ */
+.preview-motion {
+  animation-play-state: paused;
+  animation-fill-mode: both;
+  animation-iteration-count: infinite;
+  animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+}
+[data-feature-card]:hover .preview-motion {
+  animation-play-state: running;
+}
+@media (prefers-reduced-motion: reduce) {
+  .preview-motion {
+    animation-name: none !important;
+  }
+}
+
+/* A selection stepping across N items and jumping back. `--preview-x` /
+   `--preview-y` are one item plus the gap, on whichever axis the items run. */
+@keyframes preview-cycle-3 {
+  0%, 28% { translate: 0 0; }
+  33%, 61% { translate: var(--preview-x, 0) var(--preview-y, 0); }
+  66%, 94% { translate: calc(var(--preview-x, 0px) * 2) calc(var(--preview-y, 0px) * 2); }
+  100% { translate: 0 0; }
+}
+@keyframes preview-cycle-4 {
+  0%, 21% { translate: 0 0; }
+  25%, 46% { translate: var(--preview-x, 0) var(--preview-y, 0); }
+  50%, 71% { translate: calc(var(--preview-x, 0px) * 2) calc(var(--preview-y, 0px) * 2); }
+  75%, 96% { translate: calc(var(--preview-x, 0px) * 3) calc(var(--preview-y, 0px) * 3); }
+  100% { translate: 0 0; }
+}
+@keyframes preview-cycle-5 {
+  0%, 16% { translate: 0 0; }
+  20%, 36% { translate: var(--preview-x, 0) var(--preview-y, 0); }
+  40%, 56% { translate: calc(var(--preview-x, 0px) * 2) calc(var(--preview-y, 0px) * 2); }
+  60%, 76% { translate: calc(var(--preview-x, 0px) * 3) calc(var(--preview-y, 0px) * 3); }
+  80%, 96% { translate: calc(var(--preview-x, 0px) * 4) calc(var(--preview-y, 0px) * 4); }
+  100% { translate: 0 0; }
+}
+/* One row at a time without end: the last step lands on a copy of the first
+   frame, so the jump back to 0% is invisible. */
+@keyframes preview-ticker-3 {
+  0%, 28% { translate: 0 0; }
+  33%, 61% { translate: 0 var(--preview-y); }
+  66%, 94% { translate: 0 calc(var(--preview-y) * 2); }
+  100% { translate: 0 calc(var(--preview-y) * 3); }
+}
+/* The item under a `preview-cycle-4` selection: lit for its quarter, dimmed
+   for the rest. Item k runs it with a delay of -((4 - k) % 4) quarters. */
+@keyframes preview-spot-4 {
+  0%, 21% { opacity: 1; }
+  25%, 96% { opacity: 0.55; }
+  100% { opacity: 1; }
+}
+/* Three alternatives sharing one slot, each shown for a third of the loop.
+   Alternative k runs it -((3 - k) % 3) thirds early, so only the first is on
+   screen at rest. The outgoing one is gone (30%) before the next one starts
+   (97% of its own loop, i.e. 30.3% of the slot's), so the two never overlap —
+   a hover that ends mid-swap freezes on one label, not two stacked. */
+@keyframes preview-swap-3 {
+  0%, 26% { opacity: 1; transform: scale(1); }
+  30%, 97% { opacity: 0; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1); }
+}
+/* A transcript scrolling past without end: the content is drawn twice, so
+   -50% lands on the copy. */
+@keyframes preview-scroll {
+  from { translate: 0 0; }
+  to { translate: 0 -50%; }
+}
+
+/* The commit flow in the session panel, one 8s story told by its parts: the
+   row is picked, its form opens empty, Generate is pressed and twinkles while
+   the message is written, the message types itself in, "Commit and push" is
+   pressed, the form closes and the change stats turn into "Pushed". */
+@keyframes preview-git-select {
+  0%, 8% { opacity: 0; }
+  12%, 80% { opacity: 1; }
+  86%, 100% { opacity: 0; }
+}
+@keyframes preview-git-open {
+  0%, 12% { grid-template-rows: 0fr; opacity: 0; }
+  20%, 76% { grid-template-rows: 1fr; opacity: 1; }
+  84%, 100% { grid-template-rows: 0fr; opacity: 0; }
+}
+/* The empty field's placeholder, until Generate is pressed. */
+@keyframes preview-git-placeholder {
+  0%, 26% { opacity: 1; }
+  28%, 100% { opacity: 0; }
+}
+/* Idle Generate label and its generating swap (spinner + shimmering field). */
+@keyframes preview-git-idle {
+  0%, 26% { opacity: 1; }
+  28%, 46% { opacity: 0; }
+  48%, 100% { opacity: 1; }
+}
+@keyframes preview-git-generating {
+  0%, 26% { opacity: 0; }
+  28%, 46% { opacity: 1; }
+  48%, 100% { opacity: 0; }
+}
+@keyframes preview-git-type {
+  0%, 48% { clip-path: inset(0 100% 0 0); animation-timing-function: steps(30, end); }
+  60%, 100% { clip-path: inset(0 0 0 0); }
+}
+@keyframes preview-git-press {
+  0%, 62% { opacity: 0; }
+  65%, 72% { opacity: 1; }
+  75%, 100% { opacity: 0; }
+}
+@keyframes preview-git-before {
+  0%, 78% { opacity: 1; }
+  82%, 96% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes preview-git-after {
+  0%, 78% { opacity: 0; }
+  82%, 96% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.preview-cycle-3,
+.preview-ticker-3 {
+  animation-duration: 4.8s;
+}
+.preview-cycle-3 { animation-name: preview-cycle-3; }
+.preview-ticker-3 { animation-name: preview-ticker-3; }
+.preview-cycle-4,
+.preview-spot-4 {
+  animation-duration: 6.4s;
+}
+.preview-cycle-4 { animation-name: preview-cycle-4; }
+.preview-spot-4 { animation-name: preview-spot-4; }
+.preview-cycle-5 {
+  animation-name: preview-cycle-5;
+  animation-duration: 8s;
+}
+.preview-swap-3 {
+  animation-name: preview-swap-3;
+  animation-duration: 6s;
+}
+.preview-scroll {
+  animation-name: preview-scroll;
+  animation-duration: 14s;
+  animation-timing-function: linear;
+}
+.preview-git-select,
+.preview-git-open,
+.preview-git-placeholder,
+.preview-git-idle,
+.preview-git-generating,
+.preview-git-type,
+.preview-git-press,
+.preview-git-before,
+.preview-git-after {
+  animation-duration: 8s;
+  animation-timing-function: ease-out;
+}
+.preview-git-select { animation-name: preview-git-select; }
+.preview-git-open { animation-name: preview-git-open; }
+.preview-git-placeholder { animation-name: preview-git-placeholder; }
+.preview-git-idle { animation-name: preview-git-idle; }
+.preview-git-generating { animation-name: preview-git-generating; }
+.preview-git-type { animation-name: preview-git-type; }
+.preview-git-press { animation-name: preview-git-press; }
+.preview-git-before { animation-name: preview-git-before; }
+.preview-git-after { animation-name: preview-git-after; }

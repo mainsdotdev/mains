@@ -18,8 +18,10 @@ export function FeatureCard({ feature, index, animate }: FeatureCardProps) {
   const { title, blurb, Icon, accent, preview, previewPlacement } = feature;
   return (
     <div
+      // Hover target for the preview loops (`.preview-motion` in index.css).
+      data-feature-card
       className={cn(
-        "group relative aspect-[1.55] overflow-hidden rounded-3xl",
+        "group relative aspect-[1.55] overflow-hidden rounded-4xl",
         "bg-primary-100/40 dark:bg-primary-900/10 glass-outline glass-outline-soft",
         "transition-transform duration-300 ease-out hover:-translate-y-0.5",
       )}
@@ -38,15 +40,23 @@ export function FeatureCard({ feature, index, animate }: FeatureCardProps) {
         className={cn(
           "pointer-events-none absolute inset-0 select-none",
           "opacity-30 transition-opacity duration-300 group-hover:opacity-70",
-          "mask-[linear-gradient(to_bottom,black_0%,black_55%,transparent_96%)]",
+          // Gone by the time it reaches the label bar: measured from the card's
+          // bottom, not as a share of its height, so the fade ends where the
+          // title starts (5rem up) on any card size. A painted scrim would show
+          // as a band on the translucent card; the mask lets the real surface
+          // through instead.
+          "mask-[linear-gradient(to_bottom,black_0%,black_calc(100%-8rem),transparent_calc(100%-5rem))]",
         )}
       >
         <div
           className={cn(
-            "absolute top-6",
-            previewPlacement === "center"
-              ? "inset-x-0 flex justify-center"
-              : "left-8 origin-top-left scale-[1.08]",
+            "absolute",
+            previewPlacement === "middle"
+              ? // bottom-24 clears the label bar (p-5 around its 3.5rem tile).
+                "inset-x-0 top-0 bottom-24 flex items-center justify-center"
+              : previewPlacement === "center"
+                ? "inset-x-0 top-6 flex justify-center"
+                : "top-6 left-8 origin-top-left scale-[1.08]",
           )}
         >
           {preview}
@@ -63,13 +73,13 @@ export function FeatureCard({ feature, index, animate }: FeatureCardProps) {
             Mains. The blur lifts it off whichever mockup sits behind it. */}
         <span
           className={cn(
-            "flex size-14 shrink-0 items-center justify-center rounded-2xl",
+            "flex size-12 shrink-0 items-center justify-center rounded-2xl",
             "bg-primary-50/70 backdrop-blur-md glass-outline dark:bg-primary/2",
             "shadow-[0_6px_18px_-12px_rgba(0,0,0,0.6)]",
             "transition-transform duration-300 ease-out group-hover:scale-105",
           )}
         >
-          <Icon className={cn("size-6.5", iconTintClass(accent))} />
+          <Icon className={cn("size-4.5", iconTintClass(accent))} />
         </span>
         <div className="flex min-w-0 flex-col gap-0.5">
           <Text

@@ -6,6 +6,7 @@ import {
   DropdownWrapper,
   Heading2,
   Text,
+  Toggle,
 } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import {
@@ -36,30 +37,23 @@ interface CliInstall {
   docsLabel: string;
 }
 
-interface AgentColumn {
+interface AgentRowInfo {
   slug: OnboardingAgentSlug;
   name: string;
   Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
   iconClassName?: string;
+  /** What you need to use it — the one fact that differs between agents here. */
   subscription: string;
-  features: string[];
   install: CliInstall;
 }
 
-const AGENT_COLUMNS: AgentColumn[] = [
+const AGENTS: AgentRowInfo[] = [
   {
     slug: "claude",
     name: "Claude Code",
     Icon: Claude,
     iconClassName: "text-claude!",
-    subscription: "Claude Pro / Max subscription",
-    features: [
-      "Deep multi-file codebase edits",
-      "Subagents & background tasks",
-      "Hooks, skills & slash commands",
-      "Plugin marketplace",
-      "MCP server support",
-    ],
+    subscription: "Claude Pro or Max subscription",
     install: {
       sections: [
         {
@@ -78,14 +72,7 @@ const AGENT_COLUMNS: AgentColumn[] = [
     slug: "codex",
     name: "Codex",
     Icon: CodexColor,
-    subscription: "ChatGPT Plus / Pro subscription",
-    features: [
-      "Sandboxed command execution",
-      "Image generation",
-      "Plugin marketplace",
-      "Document edit & view",
-      "MCP server support",
-    ],
+    subscription: "ChatGPT Plus or Pro subscription",
     install: {
       sections: [
         {
@@ -101,14 +88,7 @@ const AGENT_COLUMNS: AgentColumn[] = [
     slug: "copilot",
     name: "GitHub Copilot",
     Icon: CopilotStatic,
-    subscription: "GitHub Copilot subscription (free tier available)",
-    features: [
-      "GitHub-native issues & PRs",
-      "Multiple frontier models",
-      "Agentic terminal workflows",
-      "Custom agents & instructions",
-      "MCP server support",
-    ],
+    subscription: "GitHub Copilot · free tier available",
     install: {
       sections: [
         { label: "Check authentication:", commands: ["gh auth status"] },
@@ -122,13 +102,7 @@ const AGENT_COLUMNS: AgentColumn[] = [
     slug: "cursor",
     name: "Cursor",
     Icon: Cursor,
-    subscription: "Cursor Pro subscription (hobby tier available)",
-    features: [
-      "Composer-style agent edits",
-      "Anthropic, OpenAI & Gemini models",
-      "Terminal-native agent",
-      "MCP server support",
-    ],
+    subscription: "Cursor Pro · hobby tier available",
     install: {
       sections: [
         {
@@ -142,102 +116,66 @@ const AGENT_COLUMNS: AgentColumn[] = [
   },
 ];
 
-const ROW_BORDER = "border-t border-primary-700/10 dark:border-primary-200/10";
+/** Same surface as the Preferences step's cards, so the two steps read as one flow. */
+const CARD =
+  "divide-y divide-primary-700/10 rounded-3xl bg-primary-100/40 p-2 glass-outline glass-outline-soft dark:divide-primary-200/10 dark:bg-primary-900/20";
+const ROW = "flex items-center gap-4 px-4 py-3.5";
 
-function RowLabel({ children }: { children: React.ReactNode }) {
+function AgentIcon({
+  Icon,
+  className,
+}: {
+  Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  className?: string;
+}) {
   return (
-    <Text as="div" weight="medium" className={cn(ROW_BORDER, "py-5 pr-4")}>
-      {children}
+    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl glass-outline glass-outline-soft">
+      <Icon className={cn("size-5 text-primary-900 dark:text-primary-100", className)} />
+    </span>
+  );
+}
+
+/** "Installed" once detection finds the CLI; the install popover when it doesn't. */
+function CliStatus({
+  agent,
+  installed,
+  onRecheck,
+  isRechecking,
+}: {
+  agent: AgentRowInfo;
+  /** `undefined` while detection is still running. */
+  installed: boolean | undefined;
+  onRecheck: () => void;
+  isRechecking: boolean;
+}) {
+  if (installed === undefined) {
+    return (
+      <Text as="span" size="xs" tone="subtle">
+        Checking…
+      </Text>
+    );
+  }
+  if (!installed) {
+    return (
+      <CliInstallBadge
+        name={agent.name}
+        install={agent.install}
+        onRecheck={onRecheck}
+        isRechecking={isRechecking}
+      />
+    );
+  }
+  return (
+    <Text as="span" size="xs" tone="success" className="flex items-center gap-1.5">
+      <span aria-hidden className="size-1.5 rounded-full bg-success" />
+      Installed
     </Text>
   );
 }
 
-function RowCell({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        ROW_BORDER,
-        "flex flex-col items-center justify-center gap-1 px-2 py-5 text-center",
-        className,
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
-function EnableButton({
-  isSelected,
-  interactive,
-  disabledReason,
-  onToggle,
-}: {
-  isSelected: boolean;
-  interactive: boolean;
-  /** Why the button is inert — shown on hover, since a dead control explains nothing. */
-  disabledReason?: string;
-  onToggle: () => void;
-}) {
-  // Clicking flips the state under a pointer that is still hovering, which
-  // would instantly show the opposite preview again. Disarm the preview on
-  // click and re-arm it once the pointer leaves the button.
-  const [previewArmed, setPreviewArmed] = useState(true);
-  const showPreview = interactive && previewArmed;
-
-  return (
-    <Button
-      onClick={() => {
-        setPreviewArmed(false);
-        onToggle();
-      }}
-      onMouseLeave={() => setPreviewArmed(true)}
-      disabled={!interactive}
-      tooltip={!interactive ? disabledReason : undefined}
-      className={cn(
-        "group min-w-26 rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50",
-        isSelected
-          ? cn(
-              "glass-success text-white",
-              showPreview && "hover:glass-danger hover:text-white",
-            )
-          : cn(
-              "bg-primary-500/10 text-primary-600 dark:text-primary-400",
-              showPreview && "hover:bg-success/15 hover:text-success",
-            ),
-      )}
-    >
-      {/* Both labels stay mounted, stacked; hover cross-fades between them */}
-      <span className="relative block">
-        <span
-          className={cn(
-            "block transition-opacity duration-200",
-            showPreview && "group-hover:opacity-0",
-          )}
-        >
-          {isSelected ? "Enabled" : "Disabled"}
-        </span>
-        {showPreview && (
-          <span
-            className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover:opacity-100"
-            aria-hidden
-          >
-            {isSelected ? "Disable" : "Enable"}
-          </span>
-        )}
-      </span>
-    </Button>
-  );
-}
-
 /**
- * "CLI not detected" badge that opens an install-instructions popover — the
- * content the old per-agent CLI setup modal steps used to show.
+ * "Install CLI" chip that opens an install-instructions popover — the content
+ * the old per-agent CLI setup modal steps used to show.
  */
 function CliInstallBadge({
   name,
@@ -273,10 +211,10 @@ function CliInstallBadge({
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="inline-flex cursor-pointer items-center gap-1 rounded-full bg-warning/15 px-3 py-1 text-sm font-medium text-warning transition-colors hover:bg-warning/25"
+        className="inline-flex cursor-pointer items-center gap-1 rounded-full bg-warning/15 px-2.5 py-1 text-xs font-medium text-warning transition-colors hover:bg-warning/25"
       >
-        CLI not detected
-        <Download className="size-3 transition-transform duration-200" />
+        <Download className="size-3" />
+        Install CLI
       </Button>
       <DropdownWrapper
         isOpen={open}
@@ -337,11 +275,13 @@ function CliInstallBadge({
 }
 
 /**
- * First onboarding step: a Dayflow-style comparison table of the supported
- * coding agents, with an enable/disable toggle per agent. Toggles drive the
- * same space archive/unarchive flow the old welcome step used.
+ * Onboarding step for the agents Mains drives: one row per agent with its
+ * install state and an on/off switch. Deliberately not a comparison — every
+ * enabled agent is used, side by side, so the step only asks which ones this
+ * machine can run and which the user wants. Switches drive the same space
+ * archive/unarchive flow the old welcome step used.
  */
-export function AgentComparisonStep() {
+export function AgentsStep() {
   const navigate = useNavigate();
   const { data: appSettings } = useGetAppSettingsQuery();
   const [archiveSpace] = useArchiveSpaceMutation();
@@ -437,143 +377,73 @@ export function AgentComparisonStep() {
   ]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl">
-      <div className="mb-12 space-y-2 text-center">
-         <Heading2 className="font-mono tracking-tight">
-          Choose your agents
-        </Heading2>
-
+    <div className="mx-auto w-full max-w-2xl">
+      <div className="mb-10 space-y-3 text-center">
+        <Heading2 className="font-mono tracking-tight">Your agents</Heading2>
+        <Text as="p" tone="secondary">
+          Mains runs every agent you have, side by side. Turn off any you
+          don&apos;t use.
+        </Text>
       </div>
 
-      <div className="grid grid-cols-[minmax(150px,210px)_repeat(4,minmax(0,1fr))_minmax(0,0.7fr)]">
-        {/* Header row */}
-        <div />
-        {AGENT_COLUMNS.map(({ slug, name, Icon, iconClassName }) => (
-          <div key={slug} className="flex flex-col items-center gap-3 pb-8">
-            <span className="flex size-14 items-center justify-center rounded-full glass-outline ">
-              <Icon
-                className={cn(
-                  "size-7 text-primary-900 dark:text-primary-100",
-                  iconClassName,
-                )}
-              />
-            </span>
-            <Text as="span" size="base" weight="medium">
-              {name}
-            </Text>
-          </div>
-        ))}
-        {/* Coming-soon column: Gemini + Grok share one column */}
-        <div className="flex flex-col items-center gap-3 pb-8 opacity-70">
-          <div className="flex items-center gap-1.5 pt-2">
-            <span className="flex size-10 items-center justify-center rounded-full glass-outline">
-              <Gemini className="size-5" />
-            </span>
-            <span className="flex size-10 items-center justify-center rounded-full glass-outline">
-              <Grok className="size-5 text-primary-900 dark:text-primary-100" />
-            </span>
-          </div>
-          <Text as="span" size="base" weight="semibold">
-            Gemini &amp; Grok
-          </Text>
-        </div>
-
-        {/* CLI status */}
-        <RowLabel>Status</RowLabel>
-        {AGENT_COLUMNS.map(({ slug, name, install }) => {
-          const installed = detectedClis?.[slug];
-          return (
-            <RowCell key={slug}>
-              {detectedClis !== undefined && !installed ? (
-                <CliInstallBadge
-                  name={name}
-                  install={install}
-                  onRecheck={() => void refetchClis()}
-                  isRechecking={isDetecting}
-                />
-              ) : (
-                <Text
-                  as="span"
-                  weight="medium"
-                  tone={detectedClis === undefined ? "subtle" : "success"}
-                  className={cn(
-                    "inline-flex items-center rounded-full px-3 py-1 ",
-                    detectedClis === undefined
-                      ? "bg-primary-500/10 "
-                      : "bg-success/5 glass-outline glass-outline-soft",
-                  )}
-                >
-                  {detectedClis === undefined ? "Checking…" : "CLI detected"}
-                </Text>
-              )}
-            </RowCell>
-          );
-        })}
-        {/* Spans every body row of the coming-soon column */}
-        <RowCell className="row-span-4">
-          <Text as="span" tone="subtle" className="italic">
-            Soon…
-          </Text>
-        </RowCell>
-
-        {/* How the agent is used — subscription today, API may come later */}
-        <RowLabel>Works with</RowLabel>
-        {AGENT_COLUMNS.map(({ slug, subscription }) => (
-          <RowCell key={slug}>
-            <Text as="span" size="s" tone="muted">
-              {subscription}
-            </Text>
-          </RowCell>
-        ))}
-
-        {/* Features */}
-        <RowLabel>Features</RowLabel>
-        {AGENT_COLUMNS.map(({ slug, features }) => (
-          <RowCell key={slug} className="justify-start gap-1.5">
-            {features.map((feature) => (
-              <Text
-                key={feature}
-                as="span"
-                size="xs"
-                tone="muted"
-                className="leading-snug"
-              >
-                {feature}
-              </Text>
-            ))}
-          </RowCell>
-        ))}
-
-        {/* Enable buttons — hover previews the opposite state, click applies it */}
-        <RowLabel>Enabled</RowLabel>
-        {AGENT_COLUMNS.map(({ slug, name }) => {
+      <section aria-label="Agents" className={CARD}>
+        {AGENTS.map((agent) => {
+          const { slug, name, Icon, iconClassName, subscription } = agent;
           const space = spacesBySlug.get(slug);
-          const isSelected = !!space && !space.isArchived;
-          const cannotArchiveLast = isSelected && visibleAgentCount <= 1;
+          const isEnabled = !!space && !space.isArchived;
+          const isLastEnabled = isEnabled && visibleAgentCount <= 1;
           // Enabling an agent whose CLI is missing would hand over a space
           // that cannot run a single turn. Turning one OFF is never blocked
           // by this — only the last-one-standing rule does that.
           const cliMissing =
-            !isSelected && anyCliDetected && !detectedClis?.[slug];
-          const interactive = !!space && !cannotArchiveLast && !cliMissing;
+            !isEnabled && anyCliDetected && !detectedClis?.[slug];
           return (
-            <RowCell key={slug}>
-              <EnableButton
-                isSelected={isSelected}
-                interactive={interactive}
-                disabledReason={
-                  cliMissing
-                    ? `Install the ${name} CLI first`
-                    : cannotArchiveLast
-                      ? "At least one agent has to stay enabled"
-                      : undefined
-                }
-                onToggle={() => toggleAgent(slug)}
+            <div key={slug} className={ROW}>
+              <AgentIcon Icon={Icon} className={iconClassName} />
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <Text as="span" weight="medium">
+                  {name}
+                </Text>
+                {/* A switch that won't move says why right here, not in a
+                    tooltip a disabled control can't show. The missing-CLI
+                    case needs no line: the Install chip beside it says it. */}
+                <Text as="span" size="xs" tone="subtle" className="truncate">
+                  {isLastEnabled ? "Keep at least one agent on" : subscription}
+                </Text>
+              </div>
+              <CliStatus
+                agent={agent}
+                installed={detectedClis === undefined ? undefined : !!detectedClis[slug]}
+                onRecheck={() => void refetchClis()}
+                isRechecking={isDetecting}
               />
-            </RowCell>
+              <Toggle
+                enabled={isEnabled}
+                onChange={() => toggleAgent(slug)}
+                disabled={!space || isLastEnabled || cliMissing}
+                aria-label={`Use ${name}`}
+                className="py-0"
+              />
+            </div>
           );
         })}
-      </div>
+
+        <div className={cn(ROW, "opacity-60")}>
+          {/* Both in one tile, so the names still line up with the rows above */}
+          <span className="flex size-10 shrink-0 items-center justify-center gap-0.5 rounded-xl glass-outline glass-outline-soft">
+            <Gemini className="size-4" />
+            <Grok className="size-4 text-primary-900 dark:text-primary-100" />
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <Text as="span" weight="medium">
+              Gemini &amp; Grok
+            </Text>
+            <Text as="span" size="xs" tone="subtle">
+              Coming soon
+            </Text>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
