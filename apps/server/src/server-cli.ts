@@ -6,8 +6,9 @@ import {
   parseServerCliOptions,
 } from "./server-cli-options";
 import {
+  commitStandaloneServerToken,
+  prepareStandaloneServerToken,
   readStandaloneServerToken,
-  resolveStandaloneServerToken,
 } from "./server-token";
 import { startStandaloneServer } from "./standalone-server";
 import {
@@ -105,15 +106,10 @@ async function runServeCommand(argv: string[]): Promise<void> {
   const { rotateToken, publicUrls, printPairing, ...serverOptions } = options;
   const packageRoot = findPackageRoot(__dirname);
   const appVersion = readAppVersion(packageRoot);
-  const token = resolveStandaloneServerToken(serverOptions.dataDir, {
+  const token = prepareStandaloneServerToken(serverOptions.dataDir, {
     explicitToken: serverOptions.token,
     rotate: rotateToken,
   });
-  if (token.path) {
-    console.log(
-      `[serve] ${token.created ? "created" : "using"} owner token file: ${token.path}`,
-    );
-  }
   const server = await startStandaloneServer({
     ...serverOptions,
     webRoot:
@@ -123,6 +119,24 @@ async function runServeCommand(argv: string[]): Promise<void> {
     appRoot: packageRoot,
     resourcesPath: findResourcesPath(),
   });
+  try {
+    commitStandaloneServerToken(token);
+  } catch (error) {
+    try {
+      await server.close();
+    } catch (closeError) {
+      throw new AggregateError(
+        [error, closeError],
+        "Failed to persist the owner token and shut down the server",
+      );
+    }
+    throw error;
+  }
+  if (token.path) {
+    console.log(
+      `[serve] ${token.created ? "created" : "using"} owner token file: ${token.path}`,
+    );
+  }
   console.log(`[serve] standalone data directory: ${server.dataDir}`);
 
   try {

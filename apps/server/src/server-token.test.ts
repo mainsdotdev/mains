@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  commitStandaloneServerToken,
+  prepareStandaloneServerToken,
   readStandaloneServerToken,
-  resolveStandaloneServerToken,
 } from "./server-token";
 
 const temporaryDirectories: string[] = [];
@@ -22,14 +23,20 @@ afterEach(() => {
   }
 });
 
-describe("resolveStandaloneServerToken", () => {
-  it("persists and reuses a generated token", () => {
+describe("standalone server token lifecycle", () => {
+  it("prepares without writing, then persists and reuses a generated token", () => {
     const dataDir = makeDataDir();
-    const first = resolveStandaloneServerToken(dataDir);
-    const second = resolveStandaloneServerToken(dataDir);
+    const first = prepareStandaloneServerToken(dataDir);
 
     expect(first.created).toBe(true);
+    expect(first.requiresCommit).toBe(true);
+    expect(readStandaloneServerToken(dataDir)).toBeNull();
+
+    commitStandaloneServerToken(first);
+    const second = prepareStandaloneServerToken(dataDir);
+
     expect(second.created).toBe(false);
+    expect(second.requiresCommit).toBe(false);
     expect(second.token).toBe(first.token);
     expect(readStandaloneServerToken(dataDir)).toBe(first.token);
     expect(second.path).toBe(first.path);
@@ -47,17 +54,22 @@ describe("resolveStandaloneServerToken", () => {
 
   it("rotates the persisted token", () => {
     const dataDir = makeDataDir();
-    const first = resolveStandaloneServerToken(dataDir);
-    const rotated = resolveStandaloneServerToken(dataDir, { rotate: true });
+    const first = prepareStandaloneServerToken(dataDir);
+    commitStandaloneServerToken(first);
+    const rotated = prepareStandaloneServerToken(dataDir, { rotate: true });
 
     expect(rotated.created).toBe(true);
+    expect(rotated.requiresCommit).toBe(true);
     expect(rotated.token).not.toBe(first.token);
-    expect(resolveStandaloneServerToken(dataDir).token).toBe(rotated.token);
+    expect(readStandaloneServerToken(dataDir)).toBe(first.token);
+
+    commitStandaloneServerToken(rotated);
+    expect(prepareStandaloneServerToken(dataDir).token).toBe(rotated.token);
   });
 
   it("uses an explicit token without writing it to disk", () => {
     const dataDir = makeDataDir();
-    const result = resolveStandaloneServerToken(dataDir, {
+    const result = prepareStandaloneServerToken(dataDir, {
       explicitToken,
     });
 
@@ -65,20 +77,22 @@ describe("resolveStandaloneServerToken", () => {
       token: explicitToken,
       path: null,
       created: false,
+      requiresCommit: false,
     });
+    commitStandaloneServerToken(result);
     expect(fs.existsSync(path.join(dataDir, "server-token"))).toBe(false);
   });
 
   it("rejects conflicting or empty explicit token options", () => {
     const dataDir = makeDataDir();
     expect(() =>
-      resolveStandaloneServerToken(dataDir, {
+      prepareStandaloneServerToken(dataDir, {
         explicitToken,
         rotate: true,
       }),
     ).toThrow("cannot be combined");
     expect(() =>
-      resolveStandaloneServerToken(dataDir, { explicitToken: "  " }),
+      prepareStandaloneServerToken(dataDir, { explicitToken: "  " }),
     ).toThrow("must not be empty");
   });
 });

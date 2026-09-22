@@ -7,13 +7,14 @@ const MIN_OWNER_TOKEN_LENGTH = 32;
 const MAX_OWNER_TOKEN_LENGTH = 256;
 const OWNER_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-export interface StandaloneServerToken {
+export interface PreparedStandaloneServerToken {
   token: string;
   path: string | null;
   created: boolean;
+  requiresCommit: boolean;
 }
 
-interface ResolveStandaloneServerTokenOptions {
+interface PrepareStandaloneServerTokenOptions {
   explicitToken?: string;
   rotate?: boolean;
 }
@@ -78,16 +79,18 @@ function replaceTokenFile(tokenPath: string, token: string): void {
 }
 
 /**
- * Resolve the standalone server's full-access owner token.
+ * Prepare the standalone server's full-access owner token without replacing
+ * the token file. A generated/rotated token must be committed only after the
+ * server has acquired ownership and started successfully.
  *
  * An explicit CLI/environment token is intentionally ephemeral. Otherwise the
  * generated token is stored beside the standalone database so saved Mains
  * Connect entries keep working across server restarts.
  */
-export function resolveStandaloneServerToken(
+export function prepareStandaloneServerToken(
   dataDir: string,
-  options: ResolveStandaloneServerTokenOptions = {},
-): StandaloneServerToken {
+  options: PrepareStandaloneServerTokenOptions = {},
+): PreparedStandaloneServerToken {
   if (options.explicitToken !== undefined) {
     if (options.rotate) {
       throw new Error("--rotate-token cannot be combined with --token");
@@ -100,6 +103,7 @@ export function resolveStandaloneServerToken(
       token,
       path: null,
       created: false,
+      requiresCommit: false,
     };
   }
 
@@ -111,11 +115,32 @@ export function resolveStandaloneServerToken(
     const storedToken = readStoredTokenFile(tokenPath);
     if (storedToken) {
       fs.chmodSync(tokenPath, 0o600);
-      return { token: storedToken, path: tokenPath, created: false };
+      return {
+        token: storedToken,
+        path: tokenPath,
+        created: false,
+        requiresCommit: false,
+      };
     }
   }
 
   const token = generateToken();
-  replaceTokenFile(tokenPath, token);
-  return { token, path: tokenPath, created: true };
+  return {
+    token,
+    path: tokenPath,
+    created: true,
+    requiresCommit: true,
+  };
+}
+
+/** Atomically persist a prepared token after server startup succeeds. */
+export function commitStandaloneServerToken(
+  prepared: PreparedStandaloneServerToken,
+): void {
+  if (!prepared.requiresCommit) return;
+  if (!prepared.path) {
+    throw new Error("Cannot commit a standalone owner token without a path");
+  }
+  fs.mkdirSync(path.dirname(prepared.path), { recursive: true, mode: 0o700 });
+  replaceTokenFile(prepared.path, prepared.token);
 }
