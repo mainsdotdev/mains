@@ -71,7 +71,7 @@ Usage: mains [serve] [options]
   --host <address>              Bind address (default: 127.0.0.1)
   --lan                         Bind all interfaces and advertise private LAN IPs
   --port <number>               HTTP/WebSocket port (default: 8787)
-  --token <token>               Full-access owner token (overrides the stored token)
+  --token <token>               Full-access owner token (32+ URL-safe characters)
   --rotate-token                Generate and persist a new owner token
   --data-dir <path>             Override the canonical Mains data directory
   --web-root <path>             Built Mains web UI directory
@@ -85,7 +85,7 @@ Usage: mains [serve] [options]
 Pair options:
   --endpoint <url>              Reachable phone URL (repeatable; defaults to server state)
   --server-url <url>            Running server control URL (defaults to server state)
-  --token <token>               Running server owner token (defaults to its token file)
+  --token <token>               Running server owner token (32+ URL-safe characters)
   --data-dir <path>             Server state directory
   --no-qr                       Print only the pairing link
 

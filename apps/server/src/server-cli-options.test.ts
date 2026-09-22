@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   defaultDesktopDatabasePath,
   defaultServerDataDir,
@@ -11,8 +11,10 @@ import {
 } from "./server-cli-options";
 
 const temporaryDirectories: string[] = [];
+const ownerToken = "a".repeat(32);
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -32,7 +34,7 @@ describe("parseServerCliOptions", () => {
         "--host=0.0.0.0",
         "--port",
         "9000",
-        "--token=secret",
+        `--token=${ownerToken}`,
         "--data-dir",
         "/tmp/mains-data",
         "--web-root=/tmp/mains-web",
@@ -43,7 +45,7 @@ describe("parseServerCliOptions", () => {
     ).toEqual({
       host: "0.0.0.0",
       port: 9000,
-      token: "secret",
+      token: ownerToken,
       dataDir: "/tmp/mains-data",
       webRoot: "/tmp/mains-web",
       rotateToken: true,
@@ -80,6 +82,48 @@ describe("parseServerCliOptions", () => {
       parseServerCliOptions(["--lan", "--host", "192.168.1.4"]),
     ).toThrow("cannot be combined");
   });
+
+  it.each([
+    ["--token", ["--token", "--lan"]],
+    ["--port", ["--port", "--tailscale-serve"]],
+    ["--public-url", ["--public-url", "--no-pairing"]],
+  ])("rejects %s when its value is another option", (name, argv) => {
+    expect(() => parseServerCliOptions(argv)).toThrow(
+      `${name} requires a value`,
+    );
+  });
+
+  it("rejects empty, unknown, positional, and duplicate options", () => {
+    expect(() => parseServerCliOptions(["--token="])).toThrow(
+      "--token requires a value",
+    );
+    expect(() => parseServerCliOptions(["--wat"])).toThrow(
+      "Unknown option: --wat",
+    );
+    expect(() => parseServerCliOptions(["unexpected"])).toThrow(
+      "Unexpected argument: unexpected",
+    );
+    expect(() =>
+      parseServerCliOptions(["--port", "8787", "--port=9000"]),
+    ).toThrow("--port may only be specified once");
+    expect(() => parseServerCliOptions(["--lan", "--lan"])).toThrow(
+      "--lan may only be specified once",
+    );
+  });
+
+  it("requires explicit owner tokens to be long and URL-safe", () => {
+    expect(() => parseServerCliOptions(["--token=short"])).toThrow(
+      "--token must be at least 32 URL-safe characters",
+    );
+    expect(() => parseServerCliOptions([`--token=${"a".repeat(31)}!`])).toThrow(
+      "--token must contain only URL-safe characters",
+    );
+
+    vi.stubEnv("MAINS_SERVE_TOKEN", "short");
+    expect(() => parseServerCliOptions([])).toThrow(
+      "MAINS_SERVE_TOKEN must be at least 32 URL-safe characters",
+    );
+  });
 });
 
 describe("parsePairCliOptions", () => {
@@ -88,7 +132,7 @@ describe("parsePairCliOptions", () => {
       parsePairCliOptions([
         "--server-url=http://127.0.0.1:9000",
         "--token",
-        "secret",
+        ownerToken,
         "--endpoint=http://192.168.1.5:9000",
         "--endpoint",
         "https://mains.example.com",
@@ -97,7 +141,7 @@ describe("parsePairCliOptions", () => {
       ]),
     ).toEqual({
       controlUrl: "http://127.0.0.1:9000",
-      token: "secret",
+      token: ownerToken,
       endpoints: [
         "http://192.168.1.5:9000",
         "https://mains.example.com",
@@ -105,6 +149,18 @@ describe("parsePairCliOptions", () => {
       dataDir: "/tmp/mains",
       printQr: false,
     });
+  });
+
+  it("rejects missing values and unsupported options", () => {
+    expect(() => parsePairCliOptions(["--token", "--no-qr"])).toThrow(
+      "--token requires a value",
+    );
+    expect(() => parsePairCliOptions(["--endpoint="])).toThrow(
+      "--endpoint requires a value",
+    );
+    expect(() => parsePairCliOptions(["--lan"])).toThrow(
+      "Unknown option: --lan",
+    );
   });
 });
 

@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 const TOKEN_FILE_NAME = "server-token";
+const MIN_OWNER_TOKEN_LENGTH = 32;
+const MAX_OWNER_TOKEN_LENGTH = 256;
+const OWNER_TOKEN_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export interface StandaloneServerToken {
   token: string;
@@ -17,6 +20,29 @@ interface ResolveStandaloneServerTokenOptions {
 
 function generateToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+export function validateStandaloneOwnerToken(
+  value: string,
+  source = "Owner token",
+): string {
+  if (!value.trim()) {
+    throw new Error(`${source} must not be empty`);
+  }
+  if (value.length < MIN_OWNER_TOKEN_LENGTH) {
+    throw new Error(
+      `${source} must be at least ${MIN_OWNER_TOKEN_LENGTH} URL-safe characters`,
+    );
+  }
+  if (!OWNER_TOKEN_PATTERN.test(value)) {
+    throw new Error(`${source} must contain only URL-safe characters`);
+  }
+  if (value.length > MAX_OWNER_TOKEN_LENGTH) {
+    throw new Error(
+      `${source} must be at most ${MAX_OWNER_TOKEN_LENGTH} characters`,
+    );
+  }
+  return value;
 }
 
 function readStoredTokenFile(tokenPath: string): string | null {
@@ -66,11 +92,12 @@ export function resolveStandaloneServerToken(
     if (options.rotate) {
       throw new Error("--rotate-token cannot be combined with --token");
     }
-    if (!options.explicitToken.trim()) {
-      throw new Error("--token must not be empty");
-    }
+    const token = validateStandaloneOwnerToken(
+      options.explicitToken,
+      "--token",
+    );
     return {
-      token: options.explicitToken,
+      token,
       path: null,
       created: false,
     };

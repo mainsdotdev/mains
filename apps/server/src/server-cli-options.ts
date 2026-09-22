@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { validateStandaloneOwnerToken } from "./server-token";
 
 export interface CliOptions {
   host: string;
@@ -52,28 +53,126 @@ export function defaultDesktopDatabasePath(): string {
   );
 }
 
-function readValue(argv: string[], name: string): string | undefined {
-  const equals = argv.find((value) => value.startsWith(`${name}=`));
-  if (equals) return equals.slice(name.length + 1);
-  const index = argv.indexOf(name);
-  return index >= 0 ? argv[index + 1] : undefined;
+type CliOptionDefinition =
+  | { kind: "flag" }
+  | { kind: "value"; repeatable?: boolean };
+
+type CliOptionSchema = Readonly<Record<string, CliOptionDefinition>>;
+
+interface ParsedCliOptions {
+  flags: ReadonlySet<string>;
+  values: ReadonlyMap<string, string[]>;
 }
 
-function readValues(argv: string[], name: string): string[] {
-  const values: string[] = [];
+const SERVER_OPTION_SCHEMA = {
+  "--host": { kind: "value" },
+  "--lan": { kind: "flag" },
+  "--port": { kind: "value" },
+  "--token": { kind: "value" },
+  "--data-dir": { kind: "value" },
+  "--web-root": { kind: "value" },
+  "--public-url": { kind: "value", repeatable: true },
+  "--rotate-token": { kind: "flag" },
+  "--tailscale-serve": { kind: "flag" },
+  "--tailscale-serve-port": { kind: "value" },
+  "--no-pairing": { kind: "flag" },
+} satisfies CliOptionSchema;
+
+const PAIR_OPTION_SCHEMA = {
+  "--data-dir": { kind: "value" },
+  "--token": { kind: "value" },
+  "--server-url": { kind: "value" },
+  "--endpoint": { kind: "value", repeatable: true },
+  "--public-url": { kind: "value", repeatable: true },
+  "--no-qr": { kind: "flag" },
+} satisfies CliOptionSchema;
+
+function parseCliOptions(
+  argv: string[],
+  schema: CliOptionSchema,
+): ParsedCliOptions {
+  const flags = new Set<string>();
+  const values = new Map<string, string[]>();
+
   for (let index = 0; index < argv.length; index += 1) {
-    const value = argv[index];
-    if (value.startsWith(`${name}=`)) {
-      values.push(value.slice(name.length + 1));
-    } else if (value === name && argv[index + 1] !== undefined) {
-      values.push(argv[index + 1]);
+    const argument = argv[index];
+    if (!argument.startsWith("--")) {
+      throw new Error(`Unexpected argument: ${argument}`);
+    }
+
+    const equalsIndex = argument.indexOf("=");
+    const name = equalsIndex === -1 ? argument : argument.slice(0, equalsIndex);
+    const definition = schema[name];
+    if (!definition) {
+      throw new Error(`Unknown option: ${name}`);
+    }
+
+    const alreadySpecified = flags.has(name) || values.has(name);
+    if (
+      alreadySpecified &&
+      !(definition.kind === "value" && definition.repeatable)
+    ) {
+      throw new Error(`${name} may only be specified once`);
+    }
+
+    if (definition.kind === "flag") {
+      if (equalsIndex !== -1) {
+        throw new Error(`${name} does not take a value`);
+      }
+      flags.add(name);
+      continue;
+    }
+
+    let value: string;
+    if (equalsIndex !== -1) {
+      value = argument.slice(equalsIndex + 1);
+    } else {
+      const next = argv[index + 1];
+      if (next === undefined || next.startsWith("--")) {
+        throw new Error(`${name} requires a value`);
+      }
+      value = next;
       index += 1;
     }
+    if (!value) {
+      throw new Error(`${name} requires a value`);
+    }
+
+    const existing = values.get(name);
+    if (existing) existing.push(value);
+    else values.set(name, [value]);
   }
-  return values;
+
+  return { flags, values };
 }
 
-function parsePort(value: string | undefined, fallback: number, name: string): number {
+function optionValue(
+  parsed: ParsedCliOptions,
+  name: string,
+): string | undefined {
+  return parsed.values.get(name)?.[0];
+}
+
+function optionValues(parsed: ParsedCliOptions, name: string): string[] {
+  return parsed.values.get(name) ?? [];
+}
+
+function ownerToken(parsed: ParsedCliOptions): string | undefined {
+  const explicit = optionValue(parsed, "--token");
+  if (explicit !== undefined) {
+    return validateStandaloneOwnerToken(explicit, "--token");
+  }
+  const environment = process.env.MAINS_SERVE_TOKEN;
+  return environment === undefined
+    ? undefined
+    : validateStandaloneOwnerToken(environment, "MAINS_SERVE_TOKEN");
+}
+
+function parsePort(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number {
   if (value === undefined) return fallback;
   const port = Number(value);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
@@ -83,59 +182,66 @@ function parsePort(value: string | undefined, fallback: number, name: string): n
 }
 
 export function parseServerCliOptions(argv: string[]): CliOptions {
+  const parsed = parseCliOptions(argv, SERVER_OPTION_SCHEMA);
   const configuredHost =
-    readValue(argv, "--host") ?? process.env.MAINS_SERVE_HOST;
-  if (argv.includes("--lan") && configuredHost && configuredHost !== "0.0.0.0") {
+    optionValue(parsed, "--host") ?? process.env.MAINS_SERVE_HOST;
+  if (
+    parsed.flags.has("--lan") &&
+    configuredHost &&
+    configuredHost !== "0.0.0.0"
+  ) {
     throw new Error("--lan cannot be combined with a different --host");
   }
   const tailscalePort =
-    readValue(argv, "--tailscale-serve-port") ??
+    optionValue(parsed, "--tailscale-serve-port") ??
     process.env.MAINS_TAILSCALE_SERVE_PORT;
   return {
-    host: argv.includes("--lan")
+    host: parsed.flags.has("--lan")
       ? "0.0.0.0"
       : (configuredHost ?? "127.0.0.1"),
     port: parsePort(
-      readValue(argv, "--port") ?? process.env.MAINS_SERVE_PORT,
+      optionValue(parsed, "--port") ?? process.env.MAINS_SERVE_PORT,
       8787,
       "--port",
     ),
-    token: readValue(argv, "--token") ?? process.env.MAINS_SERVE_TOKEN,
-    webRoot: readValue(argv, "--web-root") ?? process.env.MAINS_SERVE_WEB_ROOT,
+    token: ownerToken(parsed),
+    webRoot:
+      optionValue(parsed, "--web-root") ?? process.env.MAINS_SERVE_WEB_ROOT,
     dataDir:
-      readValue(argv, "--data-dir") ??
+      optionValue(parsed, "--data-dir") ??
       process.env.MAINS_SERVER_DATA_DIR ??
       defaultServerDataDir(),
-    rotateToken: argv.includes("--rotate-token"),
+    rotateToken: parsed.flags.has("--rotate-token"),
     tailscaleServe:
-      argv.includes("--tailscale-serve") ||
+      parsed.flags.has("--tailscale-serve") ||
       process.env.MAINS_TAILSCALE_SERVE === "1",
     tailscaleServePort:
       tailscalePort === undefined
         ? undefined
         : parsePort(tailscalePort, 443, "--tailscale-serve-port"),
     publicUrls: [
-      ...readValues(argv, "--public-url"),
+      ...optionValues(parsed, "--public-url"),
       ...(process.env.MAINS_PUBLIC_URL ? [process.env.MAINS_PUBLIC_URL] : []),
     ],
-    printPairing: !argv.includes("--no-pairing"),
+    printPairing: !parsed.flags.has("--no-pairing"),
   };
 }
 
 export function parsePairCliOptions(argv: string[]): PairCliOptions {
+  const parsed = parseCliOptions(argv, PAIR_OPTION_SCHEMA);
   return {
     dataDir:
-      readValue(argv, "--data-dir") ??
+      optionValue(parsed, "--data-dir") ??
       process.env.MAINS_SERVER_DATA_DIR ??
       defaultServerDataDir(),
-    token: readValue(argv, "--token") ?? process.env.MAINS_SERVE_TOKEN,
+    token: ownerToken(parsed),
     controlUrl:
-      readValue(argv, "--server-url") ?? process.env.MAINS_SERVER_URL,
+      optionValue(parsed, "--server-url") ?? process.env.MAINS_SERVER_URL,
     endpoints: [
-      ...readValues(argv, "--endpoint"),
-      ...readValues(argv, "--public-url"),
+      ...optionValues(parsed, "--endpoint"),
+      ...optionValues(parsed, "--public-url"),
     ],
-    printQr: !argv.includes("--no-qr"),
+    printQr: !parsed.flags.has("--no-qr"),
   };
 }
 

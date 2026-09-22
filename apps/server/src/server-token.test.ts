@@ -8,6 +8,7 @@ import {
 } from "./server-token";
 
 const temporaryDirectories: string[] = [];
+const explicitToken = "a".repeat(32);
 
 function makeDataDir(): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mains-token-test-"));
@@ -57,11 +58,11 @@ describe("resolveStandaloneServerToken", () => {
   it("uses an explicit token without writing it to disk", () => {
     const dataDir = makeDataDir();
     const result = resolveStandaloneServerToken(dataDir, {
-      explicitToken: "provided-token",
+      explicitToken,
     });
 
     expect(result).toEqual({
-      token: "provided-token",
+      token: explicitToken,
       path: null,
       created: false,
     });
@@ -72,7 +73,7 @@ describe("resolveStandaloneServerToken", () => {
     const dataDir = makeDataDir();
     expect(() =>
       resolveStandaloneServerToken(dataDir, {
-        explicitToken: "provided-token",
+        explicitToken,
         rotate: true,
       }),
     ).toThrow("cannot be combined");

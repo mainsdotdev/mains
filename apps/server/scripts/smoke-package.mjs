@@ -8,7 +8,7 @@ import WebSocket from "ws";
 
 const appRoot = path.resolve(import.meta.dirname, "..");
 const archive = path.join(appRoot, "dist", "mains-server.tgz");
-const token = "standalone-package-smoke-token";
+const token = "standalone-package-smoke-owner-token";
 const temporaryRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "mains-package-smoke-"),
 );
