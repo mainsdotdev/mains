@@ -11,7 +11,7 @@ vi.mock("./standalone-server", () => ({
   startStandaloneServer: mocks.startStandaloneServer,
 }));
 
-import { runServerCli } from "./server-cli";
+import { findBundledWebRoot, runServerCli } from "./server-cli";
 import {
   commitStandaloneServerToken,
   prepareStandaloneServerToken,
@@ -25,6 +25,12 @@ function makeDataDir(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-cli-test-"));
   temporaryDirectories.push(root);
   return path.join(root, "data");
+}
+
+function makeWebBuild(directory: string): string {
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "index.html"), "<main></main>");
+  return directory;
 }
 
 beforeEach(() => {
@@ -184,5 +190,32 @@ describe("runServerCli browser login", () => {
     expect(log).toHaveBeenCalledWith(
       "https://mains.example/#login=one-time",
     );
+  });
+});
+
+describe("findBundledWebRoot", () => {
+  it("prefers the web UI shipped inside the installed package", () => {
+    const root = path.dirname(makeDataDir());
+    const packageRoot = path.join(root, "server");
+    const shipped = makeWebBuild(path.join(packageRoot, "dist-web"));
+    makeWebBuild(path.join(root, "desktop", "dist-web"));
+
+    expect(findBundledWebRoot(packageRoot)).toBe(shipped);
+  });
+
+  it("falls back to the desktop renderer build in a source checkout", () => {
+    const root = path.dirname(makeDataDir());
+    const checkoutBuild = makeWebBuild(path.join(root, "desktop", "dist-web"));
+
+    expect(findBundledWebRoot(path.join(root, "server"))).toBe(checkoutBuild);
+  });
+
+  it("never looks in the working directory", () => {
+    const root = path.dirname(makeDataDir());
+    const project = path.join(root, "project");
+    makeWebBuild(path.join(project, "dist-web"));
+    vi.spyOn(process, "cwd").mockReturnValue(project);
+
+    expect(findBundledWebRoot(path.join(root, "server"))).toBeUndefined();
   });
 });

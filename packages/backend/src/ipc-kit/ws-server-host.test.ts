@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,26 @@ function nextMessage(ws: WebSocket): Promise<string> {
   return new Promise((resolve) =>
     ws.once("message", (data) => resolve(data.toString())),
   );
+}
+
+/** Send a tokenless upgrade with a raw request target; resolve the status line. */
+function rawUpgrade(port: number, target: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let response = "";
+    const socket = net.connect(port, "127.0.0.1", () => {
+      socket.write(
+        `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
+          "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+          "Sec-WebSocket-Version: 13\r\n\r\n",
+      );
+    });
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+    });
+    socket.on("close", () => resolve(response.split("\r\n")[0]));
+    socket.on("error", reject);
+  });
 }
 
 describe("startWsHost (integration)", () => {
@@ -93,6 +114,18 @@ describe("startWsHost (integration)", () => {
       client!.once("error", (e) => resolve(e.message)),
     );
     expect(error).toBe("Unexpected server response: 401");
+  });
+
+  it("rejects an unparseable request target without taking the host down", async () => {
+    host = await startWsHost({ port: 0, host: "127.0.0.1", token: TOKEN });
+
+    // `new URL("//", base)` throws; this once crashed the process unauthenticated.
+    for (const target of ["//", "//evil.example/__mains/ws", "/__mains/ws?x=1"]) {
+      expect(await rawUpgrade(host.port, target)).toBe("HTTP/1.1 401 Unauthorized");
+    }
+
+    client = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols(TOKEN));
+    await opened(client);
   });
 });
 

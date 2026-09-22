@@ -240,6 +240,14 @@ try {
   }
   probeInstalledDependencies();
   const dataDir = path.join(temporaryRoot, "data");
+  // The server starts in a directory holding its own `dist-web`, as a cloned
+  // project might. It must still serve the package's web UI, never this one.
+  const decoyMarker = "mains-smoke-decoy-web-root";
+  fs.mkdirSync(path.join(temporaryRoot, "dist-web"), { recursive: true });
+  fs.writeFileSync(
+    path.join(temporaryRoot, "dist-web", "index.html"),
+    `<html><body>${decoyMarker}</body></html>`,
+  );
   child = spawn(
     process.execPath,
     [
@@ -269,7 +277,11 @@ try {
   }
 
   const page = await fetch(`http://127.0.0.1:${port}/`);
-  if (!page.ok || !(await page.text()).includes('<div id="root"></div>')) {
+  const pageText = await page.text();
+  if (pageText.includes(decoyMarker)) {
+    throw new Error("Packaged server served a web UI from its working directory");
+  }
+  if (!page.ok || !pageText.includes('<div id="root"></div>')) {
     throw new Error(
       `Packaged web UI failed its HTTP smoke test (${page.status})`,
     );

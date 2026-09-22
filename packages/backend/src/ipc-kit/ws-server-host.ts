@@ -676,7 +676,9 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
         return true;
       }
     }
-    const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+    // The request target is attacker-controlled: `new URL("//", base)` throws,
+    // so compare the raw path instead of parsing it.
+    const requestPath = (req.url ?? "/").split("?")[0];
     const webSession =
       requestPath === "/__mains/ws"
         ? webSessions.verifySession(
@@ -699,10 +701,14 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
     // Reject the handshake (401) when the token is missing or wrong, so an
     // unauthenticated socket never opens.
     verifyClient: (info, cb) => {
-      void authorize(info.req).then((allowed) => {
-        if (allowed) cb(true);
-        else cb(false, 401, "Unauthorized");
-      });
+      // Fail closed: a throw while authenticating must reject this handshake,
+      // never surface as an unhandled rejection that takes the process down.
+      void authorize(info.req)
+        .catch(() => false)
+        .then((allowed) => {
+          if (allowed) cb(true);
+          else cb(false, 401, "Unauthorized");
+        });
     },
   });
 

@@ -55,11 +55,16 @@ function readAppVersion(packageRoot: string): string {
   return parsed.version;
 }
 
-function findDevelopmentWebRoot(packageRoot: string): string | undefined {
-  const candidate = path.resolve(packageRoot, "../desktop/dist-web");
-  return fs.existsSync(path.join(candidate, "index.html"))
-    ? candidate
-    : undefined;
+/**
+ * The web UI that ships with this CLI: `dist-web/` inside the installed package,
+ * or the desktop renderer build in a source checkout. Passed to the backend
+ * explicitly so the user's working directory is never searched for one.
+ */
+export function findBundledWebRoot(packageRoot: string): string | undefined {
+  return [
+    path.join(packageRoot, "dist-web"),
+    path.resolve(packageRoot, "../desktop/dist-web"),
+  ].find((candidate) => fs.existsSync(path.join(candidate, "index.html")));
 }
 
 function printHelp(): void {
@@ -121,8 +126,7 @@ async function runServeCommand(argv: string[]): Promise<void> {
   });
   const server = await startStandaloneServer({
     ...serverOptions,
-    webRoot:
-      serverOptions.webRoot ?? findDevelopmentWebRoot(packageRoot),
+    webRoot: serverOptions.webRoot ?? findBundledWebRoot(packageRoot),
     token: token.token,
     appVersion,
     appRoot: packageRoot,
