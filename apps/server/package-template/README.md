@@ -71,6 +71,3 @@ unit. Uninstalling the service keeps the server data and paired-device records.
 
 The standalone server and Electron app share the canonical Mains data directory
 serially. Never run both backend processes at once.
-
-`mains-server` remains available as a backwards-compatible alias for scripts
-written before the shorter `mains` command was introduced.

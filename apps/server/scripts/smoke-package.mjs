@@ -20,19 +20,10 @@ const installedPackageRoot = path.join(
   "server",
 );
 const executable = path.join(installedPackageRoot, "bin", "mains.cjs");
-const legacyExecutable = path.join(
-  installedPackageRoot,
-  "bin",
-  "mains-server.cjs",
-);
 const npmBinRoot = path.join(installationRoot, "node_modules", ".bin");
 const installedCommand = path.join(
   npmBinRoot,
   process.platform === "win32" ? "mains.cmd" : "mains",
-);
-const installedLegacyCommand = path.join(
-  npmBinRoot,
-  process.platform === "win32" ? "mains-server.cmd" : "mains-server",
 );
 let child;
 
@@ -196,24 +187,21 @@ try {
   );
   if (
     packageJson.bin?.mains !== "bin/mains.cjs" ||
-    packageJson.bin?.["mains-server"] !== "bin/mains-server.cjs" ||
-    !fs.existsSync(executable) ||
-    !fs.existsSync(legacyExecutable)
+    Object.keys(packageJson.bin ?? {}).length !== 1 ||
+    !fs.existsSync(executable)
   ) {
     throw new Error(
-      `Packaged CLI aliases are incomplete: ${JSON.stringify(packageJson.bin)}`,
+      `Packaged CLI entrypoint is invalid: ${JSON.stringify(packageJson.bin)}`,
     );
   }
-  for (const cli of [installedCommand, installedLegacyCommand]) {
-    const version = spawnSync(cli, ["--version"], {
-      cwd: temporaryRoot,
-      encoding: "utf8",
-    });
-    if (version.status !== 0 || version.stdout.trim() !== packageJson.version) {
-      throw new Error(
-        `Packaged CLI version check failed for ${path.basename(cli)}:\n${version.stderr || version.stdout || `exit ${version.status}`}`,
-      );
-    }
+  const version = spawnSync(installedCommand, ["--version"], {
+    cwd: temporaryRoot,
+    encoding: "utf8",
+  });
+  if (version.status !== 0 || version.stdout.trim() !== packageJson.version) {
+    throw new Error(
+      `Packaged CLI version check failed for ${path.basename(installedCommand)}:\n${version.stderr || version.stdout || `exit ${version.status}`}`,
+    );
   }
   probeInstalledDependencies();
   const dataDir = path.join(temporaryRoot, "data");

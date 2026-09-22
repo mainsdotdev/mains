@@ -165,7 +165,6 @@ const serverPackage = {
   type: "commonjs",
   bin: {
     mains: "bin/mains.cjs",
-    "mains-server": "bin/mains-server.cjs",
   },
   files: [
     "bin",
@@ -182,9 +181,7 @@ fs.writeFileSync(
   path.join(packageRoot, "package.json"),
   `${JSON.stringify(serverPackage, null, 2)}\n`,
 );
-for (const executableName of ["mains.cjs", "mains-server.cjs"]) {
-  fs.chmodSync(path.join(packageRoot, "bin", executableName), 0o755);
-}
+fs.chmodSync(path.join(packageRoot, "bin", "mains.cjs"), 0o755);
 
 const npmExecutable = process.platform === "win32" ? "npm.cmd" : "npm";
 const packed = spawnSync(

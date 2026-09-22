@@ -12,8 +12,8 @@ npm install --global ./dist/mains-server.tgz
 mains serve --lan --port 8787
 ```
 
-`mains-server` remains a compatibility alias. The commands below are the
-source-development equivalents and rebuild before starting.
+The commands below are the source-development equivalents and rebuild before
+starting.
 
 ```bash
 npm --prefix ../desktop install
