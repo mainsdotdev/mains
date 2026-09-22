@@ -30,6 +30,7 @@ const appSettingsPersistConfig = {
     "documentViewerWidth",
     "tasksDetailWidth",
     "theme",
+    "appTheme",
     "interfaceFontSize",
     "codeFontSize",
     "bottomTerminalOpen",

@@ -22,7 +22,6 @@ type CodexPersonality = NonNullable<CodexAdapterConfig["personality"]>;
 import {
   ProviderAccountSection,
   ProviderCliSection,
-  ProviderColorSection,
   ProviderSettingsLayout,
   ProviderUsageSection,
   selectedSchemaLabel,
@@ -96,7 +95,7 @@ const SANDBOX_OPTIONS = CODEX_SANDBOX_MODES.map((m) => ({
 }));
 
 export default function CodexSettings() {
-  const { provider, isLoading, error, config, space, updateConfig } =
+  const { provider, isLoading, error, config, updateConfig } =
     useProviderSettings<CodexAdapterConfig>(PROVIDER_IDS.codex, "codex");
   const { data: rateLimits, isLoading: isLoadingRateLimits } =
     useGetProviderRateLimitsQuery(PROVIDER_IDS.codex, {
@@ -273,8 +272,6 @@ export default function CodexSettings() {
           </SettingsRow>
         )}
       </ProviderCliSection>
-
-      <ProviderColorSection space={space} />
 
       <SettingsSection title="Configuration">
         <SettingsRow

@@ -22,10 +22,9 @@ import {
   type RichCodeChipData,
 } from "@/components/ui";
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
-import { useActiveSpace } from "@/hooks/use-active-space";
 import { useDarkMode } from "@/hooks/use-dark-mode";
 import { useModeConfig } from "@/hooks/use-mode-config";
-import { spaceGlowColor, spaceGlowShadow } from "@/lib/space-themes";
+import { composerGlowShadow } from "../lib/composer-glow";
 import { useIsMobile } from "@/lib/platform";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { Chat, Check, Plus } from "@/components/ui/icons";
@@ -208,20 +207,15 @@ export function WorkspaceInput({
   const spaceProvider = useSpaceProviderVariant();
   const providerVariant = spaceProvider.variant;
   const activeProviderId = providerId ?? spaceProvider.providerId;
-    // Empty-state backlight: the centered composer glows in the space's theme
-  // hue. Inline because the color is derived from per-space config at runtime.
-  const { activeSpace } = useActiveSpace();
+  // Empty-state backlight: the centered composer glows in the accent.
   const { darkMode } = useDarkMode();
   const { composerPlaceholder } = useModeConfig();
-  const spaceGlow =
-    layout === "centered"
-      ? spaceGlowColor(activeSpace?.themeConfig ?? null, darkMode)
-      : null;
   // Built outside the JSX on purpose: calling the helper inline in `style`
   // makes the React Compiler bail on this component's manual memoization.
-  const spaceGlowStyle = spaceGlow
-    ? { boxShadow: spaceGlowShadow(spaceGlow, darkMode) }
-    : undefined;
+  const glowStyle =
+    layout === "centered"
+      ? { boxShadow: composerGlowShadow(darkMode) }
+      : undefined;
 
 
   const {
@@ -819,7 +813,7 @@ export function WorkspaceInput({
         cursor-pointer transition-all
         ${layout === "default" ? "mb-4" : ""}
         ${isFileDragOver ? "ring-2 ring-primary/60 ring-offset-2 ring-offset-background" : ""}`}
-        style={spaceGlowStyle}
+        style={glowStyle}
         onDragEnter={handleWrapperDragEnter}
         onDragLeave={handleWrapperDragLeave}
         onDragOver={handleWrapperDragOver}

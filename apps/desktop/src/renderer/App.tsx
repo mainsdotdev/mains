@@ -40,6 +40,7 @@ import { SidebarToggleButton } from "./components/layout/sidebar/sidebar-toggle-
 import { MainHeaderProvider } from "./hooks/use-main-header";
 import { useLayoutWidthVars } from "./hooks/use-layout-width-vars";
 import { useAppearanceFonts } from "./hooks/use-appearance-fonts";
+import { useAppTheme } from "./hooks/use-app-theme";
 import { getProviderVariant } from "./lib/provider-variants";
 import { CommandMenu } from "./features/command-menu/command-menu";
 import { useAppshots } from "./hooks/use-appshots";
@@ -98,6 +99,7 @@ function AppContent() {
   useDropdownAnimationPrewarm();
   useLayoutWidthVars();
   useAppearanceFonts();
+  useAppTheme();
   useAppshots();
   useWindowRequests();
   useAppSettingsEvents();

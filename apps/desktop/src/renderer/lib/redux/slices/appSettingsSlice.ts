@@ -13,6 +13,12 @@ import {
   clampInterfaceFontSize,
 } from "@/lib/appearance-fonts";
 import type { DocType } from "@/lib/document-viewer";
+import {
+  DEFAULT_APP_THEME_SETTINGS,
+  applyThemeChoice,
+  type AppThemeSettings,
+  type ThemeChoiceChange,
+} from "@/lib/app-themes";
 import { isNewRunTab } from "@/features/workspace/lib/repo-utils";
 import { openNewRunTab, setActiveTab } from "./workspaceSlice";
 
@@ -63,6 +69,8 @@ export interface AppSettingsState {
   tasksDetailWidth: number;
   /** Light / dark / follow-the-OS. Applied to `<html class="dark">`. */
   theme: ThemePreference;
+  /** App themes — the default and per-provider overrides (`lib/app-themes.ts`). */
+  appTheme: AppThemeSettings;
   /** Root font size in pixels. Rescales every rem-based dimension. */
   interfaceFontSize: number;
   /** Code / diff font size in pixels. Absolute so it never scales twice. */
@@ -92,6 +100,7 @@ const initialState: AppSettingsState = {
   documentViewerDoc: null,
   tasksDetailWidth: TASKS_DETAIL_WIDTH_DEFAULT,
   theme: "system",
+  appTheme: DEFAULT_APP_THEME_SETTINGS,
   interfaceFontSize: DEFAULT_INTERFACE_FONT_SIZE,
   codeFontSize: DEFAULT_CODE_FONT_SIZE,
   bottomTerminalOpen: false,
@@ -148,6 +157,9 @@ const appSettingsSlice = createSlice({
     },
     setTheme: (state, action: PayloadAction<ThemePreference>) => {
       state.theme = action.payload;
+    },
+    setThemeChoice: (state, action: PayloadAction<ThemeChoiceChange>) => {
+      state.appTheme = applyThemeChoice(state.appTheme, action.payload);
     },
     setInterfaceFontSize: (state, action: PayloadAction<number>) => {
       state.interfaceFontSize = clampInterfaceFontSize(action.payload);
@@ -209,6 +221,7 @@ export const {
   setTasksDetailWidth,
   setDocumentViewerDoc,
   setTheme,
+  setThemeChoice,
   setInterfaceFontSize,
   setCodeFontSize,
   setBottomTerminalOpen,

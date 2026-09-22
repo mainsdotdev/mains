@@ -32,6 +32,7 @@ import {
   SettingsDivider,
 } from "./settings-layout";
 import { ThemePicker, ThemeSelect, type ThemeValue } from "./theme-picker";
+import { AppThemeSettingsRows } from "./app-theme-settings";
 import { useAutoUpdate } from "@/hooks/use-auto-update";
 import { useCapabilities, useIsMobile } from "@/lib/platform";
 import { Refresh } from "@/components/ui/icons";
@@ -305,6 +306,8 @@ export default function GeneralSettings() {
             <ThemePicker onChange={handleThemeChange} />
           )}
         </SettingsRow>
+
+        <AppThemeSettingsRows compact={isMobile} />
 
         <SettingsDivider />
         <SettingsRow

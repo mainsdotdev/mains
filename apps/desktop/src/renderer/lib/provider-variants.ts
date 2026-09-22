@@ -53,6 +53,13 @@ export interface ProviderVariantDescriptor {
   icon: ComponentType<{ className?: string }>;
   /** Accent class always applied to this variant's icon (e.g. Claude's tint). */
   accentClassName?: string;
+  /**
+   * Brand colour (`#rrggbb`, the `--color-<variant>` token in index.css),
+   * offered as the app accent while this provider is active — Settings ›
+   * General › Appearance. Absent when the mark has no usable hue (Cursor's
+   * is gray); the theme's accent stays then.
+   */
+  brandColor?: string;
 
   // ── config-key contract (renderer reads/writes; mirrors the drivers' reads) ──
   /** Config key holding the permission/sandbox mode. */
@@ -105,6 +112,7 @@ export interface ProviderVariantDescriptor {
 export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescriptor> = {
   claude: {
     variant: "claude",
+    brandColor: "#d97757",
     label: "Claude",
     providerId: PROVIDER_IDS.claude,
     icon: Claude,
@@ -127,6 +135,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
   },
   copilot: {
     variant: "copilot",
+    brandColor: "#8534f3",
     label: "Copilot",
     providerId: PROVIDER_IDS.copilot,
     icon: CopilotStatic,
@@ -148,6 +157,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
   },
   codex: {
     variant: "codex",
+    brandColor: "#0169cc",
     label: "Codex",
     providerId: PROVIDER_IDS.codex,
     icon: Codex,

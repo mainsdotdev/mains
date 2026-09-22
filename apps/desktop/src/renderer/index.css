@@ -83,25 +83,10 @@ html:not(.app-ready) *::after {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
 
-  --color-primary: #ffffff;
-  --color-primary-50: #efeeee;
-  --color-primary-100: #f7f7f6;
-  --color-primary-200: #d3d3d3;
-  --color-primary-300: #b5b5b5;
-  --color-primary-400: #a09d95;
-  --color-primary-500: #878580;
-  --color-primary-600: #6f6e69;
-  --color-primary-700: #575653;
-  --color-primary-800: #262625;
-  --color-primary-900: #141414;
-  --color-primary-950: #0c0c0c;
-
-
   --color-danger: #ff4436;
   --color-danger-hover: #e33221;
   --color-success: #22C55E;
   --color-warning: #F59E0B;
-  --color-accent: #2563eb;
   --color-claude: #D97757;
   --color-copilot: #8534F3;
   --color-codex: #0169CC;
@@ -134,6 +119,38 @@ html:not(.app-ready) *::after {
   --shadow-inset-toggle-dark: inset 0 0.5px 2px rgba(0, 0, 0, 0.3);
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
 
+}
+
+/* The themeable colours. App themes (lib/app-themes.ts) re-derive the neutral
+   scale and the accent at runtime, from a stylesheet that overrides these
+   variables — so they can't sit in `@theme inline`, which bakes the literal
+   into every utility (`bg-primary-100` → `#f7f7f6`). Here utilities reference
+   the variable instead, opacity modifiers included (`hover:bg-primary-200/60`
+   → `color-mix(in oklab, var(--color-primary-200) 60%, transparent)`).
+   `static` emits every variable, used by a utility or not, so a style prop
+   or a derived token reading one never finds it undefined.
+
+   The scale runs light → dark in BOTH modes: light mode paints surfaces with
+   the low steps and text with the high ones, dark mode the reverse. Keep it
+   that way — app themes rely on it, and app-themes.test.ts measures these
+   literals to position the steps of a derived scale. */
+@theme static {
+  --color-primary: #ffffff;
+  --color-primary-50: #efeeee;
+  --color-primary-100: #f7f7f6;
+  --color-primary-200: #d3d3d3;
+  --color-primary-300: #b5b5b5;
+  --color-primary-400: #a09d95;
+  --color-primary-500: #878580;
+  --color-primary-600: #6f6e69;
+  --color-primary-700: #575653;
+  --color-primary-800: #262625;
+  --color-primary-900: #141414;
+  --color-primary-950: #0c0c0c;
+
+  --color-accent: #2563eb;
+  /* Text on an accent fill. A theme with a light accent switches it to dark. */
+  --color-accent-foreground: #ffffff;
 }
 
 *:focus {
@@ -727,20 +744,22 @@ html.mains-web.dark #root {
    - Never pair with a bg-* or hover:bg-* utility: those set background-color,
      which the `background` shorthand here overrides — and hover:bg-* wins on
      specificity, wiping the rim on hover. Use the tokens instead, or
-     `hover:[--glass-tint:<color>]` for a genuine one-off. */
+     `hover:[--glass-tint:<color>]` for a genuine one-off.
+   - Neutral fills are mixes of the `--color-primary-*` scale, never literal
+     grays, so an app theme that re-derives the scale re-tints them too. */
 @theme {
   --glass-fill-surface: var(--color-primary-100);
-  --glass-fill-card: rgba(255, 255, 255, 0.98);
-  --glass-fill-input: rgba(255, 255, 255, 1);
-  --glass-fill-toggle: rgba(216, 216, 216, 1);
-  --glass-fill-button: rgba(255, 255, 255, 0.72);
-  --glass-fill-primary: rgba(240, 240, 240, 0.72);
-  --glass-fill-secondary: rgba(12, 12, 12, 0.42);
+  --glass-fill-card: color-mix(in srgb, var(--color-primary) 98%, transparent);
+  --glass-fill-input: var(--color-primary);
+  --glass-fill-toggle: color-mix(in srgb, var(--color-primary-200) 86%, var(--color-primary-100));
+  --glass-fill-button: color-mix(in srgb, var(--color-primary) 72%, transparent);
+  --glass-fill-primary: color-mix(in srgb, var(--color-primary-50) 72%, transparent);
+  --glass-fill-secondary: color-mix(in srgb, var(--color-primary-950) 42%, transparent);
   --glass-fill-submit: rgba(43, 127, 255, 0.9);
   --glass-fill-danger: rgba(255, 68, 54, 0.9);
   --glass-fill-success: rgba(13, 197, 94, 0.9);
 
-  --glass-hover-button: rgba(255, 255, 255, 0.9);
+  --glass-hover-button: color-mix(in srgb, var(--color-primary) 90%, transparent);
   --glass-hover-primary: var(--color-primary-200);
   --glass-hover-submit: #2563eb;
   --glass-hover-danger: var(--color-danger-hover);
@@ -751,6 +770,11 @@ html.mains-web.dark #root {
 }
 
 :root {
+  /* The window frame behind the sidebar and around the content: translucent
+     over the macOS vibrancy. An app theme replaces it with an opaque colour
+     (lib/app-themes.ts). */
+  --app-frame: #ffffffb3;
+
   --glass-rim: rgba(0, 0, 0, 0.08);
   --glass-rim-shadow: rgba(255, 255, 255, 0);
   --glass-outline-rim: rgba(0, 0, 0, 0.08);
@@ -775,6 +799,8 @@ html.mains-web.dark #root {
 
 /* Dark mode is a token swap — the utility itself never forks. */
 .dark {
+  --app-frame: #00000070;
+
   --glass-rim: rgba(255, 255, 255, 0.08);
   --glass-rim-shadow: rgba(0, 0, 0, 0);
   --glass-outline-rim: rgba(255, 255, 255, 0.08);
@@ -788,15 +814,15 @@ html.mains-web.dark #root {
   --viz-cat-5: #d55181;
 
   --glass-fill-surface: var(--color-primary-900);
-  --glass-fill-card: rgba(24, 24, 24, 0.98);
-  --glass-fill-input: rgba(14, 14, 14, 1);
-  --glass-fill-toggle: rgba(14, 14, 14, 1);
-  --glass-fill-button: rgba(36, 36, 36, 0.72);
-  --glass-fill-primary: rgba(36, 36, 36, 0.72);
-  --glass-fill-secondary: rgba(120, 120, 120, 0.42);
+  --glass-fill-card: color-mix(in srgb, color-mix(in srgb, var(--color-primary-900) 78%, var(--color-primary-800)) 98%, transparent);
+  --glass-fill-input: color-mix(in srgb, var(--color-primary-950) 75%, var(--color-primary-900));
+  --glass-fill-toggle: var(--glass-fill-input);
+  --glass-fill-button: color-mix(in srgb, var(--color-primary-800) 72%, transparent);
+  --glass-fill-primary: color-mix(in srgb, var(--color-primary-800) 72%, transparent);
+  --glass-fill-secondary: color-mix(in srgb, color-mix(in srgb, var(--color-primary-600) 62%, var(--color-primary-500)) 42%, transparent);
 
-  --glass-hover-button: rgba(48, 48, 48, 0.85);
-  --glass-hover-primary: rgba(38, 38, 37, 0.6);
+  --glass-hover-button: color-mix(in srgb, color-mix(in srgb, var(--color-primary-800) 80%, var(--color-primary-700)) 85%, transparent);
+  --glass-hover-primary: color-mix(in srgb, var(--color-primary-800) 60%, transparent);
 }
 
 @utility glass-* {

@@ -1,9 +1,8 @@
-import { useMemo } from "react";
 import { Button, Select, Text } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { defaultTheme } from "@/lib/theme";
-import { useActiveSpace } from "@/hooks/use-active-space";
 import { useDarkMode } from "@/hooks/use-dark-mode";
+import { useResolvedAppTheme } from "@/hooks/use-app-theme";
+import { themeFrameColor } from "@/lib/app-themes";
 
 export type ThemeValue = "light" | "dark" | "system";
 
@@ -150,38 +149,6 @@ export function ThemePreviewCard({
   );
 }
 
-export function useSpaceThemeBackgrounds() {
-  const { activeSpace } = useActiveSpace();
-  const activeSpaceThemeConfig = activeSpace?.themeConfig;
-
-  return useMemo(() => {
-    if (!activeSpaceThemeConfig) {
-      return {
-        lightBackground: defaultTheme.lightBackground.replace(
-          /[0-9a-f]{2}$/i,
-          "",
-        ),
-        darkBackground: defaultTheme.darkBackground.replace(
-          /[0-9a-f]{2}$/i,
-          "",
-        ),
-      };
-    }
-    try {
-      const config = JSON.parse(activeSpaceThemeConfig);
-      return {
-        lightBackground: config.lightBackground || "#f5f3ee",
-        darkBackground: config.darkBackground || "#1a1a1a",
-      };
-    } catch {
-      return {
-        lightBackground: "#f5f3ee",
-        darkBackground: "#1a1a1a",
-      };
-    }
-  }, [activeSpaceThemeConfig]);
-}
-
 const THEME_OPTIONS: { value: ThemeValue; label: string }[] = [
   { value: "light", label: "Light" },
   { value: "system", label: "Auto" },
@@ -220,7 +187,10 @@ export function ThemePicker({
   onChange,
 }: ThemePickerProps) {
   const { theme, setTheme } = useDarkMode();
-  const { lightBackground, darkBackground } = useSpaceThemeBackgrounds();
+  // The cards show the frame of the theme in force for the active provider.
+  const appTheme = useResolvedAppTheme();
+  const lightBackground = themeFrameColor(appTheme.light, "light");
+  const darkBackground = themeFrameColor(appTheme.dark, "dark");
 
   const handleSelect = (value: ThemeValue) => {
     setTheme(value);
