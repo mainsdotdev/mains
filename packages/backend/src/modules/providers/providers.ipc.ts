@@ -57,11 +57,19 @@ export function registerProvidersIpc(): void {
     handle((id: string, payload: UpdateProviderPayload) => providersService.update(id, payload)),
   );
 
+  // This command is reachable by paired devices, so project its returned row
+  // just as getEnabled does. The service keeps the full config on the Mac.
+  const updateRunSettings = handle((id: string, patch: UpdateRunSettingsPayload) =>
+    providersService.updateRunSettings(id, patch),
+  );
   ipcMain.handle(
     CHANNELS.providers.updateRunSettings,
-    handle((id: string, patch: UpdateRunSettingsPayload) =>
-      providersService.updateRunSettings(id, patch),
-    ),
+    async (ctx: IpcInvokeContext, id: string, patch: UpdateRunSettingsPayload) => {
+      const result = await updateRunSettings(ctx, id, patch);
+      return result.success && ctx?.deviceId
+        ? ok(providerForPairedDevice(result.data))
+        : result;
+    },
   );
 
   ipcMain.handle(
