@@ -30,6 +30,8 @@ import type {
  * last complete file section under the cap and flagged as truncated.
  */
 const MAX_DIFF_CHARS = 300_000;
+const FILES_PER_PAGE = 100;
+const MAX_FILE_PAGES = 30; // GitHub's list-files endpoint exposes at most 3,000 files.
 
 export function truncateDiffAtFileBoundary(diffText: string): PrDiff {
   if (diffText.length <= MAX_DIFF_CHARS) {
@@ -40,6 +42,27 @@ export function truncateDiffAtFileBoundary(diffText: string): PrDiff {
     diffText: cutoff > 0 ? diffText.slice(0, cutoff + 1) : diffText.slice(0, MAX_DIFF_CHARS),
     truncated: true,
   };
+}
+
+type GithubPrFile = {
+  filename: string;
+  previous_filename?: string;
+  status: string;
+  patch?: string;
+};
+
+function filePatchAsDiff(file: GithubPrFile): string | null {
+  if (!file.patch) return null; // Binary and very large files may have no patch.
+  const oldPath = file.previous_filename ?? file.filename;
+  const from = file.status === "added" ? "/dev/null" : `a/${oldPath}`;
+  const to = file.status === "removed" ? "/dev/null" : `b/${file.filename}`;
+  const patch = file.patch.endsWith("\n") ? file.patch : `${file.patch}\n`;
+  return `diff --git a/${oldPath} b/${file.filename}\n--- ${from}\n+++ ${to}\n${patch}`;
+}
+
+function isDiffTooLarge(error: unknown): boolean {
+  return typeof error === "object" && error !== null &&
+    "status" in error && error.status === 406;
 }
 
 const DEFAULT_PAGE_SIZE = 25;
@@ -550,19 +573,56 @@ export function createGithubPrSource(options: { token: string }): PrSource {
     },
 
     async getDiff(ref: PrRef): Promise<PrDiff> {
-      // With the diff media type GitHub returns the raw unified diff as the
-      // response body; octokit's types still say "pull request object".
-      const response = await octokit.pulls.get({
-        owner: ref.owner,
-        repo: ref.repo,
-        pull_number: ref.number,
-        mediaType: { format: "diff" },
-      });
-      const diffText = response.data as unknown as string;
-      if (typeof diffText !== "string") {
-        throw new Error("GitHub returned an unexpected diff response");
+      try {
+        // With the diff media type GitHub returns the raw unified diff as the
+        // response body; octokit's types still say "pull request object".
+        const response = await octokit.pulls.get({
+          owner: ref.owner,
+          repo: ref.repo,
+          pull_number: ref.number,
+          mediaType: { format: "diff" },
+        });
+        const diffText = response.data as unknown as string;
+        if (typeof diffText !== "string") {
+          throw new Error("GitHub returned an unexpected diff response");
+        }
+        return truncateDiffAtFileBoundary(diffText);
+      } catch (error) {
+        if (!isDiffTooLarge(error)) throw error;
       }
-      return truncateDiffAtFileBoundary(diffText);
+
+      // GitHub rejects the raw diff once the PR has more than 300 files.
+      // Its paginated list-files endpoint still provides individual patches.
+      let diffText = "";
+      let truncated = false;
+      for (let page = 1; page <= MAX_FILE_PAGES; page++) {
+        const { data: files } = await octokit.pulls.listFiles({
+          owner: ref.owner,
+          repo: ref.repo,
+          pull_number: ref.number,
+          per_page: FILES_PER_PAGE,
+          page,
+        });
+
+        for (const file of files) {
+          const section = filePatchAsDiff(file);
+          if (!section) {
+            truncated = true;
+            continue;
+          }
+          if (diffText.length + section.length > MAX_DIFF_CHARS) {
+            if (diffText) return { diffText, truncated: true };
+            // A partial first file cannot be parsed as a reliable patch.
+            // Skip it so smaller later files can still be reviewed.
+            truncated = true;
+            continue;
+          }
+          diffText += section;
+        }
+
+        if (files.length < FILES_PER_PAGE) return { diffText, truncated };
+      }
+      return { diffText, truncated: true };
     },
 
     async merge(ref: PrRef, method: PrMergeMethod): Promise<void> {

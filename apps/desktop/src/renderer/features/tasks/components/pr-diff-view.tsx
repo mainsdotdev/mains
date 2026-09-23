@@ -480,10 +480,22 @@ export function PrDiffView({ prRef }: { prRef: PrRefInput }) {
 
   if (files.length === 0) {
     return (
-      <div className="flex items-center justify-center py-10">
+      <div className="flex flex-col items-center gap-2 py-10">
         <Body size="xs" tone="secondary">
-          No changes in this pull request.
+          {data?.truncated
+            ? "GitHub could not provide a preview of this large diff."
+            : "No changes in this pull request."}
         </Body>
+        {data?.truncated && (
+          <Button
+            variant="subtle"
+            onClick={() => window.api.shell.openExternal(
+              `https://github.com/${prRef.owner}/${prRef.repo}/pull/${prRef.number}/files`,
+            )}
+          >
+            Open on GitHub
+          </Button>
+        )}
       </div>
     );
   }
@@ -497,8 +509,8 @@ export function PrDiffView({ prRef }: { prRef: PrRefInput }) {
           tone="warning"
           className="px-3 py-3 rounded-xl bg-warning/10"
         >
-          This diff is large — only the first files are shown. Open the pull
-          request on GitHub for the full diff.
+          This diff is large — only the available files and patches are shown.
+          Open the pull request on GitHub for the full diff.
         </Text>
       )}
       {files.map((file) => (

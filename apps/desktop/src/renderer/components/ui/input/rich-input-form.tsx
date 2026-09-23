@@ -643,6 +643,14 @@ function getTextBeforeCaret(root: HTMLElement): string | null {
   before.setStart(root, 0);
   before.setEnd(range.endContainer, range.endOffset);
   const fragment = before.cloneContents();
+  // A completed chip serializes to its @/$ token for the prompt, but it is a
+  // boundary for suggestion detection. Otherwise moving the caret beside a
+  // file chip turns its absolute path back into an active @ search.
+  for (const chip of Array.from(fragment.querySelectorAll(
+    `[${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`,
+  ))) {
+    chip.replaceWith(document.createTextNode(" "));
+  }
   return serializeFragment(fragment);
 }
 
