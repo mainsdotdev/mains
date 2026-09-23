@@ -161,6 +161,7 @@ export function BrowserPanel() {
   );
   const [urlInput, setUrlInput] = useState("");
   const [addressSuggestionsOpen, setAddressSuggestionsOpen] = useState(false);
+  const [addressOverlayReady, setAddressOverlayReady] = useState(false);
   const [addressSuggestionIndex, setAddressSuggestionIndex] = useState(-1);
   const [selectMode, setSelectMode] = useState(false);
   const [attached, setAttached] = useState(false);
@@ -592,30 +593,38 @@ export function BrowserPanel() {
     const operation = overlayOperationRef.current + 1;
     overlayOperationRef.current = operation;
     let pendingCaptureName: string | null = null;
+    let previousCaptureName: string | null = null;
 
     try {
-      const response = await api.captureScreenshot("viewport");
-      const captureName = response?.success
-        ? (response.data as ContextBrowserSelection | undefined)
-            ?.screenshotCaptureName
-        : undefined;
-      if (!captureName) return;
-      pendingCaptureName = captureName;
+      if (!isBlank) {
+        try {
+          const response = await api.captureScreenshot("viewport");
+          const captureName = response?.success
+            ? (response.data as ContextBrowserSelection | undefined)
+                ?.screenshotCaptureName
+            : undefined;
+          if (captureName) {
+            pendingCaptureName = captureName;
+            await preloadImage(browserCaptureUrl(captureName));
+            if (
+              operation !== overlayOperationRef.current ||
+              overlaysOpenRef.current.size === 0 ||
+              !isOpen
+            ) {
+              return;
+            }
 
-      await preloadImage(browserCaptureUrl(captureName));
-      if (
-        operation !== overlayOperationRef.current ||
-        overlaysOpenRef.current.size === 0 ||
-        !isOpen
-      ) {
-        return;
+            previousCaptureName = browserMenuPreviewNameRef.current;
+            browserMenuPreviewNameRef.current = captureName;
+            setBrowserMenuPreviewName(captureName);
+            pendingCaptureName = null;
+            await waitForPaint();
+          }
+        } catch {
+          // A failed preview still needs the native view hidden so the overlay
+          // can receive pointer events.
+        }
       }
-
-      const previousCaptureName = browserMenuPreviewNameRef.current;
-      browserMenuPreviewNameRef.current = captureName;
-      setBrowserMenuPreviewName(captureName);
-      pendingCaptureName = null;
-      await waitForPaint();
 
       if (
         operation !== overlayOperationRef.current ||
@@ -631,7 +640,25 @@ export function BrowserPanel() {
         return;
       }
 
-      if (previousCaptureName && previousCaptureName !== captureName) {
+      if (
+        operation !== overlayOperationRef.current ||
+        overlaysOpenRef.current.size === 0 ||
+        !isOpen
+      ) {
+        if (overlaysOpenRef.current.size === 0 && isOpen) {
+          await restoreBrowserView();
+        }
+        return;
+      }
+
+      if (overlaysOpenRef.current.has("address")) {
+        setAddressOverlayReady(true);
+      }
+
+      if (
+        previousCaptureName &&
+        previousCaptureName !== browserMenuPreviewNameRef.current
+      ) {
         await api.deleteCapture(previousCaptureName);
       }
     } finally {
@@ -639,7 +666,7 @@ export function BrowserPanel() {
         await api.deleteCapture(pendingCaptureName);
       }
     }
-  }, [api, clearBrowserMenuPreview, isOpen]);
+  }, [api, clearBrowserMenuPreview, isBlank, isOpen, restoreBrowserView]);
 
   const handleOverlayOpenChange = useCallback(
     (id: BrowserOverlayId, open: boolean) => {
@@ -651,7 +678,11 @@ export function BrowserPanel() {
       if (open) {
         const wasClosed = overlaysOpenRef.current.size === 0;
         overlaysOpenRef.current.add(id);
-        if (wasClosed) void suspendBrowserViewForOverlay();
+        if (id === "address") {
+          void suspendBrowserViewForOverlay();
+        } else if (wasClosed) {
+          void suspendBrowserViewForOverlay();
+        }
         return;
       }
 
@@ -670,6 +701,7 @@ export function BrowserPanel() {
 
   // The suggestions cover the top of the page instead of pushing it down.
   const addressOverlayOpen = addressSuggestionsOpen && addressRows.length > 0;
+  const addressSuggestionsVisible = addressOverlayOpen && addressOverlayReady;
   useEffect(() => {
     if (!addressOverlayOpen) return;
     handleOverlayOpenChange("address", true);
@@ -1281,6 +1313,7 @@ export function BrowserPanel() {
               value={urlInput}
               onChange={(event) => {
                 setUrlInput(event.target.value);
+                if (!addressSuggestionsOpen) setAddressOverlayReady(false);
                 setAddressSuggestionsOpen(true);
                 setAddressSuggestionIndex(0);
               }}
@@ -1290,6 +1323,7 @@ export function BrowserPanel() {
                   addressRows.length > 0
                 ) {
                   event.preventDefault();
+                  if (!addressSuggestionsOpen) setAddressOverlayReady(false);
                   setAddressSuggestionsOpen(true);
                   setAddressSuggestionIndex((current) => {
                     if (current < 0) {
@@ -1323,10 +1357,14 @@ export function BrowserPanel() {
               }}
               onFocus={(event) => {
                 event.currentTarget.select();
+                setAddressOverlayReady(false);
                 setAddressSuggestionsOpen(true);
                 setAddressSuggestionIndex(addressRows.length > 0 ? 0 : -1);
               }}
-              onClick={() => setAddressSuggestionsOpen(true)}
+              onClick={() => {
+                if (!addressSuggestionsOpen) setAddressOverlayReady(false);
+                setAddressSuggestionsOpen(true);
+              }}
               onBlur={() => {
                 setAddressSuggestionsOpen(false);
                 setAddressSuggestionIndex(-1);
@@ -1335,13 +1373,13 @@ export function BrowserPanel() {
               aria-label="Search or enter address"
               aria-autocomplete="list"
               aria-controls={
-                addressSuggestionsOpen && addressRows.length > 0
+                addressSuggestionsVisible
                   ? "browser-address-suggestions"
                   : undefined
               }
-              aria-expanded={addressSuggestionsOpen && addressRows.length > 0}
+              aria-expanded={addressSuggestionsVisible}
               aria-activedescendant={
-                addressSuggestionsOpen && selectedAddressSuggestionIndex >= 0
+                addressSuggestionsVisible && selectedAddressSuggestionIndex >= 0
                   ? `browser-address-suggestion-${selectedAddressSuggestionIndex}`
                   : undefined
               }
@@ -1385,7 +1423,7 @@ export function BrowserPanel() {
           </div>
         </div>
 
-        {addressSuggestionsOpen && (
+        {addressSuggestionsVisible && (
           <div className="absolute inset-x-0 top-full z-(--z-dropdown)">
             <BrowserAddressSuggestions
               rows={addressRows}

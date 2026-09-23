@@ -1,6 +1,8 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
+  Menu,
   shell,
   WebContentsView,
   type DownloadItem,
@@ -61,6 +63,7 @@ import {
   type BrowserDeviceEmulationQueue,
 } from "./browser-device";
 import { keyboardShortcutsService } from "../keyboardShortcuts";
+import { buildBrowserContextMenu } from "./browser-context-menu";
 import {
   KEYBOARD_SHORTCUTS,
   matchesKeyboardShortcut,
@@ -688,6 +691,77 @@ export const browserService = {
         this._openExternalIfAllowed(url);
       }
       return { action: "deny" };
+    });
+
+    contents.on("context-menu", (_event, params) => {
+      const host = this.host;
+      if (
+        !host ||
+        host.isDestroyed() ||
+        !this.visible ||
+        this.activeTabId !== record.id ||
+        contents.isDestroyed()
+      ) {
+        return;
+      }
+
+      const ifAlive = (action: () => void) => () => {
+        if (!contents.isDestroyed()) action();
+      };
+      const template = buildBrowserContextMenu(
+        params,
+        {
+          canGoBack: contents.navigationHistory.canGoBack(),
+          canGoForward: contents.navigationHistory.canGoForward(),
+          canInspect: !app.isPackaged,
+        },
+        {
+          openTab: (url) => {
+            void this.createTab(url).catch((error) => {
+              console.warn("[browser] Failed to open context link:", error);
+            });
+          },
+          openExternal: (url) => {
+            void shell.openExternal(url).catch((error) => {
+              console.warn("[browser] Failed to open external link:", error);
+            });
+          },
+          download: (url) => {
+            if (!contents.isDestroyed()) contents.downloadURL(url);
+          },
+          copyText: (value) => clipboard.writeText(value),
+          copyImage: (x, y) => {
+            if (!contents.isDestroyed()) contents.copyImageAt(x, y);
+          },
+          undo: ifAlive(() => contents.undo()),
+          redo: ifAlive(() => contents.redo()),
+          cut: ifAlive(() => contents.cut()),
+          copy: ifAlive(() => contents.copy()),
+          paste: ifAlive(() => contents.paste()),
+          selectAll: ifAlive(() => contents.selectAll()),
+          back: ifAlive(() => {
+            if (!contents.navigationHistory.canGoBack()) return;
+            record.deviceEmulationQueue.beginNavigation();
+            contents.navigationHistory.goBack();
+          }),
+          forward: ifAlive(() => {
+            if (!contents.navigationHistory.canGoForward()) return;
+            record.deviceEmulationQueue.beginNavigation();
+            contents.navigationHistory.goForward();
+          }),
+          reload: ifAlive(() => {
+            record.deviceEmulationQueue.beginNavigation();
+            contents.reload();
+          }),
+          inspect: (x, y) => {
+            if (!contents.isDestroyed()) contents.inspectElement(x, y);
+          },
+        },
+      );
+      Menu.buildFromTemplate(template).popup({
+        window: host,
+        frame: params.frame ?? undefined,
+      });
     });
 
     contents.on("will-navigate", (event, url) => {
