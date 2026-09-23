@@ -42,7 +42,7 @@ export function SidebarHeader({
         tooltip="Search Mains "
         tooltipShortcut={commandMenuShortcut}
         aria-label="Search Mains"
-        className="flex size-8 shrink-0 items-center justify-center rounded-lg text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5"
+        className="flex size-8 shrink-0 items-center justify-center rounded-full text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5"
       >
         <Search aria-hidden="true" className="size-4" />
       </Button>

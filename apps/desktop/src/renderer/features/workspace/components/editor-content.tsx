@@ -1,6 +1,8 @@
 import { lazy, Suspense } from "react";
 import { Text } from "@/components/ui";
 import { useAppSelector } from "@/lib/redux/hooks";
+import { isPreviewableImagePath } from "../lib/previewable-image";
+import { ImageViewer } from "./image-viewer";
 
 const CodeViewer = lazy(() =>
   import("./code-viewer").then((m) => ({ default: m.CodeViewer })),
@@ -33,6 +35,17 @@ export function EditorContent({ className = "" }: EditorContentProps) {
       <div className={`flex items-center justify-center h-full ${className}`}>
 
       </div>
+    );
+  }
+
+  if (selectedFile.type === "file" && isPreviewableImagePath(selectedFile.fullPath)) {
+    return (
+      <ImageViewer
+        key={selectedFile.fullPath}
+        filePath={selectedFile.fullPath}
+        name={selectedFile.name}
+        className={className}
+      />
     );
   }
 

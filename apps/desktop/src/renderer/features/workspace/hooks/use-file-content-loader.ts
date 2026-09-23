@@ -10,6 +10,7 @@ import type {
   FileContentResponse,
   ServiceResponse,
 } from "@/features/workspace/types/file-explorer";
+import { isPreviewableImagePath } from "../lib/previewable-image";
 
 interface SelectedFile {
   type: string;
@@ -29,7 +30,8 @@ export function useFileContentLoader(
       !selectedFile ||
       selectedFile.type !== "file" ||
       !rootPath ||
-      selectedFile.extension === "diff"
+      selectedFile.extension === "diff" ||
+      isPreviewableImagePath(selectedFile.fullPath)
     ) {
       return;
     }

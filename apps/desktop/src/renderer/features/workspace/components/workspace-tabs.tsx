@@ -1,4 +1,4 @@
-import { Plus, Note, Document } from "@/components/ui/icons";
+import { Plus, Note, Document, Picture } from "@/components/ui/icons";
 import { RunTab, getTabTitle } from "./run-tab";
 import { EditorTab } from "./editor-tab";
 import { IssueTab } from "./issue-tab";
@@ -16,6 +16,7 @@ import { useAppSelector } from "@/lib/redux/hooks";
 import { useIsMobile } from "@/lib/platform";
 import { ProviderIcon } from "./provider-icon";
 import { MobileTabSwitcher, type MobileTab } from "./mobile-tab-switcher";
+import { isPreviewableImagePath } from "../lib/previewable-image";
 
 const EMPTY_NOTE_TABS: ReviewTabType[] = [];
 
@@ -84,7 +85,9 @@ export function WorkspaceTabs({
       mobileTabs.push({
         id: "editor",
         label: fileName || "Editor",
-        icon: <Document className="size-4" />,
+        icon: fileName && isPreviewableImagePath(fileName)
+          ? <Picture className="size-4" />
+          : <Document className="size-4" />,
         group: "Editor",
         onSelect: onSelectEditorTab,
         onClose: onCloseEditorTab,
