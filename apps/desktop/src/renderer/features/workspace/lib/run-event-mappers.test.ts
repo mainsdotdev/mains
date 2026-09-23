@@ -31,6 +31,24 @@ function toolCall(
 }
 
 describe("mapArtifactToEvent", () => {
+  it("passes an image's byte hash to the transcript filter", () => {
+    const image = {
+      id: 28,
+      runId: "r1",
+      kind: "image",
+      content: "",
+      contentHash: "sha256:same-bytes",
+      metadata: JSON.stringify({ path: "/tmp/generated.png" }),
+      createdAt: new Date(10_000),
+    } as RunArtifact;
+
+    expect(mapArtifactToEvent(image).metadata).toMatchObject({
+      kind: "image",
+      path: "/tmp/generated.png",
+      imageContentHash: "sha256:same-bytes",
+    });
+  });
+
   it("preserves an empty prompt when the user sends only an attachment", () => {
     const prompt = {
       id: 397,

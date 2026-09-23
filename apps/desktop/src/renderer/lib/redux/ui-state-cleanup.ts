@@ -13,8 +13,10 @@ export interface DeletedUiContext {
   id: string;
 }
 
+const pendingBrowserForgets = new Set<string>();
+
 /** Called only after the backend confirms permanent deletion. */
-export async function forgetDeletedUiContext(dispatch: AppDispatch, target: DeletedUiContext): Promise<void> {
+export function forgetDeletedUiContext(dispatch: AppDispatch, target: DeletedUiContext): void {
   if (target.kind === "run") {
     dispatch(forgetRunUiState({ backendId: target.backendId, runId: target.id }));
     dispatch(forgetRunRightPane({ backendId: target.backendId, runId: target.id }));
@@ -28,12 +30,16 @@ export async function forgetDeletedUiContext(dispatch: AppDispatch, target: Dele
   // The embedded browser is desktop-only; its tabs live in the main process.
   const browser = typeof window === "undefined" ? undefined : window.api?.browser;
   if (!browser?.forgetContext) return;
-  try {
-    const result = await browser.forgetContext(target);
-    if (!result.success) throw new Error(result.error);
-  } catch (error) {
-    // Redux state is already cleaned. Reconciliation retries native tabs on
-    // the next launch or backend connection.
-    console.error("Failed to forget browser context:", error);
-  }
+  const key = JSON.stringify([target.backendId, target.kind, target.id]);
+  if (pendingBrowserForgets.has(key)) return;
+  pendingBrowserForgets.add(key);
+  // A slow or stuck WebContentsView must not keep a successful delete mutation
+  // pending. Reconciliation retries any tabs left on disk at the next launch.
+  void Promise.resolve()
+    .then(() => browser.forgetContext(target))
+    .then((result) => {
+      if (!result.success) throw new Error(result.error);
+    })
+    .catch((error) => console.error("Failed to forget browser context:", error))
+    .finally(() => pendingBrowserForgets.delete(key));
 }

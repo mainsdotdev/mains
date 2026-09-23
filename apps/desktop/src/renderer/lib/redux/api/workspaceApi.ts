@@ -341,7 +341,15 @@ export const workspaceApi = baseApi.injectEndpoints({
         const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
         const result = await baseQuery({ handler: CHANNELS.workspace.delete, args: [id, { removeWorktree }] });
         if (result.error) return { error: result.error };
-        await forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "workspace", id });
+        // The page can remount before tag invalidation refetches the list. Drop
+        // the deleted row now so it cannot select and re-save that workspace.
+        if (((getState() as RootState).backends.activeBackendId ?? "local") === backendId) {
+          dispatch(workspaceApi.util.updateQueryData("listWorkspaces", undefined, (workspaces) => {
+            const index = workspaces.findIndex((workspace) => workspace.id === id);
+            if (index !== -1) workspaces.splice(index, 1);
+          }));
+        }
+        forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "workspace", id });
         return { data: undefined };
       },
       invalidatesTags: ["Workspaces", "WorkspaceGitStates"],

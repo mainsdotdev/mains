@@ -15,13 +15,18 @@ function UiStateReconciler({ children }: ReduxProviderProps) {
   const backendId = useAppSelector((state) => state.backends.activeBackendId) ?? "local";
   useEffect(() => {
     const transport = getTransport();
+    const controller = new AbortController();
     const check = () => {
       if (transport.status() === "connected") {
-        void reconcilePersistedUiState(store.dispatch, store.getState, transport, backendId);
+        void reconcilePersistedUiState(store.dispatch, store.getState, transport, backendId, controller.signal);
       }
     };
     check();
-    return transport.onStatusChange(check);
+    const unsubscribe = transport.onStatusChange(check);
+    return () => {
+      controller.abort();
+      unsubscribe();
+    };
   }, [backendId]);
   return <>{children}</>;
 }

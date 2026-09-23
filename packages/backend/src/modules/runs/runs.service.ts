@@ -42,6 +42,7 @@ import { materializeCollectionSourceContext } from "./run-collection-sources";
 import { sanitizeRunAttachments } from "./run-attachments";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
+import { withImageContentHashes } from "./run-image-content-hashes";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -874,7 +875,7 @@ export const runsService = {
     runId: string,
     sinceId?: number,
   ): Promise<RunArtifactResponse[]> {
-    return runsRepo.findArtifactsByRun(runId, sinceId);
+    return withImageContentHashes(await runsRepo.findArtifactsByRun(runId, sinceId));
   },
 
   /**
@@ -958,7 +959,7 @@ export const runsService = {
       runsRepo.findToolCallsByRun(runId),
       runsRepo.findTurnsByRun(runId),
     ]);
-    return { run, context, artifacts, toolCalls, turns };
+    return { run, context, artifacts: await withImageContentHashes(artifacts), toolCalls, turns };
   },
 
   // ─── Orchestrators ───
@@ -1021,7 +1022,17 @@ export const runsService = {
       const execution = resolveRunExecution({ runId, mode, workspace });
       const extraInstructions = composeExtraInstructions(mode, space?.systemPrompt);
       // Persist the *composed* values — the run row records what actually ran.
-      const configSnapshot = composeConfigSnapshot(mode, payload.providerId, payload.configSnapshot);
+      // Pin Claude's selected output style when the chat is created. A later
+      // provider-settings change must not restyle an existing conversation.
+      const providerOutputStyle =
+        payload.providerId === PROVIDER_IDS.claude &&
+        typeof provider.config?.outputStyle === "string"
+          ? { outputStyle: provider.config.outputStyle }
+          : {};
+      const configSnapshot = composeConfigSnapshot(mode, payload.providerId, {
+        ...providerOutputStyle,
+        ...(payload.configSnapshot ?? {}),
+      });
       const toolPolicy = composeToolPolicy(mode, payload.toolPolicySnapshot);
 
       await runsRepo.insertRun({

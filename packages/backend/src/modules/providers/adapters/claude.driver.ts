@@ -2501,6 +2501,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     permissionModeRef?: ClaudePermissionModeRef;
     /** Mode/space instruction delta, appended to the claude_code preset. */
     extraInstructions?: string | null;
+    /** Output style pinned when the conversation was created. */
+    outputStyle?: string;
     /** Experience mode — filters which mains tools the MCP server exposes. */
     mode?: ModeId;
     /** Per-run tool policy from the mode harness. */
@@ -2521,6 +2523,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       permissionMode: runPermissionMode,
       permissionModeRef,
       extraInstructions,
+      outputStyle,
       mode,
       toolPolicy,
     } = args;
@@ -2597,6 +2600,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       env: cleanEnv,
       settingSources,
     };
+
+    if (outputStyle) {
+      options.settings = {
+        ...((options.settings as Record<string, unknown>) || {}),
+        outputStyle,
+      };
+    }
 
     if (Object.keys(mcpServers).length > 0) {
       options.mcpServers = mcpServers;
@@ -3040,6 +3050,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           : undefined,
         permissionModeRef,
         extraInstructions: request.extraInstructions,
+        outputStyle:
+          typeof request.configSnapshot?.outputStyle === "string"
+            ? request.configSnapshot.outputStyle
+            : config.outputStyle ?? undefined,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
       });
@@ -3078,6 +3092,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           : undefined,
         permissionModeRef,
         extraInstructions: request.extraInstructions,
+        outputStyle:
+          typeof request.configSnapshot?.outputStyle === "string"
+            ? request.configSnapshot.outputStyle
+            : undefined,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
       });
@@ -3122,6 +3140,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           : undefined,
         permissionModeRef,
         extraInstructions: request.extraInstructions,
+        outputStyle:
+          typeof request.configSnapshot?.outputStyle === "string"
+            ? request.configSnapshot.outputStyle
+            : undefined,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
       });

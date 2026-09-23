@@ -104,6 +104,7 @@ html:not(.app-ready) *::after {
   --z-dropdown-sub: 101;
   --z-modal: 9999;
   --z-modal-critical: 10000;
+  --z-tooltip: 10001;
 
 
   /* Layout */

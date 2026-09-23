@@ -22,7 +22,7 @@ import {
   createRunTurn,
 } from "../../../test/factories";
 import { eq } from "drizzle-orm";
-import { collections } from "../../db/schema";
+import { collections, providers } from "../../db/schema";
 import type { DatabaseInstance } from "../../db/types";
 import type Database from "better-sqlite3";
 
@@ -616,6 +616,54 @@ describe("runsService", () => {
       expect(request.toolPolicy?.allowedTools).toBeNull();
       const run = await runsService.getRunById(runId);
       expect(run?.toolPolicySnapshot).toEqual(request.toolPolicy);
+    });
+
+    it("keeps a Claude chat's output style after the provider setting changes", async () => {
+      db.update(providers)
+        .set({ config: JSON.stringify({ outputStyle: "Concise" }) })
+        .where(eq(providers.id, "claude_code"))
+        .run();
+      createSpace(db, {
+        id: "sp-style",
+        accountId: "default",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({
+        startRun,
+        continueRun,
+        canResumeSession: vi.fn().mockResolvedValue(true),
+      } as any);
+
+      const { runId } = await runsService.executeRun({
+        accountId: "default",
+        spaceId: "sp-style",
+        providerId: "claude_code",
+        goal: "summarize the docs",
+      });
+      await flushBackground();
+
+      expect(startRun.mock.calls[0][0].configSnapshot.outputStyle).toBe("Concise");
+      expect((await runsService.getRunById(runId))?.configSnapshot?.outputStyle).toBe(
+        "Concise",
+      );
+
+      db.update(providers)
+        .set({ config: JSON.stringify({ outputStyle: "Learning" }) })
+        .where(eq(providers.id, "claude_code"))
+        .run();
+      await runsService.continueRun({
+        runId,
+        accountId: "default",
+        message: "add more detail",
+      });
+      await flushBackground();
+
+      expect(continueRun.mock.calls[0][0].configSnapshot.outputStyle).toBe(
+        "Concise",
+      );
     });
 
     it("chat's overrides beat the caller's snapshot — codex stays read-only", async () => {

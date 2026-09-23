@@ -75,4 +75,25 @@ describe("persisted UI reconciliation", () => {
       "appSettings/forgetRunRightPane",
     ]);
   });
+
+  it("does not clean a record after its reconciliation has been cancelled", async () => {
+    let finishLookup!: (value: { success: true; data: null }) => void;
+    const lookup = new Promise<{ success: true; data: null }>((resolve) => {
+      finishLookup = resolve;
+    });
+    const transport = {
+      invoke: vi.fn(() => lookup),
+      status: () => "connected",
+    } as unknown as Transport;
+    harness.transport = transport;
+    const dispatch = vi.fn() as unknown as AppDispatch;
+    const controller = new AbortController();
+
+    const check = reconcilePersistedUiState(dispatch, savedState, transport, "local", controller.signal);
+    controller.abort();
+    finishLookup({ success: true, data: null });
+    await check;
+
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 });

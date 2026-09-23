@@ -62,6 +62,8 @@ interface SelectBaseProps<T extends string = string> {
   disabled?: boolean;
   size?: SelectSize;
   onOpenChange?: (open: boolean) => void;
+  /** Show each option's full description in a tooltip on hover or focus. */
+  showOptionDescriptionTooltip?: boolean;
 }
 
 export type SelectProps<T extends string = string> = SelectBaseProps<T> &
@@ -80,6 +82,7 @@ export default function Select<T extends string = string>({
   disabled,
   size = "md",
   onOpenChange,
+  showOptionDescriptionTooltip = false,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
 }: SelectProps<T>) {
@@ -414,6 +417,7 @@ export default function Select<T extends string = string>({
                     key={option.value}
                     onFocus={() => setActiveIndex(index)}
                     onClick={() => selectOption(option)}
+                    tooltip={showOptionDescriptionTooltip ? option.description : undefined}
                     className={`
                       flex w-full cursor-pointer items-center gap-1 px-3 py-1 rounded-xl text-left ${OPTION_SIZE[size]}
                       text-primary-900 transition-colors focus:outline-none dark:text-primary

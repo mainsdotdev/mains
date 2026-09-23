@@ -428,7 +428,7 @@ export const runsApi = baseApi.injectEndpoints({
         const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
         const result = await baseQuery({ handler: CHANNELS.runs.delete, args: [id] });
         if (result.error) return { error: result.error };
-        await forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "run", id });
+        forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "run", id });
         return { data: undefined };
       },
       invalidatesTags: ["Runs"],

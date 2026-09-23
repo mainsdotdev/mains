@@ -57,8 +57,10 @@ export async function reconcilePersistedUiState(
   getState: () => RootState,
   transport: Transport,
   backendId: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const stillConnected = () =>
+    !signal?.aborted &&
     getTransport() === transport &&
     (getState().backends.activeBackendId ?? "local") === backendId &&
     transport.status() === "connected";
@@ -85,7 +87,7 @@ export async function reconcilePersistedUiState(
       try {
         const result = await transport.invoke(channel, [target.id]);
         if (result.success && result.data === null && stillConnected()) {
-          await forgetDeletedUiContext(dispatch, target);
+          forgetDeletedUiContext(dispatch, target);
         }
       } catch {
         // Retry on a later connection rather than guessing that it was deleted.

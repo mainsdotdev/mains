@@ -49,6 +49,7 @@ import {
 } from "@/lib/redux/api";
 import { getProviderVariant } from "@/lib/provider-variants";
 import { isDocumentRenderImage } from "@/lib/document-viewer";
+import { dedupeGeneratedImageCopies } from "../lib/dedupe-generated-images";
 import { resolveModelDisplayName } from "@/lib/model-display";
 import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
@@ -519,7 +520,7 @@ export function WorkspaceEvents({
     // Stop finished tools from spinning until the run-end sweep resolves their
     // status (providers don't all emit per-tool completions). Runs on the
     // display-ordered list so "later event" matches what the user actually sees.
-    return demoteStaleRunningTools(deduped);
+    return demoteStaleRunningTools(dedupeGeneratedImageCopies(deduped));
   }, [currentEvents, activeRunFailedOnAuth]);
 
   // Group events for CLI-style display, reconciled so unchanged groups keep

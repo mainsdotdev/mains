@@ -78,7 +78,7 @@ export interface WorkRunRequest {
    * cached provider config when present (e.g. Pulse forces specific
    * permission/sandbox/mode regardless of the user's current provider settings).
    * Recognised keys: permissionMode, sandboxMode, mode, thinkingMode, effortLevel,
-   * modelReasoningEffort.
+   * modelReasoningEffort, outputStyle.
    */
   configSnapshot?: Record<string, unknown> | null;
   /** File attachments (images/documents) to include in the prompt */
@@ -1092,6 +1092,8 @@ export interface ClaudeCodeAdapterConfig {
   timeout?: number;
   /** Permission mode for tool access */
   permissionMode?: ClaudePermissionMode;
+  /** Claude Code output style pinned at session creation and reapplied on resume. */
+  outputStyle?: string | null;
   /**
    * Setting sources for loading skills and other filesystem settings.
    * - "user": Load from ~/.claude/skills/

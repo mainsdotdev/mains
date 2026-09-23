@@ -105,7 +105,10 @@ describe("archived runs cache", () => {
 });
 
 describe("permanent deletion UI cleanup", () => {
-  afterEach(() => resetTransport());
+  afterEach(() => {
+    resetTransport();
+    vi.unstubAllGlobals();
+  });
 
   it("clears a chat's persisted UI state only after the backend deletes it", async () => {
     let shouldFail = true;
@@ -135,7 +138,16 @@ describe("permanent deletion UI cleanup", () => {
   });
 
   it("clears a deleted workspace's view and unsent draft", async () => {
+    let finishListRefresh!: (value: ReturnType<typeof ok<unknown>>) => void;
+    const listRefresh = new Promise<ReturnType<typeof ok<unknown>>>((resolve) => {
+      finishListRefresh = resolve;
+    });
+    let listReads = 0;
     const invoke = vi.fn(async (channel: string) => {
+      if (channel === CHANNELS.workspace.list) {
+        listReads += 1;
+        return listReads === 1 ? ok([{ id: "ws-a" }, { id: "ws-b" }]) : listRefresh;
+      }
       if (channel === CHANNELS.workspace.delete) return ok(undefined);
       throw new Error(`Unexpected channel: ${channel}`);
     });
@@ -144,6 +156,8 @@ describe("permanent deletion UI cleanup", () => {
       status: () => "connected", onStatusChange: () => () => undefined,
     });
     const store = createStore();
+    const listSubscription = store.dispatch(workspaceApi.endpoints.listWorkspaces.initiate());
+    await listSubscription.unwrap();
     const view = JSON.stringify(["local", "space", "codex", "developer", "ws-a"]);
     const draft = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);
     store.dispatch(activateWorkspaceView({ key: view, workspaceId: "ws-a", providerId: "codex" }));
@@ -153,6 +167,31 @@ describe("permanent deletion UI cleanup", () => {
 
     expect(store.getState().workspace.workspaceViewKey).toBeNull();
     expect(store.getState().workspace.draftTextByKey[draft]).toBeUndefined();
+    expect(workspaceApi.endpoints.listWorkspaces.select()(store.getState()).data?.map((workspace) => workspace.id))
+      .toEqual(["ws-b"]);
     expect(invoke).toHaveBeenCalledWith(CHANNELS.workspace.delete, ["ws-a", { removeWorktree: undefined }]);
+    finishListRefresh(ok([{ id: "ws-b" }]));
+    listSubscription.unsubscribe();
+  });
+
+  it("does not hold a successful delete open while browser cleanup is pending", async () => {
+    let finishBrowser!: (value: { success: true; data: unknown }) => void;
+    const browserCleanup = new Promise<{ success: true; data: unknown }>((resolve) => {
+      finishBrowser = resolve;
+    });
+    const forgetContext = vi.fn(() => browserCleanup);
+    vi.stubGlobal("window", { api: { browser: { forgetContext } } });
+    setTransport({
+      kind: "test", invoke: async () => ok(undefined), subscribe: () => () => undefined,
+      status: () => "connected", onStatusChange: () => () => undefined,
+    });
+    const store = createStore();
+
+    await expect(Promise.race([
+      store.dispatch(runsApi.endpoints.deleteRun.initiate("run-stalled-browser")).unwrap(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("delete waited for browser")), 250)),
+    ])).resolves.toBeUndefined();
+    expect(forgetContext).toHaveBeenCalledOnce();
+    finishBrowser({ success: true, data: {} });
   });
 });
