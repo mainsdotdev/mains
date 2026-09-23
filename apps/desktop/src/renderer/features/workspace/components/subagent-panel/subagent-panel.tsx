@@ -96,10 +96,8 @@ export function SubagentPanel({
 
   const subagents = useSessionSubagents(runId);
 
-  // Selection is contextual (a specific agent of a specific run) and resets
-  // per run. Pill-vs-list deliberately does NOT reset or auto-open on new
-  // spawns — it's a persisted preference; the pill's count and twinkling
-  // glyphs already signal new activity.
+  // Agent selection and list expansion reset when the run changes.
+  // Pill-vs-list remains the user's saved preference.
   const prevRunRef = useRef(runId);
   useEffect(() => {
     if (prevRunRef.current !== runId) {

@@ -1,6 +1,6 @@
-import { ipcMain } from "../../ipc-kit/ipc-main";
-import { handle } from "../../ipc-kit/handle";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import { ipcMain } from "@mains/backend/ipc-kit/ipc-main";
+import { handle } from "@mains/backend/ipc-kit";
+import { CHANNELS } from "@mains/contracts/channels";
 import { sshService, type OpenTunnelInput } from "./ssh.service";
 
 export function registerSshIpc(): void {

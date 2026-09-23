@@ -173,6 +173,18 @@ describe("WsTransport", () => {
     expect(scheduled).toHaveLength(0);
   });
 
+  it("can enable reconnect after a verified preflight connection", () => {
+    const { transport, sockets, scheduled } = harness({ reconnect: false });
+    transport.connect();
+    sockets[0].open();
+
+    transport.enableReconnect();
+    sockets[0].serverClose();
+
+    expect(transport.status()).toBe("reconnecting");
+    expect(scheduled).toHaveLength(1);
+  });
+
   it("disposes: closes the socket, goes offline, rejects further invokes", async () => {
     const { transport, sockets } = harness();
     transport.connect();
@@ -198,5 +210,51 @@ describe("WsTransport", () => {
     const assertion = expect(pending).rejects.toThrow(/timed out/);
     await vi.advanceTimersByTimeAsync(1000);
     await assertion;
+  });
+
+  it("does not flush an invoke that timed out while queued", async () => {
+    vi.useFakeTimers();
+    const { transport, sockets } = harness({
+      invokeTimeoutMs: 1000,
+      reconnect: false,
+    });
+    transport.connect();
+
+    const expired = transport.invoke("runs:continue", [{ runId: "expired" }]);
+    const expiredAssertion = expect(expired).rejects.toThrow(/timed out/);
+    await vi.advanceTimersByTimeAsync(500);
+
+    const active = transport.invoke("runs:continue", [{ runId: "active" }]);
+    await vi.advanceTimersByTimeAsync(500);
+    await expiredAssertion;
+
+    sockets[0].open();
+    expect(sockets[0].sent.map((frame) => JSON.parse(frame))).toEqual([
+      expect.objectContaining({ id: 2, args: [{ runId: "active" }] }),
+    ]);
+
+    sockets[0].emit(responseFrame(2, "ok"));
+    await expect(active).resolves.toEqual({ success: true, data: "ok" });
+  });
+
+  it("does not flush queued invokes rejected by a failed connection", async () => {
+    const { transport, sockets, scheduled } = harness();
+    transport.connect();
+
+    const rejected = transport.invoke("runs:continue", [{ runId: "rejected" }]);
+    const rejectedAssertion = expect(rejected).rejects.toThrow(/closed/);
+    sockets[0].serverClose();
+    await rejectedAssertion;
+
+    const active = transport.invoke("runs:continue", [{ runId: "active" }]);
+    scheduled[0].fn();
+    sockets[1].open();
+
+    expect(sockets[1].sent.map((frame) => JSON.parse(frame))).toEqual([
+      expect.objectContaining({ id: 2, args: [{ runId: "active" }] }),
+    ]);
+
+    sockets[1].emit(responseFrame(2, "ok"));
+    await expect(active).resolves.toEqual({ success: true, data: "ok" });
   });
 });

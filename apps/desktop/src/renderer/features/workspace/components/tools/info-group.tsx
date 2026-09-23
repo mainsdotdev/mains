@@ -22,9 +22,6 @@ import { ProviderIcon } from "../provider-icon";
 import { ImagePreviewModal } from "../image-preview-modal";
 import { Button, DropdownMenu, DropdownMenuItem, Text } from "@/components/ui";
 import { useLazyGetAppsForFileQuery } from "@/lib/redux/api";
-import { useActiveSpace } from "@/hooks/use-active-space";
-import { useDarkMode } from "@/hooks/use-dark-mode";
-import { spaceUserMessageBackground } from "@/lib/space-themes";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useCapabilities } from "@/lib/platform";
@@ -81,14 +78,6 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
     name: string;
     dataUrl: string;
   } | null>(null);
-  // User bubble is tinted from the space theme at runtime, so it can't be a
-  // static Tailwind class; null keeps the neutral fallback classes.
-  const { activeSpace } = useActiveSpace();
-  const { darkMode } = useDarkMode();
-  const userBubbleBg = spaceUserMessageBackground(
-    activeSpace?.themeConfig ?? null,
-    darkMode,
-  );
   if (!event) return null;
 
   if (event.type === "artifact" && event.metadata?.kind === "user-prompt") {
@@ -148,12 +137,8 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
       return (
         <div className="w-full overflow-hidden">
           <div className="w-full py-2 flex justify-end">
-            <div
-              className="px-3.5 py-2 rounded-2xl bg-primary-50 dark:bg-primary/5"
-              style={
-                userBubbleBg ? { backgroundColor: userBubbleBg } : undefined
-              }
-            >
+            {/* Tinted with the accent, which follows the app theme. */}
+            <div className="px-3.5 py-2 rounded-2xl bg-accent/12 dark:bg-accent/15">
               {" "}
               <div className="px-4 py-2 rounded-2xl bg-accent/10 dark:bg-accent/10 border border-accent/60 dark:border-accent/10">
                 <div className="flex items-center gap-2 text-accent">
@@ -202,7 +187,7 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
                       onClick={() =>
                         setPreviewAtt({ name: att.name, dataUrl: imgSrc })
                       }
-                      className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary-400"
+                      className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent"
                       title={`Click to preview · ${att.name}`}
                       aria-label={`Preview ${att.name}`}
                     >
@@ -486,7 +471,7 @@ function AttachmentDocumentCard({
     <Button
       type="button"
       onClick={() => open({ path: filePath, fileName: name, docType })}
-      className={`${className} cursor-pointer outline-none transition-colors hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-primary-400 dark:hover:bg-primary-800/60`}
+      className={`${className} cursor-pointer outline-none transition-colors hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary-800/60`}
       title={`Open ${name}`}
       aria-label={`Open ${name}`}
     >
@@ -606,7 +591,7 @@ function ImageArtifact({
         <Button
           type="button"
           onClick={openInMains}
-          className="block w-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+          className="block w-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-accent"
           aria-label={`Preview ${fileName} in Mains`}
         >
           <div className="aspect-4/3 w-full flex items-center justify-center overflow-hidden">
@@ -658,7 +643,7 @@ function ImageArtifact({
       <Button
         type="button"
         onClick={openInMains}
-        className="block max-w-full overflow-hidden rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+        className="block max-w-full overflow-hidden rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-accent"
         aria-label={`Preview ${fileName} in Mains`}
       >
         <div className="flex max-h-144 max-w-[24rem] items-center justify-center overflow-hidden">

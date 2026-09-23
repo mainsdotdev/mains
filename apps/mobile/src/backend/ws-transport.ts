@@ -95,8 +95,8 @@ export class WsTransport {
   private readonly listeners = new Map<string, Set<(payload: unknown) => void>>();
   private readonly statusListeners = new Set<(status: TransportStatus) => void>();
   private readonly closeListeners = new Set<(info: CloseInfo, fatal: boolean) => void>();
-  /** Frames queued while the socket is not yet OPEN. */
-  private readonly outbox: string[] = [];
+  /** Invoke frames queued while the socket is not yet OPEN, keyed for cancellation. */
+  private readonly outbox = new Map<number, string>();
 
   private readonly factory: (url: string, protocols?: string[]) => WebSocketLike;
   private readonly token: string | null;
@@ -157,7 +157,11 @@ export class WsTransport {
       this.reconnectAttempts = 0;
       this.closeInfo = null;
       this.setStatus("connected");
-      for (const frame of this.outbox.splice(0)) socket.send(frame);
+      const queued = [...this.outbox];
+      this.outbox.clear();
+      for (const [id, frame] of queued) {
+        if (this.pending.has(id)) socket.send(frame);
+      }
     };
     socket.onmessage = (ev) => this.handleMessage(ev.data);
     socket.onerror = () => {
@@ -235,6 +239,7 @@ export class WsTransport {
         this.invokeTimeoutMs > 0
           ? setTimeout(() => {
               this.pending.delete(id);
+              this.outbox.delete(id);
               reject(
                 new Error(
                   `Invoke "${channel}" timed out after ${this.invokeTimeoutMs}ms`,
@@ -244,6 +249,7 @@ export class WsTransport {
           : null;
       this.pending.set(id, { resolve, reject, timer });
       this.sendFrame(
+        id,
         encodeWsMessage({
           kind: "invoke",
           id,
@@ -255,11 +261,11 @@ export class WsTransport {
     });
   }
 
-  private sendFrame(frame: string): void {
+  private sendFrame(id: number, frame: string): void {
     if (this.socket && this.socket.readyState === OPEN) {
       this.socket.send(frame);
     } else {
-      this.outbox.push(frame);
+      this.outbox.set(id, frame);
     }
   }
 
@@ -313,6 +319,7 @@ export class WsTransport {
   }
 
   private failAllPending(error: Error): void {
+    this.outbox.clear();
     for (const entry of this.pending.values()) {
       if (entry.timer) clearTimeout(entry.timer);
       entry.reject(error);

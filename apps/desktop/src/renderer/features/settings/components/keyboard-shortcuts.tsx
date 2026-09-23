@@ -102,7 +102,7 @@ function ShortcutRow({
               autoFocus
               disabled={busy}
               onKeyDown={onRecord}
-              className="flex min-h-9 min-w-42 items-center justify-center rounded-xl border border-accent/20 bg-accent/10 px-3 text-s font-medium text-accent outline-none ring-2 ring-accent/5"
+              className="flex min-h-9 min-w-42 items-center justify-center rounded-xl border border-accent/10 bg-accent/10 px-3 text-s font-medium text-accent outline-none ring-2 ring-accent/5"
             >
               Press shortcut
             </button>

@@ -8,6 +8,8 @@
 import { appApi } from "@/lib/transport";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
+import type { AppDispatch, RootState } from "../index";
+import { forgetDeletedUiContext } from "../ui-state-cleanup";
 
 // ─────────────────────────────────────────────────────────────
 // ── Workspace ──
@@ -335,10 +337,21 @@ export const workspaceApi = baseApi.injectEndpoints({
       void,
       { id: string; removeWorktree?: boolean }
     >({
-      query: ({ id, removeWorktree }) => ({
-        handler: CHANNELS.workspace.delete,
-        args: [id, { removeWorktree }],
-      }),
+      async queryFn({ id, removeWorktree }, { dispatch, getState }, _extra, baseQuery) {
+        const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
+        const result = await baseQuery({ handler: CHANNELS.workspace.delete, args: [id, { removeWorktree }] });
+        if (result.error) return { error: result.error };
+        // The page can remount before tag invalidation refetches the list. Drop
+        // the deleted row now so it cannot select and re-save that workspace.
+        if (((getState() as RootState).backends.activeBackendId ?? "local") === backendId) {
+          dispatch(workspaceApi.util.updateQueryData("listWorkspaces", undefined, (workspaces) => {
+            const index = workspaces.findIndex((workspace) => workspace.id === id);
+            if (index !== -1) workspaces.splice(index, 1);
+          }));
+        }
+        forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "workspace", id });
+        return { data: undefined };
+      },
       invalidatesTags: ["Workspaces", "WorkspaceGitStates"],
     }),
 

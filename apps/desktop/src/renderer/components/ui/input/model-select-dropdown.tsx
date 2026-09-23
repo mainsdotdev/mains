@@ -10,11 +10,9 @@ import { Button } from "../button";
 import Text from "../text";
 import DropdownWrapper from "../dropdown-wrapper";
 import { useClickOutside } from "@/hooks/use-click-outside";
-import {
-  formatModelDisplayName,
-  getModelIcon,
-  selectableModelNames,
-} from "@/lib/model-icons";
+import { getModelIcon } from "@/lib/model-icons";
+import { formatModelDisplayName, selectableModelNames } from "@/lib/model-display";
+import type { ProviderVariant } from "@/lib/provider-variants";
 import { formatEffortLevel } from "@/lib/format";
 import { ArrowUp, Brain, Check } from "../icons";
 import { ULTRACODE_GRADIENT_TEXT } from "./ultracode-styles";
@@ -99,7 +97,7 @@ interface ModelSelectDropdownProps {
   dropdownRef: RefObject<HTMLDivElement | null>;
   openUpward?: boolean;
   isLoading?: boolean;
-  variant?: "claude" | "copilot" | "codex" | "cursor";
+  variant?: ProviderVariant;
 }
 
 export function ModelSelectDropdown({

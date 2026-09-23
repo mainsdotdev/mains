@@ -3,6 +3,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "composite": true,
+    "rootDir": "../..",
     "lib": ["ES2020"],
     "jsx": "preserve",
     "outDir": ".vite/build",
@@ -10,6 +11,7 @@
   },
   "include": [
     "src/preload/**/*",
-    "src/shared/**/*"
+    "src/shared/**/*",
+    "../../packages/backend/shared/**/*"
   ]
 }

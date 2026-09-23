@@ -27,9 +27,9 @@ Three Electron processes with strict boundaries:
 - **Preload** (`src/preload/index.ts`) — typed `window.api` bridge, namespace-per-domain
 - **Renderer** (`src/renderer/`) — React + Redux Toolkit + HashRouter, `@/` alias → `src/renderer/`
 
-## Module Pattern (`src/main/modules/{name}/`)
+## Module Pattern (`packages/backend/src/modules/{name}/`)
 
-Every backend domain uses this exact structure (see `src/main/modules/account/` as reference):
+Every backend domain uses this exact structure (see `packages/backend/src/modules/account/` as reference):
 
 | File | Role |
 |------|------|
@@ -49,12 +49,12 @@ All modules: `account`, `appSettings`, `automations`, `browser`, `connections`, 
 Channel format: `"domain:action"` (e.g. `"runs:start"`, `"entities:getAll"`). All channels are defined once in `src/shared/ipc-kit/channels.ts` as a typed map (`CHANNELS.entities.getAll`) — never type the channel string literally. Referenced from three sites:
 
 1. `src/preload/index.ts` — `ipcRenderer.invoke(CHANNELS.entities.getAll, ...)`
-2. `src/main/modules/{name}/{name}.ipc.ts` — `ipcMain.handle(CHANNELS.entities.getAll, ...)`
+2. `packages/backend/src/modules/{name}/{name}.ipc.ts` — `ipcMain.handle(CHANNELS.entities.getAll, ...)`
 3. `src/renderer/lib/redux/api/{name}Api.ts` — `{ handler: CHANNELS.entities.getAll }`
 
 All IPC responses use the `ServiceResponse<T>` envelope, constructed via `ok(data)` → `{ success: true, data }` or `fail(msg)` → `{ success: false, error }` (from `src/shared/ipc-kit/service-response`).
 
-## Database (`src/main/db/schema.ts`)
+## Database (`packages/backend/src/db/schema.ts`)
 
 - Text primary keys (UUIDs or string literals), timestamps as `integer("col", { mode: "timestamp" })` with `default(sql\`(unixepoch())\`)`
 - Snake_case SQL columns, camelCase TypeScript — Drizzle handles mapping

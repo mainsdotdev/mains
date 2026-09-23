@@ -185,7 +185,7 @@ export function ComposerAttachments({
                         setAppshotPreviewId(appshot.id);
                       }}
                       aria-label={`Preview ${label}`}
-                      className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                      className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-accent"
                     >
                       <AttachmentImage src={src} alt={label} />
                     </Button>
@@ -223,7 +223,7 @@ export function ComposerAttachments({
                         setBrowserPreviewId(selection.id);
                       }}
                       aria-label={`Preview ${label}`}
-                      className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                      className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-accent"
                     >
                       <AttachmentImage src={src} alt={label} />
                     </Button>
@@ -259,7 +259,7 @@ export function ComposerAttachments({
                         setPreviewIndex(index);
                       }}
                       aria-label={`Preview ${file.name}`}
-                      className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                      className="block size-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-accent"
                     >
                       <AttachmentImage
                         src={uploaded.preview}
@@ -310,7 +310,7 @@ export function ComposerAttachments({
                       type="button"
                       onClick={() => openDraftDocument(file)}
                       aria-label={`Open ${file.name}`}
-                      className="flex size-full cursor-pointer flex-col text-left outline-none transition-colors hover:bg-primary-200/50 focus-visible:ring-2 focus-visible:ring-primary-400 dark:hover:bg-primary-900"
+                      className="flex size-full cursor-pointer flex-col text-left outline-none transition-colors hover:bg-primary-200/50 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary-900"
                     >
                       {content}
                     </Button>

@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
-import { ok, fail } from "../../../shared/ipc-kit/service-response";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import { ok, fail } from "@mains/contracts/service-response";
+import { CHANNELS } from "@mains/contracts/channels";
 import { localBackendService } from "./localBackend.service";
 
 // Registered via the REAL electron ipcMain (NOT the `ipcMain` shim) so these
@@ -75,7 +75,20 @@ export function registerLocalBackendIpc() {
     }
   });
 
-  // Phone pairing rides on the exposure above, so it is local-only for the same
+  ipcMain.handle(
+    CHANNELS.localBackend.createWebLogin,
+    async (_e, baseUrl: string) => {
+      try {
+        return ok(localBackendService.createWebLogin(baseUrl));
+      } catch (error) {
+        return fail(
+          error instanceof Error ? error.message : "Failed to create browser login",
+        );
+      }
+    },
+  );
+
+  // Device pairing rides on the exposure above, so it is local-only for the same
   // reason: a remote client must not be able to mint codes or revoke devices.
   ipcMain.handle(CHANNELS.localBackend.createPairingCode, async () => {
     try {
@@ -96,6 +109,19 @@ export function registerLocalBackendIpc() {
       );
     }
   });
+
+  ipcMain.handle(
+    CHANNELS.localBackend.renamePairedDevice,
+    async (_e, id: string, name: string) => {
+      try {
+        return ok(await localBackendService.renamePairedDevice(id, name));
+      } catch (error) {
+        return fail(
+          error instanceof Error ? error.message : "Failed to rename device",
+        );
+      }
+    },
+  );
 
   ipcMain.handle(
     CHANNELS.localBackend.revokePairedDevice,
@@ -119,7 +145,9 @@ export function unregisterLocalBackendIpc() {
   ipcMain.removeHandler(CHANNELS.localBackend.setTailscaleHttps);
   ipcMain.removeHandler(CHANNELS.localBackend.setKeepAwakeForRemoteAccess);
   ipcMain.removeHandler(CHANNELS.localBackend.rotateToken);
+  ipcMain.removeHandler(CHANNELS.localBackend.createWebLogin);
   ipcMain.removeHandler(CHANNELS.localBackend.createPairingCode);
   ipcMain.removeHandler(CHANNELS.localBackend.listPairedDevices);
   ipcMain.removeHandler(CHANNELS.localBackend.revokePairedDevice);
+  ipcMain.removeHandler(CHANNELS.localBackend.renamePairedDevice);
 }

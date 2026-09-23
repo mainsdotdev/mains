@@ -4,12 +4,15 @@ import { readPersistedAppSetting } from "@/lib/redux/persist-boot";
 import {
   DEFAULT_CODE_FONT_SIZE,
   DEFAULT_INTERFACE_FONT_SIZE,
+  applyAppearanceFontFamilies,
   applyAppearanceFontSizes,
+  isFontFamily,
   isFontSize,
 } from "@/lib/appearance-fonts";
 
 /**
- * Mirrors the persisted font sizes from the `appSettings` slice onto `:root`.
+ * Mirrors the persisted font sizes and families from the `appSettings` slice
+ * onto `:root`.
  *
  * Like the theme, these have to land before the first paint — rehydration is
  * async, and the interface size rescales the whole layout, so waiting for the
@@ -33,6 +36,10 @@ if (typeof window !== "undefined") {
       DEFAULT_CODE_FONT_SIZE,
     ),
   });
+  applyAppearanceFontFamilies(document.documentElement, {
+    uiFontFamily: readPersistedAppSetting("uiFontFamily", isFontFamily, ""),
+    codeFontFamily: readPersistedAppSetting("codeFontFamily", isFontFamily, ""),
+  });
 }
 
 export function useAppearanceFonts() {
@@ -45,4 +52,14 @@ export function useAppearanceFonts() {
       codeFontSize,
     });
   }, [interfaceFontSize, codeFontSize]);
+
+  const uiFontFamily = useAppSelector((s) => s.appSettings.uiFontFamily);
+  const codeFontFamily = useAppSelector((s) => s.appSettings.codeFontFamily);
+
+  useLayoutEffect(() => {
+    applyAppearanceFontFamilies(document.documentElement, {
+      uiFontFamily,
+      codeFontFamily,
+    });
+  }, [uiFontFamily, codeFontFamily]);
 }

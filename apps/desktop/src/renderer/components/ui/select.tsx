@@ -37,15 +37,17 @@ export interface SelectOption<T extends string = string> {
  * `Textarea`, so a select dropped into a compact form lines up with the fields
  * around it instead of standing a row taller than all of them.
  */
-export type SelectSize = "sm" | "md";
+export type SelectSize = "sm" | "s" | "md";
 
 const TRIGGER_SIZE: Record<SelectSize, string> = {
   md: "min-w-52 px-2.5 py-2 text-s",
+  s:"min-w-40 px-2-5 py-2 text-s",
   sm: "px-3 py-2 text-xs",
 };
 
 const OPTION_SIZE: Record<SelectSize, string> = {
   md: "text-s",
+  s:"text-s",
   sm: "text-xs",
 };
 
@@ -60,6 +62,8 @@ interface SelectBaseProps<T extends string = string> {
   disabled?: boolean;
   size?: SelectSize;
   onOpenChange?: (open: boolean) => void;
+  /** Show each option's full description in a tooltip on hover or focus. */
+  showOptionDescriptionTooltip?: boolean;
 }
 
 export type SelectProps<T extends string = string> = SelectBaseProps<T> &
@@ -78,6 +82,7 @@ export default function Select<T extends string = string>({
   disabled,
   size = "md",
   onOpenChange,
+  showOptionDescriptionTooltip = false,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
 }: SelectProps<T>) {
@@ -99,6 +104,7 @@ export default function Select<T extends string = string>({
     top: 0,
     left: 0,
     width: 0,
+    maxHeight: 0,
   });
 
   // Reset enter animation on each open. Before the app-ready latch animations
@@ -126,10 +132,16 @@ export default function Select<T extends string = string>({
   const updateDropdownPosition = () => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
+    const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
     setDropdownPosition({
       top: rect.bottom,
       left: rect.left,
       width: rect.width,
+      // Preserve the 15rem cap while leaving room at the viewport edge.
+      maxHeight: Math.max(
+        0,
+        Math.min(15 * rootFontSize, window.innerHeight - rect.bottom - 8),
+      ),
     });
   };
 
@@ -334,7 +346,7 @@ export default function Select<T extends string = string>({
           disabled:cursor-not-allowed disabled:opacity-60
           flex items-center justify-between
           transition-[color,background-color,border-radius,box-shadow]
-          focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2
           ${isOpen ? "rounded-t-xl shadow-lg" : "rounded-xl"}
         `}
       >
@@ -384,7 +396,10 @@ export default function Select<T extends string = string>({
               width: dropdownPosition.width,
             }}
           >
-            <div className="max-h-60 overflow-auto noscrollbar space-y-0.5 p-1.5">
+            <div
+              className="overflow-auto noscrollbar space-y-0.5 p-1.5"
+              style={{ maxHeight: dropdownPosition.maxHeight }}
+            >
               {options.map((option, index) => {
                 const isSelected = value === option.value;
                 const isActive = activeIndex === index;
@@ -402,6 +417,7 @@ export default function Select<T extends string = string>({
                     key={option.value}
                     onFocus={() => setActiveIndex(index)}
                     onClick={() => selectOption(option)}
+                    tooltip={showOptionDescriptionTooltip ? option.description : undefined}
                     className={`
                       flex w-full cursor-pointer items-center gap-1 px-3 py-1 rounded-xl text-left ${OPTION_SIZE[size]}
                       text-primary-900 transition-colors focus:outline-none dark:text-primary

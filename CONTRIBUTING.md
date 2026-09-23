@@ -6,7 +6,7 @@ Thanks for your interest in contributing! This guide will help you get started.
 
 ```bash
 git clone https://github.com/mainsdotdev/mains.git
-cd mains
+cd mains/apps/desktop
 npm install
 npm run db:push
 npm start
@@ -17,13 +17,13 @@ npm start
 ## Project Structure
 
 ```
-src/
-├── main/          # Electron main process (DB, IPC, modules)
-├── preload/       # IPC bridge (window.api)
-└── renderer/      # React app (Redux, Router, Tailwind)
+apps/desktop/      # Electron host, preload, and React renderer
+apps/server/       # Standalone Node host, CLI, and release package
+packages/backend/  # Shared Electron-free backend implementation
+packages/contracts/# Shared wire contract
 ```
 
-Each domain module in `src/main/modules/` follows the pattern:
+Each domain module in `packages/backend/src/modules/` follows the pattern:
 **IPC → Service → Repository → DTO**
 
 All layers are plain object literals — no classes, no dependency injection.
@@ -54,7 +54,7 @@ npm test            # Run all tests
 
 - Test framework: **Vitest**
 - DB tests use `createTestDb()` for in-memory SQLite
-- Factory functions in `src/test/factories.ts` for test data
+- Factory functions in `packages/backend/test/factories.ts` for backend test data
 - Mock `getDb()` via `vi.mock("../../db/client", ...)`
 - Use `vi.spyOn` for error path coverage
 
@@ -67,19 +67,19 @@ npx vitest run path/to/file.test.ts  # Single file
 
 ## Database Changes
 
-1. Edit the schema in `src/main/db/schema.ts`
+1. Edit the schema in `packages/backend/src/db/schema.ts`
 2. Generate a migration: `npm run db:generate`
 3. Apply to dev DB: `npm run db:push`
 4. If things break: `npm run db:clean:dev && npm run db:push`
 
 ## Adding a New Module
 
-Create files in `src/main/modules/{name}/`:
+Create files in `packages/backend/src/modules/{name}/`:
 
 | File | Role |
 |------|------|
 | `{name}.ipc.ts` | IPC handlers (`ipcMain.handle`) — call the service directly |
-| `{name}.service.ts` | Business logic, returns `Promise<ServiceResponse<T>>` |
+| `{name}.service.ts` | Business logic, returns plain values and throws on failure |
 | `{name}.repo.ts` | Database queries (Drizzle) |
 | `{name}.dto.ts` | Types and formatters |
 | `{name}.validation.ts` | Input validation (hand-rolled, no zod) |
@@ -91,7 +91,7 @@ Then register the IPC handlers in `src/main/index.ts` and expose methods in `src
 
 Channel format: `"domain:action"` (e.g. `"entities:getAll"`). Must stay in sync across:
 1. `src/preload/index.ts`
-2. `src/main/modules/{name}/{name}.ipc.ts`
+2. `packages/backend/src/modules/{name}/{name}.ipc.ts`
 3. `src/renderer/lib/redux/api/{name}Api.ts`
 
 ## Important Notes

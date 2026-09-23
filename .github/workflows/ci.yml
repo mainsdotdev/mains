@@ -10,12 +10,30 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# The desktop app lives in apps/desktop; every npm command runs there.
+# Desktop jobs run in apps/desktop; the standalone job overrides this default.
 defaults:
   run:
     working-directory: apps/desktop
 
 jobs:
+  backend:
+    name: Shared backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/backend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/backend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -25,8 +43,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            packages/backend/package-lock.json
       - run: npm ci
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
       - run: npm run lint
 
   typecheck:
@@ -38,8 +61,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            packages/backend/package-lock.json
       - run: npm ci
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
       - run: npm run typecheck
 
   test:
@@ -51,10 +79,44 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            packages/backend/package-lock.json
       - run: npm ci
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
       - run: npm rebuild better-sqlite3
       - run: npm test
+
+  standalone-server:
+    name: Standalone server package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            apps/server/package-lock.json
+            packages/backend/package-lock.json
+      - name: Install desktop web dependencies
+        working-directory: apps/desktop
+        run: npm ci
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run package
+      - run: npm run smoke:package
 
   codex-app-server:
     name: Codex app-server (${{ matrix.codex-version }})
@@ -69,8 +131,13 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            packages/backend/package-lock.json
       - run: npm ci
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
       - name: Install Codex CLI
         run: npm install --global @openai/codex@${{ matrix.codex-version }}
       - run: npm run codex:protocol:smoke

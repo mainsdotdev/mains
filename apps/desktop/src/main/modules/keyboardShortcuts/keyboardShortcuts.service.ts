@@ -1,4 +1,4 @@
-import { appSettingsService } from "../appSettings";
+import { appSettingsService } from "@mains/backend/modules/appSettings";
 import {
   bindingsForKeyboardShortcuts,
   parseKeyboardShortcutOverrides,

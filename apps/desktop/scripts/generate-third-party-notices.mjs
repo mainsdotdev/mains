@@ -11,13 +11,35 @@
  * npm, so `npm ls` cannot see them — are declared in VENDORED below.
  *
  * Run after dependency changes: npm run licenses:generate
+ * Pass `--output <path>` to generate a package-specific copy without touching
+ * the checked-in desktop notice. `--project-root` and `--vendored-dir` let the
+ * standalone server reuse the generator against its own dependency tree.
  */
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-const root = path.resolve(import.meta.dirname, "..");
-const OUT = path.join(root, "THIRD-PARTY-NOTICES.txt");
+function readArgument(name) {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return undefined;
+  if (!process.argv[index + 1]) throw new Error(`${name} requires a value`);
+  return process.argv[index + 1];
+}
+
+const root = path.resolve(
+  readArgument("--project-root") ?? path.resolve(import.meta.dirname, ".."),
+);
+const outputIndex = process.argv.indexOf("--output");
+if (outputIndex >= 0 && !process.argv[outputIndex + 1]) {
+  throw new Error("--output requires a path");
+}
+const OUT = outputIndex >= 0
+  ? path.resolve(process.argv[outputIndex + 1])
+  : path.join(root, "THIRD-PARTY-NOTICES.txt");
+const vendoredFontsDir = path.resolve(
+  readArgument("--vendored-dir") ??
+    path.join(root, "src", "renderer", "public", "fonts"),
+);
 
 const LICENSE_FILES = /^(licen[sc]e|copying|notice)(\.(md|txt|markdown))?$/i;
 
@@ -33,7 +55,7 @@ const VENDORED = [
     key: "Inter@4.001",
     license: "OFL-1.1",
     repository: "https://github.com/rsms/inter",
-    dir: path.join(root, "src", "renderer", "public", "fonts"),
+    dir: vendoredFontsDir,
   },
 ];
 

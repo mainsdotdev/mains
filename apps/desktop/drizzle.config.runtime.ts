@@ -25,8 +25,8 @@ const getRuntimeDbPath = () => {
 
 export default {
   dialect: "sqlite",
-  schema: "./src/main/db/schema.ts",
-  out: "./src/main/db/migrations",
+  schema: "../../packages/backend/src/db/schema.ts",
+  out: "../../packages/backend/src/db/migrations",
 
   dbCredentials: {
     url: getRuntimeDbPath(),

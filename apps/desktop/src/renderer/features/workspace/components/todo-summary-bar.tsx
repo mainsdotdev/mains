@@ -219,10 +219,10 @@ export function hasOutstandingWork(
  * (those are filtered out by `prepareToolCalls`) so users see one
  * continuously-updated plan instead of repeating snapshots.
  *
- * Lifecycle: the parent mounts this only while the active run's status is
- * "running" (so it disappears when the run finishes). It also returns null on
- * its own when the current events carry no todos, and once every step is
- * completed — see `hasOutstandingWork`.
+ * Lifecycle: the parent mounts this while the active run is running, or with
+ * sample steps for a development preview when no run is active. It returns
+ * null when there are no todos, or once every step is completed — see
+ * `hasOutstandingWork`.
  */
 export function TodoSummaryBar({
   events,

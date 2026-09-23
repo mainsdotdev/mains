@@ -11,10 +11,12 @@ import {
   General,
   Keyboard,
   Relay,
+  Sun,
 } from "@/components/ui/icons";
 import { capabilities } from "@/lib/platform";
 import { Claude, Scan } from "@/components/ui/icons/space";
 import GeneralSettings from "./components/general";
+import AppearanceSettings from "./components/appearance";
 import GitSettings from "./components/git";
 import { PlaceholderSection } from "./components/settings-layout";
 
@@ -50,6 +52,7 @@ const SecuritySettings = () => <PlaceholderSection title="Security" />;
 
 export type SettingsRouteId =
   | "general"
+  | "appearance"
   | "lens"
   | "shortcuts"
   | "notifications"
@@ -90,13 +93,14 @@ export type SettingsNavItem = {
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "general", label: "General", icon: General, showInNav: true, Component: GeneralSettings },
+  { id: "appearance", label: "Appearance", icon: Sun, showInNav: true, Component: AppearanceSettings },
   { id: "notifications", label: "Notifications", icon: Bell, showInNav: capabilities.nativeNotifications, Component: NotificationsSettings },
   { id: "git", label: "Git", icon: Branch, showInNav: true, Component: GitSettings },
   { id: "lens", label: "Lens", icon: Scan, showInNav: capabilities.appshots, Component: LensSettings },
   { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard, showInNav: capabilities.windowChrome, Component: KeyboardShortcutsSettings },
   { id: "connections", label: "Connections", icon: Connect, showInNav: true, Component: ConnectionsSettings },
-  // Hidden from the Settings nav — surfaced as the top-level "Relay" route instead.
-  { id: "backends", label: "Relay", icon: Relay, Component: BackendsSettings },
+  // Hidden from the Settings nav — surfaced as the top-level Connect route instead.
+  { id: "backends", label: "Mains Connect", icon: Relay, Component: BackendsSettings },
   { id: "dashboard", label: "Dashboard", icon: Chart, showInNav: true, Component: DashboardPage },
   { id: "archive", label: "Archive", icon: Archive, showInNav: true, Component: ArchiveSettings },
 

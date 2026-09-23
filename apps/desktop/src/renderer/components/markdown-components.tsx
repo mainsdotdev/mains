@@ -68,7 +68,7 @@ export function MarkdownLink({
             ?.scrollIntoView({ behavior: "smooth", block: "center" });
         }}
         title={href}
-        className="inline whitespace-normal wrap-break-word text-left text-accent hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 "
+        className="inline whitespace-normal wrap-break-word text-left text-accent hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent "
       >
         {children}
       </a>
@@ -112,7 +112,7 @@ export function MarkdownLink({
           }
         }
       }}
-      className="inline whitespace-normal wrap-break-word text-left text-accent hover:underline cursor-pointer  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 "
+      className="inline whitespace-normal wrap-break-word text-left text-accent hover:underline cursor-pointer  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent "
     >
       {showFavicon && <LinkFavicon key={href} href={href} />}
       {children}

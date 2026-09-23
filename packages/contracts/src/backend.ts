@@ -1,6 +1,6 @@
 /**
- * Backend identity and pairing contract — mirrors `mains/src/main/modules/
- * backend/backend.dto.ts` and `modules/pairing/pairing.dto.ts`. React Native
+ * Backend identity and pairing contract — mirrors `packages/backend/src/modules/
+ * backend/backend.dto.ts`. React Native
  * free by design (see ws-protocol.ts).
  */
 

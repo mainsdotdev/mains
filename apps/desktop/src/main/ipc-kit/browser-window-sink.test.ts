@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const { getAllWindows } = vi.hoisted(() => ({ getAllWindows: vi.fn(() => []) }));
 vi.mock("electron", () => ({ BrowserWindow: { getAllWindows } }));
 
-import { clearEventSinks, emit } from "./event-bus";
+import { clearEventSinks, emit } from "@mains/backend/ipc-kit";
 import { registerBrowserWindowSink } from "./browser-window-sink";
 
 function fakeWindow(destroyed = false) {

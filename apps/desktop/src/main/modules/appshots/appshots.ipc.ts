@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
-import { handle } from "../../ipc-kit/handle";
+import { CHANNELS } from "@mains/contracts/channels";
+import { handle } from "@mains/backend/ipc-kit";
 import { appshotsService } from "./appshots.service";
 import {
   requireAppshotsConfiguration,

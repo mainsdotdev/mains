@@ -49,4 +49,27 @@ describe("Select inside DropdownMenu", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("menu", { name: "Browser menu" })).toBeTruthy();
   });
+
+  it("shows an option's full description on hover", async () => {
+    const description =
+      "Use the standard style, overriding saved Claude Code styles.";
+
+    render(
+      createElement(Select, {
+        value: "",
+        options: [
+          { value: "", label: "Use Claude Code settings" },
+          { value: "default", label: "Default (standard)", description },
+        ],
+        onChange: vi.fn(),
+        "aria-label": "Output style",
+        showOptionDescriptionTooltip: true,
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Output style" }));
+    fireEvent.mouseEnter(screen.getByRole("option", { name: /Default/ }));
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(description);
+  });
 });

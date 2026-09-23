@@ -1,17 +1,13 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
-import { toast, type UploadedFile } from "@/components/ui";
+import { toast } from "@/components/ui";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAppSelector, useAppDispatch } from "@/lib/redux/hooks";
 import {
   setWorkspaceModel,
   setActiveTab,
-  clearSelectedFile,
-  clearIssueTabs,
-  clearSignalTabs,
-  clearNoteTabs,
-  setActiveWorkspaceId,
-  setActiveWorkspaceForProvider,
-  setWorkspaceProvider,
+  activateWorkspaceView,
+  setComposerContextKey,
+  setDraftText,
   clearPendingGoal,
   clearPendingReviewTarget,
   openNewRunTab,
@@ -20,6 +16,10 @@ import {
 import { isRunTab, isNewRunTab } from "@/features/workspace/lib/repo-utils";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useComposerContext } from "./use-composer-context";
+import { useTransientUploads } from "./use-transient-uploads";
+import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
+import { useActiveSpace } from "@/hooks/use-active-space";
+import { setRightPaneContextKey } from "@/lib/redux/slices/appSettingsSlice";
 import { useWorkspaceData } from "./use-workspace-data";
 import { useWorkspaceRuns } from "./use-workspace-runs";
 import { useFileContentLoader } from "./use-file-content-loader";
@@ -42,11 +42,11 @@ export function useWorkspacePage(providerId: string) {
   const selectedFile = useAppSelector(
     (state) => state.workspace.selectedFile,
   );
-  const {
-    items: contextItems,
-    clear: clearContext,
-    resetForRoute: resetContextForRoute,
-  } = useComposerContext();
+  const activeViewKey = useAppSelector((state) => state.workspace.workspaceViewKey);
+  const workspaceViewNeedsDefaultRun = useAppSelector(
+    (state) => state.workspace.workspaceViewNeedsDefaultRun,
+  );
+  const { items: contextItems, clear: clearContext } = useComposerContext();
   const openIssueTabs = useAppSelector(
     (state) => state.workspace.openIssueTabs,
   );
@@ -75,11 +75,16 @@ export function useWorkspacePage(providerId: string) {
     (state) => state.workspace.selectedCollectionId,
   );
   const { mode, showTabs } = useModeConfig();
+  const { activeSpaceId } = useActiveSpace();
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
 
-  const [goal, setGoal] = useState("");
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [canResume, setCanResume] = useState(false);
   const [autoExecute, setAutoExecute] = useState(false);
+  const [composeTargetOverride, setComposeTargetOverride] = useState<{
+    tab: string;
+    workspace: string | undefined;
+    value: string | "new";
+  } | null>(null);
 
   const handleModelChange = useCallback(
     (model: string) => {
@@ -95,45 +100,21 @@ export function useWorkspacePage(providerId: string) {
     [mode, workspaces],
   );
 
-  // A space switch can land on the same workspace, so the workspaceId-keyed
-  // resets below never fire — sync the provider so the slice drops tab state
-  // naming a run from the space being left.
-  useEffect(() => {
-    dispatch(setWorkspaceProvider(providerId));
-  }, [providerId, dispatch]);
+  const contextParts = useMemo(() => ({
+    backendId,
+    spaceId: activeSpaceId,
+    providerId,
+    mode,
+    workspaceId,
+    collectionId: selectedCollectionId,
+  }), [backendId, activeSpaceId, providerId, mode, workspaceId, selectedCollectionId]);
+  const viewKey = workspaceViewKey(contextParts);
 
-  // The workspace-switch resets below and the run auto-select further down are
-  // layout effects: they settle the tab before the browser paints, so a switch
-  // never shows a frame of the neutral "editor" placeholder in between.
+  // Store one workspace view per backend/space/workspace, then restore it
+  // before paint when navigation changes the active workspace.
   useLayoutEffect(() => {
-    dispatch(setActiveWorkspaceId(workspaceId ?? null));
-    if (workspaceId) {
-      dispatch(setActiveWorkspaceForProvider({ providerId, workspaceId }));
-    }
-  }, [workspaceId, providerId, dispatch]);
-
-  useLayoutEffect(() => {
-    dispatch(clearSelectedFile());
-    resetContextForRoute();
-    dispatch(clearIssueTabs());
-    dispatch(clearSignalTabs());
-    dispatch(clearNoteTabs());
-    dispatch(setActiveTab("editor"));
-    // `resetContextForRoute` is dispatch-stable, so listing it doesn't re-fire
-    // this effect; global Appshots intentionally survive the route reset.
-  }, [workspaceId, routeRunId, dispatch, resetContextForRoute]);
-
-  // Sync pendingGoal from Redux to local state
-  useEffect(() => {
-    if (!pendingGoal) return;
-    const nextGoal = pendingGoal;
-    const runAuto = pendingAutoExecute;
-    dispatch(clearPendingGoal());
-    queueMicrotask(() => {
-      setGoal(nextGoal);
-      if (runAuto) setAutoExecute(true);
-    });
-  }, [pendingGoal, pendingAutoExecute, dispatch]);
+    dispatch(activateWorkspaceView({ key: viewKey, workspaceId: workspaceId ?? null, providerId }));
+  }, [viewKey, workspaceId, providerId, dispatch]);
 
   const {
     runs,
@@ -161,10 +142,61 @@ export function useWorkspacePage(providerId: string) {
     switchableWorkspaceIds,
   );
 
+  // Resolve the conversation that owns the composer and browser. An editor
+  // opened from a run stays with that run unless the target pill chooses new.
+  const overrideValue =
+    composeTargetOverride &&
+    composeTargetOverride.tab === activeTab &&
+    composeTargetOverride.workspace === workspaceId
+      ? composeTargetOverride.value
+      : null;
+  const isRetargetable = activeTab === "editor" && runs.length > 0;
+  const fallbackTargetRunId =
+    previousNonEditorTab &&
+    isRunTab(previousNonEditorTab) &&
+    runs.some((r) => r.id === previousNonEditorTab)
+      ? previousNonEditorTab
+      : null;
+  const composeTargetRunId = isRunTab(activeTab)
+    ? activeTab
+    : !isRetargetable || overrideValue === "new"
+      ? null
+      : overrideValue && runs.some((r) => r.id === overrideValue)
+        ? overrideValue
+        : fallbackTargetRunId;
+  const composeTargetRun = composeTargetRunId
+    ? runs.find((r) => r.id === composeTargetRunId)
+    : undefined;
+  const ownerKey = composerOwnerKey(contextParts, composeTargetRunId);
+  const goal = useAppSelector((state) => state.workspace.draftTextByKey[ownerKey] ?? "");
+  const setGoal = useCallback((text: string) => {
+    dispatch(setDraftText({ key: ownerKey, text }));
+  }, [dispatch, ownerKey]);
+  const [uploadedFiles, setUploadedFiles] = useTransientUploads(ownerKey);
+
+  useLayoutEffect(() => {
+    if (activeViewKey !== viewKey) return;
+    dispatch(setComposerContextKey(ownerKey));
+    dispatch(setRightPaneContextKey(ownerKey));
+  }, [activeViewKey, viewKey, ownerKey, dispatch]);
+
+  // Quick actions target the currently visible composer, even after it was
+  // unmounted while visiting Settings.
+  useEffect(() => {
+    if (activeViewKey !== viewKey || !pendingGoal) return;
+    const nextGoal = pendingGoal;
+    const runAuto = pendingAutoExecute;
+    dispatch(clearPendingGoal());
+    queueMicrotask(() => {
+      setGoal(nextGoal);
+      if (runAuto) setAutoExecute(true);
+    });
+  }, [activeViewKey, viewKey, pendingGoal, pendingAutoExecute, dispatch, setGoal]);
+
   // Handle pending review target (native code review) — developer-only UI,
   // gated defensively so a stale target can't hijack the tab-less view.
   useEffect(() => {
-    if (!showTabs || !pendingReviewTarget || !workspaceId || !selectedWorkspace) return;
+    if (activeViewKey !== viewKey || !showTabs || !pendingReviewTarget || !workspaceId || !selectedWorkspace) return;
     dispatch(clearPendingReviewTarget());
 
     const run = async () => {
@@ -174,28 +206,30 @@ export function useWorkspacePage(providerId: string) {
       }
     };
     run();
-  }, [showTabs, pendingReviewTarget, workspaceId, selectedWorkspace, providerId, selectedModel, executeReview, dispatch]);
+  }, [activeViewKey, viewKey, showTabs, pendingReviewTarget, workspaceId, selectedWorkspace, providerId, selectedModel, executeReview, dispatch]);
 
   useLayoutEffect(() => {
-    if (!showTabs) return; // tab-less neutral state is the new-chat screen, not the newest run
-    if (runs.length > 0 && !selectedFile && activeTab === "editor") {
+    if (activeViewKey !== viewKey || !showTabs) return; // tab-less neutral state is the new-chat screen
+    if (isRunTab(activeTab) && runs.some((r) => r.id === activeTab)) {
+      if (activeRun?.id !== activeTab) selectTab(activeTab);
+      return;
+    }
+    if (workspaceViewNeedsDefaultRun && runs.length > 0 && !selectedFile && activeTab === "editor") {
       // A jump into another workspace names its run; landing on the newest
       // first would flash it before the jump is consumed.
       const target = runs.find((r) => r.id === pendingRunId) ?? runs[0];
       dispatch(setActiveTab(target.id));
       selectTab(target.id);
     }
-  }, [showTabs, runs, selectedFile, activeTab, pendingRunId, dispatch, selectTab]);
+  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, activeRun?.id, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
 
-  // Tab-less modes: "editor" is only ever the post-reset placeholder (workspace,
-  // provider, and space switches all hard-reset to it). Promote it to the
-  // new-chat screen — unless a sidebar chat click is about to claim the view.
+  // Tab-less modes use "editor" as the neutral placeholder for a new chat.
   useEffect(() => {
-    if (showTabs) return;
+    if (activeViewKey !== viewKey || showTabs) return;
     if (activeTab === "editor" && pendingRunId === null && !routeRunId) {
       dispatch(openNewRunTab());
     }
-  }, [showTabs, activeTab, pendingRunId, routeRunId, dispatch]);
+  }, [activeViewKey, viewKey, showTabs, activeTab, pendingRunId, routeRunId, dispatch]);
 
   useEffect(() => {
     const visibleCollectionId = collectionIdForVisibleRun(
@@ -230,36 +264,6 @@ export function useWorkspacePage(providerId: string) {
   // the target is simply that run, as before.
   // The override is stamped with the tab/workspace it was chosen on and
   // simply ignored once either changes — no reset effect needed.
-  const [composeTargetOverride, setComposeTargetOverride] = useState<{
-    tab: string;
-    workspace: string | undefined;
-    value: string | "new";
-  } | null>(null);
-  const overrideValue =
-    composeTargetOverride &&
-    composeTargetOverride.tab === activeTab &&
-    composeTargetOverride.workspace === workspaceId
-      ? composeTargetOverride.value
-      : null;
-
-  const isRetargetable = activeTab === "editor" && runs.length > 0;
-  const fallbackTargetRunId =
-    previousNonEditorTab &&
-    isRunTab(previousNonEditorTab) &&
-    runs.some((r) => r.id === previousNonEditorTab)
-      ? previousNonEditorTab
-      : null;
-  const composeTargetRunId = isRunTab(activeTab)
-    ? activeTab
-    : !isRetargetable || overrideValue === "new"
-      ? null
-      : overrideValue && runs.some((r) => r.id === overrideValue)
-        ? overrideValue
-        : fallbackTargetRunId;
-  const composeTargetRun = composeTargetRunId
-    ? runs.find((r) => r.id === composeTargetRunId)
-    : undefined;
-
   useEffect(() => {
     const checkResume = async () => {
       if (
@@ -282,7 +286,7 @@ export function useWorkspacePage(providerId: string) {
     setGoal("");
     setUploadedFiles([]);
     clearContext();
-  }, [clearContext]);
+  }, [setGoal, setUploadedFiles, clearContext]);
 
   const handleExecute = useCallback(async () => {
     if (mode === "developer" && !workspaceId) {
@@ -335,6 +339,12 @@ export function useWorkspacePage(providerId: string) {
         selectedCollectionId,
       );
       if (newRunId) {
+        if (!composeTargetRunId) {
+          await (window as any).api?.browser?.reassignTabs?.(
+            ownerKey,
+            composerOwnerKey(contextParts, newRunId),
+          );
+        }
         clearInputState();
         dispatch(setActiveTab(newRunId));
         if (mode !== "developer") {
@@ -362,6 +372,8 @@ export function useWorkspacePage(providerId: string) {
     providerId,
     selectedCollectionId,
     navigate,
+    ownerKey,
+    contextParts,
   ]);
 
   // Auto-execute when pendingAutoExecute was set (e.g. "Review Changes" button, suggestion chips)
@@ -387,6 +399,10 @@ export function useWorkspacePage(providerId: string) {
             selectedCollectionId,
           );
           if (newRunId) {
+            await (window as any).api?.browser?.reassignTabs?.(
+              ownerKey,
+              composerOwnerKey(contextParts, newRunId),
+            );
             clearInputState();
             dispatch(setActiveTab(newRunId));
             if (mode !== "developer") navigate(`/code/runs/${newRunId}`);
@@ -395,7 +411,7 @@ export function useWorkspacePage(providerId: string) {
       };
       run();
     }
-  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState]);
+  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
 
   const runLabel = (r: { title?: string; goal: string }) =>
     r.title?.trim() ? r.title : r.goal;

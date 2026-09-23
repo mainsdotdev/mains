@@ -1,5 +1,4 @@
 import type { CSSProperties, ReactNode } from "react";
-import { useTheme } from "@/hooks/use-theme";
 import { useCapabilities } from "@/lib/platform";
 
 interface MainLayoutProps {
@@ -7,21 +6,9 @@ interface MainLayoutProps {
 }
 
 export function MainLayout({ children }: MainLayoutProps) {
-  const theme = useTheme();
-
-  const backgroundStyle = theme.backgroundColor?.startsWith("linear-gradient")
-    ? { background: theme.backgroundColor }
-    : { backgroundColor: theme.backgroundColor };
-
   return (
-    <div
-      className="app-root flex flex-col h-screen"
-      style={{
-        ...backgroundStyle,
-        transition:
-          "background 300ms ease-in-out, background-color 300ms ease-in-out",
-      }}
-    >
+    // `--app-frame` comes from index.css, or from the app theme in force.
+    <div className="app-root flex flex-col h-screen bg-(--app-frame) transition-colors duration-300 ease-in-out">
       <DragRegion />
       <div className="flex h-full">{children}</div>
     </div>

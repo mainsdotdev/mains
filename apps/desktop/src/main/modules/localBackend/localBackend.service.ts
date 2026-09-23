@@ -1,19 +1,26 @@
 import { networkInterfaces } from "node:os";
 import { powerMonitor, powerSaveBlocker } from "electron";
-import { emit } from "../../ipc-kit";
-import { startWsHost, type WsHost } from "../../ipc-kit/ws-server-host";
-import { generateToken } from "../../ipc-kit/ws-auth";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
-import { resolveWebRoot } from "../../web-root";
-import { imageProxyService } from "../imageProxy/imageProxy.service";
-import { serveLocalImage, serveLocalDocument } from "../imageProxy";
-import { tailscaleService } from "../tailscale";
-import { appSettingsService } from "../appSettings";
+import { emit } from "@mains/backend/ipc-kit";
+import {
+  startWsHost,
+  type WebLoginLink,
+  type WsHost,
+} from "@mains/backend/ipc-kit/ws-server-host";
+import { generateToken } from "@mains/backend/ipc-kit/ws-auth";
+import { CHANNELS } from "@mains/contracts/channels";
+import { resolveWebRoot } from "@mains/backend/web-root";
+import {
+  imageProxyService,
+  serveLocalImage,
+  serveLocalDocument,
+} from "@mains/backend/modules/imageProxy";
+import { tailscaleService } from "@mains/backend/modules/tailscale";
+import { appSettingsService } from "@mains/backend/modules/appSettings";
 import {
   backendService,
   type PairedDevice,
   type PairingCode,
-} from "../backend";
+} from "@mains/backend/modules/backend";
 import { shouldKeepRemoteHostAwake } from "./localBackend.sleep";
 
 /**
@@ -42,8 +49,6 @@ export interface BackendAddress {
   label: string;
   /** http://<host>:<port> */
   url: string;
-  /** http://<host>:<port>/?token=… — open in a browser. */
-  webUrl: string;
   /** ws://<host>:<port> — paste into another mains' Direct URL field. */
   wsUrl: string;
 }
@@ -62,7 +67,6 @@ export interface LocalBackendStatus {
   tailscale: boolean;
   magicDnsName: string | null;
   tailscaleHttpsUrl: string | null;
-  tailscaleWebUrl: string | null;
   /** wss://<magicdns> — paste into another mains' Direct URL field. */
   tailscaleWsUrl: string | null;
   /** False when no built web renderer was found (run `npm run build:web`). */
@@ -155,11 +159,9 @@ function localIps(): { lan: string | null; tailscale: string | null } {
 
 function buildAddresses(): BackendAddress[] {
   if (!wsHost) return [];
-  const q = sessionToken ? `?token=${sessionToken}` : "";
   const mk = (label: string, host: string): BackendAddress => ({
     label,
     url: `http://${host}:${port}`,
-    webUrl: `http://${host}:${port}/${q}`,
     wsUrl: `ws://${host}:${port}`,
   });
   const list = [mk("This machine", "127.0.0.1")];
@@ -184,16 +186,19 @@ function buildStatus(): LocalBackendStatus {
     tailscale: tailscale !== null,
     magicDnsName: tailscale?.magicDnsName ?? null,
     tailscaleHttpsUrl: httpsUrl,
-    tailscaleWebUrl: httpsUrl
-      ? `${httpsUrl}/${sessionToken ? `?token=${sessionToken}` : ""}`
-      : null,
     tailscaleWsUrl: httpsUrl ? httpsUrl.replace(/^https:/, "wss:") : null,
     webUiAvailable: webRoot() !== null,
     keepAwakeForRemoteAccess,
   };
 }
 
-/** Let the desktop UI refresh its paired-phone list (a pairing, a connection, a revoke). */
+/** A paired device as the desktop's list shows it. */
+export type LocalPairedDevice = PairedDevice & { connected: boolean };
+
+/**
+ * Let the desktop UI refresh its device list: a pairing, a device connecting
+ * or dropping off, a rename, a revoke.
+ */
 function notifyPairedDevicesChanged(): void {
   emit(CHANNELS.localBackend.pairedDevicesChanged, {});
 }
@@ -242,19 +247,18 @@ async function reconcileHost(): Promise<void> {
       fetchProxiedImage: (url) => imageProxyService.proxyImage(url),
       serveLocalImage: (url) => serveLocalImage(url),
       serveLocalDocument: (url) => serveLocalDocument(url),
-      // Paired phones authenticate with their own token instead of the shared
-      // session token, and new ones pair through `POST /pair`.
-      verifyDeviceToken: async (token) => {
-        const device = await backendService.verifyDeviceToken(token);
-        if (device) notifyPairedDevicesChanged();
-        return device;
-      },
+      // Paired devices authenticate with their own token instead of the shared
+      // session token, and new ones pair through `POST /pair`. The last-seen
+      // stamp verifying records reaches the list with the connection change
+      // below, once the socket is open and counts as connected.
+      verifyDeviceToken: (token) => backendService.verifyDeviceToken(token),
       pairDevice: async (body) => {
         const result = await backendService.pairDevice(body);
         notifyPairedDevicesChanged();
         return result;
       },
       commandReceipts: backendService.commandReceipts,
+      onDeviceConnectionChange: () => notifyPairedDevicesChanged(),
     });
     bindHost = desiredBind;
     port = wsHost.port;
@@ -369,7 +373,7 @@ export const localBackendService = {
    * Replace the shared session token. A running host is restarted on the same
    * port with the new one — the token is only checked at the WS handshake, so
    * a restart is what actually drops clients that authenticated with the old
-   * token. Paired phones hold their own device tokens and simply reconnect;
+   * token. Paired devices hold their own device tokens and simply reconnect;
    * Tailscale Serve keeps proxying to the same port.
    */
   async rotateToken(): Promise<LocalBackendStatus> {
@@ -390,13 +394,45 @@ export const localBackendService = {
    */
   async createPairingCode(): Promise<PairingCode> {
     if (!wsHost) {
-      throw new Error("Turn on remote access before pairing a phone");
+      throw new Error("Turn on remote access before pairing a device");
     }
     return backendService.createPairingCode(pairingEndpoints());
   },
 
-  listPairedDevices(): Promise<PairedDevice[]> {
-    return backendService.listPairedDevices();
+  /** Mint a five-minute, one-use browser login for one advertised origin. */
+  createWebLogin(baseUrl: string): WebLoginLink {
+    if (!wsHost) {
+      throw new Error("Turn on remote access before creating a browser login");
+    }
+    let origin: string;
+    try {
+      origin = new URL(baseUrl).origin;
+    } catch {
+      throw new Error("Invalid browser URL");
+    }
+    const allowed = new Set(buildAddresses().map((address) => address.url));
+    const status = buildStatus();
+    if (status.tailscaleHttpsUrl) allowed.add(status.tailscaleHttpsUrl);
+    if (!allowed.has(origin)) {
+      throw new Error("Browser login URL is not an advertised backend address");
+    }
+    return wsHost.createWebLogin(origin);
+  },
+
+  /** The paired devices, each marked with whether it holds a socket now. */
+  async listPairedDevices(): Promise<LocalPairedDevice[]> {
+    const devices = await backendService.listPairedDevices();
+    const connected = wsHost?.connectedDeviceIds() ?? new Set<string>();
+    return devices.map((device) => ({
+      ...device,
+      connected: connected.has(device.id),
+    }));
+  },
+
+  async renamePairedDevice(id: string, name: string): Promise<PairedDevice> {
+    const device = await backendService.renamePairedDevice(id, name);
+    notifyPairedDevicesChanged();
+    return device;
   },
 
   async revokePairedDevice(id: string): Promise<void> {

@@ -222,7 +222,7 @@ const api = {
     closeTunnel: (id: string) =>
       ipcRenderer.invoke(CHANNELS.ssh.closeTunnel, id),
   },
-  // Encrypted at-rest storage for direct-mode backend pairing tokens (local-only)
+  // Encrypted at-rest storage for direct-mode backend owner tokens (local-only)
   remoteBackends: {
     setToken: (id: string, token: string) =>
       ipcRenderer.invoke(CHANNELS.remoteBackends.setToken, id, token),
@@ -249,15 +249,20 @@ const api = {
         CHANNELS.localBackend.setKeepAwakeForRemoteAccess,
         enabled,
       ),
-    // Replace the shared token; clients using the old one are disconnected
+    // Replace the owner token; clients using the old one are disconnected
     rotateToken: () => ipcRenderer.invoke(CHANNELS.localBackend.rotateToken),
-    // Phone pairing — mint a QR code, list/revoke the phones that used one
+    // Mint a one-use browser login without putting the owner token in its URL.
+    createWebLogin: (baseUrl: string) =>
+      ipcRenderer.invoke(CHANNELS.localBackend.createWebLogin, baseUrl),
+    // Device pairing — mint a QR code; list, rename, revoke the devices that used one
     createPairingCode: () =>
       ipcRenderer.invoke(CHANNELS.localBackend.createPairingCode),
     listPairedDevices: () =>
       ipcRenderer.invoke(CHANNELS.localBackend.listPairedDevices),
     revokePairedDevice: (id: string) =>
       ipcRenderer.invoke(CHANNELS.localBackend.revokePairedDevice, id),
+    renamePairedDevice: (id: string, name: string) =>
+      ipcRenderer.invoke(CHANNELS.localBackend.renamePairedDevice, id, name),
     onPairedDevicesChanged: (callback: () => void) => {
       const listener = () => callback();
       ipcRenderer.on(CHANNELS.localBackend.pairedDevicesChanged, listener);
@@ -1062,8 +1067,15 @@ const api = {
 
   // Embedded browser panel operations
   browser: {
-    createTab: (url?: string) =>
-      ipcRenderer.invoke(CHANNELS.browser.createTab, url),
+    createTab: (url?: string, ownerKey?: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.createTab, url, ownerKey),
+    setContext: (ownerKey: string, showBlankTab = false) =>
+      ipcRenderer.invoke(CHANNELS.browser.setContext, ownerKey, showBlankTab),
+    reassignTabs: (fromOwnerKey: string, toOwnerKey: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.reassignTabs, fromOwnerKey, toOwnerKey),
+    listOwnerKeys: () => ipcRenderer.invoke(CHANNELS.browser.listOwnerKeys),
+    forgetContext: (target: { backendId: string; kind: "run" | "workspace"; id: string }) =>
+      ipcRenderer.invoke(CHANNELS.browser.forgetContext, target),
     closeTab: (tabId: string) =>
       ipcRenderer.invoke(CHANNELS.browser.closeTab, tabId),
     activateTab: (tabId: string) =>
@@ -1136,6 +1148,7 @@ const api = {
     },
     onStateChanged: (
       callback: (state: {
+        ownerKey: string;
         activeTabId: string;
         tabs: Array<{
           tabId: string;

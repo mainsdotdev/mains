@@ -407,7 +407,7 @@ export function RunView({
   }));
 
   const placeholder = !connected
-    ? "Connect to your Mac to continue this run"
+    ? "Connect to Mains on your computer to continue this run"
     : runIsLive
       ? "The agent is still working…"
       : !run

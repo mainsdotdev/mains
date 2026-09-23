@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { Button, Select, Text } from "@/components/ui";
+import { Button, Select, Text, toast } from "@/components/ui";
 import { SettingsSection, SettingsRow, SettingsDivider } from "./settings-layout";
 import { useCapabilities } from "@/lib/platform";
 import {
   ProviderAccountSection,
   ProviderCliSection,
-  ProviderColorSection,
   ProviderSettingsLayout,
   selectedSchemaLabel,
   useProviderSettings,
@@ -27,15 +26,46 @@ const SETTINGS_PERMISSION_MODES = CLAUDE_PERMISSION_MODES.map((mode) => ({
   description: mode.description,
 }));
 
-export default function ClaudeSettings(
-) {
+const OUTPUT_STYLE_OPTIONS = [
+  {
+    value: "",
+    label: "Use Claude Code settings",
+    description: "Use Claude Code's saved style; if none is set, use Default.",
+  },
+  {
+    value: "default",
+    label: "Default (standard)",
+    description: "Use the standard style, overriding saved Claude Code styles.",
+  },
+  {
+    value: "Proactive",
+    label: "Proactive",
+    description: "Start work promptly and make routine decisions",
+  },
+  {
+    value: "Concise",
+    label: "Concise",
+    description: "Lead with the result and keep responses short",
+  },
+  {
+    value: "Explanatory",
+    label: "Explanatory",
+    description: "Explain implementation choices as you work",
+  },
+  {
+    value: "Learning",
+    label: "Learning",
+    description: "Teach through small hands-on coding tasks",
+  },
+];
+
+export default function ClaudeSettings() {
   const {
     provider,
     isLoading,
     error,
     updating,
     config,
-    space,
     updateConfig,
   } = useProviderSettings<ClaudeCodeAdapterConfig>(PROVIDER_IDS.claude, "claude");
 
@@ -48,6 +78,15 @@ export default function ClaudeSettings(
   const cli = accountInfo?.cli;
 
   const permissionMode = config.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
+  const outputStyle = config.outputStyle ?? "";
+  const outputStyleOptions = OUTPUT_STYLE_OPTIONS.some(
+    (option) => option.value === outputStyle,
+  )
+    ? OUTPUT_STYLE_OPTIONS
+    : [
+        ...OUTPUT_STYLE_OPTIONS,
+        { value: outputStyle, label: outputStyle, description: "Custom output style" },
+      ];
   const selectedSchemaName = selectedSchemaLabel(config);
 
   const handlePermissionModeChange = async (mode: ClaudePermissionMode) => {
@@ -93,8 +132,6 @@ export default function ClaudeSettings(
         cli={cli}
       />
 
-      <ProviderColorSection space={space} />
-
       <SettingsSection  title="Configuration">
         <SettingsRow
           title="Permission Mode"
@@ -105,6 +142,38 @@ export default function ClaudeSettings(
             aria-label="Permission mode"
             options={SETTINGS_PERMISSION_MODES}
             onChange={handlePermissionModeChange}
+          />
+        </SettingsRow>
+        <SettingsDivider />
+        <SettingsRow
+          title="Output Style"
+          description={
+            <>
+              Changes to this setting apply to new chats. Existing chats keep
+              their selected style.{" "}
+              <a
+                href="https://code.claude.com/docs/en/output-styles"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 underline"
+              >
+                Learn about output styles
+              </a>
+            </>
+          }
+        >
+          <Select
+            value={outputStyle}
+            aria-label="Output style"
+            options={outputStyleOptions}
+            showOptionDescriptionTooltip
+            disabled={updating}
+            onChange={async (value) => {
+              if (await updateConfig({ outputStyle: value || null })) {
+                const label = outputStyleOptions.find((option) => option.value === value)?.label;
+                toast.success(`Output style: ${label ?? value}`);
+              }
+            }}
           />
         </SettingsRow>
         <SettingsDivider />
@@ -251,4 +320,3 @@ export default function ClaudeSettings(
     </ProviderSettingsLayout>
   );
 }
-

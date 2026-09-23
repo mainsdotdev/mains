@@ -9,16 +9,14 @@ const harness = vi.hoisted(() => ({
   registerDocument: vi.fn(),
 }));
 
-vi.mock("../runs/runs.repo", () => ({
-  runsRepo: { findRunById: harness.findRunById },
+vi.mock("@mains/backend/modules/runs", () => ({
+  runsService: {
+    getRunById: harness.findRunById,
+    continueRun: harness.continueRun,
+  },
 }));
-vi.mock("../runs", () => ({
-  runsService: { continueRun: harness.continueRun },
-}));
-vi.mock("../providers", () => ({
+vi.mock("@mains/backend/modules/providers", () => ({
   providersService: { getById: harness.getProviderById },
-}));
-vi.mock("../providers/adapters", () => ({
   createWorkAdapter: () => ({
     readMcpAppResource: harness.readResource,
     callMcpAppTool: harness.callTool,

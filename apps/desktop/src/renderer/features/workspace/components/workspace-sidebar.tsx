@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { FileExplorer } from "@/features/workspace/components/file-explorer";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
@@ -13,6 +13,8 @@ import {
   toggleExplorerPath,
   expandExplorerPaths,
   collapseAllExplorerPaths,
+  setWorkspaceSidebarTab,
+  type WorkspaceSidebarTab,
 } from "@/lib/redux/slices/workspaceSlice";
 import { setRightPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { useIsMobile } from "@/lib/platform";
@@ -25,8 +27,6 @@ import { useOpenDiffInEditor } from "@/features/workspace/hooks/use-open-diff-in
 import { Button, Text } from "@/components/ui";
 import { ActivitySection } from "./activity-section";
 
-type SidebarTab = "files" | "changes" | "reviews";
-
 export function WorkspaceSidebar() {
   const dispatch = useAppDispatch();
   // On mobile the panel is a full-screen overlay; opening a file/issue/signal
@@ -37,11 +37,14 @@ export function WorkspaceSidebar() {
     (state) => state.workspace.activeWorkspaceId,
   );
 
-  const [selectedTab, setSidebarTab] = useState<SidebarTab>("files");
+  const selectedTab = useAppSelector((state) => state.workspace.sidebarTab);
+  const setSidebarTab = useCallback((tab: WorkspaceSidebarTab) => {
+    dispatch(setWorkspaceSidebarTab(tab));
+  }, [dispatch]);
   const { showChangesTab } = useModeConfig();
   // Derived, not reset: if the mode hides Changes while it is selected,
   // Files takes over without touching state.
-  const sidebarTab: SidebarTab =
+  const sidebarTab: WorkspaceSidebarTab =
     !showChangesTab && selectedTab === "changes" ? "files" : selectedTab;
   const openDiffInEditor = useOpenDiffInEditor();
 

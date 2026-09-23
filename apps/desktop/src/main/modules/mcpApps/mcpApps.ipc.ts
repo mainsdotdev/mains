@@ -1,6 +1,6 @@
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
-import { handle } from "../../ipc-kit";
-import { ipcMain } from "../../ipc-kit/ipc-main";
+import { CHANNELS } from "@mains/contracts/channels";
+import { handle } from "@mains/backend/ipc-kit";
+import { ipcMain } from "@mains/backend/ipc-kit/ipc-main";
 import type {
   CallMcpAppToolPayload,
   ReadMcpAppResourcePayload,

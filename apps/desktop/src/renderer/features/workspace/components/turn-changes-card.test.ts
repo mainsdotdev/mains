@@ -37,6 +37,7 @@ const changes: RunTurnChanges = {
 
 function renderCard(
   respond: () => ServiceResponse<unknown> = () => ok({ ...changes, diffText: PATCH }),
+  cardChanges: RunTurnChanges = changes,
 ) {
   const invoke = vi.fn(async (channel: string) => {
     if (channel === CHANNELS.runTurns.getChangesDiff) return respond();
@@ -59,7 +60,12 @@ function renderCard(
       Provider,
       // Provider's props type requires `children`; they arrive as the third argument.
       { store } as ComponentProps<typeof Provider>,
-      createElement(TurnChangesCard, { runId: "r1", turnId: 41, changes, canUndo: true }),
+      createElement(TurnChangesCard, {
+        runId: "r1",
+        turnId: 41,
+        changes: cardChanges,
+        canUndo: true,
+      }),
     ),
   );
   return { invoke };
@@ -69,6 +75,32 @@ describe("TurnChangesCard", () => {
   afterEach(() => {
     cleanup();
     resetTransport();
+  });
+
+  it("keeps long file lists compact until expanded or reviewed", () => {
+    const manyChanges: RunTurnChanges = {
+      ...changes,
+      files: ["one.tsx", "two.tsx", "three.tsx", "four.tsx"].map((path) => ({
+        ...changes.files[0],
+        path,
+      })),
+    };
+    renderCard(undefined, manyChanges);
+
+    expect(screen.getByRole("button", { name: /one\.tsx/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /two\.tsx/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /three\.tsx/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 more files" }));
+    expect(screen.getByRole("button", { name: /three\.tsx/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /four\.tsx/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    expect(screen.queryByRole("button", { name: /three\.tsx/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    expect(screen.getByRole("button", { name: /three\.tsx/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /four\.tsx/ })).toBeTruthy();
   });
 
   it("shows the file's diff after Review", async () => {

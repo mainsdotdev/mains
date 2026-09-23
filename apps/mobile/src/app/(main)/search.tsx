@@ -178,7 +178,7 @@ export default function SearchScreen() {
           <SFSymbol name="magnifyingglass" size={36} tint={colors.label} />
           <ThemedText variant="subhead" style={{ textAlign: "center" }}>
             {!session.backend
-              ? "Pair a Mac to search its chats and workspaces."
+              ? "Pair a computer to search its chats and workspaces."
               : nothing
                 ? `Nothing matches “${query.trim()}”.`
                 : "Search chats and workspaces"}

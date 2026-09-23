@@ -3,7 +3,6 @@ import { SettingsSection, SettingsRow } from "./settings-layout";
 import {
   ProviderAccountSection,
   ProviderCliSection,
-  ProviderColorSection,
   ProviderSettingsLayout,
   useProviderSettings,
 } from "./provider-settings-shared";
@@ -20,7 +19,6 @@ export default function CursorSettings(
     isLoading,
     error,
     config,
-    space,
     updateConfig,
   } = useProviderSettings<CursorAdapterConfig>(PROVIDER_IDS.cursor, "cursor");
   const mode = config.mode ?? "agent";
@@ -70,8 +68,6 @@ export default function CursorSettings(
           </SettingsRow>
         )}
       </ProviderCliSection>
-
-      <ProviderColorSection space={space} />
 
       <SettingsSection title="Configuration">
         <SettingsRow title="Mode" description="How Cursor operates during runs">

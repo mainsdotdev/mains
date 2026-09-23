@@ -149,7 +149,7 @@ export default function PairScreen() {
         {entryMode === "manual" ? (
           <>
             <ThemedText variant="subhead">
-              On your Mac, use “Copy pairing link” next to the QR code, then paste it here.
+              On your computer, show a pairing link in Mains or run “mains pair”, then paste it here.
             </ThemedText>
             <TextInput
               accessibilityLabel="Pairing link"
@@ -189,7 +189,7 @@ export default function PairScreen() {
           <View style={{ gap: spacing.ms, paddingTop: spacing.lg }}>
             <ThemedText variant="title3">Camera access required</ThemedText>
             <ThemedText variant="subhead">
-              Mains only uses the camera to read a pairing code from your desktop.
+              Mains only uses the camera to read a pairing code shown on your computer.
             </ThemedText>
             {permission.canAskAgain && <Button title="Allow camera" onPress={requestPermission} />}
             <Button title="Paste a link instead" variant="ghost" onPress={() => switchTo("manual")} />
@@ -237,7 +237,7 @@ export default function PairScreen() {
         {/* App Review's way in, and anyone's: the whole app on sample data. */}
         <View style={{ gap: spacing.xs, paddingTop: spacing.lg }}>
           <ThemedText variant="footnote" style={{ color: colors.secondaryLabel, textAlign: "center" }}>
-            No Mac nearby? Explore Mains with sample data.
+            No computer to pair? Explore Mains with sample data.
           </ThemedText>
           <Button
             title="Try Demo Mode"
@@ -314,7 +314,7 @@ function StatusPanel({
           </ThemedText>
           <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: spacing.sm, paddingTop: spacing.xs }}>
             <Button title={retryLabel} variant="secondary" size="sm" onPress={onRetry} />
-            <Button title="Pair with this Mac" size="sm" onPress={() => onPair(scanState.link)} />
+            <Button title="Pair with this computer" size="sm" onPress={() => onPair(scanState.link)} />
           </View>
         </View>
       );

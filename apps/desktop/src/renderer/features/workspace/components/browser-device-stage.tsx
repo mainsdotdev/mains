@@ -243,7 +243,7 @@ export function BrowserDeviceStage({
               aria-label="Resize viewport from left"
               onPointerDown={(event) => startResize("left", event)}
               onKeyDown={(event) => handleKeyDown("left", event)}
-              className="pointer-events-auto absolute -left-4 top-0 flex h-full w-3 cursor-ew-resize items-center justify-center rounded-md outline-none hover:bg-primary-950/5 focus-visible:ring-2 focus-visible:ring-primary-500 dark:hover:bg-primary/10"
+              className="pointer-events-auto absolute -left-4 top-0 flex h-full w-3 cursor-ew-resize items-center justify-center rounded-md outline-none hover:bg-primary-950/5 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary/10"
             >
               <GripLines orientation="horizontal" />
             </button>
@@ -252,7 +252,7 @@ export function BrowserDeviceStage({
               aria-label="Resize viewport from right"
               onPointerDown={(event) => startResize("right", event)}
               onKeyDown={(event) => handleKeyDown("right", event)}
-              className="pointer-events-auto absolute -right-4 top-0 flex h-full w-3 cursor-ew-resize items-center justify-center rounded-md outline-none hover:bg-primary-950/5 focus-visible:ring-2 focus-visible:ring-primary-500 dark:hover:bg-primary/10"
+              className="pointer-events-auto absolute -right-4 top-0 flex h-full w-3 cursor-ew-resize items-center justify-center rounded-md outline-none hover:bg-primary-950/5 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary/10"
             >
               <GripLines orientation="horizontal" />
             </button>
@@ -261,7 +261,7 @@ export function BrowserDeviceStage({
               aria-label="Resize viewport from bottom"
               onPointerDown={(event) => startResize("bottom", event)}
               onKeyDown={(event) => handleKeyDown("bottom", event)}
-              className="pointer-events-auto absolute -bottom-5 left-0 flex h-4 w-full cursor-ns-resize items-center justify-center rounded-md outline-none hover:bg-primary-950/5 focus-visible:ring-2 focus-visible:ring-primary-500 dark:hover:bg-primary/10"
+              className="pointer-events-auto absolute -bottom-5 left-0 flex h-4 w-full cursor-ns-resize items-center justify-center rounded-md outline-none hover:bg-primary-950/5 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary/10"
             >
               <GripLines orientation="vertical" />
             </button>

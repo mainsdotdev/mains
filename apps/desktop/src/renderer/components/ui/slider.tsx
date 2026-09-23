@@ -110,7 +110,7 @@ export function Slider({
           "relative w-full min-w-50 overflow-hidden rounded-[10px] px-3 py-3.5",
           "bg-primary-950/5 dark:bg-primary/5 glass-outline",
           "flex items-center justify-between text-sm text-primary-900 dark:text-primary",
-          "has-focus-visible:ring-2 has-focus-visible:ring-primary-500 has-focus-visible:ring-offset-2",
+          "has-focus-visible:ring-2 has-focus-visible:ring-accent has-focus-visible:ring-offset-2",
           "shadow-(--shadow-inset-subtle) transition-all dark:shadow-(--shadow-inset-subtle-dark)",
           disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
         )}

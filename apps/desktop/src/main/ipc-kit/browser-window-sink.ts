@@ -1,5 +1,5 @@
 import { BrowserWindow } from "electron";
-import { registerEventSink, type EventSink } from "./event-bus";
+import { registerEventSink, type EventSink } from "@mains/backend/ipc-kit";
 
 /**
  * The local sink: broadcast every event to all open Electron BrowserWindows —

@@ -70,7 +70,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         // TestFlight stops asking about export compliance on every build.
         ITSAppUsesNonExemptEncryption: false,
         NSLocalNetworkUsageDescription:
-          "Mains connects to the companion app running on your Mac.",
+          "Mains connects to Mains running on your computer over the local network.",
         NSAppTransportSecurity: allowsDevelopmentLan
           ? { NSAllowsLocalNetworking: true }
           : undefined,
@@ -126,7 +126,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-secure-store",
         {
-          // The pairing token uses the Keychain without biometric gating.
+          // The paired-device token uses the Keychain without biometric gating.
           // Avoid advertising a Face ID permission the app never requests.
           faceIDPermission: false,
         },

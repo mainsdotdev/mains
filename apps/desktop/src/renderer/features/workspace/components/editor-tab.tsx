@@ -1,5 +1,7 @@
 import { Code } from "@/components/ui/icons/space";
+import { Picture } from "@/components/ui/icons";
 import { Text } from "@/components/ui";
+import { isPreviewableImagePath } from "../lib/previewable-image";
 import { BaseTab } from "./base-tab";
 
 interface EditorTabProps {
@@ -12,6 +14,7 @@ interface EditorTabProps {
 }
 
 export function EditorTab({ isActive, isFirst, onClick, hasFile, fileName, onClose }: EditorTabProps) {
+  const Icon = fileName && isPreviewableImagePath(fileName) ? Picture : Code;
   return (
     <BaseTab
       isActive={isActive}
@@ -19,7 +22,7 @@ export function EditorTab({ isActive, isFirst, onClick, hasFile, fileName, onClo
       onClick={onClick}
       onClose={onClose}
       tooltip={fileName || "Editor"}
-      icon={<Code className="size-4 shrink-0 text-primary-800 dark:text-primary-200 hover:text-primary-900 dark:hover:text-primary-100 " />}
+      icon={<Icon className="size-4 shrink-0 text-primary-800 dark:text-primary-200 hover:text-primary-900 dark:hover:text-primary-100 " />}
       label={
         <Text
           as="span"

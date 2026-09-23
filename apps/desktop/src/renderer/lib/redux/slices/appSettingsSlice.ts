@@ -11,10 +11,18 @@ import {
   DEFAULT_INTERFACE_FONT_SIZE,
   clampCodeFontSize,
   clampInterfaceFontSize,
+  isFontFamily,
 } from "@/lib/appearance-fonts";
 import type { DocType } from "@/lib/document-viewer";
+import {
+  DEFAULT_APP_THEME_SETTINGS,
+  applyThemeChoice,
+  type AppThemeSettings,
+  type ThemeChoiceChange,
+} from "@/lib/app-themes";
 import { isNewRunTab } from "@/features/workspace/lib/repo-utils";
 import { openNewRunTab, setActiveTab } from "./workspaceSlice";
+import { isWorkspaceDraftOwnerKey, runOwnerKey } from "../../../../shared/ui-state-keys";
 
 /** The document currently shown in the document viewer panel. */
 export interface DocumentViewerDoc {
@@ -34,10 +42,14 @@ export interface AppSettingsState {
   sidebarCollapsed: boolean;
   rightPanelOpen: boolean;
   browserPanelOpen: boolean;
+  activeRightPaneContextKey: string;
+  rightPaneByContext: Record<string, "none" | "workspace" | "browser" | "document">;
+  /** Loaded documents only live for this app session. */
+  documentViewerDocByContext: Record<string, DocumentViewerDoc>;
   /**
    * Whether the session panel (environment / sources / deliverables) is open.
-   * Deliberately not persisted: it reads the run open in the workspace, and
-   * that isn't restored on boot — reopening onto an empty panel would confuse.
+   * Deliberately not persisted: it is a temporary overlay and closes when
+   * the conversation changes.
    */
   sessionPanelOpen: boolean;
   /**
@@ -63,10 +75,16 @@ export interface AppSettingsState {
   tasksDetailWidth: number;
   /** Light / dark / follow-the-OS. Applied to `<html class="dark">`. */
   theme: ThemePreference;
+  /** App themes — the default and per-provider overrides (`lib/app-themes.ts`). */
+  appTheme: AppThemeSettings;
   /** Root font size in pixels. Rescales every rem-based dimension. */
   interfaceFontSize: number;
   /** Code / diff font size in pixels. Absolute so it never scales twice. */
   codeFontSize: number;
+  /** UI font as a CSS family; `""` is Inter (`lib/appearance-fonts.ts`). */
+  uiFontFamily: string;
+  /** Code font as a CSS family; `""` is the system monospace. */
+  codeFontFamily: string;
   /** Whether the bottom terminal drawer is open. */
   bottomTerminalOpen: boolean;
   /** How the sidebar workspace list is grouped. */
@@ -81,6 +99,9 @@ const initialState: AppSettingsState = {
   sidebarCollapsed: false,
   rightPanelOpen: false,
   browserPanelOpen: false,
+  activeRightPaneContextKey: "default",
+  rightPaneByContext: {},
+  documentViewerDocByContext: {},
   sessionPanelOpen: false,
   subagentPanelCollapsed: false,
   onboardingCompleted: false,
@@ -92,8 +113,11 @@ const initialState: AppSettingsState = {
   documentViewerDoc: null,
   tasksDetailWidth: TASKS_DETAIL_WIDTH_DEFAULT,
   theme: "system",
+  appTheme: DEFAULT_APP_THEME_SETTINGS,
   interfaceFontSize: DEFAULT_INTERFACE_FONT_SIZE,
   codeFontSize: DEFAULT_CODE_FONT_SIZE,
+  uiFontFamily: "",
+  codeFontFamily: "",
   bottomTerminalOpen: false,
   workspaceListGrouping: "none",
   workspaceGroupExpanded: {},
@@ -104,6 +128,62 @@ const appSettingsSlice = createSlice({
   name: "appSettings",
   initialState,
   reducers: {
+    setRightPaneContextKey: (state, action: PayloadAction<string>) => {
+      const next = action.payload;
+      if (state.activeRightPaneContextKey === next) return;
+      const previousPane = state.documentViewerOpen && state.documentViewerDoc
+        ? "document"
+        : state.browserPanelOpen
+        ? "browser"
+        : state.rightPanelOpen
+          ? "workspace"
+          : "none";
+      state.rightPaneByContext[state.activeRightPaneContextKey] = previousPane;
+      if (previousPane === "document" && state.documentViewerDoc) {
+        state.documentViewerDocByContext[state.activeRightPaneContextKey] = state.documentViewerDoc;
+      } else {
+        delete state.documentViewerDocByContext[state.activeRightPaneContextKey];
+      }
+      state.activeRightPaneContextKey = next;
+      const pane = state.rightPaneByContext[next] ?? "none";
+      state.rightPanelOpen = pane === "workspace";
+      state.browserPanelOpen = pane === "browser";
+      state.documentViewerDoc = pane === "document"
+        ? state.documentViewerDocByContext[next] ?? null
+        : null;
+      state.documentViewerOpen = !!state.documentViewerDoc;
+      state.sessionPanelOpen = false;
+    },
+    forgetRunRightPane: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
+      const key = runOwnerKey(action.payload.backendId, action.payload.runId);
+      delete state.rightPaneByContext[key];
+      delete state.documentViewerDocByContext[key];
+      if (state.activeRightPaneContextKey === key) {
+        state.activeRightPaneContextKey = "default";
+        state.rightPanelOpen = false;
+        state.browserPanelOpen = false;
+        state.documentViewerOpen = false;
+        state.documentViewerDoc = null;
+        state.sessionPanelOpen = false;
+      }
+    },
+    forgetWorkspaceRightPanes: (state, action: PayloadAction<{ backendId: string; workspaceId: string }>) => {
+      const { backendId, workspaceId } = action.payload;
+      for (const key of Object.keys(state.rightPaneByContext)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.rightPaneByContext[key];
+      }
+      for (const key of Object.keys(state.documentViewerDocByContext)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.documentViewerDocByContext[key];
+      }
+      if (isWorkspaceDraftOwnerKey(state.activeRightPaneContextKey, backendId, workspaceId)) {
+        state.activeRightPaneContextKey = "default";
+        state.rightPanelOpen = false;
+        state.browserPanelOpen = false;
+        state.documentViewerOpen = false;
+        state.documentViewerDoc = null;
+        state.sessionPanelOpen = false;
+      }
+    },
     setSidebarCollapsed: (state, action: PayloadAction<boolean>) => {
       state.sidebarCollapsed = action.payload;
     },
@@ -149,11 +229,23 @@ const appSettingsSlice = createSlice({
     setTheme: (state, action: PayloadAction<ThemePreference>) => {
       state.theme = action.payload;
     },
+    setThemeChoice: (state, action: PayloadAction<ThemeChoiceChange>) => {
+      state.appTheme = applyThemeChoice(state.appTheme, action.payload);
+    },
     setInterfaceFontSize: (state, action: PayloadAction<number>) => {
       state.interfaceFontSize = clampInterfaceFontSize(action.payload);
     },
     setCodeFontSize: (state, action: PayloadAction<number>) => {
       state.codeFontSize = clampCodeFontSize(action.payload);
+    },
+    setFontFamily: (
+      state,
+      action: PayloadAction<{ target: "ui" | "code"; family: string }>,
+    ) => {
+      const { target, family } = action.payload;
+      if (!isFontFamily(family)) return;
+      if (target === "ui") state.uiFontFamily = family;
+      else state.codeFontFamily = family;
     },
     setBottomTerminalOpen: (state, action: PayloadAction<boolean>) => {
       state.bottomTerminalOpen = action.payload;
@@ -195,6 +287,9 @@ const appSettingsSlice = createSlice({
 });
 
 export const {
+  setRightPaneContextKey,
+  forgetRunRightPane,
+  forgetWorkspaceRightPanes,
   setSidebarCollapsed,
   setBrowserPanelOpen,
   setRightPanelOpen,
@@ -209,8 +304,10 @@ export const {
   setTasksDetailWidth,
   setDocumentViewerDoc,
   setTheme,
+  setThemeChoice,
   setInterfaceFontSize,
   setCodeFontSize,
+  setFontFamily,
   setBottomTerminalOpen,
   setWorkspaceListGrouping,
   setWorkspaceGroupExpanded,

@@ -146,7 +146,7 @@ export function SegmentedTabs<T extends string>({
     if (variant === "pill") {
       return cn(
         "relative z-(--z-base) flex-1 text-center px-3 py-1 text-xs font-medium rounded-[10px] whitespace-nowrap transition-colors duration-300",
-        "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 focus-visible:ring-offset-0",
+        "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent focus-visible:ring-offset-0",
         disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
         isActive
           ? "text-primary-900 dark:text-primary-100"
@@ -156,7 +156,7 @@ export function SegmentedTabs<T extends string>({
     // plain — the sliding indicator owns the active background.
     return cn(
       "relative z-(--z-base) px-2.5 py-1 text-s rounded-xl whitespace-nowrap transition-colors duration-300",
-      "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 focus-visible:ring-offset-0",
+      "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent focus-visible:ring-offset-0",
       disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
       isActive
         ? "text-primary-900 dark:text-primary-100"

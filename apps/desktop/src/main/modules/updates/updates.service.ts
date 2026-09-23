@@ -1,6 +1,6 @@
 import { app, autoUpdater } from "electron";
 import { updateElectronApp, UpdateSourceType } from "update-electron-app";
-import { emit } from "../../ipc-kit";
+import { emit } from "@mains/backend/ipc-kit";
 import type { UpdateState } from "./updates.dto";
 
 // ─────────────────────────────────────────────────────────────

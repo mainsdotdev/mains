@@ -5,7 +5,6 @@ import {
   Button,
   DropdownMenu,
   DropdownMenuItem,
-  DropdownMenuSub,
   Input,
   Modal,
 } from "@/components/ui";
@@ -14,19 +13,13 @@ import {
   Clipboard,
   Edit,
   Fork,
-  OpenWith,
   Option,
   Pin,
   Trash,
 } from "@/components/ui/icons";
 import { useAppSelector } from "@/lib/redux/hooks";
-import {
-  useGetAccountQuery,
-  useGetRunByIdQuery,
-  useListCollectionsQuery,
-} from "@/lib/redux/api";
+import { useGetRunByIdQuery } from "@/lib/redux/api";
 import { useModeConfig } from "@/hooks/use-mode-config";
-import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import { isRunTab } from "../lib/repo-utils";
 import { useChatActions } from "../hooks/use-chat-actions";
 
@@ -81,7 +74,6 @@ export function ChatActionsMenu() {
   const sessionRunId = useAppSelector((state) =>
     isRunTab(state.workspace.activeTab) ? state.workspace.activeTab : null,
   );
-  const { data: account } = useGetAccountQuery();
   // `currentData`, never `data`: RTK Query's `data` keeps the last successful
   // result once the hook skips or its arg changes, so closing a chat for the
   // new-chat screen would leave this menu on screen — still pointing at the
@@ -89,14 +81,9 @@ export function ChatActionsMenu() {
   const { currentData: run } = useGetRunByIdQuery(sessionRunId ?? "", {
     skip: !sessionRunId,
   });
-  const { data: collections } = useListCollectionsQuery(
-    { accountId: account?.id ?? "" },
-    { skip: !account },
-  );
   const {
     renameChat,
     toggleChatPin,
-    moveChat,
     forkChat,
     copyLastMessage,
     archiveChat,
@@ -169,39 +156,6 @@ export function ChatActionsMenu() {
           <Pin className="size-3.5" />
           <span>{isPinned ? "Unpin" : "Pin"}</span>
         </DropdownMenuItem>
-        <DropdownMenuSub
-          label={
-            <>
-              <OpenWith className="size-3.5" />
-              <span>Move</span>
-            </>
-          }
-        >
-          <DropdownMenuItem
-            selected={run.collectionId === null}
-            indicator="none"
-            onClick={act(() => void moveChat(run, null))}
-          >
-            {/* Holds the icon column open so every label starts at the same
-                place — "no project" has no icon to show. */}
-            <span className="size-3.5 shrink-0" />
-            <span>No project</span>
-          </DropdownMenuItem>
-          {(collections ?? []).map((collection) => (
-            <DropdownMenuItem
-              key={collection.id}
-              selected={run.collectionId === collection.id}
-              indicator="none"
-              onClick={act(() => void moveChat(run, collection.id))}
-            >
-              <ProjectIcon
-                icon={collection.icon}
-                projectName={collection.name}
-              />
-              <span className="truncate">{collection.name}</span>
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuSub>
         <MenuSeparator />
         <DropdownMenuItem onClick={act(() => void forkChat(run))}>
           <Fork className="size-3.5" />

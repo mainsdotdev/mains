@@ -70,7 +70,7 @@ function TemplateRow({
   return (
     <Button
       onClick={onSelect}
-      className="group flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left hover:bg-primary-200/40 dark:hover:bg-primary-800/40 focus-visible:ring-2 focus-visible:ring-primary-500"
+      className="group flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left hover:bg-primary-200/40 dark:hover:bg-primary-800/40 focus-visible:ring-2 focus-visible:ring-accent"
     >
       {/* The plus takes the icon's place on hover/focus — same slot, crossfaded. */}
       <span aria-hidden className="relative size-4 shrink-0">

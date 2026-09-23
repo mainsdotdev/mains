@@ -14,6 +14,8 @@ const DiffViewer = lazy(() =>
   import("./diff-viewer").then((m) => ({ default: m.DiffViewer })),
 );
 
+const COLLAPSED_FILE_COUNT = 2;
+
 const IMAGE_EXTENSIONS = new Set([
   "avif",
   "bmp",
@@ -151,6 +153,7 @@ export function TurnChangesCard({
   const [openPaths, setOpenPaths] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const [filesExpanded, setFilesExpanded] = useState(false);
   // Finished runs don't re-sync their turns, so a successful undo is also held
   // locally until the next load brings `undoneAt` back from the row.
   const [undoneLocally, setUndoneLocally] = useState(false);
@@ -179,6 +182,10 @@ export function TurnChangesCard({
   const allOpen = files.length > 0 && files.every((f) => openPaths.has(f.path));
   const singleFileOpen = files.length === 1 && openPaths.has(files[0].path);
   const hasContentBelowHeader = files.length > 1 || singleFileOpen;
+  const visibleFiles = filesExpanded
+    ? files
+    : files.slice(0, COLLAPSED_FILE_COUNT);
+  const hiddenFileCount = files.length - COLLAPSED_FILE_COUNT;
   const binaryFiles = files.filter((file) => file.binary);
   const allFilesBinary =
     files.length > 0 && binaryFiles.length === files.length;
@@ -207,8 +214,26 @@ export function TurnChangesCard({
       return next;
     });
 
-  const toggleReview = () =>
-    setOpenPaths(allOpen ? new Set() : new Set(files.map((f) => f.path)));
+  const toggleReview = () => {
+    if (allOpen) {
+      setOpenPaths(new Set());
+    } else {
+      setFilesExpanded(true);
+      setOpenPaths(new Set(files.map((f) => f.path)));
+    }
+  };
+
+  const toggleFileList = () => {
+    if (filesExpanded) {
+      const collapsedPaths = new Set(
+        files.slice(0, COLLAPSED_FILE_COUNT).map((file) => file.path),
+      );
+      setOpenPaths(
+        (prev) => new Set([...prev].filter((path) => collapsedPaths.has(path))),
+      );
+    }
+    setFilesExpanded(!filesExpanded);
+  };
 
   const handleUndo = async () => {
     try {
@@ -277,7 +302,7 @@ export function TurnChangesCard({
 
       {files.length > 1 ? (
         <div className="max-h-[70vh] overflow-y-auto rounded-b-2xl border-x border-b border-primary-200 dark:border-primary-800">
-          {files.map((file) => {
+          {visibleFiles.map((file) => {
             const { dir, name } = splitPath(file.path);
             const dot = name.lastIndexOf(".");
             const extension = dot > 0 ? name.slice(dot + 1) : undefined;
@@ -329,6 +354,17 @@ export function TurnChangesCard({
               </div>
             );
           })}
+          {hiddenFileCount > 0 && (
+            <Button
+              onClick={toggleFileList}
+              aria-expanded={filesExpanded}
+              className="w-full border-t border-primary-200/60 px-3 py-2 text-left text-xs text-primary-600 hover:bg-primary-100/95 dark:border-primary-800/60 dark:text-primary-400 dark:hover:bg-primary-900/95"
+            >
+              {filesExpanded
+                ? "Show less"
+                : `Show ${hiddenFileCount} more ${hiddenFileCount === 1 ? "file" : "files"}`}
+            </Button>
+          )}
         </div>
       ) : (
         files[0] &&

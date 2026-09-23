@@ -3,7 +3,6 @@ import { SettingsSection, SettingsRow, SettingsDivider } from "./settings-layout
 import { useCapabilities } from "@/lib/platform";
 import {
   ProviderCliSection,
-  ProviderColorSection,
   ProviderSettingsLayout,
   ProviderUsageSection,
   useProviderSettings,
@@ -19,7 +18,7 @@ import { getProviderVariant } from "@/lib/provider-variants";
 
 export default function CopilotSettings(
 ) {
-  const { provider, isLoading, error, space } = useProviderSettings<CopilotAdapterConfig>(
+  const { provider, isLoading, error } = useProviderSettings<CopilotAdapterConfig>(
     PROVIDER_IDS.copilot,
     "copilot",
   );
@@ -81,8 +80,6 @@ export default function CopilotSettings(
         cli={cli}
         buttonVariant="secondary"
       />
-
-      <ProviderColorSection space={space} />
 
       {revealInFolder && (
         <SettingsSection title="Capabilities">
