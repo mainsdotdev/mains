@@ -1,4 +1,5 @@
 import { isRunTab } from "./repo-utils";
+import { runOwnerKey } from "../../../../shared/ui-state-keys";
 
 interface UiContextParts {
   backendId: string | null;
@@ -26,7 +27,7 @@ export function composerOwnerKey(
   runId: string | null,
 ): string {
   const backend = parts.backendId ?? "local";
-  if (runId && isRunTab(runId)) return JSON.stringify([backend, "run", runId]);
+  if (runId && isRunTab(runId)) return runOwnerKey(backend, runId);
   return JSON.stringify([
     backend,
     "draft",

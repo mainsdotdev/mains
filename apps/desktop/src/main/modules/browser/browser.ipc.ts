@@ -50,6 +50,17 @@ function requireOwnerKey(input: unknown): string {
   return input;
 }
 
+function requireUiContextTarget(input: unknown): { backendId: string; kind: "run" | "workspace"; id: string } {
+  if (!input || typeof input !== "object") throw new Error("Invalid UI context");
+  const target = input as Record<string, unknown>;
+  if (
+    typeof target.backendId !== "string" || !target.backendId || target.backendId.length > 1024 ||
+    typeof target.id !== "string" || !target.id || target.id.length > 1024 ||
+    (target.kind !== "run" && target.kind !== "workspace")
+  ) throw new Error("Invalid UI context");
+  return { backendId: target.backendId, kind: target.kind, id: target.id };
+}
+
 function requireDownloadId(input: unknown): string {
   if (typeof input !== "string" || !input.trim()) {
     throw new Error("downloadId must be a string");
@@ -233,6 +244,14 @@ export function registerBrowserIpc(): void {
       browserService.reassignTabs(requireOwnerKey(fromOwnerKey), requireOwnerKey(toOwnerKey))),
   );
   ipcMain.handle(
+    CHANNELS.browser.listOwnerKeys,
+    handle(() => browserService.listOwnerKeys()),
+  );
+  ipcMain.handle(
+    CHANNELS.browser.forgetContext,
+    handle((target: unknown) => browserService.forgetContext(requireUiContextTarget(target))),
+  );
+  ipcMain.handle(
     CHANNELS.browser.closeTab,
     handle((tabId: unknown) => browserService.closeTab(requireTabId(tabId))),
   );
@@ -409,6 +428,8 @@ export function unregisterBrowserIpc(): void {
     CHANNELS.browser.createTab,
     CHANNELS.browser.setContext,
     CHANNELS.browser.reassignTabs,
+    CHANNELS.browser.listOwnerKeys,
+    CHANNELS.browser.forgetContext,
     CHANNELS.browser.closeTab,
     CHANNELS.browser.activateTab,
     CHANNELS.browser.attach,

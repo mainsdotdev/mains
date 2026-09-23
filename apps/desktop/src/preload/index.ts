@@ -1073,6 +1073,9 @@ const api = {
       ipcRenderer.invoke(CHANNELS.browser.setContext, ownerKey, showBlankTab),
     reassignTabs: (fromOwnerKey: string, toOwnerKey: string) =>
       ipcRenderer.invoke(CHANNELS.browser.reassignTabs, fromOwnerKey, toOwnerKey),
+    listOwnerKeys: () => ipcRenderer.invoke(CHANNELS.browser.listOwnerKeys),
+    forgetContext: (target: { backendId: string; kind: "run" | "workspace"; id: string }) =>
+      ipcRenderer.invoke(CHANNELS.browser.forgetContext, target),
     closeTab: (tabId: string) =>
       ipcRenderer.invoke(CHANNELS.browser.closeTab, tabId),
     activateTab: (tabId: string) =>

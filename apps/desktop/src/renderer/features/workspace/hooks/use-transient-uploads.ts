@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { UploadedFile } from "@/components/ui";
+import { isWorkspaceDraftOwnerKey } from "../../../../shared/ui-state-keys";
 
 // File and blob: URLs cannot be JSON persisted. This store survives route
 // unmounts, and disappears with the renderer when the app closes or reloads.
@@ -29,6 +30,16 @@ function replaceFiles(owner: string, next: UploadedFile[]): void {
   if (next.length) filesByOwner.set(owner, next);
   else filesByOwner.delete(owner);
   listeners.get(owner)?.forEach((listener) => listener());
+}
+
+export function clearTransientUploads(owner: string): void {
+  replaceFiles(owner, []);
+}
+
+export function clearWorkspaceTransientUploads(backendId: string, workspaceId: string): void {
+  for (const owner of filesByOwner.keys()) {
+    if (isWorkspaceDraftOwnerKey(owner, backendId, workspaceId)) clearTransientUploads(owner);
+  }
 }
 
 export function useTransientUploads(owner: string) {

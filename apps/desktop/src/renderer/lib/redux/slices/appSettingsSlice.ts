@@ -22,6 +22,7 @@ import {
 } from "@/lib/app-themes";
 import { isNewRunTab } from "@/features/workspace/lib/repo-utils";
 import { openNewRunTab, setActiveTab } from "./workspaceSlice";
+import { isWorkspaceDraftOwnerKey, runOwnerKey } from "../../../../shared/ui-state-keys";
 
 /** The document currently shown in the document viewer panel. */
 export interface DocumentViewerDoc {
@@ -153,6 +154,36 @@ const appSettingsSlice = createSlice({
       state.documentViewerOpen = !!state.documentViewerDoc;
       state.sessionPanelOpen = false;
     },
+    forgetRunRightPane: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
+      const key = runOwnerKey(action.payload.backendId, action.payload.runId);
+      delete state.rightPaneByContext[key];
+      delete state.documentViewerDocByContext[key];
+      if (state.activeRightPaneContextKey === key) {
+        state.activeRightPaneContextKey = "default";
+        state.rightPanelOpen = false;
+        state.browserPanelOpen = false;
+        state.documentViewerOpen = false;
+        state.documentViewerDoc = null;
+        state.sessionPanelOpen = false;
+      }
+    },
+    forgetWorkspaceRightPanes: (state, action: PayloadAction<{ backendId: string; workspaceId: string }>) => {
+      const { backendId, workspaceId } = action.payload;
+      for (const key of Object.keys(state.rightPaneByContext)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.rightPaneByContext[key];
+      }
+      for (const key of Object.keys(state.documentViewerDocByContext)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.documentViewerDocByContext[key];
+      }
+      if (isWorkspaceDraftOwnerKey(state.activeRightPaneContextKey, backendId, workspaceId)) {
+        state.activeRightPaneContextKey = "default";
+        state.rightPanelOpen = false;
+        state.browserPanelOpen = false;
+        state.documentViewerOpen = false;
+        state.documentViewerDoc = null;
+        state.sessionPanelOpen = false;
+      }
+    },
     setSidebarCollapsed: (state, action: PayloadAction<boolean>) => {
       state.sidebarCollapsed = action.payload;
     },
@@ -257,6 +288,8 @@ const appSettingsSlice = createSlice({
 
 export const {
   setRightPaneContextKey,
+  forgetRunRightPane,
+  forgetWorkspaceRightPanes,
   setSidebarCollapsed,
   setBrowserPanelOpen,
   setRightPanelOpen,

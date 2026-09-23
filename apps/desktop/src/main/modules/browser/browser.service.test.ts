@@ -18,6 +18,7 @@ vi.mock("../keyboardShortcuts", () => ({
 }));
 
 import { browserService } from "./browser.service";
+import { runOwnerKey } from "../../../shared/ui-state-keys";
 
 function resetInMemory() {
   if (browserService.persistTimer) clearTimeout(browserService.persistTimer);
@@ -89,6 +90,45 @@ describe("browserService — tabs by chat", () => {
     const state = browserService.getState();
     expect(state.tabs.find((tab) => tab.tabId === state.activeTabId)?.url)
       .toBe("https://example.com/docs");
+  });
+
+  it("forgets a deleted chat's tabs without creating a replacement", async () => {
+    const deletedOwner = runOwnerKey("local", "run-a");
+    const keptOwner = runOwnerKey("local", "run-b");
+    await browserService.setContext(deletedOwner);
+    await browserService.createTab("https://example.com/deleted");
+    await browserService.setContext(keptOwner);
+    await browserService.createTab("https://example.com/kept");
+    await browserService.setContext(deletedOwner);
+
+    await browserService.forgetContext({ backendId: "local", kind: "run", id: "run-a" });
+
+    expect(browserService.listOwnerKeys()).toEqual([keptOwner]);
+    expect(browserService.tabs.size).toBe(1);
+    const saved = JSON.parse(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8"));
+    expect(saved.tabs.map((tab: { ownerKey: string }) => tab.ownerKey)).toEqual([keptOwner]);
+    expect(saved.activeTabIdsByOwner[deletedOwner]).toBeUndefined();
+    await browserService.setContext(deletedOwner);
+    expect(browserService.getState().tabs).toEqual([]);
+  });
+
+  it("forgets only unsent drafts for a deleted workspace", async () => {
+    const draftA = JSON.stringify(["remote-1", "draft", "space", "codex", "developer", "ws-a", null]);
+    const draftCollection = JSON.stringify(["remote-1", "draft", "space", "codex", "developer", "ws-a", "c1"]);
+    const keptDraft = JSON.stringify(["remote-1", "draft", "space", "codex", "developer", "ws-b", null]);
+    const keptRun = runOwnerKey("remote-1", "run-a");
+    for (const owner of [draftA, draftCollection, keptDraft, keptRun]) {
+      await browserService.setContext(owner);
+      await browserService.createTab(`https://example.com/${browserService.tabs.size}`);
+    }
+
+    await browserService.forgetContext({ backendId: "remote-1", kind: "workspace", id: "ws-a" });
+
+    expect(browserService.listOwnerKeys().sort()).toEqual([keptDraft, keptRun].sort());
+    const saved = JSON.parse(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8"));
+    expect(saved.tabs).toHaveLength(2);
+    expect(saved.tabs.map((tab: { ownerKey: string }) => tab.ownerKey).sort())
+      .toEqual([keptDraft, keptRun].sort());
   });
 
   it("assigns version-one global tabs to the first opened chat", async () => {

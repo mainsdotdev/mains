@@ -4,6 +4,8 @@ import reducer, {
   addContextItem,
   addContextItemForKey,
   clearContextItems,
+  forgetRunUiState,
+  forgetWorkspaceUiState,
   closeProviderAuthTerminal,
   markProviderAuthCommandSent,
   openProviderAuthTerminal,
@@ -16,6 +18,7 @@ import reducer, {
   toggleExplorerPath,
 } from "./workspaceSlice";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
+import { runOwnerKey } from "../../../../shared/ui-state-keys";
 
 describe("workspaceSlice — provider auth terminal", () => {
   const opened = () =>
@@ -207,5 +210,49 @@ describe("workspaceSlice — composer owners", () => {
     expect(state.contextItems).toEqual([appshot]);
     state = reducer(state, setComposerContextKey("chat-a"));
     expect(state.contextItems).toEqual([file, appshot]);
+  });
+});
+
+describe("workspaceSlice — deleted UI owners", () => {
+  const viewA = JSON.stringify(["local", "space", "codex", "developer", "ws-a"]);
+  const viewB = JSON.stringify(["local", "space", "codex", "developer", "ws-b"]);
+  const draftA = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);
+  const runA = runOwnerKey("local", "run-a");
+  const runB = runOwnerKey("local", "run-b");
+
+  it("clears a deleted run from drafts and saved tabs without touching another run", () => {
+    let state = reducer(undefined, activateWorkspaceView({ key: viewA, workspaceId: "ws-a", providerId: "codex" }));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, setComposerContextKey(runA));
+    state = reducer(state, setDraftText({ key: runA, text: "deleted" }));
+    state = reducer(state, setDraftText({ key: runB, text: "kept" }));
+    state = reducer(state, activateWorkspaceView({ key: viewB, workspaceId: "ws-b", providerId: "codex" }));
+    state = reducer(state, setActiveTab("run-a"));
+
+    state = reducer(state, forgetRunUiState({ backendId: "local", runId: "run-a" }));
+
+    expect(state.workspaceViews[viewA].activeTab).toBe("editor");
+    expect(state.activeTab).toBe("editor");
+    expect(state.workspaceViewNeedsDefaultRun).toBe(false);
+    expect(state.draftTextByKey[runA]).toBeUndefined();
+    expect(state.draftTextByKey[runB]).toBe("kept");
+    expect(state.composerContextKey).toBe("default");
+  });
+
+  it("discards a deleted workspace view and drafts while keeping its existing runs", () => {
+    let state = reducer(undefined, activateWorkspaceView({ key: viewA, workspaceId: "ws-a", providerId: "codex" }));
+    state = reducer(state, setSelectedFile({ name: "a.ts", fullPath: "/a/a.ts", type: "file" }));
+    state = reducer(state, setComposerContextKey(draftA));
+    state = reducer(state, setDraftText({ key: draftA, text: "unsent" }));
+    state = reducer(state, setDraftText({ key: runA, text: "run draft" }));
+
+    state = reducer(state, forgetWorkspaceUiState({ backendId: "local", workspaceId: "ws-a" }));
+    state = reducer(state, activateWorkspaceView({ key: viewB, workspaceId: "ws-b", providerId: "codex" }));
+
+    expect(state.workspaceViews[viewA]).toBeUndefined();
+    expect(state.selectedFile).toBeNull();
+    expect(state.draftTextByKey[draftA]).toBeUndefined();
+    expect(state.draftTextByKey[runA]).toBe("run draft");
+    expect(state.activeWorkspaceIdByProvider.codex).toBe("ws-b");
   });
 });

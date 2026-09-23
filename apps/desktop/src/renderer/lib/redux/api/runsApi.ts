@@ -2,6 +2,8 @@ import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { ModeId } from "../../../../shared/modes";
 import type { RunOutputFile } from "@mains/contracts/runs";
+import type { AppDispatch, RootState } from "../index";
+import { forgetDeletedUiContext } from "../ui-state-cleanup";
 
 export type { RunOutputFile } from "@mains/contracts/runs";
 
@@ -422,10 +424,13 @@ export const runsApi = baseApi.injectEndpoints({
     }),
 
     deleteRun: builder.mutation<void, string>({
-      query: (id) => ({
-        handler: CHANNELS.runs.delete,
-        args: [id],
-      }),
+      async queryFn(id, { dispatch, getState }, _extra, baseQuery) {
+        const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
+        const result = await baseQuery({ handler: CHANNELS.runs.delete, args: [id] });
+        if (result.error) return { error: result.error };
+        await forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "run", id });
+        return { data: undefined };
+      },
       invalidatesTags: ["Runs"],
     }),
 

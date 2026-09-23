@@ -3,6 +3,8 @@ import { persistReducer, persistStore } from "redux-persist";
 import { describe, expect, it } from "vitest";
 import workspaceReducer, {
   activateWorkspaceView,
+  forgetWorkspaceUiState,
+  setDraftText,
   setSelectedFile,
 } from "./slices/workspaceSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
@@ -85,5 +87,23 @@ describe("workspace persistence — removed UI state", () => {
     const saved = JSON.parse((await storage.getItem("persist:workspace"))!);
     expect(saved).not.toHaveProperty("selectedSubagentIdByRun");
     persistor.pause();
+  });
+
+  it("does not resurrect a deleted workspace view or draft after restart", async () => {
+    const storage = memoryStorage();
+    const view = JSON.stringify(["local", "space", "codex", "developer", "ws-a"]);
+    const draft = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);
+    const { store, persistor } = await persistedWorkspace(storage);
+    store.dispatch(activateWorkspaceView({ key: view, workspaceId: "ws-a", providerId: "codex" }));
+    store.dispatch(setDraftText({ key: draft, text: "unsent" }));
+    store.dispatch(forgetWorkspaceUiState({ backendId: "local", workspaceId: "ws-a" }));
+    await persistor.flush();
+    persistor.pause();
+
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().workspaceViews[view]).toBeUndefined();
+    expect(restored.store.getState().draftTextByKey[draft]).toBeUndefined();
+    expect(restored.store.getState().workspaceViewKey).toBeNull();
+    restored.persistor.pause();
   });
 });

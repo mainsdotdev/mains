@@ -8,6 +8,8 @@
 import { appApi } from "@/lib/transport";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
+import type { AppDispatch, RootState } from "../index";
+import { forgetDeletedUiContext } from "../ui-state-cleanup";
 
 // ─────────────────────────────────────────────────────────────
 // ── Workspace ──
@@ -335,10 +337,13 @@ export const workspaceApi = baseApi.injectEndpoints({
       void,
       { id: string; removeWorktree?: boolean }
     >({
-      query: ({ id, removeWorktree }) => ({
-        handler: CHANNELS.workspace.delete,
-        args: [id, { removeWorktree }],
-      }),
+      async queryFn({ id, removeWorktree }, { dispatch, getState }, _extra, baseQuery) {
+        const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
+        const result = await baseQuery({ handler: CHANNELS.workspace.delete, args: [id, { removeWorktree }] });
+        if (result.error) return { error: result.error };
+        await forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "workspace", id });
+        return { data: undefined };
+      },
       invalidatesTags: ["Workspaces", "WorkspaceGitStates"],
     }),
 

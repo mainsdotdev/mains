@@ -7,8 +7,11 @@ import reducer, {
   setRightPanelOpen,
   setSessionPanelOpen,
   setWorkspaceGroupExpanded,
+  forgetRunRightPane,
+  forgetWorkspaceRightPanes,
 } from "./appSettingsSlice";
 import { openNewRunTab, setActiveTab } from "./workspaceSlice";
+import { runOwnerKey } from "../../../../shared/ui-state-keys";
 
 const open = () => reducer(undefined, setSessionPanelOpen(true));
 
@@ -62,6 +65,33 @@ describe("appSettingsSlice — right pane per conversation", () => {
     state = reducer(state, setRightPaneContextKey("chat-a"));
     expect(state.documentViewerDoc).toEqual(doc);
     expect(state.documentViewerOpen).toBe(true);
+  });
+
+  it("does not restore a deleted chat's pane", () => {
+    const deleted = runOwnerKey("local", "run-a");
+    const kept = runOwnerKey("local", "run-b");
+    let state = reducer(undefined, setRightPaneContextKey(deleted));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, setRightPaneContextKey(kept));
+    state = reducer(state, setRightPanelOpen(true));
+    state = reducer(state, forgetRunRightPane({ backendId: "local", runId: "run-a" }));
+    expect(state.rightPaneByContext[deleted]).toBeUndefined();
+    state = reducer(state, setRightPaneContextKey(deleted));
+    expect(state.browserPanelOpen).toBe(false);
+  });
+
+  it("removes only a deleted workspace's draft pane", () => {
+    const draft = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);
+    const run = runOwnerKey("local", "run-a");
+    let state = reducer(undefined, setRightPaneContextKey(run));
+    state = reducer(state, setRightPanelOpen(true));
+    state = reducer(state, setRightPaneContextKey(draft));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, forgetWorkspaceRightPanes({ backendId: "local", workspaceId: "ws-a" }));
+    expect(state.activeRightPaneContextKey).toBe("default");
+    expect(state.browserPanelOpen).toBe(false);
+    expect(state.rightPaneByContext[draft]).toBeUndefined();
+    expect(state.rightPaneByContext[run]).toBe("workspace");
   });
 });
 

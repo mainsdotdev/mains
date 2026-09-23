@@ -9,6 +9,12 @@ import {
   type ContextKind,
 } from "@/features/workspace/lib/composer-context";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import {
+  isWorkspaceDraftOwnerKey,
+  isWorkspaceViewKey,
+  runOwnerKey,
+  viewKeyBelongsToBackend,
+} from "../../../../shared/ui-state-keys";
 
 export interface ReviewTab {
   id: string;
@@ -204,6 +210,59 @@ const workspaceSlice = createSlice({
     setDraftText: (state, action: PayloadAction<{ key: string; text: string }>) => {
       if (action.payload.text) state.draftTextByKey[action.payload.key] = action.payload.text;
       else delete state.draftTextByKey[action.payload.key];
+    },
+    forgetRunUiState: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
+      const { backendId, runId } = action.payload;
+      const ownerKey = runOwnerKey(backendId, runId);
+      delete state.draftTextByKey[ownerKey];
+      delete state.contextItemsByKey[ownerKey];
+      if (state.composerContextKey === ownerKey) {
+        state.contextItems = [];
+        state.composerContextKey = "default";
+        state.composerContextReady = false;
+      }
+
+      for (const [key, view] of Object.entries(state.workspaceViews)) {
+        if (!viewKeyBelongsToBackend(key, backendId)) continue;
+        if (view.activeTab === runId) view.activeTab = "editor";
+        if (view.previousNonEditorTab === runId) view.previousNonEditorTab = null;
+      }
+      if (state.workspaceViewKey && viewKeyBelongsToBackend(state.workspaceViewKey, backendId)) {
+        if (state.activeTab === runId) {
+          state.activeTab = "editor";
+          // The run list can still contain the deleted row until its query
+          // refreshes. Do not immediately auto-select that stale first row.
+          state.workspaceViewNeedsDefaultRun = false;
+        }
+        if (state.previousNonEditorTab === runId) state.previousNonEditorTab = null;
+      }
+      if (state.pendingRunId === runId) state.pendingRunId = null;
+    },
+    forgetWorkspaceUiState: (state, action: PayloadAction<{ backendId: string; workspaceId: string }>) => {
+      const { backendId, workspaceId } = action.payload;
+      for (const key of Object.keys(state.workspaceViews)) {
+        if (isWorkspaceViewKey(key, backendId, workspaceId)) delete state.workspaceViews[key];
+      }
+      for (const key of Object.keys(state.draftTextByKey)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.draftTextByKey[key];
+      }
+      for (const key of Object.keys(state.contextItemsByKey)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.contextItemsByKey[key];
+      }
+      if (isWorkspaceDraftOwnerKey(state.composerContextKey, backendId, workspaceId)) {
+        state.contextItems = [];
+        state.composerContextKey = "default";
+        state.composerContextReady = false;
+      }
+      if (state.workspaceViewKey && isWorkspaceViewKey(state.workspaceViewKey, backendId, workspaceId)) {
+        state.workspaceViewKey = null;
+        state.workspaceViewNeedsDefaultRun = false;
+        state.activeWorkspaceId = null;
+        restoreWorkspaceView(state);
+      }
+      for (const [providerId, selectedId] of Object.entries(state.activeWorkspaceIdByProvider)) {
+        if (selectedId === workspaceId) delete state.activeWorkspaceIdByProvider[providerId];
+      }
     },
     setWorkspaceSidebarTab: (state, action: PayloadAction<WorkspaceSidebarTab>) => {
       state.sidebarTab = action.payload;
@@ -413,6 +472,8 @@ export const {
   activateWorkspaceView,
   setComposerContextKey,
   setDraftText,
+  forgetRunUiState,
+  forgetWorkspaceUiState,
   setWorkspaceSidebarTab,
   setWorkspaceModel,
   setWorkspaceThinkingEnabled,

@@ -16,6 +16,7 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
+import { isRunOwnerKey, isWorkspaceDraftOwnerKey } from "../../../shared/ui-state-keys";
 import {
   buildInspectorScript,
   INSPECTOR_SENTINEL,
@@ -1638,6 +1639,60 @@ export const browserService = {
     delete this.activeTabIdsByOwner[fromOwnerKey];
     if (this.activeOwnerKey === fromOwnerKey) this.activeOwnerKey = toOwnerKey;
     this._schedulePersist();
+    this._emitState();
+    return this.getState();
+  },
+
+  listOwnerKeys(): string[] {
+    this._loadPersistedTabs();
+    return Array.from(new Set([
+      this.activeOwnerKey,
+      ...Array.from(this.tabs.values(), (tab) => tab.ownerKey),
+      ...Object.keys(this.activeTabIdsByOwner),
+    ])).filter((key) => key !== DEFAULT_OWNER_KEY);
+  },
+
+  /** Permanently discard one deleted chat or the unsent drafts of a deleted workspace. */
+  async forgetContext(target: { backendId: string; kind: "run" | "workspace"; id: string }): Promise<BrowserState> {
+    this._loadPersistedTabs();
+    const matches = (key: string) => target.kind === "run"
+      ? isRunOwnerKey(key, target.backendId, target.id)
+      : isWorkspaceDraftOwnerKey(key, target.backendId, target.id);
+
+    // Switching away first detaches the native view without creating another
+    // tab for the context we are about to forget.
+    if (matches(this.activeOwnerKey)) await this.setContext(DEFAULT_OWNER_KEY);
+
+    for (const [tabId, record] of this.tabs) {
+      if (!matches(record.ownerKey)) continue;
+      record.isClosing = true;
+      record.deviceEmulationQueue.reset();
+      if (record.viewPromise) {
+        try {
+          await record.viewPromise;
+        } catch {
+          // A failed view creation still leaves a persisted tab to remove.
+        }
+      }
+      if (record.view && !record.view.webContents.isDestroyed()) {
+        if (this.host && !this.host.isDestroyed()) {
+          try {
+            this.host.contentView.removeChildView(record.view);
+          } catch {
+            // It may already be detached.
+          }
+        }
+        record.view.webContents.close();
+      }
+      this.tabs.delete(tabId);
+    }
+    for (const key of Object.keys(this.activeTabIdsByOwner)) {
+      if (matches(key)) delete this.activeTabIdsByOwner[key];
+    }
+    if (this.activeTabId && !this.tabs.has(this.activeTabId)) this.activeTabId = null;
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+    this._persistNow();
     this._emitState();
     return this.getState();
   },
