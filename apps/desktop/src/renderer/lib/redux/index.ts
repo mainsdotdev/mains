@@ -11,12 +11,13 @@ import { baseApi } from "./api/baseApi";
 import appSettingsReducer from "./slices/appSettingsSlice";
 import workspaceReducer from "./slices/workspaceSlice";
 import backendsReducer from "./slices/backendsSlice";
+import { workspacePersistConfig } from "./workspace-persistence";
 import { onTransportChange } from "../transport";
 import { parseAppThemeSettings } from "../app-themes";
 
 // Renderer-persisted UI state lives in these slices and nowhere else: the
-// whitelists below are the complete list of what survives a restart. Anything
-// reaching for `localStorage` directly is a bug — add a field here instead.
+// whitelists here and in workspace-persistence.ts list what survives a restart.
+// Anything reaching for `localStorage` directly is a bug — add a field here instead.
 // Web authentication lives in HttpOnly cookies and is deliberately absent here.
 // A persisted field that changes shape gets a step here and a `version` bump,
 // so a restart never hands the slice a shape its reducers can't read.
@@ -69,31 +70,6 @@ const appSettingsPersistConfig = {
     "workspaceListGrouping",
     "workspaceGroupExpanded",
     "onboardingCliAutoSelectApplied",
-  ],
-};
-
-const workspacePersistConfig = {
-  key: "workspace",
-  storage,
-  whitelist: [
-    "selectedModelByProvider",
-    "selectedProviderId",
-    "thinkingEnabled",
-    "activeWorkspaceIdByProvider",
-    "workspaceViewKey",
-    "workspaceViews",
-    "selectedFile",
-    "explorerExpandedPaths",
-    "sidebarTab",
-    "activeTab",
-    "previousNonEditorTab",
-    "openIssueTabs",
-    "openSignalTabs",
-    "openNoteTabs",
-    "composerContextKey",
-    "draftTextByKey",
-    "selectedSubagentIdByRun",
-    "selectedCollectionId",
   ],
 };
 

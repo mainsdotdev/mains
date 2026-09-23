@@ -12,7 +12,6 @@ import reducer, {
   setComposerContextKey,
   setDraftText,
   setSelectedFile,
-  setSelectedSubagentForRun,
   setWorkspaceSidebarTab,
   toggleExplorerPath,
 } from "./workspaceSlice";
@@ -208,15 +207,5 @@ describe("workspaceSlice — composer owners", () => {
     expect(state.contextItems).toEqual([appshot]);
     state = reducer(state, setComposerContextKey("chat-a"));
     expect(state.contextItems).toEqual([file, appshot]);
-  });
-});
-
-describe("workspaceSlice — subagent detail", () => {
-  it("remembers the selected agent separately for each run", () => {
-    let state = reducer(undefined, setSelectedSubagentForRun({ runId: "run-a", subagentId: "agent-a" }));
-    state = reducer(state, setSelectedSubagentForRun({ runId: "run-b", subagentId: "agent-b" }));
-    expect(state.selectedSubagentIdByRun).toEqual({ "run-a": "agent-a", "run-b": "agent-b" });
-    state = reducer(state, setSelectedSubagentForRun({ runId: "run-a", subagentId: null }));
-    expect(state.selectedSubagentIdByRun).toEqual({ "run-b": "agent-b" });
   });
 });

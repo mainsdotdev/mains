@@ -22,6 +22,10 @@ import { browserService } from "./browser.service";
 function resetInMemory() {
   if (browserService.persistTimer) clearTimeout(browserService.persistTimer);
   browserService.persistTimer = null;
+  if (browserService.historyPersistTimer) clearTimeout(browserService.historyPersistTimer);
+  browserService.historyPersistTimer = null;
+  browserService.historyLoaded = false;
+  browserService.historyEntries = [];
   browserService.tabs.clear();
   browserService.activeTabId = null;
   browserService.activeOwnerKey = "default";
@@ -101,5 +105,79 @@ describe("browserService — tabs by chat", () => {
     browserService._persistNow();
     expect(JSON.parse(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8")).version)
       .toBe(2);
+  });
+
+  it("clears open-tab navigation history as well as the history list", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/current");
+    const tab = browserService.tabs.get(browserService.getState().activeTabId)!;
+    tab.history = {
+      entries: [
+        { url: "https://example.com/previous", title: "Previous" },
+        { url: "https://example.com/current", title: "Current" },
+      ],
+      index: 1,
+    };
+    tab.canGoBack = true;
+    browserService.historyLoaded = true;
+    browserService.historyEntries = [{
+      id: "visit-1",
+      url: "https://example.com/previous",
+      title: "Previous",
+      faviconUrl: null,
+      visitedAt: "2026-09-23T10:00:00.000Z",
+      visitCount: 1,
+    }];
+
+    await browserService.clearHistory();
+
+    const saved = JSON.parse(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8"));
+    const savedHistory = JSON.parse(readFileSync(join(harness.userData, "browser-history.json"), "utf8"));
+    expect(saved.tabs[0].url).toBe("https://example.com/current");
+    expect(saved.tabs[0].history).toBeNull();
+    expect(savedHistory.entries).toEqual([]);
+    expect(tab.canGoBack).toBe(false);
+  });
+
+  it("clears live back-forward state so the next save cannot restore old URLs", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/current");
+    const tab = browserService.tabs.get(browserService.getState().activeTabId)!;
+    let entries = [
+      { url: "https://example.com/previous", title: "Previous" },
+      { url: "https://example.com/current", title: "Current" },
+    ];
+    const clear = vi.fn(() => { entries = entries.slice(-1); });
+    tab.view = {
+      webContents: {
+        isDestroyed: () => false,
+        getURL: () => "https://example.com/current",
+        getTitle: () => "Current",
+        isLoading: () => false,
+        getZoomFactor: () => 1,
+        navigationHistory: {
+          clear,
+          canGoBack: () => entries.length > 1,
+          canGoForward: () => false,
+          getAllEntries: () => entries,
+          getActiveIndex: () => entries.length - 1,
+        },
+      },
+    } as unknown as typeof tab.view;
+
+    await browserService.clearBrowsingData({
+      timeRange: "last-hour",
+      history: true,
+      cookiesAndSiteData: false,
+      cache: false,
+      downloads: false,
+    });
+    browserService._persistNow();
+
+    const saved = JSON.parse(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8"));
+    expect(clear).toHaveBeenCalledOnce();
+    expect(saved.tabs[0].history?.entries.map((entry: { url: string }) => entry.url))
+      .toEqual(["https://example.com/current"]);
+    expect(tab.canGoBack).toBe(false);
   });
 });

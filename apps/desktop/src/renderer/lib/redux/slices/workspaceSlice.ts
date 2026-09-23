@@ -71,7 +71,6 @@ export interface WorkspaceState {
   composerContextReady: boolean;
   contextItemsByKey: Record<string, ContextItem[]>;
   draftTextByKey: Record<string, string>;
-  selectedSubagentIdByRun: Record<string, string>;
   openIssueTabs: IssueWithEntity[];
   openSignalTabs: SignalWithEntity[];
   openNoteTabs: ReviewTab[];
@@ -122,7 +121,6 @@ const initialState: WorkspaceState = {
   composerContextReady: false,
   contextItemsByKey: {},
   draftTextByKey: {},
-  selectedSubagentIdByRun: {},
   openIssueTabs: [],
   openSignalTabs: [],
   openNoteTabs: [],
@@ -209,16 +207,6 @@ const workspaceSlice = createSlice({
     },
     setWorkspaceSidebarTab: (state, action: PayloadAction<WorkspaceSidebarTab>) => {
       state.sidebarTab = action.payload;
-    },
-    setSelectedSubagentForRun: (
-      state,
-      action: PayloadAction<{ runId: string; subagentId: string | null }>,
-    ) => {
-      if (action.payload.subagentId) {
-        state.selectedSubagentIdByRun[action.payload.runId] = action.payload.subagentId;
-      } else {
-        delete state.selectedSubagentIdByRun[action.payload.runId];
-      }
     },
     setWorkspaceModel: (state, action: PayloadAction<{ providerId: string; model: string }>) => {
       state.selectedModelByProvider[action.payload.providerId] = action.payload.model;
@@ -426,7 +414,6 @@ export const {
   setComposerContextKey,
   setDraftText,
   setWorkspaceSidebarTab,
-  setSelectedSubagentForRun,
   setWorkspaceModel,
   setWorkspaceThinkingEnabled,
   setSelectedFile,

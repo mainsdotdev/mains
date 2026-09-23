@@ -1668,10 +1668,37 @@ export const browserService = {
     return this.getHistory();
   },
 
-  clearHistory(): BrowserHistoryEntry[] {
+  async _clearTabNavigationHistory(): Promise<void> {
+    this._loadPersistedTabs();
+    for (const record of this.tabs.values()) {
+      // A view may still be restoring its saved history. Wait for it before
+      // clearing Chromium's stack, or the next snapshot would write it back.
+      if (record.viewPromise) {
+        try {
+          await record.viewPromise;
+        } catch {
+          // A failed view has no live navigation history to clear.
+        }
+      }
+      const contents = record.view?.webContents;
+      if (contents && !contents.isDestroyed()) {
+        contents.navigationHistory.clear();
+      }
+      record.history = null;
+      record.canGoBack = false;
+      record.canGoForward = false;
+    }
+    // Current tab URLs remain so the open pages can be restored. The cleared
+    // back/forward stacks must reach disk before the action reports success.
+    this._persistNow();
+    this._emitState();
+  },
+
+  async clearHistory(): Promise<BrowserHistoryEntry[]> {
     this._loadPersistedHistory();
+    await this._clearTabNavigationHistory();
     this.historyEntries = [];
-    this._scheduleHistoryPersist();
+    this._persistHistoryNow();
     this._emitHistory();
     return [];
   },
@@ -1719,8 +1746,11 @@ export const browserService = {
     }
 
     if (nextHistory) {
+      // Navigation entries have no visit timestamps, so a ranged clear also
+      // drops each tab's back/forward stack to avoid retaining cleared URLs.
+      await this._clearTabNavigationHistory();
       this.historyEntries = nextHistory;
-      this._scheduleHistoryPersist();
+      this._persistHistoryNow();
       this._emitHistory();
     }
 
