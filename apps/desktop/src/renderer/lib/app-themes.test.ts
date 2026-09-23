@@ -11,13 +11,9 @@ import {
   deriveThemeTokens,
   editAppearanceChoice,
   fitAccent,
-  paintedPalette,
   parseAppThemeSettings,
-  parseThemePalette,
   renderAppThemeCss,
   resolveAppTheme,
-  resolveAppearance,
-  serializeThemePalette,
   themeChoiceFor,
   type AppThemeSettings,
   type AppearanceChoice,
@@ -26,7 +22,6 @@ import {
   type ThemePalette,
 } from "./app-themes";
 import { contrastRatio, hexToOklab, oklabLightness } from "./color";
-import { PROVIDER_VARIANTS } from "./provider-variants";
 
 const indexCss = readFileSync(
   fileURLToPath(new URL("../index.css", import.meta.url)),
@@ -96,7 +91,7 @@ describe("SCALE_STEPS", () => {
 
 describe("resolveAppTheme", () => {
   it("leaves both appearances on the stock scale by default", () => {
-    const theme = resolveAppTheme(DEFAULT_APP_THEME_SETTINGS.default, null);
+    const theme = resolveAppTheme(DEFAULT_APP_THEME_SETTINGS.default);
     expect(theme.light).toEqual({
       palette: null,
       accent: null,
@@ -107,9 +102,7 @@ describe("resolveAppTheme", () => {
 
   it("falls back to stock for unknown ids and appearances a theme lacks", () => {
     const theme = resolveAppTheme(
-      { light: pick("tokyo-night"), dark: pick("removed") },
-      null,
-    );
+      { light: pick("tokyo-night"), dark: pick("removed") });
     expect(theme.light.palette).toBeNull();
     expect(theme.dark.palette).toBeNull();
   });
@@ -117,61 +110,52 @@ describe("resolveAppTheme", () => {
   it("picks each appearance's palette independently", () => {
     const css = renderAppThemeCss(
       resolveAppTheme(
-        { light: pick("gruvbox"), dark: pick("tokyo-night") },
-        null,
-      ),
+        { light: pick("gruvbox"), dark: pick("tokyo-night") }),
     );
     expect(tokensIn(css, "light")?.get("--color-primary")).toBe("#fbf1c7");
     expect(tokensIn(css, "dark")?.get("--color-primary-950")).toBe("#1a1b26");
   });
 
-  it("keeps the theme accent when a provider has no brand colour", () => {
-    const theme = resolveAppTheme(
-      both(pick(DEFAULT_APP_THEME_ID, { accent: "provider" })),
-      null,
-    );
-    expect(theme.dark.accent).toBeNull();
-    expect(renderAppThemeCss(theme)).toBe("");
-  });
-
-  it("puts a provider accent over the stock scale without deriving one", () => {
+  it("puts a custom accent over the stock scale without deriving one", () => {
     const css = renderAppThemeCss(
       resolveAppTheme(
-        both(pick(DEFAULT_APP_THEME_ID, { accent: "provider" })),
-        "#d97757",
+        both(pick(DEFAULT_APP_THEME_ID, { accent: "custom", accentColor: "#1ad5c0" })),
       ),
     );
     const light = tokensIn(css, "light")!;
-    expect(light.has("--color-accent")).toBe(true);
+    expect(light.get("--color-accent")).toBe("#1ad5c0");
     expect(light.has("--color-primary")).toBe(false);
     expect(light.has("--app-frame")).toBe(false);
   });
 
-  it("swaps a provider accent into a theme's tokens", () => {
-    const theme = resolveAppTheme(
-      { light: stock, dark: pick("tokyo-night", { accent: "provider" }) },
-      "#d97757",
-    );
+  it("swaps a custom accent into a theme's tokens", () => {
+    const theme = resolveAppTheme({
+      light: stock,
+      dark: pick("tokyo-night", { accent: "custom", accentColor: "#ff5f5f" }),
+    });
     const dark = tokensIn(renderAppThemeCss(theme), "dark")!;
-    expect(dark.get("--color-accent")).toBe(theme.dark.accent);
-    expect(dark.get("--color-accent")).not.toBe("#7aa2f7");
+    expect(dark.get("--color-accent")).toBe("#ff5f5f");
     expect(dark.get("--color-primary-950")).toBe("#1a1b26");
+  });
+
+  it("keeps the theme's accent while a custom one is only remembered", () => {
+    const theme = resolveAppTheme(
+      both(pick("tokyo-night", { accentColor: "#ff5f5f" })),
+    );
+    expect(theme.dark.accent).toBeNull();
   });
 
   it("paints a custom accent as picked, without fitting it", () => {
     const dim = "#303040";
     const theme = resolveAppTheme(
       both(pick("tokyo-night", { accent: "custom", accentColor: dim })),
-      "#d97757",
     );
     expect(theme.dark.accent).toBe(dim);
   });
 
   it("derives a scale from stock once one of its colours is edited", () => {
     const theme = resolveAppTheme(
-      { light: pick(DEFAULT_APP_THEME_ID, { background: "#f4efe6" }), dark: stock },
-      null,
-    );
+      { light: pick(DEFAULT_APP_THEME_ID, { background: "#f4efe6" }), dark: stock });
     expect(theme.light.palette?.foreground).toBe("#0c0c0c");
     const css = renderAppThemeCss(theme);
     expect(tokensIn(css, "light")?.get("--color-primary")).toBe("#f4efe6");
@@ -180,7 +164,7 @@ describe("resolveAppTheme", () => {
 
   it("keeps a theme's frame opaque unless asked, and stock's translucent", () => {
     const frameOf = (choice: AppearanceChoice, appearance: ThemeAppearance) =>
-      tokensIn(renderAppThemeCss(resolveAppTheme(both(choice), null)), appearance);
+      tokensIn(renderAppThemeCss(resolveAppTheme(both(choice))), appearance);
 
     expect(frameOf(pick("tokyo-night"), "dark")?.get("--app-frame")).toMatch(
       /^#[0-9a-f]{6}$/,
@@ -201,13 +185,13 @@ describe("resolveAppTheme", () => {
 describe("theme settings", () => {
   const settings: AppThemeSettings = {
     default: { light: stock, dark: pick("tokyo-night") },
-    providers: { codex: { dark: pick("gruvbox", { accent: "provider" }) } },
+    providers: { codex: { dark: pick("gruvbox", { accent: "custom", accentColor: "#ff00aa" }) } },
   };
 
   it("lets a provider take over one appearance at a time", () => {
     expect(themeChoiceFor(settings, "codex")).toEqual({
       light: stock,
-      dark: pick("gruvbox", { accent: "provider" }),
+      dark: pick("gruvbox", { accent: "custom", accentColor: "#ff00aa" }),
     });
     expect(themeChoiceFor(settings, "claude_code")).toEqual(settings.default);
     expect(themeChoiceFor(settings, null)).toEqual(settings.default);
@@ -264,7 +248,7 @@ describe("parseAppThemeSettings", () => {
     ).toEqual(settings);
   });
 
-  it("migrates the first release's theme ids and scope-wide accent", () => {
+  it("migrates the first release's theme ids, dropping its accent source", () => {
     const migrated = parseAppThemeSettings({
       default: { light: "gruvbox", dark: "tokyo-night", accent: "provider" },
       providers: {
@@ -273,18 +257,24 @@ describe("parseAppThemeSettings", () => {
       },
     });
     expect(migrated.default).toEqual({
-      light: pick("gruvbox", { accent: "provider" }),
-      dark: pick("tokyo-night", { accent: "provider" }),
-    });
-    // A provider's lone theme keeps the default's accent source.
-    expect(migrated.providers.codex).toEqual({
-      dark: pick("catppuccin", { accent: "provider" }),
-    });
-    // A lone accent applies over the default's themes.
-    expect(migrated.providers.claude_code).toEqual({
       light: pick("gruvbox"),
       dark: pick("tokyo-night"),
     });
+    expect(migrated.providers.codex).toEqual({ dark: pick("catppuccin") });
+    // An entry that only set the accent source has nothing left to override.
+    expect(migrated.providers).not.toHaveProperty("claude_code");
+  });
+
+  it("reads a provider-colour accent as the theme's", () => {
+    const migrated = parseAppThemeSettings({
+      default: {
+        light: { theme: "gruvbox", accent: "provider", contrast: 0.2 },
+        dark: { theme: "tokyo-night", accent: "custom", accentColor: "#ff5f5f" },
+      },
+      providers: {},
+    });
+    expect(migrated.default.light).toEqual(pick("gruvbox", { contrast: 0.2 }));
+    expect(migrated.default.dark.accent).toBe("custom");
   });
 
   it("drops malformed fields and falls back on unreadable blobs", () => {
@@ -307,26 +297,6 @@ describe("parseAppThemeSettings", () => {
     expect(cleaned.default.light).toEqual(pick("gruvbox", { contrast: 1 }));
     expect(cleaned.default.dark).toEqual(stock);
     expect(cleaned.providers).toEqual({});
-  });
-});
-
-describe("Copy theme / Import", () => {
-  it("round-trips what an appearance paints", () => {
-    const painted = paintedPalette(
-      resolveAppearance(pick("tokyo-night"), "dark", null),
-      "dark",
-    );
-    expect(parseThemePalette(serializeThemePalette(painted))).toEqual(painted);
-  });
-
-  it("takes any subset of the keys, and rejects what carries none", () => {
-    expect(parseThemePalette('{"accent":"#FF00AA","contrast":40}')).toEqual({
-      accent: "#ff00aa",
-      contrast: 0.4,
-    });
-    expect(parseThemePalette('{"accent":"hotpink"}')).toBeNull();
-    expect(parseThemePalette("not json")).toBeNull();
-    expect(parseThemePalette("[1,2]")).toBeNull();
   });
 });
 
@@ -405,7 +375,7 @@ describe("deriveThemeTokens", () => {
 describe.each(palettes)("$label", ({ id, appearance, palette }) => {
   // Through the real path, so the fitted accent is what's checked.
   const tokens = tokensIn(
-    renderAppThemeCss(resolveAppTheme(both(pick(id)), null)),
+    renderAppThemeCss(resolveAppTheme(both(pick(id)))),
     appearance,
   )!;
   // Light mode sets copy on `bg-primary`, dark mode on `bg-primary-950`; the
@@ -431,7 +401,6 @@ describe.each(palettes)("$label", ({ id, appearance, palette }) => {
   });
 });
 
-const brands = Object.values(PROVIDER_VARIANTS).filter((d) => d.brandColor);
 const backgrounds = [
   { label: "stock light", background: "#ffffff" },
   { label: "stock dark", background: "#0c0c0c" },
@@ -441,24 +410,17 @@ const backgrounds = [
   })),
 ];
 
-describe("provider accents", () => {
-  it.each(Object.values(PROVIDER_VARIANTS))(
-    "$label's brand colour matches its index.css token",
-    ({ variant, brandColor }) => {
-      if (!brandColor) return;
-      const token = indexCss.match(
-        new RegExp(`--color-${variant}:\\s*(#[0-9a-fA-F]{6});`),
-      )?.[1];
-      expect(token?.toLowerCase()).toBe(brandColor.toLowerCase());
+describe("fitAccent", () => {
+  // Accents that start under AA on light or dark surfaces.
+  describe.each(["#d97757", "#b58900", "#0070f3", "#ff6363", "#5e6ad2"])(
+    "%s",
+    (accent) => {
+      it.each(backgrounds)("reaches AA on $label", ({ background }) => {
+        const fitted = fitAccent(accent, background);
+        expect(contrastRatio(fitted, background)).toBeGreaterThanOrEqual(4.5);
+      });
     },
   );
-
-  describe.each(brands)("$label", ({ brandColor }) => {
-    it.each(backgrounds)("reaches AA on $label", ({ background }) => {
-      const fitted = fitAccent(brandColor!, background);
-      expect(contrastRatio(fitted, background)).toBeGreaterThanOrEqual(4.5);
-    });
-  });
 
   it("keeps the hue and leaves a readable colour alone", () => {
     // Codex's blue on white is already AA.
@@ -471,25 +433,5 @@ describe("provider accents", () => {
       return Math.atan2(b, a);
     };
     expect(Math.abs(hue(fitted) - hue("#d97757"))).toBeLessThan(0.1);
-  });
-
-  it("inks text on every fitted accent at AA", () => {
-    for (const { brandColor } of brands) {
-      for (const appearance of ["light", "dark"] as const) {
-        for (const { id } of appThemesFor(appearance)) {
-          const theme = resolveAppTheme(
-            both(pick(id, { accent: "provider" })),
-            brandColor!,
-          );
-          const ink = tokensIn(renderAppThemeCss(theme), appearance)?.get(
-            "--color-accent-foreground",
-          );
-          expect(ink, `${brandColor} ${appearance} ${id}`).toBeDefined();
-          expect(
-            contrastRatio(ink!, theme[appearance].accent!),
-          ).toBeGreaterThanOrEqual(4.5);
-        }
-      }
-    }
   });
 });

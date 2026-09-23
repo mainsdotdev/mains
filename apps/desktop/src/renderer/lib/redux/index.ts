@@ -20,22 +20,24 @@ import { parseAppThemeSettings } from "../app-themes";
 // Web authentication lives in HttpOnly cookies and is deliberately absent here.
 // A persisted field that changes shape gets a step here and a `version` bump,
 // so a restart never hands the slice a shape its reducers can't read.
+const reparseAppTheme = (state: PersistedState) =>
+  state && {
+    ...state,
+    appTheme: parseAppThemeSettings((state as { appTheme?: unknown }).appTheme),
+  };
+
 const appSettingsMigrations = {
   // App themes went from a theme id per appearance to a choice per
   // appearance; `parseAppThemeSettings` reads both.
-  1: (state: PersistedState) =>
-    state && {
-      ...state,
-      appTheme: parseAppThemeSettings(
-        (state as { appTheme?: unknown }).appTheme,
-      ),
-    },
+  1: reparseAppTheme,
+  // The provider-colour accent was dropped; the parse reads it as the theme's.
+  2: reparseAppTheme,
 };
 
 const appSettingsPersistConfig = {
   key: "appSettings",
   storage,
-  version: 1,
+  version: 2,
   migrate: createMigrate(appSettingsMigrations),
   whitelist: [
     "sidebarCollapsed",

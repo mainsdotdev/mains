@@ -33,7 +33,7 @@ const variantStyles: Record<ButtonVariant, string> = {
   // Their hover fills come from the --glass-hover-* tokens in index.css.
   primary: "text-primary-700 dark:text-primary-300 glass-primary",
   secondary: "text-primary dark:text-primary glass-secondary",
-  submit: "text-accent-foreground glass-submit",
+  submit: "text-primary glass-submit",
   ghost:
     "text-primary-900 dark:text-primary-100 hover:bg-primary dark:hover:bg-primary-950/10",
   danger: "text-primary glass-danger",

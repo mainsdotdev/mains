@@ -30,9 +30,7 @@ import {
   appThemesFor,
   editAppearanceChoice,
   paintedPalette,
-  parseThemePalette,
   resolveAppearance,
-  serializeThemePalette,
   type AppearanceChoice,
   type ThemeAccentSource,
   type ThemeAppearance,
@@ -43,8 +41,6 @@ import {
 } from "@/lib/provider-variants";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useAppThemeSettings } from "@/hooks/use-app-theme";
-import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
-import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { useIsMobile } from "@/lib/platform";
 import {
   SettingsDivider,
@@ -76,7 +72,7 @@ function ThemeSwatch({
   appearance: ThemeAppearance;
 }) {
   const { background, accent } = paintedPalette(
-    resolveAppearance({ theme, accent: "theme" }, appearance, null),
+    resolveAppearance({ theme, accent: "theme" }, appearance),
     appearance,
   );
   return (
@@ -100,8 +96,8 @@ function ResetButton({ label, onClick }: { label: string; onClick: () => void })
 }
 
 /**
- * One appearance's theme for the current scope: the preset, Import / Copy
- * theme, and the edits on top of the preset. In a provider scope the preset
+ * One appearance's theme for the current scope: the preset, and the edits on
+ * top of it. In a provider scope the preset
  * picker leads with "Default (…)"; while it's picked the fields show the
  * default's values, and editing one takes the appearance over for that
  * provider, starting from the default.
@@ -109,27 +105,19 @@ function ResetButton({ label, onClick }: { label: string; onClick: () => void })
 function AppearanceCard({
   appearance,
   provider,
-  previewProvider,
 }: {
   appearance: ThemeAppearance;
   /** The scope's provider; `null` edits the default. */
   provider: ProviderVariantDescriptor | null;
-  /** Whose brand colour a provider accent previews with. */
-  previewProvider: ProviderVariantDescriptor;
 }) {
   const [settings, change] = useAppThemeSettings();
-  const { copy } = useCopyToClipboard();
   const providerId = provider?.providerId ?? null;
   const inherited = settings.default[appearance];
   const own = providerId
     ? settings.providers[providerId]?.[appearance]
     : inherited;
   const choice = own ?? inherited;
-  const resolved = resolveAppearance(
-    choice,
-    appearance,
-    previewProvider.brandColor ?? null,
-  );
+  const resolved = resolveAppearance(choice, appearance);
   const painted = paintedPalette(resolved, appearance);
   const title = APPEARANCE_TITLES[appearance];
 
@@ -164,83 +152,43 @@ function AppearanceCard({
 
   const accentOptions: SelectOption<ThemeAccentSource>[] = [
     { value: "theme", label: "Theme" },
-    // A provider without a brand colour would only show the theme's again.
-    ...(!provider || provider.brandColor
-      ? [{ value: "provider" as const, label: "Provider color" }]
-      : []),
     { value: "custom", label: "Custom" },
   ];
-
-  const importTheme = async () => {
-    let imported: ReturnType<typeof parseThemePalette> = null;
-    try {
-      imported = parseThemePalette(await navigator.clipboard.readText());
-    } catch {
-      // Clipboard refused: reported like an empty one below.
-    }
-    if (!imported) {
-      toast.error("The clipboard doesn't hold a theme — use Copy theme on one first");
-      return;
-    }
-    // Only what the theme carries: a key it lacks keeps the current edit.
-    const { accent, ...colors } = imported;
-    edit({
-      ...colors,
-      ...(accent && { accent: "custom" as const, accentColor: accent }),
-    });
-    toast.success(`Imported into ${title}`);
-  };
-
-  const copyTheme = async () => {
-    if (await copy(serializeThemePalette(painted))) toast.success("Theme copied");
-  };
 
   return (
     <SettingsSection
       title={title}
       actions={
-        <>
-          <Button variant="subtle" className="rounded-lg px-2 py-1 text-xs" onClick={() => void importTheme()}>
-            Import
-          </Button>
-          <Button variant="subtle" className="rounded-lg px-2 py-1 text-xs" onClick={() => void copyTheme()}>
-            Copy theme
-          </Button>
-          <Select
-            value={presetValue}
-            aria-label={`${title} preset`}
-            options={presetOptions}
-            onChange={(value) =>
-              commit(
-                value === INHERIT
-                  ? null
-                  : editAppearanceChoice(choice, {
-                      theme: value,
-                      // A new preset brings its own colours.
-                      background: undefined,
-                      foreground: undefined,
-                      contrast: undefined,
-                    }),
-              )
-            }
-          />
-        </>
+        <Select
+          value={presetValue}
+          aria-label={`${title} preset`}
+          options={presetOptions}
+          onChange={(value) =>
+            commit(
+              value === INHERIT
+                ? null
+                : editAppearanceChoice(choice, {
+                    theme: value,
+                    // A new preset brings its own colours.
+                    background: undefined,
+                    foreground: undefined,
+                    contrast: undefined,
+                  }),
+            )
+          }
+        />
       }
     >
       <SettingsRow
         title="Accent"
-        description="Buttons, links, focus, and the composer glow"
+        description="Buttons, links and focus"
       >
         <div className="flex items-center gap-2">
           <Select
-            value={
-              accentOptions.some((option) => option.value === choice.accent)
-                ? choice.accent
-                : "theme"
-            }
+            value={choice.accent}
             aria-label={`${title} accent source`}
             options={accentOptions}
-            size="sm"
+            size="s"
             onChange={(accent) =>
               edit(
                 accent === "custom"
@@ -410,7 +358,6 @@ function CodeFontSizeSlider() {
 export default function AppearanceSettings() {
   const isMobile = useIsMobile();
   const { spaces } = useActiveSpace();
-  const activeProvider = useSpaceProviderVariant();
   const [scope, setScope] = useState(ALL_PROVIDERS);
 
   const providers = spaces.flatMap((space) => {
@@ -469,7 +416,6 @@ export default function AppearanceSettings() {
           key={appearance}
           appearance={appearance}
           provider={provider}
-          previewProvider={provider ?? activeProvider}
         />
       ))}
 

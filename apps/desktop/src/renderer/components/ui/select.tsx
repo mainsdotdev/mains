@@ -37,15 +37,17 @@ export interface SelectOption<T extends string = string> {
  * `Textarea`, so a select dropped into a compact form lines up with the fields
  * around it instead of standing a row taller than all of them.
  */
-export type SelectSize = "sm" | "md";
+export type SelectSize = "sm" | "s" | "md";
 
 const TRIGGER_SIZE: Record<SelectSize, string> = {
   md: "min-w-52 px-2.5 py-2 text-s",
+  s:"min-w-40 px-2-5 py-2 text-s",
   sm: "px-3 py-2 text-xs",
 };
 
 const OPTION_SIZE: Record<SelectSize, string> = {
   md: "text-s",
+  s:"text-s",
   sm: "text-xs",
 };
 

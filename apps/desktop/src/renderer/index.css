@@ -87,6 +87,8 @@ html:not(.app-ready) *::after {
   --color-danger-hover: #e33221;
   --color-success: #22C55E;
   --color-warning: #F59E0B;
+  --color-action: #2563eb;
+  --color-action-hover: #1d4ed8;
   --color-claude: #D97757;
   --color-copilot: #8534F3;
   --color-codex: #0169CC;
@@ -778,13 +780,13 @@ html.mains-web.dark #root {
   --glass-fill-button: color-mix(in srgb, var(--color-primary) 72%, transparent);
   --glass-fill-primary: color-mix(in srgb, var(--color-primary-50) 72%, transparent);
   --glass-fill-secondary: color-mix(in srgb, var(--color-primary-950) 42%, transparent);
-  --glass-fill-submit: rgba(43, 127, 255, 0.9);
+  --glass-fill-submit: color-mix(in srgb, var(--color-action) 90%, transparent);
   --glass-fill-danger: rgba(255, 68, 54, 0.9);
   --glass-fill-success: rgba(13, 197, 94, 0.9);
 
   --glass-hover-button: color-mix(in srgb, var(--color-primary) 90%, transparent);
   --glass-hover-primary: var(--color-primary-200);
-  --glass-hover-submit: #2563eb;
+  --glass-hover-submit: var(--color-action-hover);
   --glass-hover-danger: var(--color-danger-hover);
 
   /* Saturated fills swallow a dark rim — light them from the other side. */

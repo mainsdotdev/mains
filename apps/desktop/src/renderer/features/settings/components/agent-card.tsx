@@ -61,7 +61,7 @@ export function AgentCard({
         className={cn(
           "flex items-center justify-center h-6 border-t transition-colors",
           isSelected
-            ? "border-primary-200/40 dark:border-primary-800/40 text-success"
+            ? "border-primary-200/40 dark:border-primary-800/40 dark:text-primary-200 text-primary-800"
             : "border-primary-200/40 dark:border-primary-800/40 text-primary-600 dark:text-primary-400",
         )}
       >

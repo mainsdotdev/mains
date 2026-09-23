@@ -14,7 +14,6 @@ import {
   type ResolvedAppTheme,
   type ThemeChoiceChange,
 } from "@/lib/app-themes";
-import { getProviderVariantById } from "@/lib/provider-variants";
 import { useActiveSpace } from "./use-active-space";
 
 /**
@@ -40,10 +39,7 @@ function resolveFor(
   settings: AppThemeSettings,
   providerId: string | null,
 ): ResolvedAppTheme {
-  const brandColor = providerId
-    ? (getProviderVariantById(providerId)?.brandColor ?? null)
-    : null;
-  return resolveAppTheme(themeChoiceFor(settings, providerId), brandColor);
+  return resolveAppTheme(themeChoiceFor(settings, providerId));
 }
 
 if (typeof window !== "undefined") {

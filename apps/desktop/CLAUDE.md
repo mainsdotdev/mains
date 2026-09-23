@@ -331,11 +331,11 @@ Core tables:
 - **Settings Routing**: `/settings?section={id}` — section ids live in `src/renderer/features/settings/settings-sections.tsx`: `general`, `appearance`, `git`, `connections`, `backends`, `dashboard`, `archive`, `claude`, `codex`, `codex-plugins`, `copilot`, `cursor`, `notifications`, `personalization`, `schedules`, `security`, `projects`
 - **Styling**: Tailwind CSS v4 (PostCSS-based)
 - **Colors come from theme tokens, never literals.** App themes (`src/renderer/lib/app-themes.ts`, Settings › Appearance, per provider) re-derive the tokens at runtime, so anything painted outside them ignores the theme:
-  - Surfaces, borders, hovers, and text use the neutral scale `primary` / `primary-50` … `primary-950`; submit buttons, links, focus, and selection use `accent`, with `accent-foreground` for text on an accent fill. No hex (`bg-[#…]`, inline `style` colors), no Tailwind palette classes (`blue-500`, `gray-*`), no `bg-white` / `text-white`.
+  - Surfaces, borders, hovers, and text use the neutral scale `primary` / `primary-50` … `primary-950`; links, focus, and selection use `accent`, with `accent-foreground` for text on an accent fill; submit buttons use the fixed `action` color. No hex (`bg-[#…]`, inline `style` colors), no Tailwind palette classes (`blue-500`, `gray-*`), no `bg-white` / `text-white`.
   - A fill between two steps is a `color-mix` of scale steps, like the `--glass-fill-*` tokens in `index.css`.
   - The scale runs light → dark in both modes (light mode paints surfaces with low steps, dark mode with high ones); the theme engine pins its ends by appearance, so never flip it per mode.
   - A new themeable token goes in `@theme static`, not `@theme inline` — inline bakes the literal into every utility and no theme can reach it.
-  - Status colors (`danger`, `success`, `warning`), provider brand colors (`--color-claude`, …), and the `--viz-cat-*` data-viz slots are fixed on purpose.
+  - Status colors (`danger`, `success`, `warning`, `action`), provider brand colors (`--color-claude`, …), and the `--viz-cat-*` data-viz slots are fixed on purpose.
 
 ### Provider Variants (renderer)
 

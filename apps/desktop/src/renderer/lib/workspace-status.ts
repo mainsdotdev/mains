@@ -29,8 +29,8 @@ const statusConfig: Record<WorkspaceStatus, WorkspaceStatusConfig> = {
   },
   done: {
     label: "Done",
-    color: "text-accent",
-    iconColor: "text-accent",
+    color: "text-action",
+    iconColor: "text-action",
   },
   canceled: {
     label: "Canceled",
