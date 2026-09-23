@@ -61,6 +61,8 @@ export const CHANNELS = {
     clearHistory: "browser:clearHistory",
     closeTab: "browser:closeTab",
     createTab: "browser:createTab",
+    setContext: "browser:setContext",
+    reassignTabs: "browser:reassignTabs",
     deleteCapture: "browser:deleteCapture",
     destroy: "browser:destroy",
     detach: "browser:detach",

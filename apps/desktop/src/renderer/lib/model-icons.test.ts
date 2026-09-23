@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  dedupeModelsByPrettyName,
   formatModelDisplayName,
+  getModelPrettyName,
   resolveModelDisplayName,
   selectableModelNames,
 } from "./model-icons";
@@ -60,6 +62,38 @@ describe("selectableModelNames", () => {
   it("tolerates a missing or non-array list", () => {
     expect(selectableModelNames([], "copilot")).toEqual([]);
     expect(selectableModelNames(undefined as unknown as string[], "copilot")).toEqual([]);
+  });
+});
+
+describe("Claude model labels", () => {
+  it("shows the same name for both Claude catalogue formats", () => {
+    expect(
+      getModelPrettyName(
+        { displayName: "Opus", description: "Opus 5.5 · Best for everyday, complex tasks" },
+        "claude",
+      ),
+    ).toBe("Opus 5.5");
+    expect(
+      getModelPrettyName(
+        { displayName: "Opus 5.5", description: "Most capable for ambitious work" },
+        "claude",
+      ),
+    ).toBe("Opus 5.5");
+    expect(
+      getModelPrettyName(
+        { displayName: "Opus 5.5", description: "Opus 5.5 for ambitious work" },
+        "claude",
+      ),
+    ).toBe("Opus 5.5");
+  });
+
+  it("keeps distinct models that share a description", () => {
+    const models = [
+      { id: "claude-opus-5", displayName: "Opus 5", description: "Best for everyday, complex tasks" },
+      { id: "claude-opus-4-8", displayName: "Opus 4.8", description: "Best for everyday, complex tasks" },
+    ];
+
+    expect(dedupeModelsByPrettyName(models, "claude")).toEqual(models);
   });
 });
 

@@ -2,7 +2,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   type ReactNode,
 } from "react";
@@ -19,6 +18,7 @@ import {
 
 interface BrowserPanelContextValue {
   isOpen: boolean;
+  ownerKey: string;
   open: () => void;
   openUrl: (url: string) => Promise<void>;
   close: () => void;
@@ -29,7 +29,11 @@ const BrowserPanelContext = createContext<BrowserPanelContextValue | null>(null)
 
 export function BrowserPanelProvider({ children }: { children: ReactNode }) {
   const dispatch = useAppDispatch();
-  const isOpen = useAppSelector((state) => state.appSettings.browserPanelOpen);
+  const persistedOpen = useAppSelector((state) => state.appSettings.browserPanelOpen);
+  const ownerKey = useAppSelector((state) => state.workspace.composerContextKey);
+  const ownerReady = useAppSelector((state) => state.workspace.composerContextReady);
+  const { pathname } = useLocation();
+  const isOpen = persistedOpen && ownerReady && !shouldHideRightPanel(pathname);
 
   // The browser takes over the right edge, which the session box sits against —
   // close every other right-edge owner regardless of where the open originated.
@@ -45,29 +49,26 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
     if (!api?.createTab) throw new Error("In-app browser is unavailable");
 
     open();
-    const response = await api.createTab(url);
+    if (api.setContext) {
+      const contextResponse = await api.setContext(ownerKey);
+      if (contextResponse?.success === false) {
+        throw new Error(contextResponse.error || "Failed to open browser tabs");
+      }
+    }
+    const response = await api.createTab(url, ownerKey);
     if (response?.success === false) {
       throw new Error(response.error || "Failed to open browser tab");
     }
-  }, [open]);
+  }, [open, ownerKey]);
   const close = useCallback(() => dispatch(setBrowserPanelOpen(false)), [dispatch]);
   const toggle = useCallback(() => {
-    if (!isOpen) dispatch(setSessionPanelOpen(false));
-    dispatch(setBrowserPanelOpen(!isOpen));
-  }, [dispatch, isOpen]);
-
-  // The browser has no place on the routes that hide the right edge (Settings,
-  // Plugins, Pulse, Relay, Tasks) — its toggle is hidden there too. The open
-  // state is persisted, so it is taken down here rather than by each page.
-  const { pathname } = useLocation();
-  const hiddenOnRoute = shouldHideRightPanel(pathname);
-  useEffect(() => {
-    if (hiddenOnRoute && isOpen) close();
-  }, [hiddenOnRoute, isOpen, close]);
+    if (!persistedOpen) dispatch(setSessionPanelOpen(false));
+    dispatch(setBrowserPanelOpen(!persistedOpen));
+  }, [dispatch, persistedOpen]);
 
   const value = useMemo(
-    () => ({ isOpen, open, openUrl, close, toggle }),
-    [isOpen, open, openUrl, close, toggle],
+    () => ({ isOpen, ownerKey, open, openUrl, close, toggle }),
+    [isOpen, ownerKey, open, openUrl, close, toggle],
   );
 
   return (
@@ -82,6 +83,7 @@ export function useBrowserPanel(): BrowserPanelContextValue {
   if (!ctx) {
     return {
       isOpen: false,
+      ownerKey: "default",
       open: () => {},
       openUrl: async () => {},
       close: () => {},

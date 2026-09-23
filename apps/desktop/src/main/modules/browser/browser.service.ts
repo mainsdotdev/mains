@@ -74,11 +74,13 @@ const BROWSER_PARTITION = "persist:mains-browser";
 const VIEW_BORDER_RADIUS_PX = 0;
 const CAPTURE_CACHE_MAX_BYTES = 100 * 1024 * 1024;
 const IDLE_HIBERNATE_MS = 2 * 60 * 1000;
-const MAX_TABS = 20;
+const MAX_TABS_PER_CONTEXT = 20;
+const MAX_PERSISTED_TABS = 400;
 const MAX_HISTORY_ENTRIES = 100;
 const MAX_FULL_PAGE_SCREENSHOT_PIXELS = 50_000_000;
 const MAX_FULL_PAGE_SCREENSHOT_DIMENSION = 16_384;
-const PERSIST_VERSION = 1;
+const PERSIST_VERSION = 2;
+const DEFAULT_OWNER_KEY = "default";
 const DOWNLOADS_PERSIST_VERSION = 1;
 const HISTORY_PERSIST_VERSION = 1;
 const MAX_DOWNLOADS = 100;
@@ -98,6 +100,7 @@ interface BrowserHistorySnapshot {
 
 interface BrowserTabRecord {
   id: string;
+  ownerKey: string;
   url: string;
   title: string;
   faviconUrl: string | null;
@@ -116,6 +119,7 @@ interface BrowserTabRecord {
 
 interface PersistedBrowserTab {
   id: string;
+  ownerKey?: string;
   url: string;
   title: string;
   faviconUrl: string | null;
@@ -127,6 +131,8 @@ interface PersistedBrowserTab {
 interface PersistedBrowserState {
   version: number;
   activeTabId: string;
+  activeOwnerKey?: string;
+  activeTabIdsByOwner?: Record<string, string>;
   tabs: PersistedBrowserTab[];
 }
 
@@ -155,9 +161,11 @@ function createTabRecord(
   url = BLANK_URL,
   title = "New tab",
   id: string = randomUUID(),
+  ownerKey = DEFAULT_OWNER_KEY,
 ): BrowserTabRecord {
   return {
     id,
+    ownerKey,
     url,
     title,
     faviconUrl: null,
@@ -321,6 +329,8 @@ function sanitizedHistory(
 export const browserService = {
   tabs: new Map<string, BrowserTabRecord>(),
   activeTabId: null as string | null,
+  activeOwnerKey: DEFAULT_OWNER_KEY,
+  activeTabIdsByOwner: {} as Record<string, string>,
   host: null as BrowserWindow | null,
   bounds: null as BrowserBounds | null,
   visible: false,
@@ -590,11 +600,11 @@ export const browserService = {
       const parsed = JSON.parse(
         fs.readFileSync(browserStatePath(), "utf8"),
       ) as PersistedBrowserState;
-      if (parsed.version !== PERSIST_VERSION || !Array.isArray(parsed.tabs)) {
+      if ((parsed.version !== 1 && parsed.version !== PERSIST_VERSION) || !Array.isArray(parsed.tabs)) {
         throw new Error("Unsupported browser state");
       }
 
-      for (const saved of parsed.tabs.slice(0, MAX_TABS)) {
+      for (const saved of parsed.tabs.slice(0, MAX_PERSISTED_TABS)) {
         if (!saved || typeof saved.id !== "string" || !saved.id) continue;
         const url =
           typeof saved.url === "string" && isAllowedBrowserUrl(saved.url)
@@ -606,6 +616,11 @@ export const browserService = {
             ? saved.title
             : "New tab",
           saved.id,
+          parsed.version === 1
+            ? DEFAULT_OWNER_KEY
+            : typeof saved.ownerKey === "string" && saved.ownerKey
+              ? saved.ownerKey
+              : DEFAULT_OWNER_KEY,
         );
         record.faviconUrl =
           typeof saved.faviconUrl === "string" ? saved.faviconUrl : null;
@@ -622,32 +637,43 @@ export const browserService = {
         this.tabs.set(record.id, record);
       }
 
-      this.activeTabId = this.tabs.has(parsed.activeTabId)
-        ? parsed.activeTabId
-        : (this.tabs.keys().next().value ?? null);
+      this.activeOwnerKey = parsed.version === PERSIST_VERSION && typeof parsed.activeOwnerKey === "string" && parsed.activeOwnerKey
+        ? parsed.activeOwnerKey
+        : DEFAULT_OWNER_KEY;
+      this.activeTabIdsByOwner = parsed.version === PERSIST_VERSION && parsed.activeTabIdsByOwner && typeof parsed.activeTabIdsByOwner === "object"
+        ? parsed.activeTabIdsByOwner
+        : {};
+      if (this.tabs.has(parsed.activeTabId)) {
+        const active = this.tabs.get(parsed.activeTabId)!;
+        this.activeTabIdsByOwner[active.ownerKey] = active.id;
+        if (parsed.version === 1) this.activeOwnerKey = active.ownerKey;
+      }
+      this.activeTabId = this.activeTabIdsByOwner[this.activeOwnerKey] ?? null;
     } catch {
       // First launch, old format, or a partial write: start with a clean tab.
     }
 
-    if (this.tabs.size === 0) {
-      const record = createTabRecord();
-      this.tabs.set(record.id, record);
-      this.activeTabId = record.id;
-    }
   },
 
   _activeTab(): BrowserTabRecord {
     this._loadPersistedTabs();
-    const active = this.activeTabId && this.tabs.get(this.activeTabId);
-    if (active) return active;
-    const first = this.tabs.values().next().value as BrowserTabRecord | undefined;
+    const active = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined;
+    if (active?.ownerKey === this.activeOwnerKey) return active;
+    const remembered = this.tabs.get(this.activeTabIdsByOwner[this.activeOwnerKey]);
+    if (remembered?.ownerKey === this.activeOwnerKey) {
+      this.activeTabId = remembered.id;
+      return remembered;
+    }
+    const first = Array.from(this.tabs.values()).find((record) => record.ownerKey === this.activeOwnerKey);
     if (first) {
       this.activeTabId = first.id;
+      this.activeTabIdsByOwner[this.activeOwnerKey] = first.id;
       return first;
     }
-    const created = createTabRecord();
+    const created = createTabRecord(BLANK_URL, "New tab", randomUUID(), this.activeOwnerKey);
     this.tabs.set(created.id, created);
     this.activeTabId = created.id;
+    this.activeTabIdsByOwner[this.activeOwnerKey] = created.id;
     return created;
   },
 
@@ -684,7 +710,7 @@ export const browserService = {
 
     contents.setWindowOpenHandler(({ url }) => {
       if (isAllowedBrowserUrl(url)) {
-        void this.createTab(url).catch((error) => {
+        void this.createTab(url, record.ownerKey).catch((error) => {
           console.warn("[browser] Failed to open popup in a new tab:", error);
         });
       } else {
@@ -717,7 +743,7 @@ export const browserService = {
         },
         {
           openTab: (url) => {
-            void this.createTab(url).catch((error) => {
+            void this.createTab(url, record.ownerKey).catch((error) => {
               console.warn("[browser] Failed to open context link:", error);
             });
           },
@@ -810,7 +836,7 @@ export const browserService = {
       }
       if (matches("browser.newTab")) {
         event.preventDefault();
-        void this.createTab().catch((error) => {
+        void this.createTab("", record.ownerKey).catch((error) => {
           console.warn("[browser] Failed to create a tab from shortcut:", error);
         });
         return;
@@ -856,7 +882,9 @@ export const browserService = {
       }
       if (matches("browser.nextTab") || matches("browser.previousTab")) {
         event.preventDefault();
-        const ids = Array.from(this.tabs.keys());
+        const ids = Array.from(this.tabs.values())
+          .filter((tab) => tab.ownerKey === record.ownerKey)
+          .map((tab) => tab.id);
         const current = ids.indexOf(record.id);
         const direction = matches("browser.previousTab") ? -1 : 1;
         const next = (current + direction + ids.length) % ids.length;
@@ -947,6 +975,7 @@ export const browserService = {
         }
         void this._handleSelection(
           parsed as Omit<BrowserSelectionPayload, "id">,
+          record.ownerKey,
         );
       } catch (error) {
         console.warn("[browser] failed to parse selection payload:", error);
@@ -1137,12 +1166,22 @@ export const browserService = {
   _persistNow() {
     this._loadPersistedTabs();
     for (const record of this.tabs.values()) this._snapshotRecord(record);
+    const allTabs = Array.from(this.tabs.values());
+    const currentTabs = allTabs.filter((record) => record.ownerKey === this.activeOwnerKey);
+    const otherTabs = allTabs.filter((record) => record.ownerKey !== this.activeOwnerKey);
+    const tabsToSave = [
+      ...otherTabs.slice(-(MAX_PERSISTED_TABS - currentTabs.length)),
+      ...currentTabs,
+    ];
 
     const state: PersistedBrowserState = {
       version: PERSIST_VERSION,
-      activeTabId: this._activeTab().id,
-      tabs: Array.from(this.tabs.values()).map((record) => ({
+      activeTabId: this.activeTabId ?? "",
+      activeOwnerKey: this.activeOwnerKey,
+      activeTabIdsByOwner: this.activeTabIdsByOwner,
+      tabs: tabsToSave.map((record) => ({
         id: record.id,
+        ownerKey: record.ownerKey,
         url: record.url,
         title: record.title,
         faviconUrl: record.faviconUrl,
@@ -1230,7 +1269,7 @@ export const browserService = {
     view.webContents.focus();
   },
 
-  async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">) {
+  async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">, ownerKey: string) {
     const id = randomUUID();
     const record = this._activeTab();
     if (!record.view || record.view.webContents.isDestroyed()) return;
@@ -1242,6 +1281,7 @@ export const browserService = {
 
     const result: BrowserSelectionResult = {
       id,
+      ownerKey,
       type: "browser_selection",
       url: payload.url,
       title: payload.title,
@@ -1493,6 +1533,8 @@ export const browserService = {
     }
     this.tabs.clear();
     this.activeTabId = null;
+    this.activeOwnerKey = DEFAULT_OWNER_KEY;
+    this.activeTabIdsByOwner = {};
     this.host = null;
     this.bounds = null;
     this.visible = false;
@@ -1504,13 +1546,100 @@ export const browserService = {
   },
 
   getState(): BrowserState {
-    const active = this._activeTab();
+    this._loadPersistedTabs();
+    const tabs = Array.from(this.tabs.values())
+      .filter((record) => record.ownerKey === this.activeOwnerKey);
+    const active = tabs.find((tab) => tab.id === this.activeTabId)
+      ?? tabs.find((tab) => tab.id === this.activeTabIdsByOwner[this.activeOwnerKey])
+      ?? tabs[0];
+    if (active) {
+      this.activeTabId = active.id;
+      this.activeTabIdsByOwner[this.activeOwnerKey] = active.id;
+    }
     return {
-      activeTabId: active.id,
-      tabs: Array.from(this.tabs.values()).map((record) =>
-        this._tabSummary(record),
-      ),
+      ownerKey: this.activeOwnerKey,
+      activeTabId: active?.id ?? "",
+      tabs: tabs.map((record) => this._tabSummary(record)),
     };
+  },
+
+  async setContext(ownerKey: string, showBlankTab = false): Promise<BrowserState> {
+    this._loadPersistedTabs();
+    if (ownerKey === this.activeOwnerKey) return this.getState();
+    if (this.activeTabId) {
+      this.activeTabIdsByOwner[this.activeOwnerKey] = this.activeTabId;
+    }
+
+    // Tabs saved before browser contexts existed belong to the first chat
+    // opened after upgrading. The same rule covers a tab opened before the
+    // workspace page has resolved its owner on startup.
+    if (
+      this.activeOwnerKey === DEFAULT_OWNER_KEY &&
+      ownerKey !== DEFAULT_OWNER_KEY &&
+      !Array.from(this.tabs.values()).some((tab) => tab.ownerKey === ownerKey)
+    ) {
+      for (const tab of this.tabs.values()) {
+        if (tab.ownerKey === DEFAULT_OWNER_KEY) tab.ownerKey = ownerKey;
+      }
+      if (this.activeTabIdsByOwner[DEFAULT_OWNER_KEY]) {
+        this.activeTabIdsByOwner[ownerKey] = this.activeTabIdsByOwner[DEFAULT_OWNER_KEY];
+        delete this.activeTabIdsByOwner[DEFAULT_OWNER_KEY];
+      }
+    }
+
+    this.activeOwnerKey = ownerKey;
+    const remembered = this.tabs.get(this.activeTabIdsByOwner[ownerKey]);
+    const next = remembered?.ownerKey === ownerKey
+      ? remembered
+      : Array.from(this.tabs.values()).find((tab) => tab.ownerKey === ownerKey);
+    if (!(showBlankTab && this.visible)) {
+      const previous = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
+      if (previous?.view) {
+        previous.deviceEmulationQueue.cancel();
+        if (this.selectMode && !previous.view.webContents.isDestroyed()) {
+          void previous.view.webContents
+            .executeJavaScript(buildInspectorScript(false))
+            .catch(() => {});
+        }
+        this._snapshotRecord(previous);
+        previous.view.setVisible(false);
+        if (this.host && !this.host.isDestroyed()) {
+          try {
+            this.host.contentView.removeChildView(previous.view);
+          } catch {
+            // It may already be detached.
+          }
+        }
+      }
+      if (this.selectMode) {
+        this.selectMode = false;
+        this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled: false });
+      }
+      this.activeTabId = next?.id ?? null;
+      if (next) this.activeTabIdsByOwner[ownerKey] = next.id;
+      this._schedulePersist();
+      this._emitState();
+      return this.getState();
+    }
+    const target = next ?? createTabRecord(BLANK_URL, "New tab", randomUUID(), ownerKey);
+    if (!next) this.tabs.set(target.id, target);
+    await this.activateTab(target.id);
+    return this.getState();
+  },
+
+  reassignTabs(fromOwnerKey: string, toOwnerKey: string): BrowserState {
+    this._loadPersistedTabs();
+    if (fromOwnerKey === toOwnerKey) return this.getState();
+    const moved = Array.from(this.tabs.values()).filter((tab) => tab.ownerKey === fromOwnerKey);
+    if (moved.length === 0) return this.getState();
+    const chosenId = this.activeTabIdsByOwner[fromOwnerKey] ?? moved[0].id;
+    for (const tab of moved) tab.ownerKey = toOwnerKey;
+    this.activeTabIdsByOwner[toOwnerKey] = chosenId;
+    delete this.activeTabIdsByOwner[fromOwnerKey];
+    if (this.activeOwnerKey === fromOwnerKey) this.activeOwnerKey = toOwnerKey;
+    this._schedulePersist();
+    this._emitState();
+    return this.getState();
   },
 
   getDownloads(): BrowserDownload[] {
@@ -1667,22 +1796,29 @@ export const browserService = {
     return null;
   },
 
-  async createTab(rawUrl = ""): Promise<BrowserState> {
+  async createTab(rawUrl = "", ownerKey?: string): Promise<BrowserState> {
     this._loadPersistedTabs();
-    if (this.tabs.size >= MAX_TABS) {
-      throw new Error(`You can open up to ${MAX_TABS} browser tabs`);
+    const targetOwnerKey = ownerKey ?? this.activeOwnerKey;
+    if (Array.from(this.tabs.values()).filter((tab) => tab.ownerKey === targetOwnerKey).length >= MAX_TABS_PER_CONTEXT) {
+      throw new Error(`You can open up to ${MAX_TABS_PER_CONTEXT} browser tabs in one chat`);
     }
-    const record = createTabRecord(resolveBrowserInput(rawUrl));
+    const record = createTabRecord(resolveBrowserInput(rawUrl), "New tab", randomUUID(), targetOwnerKey);
     this.tabs.set(record.id, record);
-    await this.activateTab(record.id);
+    if (targetOwnerKey === this.activeOwnerKey) await this.activateTab(record.id);
+    else {
+      this.activeTabIdsByOwner[targetOwnerKey] = record.id;
+      this._schedulePersist();
+    }
     return this.getState();
   },
 
   async closeTab(tabId: string): Promise<BrowserState> {
     this._loadPersistedTabs();
-    const orderedIds = Array.from(this.tabs.keys());
     const record = this.tabs.get(tabId);
-    if (!record) throw new Error("Browser tab not found");
+    if (!record || record.ownerKey !== this.activeOwnerKey) throw new Error("Browser tab not found");
+    const orderedIds = Array.from(this.tabs.values())
+      .filter((tab) => tab.ownerKey === record.ownerKey)
+      .map((tab) => tab.id);
     const closingIndex = orderedIds.indexOf(tabId);
     record.isClosing = true;
     record.deviceEmulationQueue.reset();
@@ -1706,15 +1842,18 @@ export const browserService = {
     }
     this.tabs.delete(tabId);
 
-    if (this.tabs.size === 0) {
-      const replacement = createTabRecord();
+    if (!Array.from(this.tabs.values()).some((tab) => tab.ownerKey === record.ownerKey)) {
+      const replacement = createTabRecord(BLANK_URL, "New tab", randomUUID(), record.ownerKey);
       this.tabs.set(replacement.id, replacement);
     }
 
     if (this.activeTabId === tabId) {
-      const remaining = Array.from(this.tabs.keys());
+      const remaining = Array.from(this.tabs.values())
+        .filter((tab) => tab.ownerKey === record.ownerKey)
+        .map((tab) => tab.id);
       this.activeTabId =
         remaining[Math.min(closingIndex, remaining.length - 1)] ?? remaining[0];
+      this.activeTabIdsByOwner[record.ownerKey] = this.activeTabId;
       this.selectMode = false;
       this._sendToRenderer(CHANNELS.browser.selectModeChanged, {
         enabled: false,
@@ -1730,7 +1869,7 @@ export const browserService = {
   async activateTab(tabId: string): Promise<BrowserState> {
     this._loadPersistedTabs();
     const next = this.tabs.get(tabId);
-    if (!next) throw new Error("Browser tab not found");
+    if (!next || next.ownerKey !== this.activeOwnerKey) throw new Error("Browser tab not found");
 
     const previous = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
     if (previous && previous.id !== next.id && previous.view) {
@@ -1762,6 +1901,7 @@ export const browserService = {
       });
     }
     this.activeTabId = next.id;
+    this.activeTabIdsByOwner[this.activeOwnerKey] = next.id;
     await this._mountActiveView();
     this._schedulePersist();
     this._emitState();
@@ -1916,6 +2056,7 @@ export const browserService = {
     const isFullPage = mode === "fullPage";
     return {
       id,
+      ownerKey: record.ownerKey,
       type: "browser_selection",
       url: contents.getURL() || record.url || BLANK_URL,
       title: contents.getTitle() || record.title,

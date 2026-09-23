@@ -43,6 +43,13 @@ function requireTabId(input: unknown): string {
   return input;
 }
 
+function requireOwnerKey(input: unknown): string {
+  if (typeof input !== "string" || !input.trim() || input.length > 1024) {
+    throw new Error("ownerKey must be a non-empty string");
+  }
+  return input;
+}
+
 function requireDownloadId(input: unknown): string {
   if (typeof input !== "string" || !input.trim()) {
     throw new Error("downloadId must be a string");
@@ -205,12 +212,25 @@ function requireFindInput(input: unknown): {
 export function registerBrowserIpc(): void {
   ipcMain.handle(
     CHANNELS.browser.createTab,
-    handle((url: unknown) => {
+    handle((url: unknown, ownerKey: unknown) => {
       if (url !== undefined && typeof url !== "string") {
         throw new Error("url must be a string");
       }
-      return browserService.createTab(url as string | undefined);
+      return browserService.createTab(
+        url as string | undefined,
+        ownerKey === undefined ? undefined : requireOwnerKey(ownerKey),
+      );
     }),
+  );
+  ipcMain.handle(
+    CHANNELS.browser.setContext,
+    handle((ownerKey: unknown, showBlankTab: unknown) =>
+      browserService.setContext(requireOwnerKey(ownerKey), showBlankTab === true)),
+  );
+  ipcMain.handle(
+    CHANNELS.browser.reassignTabs,
+    handle((fromOwnerKey: unknown, toOwnerKey: unknown) =>
+      browserService.reassignTabs(requireOwnerKey(fromOwnerKey), requireOwnerKey(toOwnerKey))),
   );
   ipcMain.handle(
     CHANNELS.browser.closeTab,
@@ -387,6 +407,8 @@ export function registerBrowserIpc(): void {
 export function unregisterBrowserIpc(): void {
   [
     CHANNELS.browser.createTab,
+    CHANNELS.browser.setContext,
+    CHANNELS.browser.reassignTabs,
     CHANNELS.browser.closeTab,
     CHANNELS.browser.activateTab,
     CHANNELS.browser.attach,

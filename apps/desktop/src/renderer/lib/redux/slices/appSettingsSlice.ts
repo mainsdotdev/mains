@@ -41,10 +41,14 @@ export interface AppSettingsState {
   sidebarCollapsed: boolean;
   rightPanelOpen: boolean;
   browserPanelOpen: boolean;
+  activeRightPaneContextKey: string;
+  rightPaneByContext: Record<string, "none" | "workspace" | "browser" | "document">;
+  /** Loaded documents only live for this app session. */
+  documentViewerDocByContext: Record<string, DocumentViewerDoc>;
   /**
    * Whether the session panel (environment / sources / deliverables) is open.
-   * Deliberately not persisted: it reads the run open in the workspace, and
-   * that isn't restored on boot — reopening onto an empty panel would confuse.
+   * Deliberately not persisted: it is a temporary overlay and closes when
+   * the conversation changes.
    */
   sessionPanelOpen: boolean;
   /**
@@ -94,6 +98,9 @@ const initialState: AppSettingsState = {
   sidebarCollapsed: false,
   rightPanelOpen: false,
   browserPanelOpen: false,
+  activeRightPaneContextKey: "default",
+  rightPaneByContext: {},
+  documentViewerDocByContext: {},
   sessionPanelOpen: false,
   subagentPanelCollapsed: false,
   onboardingCompleted: false,
@@ -120,6 +127,32 @@ const appSettingsSlice = createSlice({
   name: "appSettings",
   initialState,
   reducers: {
+    setRightPaneContextKey: (state, action: PayloadAction<string>) => {
+      const next = action.payload;
+      if (state.activeRightPaneContextKey === next) return;
+      const previousPane = state.documentViewerOpen && state.documentViewerDoc
+        ? "document"
+        : state.browserPanelOpen
+        ? "browser"
+        : state.rightPanelOpen
+          ? "workspace"
+          : "none";
+      state.rightPaneByContext[state.activeRightPaneContextKey] = previousPane;
+      if (previousPane === "document" && state.documentViewerDoc) {
+        state.documentViewerDocByContext[state.activeRightPaneContextKey] = state.documentViewerDoc;
+      } else {
+        delete state.documentViewerDocByContext[state.activeRightPaneContextKey];
+      }
+      state.activeRightPaneContextKey = next;
+      const pane = state.rightPaneByContext[next] ?? "none";
+      state.rightPanelOpen = pane === "workspace";
+      state.browserPanelOpen = pane === "browser";
+      state.documentViewerDoc = pane === "document"
+        ? state.documentViewerDocByContext[next] ?? null
+        : null;
+      state.documentViewerOpen = !!state.documentViewerDoc;
+      state.sessionPanelOpen = false;
+    },
     setSidebarCollapsed: (state, action: PayloadAction<boolean>) => {
       state.sidebarCollapsed = action.payload;
     },
@@ -223,6 +256,7 @@ const appSettingsSlice = createSlice({
 });
 
 export const {
+  setRightPaneContextKey,
   setSidebarCollapsed,
   setBrowserPanelOpen,
   setRightPanelOpen,

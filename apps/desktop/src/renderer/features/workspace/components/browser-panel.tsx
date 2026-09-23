@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { addContextItem } from "@/lib/redux/slices/workspaceSlice";
+import { addContextItemForKey } from "@/lib/redux/slices/workspaceSlice";
 import type { ContextBrowserSelection } from "@/features/workspace/lib/composer-context";
 import {
   Button,
@@ -83,6 +83,7 @@ const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 5;
 
 interface BrowserState {
+  ownerKey?: string;
   activeTabId: string;
   tabs: BrowserTabViewModel[];
 }
@@ -135,7 +136,7 @@ function waitForPaint(): Promise<void> {
 }
 
 export function BrowserPanel() {
-  const { isOpen, close } = useBrowserPanel();
+  const { isOpen, close, ownerKey } = useBrowserPanel();
   const dispatch = useAppDispatch();
   const viewportRef = useRef<HTMLDivElement>(null);
   const locationInputRef = useRef<HTMLInputElement>(null);
@@ -156,10 +157,17 @@ export function BrowserPanel() {
   const downloadStatesRef = useRef<
     Map<string, BrowserDownloadViewModel["state"]>
   >(new Map());
-  const [browserState, setBrowserState] = useState<BrowserState>(
+  const [storedBrowserState, setBrowserState] = useState<BrowserState>(
     EMPTY_BROWSER_STATE,
   );
-  const [urlInput, setUrlInput] = useState("");
+  const browserState = storedBrowserState.ownerKey === ownerKey
+    ? storedBrowserState
+    : EMPTY_BROWSER_STATE;
+  const [addressInput, setAddressInput] = useState({ ownerKey, value: "" });
+  const urlInput = addressInput.ownerKey === ownerKey ? addressInput.value : "";
+  const setUrlInput = useCallback((value: string) => {
+    setAddressInput({ ownerKey, value });
+  }, [ownerKey]);
   const [addressSuggestionsOpen, setAddressSuggestionsOpen] = useState(false);
   const [addressOverlayReady, setAddressOverlayReady] = useState(false);
   const [addressSuggestionIndex, setAddressSuggestionIndex] = useState(-1);
@@ -229,6 +237,7 @@ export function BrowserPanel() {
       : -1;
 
   const applyBrowserState = useCallback((state: BrowserState) => {
+    if (state.ownerKey && state.ownerKey !== ownerKey) return;
     if (
       activeTabIdRef.current &&
       activeTabIdRef.current !== state.activeTabId
@@ -244,7 +253,7 @@ export function BrowserPanel() {
     ) {
       setUrlInput(active.url === BLANK_URL ? "" : active.url);
     }
-  }, []);
+  }, [ownerKey, setUrlInput]);
 
   const applyResponseState = useCallback(
     (response: any, fallbackError: string) => {
@@ -259,6 +268,13 @@ export function BrowserPanel() {
     },
     [applyBrowserState],
   );
+
+  useLayoutEffect(() => {
+    if (!api?.setContext) return;
+    void api.setContext(ownerKey, isOpen).then((response: any) => {
+      applyResponseState(response, "Failed to restore browser tabs");
+    });
+  }, [api, ownerKey, isOpen, applyResponseState]);
 
   const applyDownloads = useCallback(
     (nextDownloads: BrowserDownloadViewModel[], notify: boolean) => {
@@ -363,7 +379,10 @@ export function BrowserPanel() {
         .attach(browserPanelBounds(node.getBoundingClientRect()))
         .then((response: any) => {
           if (cancelled) return;
-          applyResponseState(response, "Failed to open browser");
+          if (response?.success === false) {
+            toast.error(response.error || "Failed to open browser");
+            return;
+          }
           setAttached(true);
         });
     }, 360);
@@ -374,7 +393,7 @@ export function BrowserPanel() {
       void api.detach();
       queueMicrotask(() => setAttached(false));
     };
-  }, [api, applyResponseState, isOpen]);
+  }, [api, isOpen]);
 
   useLayoutEffect(() => {
     if (!isOpen || !attached) return;
@@ -399,12 +418,11 @@ export function BrowserPanel() {
       setSelectMode(enabled),
     );
     const offSelection = api.onSelection((selection) => {
-      dispatch(
-        addContextItem({
-          kind: "browser",
-          ...(selection as ContextBrowserSelection),
-        }),
-      );
+      const { ownerKey: selectionOwnerKey, ...contextSelection } = selection as ContextBrowserSelection & { ownerKey?: string };
+      dispatch(addContextItemForKey({
+        key: selectionOwnerKey || ownerKey,
+        item: { kind: "browser", ...contextSelection },
+      }));
       toast.success("Added browser selection to chat context");
     });
     const offFind = api.onFindResult((result) => {
@@ -456,7 +474,7 @@ export function BrowserPanel() {
       offDownloads();
       offHistory();
     };
-  }, [api, applyBrowserState, applyDownloads, applyResponseState, dispatch]);
+  }, [api, applyBrowserState, applyDownloads, applyResponseState, dispatch, ownerKey]);
 
   useEffect(() => {
     if (!api || !findOpen) return;
@@ -473,12 +491,12 @@ export function BrowserPanel() {
 
   const createTab = useCallback(() => {
     if (!api) return;
-    void api.createTab().then((response: any) => {
+    void api.createTab(undefined, ownerKey).then((response: any) => {
       if (applyResponseState(response, "Failed to create tab")) {
         requestAnimationFrame(() => locationInputRef.current?.focus());
       }
     });
-  }, [api, applyResponseState]);
+  }, [api, applyResponseState, ownerKey]);
 
   const closeTab = useCallback(
     (tabId: string) => {
@@ -993,10 +1011,10 @@ export function BrowserPanel() {
   const openHistoryEntryInNewTab = useCallback(
     async (url: string) => {
       if (!(await prepareBrowserMenuAction()) || !api) return;
-      const response = await api.createTab(url);
+      const response = await api.createTab(url, ownerKey);
       applyResponseState(response, "Failed to open history entry");
     },
-    [api, applyResponseState, prepareBrowserMenuAction],
+    [api, applyResponseState, prepareBrowserMenuAction, ownerKey],
   );
 
   const openFindFromMenu = useCallback(async () => {
@@ -1026,12 +1044,11 @@ export function BrowserPanel() {
       if (!(await prepareBrowserMenuAction()) || !api) return;
       const response = await api.captureScreenshot(mode);
       if (response?.success && response.data) {
-        dispatch(
-          addContextItem({
-            kind: "browser",
-            ...(response.data as ContextBrowserSelection),
-          }),
-        );
+        const { ownerKey: captureOwnerKey, ...contextSelection } = response.data as ContextBrowserSelection & { ownerKey?: string };
+        dispatch(addContextItemForKey({
+          key: captureOwnerKey || ownerKey,
+          item: { kind: "browser", ...contextSelection },
+        }));
         toast.success(
           mode === "fullPage"
             ? "Full-page screenshot added to chat context"
@@ -1041,7 +1058,7 @@ export function BrowserPanel() {
         toast.error(response?.error || "Failed to capture page");
       }
     },
-    [api, dispatch, prepareBrowserMenuAction],
+    [api, dispatch, prepareBrowserMenuAction, ownerKey],
   );
 
   useEffect(() => {

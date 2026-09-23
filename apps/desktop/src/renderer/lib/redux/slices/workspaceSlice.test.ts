@@ -1,95 +1,22 @@
 import { describe, it, expect } from "vitest";
 import reducer, {
+  activateWorkspaceView,
   addContextItem,
+  addContextItemForKey,
   clearContextItems,
   closeProviderAuthTerminal,
   markProviderAuthCommandSent,
   openProviderAuthTerminal,
   removeContextItem,
   setActiveTab,
-  setActiveWorkspaceId,
-  setActiveWorkspaceForProvider,
-  setWorkspaceProvider,
+  setComposerContextKey,
+  setDraftText,
+  setSelectedFile,
+  setSelectedSubagentForRun,
+  setWorkspaceSidebarTab,
+  toggleExplorerPath,
 } from "./workspaceSlice";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
-
-// `activeTab` is one global field, but a run tab belongs to exactly one
-// workspace. Carrying it across a switch pointed every tab-derived reader — the
-// transcript's auto-select, the session panel's run — at a run the new
-// workspace doesn't have.
-describe("workspaceSlice — the active tab across a workspace switch", () => {
-  const onRunTab = (workspaceId: string | null) => {
-    let state = reducer(undefined, setActiveWorkspaceId(workspaceId));
-    state = reducer(state, setActiveTab("run-from-ws-a"));
-    return state;
-  };
-
-  it("drops the previous workspace's run tab", () => {
-    const state = reducer(onRunTab("ws-a"), setActiveWorkspaceId("ws-b"));
-    expect(state.activeTab).toBe("editor");
-  });
-
-  it("drops it on the per-provider switch too", () => {
-    let state = onRunTab("ws-a");
-    state = reducer(
-      state,
-      setActiveWorkspaceForProvider({ providerId: "claude_code", workspaceId: "ws-b" }),
-    );
-    expect(state.activeTab).toBe("editor");
-  });
-
-  it("keeps the tab when the same workspace is set again", () => {
-    const state = reducer(onRunTab("ws-a"), setActiveWorkspaceId("ws-a"));
-    expect(state.activeTab).toBe("run-from-ws-a");
-  });
-
-  it("keeps the tab when the same workspace is set again per provider", () => {
-    let state = reducer(
-      undefined,
-      setActiveWorkspaceForProvider({ providerId: "claude_code", workspaceId: "ws-a" }),
-    );
-    state = reducer(state, setActiveTab("run-1"));
-    state = reducer(
-      state,
-      setActiveWorkspaceForProvider({ providerId: "claude_code", workspaceId: "ws-a" }),
-    );
-    expect(state.activeTab).toBe("run-1");
-  });
-});
-
-// A space switch changes the provider but can land on the SAME workspace, so
-// none of the workspace-switch resets above fire. Without a provider-keyed
-// reset the tab keeps naming the previous space's run, and the session /
-// subagent panels resurrect a run the new space doesn't list.
-describe("workspaceSlice — the active tab across a space (provider) switch", () => {
-  const onRunTab = () => {
-    let state = reducer(undefined, setWorkspaceProvider("claude_code"));
-    state = reducer(state, setActiveWorkspaceId("ws-a"));
-    state = reducer(state, setActiveTab("run-from-claude"));
-    return state;
-  };
-
-  it("drops the previous provider's run tab", () => {
-    const state = reducer(onRunTab(), setWorkspaceProvider("codex"));
-    expect(state.activeTab).toBe("editor");
-    expect(state.previousNonEditorTab).toBeNull();
-  });
-
-  it("drops the editor fallback too, so nothing resurrects the run", () => {
-    let state = onRunTab();
-    // Landing on "editor" archives the run tab as the fallback the session
-    // panels read — the provider switch must clear that as well.
-    state = reducer(state, setActiveTab("editor"));
-    expect(state.previousNonEditorTab).toBe("run-from-claude");
-    state = reducer(state, setWorkspaceProvider("codex"));
-    expect(state.previousNonEditorTab).toBeNull();
-  });
-
-  it("keeps the tab when the same provider is set again", () => {
-    const state = reducer(onRunTab(), setWorkspaceProvider("claude_code"));
-    expect(state.activeTab).toBe("run-from-claude");
-  });
-});
 
 describe("workspaceSlice — provider auth terminal", () => {
   const opened = () =>
@@ -122,7 +49,10 @@ describe("workspaceSlice — provider auth terminal", () => {
   });
 
   it("does not carry an auth terminal across provider switches", () => {
-    const state = reducer(opened(), setWorkspaceProvider("codex"));
+    const state = reducer(
+      opened(),
+      activateWorkspaceView({ key: "codex/space/ws-a", workspaceId: "ws-a", providerId: "codex" }),
+    );
     expect(state.providerAuthTerminal).toBeNull();
   });
 });
@@ -177,5 +107,116 @@ describe("workspaceSlice — composer context", () => {
       clearContextItems(),
     );
     expect(state.contextItems).toEqual([]);
+  });
+});
+
+describe("workspaceSlice — saved workspace views", () => {
+  const activate = (key: string, workspaceId: string) =>
+    activateWorkspaceView({ key, workspaceId, providerId: "codex" });
+
+  it("restores the selected file, tab, explorer and sidebar for each workspace", () => {
+    let state = reducer(undefined, activate("space/ws-a", "ws-a"));
+    state = reducer(state, setSelectedFile({ name: "a.ts", fullPath: "/a/a.ts", type: "file" }));
+    state = reducer(state, toggleExplorerPath("/a"));
+    state = reducer(state, setWorkspaceSidebarTab("changes"));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, activate("space/ws-b", "ws-b"));
+    expect(state.selectedFile).toBeNull();
+    expect(state.activeTab).toBe("editor");
+    state = reducer(state, setActiveTab("run-b"));
+    state = reducer(state, activate("space/ws-a", "ws-a"));
+    expect(state.selectedFile?.fullPath).toBe("/a/a.ts");
+    expect(state.explorerExpandedPaths).toEqual(["/a"]);
+    expect(state.sidebarTab).toBe("changes");
+    expect(state.activeTab).toBe("run-a");
+    state = reducer(state, activate("space/ws-b", "ws-b"));
+    expect(state.activeTab).toBe("run-b");
+  });
+
+  it("does not restore generated diff files whose content is transient", () => {
+    let state = reducer(undefined, activate("space/ws-a", "ws-a"));
+    state = reducer(state, setSelectedFile({ name: "diff", fullPath: "/a/diff", type: "file", extension: "diff" }));
+    state = reducer(state, activate("space/ws-b", "ws-b"));
+    state = reducer(state, activate("space/ws-a", "ws-a"));
+    expect(state.selectedFile).toBeNull();
+  });
+
+  it("keeps an intentionally selected editor tab when revisiting a workspace", () => {
+    let state = reducer(undefined, activate("space/ws-a", "ws-a"));
+    expect(state.workspaceViewNeedsDefaultRun).toBe(true);
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, setActiveTab("editor"));
+    state = reducer(state, activate("space/ws-b", "ws-b"));
+    state = reducer(state, activate("space/ws-a", "ws-a"));
+    expect(state.activeTab).toBe("editor");
+    expect(state.workspaceViewNeedsDefaultRun).toBe(false);
+  });
+
+  it("separates providers in the same physical workspace", () => {
+    let state = reducer(
+      undefined,
+      activateWorkspaceView({ key: "claude/space/ws-a", workspaceId: "ws-a", providerId: "claude" }),
+    );
+    state = reducer(state, setActiveTab("claude-run"));
+    state = reducer(
+      state,
+      activateWorkspaceView({ key: "codex/space/ws-a", workspaceId: "ws-a", providerId: "codex" }),
+    );
+    expect(state.activeTab).toBe("editor");
+    state = reducer(
+      state,
+      activateWorkspaceView({ key: "claude/space/ws-a", workspaceId: "ws-a", providerId: "claude" }),
+    );
+    expect(state.activeTab).toBe("claude-run");
+  });
+});
+
+describe("workspaceSlice — composer owners", () => {
+  const file: ContextItem = { kind: "file", name: "a.ts", fullPath: "/a.ts", type: "file" };
+
+  it("keeps draft text and attachments with their conversation in the live renderer", () => {
+    let state = reducer(undefined, setComposerContextKey("chat-a"));
+    state = reducer(state, setDraftText({ key: "chat-a", text: "unfinished" }));
+    state = reducer(state, addContextItem(file));
+    state = reducer(state, setComposerContextKey("chat-b"));
+    expect(state.contextItems).toEqual([]);
+    state = reducer(state, setComposerContextKey("chat-a"));
+    expect(state.contextItems).toEqual([file]);
+    expect(state.draftTextByKey["chat-a"]).toBe("unfinished");
+  });
+
+  it("places an asynchronous browser selection in the chat that produced it", () => {
+    let state = reducer(undefined, setComposerContextKey("chat-b"));
+    state = reducer(state, addContextItemForKey({ key: "chat-a", item: file }));
+    expect(state.contextItems).toEqual([]);
+    state = reducer(state, setComposerContextKey("chat-a"));
+    expect(state.contextItems).toEqual([file]);
+  });
+
+  it("carries a global Appshot to the next chat while leaving files with their owner", () => {
+    const appshot: ContextItem = {
+      kind: "appshot", id: "cap-1", appName: "Browser", bundleIdentifier: null,
+      windowTitle: "Page", timestamp: "2026-09-23T00:00:00Z",
+      screenshotPath: "/tmp/cap.png", screenshotCaptureName: "cap.png",
+      screenshotMimeType: "image/png", accessibilityText: "",
+      accessibilityStatus: "captured", accessibilityTruncated: false,
+    };
+    let state = reducer(undefined, setComposerContextKey("chat-a"));
+    state = reducer(state, addContextItem(file));
+    state = reducer(state, addContextItem(appshot));
+    state = reducer(state, setComposerContextKey("chat-b"));
+    expect(state.contextItems).toEqual([appshot]);
+    state = reducer(state, setComposerContextKey("chat-a"));
+    expect(state.contextItems).toEqual([file, appshot]);
+  });
+});
+
+describe("workspaceSlice — subagent detail", () => {
+  it("remembers the selected agent separately for each run", () => {
+    let state = reducer(undefined, setSelectedSubagentForRun({ runId: "run-a", subagentId: "agent-a" }));
+    state = reducer(state, setSelectedSubagentForRun({ runId: "run-b", subagentId: "agent-b" }));
+    expect(state.selectedSubagentIdByRun).toEqual({ "run-a": "agent-a", "run-b": "agent-b" });
+    state = reducer(state, setSelectedSubagentForRun({ runId: "run-a", subagentId: null }));
+    expect(state.selectedSubagentIdByRun).toEqual({ "run-b": "agent-b" });
   });
 });

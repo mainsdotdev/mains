@@ -73,7 +73,20 @@ export function getModelPrettyName(
   if (variant === "cursor") return formatCursorModelName(model.displayName);
   if (variant === "claude" && model.description) {
     const firstPart = model.description.split("·")[0].trim();
-    return firstPart.replace(/ with 1M context$/, " [1M]");
+    // Older Claude catalogues put the version in the description, but newer
+    // ones use it only for a tagline. A tagline can also be shared by several
+    // models, so it must never replace the SDK's display name.
+    const name = model.displayName.replace(/^Claude\s+/i, "").trim();
+    const describedName = firstPart.replace(/^Claude\s+/i, "");
+    const remainder = describedName.slice(name.length);
+    if (
+      (model.description.includes("·") || firstPart.endsWith(" with 1M context")) &&
+      name &&
+      describedName.toLowerCase().startsWith(name.toLowerCase()) &&
+      (!remainder || /^[\s([]/.test(remainder))
+    ) {
+      return firstPart.replace(/ with 1M context$/, " [1M]");
+    }
   }
   return model.displayName;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setSubagentPanelCollapsed } from "@/lib/redux/slices/appSettingsSlice";
+import { setSelectedSubagentForRun } from "@/lib/redux/slices/workspaceSlice";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { useIsMobile } from "@/lib/platform";
 import {
@@ -91,20 +92,22 @@ export function SubagentPanel({
   const terminalOpen = useAppSelector(
     (state) => state.appSettings.bottomTerminalOpen,
   );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedId = useAppSelector((state) =>
+    runId ? state.workspace.selectedSubagentIdByRun[runId] ?? null : null,
+  );
+  const setSelectedId = (subagentId: string | null) => {
+    if (runId) dispatch(setSelectedSubagentForRun({ runId, subagentId }));
+  };
   const [isExpandedList, setIsExpandedList] = useState(false);
 
   const subagents = useSessionSubagents(runId);
 
-  // Selection is contextual (a specific agent of a specific run) and resets
-  // per run. Pill-vs-list deliberately does NOT reset or auto-open on new
-  // spawns — it's a persisted preference; the pill's count and twinkling
-  // glyphs already signal new activity.
+  // The selected agent belongs to its run. List expansion is only a temporary
+  // presentation state; pill-vs-list remains the user's saved preference.
   const prevRunRef = useRef(runId);
   useEffect(() => {
     if (prevRunRef.current !== runId) {
       prevRunRef.current = runId;
-      setSelectedId(null);
       setIsExpandedList(false);
     }
   }, [runId]);

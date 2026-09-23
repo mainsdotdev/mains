@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
 import reducer, {
+  setBrowserPanelOpen,
+  setDocumentViewerDoc,
+  setDocumentViewerOpen,
+  setRightPaneContextKey,
+  setRightPanelOpen,
   setSessionPanelOpen,
   setWorkspaceGroupExpanded,
 } from "./appSettingsSlice";
@@ -30,6 +35,33 @@ describe("appSettingsSlice — session panel vs the new-run tab", () => {
   it("can be reopened while the new-run tab is active", () => {
     const closed = reducer(open(), openNewRunTab());
     expect(reducer(closed, setSessionPanelOpen(true)).sessionPanelOpen).toBe(true);
+  });
+});
+
+describe("appSettingsSlice — right pane per conversation", () => {
+  it("restores the browser or workspace panel when returning to a chat", () => {
+    let state = reducer(undefined, setRightPaneContextKey("chat-a"));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, setRightPaneContextKey("chat-b"));
+    expect(state.browserPanelOpen).toBe(false);
+    state = reducer(state, setRightPanelOpen(true));
+    state = reducer(state, setRightPaneContextKey("chat-a"));
+    expect(state.browserPanelOpen).toBe(true);
+    expect(state.rightPanelOpen).toBe(false);
+    state = reducer(state, setRightPaneContextKey("chat-b"));
+    expect(state.rightPanelOpen).toBe(true);
+  });
+
+  it("restores an open document when returning to its chat in the same session", () => {
+    const doc = { path: "/tmp/report.pdf", fileName: "report.pdf", docType: "pdf" as const };
+    let state = reducer(undefined, setRightPaneContextKey("chat-a"));
+    state = reducer(state, setDocumentViewerDoc(doc));
+    state = reducer(state, setDocumentViewerOpen(true));
+    state = reducer(state, setRightPaneContextKey("chat-b"));
+    expect(state.documentViewerOpen).toBe(false);
+    state = reducer(state, setRightPaneContextKey("chat-a"));
+    expect(state.documentViewerDoc).toEqual(doc);
+    expect(state.documentViewerOpen).toBe(true);
   });
 });
 

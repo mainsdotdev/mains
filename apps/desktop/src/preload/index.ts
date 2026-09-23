@@ -1067,8 +1067,12 @@ const api = {
 
   // Embedded browser panel operations
   browser: {
-    createTab: (url?: string) =>
-      ipcRenderer.invoke(CHANNELS.browser.createTab, url),
+    createTab: (url?: string, ownerKey?: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.createTab, url, ownerKey),
+    setContext: (ownerKey: string, showBlankTab = false) =>
+      ipcRenderer.invoke(CHANNELS.browser.setContext, ownerKey, showBlankTab),
+    reassignTabs: (fromOwnerKey: string, toOwnerKey: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.reassignTabs, fromOwnerKey, toOwnerKey),
     closeTab: (tabId: string) =>
       ipcRenderer.invoke(CHANNELS.browser.closeTab, tabId),
     activateTab: (tabId: string) =>
@@ -1141,6 +1145,7 @@ const api = {
     },
     onStateChanged: (
       callback: (state: {
+        ownerKey: string;
         activeTabId: string;
         tabs: Array<{
           tabId: string;

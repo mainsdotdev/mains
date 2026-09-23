@@ -119,6 +119,7 @@ function AppContent() {
     (state) => state.appSettings.sidebarCollapsed,
   );
   const isRightPanelOpen = useAppSelector((state) => state.appSettings.rightPanelOpen);
+  const rightPaneReady = useAppSelector((state) => state.workspace.composerContextReady);
   const isSessionPanelOpen = useAppSelector(
     (state) => state.appSettings.sessionPanelOpen,
   );
@@ -137,7 +138,7 @@ function AppContent() {
   // developer session must not inset the content there (and is left untouched
   // so switching back to developer restores it).
   const rightPanelVisible =
-    !hideRightPanel && modeConfig.showRightPanel && isRightPanelOpen;
+    rightPaneReady && !hideRightPanel && modeConfig.showRightPanel && isRightPanelOpen;
   // Whatever currently owns the right edge — the content stops there, and the
   // session box aligns to the same edge just inside it.
   const rightLaneWidth = docViewer.isOpen
@@ -346,7 +347,7 @@ function AppContent() {
           />
         )}
         {!hideRightPanel && modeConfig.showRightPanel && (
-          <RightPanel isOpen={isRightPanelOpen} width={RIGHT_PANEL_WIDTH} />
+          <RightPanel isOpen={rightPanelVisible} width={RIGHT_PANEL_WIDTH} />
         )}
         {!hideRightPanel && (
           <SessionPanel
