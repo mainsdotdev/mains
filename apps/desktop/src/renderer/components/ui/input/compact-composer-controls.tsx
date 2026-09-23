@@ -6,18 +6,15 @@ import Text from "../text";
 import { ArrowUp, Brain, BoltFill, Check } from "../icons";
 import { Bolt } from "../icons/space";
 import { useClickOutside } from "@/hooks/use-click-outside";
-import {
-  formatModelDisplayName,
-  getModelIcon,
-  selectableModelNames,
-} from "@/lib/model-icons";
+import { getModelIcon } from "@/lib/model-icons";
+import { formatModelDisplayName, selectableModelNames } from "@/lib/model-display";
+import type { ProviderVariant } from "@/lib/provider-variants";
 import { ULTRACODE_GRADIENT_TEXT } from "./ultracode-styles";
 
-type Variant = "claude" | "copilot" | "codex" | "cursor";
 type EffortLevel = "minimal" | "low" | "medium" | "high" | "max" | "xhigh";
 
 interface CompactComposerControlsProps {
-  variant: Variant;
+  variant: ProviderVariant;
   model: string;
   models: string[];
   onModelChange: (model: string) => void;

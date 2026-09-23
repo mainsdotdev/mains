@@ -9,7 +9,7 @@ import {
 } from "@/lib/redux/api/providersApi";
 import { setWorkspaceModel } from "@/lib/redux/slices/workspaceSlice";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { dedupeModelsByPrettyName, getModelPrettyName } from "@/lib/model-icons";
+import { dedupeModelsByPrettyName, getModelPrettyName } from "@/lib/model-display";
 import {
   getProviderVariant,
   type ProviderVariant,

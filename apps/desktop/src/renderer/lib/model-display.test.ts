@@ -5,7 +5,7 @@ import {
   getModelPrettyName,
   resolveModelDisplayName,
   selectableModelNames,
-} from "./model-icons";
+} from "./model-display";
 
 describe("formatModelDisplayName", () => {
   it("removes separators from GPT display names", () => {

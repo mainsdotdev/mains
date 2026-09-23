@@ -16,12 +16,8 @@ import {
 } from "@/lib/provider-variants";
 import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import { useClickOutside } from "@/hooks/use-click-outside";
-import {
-  getModelIcon,
-  dedupeModelsByPrettyName,
-  getModelPrettyName,
-  type ModelIconVariant,
-} from "@/lib/model-icons";
+import { getModelIcon } from "@/lib/model-icons";
+import { dedupeModelsByPrettyName, getModelPrettyName } from "@/lib/model-display";
 import { useListProjectsQuery } from "@/lib/redux/api/projectsApi";
 import { useGetAccountQuery } from "@/lib/redux/api/accountApi";
 import { useListCollectionsQuery } from "@/lib/redux/api/collectionsApi";
@@ -484,7 +480,7 @@ export function ModelPicker({
   const { data: models = [] } = useGetProviderModelsQuery(providerId, {
     skip: !providerId,
   });
-  const variant: ModelIconVariant | undefined =
+  const variant: ProviderVariant | undefined =
     getProviderVariantById(providerId)?.variant;
   const selectableModels = dedupeModelsByPrettyName(models, variant);
   const selected = models.find((m) => m.id === value);

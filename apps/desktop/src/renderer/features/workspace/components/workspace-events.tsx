@@ -49,7 +49,7 @@ import {
 } from "@/lib/redux/api";
 import { getProviderVariant } from "@/lib/provider-variants";
 import { isDocumentRenderImage } from "@/lib/document-viewer";
-import { resolveModelDisplayName } from "@/lib/model-icons";
+import { resolveModelDisplayName } from "@/lib/model-display";
 import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
