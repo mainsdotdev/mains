@@ -416,7 +416,7 @@ function FileSection({
                     side: hovered.side === "deletions" ? "left" : "right",
                   });
                 }}
-                className="flex items-center justify-center w-4 h-4 rounded bg-accent text-white text-xs font-semibold leading-none cursor-pointer select-none"
+                className="flex items-center justify-center w-4 h-4 rounded bg-accent text-accent-foreground text-xs font-semibold leading-none cursor-pointer select-none"
               >
                 +
               </Button>

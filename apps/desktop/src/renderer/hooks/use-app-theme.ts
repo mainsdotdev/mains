@@ -6,9 +6,8 @@ import {
   readPersistedWorkspaceSetting,
 } from "@/lib/redux/persist-boot";
 import {
-  DEFAULT_APP_THEME_SETTINGS,
   applyAppTheme,
-  isAppThemeSettings,
+  parseAppThemeSettings,
   resolveAppTheme,
   themeChoiceFor,
   type AppThemeSettings,
@@ -35,6 +34,7 @@ import { useActiveSpace } from "./use-active-space";
  */
 
 const isString = (value: unknown): value is string => typeof value === "string";
+const isAnything = (value: unknown): value is unknown => value !== undefined;
 
 function resolveFor(
   settings: AppThemeSettings,
@@ -52,10 +52,10 @@ if (typeof window !== "undefined") {
   applyAppTheme(
     document,
     resolveFor(
-      readPersistedAppSetting(
-        "appTheme",
-        isAppThemeSettings,
-        DEFAULT_APP_THEME_SETTINGS,
+      // Raw, then parsed: the blob may predate the redux-persist migration
+      // that rehydration will run.
+      parseAppThemeSettings(
+        readPersistedAppSetting("appTheme", isAnything, undefined),
       ),
       readPersistedWorkspaceSetting<string | null>(
         "selectedProviderId",

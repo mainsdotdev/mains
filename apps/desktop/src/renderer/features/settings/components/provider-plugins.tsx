@@ -250,7 +250,7 @@ function InstalledPluginShelf({
                   tooltipPosition="bottom"
                   aria-label={`Open ${name}`}
                   onClick={() => onSelect(plugin.id)}
-                  className={`size-12 shrink-0 snap-start rounded-2xl glass-surface flex items-center justify-center transition-[transform,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400/70 cursor-pointer ${
+                  className={`size-12 shrink-0 snap-start rounded-2xl glass-surface flex items-center justify-center transition-[transform,opacity] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70 cursor-pointer ${
                     plugin.enabled ? "" : "opacity-55"
                   }`}
                 >

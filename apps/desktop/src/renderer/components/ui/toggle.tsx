@@ -50,9 +50,9 @@ export function Toggle({
         onClick={() => onChange(!enabled)}
         className={cn(
           "relative inline-flex h-5 w-12 shrink-0 items-center rounded-full transition-all",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2",
           "disabled:cursor-not-allowed disabled:opacity-40",
-          enabled ? "bg-success" : "glass-toggle",
+          enabled ? "bg-accent" : "glass-toggle",
         )}
       >
         <span

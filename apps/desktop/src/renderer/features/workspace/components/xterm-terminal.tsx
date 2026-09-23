@@ -3,68 +3,100 @@ import { appApi, appEvents } from "@/lib/transport";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useDarkMode } from "@/hooks/use-dark-mode";
+import { useThemeTokens } from "@/hooks/use-theme-tokens";
+import { isHexColor, mixOklab } from "@/lib/color";
 
-const baseThemeColors = {
+/**
+ * ANSI hues stay fixed per mode: they carry meaning (red is an error, green a
+ * pass), and the one-dark / Tailwind sets read on any theme's background. The
+ * neutrals come from the theme scale instead — see `terminalTheme`.
+ */
+const ANSI_HUES = {
   dark: {
-    foreground: "#cecdc3",
-    cursor: "#cecdc3",
-    selectionBackground: "#403e3c",
-    black: "#0c0c0c",
     red: "#e06c75",
     green: "#98c379",
     yellow: "#e5c07b",
     blue: "#61afef",
     magenta: "#c678dd",
     cyan: "#56b6c2",
-    white: "#cecdc3",
-    brightBlack: "#575653",
     brightRed: "#e06c75",
     brightGreen: "#98c379",
     brightYellow: "#e5c07b",
     brightBlue: "#61afef",
     brightMagenta: "#c678dd",
     brightCyan: "#56b6c2",
-    brightWhite: "#ffffff",
   },
   light: {
-    foreground: "#1c1917",
-    cursor: "#1c1917",
-    selectionBackground: "#d6d3d1",
-    black: "#1c1917",
     red: "#dc2626",
     green: "#16a34a",
     yellow: "#ca8a04",
     blue: "#2563eb",
     magenta: "#9333ea",
     cyan: "#0891b2",
-    white: "#f5f5f4",
-    brightBlack: "#78716c",
     brightRed: "#ef4444",
     brightGreen: "#22c55e",
     brightYellow: "#eab308",
     brightBlue: "#3b82f6",
     brightMagenta: "#a855f7",
     brightCyan: "#06b6d4",
-    brightWhite: "#ffffff",
   },
 };
 
+const SCALE_TOKENS = [
+  "--color-primary",
+  "--color-primary-100",
+  "--color-primary-200",
+  "--color-primary-600",
+  "--color-primary-700",
+  "--color-primary-800",
+  "--color-primary-900",
+  "--color-primary-950",
+] as const;
 
+type ScaleValues = Record<(typeof SCALE_TOKENS)[number], string>;
 
-const getTheme = (variant: string | undefined, isDark: boolean): ITheme => {
-  const backgrounds = isDark ? "#0c0c0c" : "#ffffff"
-  const colors = isDark ? baseThemeColors.dark : baseThemeColors.light;
+const FONT_TOKENS = ["--font-mono"] as const;
+
+/**
+ * The terminal's neutrals are steps of the theme scale, picked to match the
+ * surface it sits on (`bg-primary` / `dark:bg-primary-950`) and the grays it
+ * used before themes (each within a shade of its old literal).
+ */
+function terminalTheme(scale: ScaleValues, isDark: boolean): ITheme {
+  if (!isDark) {
+    return {
+      background: scale["--color-primary"],
+      foreground: scale["--color-primary-900"],
+      cursor: scale["--color-primary-900"],
+      selectionBackground: scale["--color-primary-200"],
+      black: scale["--color-primary-900"],
+      white: scale["--color-primary-100"],
+      brightBlack: scale["--color-primary-600"],
+      brightWhite: scale["--color-primary"],
+      ...ANSI_HUES.light,
+    };
+  }
+  // Halfway between the hover step and the one above it; `mixOklab` needs
+  // hex, which the scale always is once the stylesheet has loaded.
+  const [hover, above] = [scale["--color-primary-800"], scale["--color-primary-700"]];
   return {
-    background: backgrounds,
-    ...colors,
+    background: scale["--color-primary-950"],
+    foreground: scale["--color-primary-200"],
+    cursor: scale["--color-primary-200"],
+    selectionBackground:
+      isHexColor(hover) && isHexColor(above) ? mixOklab(hover, above, 0.5) : above,
+    black: scale["--color-primary-950"],
+    white: scale["--color-primary-200"],
+    brightBlack: scale["--color-primary-700"],
+    brightWhite: scale["--color-primary"],
+    ...ANSI_HUES.dark,
   };
-};
+}
 
 interface XtermTerminalProps {
   id: string;
   /** Undefined asks the backend to start the PTY in its own home directory. */
   rootPath?: string;
-  variant?: string;
   pendingCommand?: string | null;
   onPendingCommandSent?: () => void;
 }
@@ -72,7 +104,6 @@ interface XtermTerminalProps {
 export function XtermTerminal({
   id,
   rootPath,
-  variant,
   pendingCommand,
   onPendingCommandSent,
 }: XtermTerminalProps) {
@@ -83,14 +114,30 @@ export function XtermTerminal({
   const { darkMode } = useDarkMode();
   const [ptyReady, setPtyReady] = useState(false);
 
-  const theme = useMemo(() => getTheme(variant, darkMode), [variant, darkMode]);
+  const scale = useThemeTokens(SCALE_TOKENS);
+  const theme = useMemo(() => terminalTheme(scale, darkMode), [scale, darkMode]);
+  // The code font from Settings › Appearance; xterm measures glyphs itself,
+  // so it takes the resolved stack rather than a var().
+  const fontFamily =
+    useThemeTokens(FONT_TOKENS)["--font-mono"] || "ui-monospace, monospace";
 
-  // Update terminal theme when dark mode or variant changes
+  // Update the terminal theme when the mode or the app theme changes
   useEffect(() => {
     if (termRef.current) {
       termRef.current.options.theme = theme;
     }
   }, [theme]);
+
+  // A new font changes the cell size: refit the grid to the pane and tell the
+  // PTY, as the resize observer below does for a pane resize.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || term.options.fontFamily === fontFamily) return;
+    term.options.fontFamily = fontFamily;
+    fitAddonRef.current?.fit();
+    const dims = fitAddonRef.current?.proposeDimensions();
+    if (dims) appApi.terminal.resize(id, dims.cols, dims.rows);
+  }, [fontFamily, id]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -99,7 +146,7 @@ export function XtermTerminal({
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 12,
-      fontFamily: "ui-monospace, monospace",
+      fontFamily,
       theme,
       allowProposedApi: true,
       allowTransparency: true,

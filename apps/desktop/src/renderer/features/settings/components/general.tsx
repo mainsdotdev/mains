@@ -1,24 +1,4 @@
-import { useState } from "react";
-import {
-  AsciiSpinner,
-  Button,
-  Select,
-  Slider,
-  Text,
-  Toggle,
-  toast,
-} from "@/components/ui";
-import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import {
-  setCodeFontSize,
-  setInterfaceFontSize,
-} from "@/lib/redux/slices/appSettingsSlice";
-import {
-  MAX_CODE_FONT_SIZE,
-  MAX_INTERFACE_FONT_SIZE,
-  MIN_CODE_FONT_SIZE,
-  MIN_INTERFACE_FONT_SIZE,
-} from "@/lib/appearance-fonts";
+import { AsciiSpinner, Button, Select, Text, Toggle } from "@/components/ui";
 import {
   useGetAppSettingsQuery,
   useSetShowToolCallsMutation,
@@ -31,10 +11,8 @@ import {
   SettingsRow,
   SettingsDivider,
 } from "./settings-layout";
-import { ThemePicker, ThemeSelect, type ThemeValue } from "./theme-picker";
-import { AppThemeSettingsRows } from "./app-theme-settings";
 import { useAutoUpdate } from "@/hooks/use-auto-update";
-import { useCapabilities, useIsMobile } from "@/lib/platform";
+import { useCapabilities } from "@/lib/platform";
 import { Refresh } from "@/components/ui/icons";
 import {
   AgentCard,
@@ -210,55 +188,6 @@ function AgentsSection() {
   );
 }
 
-/**
- * Applied on release, not while dragging: the interface size rescales the whole
- * page — this row included — so a live update would slide the handle out from
- * under the cursor. The draft drives the readout during the drag.
- */
-function InterfaceFontSizeSlider() {
-  const dispatch = useAppDispatch();
-  const stored = useAppSelector((s) => s.appSettings.interfaceFontSize);
-  const [draft, setDraft] = useState(stored);
-  const [syncedFrom, setSyncedFrom] = useState(stored);
-
-  // Adjust during render rather than in an effect: keying the slider off
-  // `stored` would remount it on every commit and drop keyboard focus mid-step.
-  if (syncedFrom !== stored) {
-    setSyncedFrom(stored);
-    setDraft(stored);
-  }
-
-  return (
-    <Slider
-      value={draft}
-      aria-label="Interface size"
-      onChange={setDraft}
-      onCommit={(next) => dispatch(setInterfaceFontSize(next))}
-      min={MIN_INTERFACE_FONT_SIZE}
-      max={MAX_INTERFACE_FONT_SIZE}
-      step={1}
-      formatValue={(size) => `${size}px`}
-    />
-  );
-}
-
-function CodeFontSizeSlider() {
-  const dispatch = useAppDispatch();
-  const value = useAppSelector((s) => s.appSettings.codeFontSize);
-
-  return (
-    <Slider
-      value={value}
-      aria-label="Code size"
-      onChange={(next) => dispatch(setCodeFontSize(next))}
-      min={MIN_CODE_FONT_SIZE}
-      max={MAX_CODE_FONT_SIZE}
-      step={1}
-      formatValue={(size) => `${size}px`}
-    />
-  );
-}
-
 export default function GeneralSettings() {
   const {
     state: updateState,
@@ -266,12 +195,6 @@ export default function GeneralSettings() {
     install: installUpdate,
   } = useAutoUpdate();
   const caps = useCapabilities();
-  const isMobile = useIsMobile();
-
-  const handleThemeChange = (value: ThemeValue) => {
-    const labelMap = { light: "Light", system: "Auto", dark: "Dark" };
-    toast.success(`Theme changed to ${labelMap[value]}`);
-  };
 
   return (
     <SettingsPageShell title="General">
@@ -293,37 +216,6 @@ export default function GeneralSettings() {
             </SettingsRow>
           </>
         )}
-      </SettingsSection>
-
-      <SettingsSection title="Appearance">
-        <SettingsRow
-          title="Theme"
-          description="Choose your preferred color mode"
-        >
-          {isMobile ? (
-            <ThemeSelect onChange={handleThemeChange} />
-          ) : (
-            <ThemePicker onChange={handleThemeChange} />
-          )}
-        </SettingsRow>
-
-        <AppThemeSettingsRows compact={isMobile} />
-
-        <SettingsDivider />
-        <SettingsRow
-          title="Interface Size"
-          description="Scales the whole interface — text, spacing, and controls"
-        >
-          <InterfaceFontSizeSlider />
-        </SettingsRow>
-
-        <SettingsDivider />
-        <SettingsRow
-          title="Code Size"
-          description="Size of diffs, file previews, and code blocks"
-        >
-          <CodeFontSizeSlider />
-        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection title="Agents">

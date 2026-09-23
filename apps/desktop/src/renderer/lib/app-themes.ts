@@ -1,12 +1,14 @@
 import {
   contrastRatio,
+  isHexColor,
   mixOklab,
   oklabLightness,
   shiftLightness,
 } from "./color";
+import { APP_THEME_PRESETS, DEFAULT_APP_THEME_ID } from "./app-theme-presets";
 
 /**
- * App themes — Settings › General › Appearance.
+ * App themes — Settings › Appearance.
  *
  * A theme is a palette per appearance. It restyles no component: every
  * surface, border, hover fill and text colour in the renderer is already a
@@ -26,8 +28,10 @@ import {
  * app looks exactly as it did before themes existed.
  *
  * Which theme is in force depends on the active provider: the settings hold a
- * default choice and per-provider overrides (`AppThemeSettings`), and the
- * accent can come from the provider's brand colour instead of the theme.
+ * default choice and per-provider overrides (`AppThemeSettings`). Each
+ * appearance's choice is a preset plus the user's edits on top — background,
+ * foreground, contrast, the accent (the theme's, the provider's brand colour,
+ * or the user's own), and whether the frame is translucent.
  */
 
 export type ThemeAppearance = "light" | "dark";
@@ -58,75 +62,31 @@ export interface AppThemePreset {
   readonly palettes: Partial<Record<ThemeAppearance, ThemePalette | null>>;
 }
 
-export const DEFAULT_APP_THEME_ID = "mains";
-
-// Every palette here must keep secondary text at WCAG AA — the contrast
-// values are what that takes, and `app-themes.test.ts` holds each one to it.
-export const APP_THEME_PRESETS: readonly AppThemePreset[] = [
-  {
-    id: DEFAULT_APP_THEME_ID,
-    name: "Mains",
-    palettes: { light: null, dark: null },
-  },
-  {
-    id: "tokyo-night",
-    name: "Tokyo Night",
-    palettes: {
-      dark: {
-        background: "#1a1b26",
-        foreground: "#a9b1d6",
-        accent: "#7aa2f7",
-        contrast: 0.3,
-      },
-    },
-  },
-  {
-    id: "catppuccin",
-    name: "Catppuccin",
-    palettes: {
-      light: {
-        background: "#eff1f5",
-        foreground: "#4c4f69",
-        accent: "#8839ef",
-        contrast: 1,
-      },
-      dark: {
-        background: "#1e1e2e",
-        foreground: "#cdd6f4",
-        accent: "#cba6f7",
-        contrast: 0,
-      },
-    },
-  },
-  {
-    id: "gruvbox",
-    name: "Gruvbox",
-    palettes: {
-      light: {
-        background: "#fbf1c7",
-        foreground: "#3c3836",
-        accent: "#076678",
-        contrast: 0.6,
-      },
-      dark: {
-        background: "#282828",
-        foreground: "#ebdbb2",
-        accent: "#83a598",
-        contrast: 0,
-      },
-    },
-  },
-];
+// The presets are data; they live beside this file.
+export { APP_THEME_PRESETS, DEFAULT_APP_THEME_ID } from "./app-theme-presets";
 
 /** The themes that offer something for `appearance`, in menu order. */
 export function appThemesFor(appearance: ThemeAppearance): AppThemePreset[] {
   return APP_THEME_PRESETS.filter((preset) => appearance in preset.palettes);
 }
 
+/** A preset's palette for `appearance`; `null` for stock or when it has none. */
+function presetPalette(
+  id: string,
+  appearance: ThemeAppearance,
+): ThemePalette | null {
+  return (
+    APP_THEME_PRESETS.find((preset) => preset.id === id)?.palettes[
+      appearance
+    ] ?? null
+  );
+}
+
 /**
  * The stock scale as a palette: index.css's content backgrounds, scale ends
- * and accent. Nothing derives a scale from it — a stock appearance emits none
- * — but a provider accent shown on stock is fitted and inked against it.
+ * and accent. A stock appearance derives nothing from it until one of its
+ * colours is edited; a provider accent on stock is fitted and inked against
+ * it meanwhile.
  */
 const STOCK_PALETTES: Record<ThemeAppearance, ThemePalette> = {
   light: {
@@ -149,59 +109,144 @@ const STOCK_FRAMES: Record<ThemeAppearance, string> = {
   dark: "#000000",
 };
 
+const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
+
 // ─────────────────────────────────────────────────────────────
 // Settings
 // ─────────────────────────────────────────────────────────────
 
-/** Where the accent comes from: the theme, or the active provider's brand. */
-export type ThemeAccentSource = "theme" | "provider";
+/**
+ * Where an appearance's accent comes from: the theme, the active provider's
+ * brand colour, or the user's own (`AppearanceChoice.accentColor`).
+ */
+export type ThemeAccentSource = "theme" | "provider" | "custom";
 
-/** One scope's picks: a theme id per appearance, and the accent source. */
-export interface ThemeChoice {
-  readonly light: string;
-  readonly dark: string;
+/** One appearance's pick: a preset, and the user's edits on top of it. */
+export interface AppearanceChoice {
+  readonly theme: string;
   readonly accent: ThemeAccentSource;
+  /**
+   * The custom accent, `#rrggbb`. Kept while another source is picked, so
+   * switching back to "custom" brings it back.
+   */
+  readonly accentColor?: string;
+  /** Edits of the preset's palette; unset keeps the preset's value. */
+  readonly background?: string;
+  readonly foreground?: string;
+  readonly contrast?: number;
+  /**
+   * Whether the frame lets the macOS vibrancy through. Unset follows the
+   * preset: stock is translucent, every palette theme opaque.
+   */
+  readonly translucent?: boolean;
+}
+
+export interface ThemeChoice {
+  readonly light: AppearanceChoice;
+  readonly dark: AppearanceChoice;
 }
 
 /**
- * Settings › General › Appearance. `default` applies to every provider; a
- * provider's entry overrides any subset of it. A key the entry lacks follows
- * the default, so changing the default moves every provider that didn't opt
- * out of that key.
+ * Settings › Appearance. `default` applies to every provider; a provider's
+ * entry replaces it one appearance at a time. An appearance the entry lacks
+ * follows the default, so editing the default moves every provider that
+ * didn't take that appearance over.
  */
 export interface AppThemeSettings {
   readonly default: ThemeChoice;
   readonly providers: Readonly<Record<string, Partial<ThemeChoice>>>;
 }
 
+const STOCK_CHOICE: AppearanceChoice = {
+  theme: DEFAULT_APP_THEME_ID,
+  accent: "theme",
+};
+
 export const DEFAULT_APP_THEME_SETTINGS: AppThemeSettings = {
-  default: {
-    light: DEFAULT_APP_THEME_ID,
-    dark: DEFAULT_APP_THEME_ID,
-    accent: "theme",
-  },
+  default: { light: STOCK_CHOICE, dark: STOCK_CHOICE },
   providers: {},
 };
 
+const APPEARANCES: readonly ThemeAppearance[] = ["light", "dark"];
+
 const isAccentSource = (value: unknown): value is ThemeAccentSource =>
-  value === "theme" || value === "provider";
+  value === "theme" || value === "provider" || value === "custom";
+
+/** A persisted appearance choice with malformed fields dropped; `null` if it isn't one. */
+function parseAppearanceChoice(value: unknown): AppearanceChoice | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.theme !== "string" || !isAccentSource(raw.accent)) return null;
+  const choice: {
+    -readonly [K in keyof AppearanceChoice]: AppearanceChoice[K];
+  } = { theme: raw.theme, accent: raw.accent };
+  if (isHexColor(raw.accentColor)) choice.accentColor = raw.accentColor;
+  if (isHexColor(raw.background)) choice.background = raw.background;
+  if (isHexColor(raw.foreground)) choice.foreground = raw.foreground;
+  if (typeof raw.contrast === "number" && Number.isFinite(raw.contrast)) {
+    choice.contrast = clamp01(raw.contrast);
+  }
+  if (typeof raw.translucent === "boolean") choice.translucent = raw.translucent;
+  return choice;
+}
 
 /**
- * Shape check for the persisted blob, which the pre-paint read can't trust.
- * Override entries aren't checked key by key: resolution already treats an
- * unknown theme id as stock and anything but "provider" as the theme accent.
+ * One scope's persisted entry. The first release stored a theme id per
+ * appearance and one accent source for both (`{ light: "gruvbox",
+ * accent: "provider" }`); those read as appearance choices with no edits, a
+ * lone accent applying over the `inherit` scope's themes.
  */
-export function isAppThemeSettings(value: unknown): value is AppThemeSettings {
-  if (!value || typeof value !== "object") return false;
-  const { default: base, providers } = value as Record<string, unknown>;
-  if (!base || typeof base !== "object") return false;
-  if (!providers || typeof providers !== "object") return false;
-  const { light, dark, accent } = base as Record<string, unknown>;
-  return (
-    typeof light === "string" &&
-    typeof dark === "string" &&
-    isAccentSource(accent)
-  );
+function parseScope(
+  value: unknown,
+  inherit: ThemeChoice | null,
+): Partial<ThemeChoice> {
+  if (!value || typeof value !== "object") return {};
+  const raw = value as Record<string, unknown>;
+  const legacyAccent = raw.accent === "theme" || raw.accent === "provider"
+    ? raw.accent
+    : null;
+  const scope: { -readonly [K in ThemeAppearance]?: AppearanceChoice } = {};
+  for (const appearance of APPEARANCES) {
+    const entry = raw[appearance];
+    if (typeof entry === "string") {
+      scope[appearance] = {
+        theme: entry,
+        accent: legacyAccent ?? inherit?.[appearance].accent ?? "theme",
+      };
+    } else if (entry !== undefined) {
+      const choice = parseAppearanceChoice(entry);
+      if (choice) scope[appearance] = choice;
+    } else if (legacyAccent && inherit) {
+      scope[appearance] = { ...inherit[appearance], accent: legacyAccent };
+    }
+  }
+  return scope;
+}
+
+/**
+ * The persisted settings, whichever release wrote them; anything unreadable
+ * becomes the default. Both the redux-persist migration and the pre-paint
+ * read go through here, so neither ever holds a shape the rest can't read.
+ */
+export function parseAppThemeSettings(value: unknown): AppThemeSettings {
+  if (!value || typeof value !== "object") return DEFAULT_APP_THEME_SETTINGS;
+  const { default: rawDefault, providers: rawProviders } = value as Record<
+    string,
+    unknown
+  >;
+  const base = parseScope(rawDefault, null);
+  const defaults: ThemeChoice = {
+    light: base.light ?? STOCK_CHOICE,
+    dark: base.dark ?? STOCK_CHOICE,
+  };
+  const providers: Record<string, Partial<ThemeChoice>> = {};
+  if (rawProviders && typeof rawProviders === "object") {
+    for (const [id, entry] of Object.entries(rawProviders)) {
+      const scope = parseScope(entry, defaults);
+      if (Object.keys(scope).length > 0) providers[id] = scope;
+    }
+  }
+  return { default: defaults, providers };
 }
 
 /** The picks in force for `providerId` — `null` before it is known. */
@@ -213,35 +258,35 @@ export function themeChoiceFor(
   return { ...settings.default, ...override };
 }
 
-/** One edit from the settings page; `providerId: null` edits the default. */
-export type ThemeChoiceChange =
-  | {
-      providerId: string | null;
-      key: "light" | "dark";
-      value: string | null;
-    }
-  | {
-      providerId: string | null;
-      key: "accent";
-      value: ThemeAccentSource | null;
-    };
+/**
+ * One edit from the settings page: an appearance's whole choice for a scope
+ * (`providerId: null` is the default). `choice: null` hands a provider's
+ * appearance back to the default.
+ */
+export interface ThemeChoiceChange {
+  readonly providerId: string | null;
+  readonly appearance: ThemeAppearance;
+  readonly choice: AppearanceChoice | null;
+}
 
 /**
- * `value: null` drops a provider's override of `key`, handing it back to the
- * default — and drops the provider's entry once nothing is left in it. The
- * default has nothing to fall back to, so a null there is ignored.
+ * Applies a change; a provider's entry goes away once it overrides nothing.
+ * The default has nothing to fall back to, so a null there is ignored.
  */
 export function applyThemeChoice(
   settings: AppThemeSettings,
-  change: ThemeChoiceChange,
+  { providerId, appearance, choice }: ThemeChoiceChange,
 ): AppThemeSettings {
-  const { providerId, key, value } = change;
   if (providerId === null) {
-    if (value === null) return settings;
-    return { ...settings, default: { ...settings.default, [key]: value } };
+    if (!choice) return settings;
+    return {
+      ...settings,
+      default: { ...settings.default, [appearance]: choice },
+    };
   }
-  const { [key]: _replaced, ...kept } = settings.providers[providerId] ?? {};
-  const override = value === null ? kept : { ...kept, [key]: value };
+  const { [appearance]: _replaced, ...kept } =
+    settings.providers[providerId] ?? {};
+  const override = choice ? { ...kept, [appearance]: choice } : kept;
   const { [providerId]: _previous, ...others } = settings.providers;
   return {
     ...settings,
@@ -252,6 +297,21 @@ export function applyThemeChoice(
   };
 }
 
+/**
+ * The choice with `patch` applied, and edits that went back to `undefined`
+ * dropped rather than stored as holes.
+ */
+export function editAppearanceChoice(
+  choice: AppearanceChoice,
+  patch: Partial<AppearanceChoice>,
+): AppearanceChoice {
+  const next: Record<string, unknown> = { ...choice, ...patch };
+  for (const key of Object.keys(next)) {
+    if (next[key] === undefined) delete next[key];
+  }
+  return next as unknown as AppearanceChoice;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Resolution
 // ─────────────────────────────────────────────────────────────
@@ -260,10 +320,11 @@ export function applyThemeChoice(
 const ACCENT_MIN_CONTRAST = 4.5;
 
 /**
- * A brand colour made readable on `background`: moved in OKLab lightness,
- * away from the background, until it reaches AA — hue and chroma kept, so
- * Claude stays Claude's orange. Theme accents are hand-picked and tested
- * instead, so they never go through this.
+ * An accent made readable on `background`: moved in OKLab lightness, away
+ * from the background, until it reaches AA — hue and chroma kept, so Claude
+ * stays Claude's orange. Brand colours and theme accents both go through it:
+ * an editor palette's accent rarely sets body text, but `text-accent` does.
+ * A custom accent is the user's call and is painted as picked.
  */
 export function fitAccent(color: string, background: string): string {
   const step = oklabLightness(background) < 0.5 ? 0.01 : -0.01;
@@ -278,17 +339,66 @@ export function fitAccent(color: string, background: string): string {
   return fitted;
 }
 
+/**
+ * The palette an appearance choice derives its scale from: the preset's,
+ * with the user's edits. Stock stays `null` — index.css untouched — until one
+ * of its colours is edited; then the edits apply to the stock palette.
+ */
+function choicePalette(
+  choice: AppearanceChoice,
+  appearance: ThemeAppearance,
+): ThemePalette | null {
+  const edited =
+    choice.background !== undefined ||
+    choice.foreground !== undefined ||
+    choice.contrast !== undefined;
+  const base =
+    presetPalette(choice.theme, appearance) ??
+    (edited ? STOCK_PALETTES[appearance] : null);
+  if (!base) return null;
+  const background = choice.background ?? base.background;
+  return {
+    background,
+    foreground: choice.foreground ?? base.foreground,
+    accent: fitAccent(base.accent, background),
+    contrast: choice.contrast ?? base.contrast,
+  };
+}
+
 /** One appearance, resolved. */
 export interface ResolvedAppearance {
   /** What the scale derives from; `null` is the stock scale. */
   readonly palette: ThemePalette | null;
   /** An accent over the palette's (or stock's) own; `null` keeps that one. */
   readonly accent: string | null;
+  /** Whether the frame lets the vibrancy through. */
+  readonly translucent: boolean;
 }
 
 export interface ResolvedAppTheme {
   readonly light: ResolvedAppearance;
   readonly dark: ResolvedAppearance;
+}
+
+export function resolveAppearance(
+  choice: AppearanceChoice,
+  appearance: ThemeAppearance,
+  brandColor: string | null,
+): ResolvedAppearance {
+  const palette = choicePalette(choice, appearance);
+  const background = (palette ?? STOCK_PALETTES[appearance]).background;
+  const accent =
+    choice.accent === "custom" && choice.accentColor
+      ? choice.accentColor
+      : choice.accent === "provider" && brandColor
+        ? fitAccent(brandColor, background)
+        : null;
+  return {
+    palette,
+    accent,
+    translucent:
+      choice.translucent ?? presetPalette(choice.theme, appearance) === null,
+  };
 }
 
 /**
@@ -300,21 +410,28 @@ export function resolveAppTheme(
   choice: ThemeChoice,
   brandColor: string | null,
 ): ResolvedAppTheme {
-  const resolve = (appearance: ThemeAppearance): ResolvedAppearance => {
-    const palette =
-      APP_THEME_PRESETS.find((preset) => preset.id === choice[appearance])
-        ?.palettes[appearance] ?? null;
-    const accent =
-      choice.accent === "provider" && brandColor
-        ? fitAccent(
-            brandColor,
-            (palette ?? STOCK_PALETTES[appearance]).background,
-          )
-        : null;
-    return { palette, accent };
+  return {
+    light: resolveAppearance(choice.light, "light", brandColor),
+    dark: resolveAppearance(choice.dark, "dark", brandColor),
   };
-  return { light: resolve("light"), dark: resolve("dark") };
 }
+
+/**
+ * The colours an appearance actually paints — its palette (stock's when it
+ * has none) with the resolved accent. What the editor shows and what Copy
+ * theme exports.
+ */
+export function paintedPalette(
+  { palette, accent }: ResolvedAppearance,
+  appearance: ThemeAppearance,
+): ThemePalette {
+  const base = palette ?? STOCK_PALETTES[appearance];
+  return { ...base, accent: accent ?? base.accent };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tokens
+// ─────────────────────────────────────────────────────────────
 
 /**
  * Each step of the stock scale, with where it sits between the scale's white
@@ -346,14 +463,16 @@ export const SCALE_STEPS: ReadonlyArray<readonly [string, number]> = [
  * fills turning into slabs.
  */
 function liftTextSteps(share: number, contrast: number): number {
-  const u = Math.min(1, Math.max(0, (share - 0.25) / 0.5));
+  const u = clamp01((share - 0.25) / 0.5);
   const weight = u * u * (3 - 2 * u);
-  return share + Math.min(1, Math.max(0, contrast)) * (1 - share) * weight;
+  return share + clamp01(contrast) * (1 - share) * weight;
 }
 
 /**
  * Text on an accent fill: white, or the palette's darker end when that reads
- * better — a light accent like Tokyo Night's blue wants dark ink.
+ * better — a light accent like Tokyo Night's blue wants dark ink. A fitted
+ * accent always clears AA with one of the two; a custom one may not, and
+ * falls back to whichever of white and black reads better.
  */
 function accentForeground(
   accent: string,
@@ -363,9 +482,14 @@ function accentForeground(
     oklabLightness(background) < oklabLightness(foreground)
       ? background
       : foreground;
-  return contrastRatio(accent, "#ffffff") >= contrastRatio(accent, ink)
+  const best =
+    contrastRatio(accent, "#ffffff") >= contrastRatio(accent, ink)
+      ? "#ffffff"
+      : ink;
+  if (contrastRatio(accent, best) >= ACCENT_MIN_CONTRAST) return best;
+  return contrastRatio(accent, "#ffffff") >= contrastRatio(accent, "#000000")
     ? "#ffffff"
-    : ink;
+    : "#000000";
 }
 
 /**
@@ -373,6 +497,12 @@ function accentForeground(
  * below the background, the way editor themes do their sidebars.
  */
 const FRAME_LIGHTNESS_SHIFT = -0.025;
+
+/**
+ * How much of a translucent themed frame is paint; the rest is vibrancy.
+ * Stock keeps its own, lighter mix from index.css.
+ */
+const TRANSLUCENT_FRAME_OPACITY = 80;
 
 /** The accent tokens, inked against `palette`. */
 function accentTokens(
@@ -409,18 +539,31 @@ export function deriveThemeTokens(
 }
 
 /**
- * What one resolved appearance sets: the palette's tokens with the accent
- * swapped in, the accent tokens alone over the stock scale, or nothing.
+ * What one resolved appearance sets, or `null` for pure stock: the palette's
+ * tokens, the accent over them (or over the stock scale), and the frame when
+ * its translucency differs from what the rest already paints.
  */
 function appearanceTokens(
-  { palette, accent }: ResolvedAppearance,
+  { palette, accent, translucent }: ResolvedAppearance,
   appearance: ThemeAppearance,
 ): Record<string, string> | null {
-  if (palette) {
-    const tokens = deriveThemeTokens(palette, appearance);
-    return accent ? { ...tokens, ...accentTokens(accent, palette) } : tokens;
+  const tokens = palette ? deriveThemeTokens(palette, appearance) : {};
+  if (accent) {
+    Object.assign(
+      tokens,
+      accentTokens(accent, palette ?? STOCK_PALETTES[appearance]),
+    );
   }
-  return accent ? accentTokens(accent, STOCK_PALETTES[appearance]) : null;
+  if (palette && translucent) {
+    tokens["--app-frame"] =
+      `color-mix(in srgb, ${tokens["--app-frame"]} ${TRANSLUCENT_FRAME_OPACITY}%, transparent)`;
+  } else if (!palette && !translucent) {
+    tokens["--app-frame"] = shiftLightness(
+      STOCK_PALETTES[appearance].background,
+      FRAME_LIGHTNESS_SHIFT,
+    );
+  }
+  return Object.keys(tokens).length > 0 ? tokens : null;
 }
 
 /** The frame an appearance paints, opaque — for theme previews. */
@@ -455,6 +598,48 @@ export function renderAppThemeCss(theme: ResolvedAppTheme): string {
     );
   }
   return blocks.join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────
+// Copy theme / Import
+// ─────────────────────────────────────────────────────────────
+
+/** A palette as JSON for the clipboard, contrast in percent like the slider. */
+export function serializeThemePalette(palette: ThemePalette): string {
+  return JSON.stringify(
+    {
+      background: palette.background,
+      foreground: palette.foreground,
+      accent: palette.accent,
+      contrast: Math.round(palette.contrast * 100),
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * Reads what `serializeThemePalette` wrote — or any JSON object carrying some
+ * of those keys; `null` when nothing usable is there.
+ */
+export function parseThemePalette(text: string): Partial<ThemePalette> | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const palette: { -readonly [K in keyof ThemePalette]?: ThemePalette[K] } = {};
+  for (const key of ["background", "foreground", "accent"] as const) {
+    const color = raw[key];
+    if (isHexColor(color)) palette[key] = color.toLowerCase();
+  }
+  if (typeof raw.contrast === "number" && Number.isFinite(raw.contrast)) {
+    palette.contrast = clamp01(raw.contrast / 100);
+  }
+  return Object.keys(palette).length > 0 ? palette : null;
 }
 
 const STYLE_ELEMENT_ID = "mains-app-theme";

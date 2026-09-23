@@ -82,7 +82,7 @@ export function DocumentArtifact({
       <Button
         type="button"
         onClick={openInMains}
-        className="shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary-400 overflow-hidden"
+        className="shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent overflow-hidden"
         aria-label={`Open ${fileName} in Mains`}
       >
         <div className="size-10 rounded-lg border border-primary-200/60 dark:border-primary-700/20 bg-primary-100/60 dark:bg-primary-900/60 flex items-center justify-center">
@@ -92,7 +92,7 @@ export function DocumentArtifact({
       <Button
         type="button"
         onClick={openInMains}
-        className="flex-1 min-w-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary-400 rounded-md"
+        className="flex-1 min-w-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-md"
       >
         <Text as="div" size="sm" tone="contrast" weight="medium" className="truncate">
           {fileName}

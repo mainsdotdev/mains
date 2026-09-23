@@ -86,7 +86,7 @@ export function BackgroundRunCard({
         onClick={onOpen}
         title={label}
         aria-label={`Open ${label}`}
-        className="w-full text-left rounded-2xl glass-outline bg-primary dark:bg-primary-950 hover:bg-primary-50 dark:hover:bg-primary-950 px-2.5 py-2 pr-8 cursor-pointer transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+        className="w-full text-left rounded-2xl glass-outline bg-primary dark:bg-primary-950 hover:bg-primary-50 dark:hover:bg-primary-950 px-2.5 py-2 pr-8 cursor-pointer transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         {/* Every label is a <span>: a button's content model is phrasing only. */}
         <span className="flex items-center gap-1.5 min-w-0">

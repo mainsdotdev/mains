@@ -187,7 +187,7 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
                       onClick={() =>
                         setPreviewAtt({ name: att.name, dataUrl: imgSrc })
                       }
-                      className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary-400"
+                      className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent"
                       title={`Click to preview · ${att.name}`}
                       aria-label={`Preview ${att.name}`}
                     >
@@ -471,7 +471,7 @@ function AttachmentDocumentCard({
     <Button
       type="button"
       onClick={() => open({ path: filePath, fileName: name, docType })}
-      className={`${className} cursor-pointer outline-none transition-colors hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-primary-400 dark:hover:bg-primary-800/60`}
+      className={`${className} cursor-pointer outline-none transition-colors hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary-800/60`}
       title={`Open ${name}`}
       aria-label={`Open ${name}`}
     >
@@ -591,7 +591,7 @@ function ImageArtifact({
         <Button
           type="button"
           onClick={openInMains}
-          className="block w-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+          className="block w-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-accent"
           aria-label={`Preview ${fileName} in Mains`}
         >
           <div className="aspect-4/3 w-full flex items-center justify-center overflow-hidden">
@@ -643,7 +643,7 @@ function ImageArtifact({
       <Button
         type="button"
         onClick={openInMains}
-        className="block max-w-full overflow-hidden rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+        className="block max-w-full overflow-hidden rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-accent"
         aria-label={`Preview ${fileName} in Mains`}
       >
         <div className="flex max-h-144 max-w-[24rem] items-center justify-center overflow-hidden">

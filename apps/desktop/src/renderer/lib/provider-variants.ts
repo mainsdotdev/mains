@@ -56,7 +56,7 @@ export interface ProviderVariantDescriptor {
   /**
    * Brand colour (`#rrggbb`, the `--color-<variant>` token in index.css),
    * offered as the app accent while this provider is active — Settings ›
-   * General › Appearance. Absent when the mark has no usable hue (Cursor's
+   * Appearance. Absent when the mark has no usable hue (Cursor's
    * is gray); the theme's accent stays then.
    */
   brandColor?: string;

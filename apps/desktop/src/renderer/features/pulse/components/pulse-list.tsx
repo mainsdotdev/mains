@@ -192,7 +192,7 @@ function PulseRow({
 
       <Button
         onClick={onEdit}
-        className="flex-1 min-w-0 text-left rounded-lg focus-visible:ring-2 focus-visible:ring-primary-500"
+        className="flex-1 min-w-0 text-left rounded-lg focus-visible:ring-2 focus-visible:ring-accent"
       >
         <Body
           as="div"

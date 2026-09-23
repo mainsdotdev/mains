@@ -334,7 +334,7 @@ export default function Select<T extends string = string>({
           disabled:cursor-not-allowed disabled:opacity-60
           flex items-center justify-between
           transition-[color,background-color,border-radius,box-shadow]
-          focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2
           ${isOpen ? "rounded-t-xl shadow-lg" : "rounded-xl"}
         `}
       >

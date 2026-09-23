@@ -117,7 +117,6 @@ html:not(.app-ready) *::after {
   --shadow-inset-subtle-dark: inset 0 0.5px 0 rgba(255, 255, 255, 0.03);
   --shadow-inset-toggle: inset 0 0.5px 2px rgba(0, 0, 0, 0.1);
   --shadow-inset-toggle-dark: inset 0 0.5px 2px rgba(0, 0, 0, 0.3);
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
 
 }
 
@@ -151,10 +150,34 @@ html:not(.app-ready) *::after {
   --color-accent: #2563eb;
   /* Text on an accent fill. A theme with a light accent switches it to dark. */
   --color-accent-foreground: #ffffff;
+
+  /* The UI and code fonts from Settings › Appearance (lib/appearance-fonts.ts)
+     go in front of the stock stacks, so a font that isn't installed falls
+     back to them rather than to the browser default. */
+  --font-sans: var(--font-ui-family, "Inter"), -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
+  --font-mono: var(--font-code-family, ui-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 *:focus {
   outline: none !important;
+}
+
+::selection {
+  background-color: color-mix(in oklab, var(--color-accent) 30%, transparent);
+}
+
+@layer base {
+  /* A focus ring's offset is the gap between the element and its ring, so it
+     has to be the surface behind it. Tailwind registers the offset colour as
+     a non-inheriting property with a white initial value, which cuts a white
+     band into every dark or themed surface. Explicit `ring-offset-<colour>`
+     utilities still win: they sit in the utilities layer. */
+  *, ::before, ::after {
+    --tw-ring-offset-color: var(--color-primary);
+  }
+  .dark *, .dark ::before, .dark ::after {
+    --tw-ring-offset-color: var(--color-primary-950);
+  }
 }
 
 /* * {

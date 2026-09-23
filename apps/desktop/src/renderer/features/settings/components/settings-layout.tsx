@@ -60,17 +60,27 @@ export function PlaceholderSection({ title }: { title: string }) {
 
 export function SettingsSection({
   title,
+  actions,
   children,
 }: {
   title?: string;
+  /** Controls beside the title, e.g. a section-wide picker or copy button. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="mb-8">
-      {title && (
-        <Body className=" mb-3">
-          {title}
-        </Body>
+      {actions ? (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          {title && <Body>{title}</Body>}
+          <div className="flex flex-wrap items-center gap-2">{actions}</div>
+        </div>
+      ) : (
+        title && (
+          <Body className=" mb-3">
+            {title}
+          </Body>
+        )
       )}
       <div className="rounded-3xl glass-surface px-4 py-1">
         {children}

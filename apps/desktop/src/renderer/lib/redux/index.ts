@@ -1,5 +1,10 @@
 import { configureStore } from "@reduxjs/toolkit";
-import { persistStore, persistReducer } from "redux-persist";
+import {
+  createMigrate,
+  persistStore,
+  persistReducer,
+  type PersistedState,
+} from "redux-persist";
 import storage from "redux-persist/lib/storage";
 
 import { baseApi } from "./api/baseApi";
@@ -7,14 +12,31 @@ import appSettingsReducer from "./slices/appSettingsSlice";
 import workspaceReducer from "./slices/workspaceSlice";
 import backendsReducer from "./slices/backendsSlice";
 import { onTransportChange } from "../transport";
+import { parseAppThemeSettings } from "../app-themes";
 
 // Renderer-persisted UI state lives in these slices and nowhere else: the
 // whitelists below are the complete list of what survives a restart. Anything
 // reaching for `localStorage` directly is a bug — add a field here instead.
 // Web authentication lives in HttpOnly cookies and is deliberately absent here.
+// A persisted field that changes shape gets a step here and a `version` bump,
+// so a restart never hands the slice a shape its reducers can't read.
+const appSettingsMigrations = {
+  // App themes went from a theme id per appearance to a choice per
+  // appearance; `parseAppThemeSettings` reads both.
+  1: (state: PersistedState) =>
+    state && {
+      ...state,
+      appTheme: parseAppThemeSettings(
+        (state as { appTheme?: unknown }).appTheme,
+      ),
+    },
+};
+
 const appSettingsPersistConfig = {
   key: "appSettings",
   storage,
+  version: 1,
+  migrate: createMigrate(appSettingsMigrations),
   whitelist: [
     "sidebarCollapsed",
     "rightPanelOpen",
@@ -33,6 +55,8 @@ const appSettingsPersistConfig = {
     "appTheme",
     "interfaceFontSize",
     "codeFontSize",
+    "uiFontFamily",
+    "codeFontFamily",
     "bottomTerminalOpen",
     // Pill vs list is a lasting preference: the panel still appears/hides on
     // its own with the run's agents, but HOW it shows is the user's choice

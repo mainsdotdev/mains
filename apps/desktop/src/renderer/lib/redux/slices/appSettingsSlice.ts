@@ -11,6 +11,7 @@ import {
   DEFAULT_INTERFACE_FONT_SIZE,
   clampCodeFontSize,
   clampInterfaceFontSize,
+  isFontFamily,
 } from "@/lib/appearance-fonts";
 import type { DocType } from "@/lib/document-viewer";
 import {
@@ -75,6 +76,10 @@ export interface AppSettingsState {
   interfaceFontSize: number;
   /** Code / diff font size in pixels. Absolute so it never scales twice. */
   codeFontSize: number;
+  /** UI font as a CSS family; `""` is Inter (`lib/appearance-fonts.ts`). */
+  uiFontFamily: string;
+  /** Code font as a CSS family; `""` is the system monospace. */
+  codeFontFamily: string;
   /** Whether the bottom terminal drawer is open. */
   bottomTerminalOpen: boolean;
   /** How the sidebar workspace list is grouped. */
@@ -103,6 +108,8 @@ const initialState: AppSettingsState = {
   appTheme: DEFAULT_APP_THEME_SETTINGS,
   interfaceFontSize: DEFAULT_INTERFACE_FONT_SIZE,
   codeFontSize: DEFAULT_CODE_FONT_SIZE,
+  uiFontFamily: "",
+  codeFontFamily: "",
   bottomTerminalOpen: false,
   workspaceListGrouping: "none",
   workspaceGroupExpanded: {},
@@ -167,6 +174,15 @@ const appSettingsSlice = createSlice({
     setCodeFontSize: (state, action: PayloadAction<number>) => {
       state.codeFontSize = clampCodeFontSize(action.payload);
     },
+    setFontFamily: (
+      state,
+      action: PayloadAction<{ target: "ui" | "code"; family: string }>,
+    ) => {
+      const { target, family } = action.payload;
+      if (!isFontFamily(family)) return;
+      if (target === "ui") state.uiFontFamily = family;
+      else state.codeFontFamily = family;
+    },
     setBottomTerminalOpen: (state, action: PayloadAction<boolean>) => {
       state.bottomTerminalOpen = action.payload;
     },
@@ -224,6 +240,7 @@ export const {
   setThemeChoice,
   setInterfaceFontSize,
   setCodeFontSize,
+  setFontFamily,
   setBottomTerminalOpen,
   setWorkspaceListGrouping,
   setWorkspaceGroupExpanded,
