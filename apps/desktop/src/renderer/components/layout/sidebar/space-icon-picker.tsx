@@ -100,7 +100,7 @@ export default function SpaceIconPicker({
           ) : (
             <CurrentIcon icon={icon} iconMode={iconMode} />
           )}
-          <span>{icon ? "Change Icon" : "Choose an Icon"}</span>
+          <span>{icon ? "Change icon" : "Choose an icon"}</span>
         </div>
         <SelectOption
           className={`size-3 text-primary-900 dark:text-primary-100`}

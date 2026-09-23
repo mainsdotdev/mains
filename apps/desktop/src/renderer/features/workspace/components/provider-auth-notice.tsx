@@ -1,11 +1,58 @@
 import { useState } from "react";
 import { Button, Text } from "@/components/ui";
+import { Download, Lock } from "@/components/ui/icons";
+import { cn } from "@/lib/cn";
 import {
   getProviderVariant,
   type ProviderVariant,
 } from "@/lib/provider-variants";
 import { useProviderAuthTerminal } from "@/features/workspace/hooks/use-provider-auth-terminal";
 import { useUpdateProviderCliMutation } from "@/lib/redux/api";
+
+/**
+ * The shell both notices share: the composer's own glass surface, so an app
+ * theme re-tints it along with everything around it. The warning lives in the
+ * icon alone — the fixed status color painted across the whole row turned into
+ * a muddy block on every themed surface.
+ */
+function NoticeShell({
+  icon,
+  title,
+  message,
+  actions,
+  className,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  message?: string | null;
+  actions: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "mb-2 flex items-center justify-between gap-3 rounded-2xl glass-surface px-3 py-2.5 text-xs",
+        className,
+      )}
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        {icon}
+        <span className="min-w-0">
+          <Text as="span" size="inherit" tone="default" weight="medium">
+            {title}
+          </Text>
+          {message ? (
+            <Text as="span" size="inherit" tone="subtle">
+              {" "}
+              — {message}
+            </Text>
+          ) : null}
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-2">{actions}</span>
+    </div>
+  );
+}
 
 interface ProviderAuthNoticeProps {
   variant: ProviderVariant;
@@ -18,7 +65,7 @@ interface ProviderAuthNoticeProps {
 }
 
 /**
- * Yellow auth notice with a one-click recovery: "Sign in" opens a scoped
+ * Auth notice with a one-click recovery: "Sign in" opens a scoped
  * provider-auth terminal and runs the variant's `authLoginCommand` (the login
  * flows are interactive, so they live in a PTY rather than a headless spawn).
  * Used above the composer (signed-out preflight) and in the transcript when
@@ -30,56 +77,48 @@ export function ProviderAuthNotice({
   message,
   onRecheck,
   isRechecking = false,
-  className = "",
+  className,
 }: ProviderAuthNoticeProps) {
   const authTerminal = useProviderAuthTerminal();
   const { providerId, authLoginCommand } = getProviderVariant(variant);
 
   return (
-    <div
-      className={`px-3 py-2.5 mb-2 rounded-2xl text-warning bg-warning/10 dark:bg-warning/10 text-xs flex items-center justify-between gap-3 ${className}`}
-    >
-      <span className="min-w-0">
-        <Text as="span" size="inherit" tone="inherit" weight="medium">{title}</Text>
-        {message ? <span className="opacity-80"> — {message}</span> : null}
-      </span>
-      <span className="flex items-center gap-2 shrink-0">
-        {onRecheck && (
+    <NoticeShell
+      icon={<Lock className="size-4 shrink-0 text-warning" />}
+      title={title}
+      message={message}
+      className={className}
+      actions={
+        <>
+          {onRecheck && (
+            <Button variant="ghost" onClick={onRecheck} isLoading={isRechecking}>
+              Check Auth
+            </Button>
+          )}
           <Button
-            type="button"
-            variant="subtle"
-            onClick={onRecheck}
-            isLoading={isRechecking}
-            className=" glass-outline text-warning hover:text-warning/80 hover:bg-warning/10! transition-colors cursor-pointer"
+            variant="primary"
+            tooltip={`Runs \`${authLoginCommand}\` in the terminal`}
+            tooltipPosition="top-left"
+            onClick={() => authTerminal.open(providerId, authLoginCommand)}
           >
-            Check Auth
+            Sign in
           </Button>
-        )}
-        <Button
-          type="button"
-          variant="subtle"
-          tooltip={`Runs \`${authLoginCommand}\` in the terminal`}
-          tooltipPosition="top-left"
-          onClick={() => authTerminal.open(providerId, authLoginCommand)}
-          className=" glass-outline bg-warning/10 text-warning hover:text-warning/80 hover:bg-warning/20! transition-colors cursor-pointer"
-        >
-          Sign in
-        </Button>
-      </span>
-    </div>
+        </>
+      }
+    />
   );
 }
 
 /**
- * Same warning shell for an unsupported (too-old) provider CLI. Signing in
- * can't fix a version gate, so callers render this *instead of* the auth
- * notice; recovery is `providers:updateCli` rather than a login shell.
+ * Same shell for an unsupported (too-old) provider CLI. Signing in can't fix
+ * a version gate, so callers render this *instead of* the auth notice;
+ * recovery is `providers:updateCli` rather than a login shell.
  */
 export function ProviderCliUpdateNotice({
   providerId,
   message,
   onUpdated,
-  className = "",
+  className,
 }: {
   providerId: string;
   message: string;
@@ -105,22 +144,16 @@ export function ProviderCliUpdateNotice({
   };
 
   return (
-    <div
-      className={`px-3 py-2.5 mb-2 rounded-2xl text-warning bg-warning/10 dark:bg-warning/10 text-xs flex items-center justify-between gap-3 ${className}`}
-    >
-      <span className="min-w-0">
-        <Text as="span" size="inherit" tone="inherit" weight="medium">Update required</Text>
-        <span className="opacity-80"> — {failure ?? message}</span>
-      </span>
-      <Button
-        type="button"
-        variant="subtle"
-        onClick={handleUpdate}
-        isLoading={isUpdating}
-        className=" glass-outline bg-warning/10 text-warning hover:text-warning/80 hover:bg-warning/20! transition-colors cursor-pointer shrink-0"
-      >
-        Update CLI
-      </Button>
-    </div>
+    <NoticeShell
+      icon={<Download className="size-4 shrink-0 text-warning" />}
+      title="Update required"
+      message={failure ?? message}
+      className={className}
+      actions={
+        <Button variant="primary" onClick={handleUpdate} isLoading={isUpdating}>
+          Update CLI
+        </Button>
+      }
+    />
   );
 }

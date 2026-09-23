@@ -15,11 +15,11 @@ const isCI = Boolean(process.env.CI);
 export default {
   dialect: "sqlite",
 
-  // Drizzle schema source (Electron main)
-  schema: "./src/main/db/schema.ts",
+  // Shared backend schema source
+  schema: "../../packages/backend/src/db/schema.ts",
 
   // Generated SQL migrations (bundled into app resources on build)
-  out: "./src/main/db/migrations",
+  out: "../../packages/backend/src/db/migrations",
 
   // CLI-only database (never shipped to production users)
   dbCredentials: {

@@ -15,10 +15,10 @@ export function WelcomeIntroStep() {
       >
         v{__APP_VERSION__ ?? "1.0"}
       </Text>
-      <Heading1 className="mt-3 font-mono tracking-tight">
+      <Heading1 className="my-3 font-mono tracking-tight">
         Welcome to Mains
       </Heading1>
-      <Body className="mt-3 max-w-md">
+      <Body className=" max-w-md">
         Your AI-powered workspace. Let&apos;s get you set up.
       </Body>
     </div>

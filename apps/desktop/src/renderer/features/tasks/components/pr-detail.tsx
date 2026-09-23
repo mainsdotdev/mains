@@ -342,7 +342,7 @@ export function PrDetail({ pr }: PrDetailProps) {
                     variant="ghost"
                     disabled={!canMerge || isMerging}
                     onClick={handleMerge}
-                    className="rounded-r-none  bg-accent hover:bg-[#2868f1]! text-primary!"
+                    className="rounded-r-none  bg-accent hover:bg-accent/90! text-accent-foreground!"
                   >
                     {isMerging
                       ? "Merging..."
@@ -364,7 +364,7 @@ export function PrDetail({ pr }: PrDetailProps) {
                     aria-label="Choose merge method"
                     aria-haspopup="menu"
                     aria-expanded={mergeMenuOpen}
-                    className="rounded-l-none px-2 bg-accent  hover:bg-[#2868f1]! text-primary!"
+                    className="rounded-l-none px-2 bg-accent hover:bg-accent/90! text-accent-foreground!"
                   >
                     <ArrowUp
                       className={`size-3.5 transition-transform rotate-180 text-primary`}

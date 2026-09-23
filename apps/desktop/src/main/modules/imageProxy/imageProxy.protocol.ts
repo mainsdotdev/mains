@@ -1,13 +1,14 @@
 import { app, protocol } from "electron";
 import * as fs from "fs";
 import * as path from "path";
-import { imageProxyService, SsrfBlockedError } from "./imageProxy.service";
 import {
+  imageProxyService,
+  SsrfBlockedError,
   MAX_IMAGE_SIZE,
   serveLocalImage,
   serveLocalDocument,
-} from "./imageProxy.local-serve";
-import { serveLocalVisualization } from "./imageProxy.visualization-serve";
+  serveLocalVisualization,
+} from "@mains/backend/modules/imageProxy";
 
 /**
  * Bound concurrent upstream fetches. A grid of hundreds of remote images (e.g.

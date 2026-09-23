@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import { CHANNELS } from "@mains/contracts/channels";
 import {
   DEFAULT_APPSHOT_SHORTCUT,
   type AppshotAccessibilityStatus,
@@ -22,7 +22,7 @@ import {
   type AppshotsSystemSettingsPane,
 } from "../../../shared/appshots";
 import { createMainWindow, getMainWindow } from "../../windows";
-import { appSettingsService } from "../appSettings";
+import { appSettingsService } from "@mains/backend/modules/appSettings";
 import { findWindowSource, parseFrontmostWindow } from "./appshots.capture";
 import { normalizedAppshotShortcut } from "./appshots.validation";
 

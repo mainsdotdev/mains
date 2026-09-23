@@ -27,7 +27,8 @@ import { CODE_FONT_SIZE_CSS } from "./appearance-fonts";
 export const DIFF_TYPOGRAPHY_STYLE = {
   "--diffs-font-size": CODE_FONT_SIZE_CSS,
   "--diffs-line-height": `calc(${CODE_FONT_SIZE_CSS} * 5 / 3)`,
-  "--diffs-font-family": "ui-monospace, monospace",
+  // The code font from Settings › Appearance (index.css `--font-mono`).
+  "--diffs-font-family": "var(--font-mono)",
 } as CSSProperties;
 
 /**
@@ -36,8 +37,12 @@ export const DIFF_TYPOGRAPHY_STYLE = {
  * option types extend).
  *
  * The shadow root also blocks the app background, so `unsafeCSS` repaints the
- * library's own `--diffs-bg` from our `primary` scale — that selector list is
- * long and easy to mistype, which is the main reason this lives in one place.
+ * library's own `--diffs-bg` and `--diffs-fg` from our `primary` scale — that
+ * selector list is long and easy to mistype, which is the main reason this
+ * lives in one place. The library derives its context rows, separators, line
+ * numbers and hover mixes from those two, so an app theme reaches all of them;
+ * only syntax colours stay the pierre theme's. The stock steps sit within a
+ * shade of pierre's own (`#0a0a0a` / `#fafafa`).
  * `disableFileHeader` is part of the baseline because every surface renders its
  * own header chrome; a caller that wants the library's can override it.
  *
@@ -52,11 +57,12 @@ export const DIFF_TYPOGRAPHY_STYLE = {
  */
 export function diffSurfaceOptions(isDarkMode: boolean): BaseCodeOptions {
   const bg = `var(--color-${isDarkMode ? "primary-950" : "primary"})`;
+  const fg = `var(--color-${isDarkMode ? "primary-100" : "primary-950"})`;
   return {
     theme: isDarkMode ? "pierre-dark" : "pierre-light",
     themeType: isDarkMode ? "dark" : "light",
     disableFileHeader: true,
-    unsafeCSS: `:host, [data-diffs], [data-diffs-header], [data-error-wrapper], [data-code] { --diffs-bg: ${bg}; background-color: ${bg}; }`,
+    unsafeCSS: `:host, [data-diffs], [data-diffs-header], [data-error-wrapper], [data-code] { --diffs-bg: ${bg}; --diffs-fg: ${fg}; background-color: ${bg}; }`,
   };
 }
 

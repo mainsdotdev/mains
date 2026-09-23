@@ -22,7 +22,7 @@ const OPEN = 1;
 export interface WsTransportOptions {
   /** Factory for the socket; defaults to the global `WebSocket`. Injectable for tests. */
   factory?: (url: string, protocols?: string[]) => WebSocketLike;
-  /** Pairing token; sent as a WS subprotocol so the backend can authorize. */
+  /** Bearer token; sent as a WS subprotocol so the backend can authorize. */
   token?: string | null;
   /** How long an invoke waits for its response before rejecting. Default 30s. */
   invokeTimeoutMs?: number;
@@ -65,13 +65,13 @@ export class WsTransport implements Transport {
   private readonly pending = new Map<number, PendingInvoke>();
   private readonly listeners = new Map<string, Set<(payload: unknown) => void>>();
   private readonly statusListeners = new Set<(status: TransportStatus) => void>();
-  /** Frames queued while the socket is not yet OPEN. */
-  private readonly outbox: string[] = [];
+  /** Invoke frames queued while the socket is not yet OPEN, keyed for cancellation. */
+  private readonly outbox = new Map<number, string>();
 
   private readonly factory: (url: string, protocols?: string[]) => WebSocketLike;
   private readonly token: string | null;
   private readonly invokeTimeoutMs: number;
-  private readonly reconnectEnabled: boolean;
+  private reconnectEnabled: boolean;
   private readonly reconnectBaseMs: number;
   private readonly reconnectMaxMs: number;
   private readonly schedule: (fn: () => void, ms: number) => void;
@@ -110,7 +110,11 @@ export class WsTransport implements Transport {
     socket.onopen = () => {
       this.reconnectAttempts = 0;
       this.setStatus("connected");
-      for (const frame of this.outbox.splice(0)) socket.send(frame);
+      const queued = [...this.outbox];
+      this.outbox.clear();
+      for (const [id, frame] of queued) {
+        if (this.pending.has(id)) socket.send(frame);
+      }
     };
     socket.onmessage = (ev) => this.handleMessage(ev.data);
     socket.onerror = () => {
@@ -176,6 +180,7 @@ export class WsTransport implements Transport {
         this.invokeTimeoutMs > 0
           ? setTimeout(() => {
               this.pending.delete(id);
+              this.outbox.delete(id);
               reject(
                 new Error(
                   `Invoke "${channel}" timed out after ${this.invokeTimeoutMs}ms`,
@@ -184,15 +189,18 @@ export class WsTransport implements Transport {
             }, this.invokeTimeoutMs)
           : null;
       this.pending.set(id, { resolve, reject, timer });
-      this.sendFrame(encodeWsMessage({ kind: "invoke", id, channel, args }));
+      this.sendFrame(
+        id,
+        encodeWsMessage({ kind: "invoke", id, channel, args }),
+      );
     });
   }
 
-  private sendFrame(frame: string): void {
+  private sendFrame(id: number, frame: string): void {
     if (this.socket && this.socket.readyState === OPEN) {
       this.socket.send(frame);
     } else {
-      this.outbox.push(frame);
+      this.outbox.set(id, frame);
     }
   }
 
@@ -220,6 +228,21 @@ export class WsTransport implements Transport {
     return () => this.statusListeners.delete(listener);
   }
 
+  /**
+   * Promote a one-shot preflight connection to a persistent connection.
+   * Remote-backend activation calls this only after accepting the descriptor.
+   */
+  enableReconnect(): void {
+    this.reconnectEnabled = true;
+    if (
+      !this.disposed &&
+      !this.socket &&
+      this.currentStatus === "offline"
+    ) {
+      this.scheduleReconnect();
+    }
+  }
+
   /** Close the connection and stop reconnecting. */
   dispose(): void {
     this.disposed = true;
@@ -236,6 +259,7 @@ export class WsTransport implements Transport {
   }
 
   private failAllPending(error: Error): void {
+    this.outbox.clear();
     for (const entry of this.pending.values()) {
       if (entry.timer) clearTimeout(entry.timer);
       entry.reject(error);

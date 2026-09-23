@@ -68,13 +68,14 @@ npm start
 
 ## Quick Start
 
-**Platform:** macOS only (Apple Silicon and Intel). Windows and Linux are not supported yet. 
+**Desktop platform:** macOS only (Apple Silicon and Intel). The standalone
+server below also targets Linux.
 
 **Prerequisites:** [Node.js](https://nodejs.org/) 22.12+, Git
 
 ```bash
 git clone https://github.com/mainsdotdev/mains.git
-cd mains
+cd mains/apps/desktop
 npm install
 npm start
 ```
@@ -88,13 +89,87 @@ For Claude, you'll need [Claude Code](https://docs.anthropic.com/en/docs/claude-
 For Codex, you'll need [Codex CLI](https://github.com/openai/codex) authenticated (`codex auth login`).
 For Cursor, you'll need the [Cursor Agent CLI](https://cursor.com/cli) installed (`curl https://cursor.com/install -fsS | bash`) and authenticated (`cursor-agent login`).
 
-## Development
+## Standalone server
+
+Mains Server runs the backend and browser UI without Electron. Release builds
+are portable npm packages; platform-specific dependencies are installed for the
+host machine. Node.js 22.12+ is required.
 
 ```bash
-npm start              # Dev server
+npm install --global https://github.com/mainsdotdev/mains/releases/latest/download/mains-server.tgz
+mains serve
+```
+
+The first run creates a persistent full-access owner token. To connect a phone
+on the same trusted network, expose private interfaces and scan the printed,
+five-minute pairing QR:
+
+```bash
+mains serve --lan
+```
+
+The phone exchanges that one-time code for its own revocable device token. Use
+`mains pair` for another link and `mains auth list|revoke` to
+manage access without restarting the backend.
+
+For remote access, use `mains serve --tailscale-serve`, or keep the default
+loopback bind and use **Settings → Mains Connect → SSH** from the desktop app.
+The standalone server can stay available without Electron or an open terminal:
+
+```bash
+mains service install --tailscale-serve
+```
+
+This installs a macOS LaunchAgent or Linux systemd user service. Direct public
+exposure should sit behind a TLS proxy and be advertised explicitly with
+`--public-url`.
+
+The standalone server currently targets macOS and Linux. By default it opens
+the installed desktop app's canonical Mains data directory, so existing
+workspaces, collections, and run history appear without an import. Quit Desktop
+before starting Server, and stop Server before reopening Desktop; an ownership
+lock rejects concurrent backend access. `--data-dir` opts into isolated data.
+
+Electron-encrypted integration credentials remain preserved but cannot yet be
+decrypted by the plain-Node host. CLI-backed providers use their normal host
+authentication.
+
+## Development
+
+Desktop commands (from `apps/desktop`):
+
+```bash
+npm start              # Start the Electron app
 npm run lint:fix       # Lint with auto-fix
 npm run package        # Package for current platform
 npm run make           # Create distributable
+```
+
+Standalone server commands (from `apps/server`; packaging also needs
+`apps/desktop` dependencies installed):
+
+```bash
+npm --prefix ../desktop install
+npm install
+npm run serve -- --lan         # Build, run, and print a phone pairing QR
+npm run pair                    # Refresh the one-time pairing link
+npm run service -- status       # Inspect the background service
+npm run package                 # Build dist/mains-server.tgz
+npm run smoke:package           # Clean-install and exercise WS/HTTP/CLI flows
+```
+
+The standalone development server exposes the Mains protocol over a
+token-gated WebSocket. Its executable composition root stays in `apps/server`;
+the Electron-free database, domain services, provider runtimes, and transport
+implementation shared with desktop live in `packages/backend`.
+
+Shared backend checks (from `packages/backend`):
+
+```bash
+npm install
+npm run typecheck
+npm run lint
+npm test
 ```
 
 ### Database

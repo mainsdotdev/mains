@@ -101,7 +101,7 @@ export default function RunOptionsSheet() {
         <ThemedText variant="subhead" style={{ padding: spacing.md, textAlign: "center" }}>
           {session.connection.kind === "connected"
             ? "This provider has no run options."
-            : "Connect to your Mac to load its run options."}
+            : "Connect to Mains on your computer to load its run options."}
         </ThemedText>
       )}
 

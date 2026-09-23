@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CHANNELS } from "../../shared/ipc-kit/channels";
-import { clearEventSinks, emit } from "../ipc-kit";
+import { CHANNELS } from "@mains/contracts/channels";
+import { clearEventSinks, emit } from "@mains/backend/ipc-kit";
 import type { TraySnapshot } from "./status-menus";
 
 const mocks = vi.hoisted(() => ({
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   workspaces: [] as Array<{ id: string; name: string }>,
 }));
 
-vi.mock("../modules/runs", () => ({
+vi.mock("@mains/backend/modules/runs", () => ({
   runsService: {
     listActiveRuns: async () => mocks.activeRuns,
     getRunById: async (id: string) => mocks.runsById.get(id) ?? null,
@@ -22,19 +22,19 @@ vi.mock("../modules/runs", () => ({
   }),
   formatRunLabel: (run: { title?: string | null }) => run.title ?? null,
 }));
-vi.mock("../modules/workspace", () => ({
+vi.mock("@mains/backend/modules/workspace", () => ({
   workspaceService: { list: async () => mocks.workspaces },
 }));
-vi.mock("../modules/appSettings", () => ({
+vi.mock("@mains/backend/modules/appSettings", () => ({
   appSettingsService: { getSettings: async () => ({ preventSleepDuringRuns: true }) },
 }));
-vi.mock("../modules/pulse", () => ({
+vi.mock("@mains/backend/modules/pulse", () => ({
   pulseService: { getNextScheduled: () => null },
 }));
 vi.mock("../modules/localBackend", () => ({
   localBackendService: { getStatus: () => ({ remoteAccess: false, tailscale: false }) },
 }));
-vi.mock("../modules/backend", () => ({
+vi.mock("@mains/backend/modules/backend", () => ({
   backendService: { listPairedDevices: async () => [] },
 }));
 vi.mock("../modules/appshots", () => ({

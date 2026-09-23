@@ -61,6 +61,10 @@ export const CHANNELS = {
     clearHistory: "browser:clearHistory",
     closeTab: "browser:closeTab",
     createTab: "browser:createTab",
+    forgetContext: "browser:forgetContext",
+    listOwnerKeys: "browser:listOwnerKeys",
+    setContext: "browser:setContext",
+    reassignTabs: "browser:reassignTabs",
     deleteCapture: "browser:deleteCapture",
     destroy: "browser:destroy",
     detach: "browser:detach",
@@ -193,10 +197,12 @@ export const CHANNELS = {
     setTailscaleHttps: "localBackend:setTailscaleHttps",
     setKeepAwakeForRemoteAccess: "localBackend:setKeepAwakeForRemoteAccess",
     rotateToken: "localBackend:rotateToken",
+    createWebLogin: "localBackend:createWebLogin",
     createPairingCode: "localBackend:createPairingCode",
     listPairedDevices: "localBackend:listPairedDevices",
     revokePairedDevice: "localBackend:revokePairedDevice",
-    // main → renderer: a phone paired, connected (last-seen), or was revoked
+    renamePairedDevice: "localBackend:renamePairedDevice",
+    // main → renderer: a device paired, connected or disconnected, was renamed, or was revoked
     pairedDevicesChanged: "localBackend:pairedDevicesChanged",
   },
   imageProxy: {

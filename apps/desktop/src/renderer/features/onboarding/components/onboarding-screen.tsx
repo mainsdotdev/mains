@@ -5,7 +5,7 @@ import { ChevronUp } from "@/components/ui/icons";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 import { setOnboardingCompleted } from "@/lib/redux/slices/appSettingsSlice";
-import { AgentComparisonStep } from "./agent-comparison-step";
+import { AgentsStep } from "./agents-step";
 import { CoreFeaturesStep } from "./core-features-step";
 import { PreferencesStep } from "./preferences-step";
 import { WelcomeIntroStep } from "./welcome-intro-step";
@@ -20,7 +20,7 @@ interface OnboardingStep {
 const STEPS: OnboardingStep[] = [
   { id: "welcome", render: () => <WelcomeIntroStep /> },
   { id: "features", render: () => <CoreFeaturesStep /> },
-  { id: "agents", render: () => <AgentComparisonStep />, changesSettings: true },
+  { id: "agents", render: () => <AgentsStep />, changesSettings: true },
   { id: "preferences", render: () => <PreferencesStep />, changesSettings: true },
 ];
 

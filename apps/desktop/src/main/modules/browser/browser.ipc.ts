@@ -1,5 +1,5 @@
-import { ipcMain } from "../../ipc-kit/ipc-main";
-import { handle } from "../../ipc-kit/handle";
+import { ipcMain } from "@mains/backend/ipc-kit/ipc-main";
+import { handle } from "@mains/backend/ipc-kit";
 import { browserService } from "./browser.service";
 import type {
   BrowserBounds,
@@ -19,7 +19,7 @@ import {
   BROWSER_DEVICE_WIDTH_MAX,
   BROWSER_DEVICE_WIDTH_MIN,
 } from "./browser-device";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import { CHANNELS } from "@mains/contracts/channels";
 
 function requireBounds(input: unknown): BrowserBounds {
   if (!input || typeof input !== "object") throw new Error("Invalid bounds");
@@ -41,6 +41,24 @@ function requireTabId(input: unknown): string {
     throw new Error("tabId must be a string");
   }
   return input;
+}
+
+function requireOwnerKey(input: unknown): string {
+  if (typeof input !== "string" || !input.trim() || input.length > 1024) {
+    throw new Error("ownerKey must be a non-empty string");
+  }
+  return input;
+}
+
+function requireUiContextTarget(input: unknown): { backendId: string; kind: "run" | "workspace"; id: string } {
+  if (!input || typeof input !== "object") throw new Error("Invalid UI context");
+  const target = input as Record<string, unknown>;
+  if (
+    typeof target.backendId !== "string" || !target.backendId || target.backendId.length > 1024 ||
+    typeof target.id !== "string" || !target.id || target.id.length > 1024 ||
+    (target.kind !== "run" && target.kind !== "workspace")
+  ) throw new Error("Invalid UI context");
+  return { backendId: target.backendId, kind: target.kind, id: target.id };
 }
 
 function requireDownloadId(input: unknown): string {
@@ -205,12 +223,33 @@ function requireFindInput(input: unknown): {
 export function registerBrowserIpc(): void {
   ipcMain.handle(
     CHANNELS.browser.createTab,
-    handle((url: unknown) => {
+    handle((url: unknown, ownerKey: unknown) => {
       if (url !== undefined && typeof url !== "string") {
         throw new Error("url must be a string");
       }
-      return browserService.createTab(url as string | undefined);
+      return browserService.createTab(
+        url as string | undefined,
+        ownerKey === undefined ? undefined : requireOwnerKey(ownerKey),
+      );
     }),
+  );
+  ipcMain.handle(
+    CHANNELS.browser.setContext,
+    handle((ownerKey: unknown, showBlankTab: unknown) =>
+      browserService.setContext(requireOwnerKey(ownerKey), showBlankTab === true)),
+  );
+  ipcMain.handle(
+    CHANNELS.browser.reassignTabs,
+    handle((fromOwnerKey: unknown, toOwnerKey: unknown) =>
+      browserService.reassignTabs(requireOwnerKey(fromOwnerKey), requireOwnerKey(toOwnerKey))),
+  );
+  ipcMain.handle(
+    CHANNELS.browser.listOwnerKeys,
+    handle(() => browserService.listOwnerKeys()),
+  );
+  ipcMain.handle(
+    CHANNELS.browser.forgetContext,
+    handle((target: unknown) => browserService.forgetContext(requireUiContextTarget(target))),
   );
   ipcMain.handle(
     CHANNELS.browser.closeTab,
@@ -387,6 +426,10 @@ export function registerBrowserIpc(): void {
 export function unregisterBrowserIpc(): void {
   [
     CHANNELS.browser.createTab,
+    CHANNELS.browser.setContext,
+    CHANNELS.browser.reassignTabs,
+    CHANNELS.browser.listOwnerKeys,
+    CHANNELS.browser.forgetContext,
     CHANNELS.browser.closeTab,
     CHANNELS.browser.activateTab,
     CHANNELS.browser.attach,

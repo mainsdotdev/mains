@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { addContextItem } from "@/lib/redux/slices/workspaceSlice";
+import { addContextItemForKey } from "@/lib/redux/slices/workspaceSlice";
 import type { ContextBrowserSelection } from "@/features/workspace/lib/composer-context";
 import {
   Button,
@@ -63,6 +63,7 @@ import {
 } from "./browser-history-panel";
 import {
   BrowserAddressSuggestions,
+  browserAddressRows,
   browserAddressSuggestions,
 } from "./browser-address-suggestions";
 import {
@@ -82,6 +83,7 @@ const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 5;
 
 interface BrowserState {
+  ownerKey?: string;
   activeTabId: string;
   tabs: BrowserTabViewModel[];
 }
@@ -92,6 +94,8 @@ interface FindState {
 }
 
 type AnimationState = "closed" | "opening" | "open" | "closing";
+/** A DOM overlay that needs the native page view out of its way. */
+type BrowserOverlayId = "device" | "scale" | "address";
 
 const EMPTY_BROWSER_STATE: BrowserState = { activeTabId: "", tabs: [] };
 const EMPTY_FIND_STATE: FindState = { activeMatchOrdinal: 0, matches: 0 };
@@ -132,7 +136,7 @@ function waitForPaint(): Promise<void> {
 }
 
 export function BrowserPanel() {
-  const { isOpen, close } = useBrowserPanel();
+  const { isOpen, close, ownerKey } = useBrowserPanel();
   const dispatch = useAppDispatch();
   const viewportRef = useRef<HTMLDivElement>(null);
   const locationInputRef = useRef<HTMLInputElement>(null);
@@ -142,19 +146,30 @@ export function BrowserPanel() {
   const browserMenuOpeningRef = useRef(false);
   const browserMenuPreviewNameRef = useRef<string | null>(null);
   const browserMenuPreviewRevisionRef = useRef(0);
-  const deviceDropdownOperationRef = useRef(0);
-  const deviceDropdownsOpenRef = useRef(new Set<"device" | "scale">());
-  const deviceDropdownRestoreTimerRef = useRef<ReturnType<
+  // DOM overlays that sit over the page — the device toolbar's dropdowns and
+  // the address suggestions. The page is a native view drawn above the DOM,
+  // so while any is open it is swapped for a screenshot of itself.
+  const overlayOperationRef = useRef(0);
+  const overlaysOpenRef = useRef(new Set<BrowserOverlayId>());
+  const overlayRestoreTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
   const downloadStatesRef = useRef<
     Map<string, BrowserDownloadViewModel["state"]>
   >(new Map());
-  const [browserState, setBrowserState] = useState<BrowserState>(
+  const [storedBrowserState, setBrowserState] = useState<BrowserState>(
     EMPTY_BROWSER_STATE,
   );
-  const [urlInput, setUrlInput] = useState("");
+  const browserState = storedBrowserState.ownerKey === ownerKey
+    ? storedBrowserState
+    : EMPTY_BROWSER_STATE;
+  const [addressInput, setAddressInput] = useState({ ownerKey, value: "" });
+  const urlInput = addressInput.ownerKey === ownerKey ? addressInput.value : "";
+  const setUrlInput = useCallback((value: string) => {
+    setAddressInput({ ownerKey, value });
+  }, [ownerKey]);
   const [addressSuggestionsOpen, setAddressSuggestionsOpen] = useState(false);
+  const [addressOverlayReady, setAddressOverlayReady] = useState(false);
   const [addressSuggestionIndex, setAddressSuggestionIndex] = useState(-1);
   const [selectMode, setSelectMode] = useState(false);
   const [attached, setAttached] = useState(false);
@@ -206,19 +221,23 @@ export function BrowserPanel() {
     browserState.tabs.find((tab) => tab.tabId === browserState.activeTabId) ??
     null;
   const isBlank = !activeTab?.url || activeTab.url === BLANK_URL;
-  const addressSuggestions = useMemo(
-    () => browserAddressSuggestions(historyEntries, urlInput),
+  // The typed input leads the rows, so the default selection (0) is exactly
+  // what was typed; history matches follow it.
+  const addressRows = useMemo(
+    () =>
+      browserAddressRows(
+        urlInput,
+        browserAddressSuggestions(historyEntries, urlInput),
+      ),
     [historyEntries, urlInput],
   );
   const selectedAddressSuggestionIndex =
-    addressSuggestions.length > 0
-      ? Math.min(
-          Math.max(addressSuggestionIndex, 0),
-          addressSuggestions.length - 1,
-        )
+    addressRows.length > 0
+      ? Math.min(Math.max(addressSuggestionIndex, 0), addressRows.length - 1)
       : -1;
 
   const applyBrowserState = useCallback((state: BrowserState) => {
+    if (state.ownerKey && state.ownerKey !== ownerKey) return;
     if (
       activeTabIdRef.current &&
       activeTabIdRef.current !== state.activeTabId
@@ -234,7 +253,7 @@ export function BrowserPanel() {
     ) {
       setUrlInput(active.url === BLANK_URL ? "" : active.url);
     }
-  }, []);
+  }, [ownerKey, setUrlInput]);
 
   const applyResponseState = useCallback(
     (response: any, fallbackError: string) => {
@@ -249,6 +268,13 @@ export function BrowserPanel() {
     },
     [applyBrowserState],
   );
+
+  useLayoutEffect(() => {
+    if (!api?.setContext) return;
+    void api.setContext(ownerKey, isOpen).then((response: any) => {
+      applyResponseState(response, "Failed to restore browser tabs");
+    });
+  }, [api, ownerKey, isOpen, applyResponseState]);
 
   const applyDownloads = useCallback(
     (nextDownloads: BrowserDownloadViewModel[], notify: boolean) => {
@@ -353,7 +379,10 @@ export function BrowserPanel() {
         .attach(browserPanelBounds(node.getBoundingClientRect()))
         .then((response: any) => {
           if (cancelled) return;
-          applyResponseState(response, "Failed to open browser");
+          if (response?.success === false) {
+            toast.error(response.error || "Failed to open browser");
+            return;
+          }
           setAttached(true);
         });
     }, 360);
@@ -364,7 +393,7 @@ export function BrowserPanel() {
       void api.detach();
       queueMicrotask(() => setAttached(false));
     };
-  }, [api, applyResponseState, isOpen]);
+  }, [api, isOpen]);
 
   useLayoutEffect(() => {
     if (!isOpen || !attached) return;
@@ -389,12 +418,11 @@ export function BrowserPanel() {
       setSelectMode(enabled),
     );
     const offSelection = api.onSelection((selection) => {
-      dispatch(
-        addContextItem({
-          kind: "browser",
-          ...(selection as ContextBrowserSelection),
-        }),
-      );
+      const { ownerKey: selectionOwnerKey, ...contextSelection } = selection as ContextBrowserSelection & { ownerKey?: string };
+      dispatch(addContextItemForKey({
+        key: selectionOwnerKey || ownerKey,
+        item: { kind: "browser", ...contextSelection },
+      }));
       toast.success("Added browser selection to chat context");
     });
     const offFind = api.onFindResult((result) => {
@@ -446,7 +474,7 @@ export function BrowserPanel() {
       offDownloads();
       offHistory();
     };
-  }, [api, applyBrowserState, applyDownloads, applyResponseState, dispatch]);
+  }, [api, applyBrowserState, applyDownloads, applyResponseState, dispatch, ownerKey]);
 
   useEffect(() => {
     if (!api || !findOpen) return;
@@ -463,12 +491,12 @@ export function BrowserPanel() {
 
   const createTab = useCallback(() => {
     if (!api) return;
-    void api.createTab().then((response: any) => {
+    void api.createTab(undefined, ownerKey).then((response: any) => {
       if (applyResponseState(response, "Failed to create tab")) {
         requestAnimationFrame(() => locationInputRef.current?.focus());
       }
     });
-  }, [api, applyResponseState]);
+  }, [api, applyResponseState, ownerKey]);
 
   const closeTab = useCallback(
     (tabId: string) => {
@@ -577,40 +605,48 @@ export function BrowserPanel() {
     await clearBrowserMenuPreview();
   }, [api, clearBrowserMenuPreview, isOpen, syncBounds]);
 
-  const suspendBrowserViewForDeviceDropdown = useCallback(async () => {
-    if (!api || !isOpen || deviceDropdownsOpenRef.current.size === 0) return;
+  const suspendBrowserViewForOverlay = useCallback(async () => {
+    if (!api || !isOpen || overlaysOpenRef.current.size === 0) return;
 
-    const operation = deviceDropdownOperationRef.current + 1;
-    deviceDropdownOperationRef.current = operation;
+    const operation = overlayOperationRef.current + 1;
+    overlayOperationRef.current = operation;
     let pendingCaptureName: string | null = null;
+    let previousCaptureName: string | null = null;
 
     try {
-      const response = await api.captureScreenshot("viewport");
-      const captureName = response?.success
-        ? (response.data as ContextBrowserSelection | undefined)
-            ?.screenshotCaptureName
-        : undefined;
-      if (!captureName) return;
-      pendingCaptureName = captureName;
+      if (!isBlank) {
+        try {
+          const response = await api.captureScreenshot("viewport");
+          const captureName = response?.success
+            ? (response.data as ContextBrowserSelection | undefined)
+                ?.screenshotCaptureName
+            : undefined;
+          if (captureName) {
+            pendingCaptureName = captureName;
+            await preloadImage(browserCaptureUrl(captureName));
+            if (
+              operation !== overlayOperationRef.current ||
+              overlaysOpenRef.current.size === 0 ||
+              !isOpen
+            ) {
+              return;
+            }
 
-      await preloadImage(browserCaptureUrl(captureName));
-      if (
-        operation !== deviceDropdownOperationRef.current ||
-        deviceDropdownsOpenRef.current.size === 0 ||
-        !isOpen
-      ) {
-        return;
+            previousCaptureName = browserMenuPreviewNameRef.current;
+            browserMenuPreviewNameRef.current = captureName;
+            setBrowserMenuPreviewName(captureName);
+            pendingCaptureName = null;
+            await waitForPaint();
+          }
+        } catch {
+          // A failed preview still needs the native view hidden so the overlay
+          // can receive pointer events.
+        }
       }
 
-      const previousCaptureName = browserMenuPreviewNameRef.current;
-      browserMenuPreviewNameRef.current = captureName;
-      setBrowserMenuPreviewName(captureName);
-      pendingCaptureName = null;
-      await waitForPaint();
-
       if (
-        operation !== deviceDropdownOperationRef.current ||
-        deviceDropdownsOpenRef.current.size === 0 ||
+        operation !== overlayOperationRef.current ||
+        overlaysOpenRef.current.size === 0 ||
         !isOpen
       ) {
         return;
@@ -622,7 +658,25 @@ export function BrowserPanel() {
         return;
       }
 
-      if (previousCaptureName && previousCaptureName !== captureName) {
+      if (
+        operation !== overlayOperationRef.current ||
+        overlaysOpenRef.current.size === 0 ||
+        !isOpen
+      ) {
+        if (overlaysOpenRef.current.size === 0 && isOpen) {
+          await restoreBrowserView();
+        }
+        return;
+      }
+
+      if (overlaysOpenRef.current.has("address")) {
+        setAddressOverlayReady(true);
+      }
+
+      if (
+        previousCaptureName &&
+        previousCaptureName !== browserMenuPreviewNameRef.current
+      ) {
         await api.deleteCapture(previousCaptureName);
       }
     } finally {
@@ -630,43 +684,56 @@ export function BrowserPanel() {
         await api.deleteCapture(pendingCaptureName);
       }
     }
-  }, [api, clearBrowserMenuPreview, isOpen]);
+  }, [api, clearBrowserMenuPreview, isBlank, isOpen, restoreBrowserView]);
 
-  const handleDeviceDropdownOpenChange = useCallback(
-    (id: "device" | "scale", open: boolean) => {
-      if (deviceDropdownRestoreTimerRef.current !== null) {
-        clearTimeout(deviceDropdownRestoreTimerRef.current);
-        deviceDropdownRestoreTimerRef.current = null;
+  const handleOverlayOpenChange = useCallback(
+    (id: BrowserOverlayId, open: boolean) => {
+      if (overlayRestoreTimerRef.current !== null) {
+        clearTimeout(overlayRestoreTimerRef.current);
+        overlayRestoreTimerRef.current = null;
       }
 
       if (open) {
-        const wasClosed = deviceDropdownsOpenRef.current.size === 0;
-        deviceDropdownsOpenRef.current.add(id);
-        if (wasClosed) void suspendBrowserViewForDeviceDropdown();
+        const wasClosed = overlaysOpenRef.current.size === 0;
+        overlaysOpenRef.current.add(id);
+        if (id === "address") {
+          void suspendBrowserViewForOverlay();
+        } else if (wasClosed) {
+          void suspendBrowserViewForOverlay();
+        }
         return;
       }
 
-      deviceDropdownsOpenRef.current.delete(id);
-      if (deviceDropdownsOpenRef.current.size > 0) return;
+      overlaysOpenRef.current.delete(id);
+      if (overlaysOpenRef.current.size > 0) return;
 
-      deviceDropdownRestoreTimerRef.current = setTimeout(() => {
-        deviceDropdownRestoreTimerRef.current = null;
-        if (deviceDropdownsOpenRef.current.size > 0) return;
-        deviceDropdownOperationRef.current += 1;
+      overlayRestoreTimerRef.current = setTimeout(() => {
+        overlayRestoreTimerRef.current = null;
+        if (overlaysOpenRef.current.size > 0) return;
+        overlayOperationRef.current += 1;
         void restoreBrowserView();
       }, 50);
     },
-    [restoreBrowserView, suspendBrowserViewForDeviceDropdown],
+    [restoreBrowserView, suspendBrowserViewForOverlay],
   );
+
+  // The suggestions cover the top of the page instead of pushing it down.
+  const addressOverlayOpen = addressSuggestionsOpen && addressRows.length > 0;
+  const addressSuggestionsVisible = addressOverlayOpen && addressOverlayReady;
+  useEffect(() => {
+    if (!addressOverlayOpen) return;
+    handleOverlayOpenChange("address", true);
+    return () => handleOverlayOpenChange("address", false);
+  }, [addressOverlayOpen, handleOverlayOpenChange]);
 
   const closeDeviceToolbar = useCallback(async () => {
     const device = activeTab?.deviceEmulation;
     if (!device) return;
-    deviceDropdownsOpenRef.current.clear();
-    deviceDropdownOperationRef.current += 1;
-    if (deviceDropdownRestoreTimerRef.current !== null) {
-      clearTimeout(deviceDropdownRestoreTimerRef.current);
-      deviceDropdownRestoreTimerRef.current = null;
+    overlaysOpenRef.current.clear();
+    overlayOperationRef.current += 1;
+    if (overlayRestoreTimerRef.current !== null) {
+      clearTimeout(overlayRestoreTimerRef.current);
+      overlayRestoreTimerRef.current = null;
     }
     await restoreBrowserView();
     await updateDeviceEmulation({ ...device, enabled: false });
@@ -944,10 +1011,10 @@ export function BrowserPanel() {
   const openHistoryEntryInNewTab = useCallback(
     async (url: string) => {
       if (!(await prepareBrowserMenuAction()) || !api) return;
-      const response = await api.createTab(url);
+      const response = await api.createTab(url, ownerKey);
       applyResponseState(response, "Failed to open history entry");
     },
-    [api, applyResponseState, prepareBrowserMenuAction],
+    [api, applyResponseState, prepareBrowserMenuAction, ownerKey],
   );
 
   const openFindFromMenu = useCallback(async () => {
@@ -977,12 +1044,11 @@ export function BrowserPanel() {
       if (!(await prepareBrowserMenuAction()) || !api) return;
       const response = await api.captureScreenshot(mode);
       if (response?.success && response.data) {
-        dispatch(
-          addContextItem({
-            kind: "browser",
-            ...(response.data as ContextBrowserSelection),
-          }),
-        );
+        const { ownerKey: captureOwnerKey, ...contextSelection } = response.data as ContextBrowserSelection & { ownerKey?: string };
+        dispatch(addContextItemForKey({
+          key: captureOwnerKey || ownerKey,
+          item: { kind: "browser", ...contextSelection },
+        }));
         toast.success(
           mode === "fullPage"
             ? "Full-page screenshot added to chat context"
@@ -992,7 +1058,7 @@ export function BrowserPanel() {
         toast.error(response?.error || "Failed to capture page");
       }
     },
-    [api, dispatch, prepareBrowserMenuAction],
+    [api, dispatch, prepareBrowserMenuAction, ownerKey],
   );
 
   useEffect(() => {
@@ -1123,11 +1189,11 @@ export function BrowserPanel() {
     setDownloadsOpen(false);
     setHistoryOpen(false);
     setClearDataOpen(false);
-    deviceDropdownsOpenRef.current.clear();
-    deviceDropdownOperationRef.current += 1;
-    if (deviceDropdownRestoreTimerRef.current !== null) {
-      clearTimeout(deviceDropdownRestoreTimerRef.current);
-      deviceDropdownRestoreTimerRef.current = null;
+    overlaysOpenRef.current.clear();
+    overlayOperationRef.current += 1;
+    if (overlayRestoreTimerRef.current !== null) {
+      clearTimeout(overlayRestoreTimerRef.current);
+      overlayRestoreTimerRef.current = null;
     }
     if (api) {
       if (selectMode) await api.setSelectMode(false);
@@ -1142,9 +1208,9 @@ export function BrowserPanel() {
     return () => {
       browserMenuOperationRef.current += 1;
       browserMenuPreviewRevisionRef.current += 1;
-      deviceDropdownOperationRef.current += 1;
-      if (deviceDropdownRestoreTimerRef.current !== null) {
-        clearTimeout(deviceDropdownRestoreTimerRef.current);
+      overlayOperationRef.current += 1;
+      if (overlayRestoreTimerRef.current !== null) {
+        clearTimeout(overlayRestoreTimerRef.current);
       }
       const captureName = browserMenuPreviewNameRef.current;
       browserMenuPreviewNameRef.current = null;
@@ -1214,178 +1280,192 @@ export function BrowserPanel() {
         closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}
       />
 
-      <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
-        <div className="flex items-center gap-1 rounded-full p-0.5 ">
-          <Button
-            tooltip="Back"
-            tooltipShortcut={keyboardShortcutLabel(backShortcut)}
-            tooltipPosition="top"
-            onClick={() => void api.back()}
-            disabled={!activeTab?.canGoBack}
-            className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            aria-label="Back"
-          >
-            <ChevronLeft className="size-5" />
-          </Button>
-          <Button
-            tooltip="Forward"
-            tooltipShortcut={keyboardShortcutLabel(forwardShortcut)}
-            tooltipPosition="top"
-            onClick={() => void api.forward()}
-            disabled={!activeTab?.canGoForward}
-            className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            aria-label="Forward"
-          >
-            <ChevronLeft className="size-5 rotate-180" />
-          </Button>
-          <Button
-            tooltip={activeTab?.isLoading ? "Stop" : "Reload"}
-            tooltipPosition="top"
-            onClick={() =>
-              void (activeTab?.isLoading ? api.stop() : api.reload())
-            }
-            className="group rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
-          >
-            {activeTab?.isLoading ? (
-              <Close className="size-4 transition-transform duration-200 group-active:rotate-90" />
-            ) : (
-              <Refresh className="size-4 rotate-180 transition-transform duration-200 group-active:rotate-90" />
-            )}
-          </Button>
-        </div>
+      <div className="relative">
+        <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
+          <div className="flex items-center gap-1 rounded-full p-0.5 ">
+            <Button
+              tooltip="Back"
+              tooltipShortcut={keyboardShortcutLabel(backShortcut)}
+              tooltipPosition="top"
+              onClick={() => void api.back()}
+              disabled={!activeTab?.canGoBack}
+              className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              aria-label="Back"
+            >
+              <ChevronLeft className="size-5" />
+            </Button>
+            <Button
+              tooltip="Forward"
+              tooltipShortcut={keyboardShortcutLabel(forwardShortcut)}
+              tooltipPosition="top"
+              onClick={() => void api.forward()}
+              disabled={!activeTab?.canGoForward}
+              className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              aria-label="Forward"
+            >
+              <ChevronLeft className="size-5 rotate-180" />
+            </Button>
+            <Button
+              tooltip={activeTab?.isLoading ? "Stop" : "Reload"}
+              tooltipPosition="top"
+              onClick={() =>
+                void (activeTab?.isLoading ? api.stop() : api.reload())
+              }
+              className="group rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
+            >
+              {activeTab?.isLoading ? (
+                <Close className="size-4 transition-transform duration-200 group-active:rotate-90" />
+              ) : (
+                <Refresh className="size-4 rotate-180 transition-transform duration-200 group-active:rotate-90" />
+              )}
+            </Button>
+          </div>
 
-        <div className="min-w-0 flex-1">
-          <Input
-            ref={locationInputRef}
-            type="text"
-            role="combobox"
-            value={urlInput}
-            onChange={(event) => {
-              setUrlInput(event.target.value);
-              setAddressSuggestionsOpen(true);
-              setAddressSuggestionIndex(0);
-            }}
-            onKeyDown={(event) => {
-              if (
-                (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-                addressSuggestions.length > 0
-              ) {
-                event.preventDefault();
+          <div className="min-w-0 flex-1">
+            <Input
+              ref={locationInputRef}
+              type="text"
+              role="combobox"
+              value={urlInput}
+              onChange={(event) => {
+                setUrlInput(event.target.value);
+                if (!addressSuggestionsOpen) setAddressOverlayReady(false);
                 setAddressSuggestionsOpen(true);
-                setAddressSuggestionIndex((current) => {
-                  if (current < 0) {
-                    return event.key === "ArrowDown"
-                      ? 0
-                      : addressSuggestions.length - 1;
-                  }
-                  const direction = event.key === "ArrowDown" ? 1 : -1;
-                  const clampedCurrent = Math.min(
-                    current,
-                    addressSuggestions.length - 1,
+                setAddressSuggestionIndex(0);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+                  addressRows.length > 0
+                ) {
+                  event.preventDefault();
+                  if (!addressSuggestionsOpen) setAddressOverlayReady(false);
+                  setAddressSuggestionsOpen(true);
+                  setAddressSuggestionIndex((current) => {
+                    if (current < 0) {
+                      return event.key === "ArrowDown"
+                        ? 0
+                        : addressRows.length - 1;
+                    }
+                    const direction = event.key === "ArrowDown" ? 1 : -1;
+                    const clampedCurrent = Math.min(
+                      current,
+                      addressRows.length - 1,
+                    );
+                    return (
+                      (clampedCurrent + direction + addressRows.length) %
+                      addressRows.length
+                    );
+                  });
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  const row = addressSuggestionsOpen
+                    ? addressRows[selectedAddressSuggestionIndex]
+                    : undefined;
+                  navigate(
+                    row?.kind === "history" ? row.suggestion.url : urlInput,
                   );
-                  return (
-                    (clampedCurrent + direction + addressSuggestions.length) %
-                    addressSuggestions.length
-                  );
-                });
-              } else if (event.key === "Enter") {
-                event.preventDefault();
-                const suggestion = addressSuggestionsOpen
-                  ? addressSuggestions[selectedAddressSuggestionIndex]
-                  : undefined;
-                navigate(suggestion?.url ?? urlInput);
-              } else if (event.key === "Escape") {
-                event.preventDefault();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setAddressSuggestionsOpen(false);
+                  setAddressSuggestionIndex(-1);
+                }
+              }}
+              onFocus={(event) => {
+                event.currentTarget.select();
+                setAddressOverlayReady(false);
+                setAddressSuggestionsOpen(true);
+                setAddressSuggestionIndex(addressRows.length > 0 ? 0 : -1);
+              }}
+              onClick={() => {
+                if (!addressSuggestionsOpen) setAddressOverlayReady(false);
+                setAddressSuggestionsOpen(true);
+              }}
+              onBlur={() => {
                 setAddressSuggestionsOpen(false);
                 setAddressSuggestionIndex(-1);
+              }}
+              placeholder="Search or enter address"
+              aria-label="Search or enter address"
+              aria-autocomplete="list"
+              aria-controls={
+                addressSuggestionsVisible
+                  ? "browser-address-suggestions"
+                  : undefined
               }
-            }}
-            onFocus={(event) => {
-              event.currentTarget.select();
-              setAddressSuggestionsOpen(true);
-              setAddressSuggestionIndex(addressSuggestions.length > 0 ? 0 : -1);
-            }}
-            onClick={() => setAddressSuggestionsOpen(true)}
-            onBlur={() => {
-              setAddressSuggestionsOpen(false);
-              setAddressSuggestionIndex(-1);
-            }}
-            placeholder="Search or enter address"
-            aria-label="Search or enter address"
-            aria-autocomplete="list"
-            aria-controls={
-              addressSuggestionsOpen && addressSuggestions.length > 0
-                ? "browser-address-suggestions"
-                : undefined
-            }
-            aria-expanded={
-              addressSuggestionsOpen && addressSuggestions.length > 0
-            }
-            aria-activedescendant={
-              addressSuggestionsOpen && selectedAddressSuggestionIndex >= 0
-                ? `browser-address-suggestion-${selectedAddressSuggestionIndex}`
-                : undefined
-            }
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect="off"
-            className="w-full rounded-full py-1.75 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:text-primary-100 dark:focus:bg-primary-800/60"
-            spellCheck={false}
-          />
+              aria-expanded={addressSuggestionsVisible}
+              aria-activedescendant={
+                addressSuggestionsVisible && selectedAddressSuggestionIndex >= 0
+                  ? `browser-address-suggestion-${selectedAddressSuggestionIndex}`
+                  : undefined
+              }
+              autoCapitalize="none"
+              autoComplete="off"
+              autoCorrect="off"
+              className="w-full rounded-full py-1.75 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:text-primary-100 dark:focus:bg-primary-800/60"
+              spellCheck={false}
+            />
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
+            <Button
+              tooltip={selectMode ? "Exit select mode" : "Select in browser"}
+              tooltipShortcut="Esc"
+              tooltipPosition="top-left"
+              onClick={() => void toggleSelect()}
+              className={`rounded-full p-1 transition-colors ${
+                selectMode
+                  ? "bg-primary-500/20 text-primary-800 dark:text-primary-200"
+                  : "text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              }`}
+              aria-label={selectMode ? "Exit select mode" : "Select in browser"}
+              aria-pressed={selectMode}
+            >
+              <Crop className="size-4" />
+            </Button>
+            <Button
+              ref={browserMenuButtonRef}
+              tooltip="Browser menu"
+              tooltipPosition="top-left"
+              onClick={() => void toggleBrowserMenu()}
+              onMouseDown={(event) => event.stopPropagation()}
+              className="rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              aria-label="Open browser menu"
+              aria-haspopup="menu"
+              aria-expanded={browserMenuOpen}
+            >
+              <Option className="size-4 rotate-90" />
+            </Button>
+          </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
-          <Button
-            tooltip={selectMode ? "Exit select mode" : "Select in browser"}
-            tooltipShortcut="Esc"
-            tooltipPosition="top-left"
-            onClick={() => void toggleSelect()}
-            className={`rounded-full p-1 transition-colors ${
-              selectMode
-                ? "bg-primary-500/20 text-primary-800 dark:text-primary-200"
-                : "text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            }`}
-            aria-label={selectMode ? "Exit select mode" : "Select in browser"}
-            aria-pressed={selectMode}
-          >
-            <Crop className="size-4" />
-          </Button>
-          <Button
-            ref={browserMenuButtonRef}
-            tooltip="Browser menu"
-            tooltipPosition="top-left"
-            onClick={() => void toggleBrowserMenu()}
-            onMouseDown={(event) => event.stopPropagation()}
-            className="rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            aria-label="Open browser menu"
-            aria-haspopup="menu"
-            aria-expanded={browserMenuOpen}
-          >
-            <Option className="size-4 rotate-90" />
-          </Button>
-        </div>
+        {addressSuggestionsVisible && (
+          <div className="absolute inset-x-0 top-full z-(--z-dropdown)">
+            <BrowserAddressSuggestions
+              rows={addressRows}
+              selectedIndex={selectedAddressSuggestionIndex}
+              onHighlight={setAddressSuggestionIndex}
+              onSelect={(row) => {
+                if (row.kind === "input") {
+                  navigate(row.value);
+                  return;
+                }
+                setUrlInput(row.suggestion.url);
+                navigate(row.suggestion.url);
+              }}
+              onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
+            />
+          </div>
+        )}
       </div>
-
-      {addressSuggestionsOpen && (
-        <BrowserAddressSuggestions
-          suggestions={addressSuggestions}
-          selectedIndex={selectedAddressSuggestionIndex}
-          onHighlight={setAddressSuggestionIndex}
-          onSelect={(suggestion) => {
-            setUrlInput(suggestion.url);
-            navigate(suggestion.url);
-          }}
-          onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
-        />
-      )}
 
       {activeTab?.deviceEmulation.enabled && (
         <BrowserDeviceToolbar
           device={activeTab.deviceEmulation}
           onChange={(device) => void updateDeviceEmulation(device)}
           onClose={() => void closeDeviceToolbar()}
-          onDropdownOpenChange={handleDeviceDropdownOpenChange}
+          onDropdownOpenChange={handleOverlayOpenChange}
         />
       )}
 

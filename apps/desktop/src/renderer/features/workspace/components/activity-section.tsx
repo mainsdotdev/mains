@@ -118,7 +118,7 @@ export function ActivitySection({ workspaceId }: ActivitySectionProps) {
             >
               {/* Icon column with connecting line */}
               <div className="flex flex-col items-center shrink-0 w-6">
-                <div className="flex items-center justify-center size-6">
+                <div className="flex items-center justify-center size-5">
                   <ActivityIcon type={activity.type} />
                 </div>
                 {!isLast && (

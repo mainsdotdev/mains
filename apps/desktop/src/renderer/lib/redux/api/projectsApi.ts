@@ -1,4 +1,7 @@
 import { baseApi } from "./baseApi";
+import { getTransport } from "@/lib/transport";
+import type { AppDispatch, RootState } from "../index";
+import { reconcilePersistedUiState } from "../ui-state-reconciliation";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { IssueWithEntity } from "./entitiesApi";
 
@@ -172,7 +175,17 @@ export const projectsApi = baseApi.injectEndpoints({
         handler: CHANNELS.projects.remove,
         args: [id],
       }),
-      invalidatesTags: ["Projects", "Workspaces"],
+      async onQueryStarted(_id, { dispatch, getState, queryFulfilled }) {
+        const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
+        const transport = getTransport();
+        try {
+          await queryFulfilled;
+          void reconcilePersistedUiState(dispatch as AppDispatch, getState as () => RootState, transport, backendId);
+        } catch {
+          // No UI record was deleted when the backend operation failed.
+        }
+      },
+      invalidatesTags: ["Projects", "Workspaces", "Runs"],
     }),
 
     deleteProject: builder.mutation<void, string>({
@@ -180,7 +193,17 @@ export const projectsApi = baseApi.injectEndpoints({
         handler: CHANNELS.projects.delete,
         args: [id],
       }),
-      invalidatesTags: ["Projects"],
+      async onQueryStarted(_id, { dispatch, getState, queryFulfilled }) {
+        const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
+        const transport = getTransport();
+        try {
+          await queryFulfilled;
+          void reconcilePersistedUiState(dispatch as AppDispatch, getState as () => RootState, transport, backendId);
+        } catch {
+          // No UI record was deleted when the backend operation failed.
+        }
+      },
+      invalidatesTags: ["Projects", "Workspaces", "Runs"],
     }),
 
     archiveProject: builder.mutation<Project, string>({

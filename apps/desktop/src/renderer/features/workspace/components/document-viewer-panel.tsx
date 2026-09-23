@@ -142,7 +142,7 @@ export function DocumentViewerPanel() {
               tooltipPosition="bottom"
               onClick={zoomOut}
               disabled={zoom <= ZOOM_MIN}
-              className="size-6 flex items-center justify-center rounded-md cursor-pointer disabled:opacity-40 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
+              className="size-6 flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
               aria-label="Zoom out"
             >
               <Text as="span" size="sm" tone="inherit" className="leading-none">−</Text>

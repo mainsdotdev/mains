@@ -159,7 +159,7 @@ export default function Tooltip({
             top: coords.top,
             left: coords.left,
             transform: getTransformOrigin(),
-            zIndex: 9999,
+            zIndex: "var(--z-tooltip)",
           }}
           className={cn(
             "px-2 py-1 whitespace-nowrap rounded-[10px] pointer-events-none glass-surface",

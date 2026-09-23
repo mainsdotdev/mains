@@ -439,7 +439,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
             <div className="px-3 mb-2">
               <Button
                 variant="subtle"
-                tooltip="Relay"
+                tooltip="Mains Connect"
                 className={`justify-start flex items-center gap-2 w-full rounded-xl transition-colors ${
                   isRelayRoute
                     ? " glass-outline bg-primary/50 dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
@@ -463,7 +463,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                   align="left"
                   className="flex-1"
                 >
-                  Relay
+                  Connect
                 </Text>
 
               </Button>

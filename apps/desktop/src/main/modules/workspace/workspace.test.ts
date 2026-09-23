@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync } from "fs";
-import { createTestDb } from "../../../test/setup-db";
+import { createTestDb } from "../../../../../../packages/backend/test/setup-db";
 import {
   createAccount,
   createProject,
@@ -26,10 +26,10 @@ import {
   createReview,
   createReviewFinding,
   createRun,
-} from "../../../test/factories";
-import type { DatabaseInstance } from "../../db/types";
+} from "../../../../../../packages/backend/test/factories";
+import type { DatabaseInstance } from "../../../../../../packages/backend/src/db/types";
 import type Database from "better-sqlite3";
-import { clearEventSinks } from "../../ipc-kit";
+import { clearEventSinks } from "@mains/backend/ipc-kit";
 import { registerBrowserWindowSink } from "../../ipc-kit/browser-window-sink";
 
 let db: DatabaseInstance;
@@ -40,7 +40,7 @@ const { fsWatchMock } = vi.hoisted(() => ({
   fsWatchMock: vi.fn(),
 }));
 
-vi.mock("../../db/client", () => ({
+vi.mock("../../../../../../packages/backend/src/db/client", () => ({
   getDb: () => db,
 }));
 
@@ -89,7 +89,7 @@ vi.mock("fs", async (importOriginal) => {
 // Workspace intake collaborators — stubbed so the intake can be exercised
 // end-to-end against the test db without touching real git or settings.
 // gitService is throw-style: mocks resolve plain values / reject Errors.
-vi.mock("../git/git.service", () => ({
+vi.mock("../../../../../../packages/backend/src/modules/git/git.service", () => ({
   gitService: {
     initRepo: vi.fn(),
     cloneRepo: vi.fn(),
@@ -110,20 +110,23 @@ vi.mock("../git/git.service", () => ({
   },
 }));
 
-vi.mock("../appSettings/appSettings.service", () => ({
+vi.mock(
+  "../../../../../../packages/backend/src/modules/appSettings/appSettings.service",
+  () => ({
   appSettingsService: { ensureSettings: vi.fn() },
-}));
+  }),
+);
 
 import {
   workspaceService,
   logWorkspaceActivity,
   workspacePathExists,
   assertWorkspacePathExists,
-} from "./index";
-import { workspaceRepo } from "./workspace.repo";
-import { projectsRepo } from "../projects/projects.repo";
-import { gitService } from "../git/git.service";
-import { appSettingsService } from "../appSettings/appSettings.service";
+} from "@mains/backend/modules/workspace";
+import { workspaceRepo } from "../../../../../../packages/backend/src/modules/workspace/workspace.repo";
+import { projectsRepo } from "../../../../../../packages/backend/src/modules/projects/projects.repo";
+import { gitService } from "../../../../../../packages/backend/src/modules/git/git.service";
+import { appSettingsService } from "../../../../../../packages/backend/src/modules/appSettings/appSettings.service";
 import { BrowserWindow } from "electron";
 import { execFile } from "child_process";
 

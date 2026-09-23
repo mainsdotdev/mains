@@ -23,6 +23,15 @@ import {
  */
 let activeTunnelId: string | null = null;
 
+async function closeTunnelQuietly(id: string): Promise<void> {
+  try {
+    await window.api.ssh.closeTunnel(id);
+  } catch {
+    // The transport is already detached. Tunnel cleanup must not turn a
+    // successful backend switch into a failed one.
+  }
+}
+
 /**
  * Track the active transport's connection status, re-subscribing when the
  * transport is swapped (local ↔ remote). Local IPC is always `"connected"`.
@@ -66,29 +75,64 @@ export function useBackendConnection() {
   const connect = useCallback(
     async (id: string) => {
       const backend = saved.find((b) => b.id === id);
-      if (!backend) return;
+      if (!backend) throw new Error("Saved backend not found.");
       let url: string | undefined;
       let token: string | undefined;
-      if (backend.ssh) {
-        // Open an SSH tunnel locally and connect to the forwarded loopback port.
-        const res = await window.api.ssh.openTunnel(backend.ssh);
-        if (!res.success) throw new Error(res.error);
-        activeTunnelId = res.data.id;
-        url = res.data.localUrl;
-        token = res.data.token ?? undefined; // ephemeral token (auto-launch case)
-      } else {
-        url = backend.wsUrl;
+      let candidateTunnelId: string | null = null;
+
+      try {
+        if (backend.ssh) {
+          // Open a candidate tunnel without disturbing the currently-active
+          // one. It becomes active only after backend preflight succeeds.
+          const res = await window.api.ssh.openTunnel(backend.ssh);
+          if (!res.success) throw new Error(res.error);
+          candidateTunnelId = res.data.id;
+          url = res.data.localUrl;
+          token = res.data.token ?? undefined; // ephemeral token (auto-launch case)
+        } else {
+          url = backend.wsUrl;
+        }
+
+        // Fall back to the stored owner token (direct mode, or SSH to a
+        // pre-running token-protected backend).
+        if (!token && backend.hasToken) {
+          const stored = await window.api.remoteBackends.getToken(id);
+          if (!stored.success) throw new Error(stored.error);
+          if (!stored.data) {
+            throw new Error("The saved owner token is missing.");
+          }
+          token = stored.data;
+        }
+
+        if (!url) throw new Error("Backend has no address.");
+        const connection = await connectRemoteBackend(
+          url,
+          token ? { token } : undefined,
+        );
+
+        const previousTunnelId = activeTunnelId;
+        activeTunnelId = candidateTunnelId;
+        candidateTunnelId = null;
+        dispatch(setActiveBackend(id));
+        dispatch(
+          markConnected({
+            id,
+            at: Date.now(),
+            descriptor: connection.descriptor,
+          }),
+        );
+
+        if (previousTunnelId && previousTunnelId !== activeTunnelId) {
+          await closeTunnelQuietly(previousTunnelId);
+        }
+
+        return connection.descriptor;
+      } catch (error) {
+        if (candidateTunnelId) {
+          await closeTunnelQuietly(candidateTunnelId);
+        }
+        throw error;
       }
-      // Fall back to the stored pairing token (direct mode, or SSH to a
-      // pre-running token-protected backend).
-      if (!token && backend.hasToken) {
-        const stored = await window.api.remoteBackends.getToken(id);
-        if (stored.success && stored.data) token = stored.data;
-      }
-      if (!url) throw new Error("Backend has no address");
-      connectRemoteBackend(url, token ? { token } : undefined);
-      dispatch(setActiveBackend(id));
-      dispatch(markConnected({ id, at: Date.now() }));
     },
     [saved, dispatch],
   );
@@ -99,7 +143,7 @@ export function useBackendConnection() {
     if (activeTunnelId) {
       const tunnelId = activeTunnelId;
       activeTunnelId = null;
-      await window.api.ssh.closeTunnel(tunnelId);
+      await closeTunnelQuietly(tunnelId);
     }
   }, [dispatch]);
 
@@ -111,7 +155,10 @@ export function useBackendConnection() {
       token?: string;
     }) => {
       const id = nanoid();
-      if (input.token) await window.api.remoteBackends.setToken(id, input.token);
+      if (input.token) {
+        const stored = await window.api.remoteBackends.setToken(id, input.token);
+        if (!stored.success) throw new Error(stored.error);
+      }
       dispatch(
         addBackend({
           id,

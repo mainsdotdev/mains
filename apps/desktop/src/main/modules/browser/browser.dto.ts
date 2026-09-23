@@ -2,7 +2,7 @@
 // Browser DTOs
 // ─────────────────────────────────────────────────────────────
 
-export type { ServiceResponse } from "../../../shared/ipc-kit/service-response";
+export type { ServiceResponse } from "@mains/contracts/service-response";
 
 export interface BrowserBounds {
   x: number;
@@ -49,6 +49,7 @@ export interface BrowserTabSummary extends BrowserNavState {
 }
 
 export interface BrowserState {
+  ownerKey: string;
   activeTabId: string;
   tabs: BrowserTabSummary[];
 }
@@ -138,6 +139,7 @@ export interface BrowserSelectionPayload {
 }
 
 export interface BrowserSelectionResult extends BrowserSelectionPayload {
+  ownerKey: string;
   /** Absolute path of the element screenshot on disk. */
   screenshotPath?: string;
   /** Basename used to resolve the capture via the `mains-capture://` scheme in the renderer. */

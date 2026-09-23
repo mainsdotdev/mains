@@ -1,4 +1,5 @@
 import { createSlice, nanoid, type PayloadAction } from "@reduxjs/toolkit";
+import type { BackendDescriptor } from "@mains/contracts/backend";
 
 /**
  * A saved remote backend the UI can connect to (a `mains serve` instance reached
@@ -18,10 +19,12 @@ export interface KnownBackend {
   wsUrl?: string;
   /** SSH config. Set for tunneled backends; the ws URL is derived per connect. */
   ssh?: BackendSshConfig;
-  /** Whether a pairing token is stored (encrypted) in main for this backend. */
+  /** Whether an owner token is stored (encrypted) in main for this backend. */
   hasToken?: boolean;
   /** Last successful connect time (epoch ms), or null if never connected. */
   lastConnectedAt: number | null;
+  /** Identity reported by the server during the last successful preflight. */
+  lastDescriptor?: BackendDescriptor;
 }
 
 export interface BackendsState {
@@ -81,10 +84,17 @@ const backendsSlice = createSlice({
     },
     markConnected: (
       state,
-      action: PayloadAction<{ id: string; at: number }>,
+      action: PayloadAction<{
+        id: string;
+        at: number;
+        descriptor: BackendDescriptor;
+      }>,
     ) => {
       const backend = state.saved.find((b) => b.id === action.payload.id);
-      if (backend) backend.lastConnectedAt = action.payload.at;
+      if (backend) {
+        backend.lastConnectedAt = action.payload.at;
+        backend.lastDescriptor = action.payload.descriptor;
+      }
     },
   },
 });

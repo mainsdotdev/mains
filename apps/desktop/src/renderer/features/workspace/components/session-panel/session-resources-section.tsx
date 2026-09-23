@@ -281,6 +281,7 @@ function SessionResourceRow({
   const imageUrl = useLocalImageUrl(imageSource);
 
   const onClick = (() => {
+    if (resource.kind === "folder") return undefined;
     const target = resource.target;
     if (!target) return undefined;
     if (target.type === "url") {

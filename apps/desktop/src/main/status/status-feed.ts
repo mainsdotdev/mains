@@ -1,19 +1,19 @@
-import { CHANNELS } from "../../shared/ipc-kit/channels";
-import { registerEventSink, type EventSink } from "../ipc-kit";
-import { appSettingsService } from "../modules/appSettings";
+import { CHANNELS } from "@mains/contracts/channels";
+import { registerEventSink, type EventSink } from "@mains/backend/ipc-kit";
+import { appSettingsService } from "@mains/backend/modules/appSettings";
 import { appshotsService } from "../modules/appshots";
-import { backendService } from "../modules/backend";
+import { backendService } from "@mains/backend/modules/backend";
 import { localBackendService } from "../modules/localBackend";
-import { pulseService } from "../modules/pulse";
+import { pulseService } from "@mains/backend/modules/pulse";
 import {
   describeApprovalNotification,
   formatRunLabel,
   listPendingApprovals,
   runsService,
   type ActiveRunResponse,
-} from "../modules/runs";
+} from "@mains/backend/modules/runs";
 import { updatesService } from "../modules/updates";
-import { workspaceService } from "../modules/workspace";
+import { workspaceService } from "@mains/backend/modules/workspace";
 import type { TrayFinishedStatus, TraySnapshot } from "./status-menus";
 
 /**

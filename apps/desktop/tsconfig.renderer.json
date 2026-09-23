@@ -3,6 +3,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "composite": true,
+    "rootDir": "../..",
     "outDir": ".vite/renderer",
     "types": ["vite/client"],
     "paths": {
@@ -12,6 +13,7 @@
   "include": [
     "src/renderer/**/*",
     "src/preload/types.d.ts",
-    "src/shared/**/*"
+    "src/shared/**/*",
+    "../../packages/backend/shared/**/*"
   ]
 }

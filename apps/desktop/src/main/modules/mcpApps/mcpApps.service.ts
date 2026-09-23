@@ -1,7 +1,8 @@
-import { runsRepo } from "../runs/runs.repo";
-import { runsService } from "../runs";
-import { providersService } from "../providers";
-import { createWorkAdapter } from "../providers/adapters";
+import { runsService } from "@mains/backend/modules/runs";
+import {
+  providersService,
+  createWorkAdapter,
+} from "@mains/backend/modules/providers";
 import { mcpAppsRegistry } from "./mcpApps.registry";
 import type {
   CallMcpAppToolPayload,
@@ -117,7 +118,7 @@ function normalizeResourceMeta(value: unknown): McpAppResourceMeta {
 }
 
 async function adapterForRun(runId: string) {
-  const run = await runsRepo.findRunById(runId);
+  const run = await runsService.getRunById(runId);
   if (!run) throw new Error("Run not found");
   const provider = await providersService.getById(run.providerId);
   if (!provider) throw new Error(`Provider "${run.providerId}" not found`);

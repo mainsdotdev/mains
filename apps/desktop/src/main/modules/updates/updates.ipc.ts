@@ -1,7 +1,7 @@
-import { ipcMain } from "../../ipc-kit/ipc-main";
-import { handle } from "../../ipc-kit/handle";
+import { ipcMain } from "@mains/backend/ipc-kit/ipc-main";
+import { handle } from "@mains/backend/ipc-kit";
 import { updatesService } from "./updates.service";
-import { CHANNELS } from "../../../shared/ipc-kit/channels";
+import { CHANNELS } from "@mains/contracts/channels";
 
 // ─────────────────────────────────────────────────────────────
 // IPC Handlers - Thin layer, just registers handlers

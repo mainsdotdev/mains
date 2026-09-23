@@ -1,5 +1,6 @@
 /**
- * Font sizes from Settings → General → Appearance, applied to `:root`.
+ * Fonts from Settings › Appearance, applied to `:root`: two sizes, and the UI
+ * and code families (further down).
  *
  * Two independent controls, because they answer different complaints:
  *
@@ -85,5 +86,126 @@ export function applyAppearanceFontSizes(
   root.style.setProperty(
     CODE_FONT_SIZE_VAR,
     `${clampCodeFontSize(sizes.codeFontSize)}px`
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Font families
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * The UI and code fonts, as the CSS family that goes in front of the stock
+ * stacks in index.css (`--font-sans` reads `--font-ui-family`, `--font-mono`
+ * reads `--font-code-family`). `""` is the stock font: Inter, and the system
+ * monospace (SF Mono). A font that isn't installed falls through to the rest
+ * of the stack, never to the browser default.
+ */
+export interface AppearanceFontFamilies {
+  readonly uiFontFamily: string;
+  readonly codeFontFamily: string;
+}
+
+export const UI_FONT_FAMILY_VAR = "--font-ui-family";
+export const CODE_FONT_FAMILY_VAR = "--font-code-family";
+
+export interface FontFamilyOption {
+  /** CSS family (quoted where it needs to be); `""` is the stock font. */
+  readonly value: string;
+  readonly label: string;
+}
+
+/** Faces every Mac has, offered before the installed-font list loads. */
+export const UI_FONT_OPTIONS: readonly FontFamilyOption[] = [
+  { value: "", label: "Inter" },
+  { value: "-apple-system", label: "SF Pro" },
+  { value: '"Helvetica Neue"', label: "Helvetica Neue" },
+  { value: '"Avenir Next"', label: "Avenir Next" },
+];
+
+export const CODE_FONT_OPTIONS: readonly FontFamilyOption[] = [
+  { value: "", label: "SF Mono" },
+  { value: "Menlo", label: "Menlo" },
+  { value: "Monaco", label: "Monaco" },
+  { value: '"Courier New"', label: "Courier New" },
+];
+
+/** A family name as a CSS string, safe for any name the system reports. */
+export function quoteFontFamily(name: string): string {
+  return `"${name.replace(/["\\]/g, "\\$&")}"`;
+}
+
+/**
+ * A stored family is spliced into a custom property, so it is held to what a
+ * single family can look like — no declaration or block punctuation.
+ */
+export const isFontFamily = (value: unknown): value is string =>
+  typeof value === "string" && value.length <= 200 && !/[;{}]/.test(value);
+
+/** Publishes both families on the root element; the stock font clears its property. */
+export function applyAppearanceFontFamilies(
+  root: HTMLElement,
+  families: AppearanceFontFamilies,
+): void {
+  for (const [property, family] of [
+    [UI_FONT_FAMILY_VAR, families.uiFontFamily],
+    [CODE_FONT_FAMILY_VAR, families.codeFontFamily],
+  ] as const) {
+    if (family && isFontFamily(family)) root.style.setProperty(property, family);
+    else root.style.removeProperty(property);
+  }
+}
+
+/**
+ * The installed families, through the Local Font Access API (Chromium, so
+ * the desktop app and Chrome) — sorted and deduplicated from the per-style
+ * entries it returns. Empty where the API is missing or refused; callers
+ * keep the curated options then. Asked once per session: the list only
+ * changes when fonts are installed, and the call needs a user gesture.
+ */
+let installedFamilies: Promise<string[]> | null = null;
+
+export function loadInstalledFontFamilies(): Promise<string[]> {
+  const query = (
+    globalThis as {
+      queryLocalFonts?: () => Promise<ReadonlyArray<{ family: string }>>;
+    }
+  ).queryLocalFonts;
+  if (!query) return Promise.resolve([]);
+  installedFamilies ??= query()
+    .then((fonts) =>
+      [...new Set(fonts.map((font) => font.family))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    )
+    .catch(() => {
+      // Refused or failed: offer the curated faces, and ask again next time.
+      installedFamilies = null;
+      return [];
+    });
+  return installedFamilies;
+}
+
+/** Curated options, then every installed family not already among them. */
+export function fontFamilyOptions(
+  curated: readonly FontFamilyOption[],
+  installed: readonly string[],
+): FontFamilyOption[] {
+  const labels = new Set(curated.map((option) => option.label));
+  return [
+    ...curated,
+    ...installed
+      .filter((family) => !labels.has(family))
+      .map((family) => ({ value: quoteFontFamily(family), label: family })),
+  ];
+}
+
+/** A stored family as a name to show: its curated label, else the family unquoted. */
+export function fontFamilyLabel(
+  family: string,
+  curated: readonly FontFamilyOption[],
+): string {
+  return (
+    curated.find((option) => option.value === family)?.label ??
+    family.replace(/^"(.*)"$/, "$1").replace(/\\(.)/g, "$1")
   );
 }

@@ -50,6 +50,7 @@ export interface RunArtifact {
   kind: string;
   path?: string;
   content?: string;
+  contentHash?: string | null;
   metadata?: string;
   createdAt: Date;
 }

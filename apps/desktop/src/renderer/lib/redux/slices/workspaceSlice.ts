@@ -9,6 +9,12 @@ import {
   type ContextKind,
 } from "@/features/workspace/lib/composer-context";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import {
+  isWorkspaceDraftOwnerKey,
+  isWorkspaceViewKey,
+  runOwnerKey,
+  viewKeyBelongsToBackend,
+} from "../../../../shared/ui-state-keys";
 
 export interface ReviewTab {
   id: string;
@@ -22,8 +28,26 @@ export interface ProviderAuthTerminalState {
   pendingCommand: string | null;
 }
 
+export type WorkspaceSidebarTab = "files" | "changes" | "reviews";
+
+interface WorkspaceViewSnapshot {
+  selectedFile: FileNode | null;
+  explorerExpandedPaths: string[];
+  activeTab: string;
+  previousNonEditorTab: string | null;
+  openIssueTabs: IssueWithEntity[];
+  openSignalTabs: SignalWithEntity[];
+  openNoteTabs: ReviewTab[];
+  sidebarTab: WorkspaceSidebarTab;
+}
+
 export interface WorkspaceState {
   activeWorkspaceId: string | null;
+  /** The currently loaded local UI snapshot, distinct from the domain workspace. */
+  workspaceViewKey: string | null;
+  workspaceViews: Record<string, WorkspaceViewSnapshot>;
+  /** A new workspace may land on its newest run; restored views keep their tab. */
+  workspaceViewNeedsDefaultRun: boolean;
   activeWorkspaceIdByProvider: Record<string, string>;
   selectedModelByProvider: Record<string, string>;
   selectedProviderId: string;
@@ -38,6 +62,7 @@ export interface WorkspaceState {
    * unmount the explorer.
    */
   explorerExpandedPaths: string[];
+  sidebarTab: WorkspaceSidebarTab;
   activeTab: "editor" | string;
   /** Tab that was active before "editor" was opened — used to restore on editor close. */
   previousNonEditorTab: string | null;
@@ -48,6 +73,10 @@ export interface WorkspaceState {
    * rules; read it through `useComposerContext()`.
    */
   contextItems: ContextItem[];
+  composerContextKey: string;
+  composerContextReady: boolean;
+  contextItemsByKey: Record<string, ContextItem[]>;
+  draftTextByKey: Record<string, string>;
   openIssueTabs: IssueWithEntity[];
   openSignalTabs: SignalWithEntity[];
   openNoteTabs: ReviewTab[];
@@ -78,6 +107,9 @@ export interface WorkspaceState {
 
 const initialState: WorkspaceState = {
   activeWorkspaceId: null,
+  workspaceViewKey: null,
+  workspaceViews: {},
+  workspaceViewNeedsDefaultRun: false,
   activeWorkspaceIdByProvider: {},
   selectedModelByProvider: {},
   selectedProviderId: PROVIDER_IDS.claude,
@@ -87,9 +119,14 @@ const initialState: WorkspaceState = {
   isLoadingFileContent: false,
   fileContentError: null,
   explorerExpandedPaths: [],
+  sidebarTab: "files",
   activeTab: "editor",
   previousNonEditorTab: null,
   contextItems: [],
+  composerContextKey: "default",
+  composerContextReady: false,
+  contextItemsByKey: {},
+  draftTextByKey: {},
   openIssueTabs: [],
   openSignalTabs: [],
   openNoteTabs: [],
@@ -101,55 +138,137 @@ const initialState: WorkspaceState = {
   selectedCollectionId: null,
 };
 
+function snapshotWorkspaceView(state: WorkspaceState): WorkspaceViewSnapshot {
+  return {
+    selectedFile: state.selectedFile?.extension === "diff" ? null : state.selectedFile,
+    explorerExpandedPaths: state.explorerExpandedPaths,
+    activeTab: state.activeTab,
+    previousNonEditorTab: state.previousNonEditorTab,
+    openIssueTabs: state.openIssueTabs,
+    openSignalTabs: state.openSignalTabs,
+    openNoteTabs: state.openNoteTabs,
+    sidebarTab: state.sidebarTab,
+  };
+}
+
+function restoreWorkspaceView(state: WorkspaceState, view?: WorkspaceViewSnapshot): void {
+  state.selectedFile = view?.selectedFile ?? null;
+  state.selectedFileContent = null;
+  state.fileContentError = null;
+  state.isLoadingFileContent = false;
+  state.explorerExpandedPaths = view?.explorerExpandedPaths ?? [];
+  state.sidebarTab = view?.sidebarTab ?? "files";
+  state.activeTab = view?.activeTab ?? "editor";
+  state.previousNonEditorTab = view?.previousNonEditorTab ?? null;
+  state.openIssueTabs = view?.openIssueTabs ?? [];
+  state.openSignalTabs = view?.openSignalTabs ?? [];
+  state.openNoteTabs = view?.openNoteTabs ?? [];
+}
+
 const workspaceSlice = createSlice({
   name: "workspace",
   initialState,
   reducers: {
-    setActiveWorkspaceId: (state, action: PayloadAction<string | null>) => {
-      // Switching workspaces invalidates any cached file content — drop it so
-      // large text buffers (multi-MB source files) don't linger in Redux.
-      if (state.activeWorkspaceId !== action.payload) {
-        state.selectedFile = null;
-        state.selectedFileContent = null;
-        state.fileContentError = null;
-        state.isLoadingFileContent = false;
-        state.explorerExpandedPaths = [];
-        state.previousNonEditorTab = null;
-        // The tab is a single global field, so it would otherwise still name a
-        // run belonging to the workspace being left. "editor" is the neutral
-        // tab, and the page picks the newest run from there when there is one.
-        state.activeTab = "editor";
+    activateWorkspaceView: (
+      state,
+      action: PayloadAction<{ key: string; workspaceId: string | null; providerId: string }>,
+    ) => {
+      const { key, workspaceId, providerId } = action.payload;
+      if (state.workspaceViewKey !== key) {
+        if (state.workspaceViewKey) {
+          state.workspaceViews[state.workspaceViewKey] = snapshotWorkspaceView(state);
+        }
+        const savedView = state.workspaceViews[key];
+        restoreWorkspaceView(state, savedView);
+        state.workspaceViewNeedsDefaultRun = !savedView;
+        state.workspaceViewKey = key;
       }
-      state.activeWorkspaceId = action.payload;
+      if (state.selectedProviderId !== providerId) state.providerAuthTerminal = null;
+      state.activeWorkspaceId = workspaceId;
+      state.selectedProviderId = providerId;
+      if (workspaceId) state.activeWorkspaceIdByProvider[providerId] = workspaceId;
     },
-    setActiveWorkspaceForProvider: (state, action: PayloadAction<{ providerId: string; workspaceId: string }>) => {
-      const prev = state.activeWorkspaceIdByProvider[action.payload.providerId];
-      if (prev !== action.payload.workspaceId) {
-        state.selectedFile = null;
-        state.selectedFileContent = null;
-        state.fileContentError = null;
-        state.isLoadingFileContent = false;
-        state.explorerExpandedPaths = [];
-        state.previousNonEditorTab = null;
-        state.activeTab = "editor";
+    setComposerContextKey: (state, action: PayloadAction<string>) => {
+      state.composerContextReady = true;
+      const next = action.payload;
+      if (state.composerContextKey === next) return;
+      // Appshots are captured outside a chat and follow the next message,
+      // even if the user navigates before sending it.
+      const appshots = state.contextItems.filter((item) => item.kind === "appshot");
+      state.contextItemsByKey[state.composerContextKey] = state.contextItems
+        .filter((item) => item.kind !== "appshot");
+      state.composerContextKey = next;
+      const owned = state.contextItemsByKey[next] ?? [];
+      state.contextItems = [...owned];
+      for (const appshot of appshots) {
+        if (!state.contextItems.some((item) => isSameContextItem(item, appshot))) {
+          state.contextItems.push(appshot);
+        }
       }
-      state.activeWorkspaceIdByProvider[action.payload.providerId] = action.payload.workspaceId;
+      state.contextItemsByKey[next] = state.contextItems;
+    },
+    setDraftText: (state, action: PayloadAction<{ key: string; text: string }>) => {
+      if (action.payload.text) state.draftTextByKey[action.payload.key] = action.payload.text;
+      else delete state.draftTextByKey[action.payload.key];
+    },
+    forgetRunUiState: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
+      const { backendId, runId } = action.payload;
+      const ownerKey = runOwnerKey(backendId, runId);
+      delete state.draftTextByKey[ownerKey];
+      delete state.contextItemsByKey[ownerKey];
+      if (state.composerContextKey === ownerKey) {
+        state.contextItems = [];
+        state.composerContextKey = "default";
+        state.composerContextReady = false;
+      }
+
+      for (const [key, view] of Object.entries(state.workspaceViews)) {
+        if (!viewKeyBelongsToBackend(key, backendId)) continue;
+        if (view.activeTab === runId) view.activeTab = "editor";
+        if (view.previousNonEditorTab === runId) view.previousNonEditorTab = null;
+      }
+      if (state.workspaceViewKey && viewKeyBelongsToBackend(state.workspaceViewKey, backendId)) {
+        if (state.activeTab === runId) {
+          state.activeTab = "editor";
+          // The run list can still contain the deleted row until its query
+          // refreshes. Do not immediately auto-select that stale first row.
+          state.workspaceViewNeedsDefaultRun = false;
+        }
+        if (state.previousNonEditorTab === runId) state.previousNonEditorTab = null;
+      }
+      if (state.pendingRunId === runId) state.pendingRunId = null;
+    },
+    forgetWorkspaceUiState: (state, action: PayloadAction<{ backendId: string; workspaceId: string }>) => {
+      const { backendId, workspaceId } = action.payload;
+      for (const key of Object.keys(state.workspaceViews)) {
+        if (isWorkspaceViewKey(key, backendId, workspaceId)) delete state.workspaceViews[key];
+      }
+      for (const key of Object.keys(state.draftTextByKey)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.draftTextByKey[key];
+      }
+      for (const key of Object.keys(state.contextItemsByKey)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.contextItemsByKey[key];
+      }
+      if (isWorkspaceDraftOwnerKey(state.composerContextKey, backendId, workspaceId)) {
+        state.contextItems = [];
+        state.composerContextKey = "default";
+        state.composerContextReady = false;
+      }
+      if (state.workspaceViewKey && isWorkspaceViewKey(state.workspaceViewKey, backendId, workspaceId)) {
+        state.workspaceViewKey = null;
+        state.workspaceViewNeedsDefaultRun = false;
+        state.activeWorkspaceId = null;
+        restoreWorkspaceView(state);
+      }
+      for (const [providerId, selectedId] of Object.entries(state.activeWorkspaceIdByProvider)) {
+        if (selectedId === workspaceId) delete state.activeWorkspaceIdByProvider[providerId];
+      }
+    },
+    setWorkspaceSidebarTab: (state, action: PayloadAction<WorkspaceSidebarTab>) => {
+      state.sidebarTab = action.payload;
     },
     setWorkspaceModel: (state, action: PayloadAction<{ providerId: string; model: string }>) => {
       state.selectedModelByProvider[action.payload.providerId] = action.payload.model;
-    },
-    setWorkspaceProvider: (state, action: PayloadAction<string>) => {
-      // A space switch can land on the SAME workspace, so the workspace-switch
-      // resets above never fire — the tab (or its editor fallback) would keep
-      // naming a run from the provider being left.
-      if (state.selectedProviderId !== action.payload) {
-        state.previousNonEditorTab = null;
-        state.activeTab = "editor";
-        // A login PTY belongs to the provider that opened it. Never carry its
-        // prompt or a not-yet-written command into the next space.
-        state.providerAuthTerminal = null;
-      }
-      state.selectedProviderId = action.payload;
     },
     setWorkspaceThinkingEnabled: (state, action: PayloadAction<boolean>) => {
       state.thinkingEnabled = action.payload;
@@ -195,6 +314,7 @@ const workspaceSlice = createSlice({
       state.explorerExpandedPaths = [];
     },
     setActiveTab: (state, action: PayloadAction<"editor" | string>) => {
+      state.workspaceViewNeedsDefaultRun = false;
       // Remember which tab the user was on before opening the editor so we can
       // return there when the editor tab is closed (rather than jumping to runs[0]).
       if (action.payload === "editor" && state.activeTab !== "editor") {
@@ -207,7 +327,21 @@ const workspaceSlice = createSlice({
       const incoming = action.payload;
       if (!state.contextItems.some((item) => isSameContextItem(item, incoming))) {
         state.contextItems.push(incoming);
+        state.contextItemsByKey[state.composerContextKey] = state.contextItems;
       }
+    },
+    addContextItemForKey: (
+      state,
+      action: PayloadAction<{ key: string; item: ContextItem }>,
+    ) => {
+      const { key, item } = action.payload;
+      const current = key === state.composerContextKey
+        ? state.contextItems
+        : state.contextItemsByKey[key] ?? [];
+      if (current.some((existing) => isSameContextItem(existing, item))) return;
+      const next = [...current, item];
+      state.contextItemsByKey[key] = next;
+      if (key === state.composerContextKey) state.contextItems = next;
     },
     /**
      * Detach by kind + key rather than by object identity: the caller usually
@@ -221,9 +355,11 @@ const workspaceSlice = createSlice({
       state.contextItems = state.contextItems.filter(
         (item) => item.kind !== kind || contextItemKey(item) !== key,
       );
+      state.contextItemsByKey[state.composerContextKey] = state.contextItems;
     },
     clearContextItems: (state) => {
       state.contextItems = [];
+      state.contextItemsByKey[state.composerContextKey] = [];
     },
     openIssueTab: (state, action: PayloadAction<IssueWithEntity>) => {
       const entityId = action.payload.issue.entityId;
@@ -333,10 +469,13 @@ const workspaceSlice = createSlice({
 });
 
 export const {
-  setActiveWorkspaceId,
-  setActiveWorkspaceForProvider,
+  activateWorkspaceView,
+  setComposerContextKey,
+  setDraftText,
+  forgetRunUiState,
+  forgetWorkspaceUiState,
+  setWorkspaceSidebarTab,
   setWorkspaceModel,
-  setWorkspaceProvider,
   setWorkspaceThinkingEnabled,
   setSelectedFile,
   setSelectedFileContent,
@@ -348,6 +487,7 @@ export const {
   collapseAllExplorerPaths,
   setActiveTab,
   addContextItem,
+  addContextItemForKey,
   removeContextItem,
   clearContextItems,
   openIssueTab,

@@ -83,25 +83,12 @@ html:not(.app-ready) *::after {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
 
-  --color-primary: #ffffff;
-  --color-primary-50: #efeeee;
-  --color-primary-100: #f7f7f6;
-  --color-primary-200: #d3d3d3;
-  --color-primary-300: #b5b5b5;
-  --color-primary-400: #a09d95;
-  --color-primary-500: #878580;
-  --color-primary-600: #6f6e69;
-  --color-primary-700: #575653;
-  --color-primary-800: #262625;
-  --color-primary-900: #141414;
-  --color-primary-950: #0c0c0c;
-
-
   --color-danger: #ff4436;
   --color-danger-hover: #e33221;
   --color-success: #22C55E;
   --color-warning: #F59E0B;
-  --color-accent: #2563eb;
+  --color-action: #2563eb;
+  --color-action-hover: #1d4ed8;
   --color-claude: #D97757;
   --color-copilot: #8534F3;
   --color-codex: #0169CC;
@@ -117,6 +104,7 @@ html:not(.app-ready) *::after {
   --z-dropdown-sub: 101;
   --z-modal: 9999;
   --z-modal-critical: 10000;
+  --z-tooltip: 10001;
 
 
   /* Layout */
@@ -132,12 +120,67 @@ html:not(.app-ready) *::after {
   --shadow-inset-subtle-dark: inset 0 0.5px 0 rgba(255, 255, 255, 0.03);
   --shadow-inset-toggle: inset 0 0.5px 2px rgba(0, 0, 0, 0.1);
   --shadow-inset-toggle-dark: inset 0 0.5px 2px rgba(0, 0, 0, 0.3);
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
 
+}
+
+/* The themeable colours. App themes (lib/app-themes.ts) re-derive the neutral
+   scale and the accent at runtime, from a stylesheet that overrides these
+   variables — so they can't sit in `@theme inline`, which bakes the literal
+   into every utility (`bg-primary-100` → `#f7f7f6`). Here utilities reference
+   the variable instead, opacity modifiers included (`hover:bg-primary-200/60`
+   → `color-mix(in oklab, var(--color-primary-200) 60%, transparent)`).
+   `static` emits every variable, used by a utility or not, so a style prop
+   or a derived token reading one never finds it undefined.
+
+   The scale runs light → dark in BOTH modes: light mode paints surfaces with
+   the low steps and text with the high ones, dark mode the reverse. Keep it
+   that way — app themes rely on it, and app-themes.test.ts measures these
+   literals to position the steps of a derived scale. */
+@theme static {
+  --color-primary: #ffffff;
+  --color-primary-50: #efeeee;
+  --color-primary-100: #f7f7f6;
+  --color-primary-200: #d3d3d3;
+  --color-primary-300: #b5b5b5;
+  --color-primary-400: #a09d95;
+  --color-primary-500: #878580;
+  --color-primary-600: #6f6e69;
+  --color-primary-700: #575653;
+  --color-primary-800: #262625;
+  --color-primary-900: #141414;
+  --color-primary-950: #0c0c0c;
+
+  --color-accent: #2563eb;
+  /* Text on an accent fill. A theme with a light accent switches it to dark. */
+  --color-accent-foreground: #ffffff;
+
+  /* The UI and code fonts from Settings › Appearance (lib/appearance-fonts.ts)
+     go in front of the stock stacks, so a font that isn't installed falls
+     back to them rather than to the browser default. */
+  --font-sans: var(--font-ui-family, "Inter"), -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
+  --font-mono: var(--font-code-family, ui-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 *:focus {
   outline: none !important;
+}
+
+::selection {
+  background-color: color-mix(in oklab, var(--color-accent) 30%, transparent);
+}
+
+@layer base {
+  /* A focus ring's offset is the gap between the element and its ring, so it
+     has to be the surface behind it. Tailwind registers the offset colour as
+     a non-inheriting property with a white initial value, which cuts a white
+     band into every dark or themed surface. Explicit `ring-offset-<colour>`
+     utilities still win: they sit in the utilities layer. */
+  *, ::before, ::after {
+    --tw-ring-offset-color: var(--color-primary);
+  }
+  .dark *, .dark ::before, .dark ::after {
+    --tw-ring-offset-color: var(--color-primary-950);
+  }
 }
 
 /* * {
@@ -727,22 +770,24 @@ html.mains-web.dark #root {
    - Never pair with a bg-* or hover:bg-* utility: those set background-color,
      which the `background` shorthand here overrides — and hover:bg-* wins on
      specificity, wiping the rim on hover. Use the tokens instead, or
-     `hover:[--glass-tint:<color>]` for a genuine one-off. */
+     `hover:[--glass-tint:<color>]` for a genuine one-off.
+   - Neutral fills are mixes of the `--color-primary-*` scale, never literal
+     grays, so an app theme that re-derives the scale re-tints them too. */
 @theme {
   --glass-fill-surface: var(--color-primary-100);
-  --glass-fill-card: rgba(255, 255, 255, 0.98);
-  --glass-fill-input: rgba(255, 255, 255, 1);
-  --glass-fill-toggle: rgba(216, 216, 216, 1);
-  --glass-fill-button: rgba(255, 255, 255, 0.72);
-  --glass-fill-primary: rgba(240, 240, 240, 0.72);
-  --glass-fill-secondary: rgba(12, 12, 12, 0.42);
-  --glass-fill-submit: rgba(43, 127, 255, 0.9);
+  --glass-fill-card: color-mix(in srgb, var(--color-primary) 98%, transparent);
+  --glass-fill-input: var(--color-primary);
+  --glass-fill-toggle: color-mix(in srgb, var(--color-primary-200) 86%, var(--color-primary-100));
+  --glass-fill-button: color-mix(in srgb, var(--color-primary) 72%, transparent);
+  --glass-fill-primary: color-mix(in srgb, var(--color-primary-50) 72%, transparent);
+  --glass-fill-secondary: color-mix(in srgb, var(--color-primary-950) 42%, transparent);
+  --glass-fill-submit: color-mix(in srgb, var(--color-action) 90%, transparent);
   --glass-fill-danger: rgba(255, 68, 54, 0.9);
   --glass-fill-success: rgba(13, 197, 94, 0.9);
 
-  --glass-hover-button: rgba(255, 255, 255, 0.9);
+  --glass-hover-button: color-mix(in srgb, var(--color-primary) 90%, transparent);
   --glass-hover-primary: var(--color-primary-200);
-  --glass-hover-submit: #2563eb;
+  --glass-hover-submit: var(--color-action-hover);
   --glass-hover-danger: var(--color-danger-hover);
 
   /* Saturated fills swallow a dark rim — light them from the other side. */
@@ -751,6 +796,11 @@ html.mains-web.dark #root {
 }
 
 :root {
+  /* The window frame behind the sidebar and around the content: translucent
+     over the macOS vibrancy. An app theme replaces it with an opaque colour
+     (lib/app-themes.ts). */
+  --app-frame: #ffffffb3;
+
   --glass-rim: rgba(0, 0, 0, 0.08);
   --glass-rim-shadow: rgba(255, 255, 255, 0);
   --glass-outline-rim: rgba(0, 0, 0, 0.08);
@@ -775,6 +825,8 @@ html.mains-web.dark #root {
 
 /* Dark mode is a token swap — the utility itself never forks. */
 .dark {
+  --app-frame: #00000070;
+
   --glass-rim: rgba(255, 255, 255, 0.08);
   --glass-rim-shadow: rgba(0, 0, 0, 0);
   --glass-outline-rim: rgba(255, 255, 255, 0.08);
@@ -788,15 +840,15 @@ html.mains-web.dark #root {
   --viz-cat-5: #d55181;
 
   --glass-fill-surface: var(--color-primary-900);
-  --glass-fill-card: rgba(24, 24, 24, 0.98);
-  --glass-fill-input: rgba(14, 14, 14, 1);
-  --glass-fill-toggle: rgba(14, 14, 14, 1);
-  --glass-fill-button: rgba(36, 36, 36, 0.72);
-  --glass-fill-primary: rgba(36, 36, 36, 0.72);
-  --glass-fill-secondary: rgba(120, 120, 120, 0.42);
+  --glass-fill-card: color-mix(in srgb, color-mix(in srgb, var(--color-primary-900) 78%, var(--color-primary-800)) 98%, transparent);
+  --glass-fill-input: color-mix(in srgb, var(--color-primary-950) 75%, var(--color-primary-900));
+  --glass-fill-toggle: var(--glass-fill-input);
+  --glass-fill-button: color-mix(in srgb, var(--color-primary-800) 72%, transparent);
+  --glass-fill-primary: color-mix(in srgb, var(--color-primary-800) 72%, transparent);
+  --glass-fill-secondary: color-mix(in srgb, color-mix(in srgb, var(--color-primary-600) 62%, var(--color-primary-500)) 42%, transparent);
 
-  --glass-hover-button: rgba(48, 48, 48, 0.85);
-  --glass-hover-primary: rgba(38, 38, 37, 0.6);
+  --glass-hover-button: color-mix(in srgb, color-mix(in srgb, var(--color-primary-800) 80%, var(--color-primary-700)) 85%, transparent);
+  --glass-hover-primary: color-mix(in srgb, var(--color-primary-800) 60%, transparent);
 }
 
 @utility glass-* {
@@ -1125,3 +1177,183 @@ html.mains-web.dark #root {
     opacity: 0;
   }
 }
+
+/*
+ * Onboarding feature cards (`features/onboarding/components/feature-previews.tsx`):
+ * the mini-UI behind each card plays while that card is hovered. Every loop's
+ * 0% frame is the resting picture; it sits parked there until the card
+ * (`[data-feature-card]`) is hovered, and parks again wherever it is when the
+ * pointer leaves — freezing mid-motion reads calmer than snapping back.
+ * Longhands only below: the `animation` shorthand would reset the play state
+ * these rules own.
+ *
+ * Loops that must stay in step share one duration and start together (every
+ * loop in a card starts on the same hover). Staggered members of a set use
+ * negative delays, which place them mid-cycle without leaving the rest frame.
+ */
+.preview-motion {
+  animation-play-state: paused;
+  animation-fill-mode: both;
+  animation-iteration-count: infinite;
+  animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+}
+[data-feature-card]:hover .preview-motion {
+  animation-play-state: running;
+}
+@media (prefers-reduced-motion: reduce) {
+  .preview-motion {
+    animation-name: none !important;
+  }
+}
+
+/* A selection stepping across N items and jumping back. `--preview-x` /
+   `--preview-y` are one item plus the gap, on whichever axis the items run. */
+@keyframes preview-cycle-3 {
+  0%, 28% { translate: 0 0; }
+  33%, 61% { translate: var(--preview-x, 0) var(--preview-y, 0); }
+  66%, 94% { translate: calc(var(--preview-x, 0px) * 2) calc(var(--preview-y, 0px) * 2); }
+  100% { translate: 0 0; }
+}
+@keyframes preview-cycle-4 {
+  0%, 21% { translate: 0 0; }
+  25%, 46% { translate: var(--preview-x, 0) var(--preview-y, 0); }
+  50%, 71% { translate: calc(var(--preview-x, 0px) * 2) calc(var(--preview-y, 0px) * 2); }
+  75%, 96% { translate: calc(var(--preview-x, 0px) * 3) calc(var(--preview-y, 0px) * 3); }
+  100% { translate: 0 0; }
+}
+@keyframes preview-cycle-5 {
+  0%, 16% { translate: 0 0; }
+  20%, 36% { translate: var(--preview-x, 0) var(--preview-y, 0); }
+  40%, 56% { translate: calc(var(--preview-x, 0px) * 2) calc(var(--preview-y, 0px) * 2); }
+  60%, 76% { translate: calc(var(--preview-x, 0px) * 3) calc(var(--preview-y, 0px) * 3); }
+  80%, 96% { translate: calc(var(--preview-x, 0px) * 4) calc(var(--preview-y, 0px) * 4); }
+  100% { translate: 0 0; }
+}
+/* One row at a time without end: the last step lands on a copy of the first
+   frame, so the jump back to 0% is invisible. */
+@keyframes preview-ticker-3 {
+  0%, 28% { translate: 0 0; }
+  33%, 61% { translate: 0 var(--preview-y); }
+  66%, 94% { translate: 0 calc(var(--preview-y) * 2); }
+  100% { translate: 0 calc(var(--preview-y) * 3); }
+}
+/* The item under a `preview-cycle-4` selection: lit for its quarter, dimmed
+   for the rest. Item k runs it with a delay of -((4 - k) % 4) quarters. */
+@keyframes preview-spot-4 {
+  0%, 21% { opacity: 1; }
+  25%, 96% { opacity: 0.55; }
+  100% { opacity: 1; }
+}
+/* Three alternatives sharing one slot, each shown for a third of the loop.
+   Alternative k runs it -((3 - k) % 3) thirds early, so only the first is on
+   screen at rest. The outgoing one is gone (30%) before the next one starts
+   (97% of its own loop, i.e. 30.3% of the slot's), so the two never overlap —
+   a hover that ends mid-swap freezes on one label, not two stacked. */
+@keyframes preview-swap-3 {
+  0%, 26% { opacity: 1; transform: scale(1); }
+  30%, 97% { opacity: 0; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1); }
+}
+/* A transcript scrolling past without end: the content is drawn twice, so
+   -50% lands on the copy. */
+@keyframes preview-scroll {
+  from { translate: 0 0; }
+  to { translate: 0 -50%; }
+}
+
+/* The commit flow in the session panel, one 8s story told by its parts: the
+   row is picked, its form opens empty, Generate is pressed and twinkles while
+   the message is written, the message types itself in, "Commit and push" is
+   pressed, the form closes and the change stats turn into "Pushed". */
+@keyframes preview-git-select {
+  0%, 8% { opacity: 0; }
+  12%, 80% { opacity: 1; }
+  86%, 100% { opacity: 0; }
+}
+@keyframes preview-git-open {
+  0%, 12% { grid-template-rows: 0fr; opacity: 0; }
+  20%, 76% { grid-template-rows: 1fr; opacity: 1; }
+  84%, 100% { grid-template-rows: 0fr; opacity: 0; }
+}
+/* The empty field's placeholder, until Generate is pressed. */
+@keyframes preview-git-placeholder {
+  0%, 26% { opacity: 1; }
+  28%, 100% { opacity: 0; }
+}
+/* Idle Generate label and its generating swap (spinner + shimmering field). */
+@keyframes preview-git-idle {
+  0%, 26% { opacity: 1; }
+  28%, 46% { opacity: 0; }
+  48%, 100% { opacity: 1; }
+}
+@keyframes preview-git-generating {
+  0%, 26% { opacity: 0; }
+  28%, 46% { opacity: 1; }
+  48%, 100% { opacity: 0; }
+}
+@keyframes preview-git-type {
+  0%, 48% { clip-path: inset(0 100% 0 0); animation-timing-function: steps(30, end); }
+  60%, 100% { clip-path: inset(0 0 0 0); }
+}
+@keyframes preview-git-press {
+  0%, 62% { opacity: 0; }
+  65%, 72% { opacity: 1; }
+  75%, 100% { opacity: 0; }
+}
+@keyframes preview-git-before {
+  0%, 78% { opacity: 1; }
+  82%, 96% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes preview-git-after {
+  0%, 78% { opacity: 0; }
+  82%, 96% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.preview-cycle-3,
+.preview-ticker-3 {
+  animation-duration: 4.8s;
+}
+.preview-cycle-3 { animation-name: preview-cycle-3; }
+.preview-ticker-3 { animation-name: preview-ticker-3; }
+.preview-cycle-4,
+.preview-spot-4 {
+  animation-duration: 6.4s;
+}
+.preview-cycle-4 { animation-name: preview-cycle-4; }
+.preview-spot-4 { animation-name: preview-spot-4; }
+.preview-cycle-5 {
+  animation-name: preview-cycle-5;
+  animation-duration: 8s;
+}
+.preview-swap-3 {
+  animation-name: preview-swap-3;
+  animation-duration: 6s;
+}
+.preview-scroll {
+  animation-name: preview-scroll;
+  animation-duration: 14s;
+  animation-timing-function: linear;
+}
+.preview-git-select,
+.preview-git-open,
+.preview-git-placeholder,
+.preview-git-idle,
+.preview-git-generating,
+.preview-git-type,
+.preview-git-press,
+.preview-git-before,
+.preview-git-after {
+  animation-duration: 8s;
+  animation-timing-function: ease-out;
+}
+.preview-git-select { animation-name: preview-git-select; }
+.preview-git-open { animation-name: preview-git-open; }
+.preview-git-placeholder { animation-name: preview-git-placeholder; }
+.preview-git-idle { animation-name: preview-git-idle; }
+.preview-git-generating { animation-name: preview-git-generating; }
+.preview-git-type { animation-name: preview-git-type; }
+.preview-git-press { animation-name: preview-git-press; }
+.preview-git-before { animation-name: preview-git-before; }
+.preview-git-after { animation-name: preview-git-after; }

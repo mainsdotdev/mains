@@ -11,7 +11,7 @@ const BAR_COLORS = ["#A34D35", "#D97757", "#F0B9A5", "#B25A3F", "#F0B9A5", "#A34
 
 // Hand-maintained: run records store raw model ids ("default", "sonnet") with
 // no provider context, so these display names can't be derived from
-// lib/model-icons and must be updated when the underlying models change.
+// lib/model-display and must be updated when the underlying models change.
 const MODEL_LABELS: Record<string, string> = {
   default: "Opus 4.8",
   sonnet: "Sonnet 4.6",

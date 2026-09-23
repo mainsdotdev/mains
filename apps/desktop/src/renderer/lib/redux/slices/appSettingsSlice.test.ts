@@ -1,9 +1,17 @@
 import { describe, it, expect } from "vitest";
 import reducer, {
+  setBrowserPanelOpen,
+  setDocumentViewerDoc,
+  setDocumentViewerOpen,
+  setRightPaneContextKey,
+  setRightPanelOpen,
   setSessionPanelOpen,
   setWorkspaceGroupExpanded,
+  forgetRunRightPane,
+  forgetWorkspaceRightPanes,
 } from "./appSettingsSlice";
 import { openNewRunTab, setActiveTab } from "./workspaceSlice";
+import { runOwnerKey } from "../../../../shared/ui-state-keys";
 
 const open = () => reducer(undefined, setSessionPanelOpen(true));
 
@@ -30,6 +38,60 @@ describe("appSettingsSlice — session panel vs the new-run tab", () => {
   it("can be reopened while the new-run tab is active", () => {
     const closed = reducer(open(), openNewRunTab());
     expect(reducer(closed, setSessionPanelOpen(true)).sessionPanelOpen).toBe(true);
+  });
+});
+
+describe("appSettingsSlice — right pane per conversation", () => {
+  it("restores the browser or workspace panel when returning to a chat", () => {
+    let state = reducer(undefined, setRightPaneContextKey("chat-a"));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, setRightPaneContextKey("chat-b"));
+    expect(state.browserPanelOpen).toBe(false);
+    state = reducer(state, setRightPanelOpen(true));
+    state = reducer(state, setRightPaneContextKey("chat-a"));
+    expect(state.browserPanelOpen).toBe(true);
+    expect(state.rightPanelOpen).toBe(false);
+    state = reducer(state, setRightPaneContextKey("chat-b"));
+    expect(state.rightPanelOpen).toBe(true);
+  });
+
+  it("restores an open document when returning to its chat in the same session", () => {
+    const doc = { path: "/tmp/report.pdf", fileName: "report.pdf", docType: "pdf" as const };
+    let state = reducer(undefined, setRightPaneContextKey("chat-a"));
+    state = reducer(state, setDocumentViewerDoc(doc));
+    state = reducer(state, setDocumentViewerOpen(true));
+    state = reducer(state, setRightPaneContextKey("chat-b"));
+    expect(state.documentViewerOpen).toBe(false);
+    state = reducer(state, setRightPaneContextKey("chat-a"));
+    expect(state.documentViewerDoc).toEqual(doc);
+    expect(state.documentViewerOpen).toBe(true);
+  });
+
+  it("does not restore a deleted chat's pane", () => {
+    const deleted = runOwnerKey("local", "run-a");
+    const kept = runOwnerKey("local", "run-b");
+    let state = reducer(undefined, setRightPaneContextKey(deleted));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, setRightPaneContextKey(kept));
+    state = reducer(state, setRightPanelOpen(true));
+    state = reducer(state, forgetRunRightPane({ backendId: "local", runId: "run-a" }));
+    expect(state.rightPaneByContext[deleted]).toBeUndefined();
+    state = reducer(state, setRightPaneContextKey(deleted));
+    expect(state.browserPanelOpen).toBe(false);
+  });
+
+  it("removes only a deleted workspace's draft pane", () => {
+    const draft = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);
+    const run = runOwnerKey("local", "run-a");
+    let state = reducer(undefined, setRightPaneContextKey(run));
+    state = reducer(state, setRightPanelOpen(true));
+    state = reducer(state, setRightPaneContextKey(draft));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, forgetWorkspaceRightPanes({ backendId: "local", workspaceId: "ws-a" }));
+    expect(state.activeRightPaneContextKey).toBe("default");
+    expect(state.browserPanelOpen).toBe(false);
+    expect(state.rightPaneByContext[draft]).toBeUndefined();
+    expect(state.rightPaneByContext[run]).toBe("workspace");
   });
 });
 

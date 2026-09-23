@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CHANNELS } from "../../shared/ipc-kit/channels";
+import { CHANNELS } from "@mains/contracts/channels";
 
 const mocks = vi.hoisted(() => ({
   reopenMainWindow: vi.fn(),

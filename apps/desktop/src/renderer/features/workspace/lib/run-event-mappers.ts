@@ -33,7 +33,13 @@ export function mapArtifactToEvent(artifact: RunArtifact): RunEvent {
       type: artifact.kind === "log" ? "log" : "artifact",
       content: artifact.content ?? artifact.path ?? JSON.stringify(artifact),
       timestamp: artifact.createdAt ? new Date(artifact.createdAt) : new Date(),
-      metadata: { ...parseMetadata(artifact.metadata), kind: artifact.kind },
+      metadata: {
+        ...parseMetadata(artifact.metadata),
+        kind: artifact.kind,
+        ...(artifact.kind === "image" && artifact.contentHash
+          ? { imageContentHash: artifact.contentHash }
+          : {}),
+      },
     };
   } catch {
     return {
