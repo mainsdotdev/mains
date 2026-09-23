@@ -231,7 +231,7 @@ function DeviceRow({
               if (event.key === "Enter") finishEditing(true);
               if (event.key === "Escape") finishEditing(false);
             }}
-            className="mb-0.5 max-w-72 py-1"
+            className="mb-0.5 max-w-72 py-1 mr-2"
           />
         )}
         <Caption>{details.join(" · ")}</Caption>

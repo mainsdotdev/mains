@@ -63,6 +63,7 @@ import {
 } from "./browser-history-panel";
 import {
   BrowserAddressSuggestions,
+  browserAddressRows,
   browserAddressSuggestions,
 } from "./browser-address-suggestions";
 import {
@@ -92,6 +93,8 @@ interface FindState {
 }
 
 type AnimationState = "closed" | "opening" | "open" | "closing";
+/** A DOM overlay that needs the native page view out of its way. */
+type BrowserOverlayId = "device" | "scale" | "address";
 
 const EMPTY_BROWSER_STATE: BrowserState = { activeTabId: "", tabs: [] };
 const EMPTY_FIND_STATE: FindState = { activeMatchOrdinal: 0, matches: 0 };
@@ -142,9 +145,12 @@ export function BrowserPanel() {
   const browserMenuOpeningRef = useRef(false);
   const browserMenuPreviewNameRef = useRef<string | null>(null);
   const browserMenuPreviewRevisionRef = useRef(0);
-  const deviceDropdownOperationRef = useRef(0);
-  const deviceDropdownsOpenRef = useRef(new Set<"device" | "scale">());
-  const deviceDropdownRestoreTimerRef = useRef<ReturnType<
+  // DOM overlays that sit over the page — the device toolbar's dropdowns and
+  // the address suggestions. The page is a native view drawn above the DOM,
+  // so while any is open it is swapped for a screenshot of itself.
+  const overlayOperationRef = useRef(0);
+  const overlaysOpenRef = useRef(new Set<BrowserOverlayId>());
+  const overlayRestoreTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
   const downloadStatesRef = useRef<
@@ -206,16 +212,19 @@ export function BrowserPanel() {
     browserState.tabs.find((tab) => tab.tabId === browserState.activeTabId) ??
     null;
   const isBlank = !activeTab?.url || activeTab.url === BLANK_URL;
-  const addressSuggestions = useMemo(
-    () => browserAddressSuggestions(historyEntries, urlInput),
+  // The typed input leads the rows, so the default selection (0) is exactly
+  // what was typed; history matches follow it.
+  const addressRows = useMemo(
+    () =>
+      browserAddressRows(
+        urlInput,
+        browserAddressSuggestions(historyEntries, urlInput),
+      ),
     [historyEntries, urlInput],
   );
   const selectedAddressSuggestionIndex =
-    addressSuggestions.length > 0
-      ? Math.min(
-          Math.max(addressSuggestionIndex, 0),
-          addressSuggestions.length - 1,
-        )
+    addressRows.length > 0
+      ? Math.min(Math.max(addressSuggestionIndex, 0), addressRows.length - 1)
       : -1;
 
   const applyBrowserState = useCallback((state: BrowserState) => {
@@ -577,11 +586,11 @@ export function BrowserPanel() {
     await clearBrowserMenuPreview();
   }, [api, clearBrowserMenuPreview, isOpen, syncBounds]);
 
-  const suspendBrowserViewForDeviceDropdown = useCallback(async () => {
-    if (!api || !isOpen || deviceDropdownsOpenRef.current.size === 0) return;
+  const suspendBrowserViewForOverlay = useCallback(async () => {
+    if (!api || !isOpen || overlaysOpenRef.current.size === 0) return;
 
-    const operation = deviceDropdownOperationRef.current + 1;
-    deviceDropdownOperationRef.current = operation;
+    const operation = overlayOperationRef.current + 1;
+    overlayOperationRef.current = operation;
     let pendingCaptureName: string | null = null;
 
     try {
@@ -595,8 +604,8 @@ export function BrowserPanel() {
 
       await preloadImage(browserCaptureUrl(captureName));
       if (
-        operation !== deviceDropdownOperationRef.current ||
-        deviceDropdownsOpenRef.current.size === 0 ||
+        operation !== overlayOperationRef.current ||
+        overlaysOpenRef.current.size === 0 ||
         !isOpen
       ) {
         return;
@@ -609,8 +618,8 @@ export function BrowserPanel() {
       await waitForPaint();
 
       if (
-        operation !== deviceDropdownOperationRef.current ||
-        deviceDropdownsOpenRef.current.size === 0 ||
+        operation !== overlayOperationRef.current ||
+        overlaysOpenRef.current.size === 0 ||
         !isOpen
       ) {
         return;
@@ -632,41 +641,49 @@ export function BrowserPanel() {
     }
   }, [api, clearBrowserMenuPreview, isOpen]);
 
-  const handleDeviceDropdownOpenChange = useCallback(
-    (id: "device" | "scale", open: boolean) => {
-      if (deviceDropdownRestoreTimerRef.current !== null) {
-        clearTimeout(deviceDropdownRestoreTimerRef.current);
-        deviceDropdownRestoreTimerRef.current = null;
+  const handleOverlayOpenChange = useCallback(
+    (id: BrowserOverlayId, open: boolean) => {
+      if (overlayRestoreTimerRef.current !== null) {
+        clearTimeout(overlayRestoreTimerRef.current);
+        overlayRestoreTimerRef.current = null;
       }
 
       if (open) {
-        const wasClosed = deviceDropdownsOpenRef.current.size === 0;
-        deviceDropdownsOpenRef.current.add(id);
-        if (wasClosed) void suspendBrowserViewForDeviceDropdown();
+        const wasClosed = overlaysOpenRef.current.size === 0;
+        overlaysOpenRef.current.add(id);
+        if (wasClosed) void suspendBrowserViewForOverlay();
         return;
       }
 
-      deviceDropdownsOpenRef.current.delete(id);
-      if (deviceDropdownsOpenRef.current.size > 0) return;
+      overlaysOpenRef.current.delete(id);
+      if (overlaysOpenRef.current.size > 0) return;
 
-      deviceDropdownRestoreTimerRef.current = setTimeout(() => {
-        deviceDropdownRestoreTimerRef.current = null;
-        if (deviceDropdownsOpenRef.current.size > 0) return;
-        deviceDropdownOperationRef.current += 1;
+      overlayRestoreTimerRef.current = setTimeout(() => {
+        overlayRestoreTimerRef.current = null;
+        if (overlaysOpenRef.current.size > 0) return;
+        overlayOperationRef.current += 1;
         void restoreBrowserView();
       }, 50);
     },
-    [restoreBrowserView, suspendBrowserViewForDeviceDropdown],
+    [restoreBrowserView, suspendBrowserViewForOverlay],
   );
+
+  // The suggestions cover the top of the page instead of pushing it down.
+  const addressOverlayOpen = addressSuggestionsOpen && addressRows.length > 0;
+  useEffect(() => {
+    if (!addressOverlayOpen) return;
+    handleOverlayOpenChange("address", true);
+    return () => handleOverlayOpenChange("address", false);
+  }, [addressOverlayOpen, handleOverlayOpenChange]);
 
   const closeDeviceToolbar = useCallback(async () => {
     const device = activeTab?.deviceEmulation;
     if (!device) return;
-    deviceDropdownsOpenRef.current.clear();
-    deviceDropdownOperationRef.current += 1;
-    if (deviceDropdownRestoreTimerRef.current !== null) {
-      clearTimeout(deviceDropdownRestoreTimerRef.current);
-      deviceDropdownRestoreTimerRef.current = null;
+    overlaysOpenRef.current.clear();
+    overlayOperationRef.current += 1;
+    if (overlayRestoreTimerRef.current !== null) {
+      clearTimeout(overlayRestoreTimerRef.current);
+      overlayRestoreTimerRef.current = null;
     }
     await restoreBrowserView();
     await updateDeviceEmulation({ ...device, enabled: false });
@@ -1123,11 +1140,11 @@ export function BrowserPanel() {
     setDownloadsOpen(false);
     setHistoryOpen(false);
     setClearDataOpen(false);
-    deviceDropdownsOpenRef.current.clear();
-    deviceDropdownOperationRef.current += 1;
-    if (deviceDropdownRestoreTimerRef.current !== null) {
-      clearTimeout(deviceDropdownRestoreTimerRef.current);
-      deviceDropdownRestoreTimerRef.current = null;
+    overlaysOpenRef.current.clear();
+    overlayOperationRef.current += 1;
+    if (overlayRestoreTimerRef.current !== null) {
+      clearTimeout(overlayRestoreTimerRef.current);
+      overlayRestoreTimerRef.current = null;
     }
     if (api) {
       if (selectMode) await api.setSelectMode(false);
@@ -1142,9 +1159,9 @@ export function BrowserPanel() {
     return () => {
       browserMenuOperationRef.current += 1;
       browserMenuPreviewRevisionRef.current += 1;
-      deviceDropdownOperationRef.current += 1;
-      if (deviceDropdownRestoreTimerRef.current !== null) {
-        clearTimeout(deviceDropdownRestoreTimerRef.current);
+      overlayOperationRef.current += 1;
+      if (overlayRestoreTimerRef.current !== null) {
+        clearTimeout(overlayRestoreTimerRef.current);
       }
       const captureName = browserMenuPreviewNameRef.current;
       browserMenuPreviewNameRef.current = null;
@@ -1214,178 +1231,186 @@ export function BrowserPanel() {
         closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}
       />
 
-      <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
-        <div className="flex items-center gap-1 rounded-full p-0.5 ">
-          <Button
-            tooltip="Back"
-            tooltipShortcut={keyboardShortcutLabel(backShortcut)}
-            tooltipPosition="top"
-            onClick={() => void api.back()}
-            disabled={!activeTab?.canGoBack}
-            className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            aria-label="Back"
-          >
-            <ChevronLeft className="size-5" />
-          </Button>
-          <Button
-            tooltip="Forward"
-            tooltipShortcut={keyboardShortcutLabel(forwardShortcut)}
-            tooltipPosition="top"
-            onClick={() => void api.forward()}
-            disabled={!activeTab?.canGoForward}
-            className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            aria-label="Forward"
-          >
-            <ChevronLeft className="size-5 rotate-180" />
-          </Button>
-          <Button
-            tooltip={activeTab?.isLoading ? "Stop" : "Reload"}
-            tooltipPosition="top"
-            onClick={() =>
-              void (activeTab?.isLoading ? api.stop() : api.reload())
-            }
-            className="group rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
-          >
-            {activeTab?.isLoading ? (
-              <Close className="size-4 transition-transform duration-200 group-active:rotate-90" />
-            ) : (
-              <Refresh className="size-4 rotate-180 transition-transform duration-200 group-active:rotate-90" />
-            )}
-          </Button>
-        </div>
+      <div className="relative">
+        <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
+          <div className="flex items-center gap-1 rounded-full p-0.5 ">
+            <Button
+              tooltip="Back"
+              tooltipShortcut={keyboardShortcutLabel(backShortcut)}
+              tooltipPosition="top"
+              onClick={() => void api.back()}
+              disabled={!activeTab?.canGoBack}
+              className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              aria-label="Back"
+            >
+              <ChevronLeft className="size-5" />
+            </Button>
+            <Button
+              tooltip="Forward"
+              tooltipShortcut={keyboardShortcutLabel(forwardShortcut)}
+              tooltipPosition="top"
+              onClick={() => void api.forward()}
+              disabled={!activeTab?.canGoForward}
+              className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              aria-label="Forward"
+            >
+              <ChevronLeft className="size-5 rotate-180" />
+            </Button>
+            <Button
+              tooltip={activeTab?.isLoading ? "Stop" : "Reload"}
+              tooltipPosition="top"
+              onClick={() =>
+                void (activeTab?.isLoading ? api.stop() : api.reload())
+              }
+              className="group rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
+            >
+              {activeTab?.isLoading ? (
+                <Close className="size-4 transition-transform duration-200 group-active:rotate-90" />
+              ) : (
+                <Refresh className="size-4 rotate-180 transition-transform duration-200 group-active:rotate-90" />
+              )}
+            </Button>
+          </div>
 
-        <div className="min-w-0 flex-1">
-          <Input
-            ref={locationInputRef}
-            type="text"
-            role="combobox"
-            value={urlInput}
-            onChange={(event) => {
-              setUrlInput(event.target.value);
-              setAddressSuggestionsOpen(true);
-              setAddressSuggestionIndex(0);
-            }}
-            onKeyDown={(event) => {
-              if (
-                (event.key === "ArrowDown" || event.key === "ArrowUp") &&
-                addressSuggestions.length > 0
-              ) {
-                event.preventDefault();
+          <div className="min-w-0 flex-1">
+            <Input
+              ref={locationInputRef}
+              type="text"
+              role="combobox"
+              value={urlInput}
+              onChange={(event) => {
+                setUrlInput(event.target.value);
                 setAddressSuggestionsOpen(true);
-                setAddressSuggestionIndex((current) => {
-                  if (current < 0) {
-                    return event.key === "ArrowDown"
-                      ? 0
-                      : addressSuggestions.length - 1;
-                  }
-                  const direction = event.key === "ArrowDown" ? 1 : -1;
-                  const clampedCurrent = Math.min(
-                    current,
-                    addressSuggestions.length - 1,
+                setAddressSuggestionIndex(0);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+                  addressRows.length > 0
+                ) {
+                  event.preventDefault();
+                  setAddressSuggestionsOpen(true);
+                  setAddressSuggestionIndex((current) => {
+                    if (current < 0) {
+                      return event.key === "ArrowDown"
+                        ? 0
+                        : addressRows.length - 1;
+                    }
+                    const direction = event.key === "ArrowDown" ? 1 : -1;
+                    const clampedCurrent = Math.min(
+                      current,
+                      addressRows.length - 1,
+                    );
+                    return (
+                      (clampedCurrent + direction + addressRows.length) %
+                      addressRows.length
+                    );
+                  });
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  const row = addressSuggestionsOpen
+                    ? addressRows[selectedAddressSuggestionIndex]
+                    : undefined;
+                  navigate(
+                    row?.kind === "history" ? row.suggestion.url : urlInput,
                   );
-                  return (
-                    (clampedCurrent + direction + addressSuggestions.length) %
-                    addressSuggestions.length
-                  );
-                });
-              } else if (event.key === "Enter") {
-                event.preventDefault();
-                const suggestion = addressSuggestionsOpen
-                  ? addressSuggestions[selectedAddressSuggestionIndex]
-                  : undefined;
-                navigate(suggestion?.url ?? urlInput);
-              } else if (event.key === "Escape") {
-                event.preventDefault();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  setAddressSuggestionsOpen(false);
+                  setAddressSuggestionIndex(-1);
+                }
+              }}
+              onFocus={(event) => {
+                event.currentTarget.select();
+                setAddressSuggestionsOpen(true);
+                setAddressSuggestionIndex(addressRows.length > 0 ? 0 : -1);
+              }}
+              onClick={() => setAddressSuggestionsOpen(true)}
+              onBlur={() => {
                 setAddressSuggestionsOpen(false);
                 setAddressSuggestionIndex(-1);
+              }}
+              placeholder="Search or enter address"
+              aria-label="Search or enter address"
+              aria-autocomplete="list"
+              aria-controls={
+                addressSuggestionsOpen && addressRows.length > 0
+                  ? "browser-address-suggestions"
+                  : undefined
               }
-            }}
-            onFocus={(event) => {
-              event.currentTarget.select();
-              setAddressSuggestionsOpen(true);
-              setAddressSuggestionIndex(addressSuggestions.length > 0 ? 0 : -1);
-            }}
-            onClick={() => setAddressSuggestionsOpen(true)}
-            onBlur={() => {
-              setAddressSuggestionsOpen(false);
-              setAddressSuggestionIndex(-1);
-            }}
-            placeholder="Search or enter address"
-            aria-label="Search or enter address"
-            aria-autocomplete="list"
-            aria-controls={
-              addressSuggestionsOpen && addressSuggestions.length > 0
-                ? "browser-address-suggestions"
-                : undefined
-            }
-            aria-expanded={
-              addressSuggestionsOpen && addressSuggestions.length > 0
-            }
-            aria-activedescendant={
-              addressSuggestionsOpen && selectedAddressSuggestionIndex >= 0
-                ? `browser-address-suggestion-${selectedAddressSuggestionIndex}`
-                : undefined
-            }
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect="off"
-            className="w-full rounded-full py-1.75 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:text-primary-100 dark:focus:bg-primary-800/60"
-            spellCheck={false}
-          />
+              aria-expanded={addressSuggestionsOpen && addressRows.length > 0}
+              aria-activedescendant={
+                addressSuggestionsOpen && selectedAddressSuggestionIndex >= 0
+                  ? `browser-address-suggestion-${selectedAddressSuggestionIndex}`
+                  : undefined
+              }
+              autoCapitalize="none"
+              autoComplete="off"
+              autoCorrect="off"
+              className="w-full rounded-full py-1.75 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:text-primary-100 dark:focus:bg-primary-800/60"
+              spellCheck={false}
+            />
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
+            <Button
+              tooltip={selectMode ? "Exit select mode" : "Select in browser"}
+              tooltipShortcut="Esc"
+              tooltipPosition="top-left"
+              onClick={() => void toggleSelect()}
+              className={`rounded-full p-1 transition-colors ${
+                selectMode
+                  ? "bg-primary-500/20 text-primary-800 dark:text-primary-200"
+                  : "text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              }`}
+              aria-label={selectMode ? "Exit select mode" : "Select in browser"}
+              aria-pressed={selectMode}
+            >
+              <Crop className="size-4" />
+            </Button>
+            <Button
+              ref={browserMenuButtonRef}
+              tooltip="Browser menu"
+              tooltipPosition="top-left"
+              onClick={() => void toggleBrowserMenu()}
+              onMouseDown={(event) => event.stopPropagation()}
+              className="rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              aria-label="Open browser menu"
+              aria-haspopup="menu"
+              aria-expanded={browserMenuOpen}
+            >
+              <Option className="size-4 rotate-90" />
+            </Button>
+          </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
-          <Button
-            tooltip={selectMode ? "Exit select mode" : "Select in browser"}
-            tooltipShortcut="Esc"
-            tooltipPosition="top-left"
-            onClick={() => void toggleSelect()}
-            className={`rounded-full p-1 transition-colors ${
-              selectMode
-                ? "bg-primary-500/20 text-primary-800 dark:text-primary-200"
-                : "text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            }`}
-            aria-label={selectMode ? "Exit select mode" : "Select in browser"}
-            aria-pressed={selectMode}
-          >
-            <Crop className="size-4" />
-          </Button>
-          <Button
-            ref={browserMenuButtonRef}
-            tooltip="Browser menu"
-            tooltipPosition="top-left"
-            onClick={() => void toggleBrowserMenu()}
-            onMouseDown={(event) => event.stopPropagation()}
-            className="rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
-            aria-label="Open browser menu"
-            aria-haspopup="menu"
-            aria-expanded={browserMenuOpen}
-          >
-            <Option className="size-4 rotate-90" />
-          </Button>
-        </div>
+        {addressSuggestionsOpen && (
+          <div className="absolute inset-x-0 top-full z-(--z-dropdown)">
+            <BrowserAddressSuggestions
+              rows={addressRows}
+              selectedIndex={selectedAddressSuggestionIndex}
+              onHighlight={setAddressSuggestionIndex}
+              onSelect={(row) => {
+                if (row.kind === "input") {
+                  navigate(row.value);
+                  return;
+                }
+                setUrlInput(row.suggestion.url);
+                navigate(row.suggestion.url);
+              }}
+              onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
+            />
+          </div>
+        )}
       </div>
-
-      {addressSuggestionsOpen && (
-        <BrowserAddressSuggestions
-          suggestions={addressSuggestions}
-          selectedIndex={selectedAddressSuggestionIndex}
-          onHighlight={setAddressSuggestionIndex}
-          onSelect={(suggestion) => {
-            setUrlInput(suggestion.url);
-            navigate(suggestion.url);
-          }}
-          onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
-        />
-      )}
 
       {activeTab?.deviceEmulation.enabled && (
         <BrowserDeviceToolbar
           device={activeTab.deviceEmulation}
           onChange={(device) => void updateDeviceEmulation(device)}
           onClose={() => void closeDeviceToolbar()}
-          onDropdownOpenChange={handleDeviceDropdownOpenChange}
+          onDropdownOpenChange={handleOverlayOpenChange}
         />
       )}
 

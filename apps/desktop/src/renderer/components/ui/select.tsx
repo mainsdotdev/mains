@@ -101,6 +101,7 @@ export default function Select<T extends string = string>({
     top: 0,
     left: 0,
     width: 0,
+    maxHeight: 0,
   });
 
   // Reset enter animation on each open. Before the app-ready latch animations
@@ -128,10 +129,16 @@ export default function Select<T extends string = string>({
   const updateDropdownPosition = () => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
+    const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
     setDropdownPosition({
       top: rect.bottom,
       left: rect.left,
       width: rect.width,
+      // Preserve the 15rem cap while leaving room at the viewport edge.
+      maxHeight: Math.max(
+        0,
+        Math.min(15 * rootFontSize, window.innerHeight - rect.bottom - 8),
+      ),
     });
   };
 
@@ -386,7 +393,10 @@ export default function Select<T extends string = string>({
               width: dropdownPosition.width,
             }}
           >
-            <div className="max-h-60 overflow-auto noscrollbar space-y-0.5 p-1.5">
+            <div
+              className="overflow-auto noscrollbar space-y-0.5 p-1.5"
+              style={{ maxHeight: dropdownPosition.maxHeight }}
+            >
               {options.map((option, index) => {
                 const isSelected = value === option.value;
                 const isActive = activeIndex === index;

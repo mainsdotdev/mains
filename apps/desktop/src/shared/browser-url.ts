@@ -35,32 +35,48 @@ export function isAllowedBrowserUrl(value: string): boolean {
   }
 }
 
+/** What omnibox input turns into: an address to open, or a web search. */
+export interface BrowserInput {
+  kind: "address" | "search";
+  url: string;
+}
+
 /**
- * Resolve omnibox input to a safe browser URL. Explicit but unsupported schemes
- * are refused; ordinary text becomes a search instead of silently navigating to
- * about:blank.
+ * Classify omnibox input and resolve it to a safe browser URL. Explicit but
+ * unsupported schemes are refused; ordinary text becomes a search instead of
+ * silently navigating to about:blank. Shared so the address bar can say which
+ * of the two Enter will do.
  */
-export function resolveBrowserInput(raw: string): string {
+export function classifyBrowserInput(raw: string): BrowserInput {
   const value = (raw || "").trim();
-  if (!value) return BLANK_URL;
+  const address = (url: string): BrowserInput => ({ kind: "address", url });
+  if (!value) return address(BLANK_URL);
 
   if (/^about:/i.test(value)) {
-    return isAllowedBrowserUrl(value) ? value : BLANK_URL;
+    return address(isAllowedBrowserUrl(value) ? value : BLANK_URL);
   }
 
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
-    return isAllowedBrowserUrl(value) ? value : BLANK_URL;
+    return address(isAllowedBrowserUrl(value) ? value : BLANK_URL);
   }
 
   if (looksLikeLocalhost(value) || looksLikeIpv4(value)) {
-    return `http://${value}`;
+    return address(`http://${value}`);
   }
 
   if (looksLikeDomain(value)) {
     const candidate = `https://${value}`;
-    return isAllowedBrowserUrl(candidate) ? candidate : BLANK_URL;
+    return address(isAllowedBrowserUrl(candidate) ? candidate : BLANK_URL);
   }
 
-  return `${DEFAULT_SEARCH_URL}${encodeURIComponent(value)}`;
+  return {
+    kind: "search",
+    url: `${DEFAULT_SEARCH_URL}${encodeURIComponent(value)}`,
+  };
+}
+
+/** {@link classifyBrowserInput}'s URL alone — what navigation loads. */
+export function resolveBrowserInput(raw: string): string {
+  return classifyBrowserInput(raw).url;
 }
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BLANK_URL, isAllowedBrowserUrl, resolveBrowserInput } from "./browser-url";
+import {
+  BLANK_URL,
+  classifyBrowserInput,
+  isAllowedBrowserUrl,
+  resolveBrowserInput,
+} from "./browser-url";
 
 describe("resolveBrowserInput", () => {
   it("keeps supported absolute URLs", () => {
@@ -33,6 +38,25 @@ describe("resolveBrowserInput", () => {
   it("refuses explicit unsupported protocols", () => {
     expect(resolveBrowserInput("file:///etc/passwd")).toBe(BLANK_URL);
     expect(resolveBrowserInput("ftp://example.com/file")).toBe(BLANK_URL);
+  });
+});
+
+describe("classifyBrowserInput", () => {
+  it("tells an address from a search", () => {
+    expect(classifyBrowserInput("localhost:3000/writing/")).toEqual({
+      kind: "address",
+      url: "http://localhost:3000/writing/",
+    });
+    expect(classifyBrowserInput("example.com").kind).toBe("address");
+    expect(classifyBrowserInput("electron web contents view").kind).toBe(
+      "search",
+    );
+  });
+
+  it("counts a search engine URL typed out in full as an address", () => {
+    expect(
+      classifyBrowserInput("https://www.google.com/search?q=mains").kind,
+    ).toBe("address");
   });
 });
 

@@ -1,5 +1,6 @@
 import { Button, Text } from "@/components/ui";
-import { Close } from "@/components/ui/icons";
+import { Close, Search, Web } from "@/components/ui/icons";
+import { classifyBrowserInput } from "../../../../shared/browser-url";
 import type { BrowserHistoryEntryViewModel } from "./browser-history-panel";
 import { BrowserFavicon } from "./browser-favicon";
 
@@ -9,10 +10,24 @@ export interface BrowserAddressSuggestion extends BrowserHistoryEntryViewModel {
   displayUrl: string;
 }
 
+/**
+ * One row of the address dropdown. The first is what's in the address bar, so
+ * Enter opens exactly what was typed until an arrow key picks a history match.
+ */
+export type BrowserAddressRow =
+  | {
+      kind: "input";
+      /** The address-bar text, trimmed — shown as typed, and what navigation receives. */
+      value: string;
+      /** Enter runs a web search rather than opening an address. */
+      search: boolean;
+    }
+  | { kind: "history"; suggestion: BrowserAddressSuggestion };
+
 interface BrowserAddressSuggestionsProps {
-  suggestions: BrowserAddressSuggestion[];
+  rows: BrowserAddressRow[];
   selectedIndex: number;
-  onSelect: (suggestion: BrowserAddressSuggestion) => void;
+  onSelect: (row: BrowserAddressRow) => void;
   onHighlight: (index: number) => void;
   onRemove: (historyEntryId: string) => void;
 }
@@ -100,28 +115,110 @@ export function browserAddressSuggestions(
     .map(({ entry }) => ({ ...entry, displayUrl: displayUrl(entry.url) }));
 }
 
+/**
+ * The dropdown's rows: the typed input first, when there is any, then the
+ * history matches — minus the one that is the typed address itself.
+ */
+export function browserAddressRows(
+  input: string,
+  suggestions: BrowserAddressSuggestion[],
+): BrowserAddressRow[] {
+  const history = (list: BrowserAddressSuggestion[]): BrowserAddressRow[] =>
+    list.map((suggestion) => ({ kind: "history", suggestion }));
+  const value = input.trim();
+  if (!value) return history(suggestions);
+
+  const resolved = classifyBrowserInput(value);
+  const search = resolved.kind === "search";
+  const target = resolved.url.toLocaleLowerCase();
+  return [
+    { kind: "input", value, search },
+    ...history(
+      search
+        ? suggestions
+        : suggestions.filter(
+            (suggestion) => suggestion.url.toLocaleLowerCase() !== target,
+          ),
+    ),
+  ];
+}
+
+const ICON_CHIP_CLASS =
+  "flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary-100/80 dark:bg-primary-900/80";
+
+function RowContent({ row }: { row: BrowserAddressRow }) {
+  if (row.kind === "input") {
+    return (
+      <>
+        <span className={ICON_CHIP_CLASS}>
+          {row.search ? (
+            <Search
+              aria-hidden
+              className="size-4 text-primary-400 dark:text-primary-500"
+            />
+          ) : (
+            <Web
+              aria-hidden
+              className="size-4.5 text-primary-400 dark:text-primary-500"
+            />
+          )}
+        </span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <Text as="span" size="xs" weight="medium" className="min-w-0 truncate">
+            {row.value}
+          </Text>
+          <Text as="span" size="xxs" tone="subtle" className="shrink-0">
+            {row.search ? "Search Google" : "Open"}
+          </Text>
+        </span>
+      </>
+    );
+  }
+  const { suggestion } = row;
+  return (
+    <>
+      <span className={ICON_CHIP_CLASS}>
+        <BrowserFavicon faviconUrl={suggestion.faviconUrl} className="size-4.5" />
+      </span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <Text
+          as="span"
+          size="xs"
+          weight="medium"
+          className="max-w-[45%] shrink-0 truncate"
+        >
+          {suggestion.title || suggestion.displayUrl}
+        </Text>
+        <Text as="span" size="xxs" tone="subtle" className="min-w-0 truncate">
+          {suggestion.displayUrl}
+        </Text>
+      </span>
+    </>
+  );
+}
+
 export function BrowserAddressSuggestions({
-  suggestions,
+  rows,
   selectedIndex,
   onSelect,
   onHighlight,
   onRemove,
 }: BrowserAddressSuggestionsProps) {
-  if (suggestions.length === 0) return null;
+  if (rows.length === 0) return null;
 
   return (
     <div
       id="browser-address-suggestions"
       role="listbox"
-      aria-label="Suggestions from browsing history"
+      aria-label="Address suggestions"
       className="mx-2 mb-1 mt-1 max-h-64 shrink-0 overflow-y-auto rounded-2xl p-1 glass-outline bg-primary-50/95 shadow-xl backdrop-blur-xl dark:bg-primary-950/95"
     >
-      {suggestions.map((suggestion, index) => {
+      {rows.map((row, index) => {
         const isSelected = index === selectedIndex;
         return (
           <div
             id={`browser-address-suggestion-${index}`}
-            key={suggestion.url}
+            key={row.kind === "input" ? "input" : row.suggestion.url}
             role="option"
             aria-selected={isSelected}
             onMouseEnter={() => onHighlight(index)}
@@ -135,43 +232,22 @@ export function BrowserAddressSuggestions({
               type="button"
               tabIndex={-1}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onSelect(suggestion)}
+              onClick={() => onSelect(row)}
               className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-xl px-2.5 py-2 text-left focus:outline-none"
             >
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary-100/80 dark:bg-primary-900/80">
-                <BrowserFavicon
-                  faviconUrl={suggestion.faviconUrl}
-                  className="size-4.5"
-                />
-              </span>
-              <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                <Text
-                  as="span"
-                  size="xs"
-                  weight="medium"
-                  className="max-w-[45%] shrink-0 truncate"
-                >
-                  {suggestion.title || suggestion.displayUrl}
-                </Text>
-                <Text
-                  as="span"
-                  size="xxs"
-                  tone="subtle"
-                  className="min-w-0 truncate"
-                >
-                  {suggestion.displayUrl}
-                </Text>
-              </span>
+              <RowContent row={row} />
             </button>
-            <Button
-              tabIndex={-1}
-              aria-label={`Remove ${suggestion.title || suggestion.displayUrl} from history`}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => onRemove(suggestion.id)}
-              className="mr-1 rounded-lg p-1 text-primary-500 opacity-0 hover:bg-primary-300/50 hover:text-primary-900 group-hover:opacity-100 dark:text-primary-400 dark:hover:bg-primary-700/60 dark:hover:text-primary-100"
-            >
-              <Close className="size-3.5" />
-            </Button>
+            {row.kind === "history" && (
+              <Button
+                tabIndex={-1}
+                aria-label={`Remove ${row.suggestion.title || row.suggestion.displayUrl} from history`}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => onRemove(row.suggestion.id)}
+                className="mr-1 rounded-lg p-1 text-primary-500 opacity-0 hover:bg-primary-300/50 hover:text-primary-900 group-hover:opacity-100 dark:text-primary-400 dark:hover:bg-primary-700/60 dark:hover:text-primary-100"
+              >
+                <Close className="size-3.5" />
+              </Button>
+            )}
           </div>
         );
       })}

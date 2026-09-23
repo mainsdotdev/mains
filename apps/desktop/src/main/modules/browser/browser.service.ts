@@ -22,7 +22,7 @@ import {
   BLANK_URL,
   isAllowedBrowserUrl,
   resolveBrowserInput,
-} from "./browser-url";
+} from "../../../shared/browser-url";
 import {
   isPathInsideDirectory,
   nextDownloadPath,
