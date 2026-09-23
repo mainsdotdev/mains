@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef, Fragment, type ReactNode } from "react";
+import { useState, useMemo, useCallback, useEffect, Fragment } from "react";
 import {
   Heading2,
   Heading3,
@@ -12,6 +12,7 @@ import {
   Input,
   Select,
   SegmentedTabs,
+  HorizontalFadeScroller,
 } from "@/components/ui";
 import {
   useGetProviderPluginsQuery,
@@ -161,59 +162,6 @@ function PluginLogo({
   );
 }
 
-/**
- * Horizontal scroll rail that fades content out at whichever edge still has
- * more to scroll. Uses a CSS mask instead of overlay gradients so it works on
- * any background (light/dark, glass) without color matching.
- */
-function HorizontalFadeScroller({
-  children,
-  className = "",
-  contentClassName = "flex gap-4 w-max",
-}: {
-  children: ReactNode;
-  /** Outer (scrolling) element — for sizing it inside a flex row. */
-  className?: string;
-  contentClassName?: string;
-}) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  const [fade, setFade] = useState({ left: false, right: false });
-
-  const updateFade = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const left = el.scrollLeft > 4;
-    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
-    setFade((f) => (f.left === left && f.right === right ? f : { left, right }));
-  }, []);
-
-  useEffect(() => {
-    updateFade();
-    const observer = new ResizeObserver(updateFade);
-    if (scrollRef.current) observer.observe(scrollRef.current);
-    if (contentRef.current) observer.observe(contentRef.current);
-    return () => observer.disconnect();
-  }, [updateFade]);
-
-  const mask = `linear-gradient(to right, ${
-    fade.left ? "transparent, black 3rem" : "black"
-  }, ${fade.right ? "black calc(100% - 3rem), transparent" : "black"})`;
-
-  return (
-    <div
-      ref={scrollRef}
-      onScroll={updateFade}
-      className={`overflow-x-auto noscrollbar snap-x  ${className}`}
-      style={{ maskImage: mask, WebkitMaskImage: mask }}
-    >
-      <div ref={contentRef} className={contentClassName}>
-        {children}
-      </div>
-    </div>
-  );
-}
-
 function InstalledPluginShelf({
   plugins,
   isLoading,
@@ -230,7 +178,7 @@ function InstalledPluginShelf({
       <Body weight="medium" className="mb-3">
         Installed
       </Body>
-      <HorizontalFadeScroller contentClassName="flex gap-3 w-max px-0.5 pr-10">
+      <HorizontalFadeScroller arrows contentClassName="flex gap-3 w-max px-0.5 pr-10">
         {isLoading
           ? Array.from({ length: 7 }, (_, index) => (
               <div
@@ -1406,7 +1354,7 @@ function ProviderPluginCatalog({
           <Body weight="medium" className="mb-3">
             {highlightLabel}
           </Body>
-          <HorizontalFadeScroller contentClassName="grid grid-rows-2 grid-flow-col gap-3 w-max">
+          <HorizontalFadeScroller arrows contentClassName="grid grid-rows-2 grid-flow-col gap-3 w-max">
             {highlight.map((p) => (
               <div key={p.id} className="w-72 snap-start">
                 <PluginCard

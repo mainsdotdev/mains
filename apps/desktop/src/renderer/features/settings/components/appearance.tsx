@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import {
   Button,
+  getSegmentedTabId,
   SegmentedTabs,
   Select,
   Slider,
@@ -41,6 +42,7 @@ import {
 } from "@/lib/provider-variants";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useAppThemeSettings } from "@/hooks/use-app-theme";
+import { useDarkMode } from "@/hooks/use-dark-mode";
 import { useIsMobile } from "@/lib/platform";
 import {
   SettingsDivider,
@@ -49,6 +51,7 @@ import {
   SettingsSection,
 } from "./settings-layout";
 import { ThemePicker, ThemeSelect, type ThemeValue } from "./theme-picker";
+import { ThemePresetStrip, type ThemePresetOption } from "./theme-preset-strip";
 import { ColorField } from "./color-field";
 
 const ALL_PROVIDERS = "all";
@@ -60,31 +63,12 @@ const APPEARANCE_TITLES: Record<ThemeAppearance, string> = {
   dark: "Dark theme",
 };
 
-/**
- * The "Aa" chip a theme menu entry leads with: the theme's background and its
- * accent. A preview of literal colours, like the colour pills.
- */
-function ThemeSwatch({
-  theme,
-  appearance,
-}: {
-  theme: string;
-  appearance: ThemeAppearance;
-}) {
-  const { background, accent } = paintedPalette(
-    resolveAppearance({ theme, accent: "theme" }, appearance),
-    appearance,
-  );
-  return (
-    <span
-      aria-hidden
-      className="flex size-5 shrink-0 items-center justify-center rounded-md border border-primary-950/10 text-t font-semibold dark:border-primary/15"
-      style={{ backgroundColor: background, color: accent }}
-    >
-      Aa
-    </span>
-  );
-}
+const APPEARANCE_TABS: { value: ThemeAppearance; label: string }[] = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
+const APPEARANCE_TABS_ID = "appearance-colors-tabs";
+const APPEARANCE_PANEL_ID = "appearance-colors-panel";
 
 /** A small reset beside a field that holds an edit. */
 function ResetButton({ label, onClick }: { label: string; onClick: () => void }) {
@@ -96,17 +80,19 @@ function ResetButton({ label, onClick }: { label: string; onClick: () => void })
 }
 
 /**
- * One appearance's theme for the current scope: the preset, and the edits on
- * top of it. In a provider scope the preset
- * picker leads with "Default (…)"; while it's picked the fields show the
+ * The theme for the current scope, one appearance at a time behind Light /
+ * Dark tabs: the preset, and the edits on top of it. In a provider scope the
+ * preset strip leads with "Default"; while it's picked the fields show the
  * default's values, and editing one takes the appearance over for that
  * provider, starting from the default.
  */
 function AppearanceCard({
   appearance,
+  onAppearanceChange,
   provider,
 }: {
   appearance: ThemeAppearance;
+  onAppearanceChange: (appearance: ThemeAppearance) => void;
   /** The scope's provider; `null` edits the default. */
   provider: ProviderVariantDescriptor | null;
 }) {
@@ -126,19 +112,23 @@ function AppearanceCard({
   const edit = (patch: Partial<AppearanceChoice>) =>
     commit(editAppearanceChoice(choice, patch));
 
-  const presets: SelectOption[] = appThemesFor(appearance).map((preset) => ({
-    value: preset.id,
-    label: preset.name,
-    icon: <ThemeSwatch theme={preset.id} appearance={appearance} />,
-  }));
+  const presets: ThemePresetOption[] = appThemesFor(appearance).map(
+    (preset) => ({
+      value: preset.id,
+      label: preset.name,
+      choice: { theme: preset.id, accent: "theme" },
+    }),
+  );
   const presetName = (id: string) =>
     presets.find((option) => option.value === id)?.label ?? presets[0].label;
   const presetOptions = providerId
     ? [
         {
           value: INHERIT,
-          label: `Default (${presetName(inherited.theme)})`,
-          icon: <ThemeSwatch theme={inherited.theme} appearance={appearance} />,
+          label: "Default",
+          hint: presetName(inherited.theme),
+          // The default as it paints, edits included.
+          choice: inherited,
         },
         ...presets,
       ]
@@ -157,116 +147,136 @@ function AppearanceCard({
 
   return (
     <SettingsSection
-      title={title}
+      title="Colors"
       actions={
-        <Select
-          value={presetValue}
-          aria-label={`${title} preset`}
-          options={presetOptions}
-          onChange={(value) =>
-            commit(
-              value === INHERIT
-                ? null
-                : editAppearanceChoice(choice, {
-                    theme: value,
-                    // A new preset brings its own colours.
-                    background: undefined,
-                    foreground: undefined,
-                    contrast: undefined,
-                  }),
-            )
-          }
+        <SegmentedTabs
+          id={APPEARANCE_TABS_ID}
+          value={appearance}
+          onChange={onAppearanceChange}
+          options={APPEARANCE_TABS}
+          panelId={APPEARANCE_PANEL_ID}
+          aria-label="Appearance to edit"
+          className="min-w-32"
         />
       }
     >
-      <SettingsRow
-        title="Accent"
-        description="Buttons, links and focus"
+      <div
+        id={APPEARANCE_PANEL_ID}
+        role="tabpanel"
+        aria-labelledby={getSegmentedTabId(APPEARANCE_TABS_ID, appearance)}
       >
-        <div className="flex items-center gap-2">
-          <Select
-            value={choice.accent}
-            aria-label={`${title} accent source`}
-            options={accentOptions}
-            size="s"
-            onChange={(accent) =>
-              edit(
-                accent === "custom"
-                  ? { accent, accentColor: choice.accentColor ?? painted.accent }
-                  : { accent },
+        <div className="py-4">
+          <ThemePresetStrip
+            appearance={appearance}
+            options={presetOptions}
+            value={presetValue}
+            aria-label={`${title} preset`}
+            onChange={(value) =>
+              commit(
+                value === INHERIT
+                  ? null
+                  : editAppearanceChoice(choice, {
+                      theme: value,
+                      // A new preset brings its own colours.
+                      background: undefined,
+                      foreground: undefined,
+                      contrast: undefined,
+                    }),
               )
             }
           />
-          <ColorField
-            value={painted.accent}
-            aria-label={`${title} accent`}
-            onChange={(color) => edit({ accent: "custom", accentColor: color })}
-          />
         </div>
-      </SettingsRow>
 
-      {(["background", "foreground"] as const).map((key) => (
-        <Fragment key={key}>
-          <SettingsDivider />
-          <SettingsRow
-            title={key === "background" ? "Background" : "Foreground"}
-            description={
-              key === "background"
-                ? "The content surface; the frame and panels derive from it"
-                : "Text; secondary text and borders derive from it"
-            }
-          >
-            <div className="flex items-center gap-2">
-              {choice[key] !== undefined && (
-                <ResetButton
-                  label={`Reset ${key} to the preset`}
-                  onClick={() => edit({ [key]: undefined })}
-                />
-              )}
-              <ColorField
-                value={painted[key]}
-                aria-label={`${title} ${key}`}
-                onChange={(color) => edit({ [key]: color })}
-              />
-            </div>
-          </SettingsRow>
-        </Fragment>
-      ))}
-
-      <SettingsDivider />
-      <SettingsRow
-        title="Contrast"
-        description="Pulls secondary text toward the foreground; surfaces stay put"
-      >
-        <div className="flex items-center gap-2">
-          {choice.contrast !== undefined && (
-            <ResetButton
-              label="Reset contrast to the preset"
-              onClick={() => edit({ contrast: undefined })}
+        <SettingsDivider />
+        <SettingsRow
+          title="Accent"
+          description="Buttons, links and focus"
+        >
+          <div className="flex items-center gap-2">
+            <Select
+              value={choice.accent}
+              aria-label={`${title} accent source`}
+              options={accentOptions}
+              size="s"
+              onChange={(accent) =>
+                edit(
+                  accent === "custom"
+                    ? { accent, accentColor: choice.accentColor ?? painted.accent }
+                    : { accent },
+                )
+              }
             />
-          )}
-          <Slider
-            value={Math.round(painted.contrast * 100)}
-            aria-label={`${title} contrast`}
-            onChange={(value) => edit({ contrast: value / 100 })}
-            min={0}
-            max={100}
-            step={1}
-          />
-        </div>
-      </SettingsRow>
+            <ColorField
+              value={painted.accent}
+              aria-label={`${title} accent`}
+              onChange={(color) => edit({ accent: "custom", accentColor: color })}
+            />
+          </div>
+        </SettingsRow>
 
-      <SettingsDivider />
-      <SettingsRow
-        title="Translucent sidebar"
-        description="Let the desktop show through the frame around the content"
-      >
-        <Toggle
-          enabled={resolved.translucent}
-          aria-label={`${title} translucent sidebar`}
-          onChange={(translucent) => edit({ translucent })}
-        />
-      </SettingsRow>
+        {(["background", "foreground"] as const).map((key) => (
+          <Fragment key={key}>
+            <SettingsDivider />
+            <SettingsRow
+              title={key === "background" ? "Background" : "Foreground"}
+              description={
+                key === "background"
+                  ? "The content surface; the frame and panels derive from it"
+                  : "Text; secondary text and borders derive from it"
+              }
+            >
+              <div className="flex items-center gap-2">
+                {choice[key] !== undefined && (
+                  <ResetButton
+                    label={`Reset ${key} to the preset`}
+                    onClick={() => edit({ [key]: undefined })}
+                  />
+                )}
+                <ColorField
+                  value={painted[key]}
+                  aria-label={`${title} ${key}`}
+                  onChange={(color) => edit({ [key]: color })}
+                />
+              </div>
+            </SettingsRow>
+          </Fragment>
+        ))}
+
+        <SettingsDivider />
+        <SettingsRow
+          title="Contrast"
+          description="Pulls secondary text toward the foreground; surfaces stay put"
+        >
+          <div className="flex items-center gap-2">
+            {choice.contrast !== undefined && (
+              <ResetButton
+                label="Reset contrast to the preset"
+                onClick={() => edit({ contrast: undefined })}
+              />
+            )}
+            <Slider
+              value={Math.round(painted.contrast * 100)}
+              aria-label={`${title} contrast`}
+              onChange={(value) => edit({ contrast: value / 100 })}
+              min={0}
+              max={100}
+              step={1}
+            />
+          </div>
+        </SettingsRow>
+
+        <SettingsDivider />
+        <SettingsRow
+          title="Translucent sidebar"
+          description="Let the desktop show through the frame around the content"
+        >
+          <Toggle
+            enabled={resolved.translucent}
+            aria-label={`${title} translucent sidebar`}
+            onChange={(translucent) => edit({ translucent })}
+          />
+        </SettingsRow>
+      </div>
     </SettingsSection>
   );
 }
@@ -358,7 +368,18 @@ function CodeFontSizeSlider() {
 export default function AppearanceSettings() {
   const isMobile = useIsMobile();
   const { spaces } = useActiveSpace();
+  const { darkMode } = useDarkMode();
   const [scope, setScope] = useState(ALL_PROVIDERS);
+
+  // The colors card opens on the appearance on screen and follows the mode
+  // when it flips; a tab picked by hand stays until then.
+  const onScreen: ThemeAppearance = darkMode ? "dark" : "light";
+  const [appearance, setAppearance] = useState(onScreen);
+  const [followedMode, setFollowedMode] = useState(onScreen);
+  if (followedMode !== onScreen) {
+    setFollowedMode(onScreen);
+    setAppearance(onScreen);
+  }
 
   const providers = spaces.flatMap((space) => {
     const descriptor = getProviderVariantById(space.providerId);
@@ -411,13 +432,11 @@ export default function AppearanceSettings() {
         </SettingsRow>
       </SettingsSection>
 
-      {(["light", "dark"] as const).map((appearance) => (
-        <AppearanceCard
-          key={appearance}
-          appearance={appearance}
-          provider={provider}
-        />
-      ))}
+      <AppearanceCard
+        appearance={appearance}
+        onAppearanceChange={setAppearance}
+        provider={provider}
+      />
 
       <SettingsSection title="Fonts">
         <SettingsRow title="UI font" description="Menus, labels, and messages">

@@ -43,7 +43,7 @@ export function ColorField({
 
   return (
     <div
-      className="flex h-7 w-32 items-center gap-2 rounded-lg border border-primary-950/10 px-2 dark:border-primary/10"
+      className="flex h-7 w-32 items-center gap-2 rounded-[10px] border border-primary-950/10 px-2 dark:border-primary/10"
       style={{ backgroundColor: value, color: ink }}
     >
       <label className="relative size-3.5 shrink-0 cursor-pointer rounded-full ring-1 ring-current/50">

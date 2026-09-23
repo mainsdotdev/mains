@@ -5,13 +5,20 @@ export { CopyButton } from "./copy-button";
 export { AgentGlyph } from "./agent-glyph";
 
 // Segmented tabs
-export { getSegmentedTabId, SegmentedTabs } from "./segmented-tabs";
+export {
+  getNextSegmentedValue,
+  getSegmentedTabId,
+  SegmentedTabs,
+} from "./segmented-tabs";
 export type {
   SegmentedTabOption,
   SegmentedTabsNavigationKey,
   SegmentedTabsProps,
   SegmentedTabsSemantics,
 } from "./segmented-tabs";
+
+// Scrolling
+export { HorizontalFadeScroller } from "./horizontal-fade-scroller";
 
 // Text
 export {
