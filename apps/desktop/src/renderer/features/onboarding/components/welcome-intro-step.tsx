@@ -15,7 +15,7 @@ export function WelcomeIntroStep() {
       >
         v{__APP_VERSION__ ?? "1.0"}
       </Text>
-      <Heading1 className="my-3">
+      <Heading1 className="my-3 font-mono tracking-tight">
         Welcome to Mains
       </Heading1>
       <Body className=" max-w-md">
