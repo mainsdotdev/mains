@@ -13,7 +13,7 @@ export {
 // Repository (module-internal — not exported)
 
 // Validation
-export { parsePairDeviceInput } from "./backend.validation";
+export { parseDeviceName, parsePairDeviceInput } from "./backend.validation";
 
 // DTOs
 export type {

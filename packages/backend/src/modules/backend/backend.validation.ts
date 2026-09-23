@@ -14,6 +14,15 @@ const PLATFORMS: ReadonlySet<PairedDevicePlatform> = new Set([
 const MAX_DEVICE_NAME_LENGTH = 80;
 const MAX_APP_VERSION_LENGTH = 40;
 
+/** A name the owner gives a paired device from the desktop's device list. */
+export function parseDeviceName(input: unknown): string {
+  const name = typeof input === "string" ? input.trim() : "";
+  if (name.length === 0) {
+    throw new Error("Device name is required");
+  }
+  return name.slice(0, MAX_DEVICE_NAME_LENGTH);
+}
+
 export function parsePairDeviceInput(input: unknown): PairDeviceInput {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("Pairing request must be an object");

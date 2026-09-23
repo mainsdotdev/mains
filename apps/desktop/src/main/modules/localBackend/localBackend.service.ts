@@ -192,7 +192,13 @@ function buildStatus(): LocalBackendStatus {
   };
 }
 
-/** Let the desktop UI refresh its paired-phone list (a pairing, a connection, a revoke). */
+/** A paired device as the desktop's list shows it. */
+export type LocalPairedDevice = PairedDevice & { connected: boolean };
+
+/**
+ * Let the desktop UI refresh its device list: a pairing, a device connecting
+ * or dropping off, a rename, a revoke.
+ */
 function notifyPairedDevicesChanged(): void {
   emit(CHANNELS.localBackend.pairedDevicesChanged, {});
 }
@@ -241,19 +247,18 @@ async function reconcileHost(): Promise<void> {
       fetchProxiedImage: (url) => imageProxyService.proxyImage(url),
       serveLocalImage: (url) => serveLocalImage(url),
       serveLocalDocument: (url) => serveLocalDocument(url),
-      // Paired phones authenticate with their own token instead of the shared
-      // session token, and new ones pair through `POST /pair`.
-      verifyDeviceToken: async (token) => {
-        const device = await backendService.verifyDeviceToken(token);
-        if (device) notifyPairedDevicesChanged();
-        return device;
-      },
+      // Paired devices authenticate with their own token instead of the shared
+      // session token, and new ones pair through `POST /pair`. The last-seen
+      // stamp verifying records reaches the list with the connection change
+      // below, once the socket is open and counts as connected.
+      verifyDeviceToken: (token) => backendService.verifyDeviceToken(token),
       pairDevice: async (body) => {
         const result = await backendService.pairDevice(body);
         notifyPairedDevicesChanged();
         return result;
       },
       commandReceipts: backendService.commandReceipts,
+      onDeviceConnectionChange: () => notifyPairedDevicesChanged(),
     });
     bindHost = desiredBind;
     port = wsHost.port;
@@ -368,7 +373,7 @@ export const localBackendService = {
    * Replace the shared session token. A running host is restarted on the same
    * port with the new one — the token is only checked at the WS handshake, so
    * a restart is what actually drops clients that authenticated with the old
-   * token. Paired phones hold their own device tokens and simply reconnect;
+   * token. Paired devices hold their own device tokens and simply reconnect;
    * Tailscale Serve keeps proxying to the same port.
    */
   async rotateToken(): Promise<LocalBackendStatus> {
@@ -389,7 +394,7 @@ export const localBackendService = {
    */
   async createPairingCode(): Promise<PairingCode> {
     if (!wsHost) {
-      throw new Error("Turn on remote access before pairing a phone");
+      throw new Error("Turn on remote access before pairing a device");
     }
     return backendService.createPairingCode(pairingEndpoints());
   },
@@ -414,8 +419,20 @@ export const localBackendService = {
     return wsHost.createWebLogin(origin);
   },
 
-  listPairedDevices(): Promise<PairedDevice[]> {
-    return backendService.listPairedDevices();
+  /** The paired devices, each marked with whether it holds a socket now. */
+  async listPairedDevices(): Promise<LocalPairedDevice[]> {
+    const devices = await backendService.listPairedDevices();
+    const connected = wsHost?.connectedDeviceIds() ?? new Set<string>();
+    return devices.map((device) => ({
+      ...device,
+      connected: connected.has(device.id),
+    }));
+  },
+
+  async renamePairedDevice(id: string, name: string): Promise<PairedDevice> {
+    const device = await backendService.renamePairedDevice(id, name);
+    notifyPairedDevicesChanged();
+    return device;
   },
 
   async revokePairedDevice(id: string): Promise<void> {

@@ -310,6 +310,57 @@ describe("backendService", () => {
     });
   });
 
+  describe("renamePairedDevice", () => {
+    it("renames a paired device, trimmed", async () => {
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      const { deviceId } = await backendService.pairDevice(phone(code));
+
+      const renamed = await backendService.renamePairedDevice(
+        deviceId,
+        "  Okan's iPad  ",
+      );
+
+      expect(renamed.name).toBe("Okan's iPad");
+      const [device] = await backendService.listPairedDevices();
+      expect(device.name).toBe("Okan's iPad");
+    });
+
+    it("rejects a blank name and leaves the old one", async () => {
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      const { deviceId } = await backendService.pairDevice(phone(code));
+
+      await expect(
+        backendService.renamePairedDevice(deviceId, "   "),
+      ).rejects.toThrow("Device name is required");
+      const [device] = await backendService.listPairedDevices();
+      expect(device.name).toBe("Okan's iPhone");
+    });
+
+    it("caps the name at the pairing length", async () => {
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      const { deviceId } = await backendService.pairDevice(phone(code));
+
+      const renamed = await backendService.renamePairedDevice(
+        deviceId,
+        "x".repeat(200),
+      );
+      expect(renamed.name).toHaveLength(80);
+    });
+
+    it("throws for an unknown or revoked device", async () => {
+      await expect(
+        backendService.renamePairedDevice("missing", "iPad"),
+      ).rejects.toThrow("Paired device not found");
+
+      const { code } = await backendService.createPairingCode(ENDPOINTS);
+      const { deviceId } = await backendService.pairDevice(phone(code));
+      await backendService.revokePairedDevice(deviceId);
+      await expect(
+        backendService.renamePairedDevice(deviceId, "iPad"),
+      ).rejects.toThrow("Paired device not found");
+    });
+  });
+
   describe("revokePairedDevice", () => {
     it("throws for an unknown device", async () => {
       await expect(backendService.revokePairedDevice("missing")).rejects.toThrow(

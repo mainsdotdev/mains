@@ -18,6 +18,17 @@ function rejected(ws: WebSocket): Promise<string> {
   });
 }
 
+/** Resolves once `check` holds — for server-side effects a client can't await. */
+function until(check: () => boolean): Promise<void> {
+  return new Promise((resolve) => {
+    const poll = setInterval(() => {
+      if (!check()) return;
+      clearInterval(poll);
+      resolve();
+    }, 5);
+  });
+}
+
 function nextMessage(ws: WebSocket): Promise<string> {
   return new Promise((resolve) =>
     ws.once("message", (data) => resolve(data.toString())),
@@ -170,6 +181,38 @@ describe("startWsHost — paired devices and POST /pair", () => {
 
     expect(client.readyState).toBe(WebSocket.OPEN);
     expect(await whoAmI(client)).toEqual({ clientId: expect.any(String) });
+  });
+
+  it("tracks which devices are connected and reports each change", async () => {
+    const changes: string[] = [];
+    let connectedAtChange: boolean[] = [];
+    host = await startWsHost({
+      port: 0,
+      host: "127.0.0.1",
+      token: SHARED_TOKEN,
+      verifyDeviceToken,
+      onDeviceConnectionChange: (deviceId) => {
+        changes.push(deviceId);
+        connectedAtChange.push(host!.connectedDeviceIds().has(deviceId));
+      },
+    });
+
+    const phone = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols(DEVICE_TOKEN));
+    client = new WebSocket(`ws://127.0.0.1:${host.port}`, buildSubprotocols(SHARED_TOKEN));
+    await Promise.all([opened(phone), opened(client), until(() => changes.length > 0)]);
+
+    // The owner's socket is no device.
+    expect([...host.connectedDeviceIds()]).toEqual(["d1"]);
+    expect(changes).toEqual(["d1"]);
+    expect(connectedAtChange).toEqual([true]);
+
+    connectedAtChange = [];
+    phone.close();
+    await until(() => changes.length > 1);
+
+    expect(host.connectedDeviceIds().size).toBe(0);
+    expect(changes).toEqual(["d1", "d1"]);
+    expect(connectedAtChange).toEqual([false]);
   });
 
   describe("commands (idempotent mutations)", () => {

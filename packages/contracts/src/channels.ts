@@ -197,7 +197,8 @@ export const CHANNELS = {
     createPairingCode: "localBackend:createPairingCode",
     listPairedDevices: "localBackend:listPairedDevices",
     revokePairedDevice: "localBackend:revokePairedDevice",
-    // main → renderer: a phone paired, connected (last-seen), or was revoked
+    renamePairedDevice: "localBackend:renamePairedDevice",
+    // main → renderer: a device paired, connected or disconnected, was renamed, or was revoked
     pairedDevicesChanged: "localBackend:pairedDevicesChanged",
   },
   imageProxy: {

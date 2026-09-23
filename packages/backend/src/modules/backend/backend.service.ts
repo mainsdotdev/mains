@@ -6,7 +6,7 @@ import { registeredChannels } from "../../ipc-kit";
 import { generateToken, hashToken, tokensMatch } from "../../ipc-kit/ws-auth";
 import { appSettingsService } from "../appSettings";
 import { backendRepo } from "./backend.repo";
-import { parsePairDeviceInput } from "./backend.validation";
+import { parseDeviceName, parsePairDeviceInput } from "./backend.validation";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import type {
   BackendDescriptor,
@@ -256,7 +256,7 @@ export const backendService = {
   async createPairingCode(endpoints: string[]): Promise<PairingCode> {
     if (endpoints.length === 0) {
       throw new Error(
-        "No address a phone could reach — turn on network access or Tailscale HTTPS first",
+        "No address a device could reach — turn on network access or Tailscale HTTPS first",
       );
     }
     const now = Date.now();
@@ -331,6 +331,20 @@ export const backendService = {
   async listPairedDevices(): Promise<PairedDevice[]> {
     const records = await backendRepo.listActivePairedDevices();
     return records.map(toPairedDevice);
+  },
+
+  /**
+   * Give a paired device the owner's name for it. iOS hands pairing only the
+   * model family ("iPad") and Android a model code, so this is how a list of
+   * two iPhones becomes one you can tell apart.
+   */
+  async renamePairedDevice(id: string, name: unknown): Promise<PairedDevice> {
+    const record = await backendRepo.renamePairedDevice(
+      id,
+      parseDeviceName(name),
+    );
+    if (!record) throw new Error("Paired device not found");
+    return toPairedDevice(record);
   },
 
   async revokePairedDevice(id: string): Promise<void> {

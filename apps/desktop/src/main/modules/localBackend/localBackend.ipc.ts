@@ -88,7 +88,7 @@ export function registerLocalBackendIpc() {
     },
   );
 
-  // Phone pairing rides on the exposure above, so it is local-only for the same
+  // Device pairing rides on the exposure above, so it is local-only for the same
   // reason: a remote client must not be able to mint codes or revoke devices.
   ipcMain.handle(CHANNELS.localBackend.createPairingCode, async () => {
     try {
@@ -109,6 +109,19 @@ export function registerLocalBackendIpc() {
       );
     }
   });
+
+  ipcMain.handle(
+    CHANNELS.localBackend.renamePairedDevice,
+    async (_e, id: string, name: string) => {
+      try {
+        return ok(await localBackendService.renamePairedDevice(id, name));
+      } catch (error) {
+        return fail(
+          error instanceof Error ? error.message : "Failed to rename device",
+        );
+      }
+    },
+  );
 
   ipcMain.handle(
     CHANNELS.localBackend.revokePairedDevice,
@@ -136,4 +149,5 @@ export function unregisterLocalBackendIpc() {
   ipcMain.removeHandler(CHANNELS.localBackend.createPairingCode);
   ipcMain.removeHandler(CHANNELS.localBackend.listPairedDevices);
   ipcMain.removeHandler(CHANNELS.localBackend.revokePairedDevice);
+  ipcMain.removeHandler(CHANNELS.localBackend.renamePairedDevice);
 }

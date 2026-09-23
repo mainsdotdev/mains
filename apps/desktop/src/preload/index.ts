@@ -254,13 +254,15 @@ const api = {
     // Mint a one-use browser login without putting the owner token in its URL.
     createWebLogin: (baseUrl: string) =>
       ipcRenderer.invoke(CHANNELS.localBackend.createWebLogin, baseUrl),
-    // Phone pairing — mint a QR code, list/revoke the phones that used one
+    // Device pairing — mint a QR code; list, rename, revoke the devices that used one
     createPairingCode: () =>
       ipcRenderer.invoke(CHANNELS.localBackend.createPairingCode),
     listPairedDevices: () =>
       ipcRenderer.invoke(CHANNELS.localBackend.listPairedDevices),
     revokePairedDevice: (id: string) =>
       ipcRenderer.invoke(CHANNELS.localBackend.revokePairedDevice, id),
+    renamePairedDevice: (id: string, name: string) =>
+      ipcRenderer.invoke(CHANNELS.localBackend.renamePairedDevice, id, name),
     onPairedDevicesChanged: (callback: () => void) => {
       const listener = () => callback();
       ipcRenderer.on(CHANNELS.localBackend.pairedDevicesChanged, listener);

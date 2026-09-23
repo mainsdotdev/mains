@@ -50,6 +50,20 @@ export const backendRepo = {
   },
 
   /** Revoke an active device. Returns false when no active row matched. */
+  /** Rename a device that is still paired; null when unknown or revoked. */
+  async renamePairedDevice(
+    id: string,
+    name: string,
+  ): Promise<PairedDeviceRecord | null> {
+    const db = getDb();
+    const [row] = await db
+      .update(pairedDevices)
+      .set({ name })
+      .where(and(eq(pairedDevices.id, id), isNull(pairedDevices.revokedAt)))
+      .returning();
+    return row ?? null;
+  },
+
   async revokePairedDevice(id: string): Promise<boolean> {
     const db = getDb();
     const result = await db

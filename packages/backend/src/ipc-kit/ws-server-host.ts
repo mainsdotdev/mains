@@ -54,6 +54,8 @@ export interface WsHost {
    * leaves an already-open socket working. Returns how many were dropped.
    */
   disconnectDevice(deviceId: string): number;
+  /** Paired devices holding at least one open socket right now. */
+  connectedDeviceIds(): Set<string>;
   close(): Promise<void>;
 }
 
@@ -109,6 +111,12 @@ export interface WsHostOptions {
   listPairedDevices?: () => Promise<unknown>;
   /** Revoke one device session for authenticated local administration. */
   revokePairedDevice?: (deviceId: string) => Promise<void>;
+  /**
+   * A paired device's socket opened or closed. Fires after
+   * {@link WsHost.connectedDeviceIds} already reflects the change, so a
+   * listener can read it straight away.
+   */
+  onDeviceConnectionChange?: (deviceId: string) => void;
   /**
    * Receipt store that makes a paired device's commands idempotent: a repeated
    * `commandId` replays the stored result instead of running the handler
@@ -716,7 +724,16 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
   const socketDevices = new WeakMap<WebSocket, string>();
   wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
     const device = authenticatedDevices.get(req);
-    if (device) socketDevices.set(socket, device.deviceId);
+    if (device) {
+      socketDevices.set(socket, device.deviceId);
+      // `ws` drops a socket from `wss.clients` in a close listener it adds
+      // before emitting "connection", so by the time this one runs the
+      // socket no longer counts as connected.
+      socket.once("close", () =>
+        options.onDeviceConnectionChange?.(device.deviceId),
+      );
+      options.onDeviceConnectionChange?.(device.deviceId);
+    }
     const webSessionExpiresAt = authenticatedWebSessions.get(req);
     if (webSessionExpiresAt !== undefined) {
       const expiryTimer = setTimeout(
@@ -751,6 +768,14 @@ export function startWsHost(options: WsHostOptions): Promise<WsHost> {
             dropped++;
           }
           return dropped;
+        },
+        connectedDeviceIds: () => {
+          const ids = new Set<string>();
+          for (const client of wss.clients) {
+            const deviceId = socketDevices.get(client);
+            if (deviceId && client.readyState === client.OPEN) ids.add(deviceId);
+          }
+          return ids;
         },
         close: () =>
           new Promise<void>((res) => {

@@ -63,6 +63,7 @@ export async function startStandaloneServer(
     dataDir,
     createPairingCode: (endpoints) => server.createPairingCode(endpoints),
     disconnectDevice: (deviceId) => server.disconnectDevice(deviceId),
+    connectedDeviceIds: () => server.connectedDeviceIds(),
     close() {
       if (closePromise) return closePromise;
       closePromise = server.close().finally(() => {

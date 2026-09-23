@@ -316,6 +316,7 @@ export async function startBackendServer(
     createPairingCode: (endpoints) =>
       backendService.createPairingCode(endpoints),
     disconnectDevice: (deviceId) => wsHost.disconnectDevice(deviceId),
+    connectedDeviceIds: () => wsHost.connectedDeviceIds(),
     close,
   };
 }
