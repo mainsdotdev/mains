@@ -5,12 +5,12 @@ import type { AppThemePreset, ThemePalette } from "./app-themes";
  * resolves and paints them). Each is a family with a palette per appearance
  * it supports; Mains, the stock theme, has `null` for both — index.css as is.
  *
- * Palettes use the themes' published colours where there are some. Three
+ * Palettes use the themes' published colours where there are some. Four
  * editor palettes set body text too light for UI copy, so their foreground is
  * the family's next-darker (or lighter) tone: Solarized light base02 for
- * base00, Solarized dark base1 for base0, Everforest light its dark bg1. Names
- * marked ≈ are brand or app themes with no published palette, read off their
- * interfaces.
+ * base00, Solarized dark base1 for base0, Everforest light its dark bg1,
+ * Kanagawa light lotusInk2 for lotusInk1. Names marked ≈ are brand or app
+ * themes with no published palette, read off their interfaces.
  *
  * `contrast` is what each palette takes to keep secondary text at WCAG AA;
  * accents that sit under AA on their background are fitted when resolved
@@ -78,6 +78,14 @@ export const APP_THEME_PRESETS: readonly AppThemePreset[] = [
     },
   },
   {
+    id: "flexoki",
+    name: "Flexoki",
+    palettes: {
+      light: palette("#fffcf0", "#100f0f", "#205ea6"),
+      dark: palette("#100f0f", "#cecdc3", "#4385be"),
+    },
+  },
+  {
     id: "github",
     name: "GitHub",
     palettes: {
@@ -91,6 +99,15 @@ export const APP_THEME_PRESETS: readonly AppThemePreset[] = [
     palettes: {
       light: palette("#fbf1c7", "#3c3836", "#076678", 0.6),
       dark: palette("#282828", "#ebdbb2", "#83a598"),
+    },
+  },
+  {
+    // Lotus light, Wave dark.
+    id: "kanagawa",
+    name: "Kanagawa",
+    palettes: {
+      light: palette("#f2ecbc", "#43436c", "#4d699b", 0.8),
+      dark: palette("#1f1f28", "#dcd7ba", "#7e9cd8"),
     },
   },
   {
@@ -127,7 +144,20 @@ export const APP_THEME_PRESETS: readonly AppThemePreset[] = [
   {
     id: "night-owl",
     name: "Night Owl",
-    palettes: { dark: palette("#011627", "#d6deeb", "#82aaff") },
+    palettes: {
+      // Light Owl.
+      light: palette("#fbfbfb", "#403f53", "#4876d6", 0.55),
+      dark: palette("#011627", "#d6deeb", "#82aaff"),
+    },
+  },
+  {
+    // Dayfox light, Nightfox dark.
+    id: "nightfox",
+    name: "Nightfox",
+    palettes: {
+      light: palette("#f6f2ee", "#3d2b5a", "#2848a9", 0.4),
+      dark: palette("#192330", "#cdcecf", "#719cd6"),
+    },
   },
   {
     id: "nord",
