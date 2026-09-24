@@ -158,6 +158,15 @@ export function TurnChangesCard({
   // locally until the next load brings `undoneAt` back from the row.
   const [undoneLocally, setUndoneLocally] = useState(false);
   const isUndone = Boolean(changes.undoneAt) || undoneLocally;
+  // A parallel run wrote some of these files too; undoing would take its
+  // hunks with ours, so the backend refuses.
+  const hasSharedFiles = files.some((file) => file.shared);
+  let undoTitle = "Undo this turn's file changes";
+  if (hasSharedFiles) {
+    undoTitle = "A parallel run changed some of these files too, so this turn can't be undone";
+  } else if (!canUndo) {
+    undoTitle = "Undo is available when the run finishes";
+  }
 
   const [undoChanges, { isLoading: isUndoing }] =
     useUndoRunTurnChangesMutation();
@@ -278,17 +287,14 @@ export function TurnChangesCard({
             {binarySummary && <span>{binarySummary}</span>}
             {isUndone && <span>Undone</span>}
             {!isUndone && changes.truncated && <span>Too large to undo</span>}
+            {!isUndone && hasSharedFiles && <span>Shared with a parallel run</span>}
           </Text>
         </div>
         {!isUndone && (
           <Button
             onClick={handleUndo}
-            disabled={isUndoing || !canUndo}
-            title={
-              canUndo
-                ? "Undo this turn's file changes"
-                : "Undo is available when the run finishes"
-            }
+            disabled={isUndoing || !canUndo || hasSharedFiles}
+            title={undoTitle}
             className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-s text-primary-700 hover:bg-primary-100 dark:text-primary-300 dark:hover:bg-primary-900"
           >
             Undo
@@ -328,6 +334,16 @@ export function TurnChangesCard({
                     <span className="opacity-60">{dir}</span>
                     {name}
                   </Text>
+                  {file.shared && (
+                    <Text
+                      as="span"
+                      size="xs"
+                      tone="subtle"
+                      title="A parallel run may have changed this file too"
+                    >
+                      shared
+                    </Text>
+                  )}
                   {file.binary ? (
                     <Text as="span" size="xs" tone="subtle">
                       {isImagePath(file.path) ? "image" : "binary"}

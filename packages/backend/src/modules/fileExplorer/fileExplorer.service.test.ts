@@ -20,6 +20,7 @@ vi.mock("./fileExplorer.roots", () => ({
 }));
 
 import { fileExplorerService } from "./fileExplorer.service";
+import { worktreeWrites } from "../git";
 
 let tmpDir: string;
 
@@ -410,6 +411,24 @@ describe("fileExplorerService", () => {
   });
 
   describe("writeFileText", () => {
+    it("puts a save on the worktree's write ledger while a run is live", async () => {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: tmpDir });
+      await fs.mkdir(path.join(tmpDir, "src"));
+      const filePath = path.join(tmpDir, "src", "code.ts");
+      await fs.writeFile(filePath, "const x = 1;");
+      const topLevel = await fs.realpath(tmpDir);
+      const since = Date.now();
+      worktreeWrites.open(topLevel, "live-run", since);
+      try {
+        await fileExplorerService.writeFileText({ filePath, content: "const x = 2;" });
+        expect(worktreeWrites.peersSince(topLevel, "live-run", since).paths).toEqual(
+          new Set(["src/code.ts"]),
+        );
+      } finally {
+        worktreeWrites.close(topLevel, "live-run", Date.now());
+      }
+    });
+
     it("overwrites an existing file and returns the new mtime", async () => {
       const filePath = path.join(tmpDir, "code.ts");
       await fs.writeFile(filePath, "const x = 1;");

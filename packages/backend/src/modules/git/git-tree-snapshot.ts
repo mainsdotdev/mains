@@ -69,6 +69,21 @@ async function repoTopLevel(rootPath: string): Promise<string> {
   return (await openGit(rootPath).revparse(["--show-toplevel"])).trim();
 }
 
+export interface WorktreeLocation {
+  /** The worktree's root — what every snapshot and tree diff path is relative to. */
+  topLevel: string;
+  /** Where `rootPath` sits inside it: "" at the root, else "sub/dir/". */
+  prefix: string;
+}
+
+/** Which worktree `rootPath` belongs to, and where in it. */
+export async function locateWorktree(rootPath: string): Promise<WorktreeLocation> {
+  const [topLevel, prefix = ""] = (
+    await openGit(rootPath).raw(["rev-parse", "--show-toplevel", "--show-prefix"])
+  ).split("\n");
+  return { topLevel: topLevel.trim(), prefix: prefix.trim() };
+}
+
 function splitNul(raw: string): string[] {
   const tokens = raw.split("\0");
   if (tokens[tokens.length - 1] === "") tokens.pop();
@@ -148,7 +163,15 @@ export async function snapshotWorkingTree(rootPath: string): Promise<string> {
   return withScratchDir(async (dir) => {
     const scratchIndex = path.join(dir, "index");
     // A repo that has never staged anything has no index file yet.
-    if (fs.existsSync(indexPath)) fs.copyFileSync(indexPath, scratchIndex);
+    if (fs.existsSync(indexPath)) {
+      fs.copyFileSync(indexPath, scratchIndex);
+      // Keep the index's own mtime. Git trusts a cached stat unless the index
+      // was written no later than the file changed, and judges that by the
+      // index file's mtime — a fresh copy's "now" would pass off a same-size
+      // edit made in the same second as the index as unchanged.
+      const { atime, mtime } = fs.statSync(indexPath);
+      fs.utimesSync(scratchIndex, atime, mtime);
+    }
     await gitWithIndex(topLevel, scratchIndex, ["add", "--all", "--", "."]);
     return (await gitWithIndex(topLevel, scratchIndex, ["write-tree"])).trim();
   });
@@ -168,17 +191,28 @@ function toStatus(code: string): TreeDiffStatus {
   }
 }
 
-/** Everything that changed between two tree objects. */
+/**
+ * Everything that changed between two tree objects — or, given `paths`
+ * (relative to the worktree root), only what changed at those paths. Include
+ * both sides of a move, or it diffs as a lone add or delete.
+ */
 export async function diffTrees(
   rootPath: string,
   fromTree: string,
   toTree: string,
+  paths?: string[],
 ): Promise<TreeDiff> {
+  // A bare `--` would mean "every path", the opposite of what was asked.
+  if (paths?.length === 0) {
+    return { diffText: "", files: [], additions: 0, deletions: 0, truncated: false };
+  }
   const git = openGit(await repoTopLevel(rootPath));
+  // Literal pathspecs: a file named `*.ts` or `:x` must match only itself.
+  const pathspec = paths ? ["--", ...paths.map((p) => `:(literal)${p}`)] : [];
   const [patch, nameStatus, numstat] = await Promise.all([
-    git.raw([...DIFF_FLAGS, "--binary", fromTree, toTree]),
-    git.raw([...DIFF_FLAGS, "--name-status", "-z", fromTree, toTree]),
-    git.raw([...DIFF_FLAGS, "--numstat", "-z", fromTree, toTree]),
+    git.raw([...DIFF_FLAGS, "--binary", fromTree, toTree, ...pathspec]),
+    git.raw([...DIFF_FLAGS, "--name-status", "-z", fromTree, toTree, ...pathspec]),
+    git.raw([...DIFF_FLAGS, "--numstat", "-z", fromTree, toTree, ...pathspec]),
   ]);
 
   // --numstat -z: "add\tdel\tpath\0", or for a move "add\tdel\t\0old\0new\0".
@@ -264,6 +298,54 @@ export async function canApplyPatch(
       return false;
     }
   });
+}
+
+/**
+ * Every path `git diff` would list between two commits — both sides of a move
+ * — relative to the worktree root: what moving HEAD from one to the other
+ * rewrote on disk.
+ */
+export async function changedPaths(
+  rootPath: string,
+  fromRef: string,
+  toRef: string,
+): Promise<string[]> {
+  return splitNul(
+    await openGit(rootPath).raw([
+      "diff",
+      "--name-only",
+      "--no-renames",
+      "--no-relative",
+      "--no-ext-diff",
+      "-z",
+      fromRef,
+      toRef,
+    ]),
+  );
+}
+
+/** Every path a patch touches — both sides of a move — as the patch names them. */
+export async function patchPaths(rootPath: string, patch: string): Promise<string[]> {
+  const git = openGit(await repoTopLevel(rootPath));
+  // `apply --numstat` names only the side a move ends on, so read the patch
+  // both ways round.
+  const [forward, reverse] = await withPatchFile(patch, (patchFile) =>
+    Promise.all([
+      git.raw(["apply", "--numstat", "-z", patchFile]),
+      git.raw(["apply", "--numstat", "-z", "-R", patchFile]),
+    ]),
+  );
+  // "add\tdel\tpath\0", or in diff's own form for a move "add\tdel\t\0old\0new\0".
+  const paths = new Set<string>();
+  for (const raw of [forward, reverse]) {
+    const tokens = splitNul(raw);
+    for (let i = 0; i < tokens.length; i++) {
+      const inlinePath = tokens[i].split("\t")[2];
+      if (inlinePath) paths.add(inlinePath);
+      else for (const moved of [tokens[++i], tokens[++i]]) if (moved) paths.add(moved);
+    }
+  }
+  return [...paths];
 }
 
 /**

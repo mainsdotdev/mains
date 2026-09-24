@@ -1628,7 +1628,8 @@ export const runsService = {
 
   /**
    * Reverse-apply one turn's stored patch to its workspace. Refused while the
-   * run is live (the agent may be editing the same files) and when any file
+   * run is live (the agent may be editing the same files), when a parallel
+   * run wrote one of its files during the turn (`shared`), and when any file
    * the turn touched has moved on since — `git apply --check` decides that,
    * and a failed check writes nothing. See CONTEXT.md "turn changes".
    */
@@ -1647,6 +1648,12 @@ export const runsService = {
     if (changes.truncated) {
       throw new Error(
         "This turn's changes were too large to store in full, so they can't be undone.",
+      );
+    }
+    // Reverse-applying would take the parallel run's edits to these files too.
+    if (changes.files.some((f) => f.shared)) {
+      throw new Error(
+        "A parallel run changed some of these files too, so this turn can't be undone automatically.",
       );
     }
     const workspace = run.workspaceId

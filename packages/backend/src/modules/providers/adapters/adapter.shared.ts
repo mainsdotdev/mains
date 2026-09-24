@@ -53,6 +53,8 @@ export const FILE_MODIFYING_TOOLS = new Set([
   "apply_patch",
   "apply_diff",
   "patch",
+  // Codex and Cursor report file deletions as their own tool.
+  "Delete",
   "Bash",
   "bash",
   "shell",
@@ -60,6 +62,83 @@ export const FILE_MODIFYING_TOOLS = new Set([
 
 export function couldModifyFiles(toolName: string): boolean {
   return FILE_MODIFYING_TOOLS.has(toolName);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tool writes — which files a tool call says it wrote. Turn changes use it to
+// keep a parallel run's edits in the same worktree off this run's card (see
+// CONTEXT.md "turn changes"). Names are matched lowercased: providers disagree
+// on case (`Edit` vs copilot's `edit`).
+// ─────────────────────────────────────────────────────────────
+
+/** Tools whose input names the one file they write. */
+const PATH_WRITING_TOOLS = new Set([
+  "write",
+  "edit",
+  "multiedit",
+  "notebookedit",
+  "writeifempty",
+  "replace",
+  "write_file",
+  "edit_file",
+  "create_file",
+  "create",
+  "str_replace",
+  "str_replace_editor",
+  "delete",
+  "delete_file",
+]);
+/** Tools that write whatever their patch lists. */
+const PATCH_TOOLS = new Set(["apply_patch", "apply_diff", "patch"]);
+/** Tools that can write any file without naming it. */
+const SHELL_TOOLS = new Set(["bash", "shell"]);
+const PATH_INPUT_KEYS = ["file_path", "path", "notebook_path", "filePath"];
+/** `*** Add File: x` / `*** Update File: x` / `*** Delete File: x` / `*** Move to: x`. */
+const PATCH_ENVELOPE_PATH = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm;
+
+export interface ToolWrites {
+  /** Files the call names, as the tool gave them: absolute or cwd-relative. */
+  paths: string[];
+  /** The call could have written files it does not name — a shell command. */
+  unnamed: boolean;
+}
+
+function namedInputPath(input: Record<string, unknown> | undefined): string | null {
+  for (const key of PATH_INPUT_KEYS) {
+    const value = input?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+export function toolWrites(toolName: string, input: unknown): ToolWrites {
+  const name = toolName.toLowerCase();
+  if (SHELL_TOOLS.has(name)) return { paths: [], unnamed: true };
+  const record =
+    input && typeof input === "object" ? (input as Record<string, unknown>) : undefined;
+
+  let paths: string[];
+  if (PATH_WRITING_TOOLS.has(name)) {
+    // str_replace_editor also reads.
+    if (record?.command === "view") return { paths: [], unnamed: false };
+    const named = namedInputPath(record);
+    paths = named ? [named] : [];
+  } else if (PATCH_TOOLS.has(name)) {
+    // Copilot's apply_patch input is the bare `*** Begin Patch` envelope.
+    const envelope =
+      typeof input === "string"
+        ? input
+        : typeof record?.patch === "string"
+          ? record.patch
+          : "";
+    paths = [...envelope.matchAll(PATCH_ENVELOPE_PATH)].map((m) => m[1].trim());
+    const named = namedInputPath(record);
+    if (named) paths.push(named);
+  } else {
+    return { paths: [], unnamed: false };
+  }
+  // A writing tool that names nothing is as opaque as a shell.
+  return paths.length > 0 ? { paths, unnamed: false } : { paths: [], unnamed: true };
 }
 
 export const DEFAULT_ALLOWED_TOOLS = [

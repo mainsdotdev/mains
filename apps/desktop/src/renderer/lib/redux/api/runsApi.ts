@@ -216,6 +216,8 @@ export interface TurnFileChange {
   additions: number;
   deletions: number;
   binary: boolean;
+  /** A parallel run in the same worktree may have written this file too; the turn can't be undone. */
+  shared?: boolean;
 }
 
 /** A turn's changes as the transcript card shows them (see CONTEXT.md "turn changes"). */

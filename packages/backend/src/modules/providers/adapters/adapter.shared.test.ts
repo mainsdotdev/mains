@@ -17,6 +17,7 @@ import {
   resolveCatalogDefaultId,
   DEFAULT_ALLOWED_TOOLS,
   ALLOWED_TOOLS_SET,
+  toolWrites,
 } from "./adapter.shared";
 
 describe("saveAttachments", () => {
@@ -429,5 +430,55 @@ describe("emitUserPromptArtifact", () => {
     const event = onEvent.mock.calls[0][0];
     expect(event.metadata.issues).toHaveLength(1);
     expect(event.metadata.files).toHaveLength(1);
+  });
+});
+
+describe("toolWrites", () => {
+  it("names the file an edit tool wrote, whatever the provider calls it", () => {
+    expect(toolWrites("Edit", { file_path: "/repo/a.ts" })).toEqual({
+      paths: ["/repo/a.ts"],
+      unnamed: false,
+    });
+    expect(toolWrites("NotebookEdit", { notebook_path: "nb.ipynb" }).paths).toEqual([
+      "nb.ipynb",
+    ]);
+    // Codex fileChange rows and copilot's lowercase tools carry `path`.
+    expect(toolWrites("Delete", { path: "gone.ts" }).paths).toEqual(["gone.ts"]);
+    expect(toolWrites("create", { path: "new.ts" }).paths).toEqual(["new.ts"]);
+  });
+
+  it("reads every file out of an apply_patch envelope", () => {
+    const envelope = [
+      "*** Begin Patch",
+      "*** Update File: src/a.ts",
+      "@@",
+      "-old",
+      "+new",
+      "*** Move to: src/b.ts",
+      "*** Add File: src/c.ts",
+      "+hello",
+      "*** Delete File: src/d.ts",
+      "*** End Patch",
+    ].join("\n");
+    expect(toolWrites("apply_patch", envelope)).toEqual({
+      paths: ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"],
+      unnamed: false,
+    });
+  });
+
+  it("treats a shell, or a writing tool that names nothing, as unnamed writes", () => {
+    expect(toolWrites("Bash", { command: "npm run format" })).toEqual({
+      paths: [],
+      unnamed: true,
+    });
+    expect(toolWrites("apply_patch", {})).toEqual({ paths: [], unnamed: true });
+    expect(toolWrites("Write", {})).toEqual({ paths: [], unnamed: true });
+  });
+
+  it("reports nothing for tools that only read", () => {
+    const none = { paths: [], unnamed: false };
+    expect(toolWrites("Read", { file_path: "a.ts" })).toEqual(none);
+    expect(toolWrites("Grep", { pattern: "x" })).toEqual(none);
+    expect(toolWrites("str_replace_editor", { command: "view", path: "a.ts" })).toEqual(none);
   });
 });

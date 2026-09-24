@@ -22,4 +22,12 @@ export type {
   TreeDiffFile,
   TreeDiffStatus,
   ApplyPatchOptions,
+  WorktreeLocation,
 } from "./git-tree-snapshot";
+export {
+  worktreeWrites,
+  toWorktreePath,
+  noteAppWrites,
+  APP_WRITER,
+  type PeerWrites,
+} from "./worktree-writes";

@@ -1968,6 +1968,31 @@ describe("runsService", () => {
     });
   });
 
+  describe("undoTurnChanges", () => {
+    it("refuses a turn whose files a parallel run also wrote", async () => {
+      createWorkspace(db, { id: "w1", rootPath: "/tmp/w1" });
+      createRun(db, { id: "r1", workspaceId: "w1", status: "succeeded" });
+      const turn = createRunTurn(db, { runId: "r1", turnIndex: 0 });
+      await runsRepo.insertTurnChanges({
+        runId: "r1",
+        turnId: turn.id,
+        diffText: "diff --git a/a.ts b/a.ts\n",
+        files: [
+          { path: "a.ts", status: "modified", additions: 1, deletions: 1, binary: false, shared: true },
+        ],
+        additions: 1,
+        deletions: 1,
+        truncated: false,
+      });
+
+      await expect(runsService.undoTurnChanges("r1", turn.id)).rejects.toThrow(
+        /A parallel run changed some of these files too/,
+      );
+      const stored = await runsRepo.findTurnChanges("r1", turn.id);
+      expect(stored?.undoneAt).toBeNull();
+    });
+  });
+
   // ─────────────────────────────────────────────────────────────
   // executeRun
   // ─────────────────────────────────────────────────────────────

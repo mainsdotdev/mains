@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, onTestFinished, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -31,6 +31,7 @@ import {
   buildPerFileDiffHashes,
   parsePerFileDiffStats,
 } from "./git-snapshot";
+import { worktreeWrites } from "./worktree-writes";
 
 let sandbox: string;
 let restoreRuntime: () => void;
@@ -57,6 +58,19 @@ function makeRepo(): string {
 
 function write(repo: string, file: string, content: string): void {
   fs.writeFileSync(path.join(repo, file), content);
+}
+
+/**
+ * Stand in for a live run in the repo's worktree, so the app's own writes get
+ * recorded; returns the files recorded since. Closed when the test ends.
+ */
+function watchWorktree(repo: string): () => Set<string> {
+  const topLevel = fs.realpathSync(repo);
+  const runId = `watcher-${++repoCounter}`;
+  const since = Date.now();
+  worktreeWrites.open(topLevel, runId, since);
+  onTestFinished(() => worktreeWrites.close(topLevel, runId, Date.now()));
+  return () => worktreeWrites.peersSince(topLevel, runId, since).paths;
 }
 
 beforeAll(() => {
@@ -429,6 +443,20 @@ describe("pullFastForward", () => {
 
     expect(result.received).toBe(2);
     expect(fs.existsSync(path.join(repo, "remote-2.txt"))).toBe(true);
+  });
+
+  it("records the files that arrived while a run is live", async () => {
+    const { repo, other } = makeTrackingPair();
+    write(other, "remote-1.txt", "1\n");
+    write(other, "README.md", "# changed upstream\n");
+    git(other, "add", ".");
+    git(other, "commit", "-m", "remote");
+    git(other, "push", "origin", "main");
+    const written = watchWorktree(repo);
+
+    await gitService.pullFastForward(repo);
+
+    expect(written()).toEqual(new Set(["remote-1.txt", "README.md"]));
   });
 
   // The whole reason for --ff-only: a refusal leaves the repo untouched
@@ -898,6 +926,30 @@ describe("snapshotWorkingTree", () => {
     expect(git(repo, "status", "--porcelain")).toContain("?? fresh.ts");
   });
 
+  // Git trusts an index entry whose stat still matches the file, unless the
+  // index was written no later than the file last changed ("racily clean") —
+  // then it re-reads the content. The snapshot runs on a copy of the index, so
+  // that check has to see the real index's time, not the copy's.
+  it("sees a same-size edit made in the second the index was written", async () => {
+    const repo = makeTurnRepo();
+    // Take ctime out of the comparison: only mtime can be pinned from here.
+    git(repo, "config", "core.trustctime", "false");
+    const keep = path.join(repo, "keep.ts");
+    const indexFile = path.join(repo, ".git", "index");
+    const second = new Date((Math.floor(Date.now() / 1000) - 100) * 1000);
+    fs.utimesSync(keep, second, second);
+    git(repo, "update-index", "--refresh");
+    // The index was written in the same second the file last changed.
+    fs.utimesSync(indexFile, second, second);
+
+    const before = await gitService.snapshotWorkingTree(repo);
+    write(repo, "keep.ts", "a\nB\nc\n");
+    fs.utimesSync(keep, second, second);
+    const after = await gitService.snapshotWorkingTree(repo);
+
+    expect(after).not.toBe(before);
+  });
+
   it("returns the same tree when nothing changed", async () => {
     const repo = makeTurnRepo();
     write(repo, "dirty.ts", "carried over\n");
@@ -968,6 +1020,58 @@ describe("diffTrees", () => {
     const diff = await gitService.diffTrees(repo, before, after);
     expect(diff.files.map((f) => f.path)).toEqual(["belgeler/özet.md"]);
   });
+
+  it("narrows to the given paths, taken literally, and keeps a move whole", async () => {
+    const repo = makeTurnRepo();
+    const before = await gitService.snapshotWorkingTree(repo);
+    makeTurnEdits(repo);
+    write(repo, "*.ts", "not a glob\n");
+    const after = await gitService.snapshotWorkingTree(repo);
+
+    const diff = await gitService.diffTrees(repo, before, after, [
+      "keep.ts",
+      "moved.ts",
+      "move-me.ts",
+      "*.ts",
+    ]);
+    expect(diff.files.map((f) => f.path).sort()).toEqual(["*.ts", "keep.ts", "moved.ts"]);
+    expect(diff.files.find((f) => f.path === "moved.ts")).toMatchObject({
+      status: "renamed",
+      oldPath: "move-me.ts",
+    });
+    expect(diff.diffText).not.toContain("new.ts");
+    expect(diff.additions).toBe(2);
+    expect(diff.deletions).toBe(1);
+
+    // The narrowed patch still undoes just its own files.
+    await gitService.applyPatch(repo, diff.diffText, { reverse: true });
+    expect(fs.readFileSync(path.join(repo, "keep.ts"), "utf-8")).toBe("a\nb\nc\n");
+    expect(fs.existsSync(path.join(repo, "new.ts"))).toBe(true);
+  });
+
+  it("returns nothing for an empty path list rather than everything", async () => {
+    const repo = makeTurnRepo();
+    const before = await gitService.snapshotWorkingTree(repo);
+    makeTurnEdits(repo);
+    const after = await gitService.snapshotWorkingTree(repo);
+
+    const diff = await gitService.diffTrees(repo, before, after, []);
+    expect(diff.files).toEqual([]);
+    expect(diff.diffText).toBe("");
+  });
+});
+
+describe("locateWorktree", () => {
+  it("reports the worktree root and where a subdirectory sits in it", async () => {
+    const repo = makeRepo();
+    fs.mkdirSync(path.join(repo, "apps", "desktop"), { recursive: true });
+
+    const atRoot = await gitService.locateWorktree(repo);
+    expect(atRoot).toEqual({ topLevel: fs.realpathSync(repo), prefix: "" });
+
+    const inSubdir = await gitService.locateWorktree(path.join(repo, "apps", "desktop"));
+    expect(inSubdir).toEqual({ topLevel: fs.realpathSync(repo), prefix: "apps/desktop/" });
+  });
 });
 
 describe("canApplyPatch / applyPatch", () => {
@@ -1006,5 +1110,65 @@ describe("canApplyPatch / applyPatch", () => {
     // Atomic: the files the turn touched that still matched are untouched too.
     expect(fs.existsSync(path.join(repo, "new.ts"))).toBe(true);
     expect(fs.readFileSync(path.join(repo, "keep.ts"), "utf-8")).toBe("a\nZ\nc\n");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// The app's own writes on the worktree write ledger
+// ─────────────────────────────────────────────────────────────
+
+describe("worktree write ledger", () => {
+  it("records the files a branch switch rewrote", async () => {
+    const repo = makeRepo();
+    git(repo, "checkout", "-b", "feature");
+    write(repo, "feature.txt", "f\n");
+    fs.mkdirSync(path.join(repo, "src"));
+    write(repo, "src/only-here.ts", "x\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "feature");
+    git(repo, "checkout", "main");
+    const written = watchWorktree(repo);
+
+    await gitService.checkoutBranch(repo, "feature");
+
+    expect(written()).toEqual(new Set(["feature.txt", "src/only-here.ts"]));
+  });
+
+  it("records discarded files relative to the worktree root", async () => {
+    const repo = makeRepo();
+    fs.mkdirSync(path.join(repo, "pkg"));
+    write(repo, "pkg/new.txt", "new\n");
+    write(repo, "README.md", "# dirty\n");
+    const written = watchWorktree(repo);
+
+    await gitService.discardPaths(path.join(repo, "pkg"), ["new.txt"]);
+    await gitService.discardPaths(repo, ["README.md"]);
+
+    expect(written()).toEqual(new Set(["pkg/new.txt", "README.md"]));
+  });
+
+  it("records every file an applied patch touched, both sides of a move", async () => {
+    const repo = makeTurnRepo();
+    const before = await gitService.snapshotWorkingTree(repo);
+    makeTurnEdits(repo);
+    const after = await gitService.snapshotWorkingTree(repo);
+    const { diffText } = await gitService.diffTrees(repo, before, after);
+    const written = watchWorktree(repo);
+
+    await gitService.applyPatch(repo, diffText, { reverse: true });
+
+    expect(written()).toEqual(
+      new Set(["keep.ts", "gone.ts", "move-me.ts", "moved.ts", "new.ts", "pixel.bin"]),
+    );
+  });
+
+  it("records nothing while no run is live", async () => {
+    const repo = makeRepo();
+    write(repo, "README.md", "# dirty\n");
+    await gitService.discardPaths(repo, ["README.md"]);
+
+    // A session that starts afterwards finds a clean slate.
+    const written = watchWorktree(repo);
+    expect(written()).toEqual(new Set());
   });
 });

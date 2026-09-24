@@ -20,7 +20,7 @@ import {
   DEFAULT_READ_DIRECTORY_DEPTH,
   DEFAULT_SEARCH_FILES_MAX,
 } from "./fileExplorer.dto";
-import { gitService } from "../git";
+import { gitService, noteAppWrites, toWorktreePath } from "../git";
 import { assertWithinContentRoots } from "./fileExplorer.roots";
 
 
@@ -565,6 +565,9 @@ export const fileExplorerService = {
 
       await fs.writeFile(realPath, content, "utf-8");
       const after = await fs.stat(realPath);
+      // A save while a run is live must not land on its turn changes.
+      const dir = path.dirname(realPath);
+      await noteAppWrites(dir, (location) => [toWorktreePath(location, dir, realPath)]);
       return { size: byteLength, mtimeMs: after.mtimeMs };
     } catch (error) {
       // Domain messages pass through; raw fs errors get mapped.
