@@ -37,6 +37,7 @@
     "@github/copilot-sdk": "1.0.11",
     "@linear/sdk": "94.0.0",
     "@octokit/rest": "22.0.1",
+    "@vscode/ripgrep": "1.18.0",
     "better-sqlite3": "13.0.3",
     "drizzle-orm": "0.45.2",
     "nanoid": "6.0.1",

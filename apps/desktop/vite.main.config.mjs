@@ -52,6 +52,11 @@ export default defineConfig(({ command }) => {
         '@github/copilot',
         '@github/copilot-darwin-arm64',
         '@github/copilot-darwin-x64',
+        // Content search's ripgrep: the package resolves its per-arch binary
+        // package at runtime, so neither can be inlined into main.js.
+        '@vscode/ripgrep',
+        '@vscode/ripgrep-darwin-arm64',
+        '@vscode/ripgrep-darwin-x64',
         'vscode-jsonrpc',
         'zod',
       ],
@@ -77,8 +82,9 @@ export default defineConfig(({ command }) => {
         ];
 
         // Scoped packages need their parent @scope directory created.
-        // Both darwin copilot binary packages are listed: npm only installs the
-        // host-arch one, and CI force-installs the cross-build target's variant.
+        // Both darwin variants of each binary package (copilot, claude, ripgrep)
+        // are listed: npm only installs the host-arch one, and CI force-installs
+        // the cross-build target's variant.
         // Whichever variants exist get copied; forge's packageAfterPrune hook
         // strips the non-target one from the final bundle.
         const scopedModulesToCopy = [
@@ -89,6 +95,9 @@ export default defineConfig(({ command }) => {
           '@github/copilot',
           '@github/copilot-darwin-arm64',
           '@github/copilot-darwin-x64',
+          '@vscode/ripgrep',
+          '@vscode/ripgrep-darwin-arm64',
+          '@vscode/ripgrep-darwin-x64',
         ];
 
         for (const mod of modulesToCopy) {

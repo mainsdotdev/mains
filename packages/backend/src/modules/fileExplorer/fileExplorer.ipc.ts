@@ -2,6 +2,7 @@ import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { fileExplorerService } from "./fileExplorer.service";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type {
   ReadDirectoryOptions,
   ReadFileTextOptions,
@@ -52,6 +53,11 @@ export function registerFileExplorerIpc(): void {
   );
 
   ipcMain.handle(
+    CHANNELS.fileExplorer.searchText,
+    handle((options: TextSearchQuery) => fileExplorerService.searchText(options)),
+  );
+
+  ipcMain.handle(
     CHANNELS.fileExplorer.writeFileText,
     handle((options: WriteFileTextOptions) => fileExplorerService.writeFileText(options)),
   );
@@ -66,6 +72,7 @@ export function unregisterFileExplorerIpc(): void {
     CHANNELS.fileExplorer.readFileText,
     CHANNELS.fileExplorer.listDir,
     CHANNELS.fileExplorer.searchFiles,
+    CHANNELS.fileExplorer.searchText,
     CHANNELS.fileExplorer.writeFileText,
   ].forEach((channel) => ipcMain.removeHandler(channel));
 }

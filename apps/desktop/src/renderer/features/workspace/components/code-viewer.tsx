@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAppDispatch } from "@/lib/redux/hooks";
+import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import { File, EditProvider } from "@pierre/diffs/react";
 import type { EditorFactory, FileContents } from "@pierre/diffs/react";
@@ -7,10 +7,13 @@ import { Editor, type EditorOptions } from "@pierre/diffs/edit";
 import {
   setSelectedFileContent,
   addContextItem,
+  clearEditorReveal,
+  type EditorRevealTarget,
 } from "@/lib/redux/slices/workspaceSlice";
 import { useResyncWorkspaceDiffMutation } from "@/lib/redux/api";
 import { DIFF_TYPOGRAPHY_STYLE, diffSurfaceOptions } from "@/lib/diff-style";
 import { useDiffHighlighterReady } from "@/lib/diff-highlighter";
+import { debounceEditorSearchInput } from "@/lib/editor-search-debounce";
 import { Button, Text } from "@/components/ui";
 import type {
   FileContentResponse,
@@ -201,6 +204,79 @@ export function CodeViewer({
     [],
   );
 
+  // A content-search hit to select. It can arrive before the editor exists
+  // (the file is still loading) or while it is open (another hit in the same
+  // file), so it is applied from onAttach and on change, whichever is later.
+  const revealTarget = useAppSelector(
+    (state) => state.workspace.editorRevealTarget,
+  );
+  const editorRef = useRef<Editor<"file", undefined, undefined> | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // The hit this mount revealed. The editor can attach again within one mount
+  // (StrictMode's double mount in development does it), and a fresh attach
+  // starts without a selection, so the hit is selected again.
+  const revealedRef = useRef<EditorRevealTarget | null>(null);
+
+  const selectHit = useCallback(
+    (editor: Editor<"file", undefined, undefined>, target: EditorRevealTarget) => {
+      const line = target.line - 1;
+      const previousFocus = document.activeElement;
+      try {
+        editor.setSelections([
+          {
+            start: { line, character: target.start },
+            end: { line, character: target.end },
+            direction: "forward",
+          },
+        ]);
+        // setSelections focuses the editor. A hit opened from the keyboard
+        // left focus in the search box — hand it back so the arrow keys keep
+        // walking results. A mouse click left it on the body; the editor
+        // keeps it then.
+        if (previousFocus instanceof HTMLElement && previousFocus !== document.body) {
+          previousFocus.focus({ preventScroll: true });
+        }
+        // It also scrolls only as far as the nearest edge, where the composer
+        // can cover the line; centre it instead. Vertically only — a line row
+        // is as wide as the longest line, so scrollIntoView would also shift
+        // the code sideways.
+        const viewport = scrollRef.current;
+        const lineRow = viewport
+          ?.querySelector("diffs-container")
+          ?.shadowRoot?.querySelector(`[data-line="${target.line}"]`);
+        if (viewport && lineRow) {
+          const viewportRect = viewport.getBoundingClientRect();
+          const lineRect = lineRow.getBoundingClientRect();
+          viewport.scrollTop +=
+            lineRect.top - viewportRect.top - (viewportRect.height - lineRect.height) / 2;
+        }
+      } catch (err) {
+        console.warn("[CodeViewer] Could not reveal search hit:", err);
+      }
+    },
+    [],
+  );
+
+  const applyReveal = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor || !revealTarget || revealTarget.fullPath !== filePath) return;
+    selectHit(editor, revealTarget);
+    revealedRef.current = revealTarget;
+    dispatch(clearEditorReveal());
+  }, [revealTarget, filePath, selectHit, dispatch]);
+  const applyRevealRef = useRef(applyReveal);
+  useEffect(() => {
+    applyRevealRef.current = applyReveal;
+    applyReveal();
+  }, [applyReveal]);
+
+  // The editor's Cmd+F panel searches on every keystroke; hold it until
+  // typing pauses.
+  useEffect(() => {
+    const root = scrollRef.current;
+    return root ? debounceEditorSearchInput(root) : undefined;
+  }, []);
+
   // The live selection-action context while the widget is visible — lets the
   // The configured editor shortcut reuses the same action as the button.
   const selectionActionRef = useRef<SelectionActionCtx | null>(null);
@@ -241,6 +317,11 @@ export function CodeViewer({
 
   const editorOptions = useMemo<EditorOptions<"file", undefined, undefined>>(
     () => ({
+      onAttach: (editor) => {
+        editorRef.current = editor;
+        if (revealedRef.current) selectHit(editor, revealedRef.current);
+        applyRevealRef.current();
+      },
       onChange: (edited) => {
         draftRef.current = edited.file.contents;
         if (pausedRef.current) return;
@@ -292,7 +373,7 @@ export function CodeViewer({
         return button;
       },
     }),
-    [addSelectionShortcut, schedule, addSelectionToChat, filePath],
+    [addSelectionShortcut, schedule, addSelectionToChat, filePath, selectHit],
   );
 
   const handleReload = useCallback(async () => {
@@ -392,7 +473,7 @@ export function CodeViewer({
           )  : null}
         </div>
       )}
-      <div className="h-full overflow-auto">
+      <div ref={scrollRef} className="h-full overflow-auto">
         {!highlighterReady ? (
           <Text as="div" size="xs" tone="subtle" className="px-4 py-3 shine-text">
             Loading file...

@@ -20,8 +20,19 @@ import {
   DEFAULT_READ_DIRECTORY_DEPTH,
   DEFAULT_SEARCH_FILES_MAX,
 } from "./fileExplorer.dto";
+import type {
+  TextSearchQuery,
+  TextSearchResult,
+} from "@mains/contracts/text-search";
 import { gitService, noteAppWrites, toWorktreePath } from "../git";
 import { assertWithinContentRoots } from "./fileExplorer.roots";
+import {
+  DEFAULT_TEXT_SEARCH_MAX_RESULTS,
+  MAX_TEXT_SEARCH_QUERY_LENGTH,
+  MAX_TEXT_SEARCH_RESULTS,
+  runTextSearch,
+  takeOverTextSearch,
+} from "./fileExplorer.text-search";
 
 
 // ─────────────────────────────────────────────────────────────
@@ -743,6 +754,63 @@ export const fileExplorerService = {
 
     await walk(rootPath);
     return results;
+  },
+
+  /**
+   * Search file contents under `rootPath` with ripgrep. Unlike the filename
+   * search this reads what files hold, so the root passes the same content
+   * boundary as readFileText. A search carrying a `cancelKey` stops the one
+   * still running under that key — including when the new query is empty.
+   */
+  async searchText(options: TextSearchQuery): Promise<TextSearchResult> {
+    const { signal, release } = takeOverTextSearch(options?.cancelKey);
+    try {
+      if (
+        typeof options?.rootPath !== "string" ||
+        typeof options.query !== "string"
+      ) {
+        throw new Error("Invalid search request");
+      }
+      const { query } = options;
+      if (!query) return { files: [], matchCount: 0, truncated: false };
+      if (query.length > MAX_TEXT_SEARCH_QUERY_LENGTH) {
+        throw new Error("Search text is too long");
+      }
+
+      const rootPath = path.resolve(options.rootPath);
+      let realRoot: string;
+      try {
+        realRoot = await fs.realpath(rootPath);
+        if (!(await fs.stat(realRoot)).isDirectory()) {
+          throw new Error("Path is not a directory");
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message === "Path is not a directory") {
+          throw error;
+        }
+        throwFsError(error, "Directory does not exist", "Failed to search files");
+      }
+      await assertWithinContentRoots(realRoot);
+
+      const maxResults = Math.min(
+        Math.max(1, Math.floor(options.maxResults ?? DEFAULT_TEXT_SEARCH_MAX_RESULTS)),
+        MAX_TEXT_SEARCH_RESULTS,
+      );
+      return await runTextSearch(
+        {
+          rootPath,
+          query,
+          caseSensitive: options.caseSensitive === true,
+          wholeWord: options.wholeWord === true,
+          regex: options.regex === true,
+          includeHidden: options.includeHidden !== false,
+          maxResults,
+        },
+        signal,
+      );
+    } finally {
+      release();
+    }
   },
 
   // Immediate children only — no recursion. Used for lazy tree expansion.

@@ -106,6 +106,12 @@ jobs:
           tar -xzf anthropic-ai-claude-agent-sdk-darwin-x64-*.tgz -C node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64 --strip-components=1
           rm anthropic-ai-claude-agent-sdk-darwin-x64-*.tgz
 
+          RG_VERSION=$(node -p "JSON.parse(require('fs').readFileSync('node_modules/@vscode/ripgrep/package.json', 'utf8')).optionalDependencies['@vscode/ripgrep-darwin-x64']")
+          npm pack "@vscode/ripgrep-darwin-x64@$RG_VERSION"
+          mkdir -p node_modules/@vscode/ripgrep-darwin-x64
+          tar -xzf vscode-ripgrep-darwin-x64-*.tgz -C node_modules/@vscode/ripgrep-darwin-x64 --strip-components=1
+          rm vscode-ripgrep-darwin-x64-*.tgz
+
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

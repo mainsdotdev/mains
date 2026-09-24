@@ -164,6 +164,22 @@ module.exports = {
         }
       }
 
+      // Keep only content search's ripgrep binary for the target arch.
+      // @vscode/ripgrep itself (the resolver) must survive.
+      const vscodeScope = path.join(viteNodeModules, '@vscode');
+      if (fs.existsSync(vscodeScope)) {
+        for (const entry of fs.readdirSync(vscodeScope, { withFileTypes: true })) {
+          const isNativeBinaryPkg = /^ripgrep-(darwin|linux|win32)-/.test(entry.name);
+          if (entry.isDirectory() && isNativeBinaryPkg && entry.name !== `ripgrep-${targetPlatform}`) {
+            const fullPath = path.join(vscodeScope, entry.name);
+            const size = getDirSize(fullPath);
+            fs.rmSync(fullPath, { recursive: true, force: true });
+            totalSaved += size;
+            console.log(`  ✓ Removed ${path.relative(viteNodeModules, fullPath)} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+          }
+        }
+      }
+
       // Strip node-pty source/build artifacts not needed at runtime
       const ptyExtras = ['third_party', 'deps', 'src', 'scripts', 'node-addon-api'].map(
         d => path.join(viteNodeModules, 'node-pty', d)
@@ -196,7 +212,7 @@ module.exports = {
     },
     asar: {
       unpack: '{**/*.node,**/claude,**/copilot,**/spawn-helper,**/rg,**/*.wasm}',
-      unpackDir: '.vite/build/node_modules/{node-pty,@github/copilot-darwin-arm64,@github/copilot-darwin-x64,@github/copilot/prebuilds,@github/copilot/ripgrep,@anthropic-ai/claude-agent-sdk-darwin-arm64,@anthropic-ai/claude-agent-sdk-darwin-x64}',
+      unpackDir: '.vite/build/node_modules/{node-pty,@github/copilot-darwin-arm64,@github/copilot-darwin-x64,@github/copilot/prebuilds,@github/copilot/ripgrep,@anthropic-ai/claude-agent-sdk-darwin-arm64,@anthropic-ai/claude-agent-sdk-darwin-x64,@vscode/ripgrep-darwin-arm64,@vscode/ripgrep-darwin-x64}',
     },
     icon: 'src/renderer/public/icon',
     extraResource: [

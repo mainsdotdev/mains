@@ -8,12 +8,14 @@ import {
 } from "@/lib/redux/api";
 import {
   setSelectedFile,
+  revealInEditor,
   setActiveTab,
   addContextItem,
   toggleExplorerPath,
   expandExplorerPaths,
   collapseAllExplorerPaths,
   setWorkspaceSidebarTab,
+  type EditorRevealTarget,
   type WorkspaceSidebarTab,
 } from "@/lib/redux/slices/workspaceSlice";
 import { setRightPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
@@ -102,15 +104,23 @@ export function WorkspaceSidebar() {
     dispatch(expandExplorerPaths(ancestors));
   }, [selectedFile?.fullPath, rootPath, dispatch]);
 
+  // The file the editor holds — a diff view carries the same path but isn't it.
+  const openFilePath =
+    selectedFile?.extension === "diff" ? null : (selectedFile?.fullPath ?? null);
+
   const handleFileSelect = useCallback(
-    (node: FileNode) => {
-      // Dispatch file selection to Redux
-      dispatch(setSelectedFile(node));
+    (node: FileNode, reveal?: EditorRevealTarget) => {
+      // Another hit in the file already open only moves the selection —
+      // re-selecting would reload the file and remount the editor.
+      if (!reveal || openFilePath !== node.fullPath) {
+        dispatch(setSelectedFile(node));
+      }
+      if (reveal) dispatch(revealInEditor(reveal));
       // Switch to Editor tab when a file is selected
       dispatch(setActiveTab("editor"));
       if (isMobile) dispatch(setRightPanelOpen(false));
     },
-    [dispatch, isMobile],
+    [dispatch, isMobile, openFilePath],
   );
 
   const handleAddToContext = useCallback(

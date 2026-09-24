@@ -154,6 +154,7 @@ export const CHANNELS = {
     readFileText: "fileExplorer:readFileText",
     saveFileAs: "fileExplorer:saveFileAs",
     searchFiles: "fileExplorer:searchFiles",
+    searchText: "fileExplorer:searchText",
     writeFileText: "fileExplorer:writeFileText",
   },
   // NOTE: there is deliberately no `git` namespace — the git module is

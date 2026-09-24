@@ -10,6 +10,7 @@ import type {
 import type {
   KeyboardShortcutId,
 } from "../shared/keyboard-shortcuts";
+import type { TextSearchQuery } from "@mains/contracts/text-search";
 
 type BrowserDownloadState =
   | "progressing"
@@ -915,6 +916,12 @@ const api = {
       includeDirectories?: boolean;
       excludePatterns?: string[];
     }) => ipcRenderer.invoke(CHANNELS.fileExplorer.searchFiles, options),
+    /**
+     * Search file contents under a root with ripgrep (.gitignore applies).
+     * Resolves to a ServiceResponse<TextSearchResult>.
+     */
+    searchText: (options: TextSearchQuery) =>
+      ipcRenderer.invoke(CHANNELS.fileExplorer.searchText, options),
     /**
      * Overwrite an existing regular file with UTF-8 text. Same 2MB cap and
      * regular-file safeguards as readFileText; does not create new files.

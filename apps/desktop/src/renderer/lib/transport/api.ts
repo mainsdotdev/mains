@@ -93,6 +93,9 @@ export const appApi = {
     searchFiles: method<typeof window.api.fileExplorer.searchFiles>(
       CHANNELS.fileExplorer.searchFiles,
     ),
+    searchText: method<typeof window.api.fileExplorer.searchText>(
+      CHANNELS.fileExplorer.searchText,
+    ),
     getPathInfo: method<typeof window.api.fileExplorer.getPathInfo>(
       CHANNELS.fileExplorer.getPathInfo,
     ),

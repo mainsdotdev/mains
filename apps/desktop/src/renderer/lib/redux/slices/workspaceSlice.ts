@@ -30,6 +30,15 @@ export interface ProviderAuthTerminalState {
 
 export type WorkspaceSidebarTab = "files" | "changes" | "reviews";
 
+export interface EditorRevealTarget {
+  fullPath: string;
+  /** One-based line number. */
+  line: number;
+  /** Zero-based UTF-16 offsets within the line, end exclusive. */
+  start: number;
+  end: number;
+}
+
 interface WorkspaceViewSnapshot {
   selectedFile: FileNode | null;
   explorerExpandedPaths: string[];
@@ -56,6 +65,12 @@ export interface WorkspaceState {
   selectedFileContent: FileContentResponse | null;
   isLoadingFileContent: boolean;
   fileContentError: string | null;
+  /**
+   * A span of the selected file to select and scroll to — a content-search
+   * hit. The code viewer clears it once applied; selecting another file
+   * drops it.
+   */
+  editorRevealTarget: EditorRevealTarget | null;
   /**
    * Expanded directory paths in the Files tree. Lives here (not in the
    * component) so the tree survives tab switches and panel toggles, which
@@ -118,6 +133,7 @@ const initialState: WorkspaceState = {
   selectedFileContent: null,
   isLoadingFileContent: false,
   fileContentError: null,
+  editorRevealTarget: null,
   explorerExpandedPaths: [],
   sidebarTab: "files",
   activeTab: "editor",
@@ -156,6 +172,7 @@ function restoreWorkspaceView(state: WorkspaceState, view?: WorkspaceViewSnapsho
   state.selectedFileContent = null;
   state.fileContentError = null;
   state.isLoadingFileContent = false;
+  state.editorRevealTarget = null;
   state.explorerExpandedPaths = view?.explorerExpandedPaths ?? [];
   state.sidebarTab = view?.sidebarTab ?? "files";
   state.activeTab = view?.activeTab ?? "editor";
@@ -279,6 +296,15 @@ const workspaceSlice = createSlice({
         state.selectedFileContent = null;
         state.fileContentError = null;
       }
+      if (state.editorRevealTarget?.fullPath !== action.payload?.fullPath) {
+        state.editorRevealTarget = null;
+      }
+    },
+    revealInEditor: (state, action: PayloadAction<EditorRevealTarget>) => {
+      state.editorRevealTarget = action.payload;
+    },
+    clearEditorReveal: (state) => {
+      state.editorRevealTarget = null;
     },
     setSelectedFileContent: (state, action: PayloadAction<FileContentResponse | null>) => {
       state.selectedFileContent = action.payload;
@@ -296,6 +322,7 @@ const workspaceSlice = createSlice({
       state.selectedFileContent = null;
       state.fileContentError = null;
       state.isLoadingFileContent = false;
+      state.editorRevealTarget = null;
     },
     toggleExplorerPath: (state, action: PayloadAction<string>) => {
       const idx = state.explorerExpandedPaths.indexOf(action.payload);
@@ -478,6 +505,8 @@ export const {
   setWorkspaceModel,
   setWorkspaceThinkingEnabled,
   setSelectedFile,
+  revealInEditor,
+  clearEditorReveal,
   setSelectedFileContent,
   setFileContentLoading,
   setFileContentError,
