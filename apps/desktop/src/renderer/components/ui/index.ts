@@ -20,6 +20,15 @@ export type {
 // Scrolling
 export { HorizontalFadeScroller } from "./horizontal-fade-scroller";
 
+// Sortable list
+export {
+  moveIdByStep,
+  reorderIds,
+  SortableItem,
+  SortableList,
+} from "./sortable-list";
+export type { SortableDirection, SortableHandle } from "./sortable-list";
+
 // Text
 export {
   default as Text,

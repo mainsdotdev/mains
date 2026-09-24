@@ -1,11 +1,7 @@
-import type {
-  DragEventHandler,
-  MouseEvent,
-  ReactNode,
-} from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceGroupExpanded } from "@/lib/redux/slices/appSettingsSlice";
-import { Button, Text } from "@/components/ui";
+import { Button, Text, type SortableHandle } from "@/components/ui";
 import { ArrowUp, New } from "@/components/ui/icons";
 
 /** Shared by the header's own glyph and any a caller supplies in its place. */
@@ -26,8 +22,7 @@ export function SidebarGroupSection({
   // count,
   action,
   secondaryAction,
-  dragHandleProps,
-  onReorderKey,
+  sortHandle,
   children,
 }: {
   groupKey: string;
@@ -59,14 +54,11 @@ export function SidebarGroupSection({
     onClick: (event: MouseEvent<HTMLElement>) => void;
     icon: ReactNode;
   };
-  dragHandleProps?: {
-    draggable: boolean;
-    onDragStart: DragEventHandler<HTMLDivElement>;
-    onDragOver: DragEventHandler<HTMLDivElement>;
-    onDrop: DragEventHandler<HTMLDivElement>;
-    onDragEnd: DragEventHandler<HTMLDivElement>;
-  };
-  onReorderKey?: (direction: "up" | "down") => void;
+  /**
+   * Makes the header the handle of a `SortableItem`: dragging it, or Alt+Arrow
+   * while it has focus, moves the whole section.
+   */
+  sortHandle?: SortableHandle;
   children: ReactNode;
 }) {
   const dispatch = useAppDispatch();
@@ -77,41 +69,31 @@ export function SidebarGroupSection({
   const toggleExpanded = () => {
     dispatch(setWorkspaceGroupExpanded({ groupKey, expanded: !expanded }));
   };
+  const isSortable = !!sortHandle?.listeners;
 
   return (
     <div className="">
       <div
+        ref={sortHandle?.ref}
         role="button"
         tabIndex={0}
-        draggable={dragHandleProps?.draggable}
-        onDragStart={(event) => {
-          if ((event.target as HTMLElement).closest("button")) {
-            event.preventDefault();
-            return;
-          }
-          dragHandleProps?.onDragStart(event);
+        onPointerDown={(event) => {
+          // A press on one of the header's own buttons is a click on that
+          // button, never the start of a drag.
+          if ((event.target as HTMLElement).closest("button")) return;
+          sortHandle?.listeners?.onPointerDown?.(event);
         }}
-        onDragOver={dragHandleProps?.onDragOver}
-        onDrop={dragHandleProps?.onDrop}
-        onDragEnd={dragHandleProps?.onDragEnd}
         onClick={toggleExpanded}
         onKeyDown={(e) => {
-          if (
-            onReorderKey &&
-            e.altKey &&
-            (e.key === "ArrowUp" || e.key === "ArrowDown")
-          ) {
-            e.preventDefault();
-            onReorderKey?.(e.key === "ArrowUp" ? "up" : "down");
-            return;
-          }
+          sortHandle?.onKeyDown?.(e);
+          if (e.defaultPrevented) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             toggleExpanded();
           }
         }}
         className={`group/section w-full flex items-center gap-1.5 px-2 py-1 mb-px rounded-lg hover:bg-primary/50 dark:hover:bg-primary/5 transition-colors ${
-          dragHandleProps?.draggable
+          isSortable
             ? "cursor-grab active:cursor-grabbing"
             : "cursor-pointer"
         }`}
