@@ -25,7 +25,10 @@ import type {
   TextSearchResult,
 } from "@mains/contracts/text-search";
 import { gitService, noteAppWrites, toWorktreePath } from "../git";
-import { assertWithinContentRoots } from "./fileExplorer.roots";
+import {
+  assertWithinContentRoots,
+  assertWithinReadableContentRoots,
+} from "./fileExplorer.roots";
 import {
   DEFAULT_TEXT_SEARCH_MAX_RESULTS,
   MAX_TEXT_SEARCH_QUERY_LENGTH,
@@ -356,7 +359,7 @@ export const fileExplorerService = {
       throw new Error("Failed to get path info");
     }
 
-    await assertWithinContentRoots(realPath);
+    await assertWithinReadableContentRoots(realPath);
 
     try {
       const stat = await fs.stat(realPath);
@@ -409,7 +412,7 @@ export const fileExplorerService = {
 
     // Checked on the resolved path: a link inside a workspace that points out
     // of it escapes the boundary otherwise.
-    await assertWithinContentRoots(realPath);
+    await assertWithinReadableContentRoots(realPath);
 
     try {
       // Get file stats and validate it's a regular file
@@ -512,7 +515,7 @@ export const fileExplorerService = {
       throwFsError(error, "File does not exist", "Failed to save file");
     }
 
-    await assertWithinContentRoots(realSource);
+    await assertWithinReadableContentRoots(realSource);
 
     const stat = await fs.stat(realSource).catch((error) => {
       throwFsError(error, "File does not exist", "Failed to save file");

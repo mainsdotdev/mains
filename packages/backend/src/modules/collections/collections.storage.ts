@@ -76,6 +76,7 @@ export function writeCollectionSource(args: {
   const temporaryPath = path.join(directory, `.pending-${crypto.randomUUID()}`);
   try {
     fs.writeFileSync(temporaryPath, args.bytes, { flag: "wx" });
+    fs.chmodSync(temporaryPath, 0o444);
     fs.renameSync(temporaryPath, absolutePath);
     return storageKey;
   } catch (error) {

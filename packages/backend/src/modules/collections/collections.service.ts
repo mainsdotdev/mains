@@ -1,4 +1,7 @@
 import { createHash, randomUUID } from "crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { collectionsRepo } from "./collections.repo";
 import {
   validateAddCollectionSource,
@@ -63,6 +66,29 @@ async function findOwnedCollection(
 }
 
 export const collectionsService = {
+  /** Exact registered source files may be opened as read-only references. */
+  async isStoredSourceFile(realPath: string): Promise<boolean> {
+    if (!path.isAbsolute(realPath)) return false;
+    try {
+      const root = await fs.realpath(path.join(getBackendRuntime().getPath("userData"), "collections"));
+      const parts = path.relative(root, realPath).split(path.sep);
+      if (parts.length !== 4 || parts[1] !== "sources") return false;
+      const [collectionId, , sourceId] = parts;
+      const source = await collectionsRepo.findSourceById(sourceId);
+      if (!source || source.collectionId !== collectionId) return false;
+      const expected = resolveCollectionSourceStorage({
+        collectionId: source.collectionId,
+        sourceId: source.id,
+        name: source.name,
+        storageKey: source.storageKey,
+      });
+      const stat = await fs.lstat(expected);
+      return stat.isFile() && (await fs.realpath(expected)) === realPath;
+    } catch {
+      return false;
+    }
+  },
+
   async list(options: ListCollectionsOptions): Promise<CollectionResponse[]> {
     return collectionsRepo.list(options);
   },

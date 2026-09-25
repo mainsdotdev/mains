@@ -12,10 +12,11 @@ import {
 
 const linkHarness = vi.hoisted(() => ({
   openLink: vi.fn(),
+  openFile: vi.fn(),
 }));
 
 vi.mock("@/features/workspace/hooks/use-open-file-in-editor", () => ({
-  useOpenFileInEditor: () => vi.fn(),
+  useOpenFileInEditor: () => linkHarness.openFile,
 }));
 vi.mock("@/hooks/use-open-link", () => ({
   useOpenLink: () => linkHarness.openLink,
@@ -127,6 +128,18 @@ describe("assistant markdown / math", () => {
 });
 
 describe("markdownComponents / links", () => {
+  it("decodes spaces in a Collection source file link before opening it", () => {
+    renderMarkdown(
+      "[Blueprint.pdf](/Users/example/Application%20Support/mains/runs/run-1/work/collection-sources/source-1/content.pdf)",
+    );
+
+    fireEvent.click(screen.getByText("Blueprint.pdf").closest("button")!);
+
+    expect(linkHarness.openFile).toHaveBeenCalledWith(
+      "/Users/example/Application Support/mains/runs/run-1/work/collection-sources/source-1/content.pdf",
+    );
+  });
+
   it("derives favicon requests from the origin only", () => {
     expect(
       faviconUrlForHref(

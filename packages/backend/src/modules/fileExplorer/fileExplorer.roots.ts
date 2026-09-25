@@ -2,13 +2,15 @@ import { promises as fs } from "fs";
 import * as path from "path";
 
 import { projectsService } from "../projects";
+import { collectionsService } from "../collections";
 import { managedExecutionRoots } from "../runs";
 import { workspaceService } from "../workspace";
 
 // ─────────────────────────────────────────────────────────────
 // Content roots
 //
-// The directories whose files the renderer may read and write.
+// The directories whose files the renderer may read and write. Exact registered
+// Collection source files are a read-only exception below.
 //
 // The renderer renders markdown from sources nobody here controls — synced
 // issue bodies, agent and subagent reports — and a link in that markdown can
@@ -77,5 +79,19 @@ export async function assertWithinContentRoots(realPath: string): Promise<void> 
     if (isWithin(realRoot, realPath)) return;
   }
 
+  throw new Error("Path is outside your workspaces");
+}
+
+/** Registered Collection source files are readable, but remain outside write roots. */
+export async function assertWithinReadableContentRoots(realPath: string): Promise<void> {
+  try {
+    await assertWithinContentRoots(realPath);
+    return;
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "Path is outside your workspaces") {
+      throw error;
+    }
+  }
+  if (await collectionsService.isStoredSourceFile(realPath)) return;
   throw new Error("Path is outside your workspaces");
 }

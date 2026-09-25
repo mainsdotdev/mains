@@ -22,6 +22,14 @@ function splitFileHref(href: string): { path: string; line?: number } {
   return { path: href };
 }
 
+function decodeFileHrefPath(filePath: string): string {
+  try {
+    return decodeURI(filePath);
+  } catch {
+    return filePath;
+  }
+}
+
 /**
  * Href with no URL scheme whose last segment looks like a file — an agent's
  * reference to a workspace file rather than a web link.
@@ -85,7 +93,7 @@ export function MarkdownLink({
         : undefined;
     return (
       <Button
-        onClick={() => openFileInEditor(target.path)}
+        onClick={() => openFileInEditor(decodeFileHrefPath(target.path))}
         title={href}
         className="inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none bg-primary-50 dark:bg-primary-300/10 text-primary-800 dark:text-primary-200 cursor-pointer hover:bg-primary-200/60 dark:hover:bg-primary-300/20 transition-colors"
       >

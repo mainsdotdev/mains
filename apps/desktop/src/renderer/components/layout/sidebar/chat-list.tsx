@@ -15,14 +15,13 @@ import {
   Text,
   toast,
 } from "@/components/ui";
-import { Edit, Option, Plus, Trash } from "@/components/ui/icons";
+import { Option, Plus, Settings, Trash } from "@/components/ui/icons";
 import {
   useGetAccountQuery,
   useListCollectionsQuery,
   useRemoveCollectionMutation,
   useReorderCollectionsMutation,
   useSetActiveSpaceMutation,
-  useUpdateCollectionMutation,
   useUpdateSpaceMutation,
   type Collection,
   type RecentRun,
@@ -41,8 +40,7 @@ import { SidebarGroupSection } from "./sidebar-group-section";
 import { ChatItem, chatLabel } from "./chat-item";
 import { ProjectIcon } from "./project-icon";
 import { useRecentChats } from "./use-recent-chats";
-import { CollectionSourcesModal } from "./collection-sources-modal";
-import CollectionModal from "./collection-modal";
+import { CollectionSettingsModal } from "./collection-settings-modal";
 import DeleteConfirmationModal from "./delete-confirmation-modal";
 
 /** How many rows the flat Recents section shows. */
@@ -74,18 +72,15 @@ export function SidebarChatList({
   const [updateSpace] = useUpdateSpaceMutation();
   const { renameChat, toggleChatPin, moveChat, archiveChat, deleteChat } =
     useChatActions();
-  const [updateCollection] = useUpdateCollectionMutation();
   const [removeCollection] = useRemoveCollectionMutation();
   const [reorderCollections, { isLoading: isReorderingCollections }] =
     useReorderCollectionsMutation();
-  const [sourcesCollection, setSourcesCollection] =
+  const [settingsCollection, setSettingsCollection] =
     useState<Collection | null>(null);
   // One row's ⋯ menu at a time, plus the two dialogs it can open. Anchored to
   // the button it was opened from, like the chat row's own menu.
   const [menuCollection, setMenuCollection] = useState<Collection | null>(null);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
-  const [editCollection, setEditCollection] = useState<Collection | null>(null);
-  const [isSavingCollection, setIsSavingCollection] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Collection | null>(null);
   const [isDeletingCollection, setIsDeletingCollection] = useState(false);
   // Archiving is reversible and fires straight from the menu; deleting is not,
@@ -235,27 +230,6 @@ export function SidebarChatList({
     const rect = event.currentTarget.getBoundingClientRect();
     setMenuPosition({ x: rect.right, y: rect.bottom + 4 });
     setMenuCollection(collection);
-  };
-
-  const handleSaveCollection = async (draft: {
-    name: string;
-    icon: string | null;
-  }) => {
-    if (!editCollection || !account) return;
-    setIsSavingCollection(true);
-    try {
-      await updateCollection({
-        id: editCollection.id,
-        accountId: account.id,
-        payload: { name: draft.name, icon: draft.icon },
-      }).unwrap();
-      setEditCollection(null);
-    } catch (error) {
-      console.error("Failed to update collection:", error);
-      toast.error("Failed to save project");
-    } finally {
-      setIsSavingCollection(false);
-    }
   };
 
   const handleDeleteCollection = async () => {
@@ -433,12 +407,12 @@ export function SidebarChatList({
       >
         <DropdownMenuItem
           onClick={() => {
-            setEditCollection(menuCollection);
+            setSettingsCollection(menuCollection);
             setMenuCollection(null);
           }}
         >
-          <Edit className="size-3.5" />
-          <span>Edit</span>
+          <Settings className="size-3.5" />
+          <span>Project settings</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="danger"
@@ -451,13 +425,14 @@ export function SidebarChatList({
           <span>Delete</span>
         </DropdownMenuItem>
       </DropdownMenu>
-      <CollectionModal
-        isOpen={!!editCollection}
-        collection={editCollection}
-        isSaving={isSavingCollection}
-        onSave={handleSaveCollection}
-        onClose={() => setEditCollection(null)}
-      />
+      {settingsCollection && account && (
+        <CollectionSettingsModal
+          key={settingsCollection.id}
+          accountId={account.id}
+          collection={settingsCollection}
+          onClose={() => setSettingsCollection(null)}
+        />
+      )}
       <DeleteConfirmationModal
         isOpen={!!deleteTarget}
         isDeleting={isDeletingCollection}
@@ -478,12 +453,6 @@ export function SidebarChatList({
         description="This chat and its messages are permanently deleted. Archive instead to keep it recoverable from Settings → Archive."
         onConfirm={() => void handleDeleteRun()}
         onCancel={() => setDeleteRunTarget(null)}
-      />
-      <CollectionSourcesModal
-        key={sourcesCollection?.id ?? "closed"}
-        accountId={account?.id ?? ""}
-        collection={sourcesCollection}
-        onClose={() => setSourcesCollection(null)}
       />
     </div>
   );

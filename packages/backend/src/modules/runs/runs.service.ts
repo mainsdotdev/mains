@@ -38,7 +38,10 @@ import {
   removeManagedRunDir,
   resolveRunExecution,
 } from "./run-execution";
-import { materializeCollectionSourceContext } from "./run-collection-sources";
+import {
+  buildCollectionSourceInstructions,
+  syncCollectionSourceDirectory,
+} from "./run-collection-sources";
 import { sanitizeRunAttachments } from "./run-attachments";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
@@ -91,12 +94,24 @@ const RUN_OUTPUT_MAX_FILES = 500;
 const RUN_OUTPUT_MAX_DEPTH = 12;
 const RUN_OUTPUT_EXCLUDES = new Set([
   ".mains",
+  "project-resources",
+  "collection-sources",
   ".git",
   "node_modules",
   "bower_components",
   ".DS_Store",
   "Thumbs.db",
 ]);
+
+function withProjectResources(
+  baseInstructions: string | null,
+  projectInstructions: string | null,
+): string | null {
+  const parts = [baseInstructions, projectInstructions].filter(
+    (part): part is string => Boolean(part),
+  );
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
 /** Image types the phone decodes on its own, by extension — `nativeImage` reads only PNG and JPEG. */
 const RAW_IMAGE_MIMES: Record<string, string> = {
   png: "image/png",
@@ -129,8 +144,9 @@ function isWithin(parent: string, child: string): boolean {
 }
 
 /**
- * Visible files created in a managed Work/Chat directory. The `.mains` tree is
- * copied input context, not output, and symlinks are deliberately not followed.
+ * Visible files created in a managed Work/Chat directory. Legacy source copies
+ * and the Collection source link are input context, not output. Symlinks are
+ * deliberately not followed.
  */
 async function listManagedOutputFiles(root: string): Promise<RunOutputFile[]> {
   const files: RunOutputFile[] = [];
@@ -759,6 +775,13 @@ export const runsService = {
       collectionId ?? null,
     );
     if (!updated) throw new Error("Run not found");
+    if (!run.workspaceId) {
+      await syncCollectionSourceDirectory({
+        cwd: managedRunDir(run.id, run.mode),
+        accountId: run.accountId,
+        collectionId,
+      });
+    }
     emit("runs:updated", { runId: run.id, ts: Date.now() });
     return updated;
   },
@@ -1020,7 +1043,7 @@ export const runsService = {
         mode,
       );
       const execution = resolveRunExecution({ runId, mode, workspace });
-      const extraInstructions = composeExtraInstructions(mode, space?.systemPrompt);
+      const baseInstructions = composeExtraInstructions(mode, space?.systemPrompt);
       // Persist the *composed* values — the run row records what actually ran.
       // Pin Claude's selected output style when the chat is created. A later
       // provider-settings change must not restyle an existing conversation.
@@ -1052,16 +1075,13 @@ export const runsService = {
       });
       await runsRepo.updateRun(runId, { startedAt: new Date() });
 
-      const collectionContext = await materializeCollectionSourceContext({
+      const projectInstructions = await buildCollectionSourceInstructions({
         runId,
         accountId: payload.accountId,
         collectionId,
-        execution,
+        cwd: execution.workspaceId ? null : execution.cwd,
       });
-      const effectiveInitialContext: WorkRunContextItem[] = [
-        ...collectionContext,
-        ...((payload.initialContext ?? []) as WorkRunContextItem[]),
-      ];
+      const extraInstructions = withProjectResources(baseInstructions, projectInstructions);
 
       if (payload.initialContext && payload.initialContext.length > 0) {
         for (const ctx of payload.initialContext) {
@@ -1099,10 +1119,7 @@ export const runsService = {
           systemPrompt: payload.systemPrompt,
           mode,
           extraInstructions,
-          context:
-            effectiveInitialContext.length > 0
-              ? effectiveInitialContext
-              : undefined,
+          context: payload.initialContext as WorkRunContextItem[] | undefined,
           toolPolicy,
           configSnapshot,
           attachments,
@@ -1327,16 +1344,12 @@ export const runsService = {
         toolPolicySnapshot: toolPolicy ?? undefined,
       });
 
-      const collectionContext = await materializeCollectionSourceContext({
+      const projectInstructions = await buildCollectionSourceInstructions({
         runId,
         accountId,
         collectionId: run.collectionId,
-        execution,
+        cwd: execution.workspaceId ? null : execution.cwd,
       });
-      const effectiveAdditionalContext: WorkRunContextItem[] = [
-        ...collectionContext,
-        ...((additionalContext ?? []) as WorkRunContextItem[]),
-      ];
 
       if (additionalContext && additionalContext.length > 0) {
         for (const ctx of additionalContext) {
@@ -1375,13 +1388,13 @@ export const runsService = {
           model: payload.model ?? previousModel,
           systemPrompt: run.systemPrompt,
           mode: run.mode,
-          extraInstructions: composeExtraInstructions(run.mode, space?.systemPrompt),
+          extraInstructions: withProjectResources(
+            composeExtraInstructions(run.mode, space?.systemPrompt),
+            projectInstructions,
+          ),
           toolPolicy,
           configSnapshot,
-          context:
-            effectiveAdditionalContext.length > 0
-              ? effectiveAdditionalContext
-              : undefined,
+          context: additionalContext as WorkRunContextItem[] | undefined,
           attachments,
           contextIssues: payload.contextIssues,
           contextSignals: payload.contextSignals,
@@ -1488,16 +1501,12 @@ export const runsService = {
         workspace,
       });
 
-      const collectionContext = await materializeCollectionSourceContext({
+      const projectInstructions = await buildCollectionSourceInstructions({
         runId: newRunId,
         accountId,
         collectionId: sourceRun.collectionId,
-        execution,
+        cwd: execution.workspaceId ? null : execution.cwd,
       });
-      const effectiveAdditionalContext: WorkRunContextItem[] = [
-        ...collectionContext,
-        ...((payload.additionalContext ?? []) as WorkRunContextItem[]),
-      ];
       if (payload.additionalContext) {
         for (const item of payload.additionalContext) {
           await runsRepo.insertContext({
@@ -1538,13 +1547,13 @@ export const runsService = {
           // model the source happened to start with.
           model: sourceModel,
           mode: sourceRun.mode,
-          extraInstructions: composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
+          extraInstructions: withProjectResources(
+            composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
+            projectInstructions,
+          ),
           toolPolicy,
           configSnapshot,
-          context:
-            effectiveAdditionalContext.length > 0
-              ? effectiveAdditionalContext
-              : undefined,
+          context: payload.additionalContext as WorkRunContextItem[] | undefined,
           attachments,
         },
         (event: WorkRunEvent) =>

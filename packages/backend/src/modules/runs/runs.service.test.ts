@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   rmSync,
   statSync,
@@ -109,6 +110,7 @@ import { runsRepo } from "./runs.repo";
 import { managedRunDir } from "./run-execution";
 import { runSessionRegistry } from "./run-session-registry";
 import { createWorkAdapter } from "../providers/adapters";
+import { collectionsService } from "../collections";
 import { workspaceService } from "../workspace";
 import { gitService } from "../git/git.service";
 
@@ -568,6 +570,46 @@ describe("runsService", () => {
       await flushBackground();
     });
 
+    it("gives the provider a short project resource list without changing the user message", async () => {
+      createProvider(db, { id: "codex", displayName: "Codex" });
+      createSpace(db, {
+        id: "sp-project-context",
+        accountId: "default",
+        providerId: "codex",
+        mode: "work",
+      });
+      createCollection(db, { id: "collection-project-context" });
+      const source = await collectionsService.addSource({
+        accountId: "default",
+        collectionId: "collection-project-context",
+        kind: "text",
+        name: "Research.md",
+        text: "Relevant project notes",
+      });
+      const startRun = mockStartAdapter();
+
+      await runsService.executeRun({
+        accountId: "default",
+        collectionId: "collection-project-context",
+        spaceId: "sp-project-context",
+        providerId: "codex",
+        goal: "summarize the notes",
+      });
+      await flushBackground();
+
+      const request = startRun.mock.calls[0][0];
+      expect(request.goal).toBe("summarize the notes");
+      expect(request.context).toBeUndefined();
+      const canonicalPath = `/tmp/mains-test/userData/collections/collection-project-context/sources/${source.id}/content.md`;
+      expect(request.extraInstructions).toContain(`./collection-sources/${source.id}/content.md`);
+      expect(statSync(canonicalPath).isFile())
+        .toBe(true);
+      expect(lstatSync(`${request.execution.cwd}/collection-sources`).isSymbolicLink()).toBe(true);
+      expect(() => statSync(`${request.execution.cwd}/project-resources`)).toThrow();
+      rmSync(request.execution.cwd, { recursive: true, force: true });
+      rmSync("/tmp/mains-test/userData/collections/collection-project-context", { recursive: true, force: true });
+    });
+
     it("runs Developer mode with no delta from a valid Developer space", async () => {
       createWorkspace(db, { id: "ws-dev", accountId: "default" });
       createSpace(db, {
@@ -867,6 +909,54 @@ describe("runsService", () => {
       expect(request.extraInstructions).toContain("non-technical");
     });
 
+    it("refreshes project resources on follow-up without adding them to the user message", async () => {
+      createProvider(db, { id: "codex", displayName: "Codex" });
+      createCollection(db, { id: "collection-project-followup" });
+      createRun(db, {
+        id: "run-project-followup",
+        accountId: "default",
+        collectionId: "collection-project-followup",
+        providerId: "codex",
+        mode: "chat",
+        status: "succeeded",
+        sessionId: "sess-project-followup",
+      });
+      const source = await collectionsService.addSource({
+        accountId: "default",
+        collectionId: "collection-project-followup",
+        kind: "text",
+        name: "Notes.md",
+        text: "Current project notes",
+      });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({
+        continueRun,
+        canResumeSession: vi.fn().mockResolvedValue(true),
+      } as any);
+
+      try {
+        await runsService.continueRun({
+          runId: "run-project-followup",
+          accountId: "default",
+          message: "What do the notes say?",
+        });
+        await flushBackground();
+
+        const request = continueRun.mock.calls[0][0];
+        expect(request.message).toBe("What do the notes say?");
+        expect(request.context).toBeUndefined();
+        const canonicalPath = `/tmp/mains-test/userData/collections/collection-project-followup/sources/${source.id}/content.md`;
+        expect(request.extraInstructions).toContain(`./collection-sources/${source.id}/content.md`);
+        expect(statSync(canonicalPath).isFile())
+          .toBe(true);
+        expect(lstatSync(`${request.execution.cwd}/collection-sources`).isSymbolicLink()).toBe(true);
+        expect(() => statSync(`${request.execution.cwd}/project-resources`)).toThrow();
+      } finally {
+        rmSync(managedRunDir("run-project-followup", "chat"), { recursive: true, force: true });
+        rmSync("/tmp/mains-test/userData/collections/collection-project-followup", { recursive: true, force: true });
+      }
+    });
+
     it("re-derives tool policy and config snapshot from the run row's mode", async () => {
       createProvider(db, { id: "codex", displayName: "Codex" });
       createWorkspace(db, { id: "ws-cont2", accountId: "default" });
@@ -1123,6 +1213,36 @@ describe("runsService", () => {
   });
 
   describe("moveRunToCollection", () => {
+    it("updates the source link when a run joins or leaves a Collection", async () => {
+      createCollection(db, { id: "linked-project" });
+      createRun(db, { id: "linked-run", mode: "work" });
+      const source = await collectionsService.addSource({
+        accountId: "default",
+        collectionId: "linked-project",
+        kind: "text",
+        name: "Notes.txt",
+        text: "Reference",
+      });
+      const cwd = managedRunDir("linked-run", "work");
+      const link = `${cwd}/collection-sources`;
+
+      try {
+        await runsService.moveRunToCollection({
+          runId: "linked-run", accountId: "default", collectionId: "linked-project",
+        });
+        expect(lstatSync(link).isSymbolicLink()).toBe(true);
+        expect(statSync(`${link}/${source.id}/content.txt`).isFile()).toBe(true);
+
+        await runsService.moveRunToCollection({
+          runId: "linked-run", accountId: "default", collectionId: null,
+        });
+        expect(() => lstatSync(link)).toThrow();
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync("/tmp/mains-test/userData/collections/linked-project", { recursive: true, force: true });
+      }
+    });
+
     it("moves a Work run to a same-account Collection", async () => {
       createCollection(db, { id: "shared-project" });
       createRun(db, { id: "work-run", mode: "work" });
@@ -1631,9 +1751,11 @@ describe("runsService", () => {
       const outside = "/tmp/mains-output-outside.md";
       mkdirSync(`${root}/outputs`, { recursive: true });
       mkdirSync(`${root}/.mains/sources`, { recursive: true });
+      mkdirSync(`${root}/project-resources/source-1`, { recursive: true });
       writeFileSync(`${root}/notes.md`, "# Notes");
       writeFileSync(`${root}/outputs/chart.csv`, "x,y\n1,2");
       writeFileSync(`${root}/.mains/sources/brief.pdf`, "source");
+      writeFileSync(`${root}/project-resources/source-1/brief.pdf`, "source");
       writeFileSync(`${root}/.hidden.txt`, "hidden");
       writeFileSync(outside, "outside");
       symlinkSync(outside, `${root}/linked.md`);

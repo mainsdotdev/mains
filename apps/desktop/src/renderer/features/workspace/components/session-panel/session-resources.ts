@@ -62,6 +62,32 @@ export interface SessionPlugin {
   createdAt: number;
 }
 
+/** Minimum persisted fields needed to project source rows outside a session. */
+export interface SessionSourceContextRow {
+  id: number;
+  kind: string;
+  ref: string | null;
+  content: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: number | Date | string;
+}
+
+export interface SessionSourceArtifactRow {
+  id: number;
+  kind: string;
+  content: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: number | Date | string;
+}
+
+export interface SessionSourceToolCallRow {
+  id: number;
+  toolName: string;
+  status: string;
+  input: unknown;
+  createdAt: number | Date | string;
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 const OUTPUT_KINDS = new Set(["file", "image", "document", "visualization"]);
@@ -153,7 +179,7 @@ function withDedupeKey(
   };
 }
 
-function contextResources(context: readonly RunContext[]): SessionResource[] {
+function contextResources(context: readonly SessionSourceContextRow[]): SessionResource[] {
   const resources: SessionResource[] = [];
 
   for (const item of context) {
@@ -211,12 +237,13 @@ function contextResources(context: readonly RunContext[]): SessionResource[] {
 
     const path = ref || undefined;
     const isProjectSource = origin === "collection-source";
+    const projectSourceName = isProjectSource ? text(metadata.sourceName) : undefined;
     resources.push(
       withDedupeKey({
         id: `context-${item.id}`,
         role: "source",
         kind: item.kind === "note" ? "note" : "file",
-        title: path ? basename(path) : (item.content?.split("\n", 1)[0] ?? "Note"),
+        title: projectSourceName ?? (path ? basename(path) : (item.content?.split("\n", 1)[0] ?? "Note")),
         badge: isProjectSource ? "Project" : "User",
         detail: isProjectSource ? "Project source" : undefined,
         target: path ? { type: "file", value: path } : undefined,
@@ -228,7 +255,7 @@ function contextResources(context: readonly RunContext[]): SessionResource[] {
   return resources;
 }
 
-function promptResources(artifacts: readonly RunArtifact[]): SessionResource[] {
+function promptResources(artifacts: readonly SessionSourceArtifactRow[]): SessionResource[] {
   const resources: SessionResource[] = [];
 
   for (const artifact of artifacts) {
@@ -469,7 +496,7 @@ function collectWebInput(value: unknown): { urls: string[]; queries: string[] } 
   return { urls, queries };
 }
 
-function webResources(toolCalls: readonly ToolCall[]): SessionResource[] {
+function webResources(toolCalls: readonly SessionSourceToolCallRow[]): SessionResource[] {
   const resources: SessionResource[] = [];
   const queries = new Set<string>();
   let newestSearchAt = 0;
@@ -545,7 +572,7 @@ function trimUrlPunctuation(value: string): string {
 /** Links written into either side of the conversation are useful references
  * even when they were not the direct input to a web tool. */
 function conversationLinkResources(
-  artifacts: readonly RunArtifact[],
+  artifacts: readonly SessionSourceArtifactRow[],
 ): SessionResource[] {
   const resources: SessionResource[] = [];
 
@@ -737,12 +764,7 @@ export function buildSessionResources(args: {
   );
 
   return {
-    sources: dedupe([
-      ...contextResources(args.context),
-      ...promptResources(args.artifacts),
-      ...webResources(args.toolCalls),
-      ...conversationLinkResources(args.artifacts),
-    ]),
+    sources: buildSessionSourceResources(args),
     plugins: sessionPlugins(args.artifacts, args.toolCalls),
     // Explicit artifacts keep their richer kind/metadata. Directory discovery
     // fills only the gaps, including files created by shell commands.
@@ -751,4 +773,18 @@ export function buildSessionResources(args: {
       ...artifactDeliverables,
     ]),
   };
+}
+
+/** The same source projection used by the session shelf, without output files. */
+export function buildSessionSourceResources(args: {
+  context: readonly SessionSourceContextRow[];
+  artifacts: readonly SessionSourceArtifactRow[];
+  toolCalls: readonly SessionSourceToolCallRow[];
+}): SessionResource[] {
+  return dedupe([
+    ...contextResources(args.context),
+    ...promptResources(args.artifacts),
+    ...webResources(args.toolCalls),
+    ...conversationLinkResources(args.artifacts),
+  ]);
 }

@@ -17,6 +17,14 @@ vi.mock("./fileExplorer.roots", () => ({
     });
     if (!within) throw new Error("Path is outside your workspaces");
   },
+  assertWithinReadableContentRoots: async (realPath: string) => {
+    const nodePath = await import("path");
+    const within = allowedRoots.some((root) => {
+      const rel = nodePath.relative(root, realPath);
+      return rel === "" || (!rel.startsWith("..") && !nodePath.isAbsolute(rel));
+    });
+    if (!within) throw new Error("Path is outside your workspaces");
+  },
 }));
 
 import { fileExplorerService } from "./fileExplorer.service";
