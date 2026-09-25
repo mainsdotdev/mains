@@ -140,6 +140,18 @@ describe("markdownComponents / links", () => {
     );
   });
 
+  it("decodes reserved characters in a cited file path before opening it", () => {
+    renderMarkdown(
+      "[Recipe #1 (draft).pdf](/Users/example/Application%20Support/Recipe%20%231%20%28draft%29.pdf)",
+    );
+
+    fireEvent.click(screen.getByText("Recipe #1 (draft).pdf").closest("button")!);
+
+    expect(linkHarness.openFile).toHaveBeenCalledWith(
+      "/Users/example/Application Support/Recipe #1 (draft).pdf",
+    );
+  });
+
   it("derives favicon requests from the origin only", () => {
     expect(
       faviconUrlForHref(

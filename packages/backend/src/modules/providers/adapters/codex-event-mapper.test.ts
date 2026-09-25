@@ -1194,6 +1194,82 @@ describe("Codex follow-up directives", () => {
   });
 });
 
+describe("Codex file citations", () => {
+  function messageEvents(text: string, state = createRunState()): WorkRunEvent[] {
+    const { mapper } = createHarness(state);
+    return mapper.mapThreadItem(
+      { id: "item-citation", type: "agentMessage", text },
+      "item/completed",
+      400,
+      "run-1",
+    );
+  }
+
+  it("renders a source citation as an inline file chip with an encoded path", () => {
+    const events = messageEvents(
+      'I used this recipe.\n:codex-file-citation{purpose="source" path="/Users/me/Application Support/Recipe #1 (draft).pdf"}\n\nNext section.',
+    );
+    const report = events.find(
+      (event) => event.type === "artifact" && event.kind === "report",
+    ) as Extract<WorkRunEvent, { type: "artifact" }> | undefined;
+
+    expect(report?.content).toBe(
+      "I used this recipe. [Recipe #1 (draft).pdf](/Users/me/Application%20Support/Recipe%20%231%20%28draft%29.pdf)\n\nNext section.",
+    );
+    expect(report?.content).not.toContain(":codex-file-citation");
+  });
+
+  it("does not turn a cited source into a deliverable", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-cited-source-"));
+    tempDirs.push(root);
+    const source = path.join(root, "collection-sources", "source-1", "content.pdf");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, "%PDF-1.7\n");
+
+    const events = messageEvents(
+      `Used the source. :codex-file-citation{path="${source}" purpose="source"}`,
+      createRunState(root),
+    );
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "artifact",
+      kind: "report",
+      content: expect.stringContaining("[content.pdf]("),
+    }));
+    expect(events.filter((event) => event.type === "artifact" && event.kind === "document"))
+      .toHaveLength(0);
+  });
+
+  it("hides incomplete citations during streaming", () => {
+    const { mapper } = createHarness();
+    const events = mapper.mapNotification(
+      "item/agentMessage/delta",
+      {
+        threadId: "thread-parent",
+        itemId: "item-citation",
+        delta: 'Used the source. :codex-file-citation{path="/tmp/content',
+      },
+      "run-1",
+    );
+    const preview = events.find(
+      (event) => event.type === "artifact" && event.kind === "report",
+    ) as Extract<WorkRunEvent, { type: "artifact" }> | undefined;
+
+    expect(preview?.content).toBe("Used the source.");
+  });
+
+  it("does not turn a non-file URL into a citation link", () => {
+    const events = messageEvents(
+      'Answer. :codex-file-citation{path="https://example.com/x.pdf" purpose="source"}',
+    );
+    const report = events.find(
+      (event) => event.type === "artifact" && event.kind === "report",
+    ) as Extract<WorkRunEvent, { type: "artifact" }> | undefined;
+
+    expect(report?.content).toBe("Answer.");
+  });
+});
+
 describe("Codex subagent lifecycle projection", () => {
   function spawnComplete(
     mapper: ReturnType<typeof createHarness>["mapper"],

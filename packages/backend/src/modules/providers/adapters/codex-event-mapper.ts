@@ -1075,6 +1075,54 @@ export function createCodexEventMapper(
     return { text: cleaned, followups };
   }
 
+  // Codex emits file citations as inline remark directives. Turn each one
+  // into the Markdown file chip the renderer already knows how to open. The
+  // streaming preview omits directives until the completed message arrives.
+  const FILE_CITATION_DIRECTIVE_REGEX =
+    /[ \t\r\n]*:codex-file-citation\{((?:[^"{}]|"(?:\\.|[^"\\])*")*)\}/g;
+  const FILE_CITATION_ATTRIBUTE_REGEX =
+    /([A-Za-z][\w-]*)="((?:\\.|[^"\\])*)"/g;
+
+  function fileCitationPath(attributes: string): string | null {
+    let cursor = 0;
+    let filePath: string | null = null;
+    for (const match of attributes.matchAll(FILE_CITATION_ATTRIBUTE_REGEX)) {
+      const index = match.index ?? 0;
+      if (attributes.slice(cursor, index).trim()) return null;
+      cursor = index + match[0].length;
+      if (match[1] !== "path") continue;
+      try {
+        filePath = JSON.parse(`"${match[2]}"`) as string;
+      } catch {
+        return null;
+      }
+    }
+    if (attributes.slice(cursor).trim()) return null;
+    const resolved = filePath?.trim();
+    if (!resolved || resolved.startsWith("//") || /^[A-Za-z][\w+.-]*:/.test(resolved) || resolved.includes("\0")) {
+      return null;
+    }
+    return resolved;
+  }
+
+  function projectFileCitations(text: string, renderLinks: boolean): string {
+    if (!text.includes(":codex-file-citation")) return text;
+    return text
+      .replace(FILE_CITATION_DIRECTIVE_REGEX, (_match, attributes: string) => {
+        const filePath = fileCitationPath(attributes);
+        if (!renderLinks || !filePath) return "";
+        const label = path.basename(filePath).replace(/[\\[\]]/g, "\\$&");
+        const href = filePath
+          .split("/")
+          .map((segment) => encodeURIComponent(segment).replace(/[()]/g, (char) =>
+            char === "(" ? "%28" : "%29"))
+          .join("/");
+        return ` [${label || "File"}](${href})`;
+      })
+      // An incomplete streaming directive should not flash as raw syntax.
+      .replace(/[ \t]*:codex-file-citation(?:\{[^\n]*)?$/gm, "");
+  }
+
   function emitAgentMessageContent(
     events: WorkRunEvent[],
     runId: string,
@@ -1084,7 +1132,8 @@ export function createCodexEventMapper(
     extraMetadata: Record<string, unknown> = {},
   ): boolean {
     const { text: messageText, followups } = extractFollowupDirectives(rawText);
-    const parts = parseAgentMessageParts(messageText);
+    const parts = parseAgentMessageParts(projectFileCitations(messageText, true));
+    const textWithoutCitations = projectFileCitations(messageText, false);
     const documentText: string[] = [];
     let emitted = false;
     const metadata = {
@@ -1119,7 +1168,7 @@ export function createCodexEventMapper(
       emitDocumentArtifactsFromText(
         events,
         runId,
-        documentText.join("\n"),
+        stripAnnotationMarkers(textWithoutCitations),
         ts,
       );
     }
@@ -1749,7 +1798,7 @@ export function createCodexEventMapper(
             events.push({
               type: "artifact",
               kind: "report",
-              content: stripAnnotationMarkers(runState.agentMessageBuffer),
+              content: projectFileCitations(stripAnnotationMarkers(runState.agentMessageBuffer), false),
               metadata: { source: "agent_message_streaming" },
               ephemeral: true,
               streamId: `codex-msg-${runId}-${runState.currentMessageItemId ?? "default"}`,
@@ -3093,10 +3142,13 @@ export function createCodexEventMapper(
     if (phase === "complete") {
       emitImageArtifacts(events, runId, item, ts);
     }
-    // Document scan runs on every phase (start/update/complete): a command like
-    // `qlmanage … report.docx` references a doc that already exists at start,
-    // and the existence + dedup guards make repeat scans harmless.
-    emitDocumentArtifacts(events, runId, item, ts);
+    // Agent messages are scanned above after citation directives are removed;
+    // treating a cited source as an output document would misfile it as a
+    // deliverable. Other item types still scan on every phase: a command like
+    // `qlmanage … report.docx` can name a document before it completes.
+    if (item.type !== "agentMessage" && item.type !== "agent_message") {
+      emitDocumentArtifacts(events, runId, item, ts);
+    }
 
     return events;
   }

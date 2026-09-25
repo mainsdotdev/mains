@@ -24,7 +24,7 @@ function splitFileHref(href: string): { path: string; line?: number } {
 
 function decodeFileHrefPath(filePath: string): string {
   try {
-    return decodeURI(filePath);
+    return decodeURIComponent(filePath);
   } catch {
     return filePath;
   }
