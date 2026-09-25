@@ -98,6 +98,32 @@ describe("Modal behavior", () => {
     opener.remove();
   });
 
+  it("restores an explicit opener when the background surface was hidden", () => {
+    const previousFocus = document.createElement("button");
+    const opener = document.createElement("button");
+    document.body.append(previousFocus, opener);
+    previousFocus.focus();
+    const returnFocusRef = { current: opener };
+
+    const { unmount } = render(
+      createElement(
+        Modal,
+        {
+          isOpen: true,
+          onClose: () => undefined,
+          returnFocusRef,
+          "aria-label": "Expanded editor",
+        },
+        createElement("button", null, "Save"),
+      ),
+    );
+
+    unmount();
+    expect(document.activeElement).toBe(opener);
+    previousFocus.remove();
+    opener.remove();
+  });
+
   it("wraps focus across the first and last controls", () => {
     render(
       createElement(

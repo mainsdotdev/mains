@@ -176,7 +176,7 @@ export function CollectionSettingsModal({
       className="w-full max-w-xl rounded-3xl overflow-visible text-primary-900 dark:text-primary-100"
     >
       <ModalHeader onClose={close}>
-        <Text as="h2" size="xl" weight="semibold" tone="contrast">
+        <Text as="h2" size="base" weight="semibold" tone="contrast">
           Project settings
         </Text>
       </ModalHeader>
@@ -283,7 +283,7 @@ export function CollectionSettingsModal({
             className={`flex min-h-64 w-full flex-col items-center justify-center rounded-2xl border border-dashed px-5 text-center transition-colors sm:min-h-72 ${
               isDragging
                 ? "border-primary-600 bg-primary-100/60 dark:border-primary-300 dark:bg-primary-800/40"
-                : "border-primary-300 bg-primary-50/20 hover:bg-primary-50/60 dark:border-primary-700 dark:bg-primary-950/20 dark:hover:bg-primary-900/40"
+                : "border-primary-200 bg-primary-50/20 hover:bg-primary-50/60 dark:border-primary-800 dark:bg-primary-950/20 dark:hover:bg-primary-900/40"
             }`}
           >
             <Text as="span" size="sm" tone="muted">
@@ -338,7 +338,7 @@ export function CollectionSettingsModal({
         )}
       </div>
 
-      <div className="flex shrink-0 justify-end border-t border-primary-200 px-6 py-4 dark:border-primary-800">
+      <div className="flex shrink-0 justify-end px-6 py-4 ">
         <Button
           variant="submit"
           className="min-w-24"

@@ -1357,3 +1357,40 @@ html.mains-web.dark #root {
 .preview-git-press { animation-name: preview-git-press; }
 .preview-git-before { animation-name: preview-git-before; }
 .preview-git-after { animation-name: preview-git-after; }
+
+/* The PR form snapshots keep their native pixel size as the shared surface
+   grows or shrinks. Cropping and overlapping their fades preserves visible
+   content throughout the move without stretching the text. */
+::view-transition-group(pr-editor) {
+  background: var(--glass-fill-surface);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  animation-duration: 340ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+::view-transition-old(pr-editor),
+::view-transition-new(pr-editor) {
+  width: 100%;
+  height: 100%;
+  object-fit: none;
+  object-position: top left;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(pr-editor) {
+  animation: pr-editor-content-out 200ms ease-in both;
+}
+
+::view-transition-new(pr-editor) {
+  animation: pr-editor-content-in 280ms ease-out 40ms both;
+}
+
+@keyframes pr-editor-content-out {
+  to { opacity: 0; }
+}
+
+@keyframes pr-editor-content-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

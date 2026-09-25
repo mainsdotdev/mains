@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useId } from "react";
 import { useNavigate } from "react-router-dom";
-import { Body, Button, Caption, Checkbox, Heading3, Modal, Text, toast } from "@/components/ui";
+import { Body, Button, Caption, Checkbox, Modal, Text, toast } from "@/components/ui";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import {
   useListAvailableResourcesQuery,
@@ -186,10 +186,10 @@ export function LinkResourcesModal({
       className="w-full max-w-xl rounded-3xl"
     >
       {/* Header */}
-      <div className="px-6 pt-6 pb-4">
-        <Heading3 id={titleId}>
+      <div className="px-6 pt-6 pb-2">
+        <Text variant="h3" size="base" id={titleId}>
           Link Resources
-        </Heading3>
+        </Text>
       </div>
 
       {/* Content */}

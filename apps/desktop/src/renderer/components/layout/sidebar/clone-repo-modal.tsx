@@ -58,9 +58,9 @@ export default function CloneRepoModal({
       aria-labelledby={titleId}
       closeOnEscape={!isCloning}
       closeOnBackdrop={!isCloning}
-      className="max-w-md w-full rounded-4xl px-6 pt-5 pb-6"
+      className="max-w-md w-full rounded-3xl px-6 pt-5 pb-6"
     >
-      <Body as="h2" id={titleId} weight="medium" className="mb-2">
+      <Body as="h2" id={titleId} weight="medium" className="mb-4">
         Clone Repository
       </Body>
 

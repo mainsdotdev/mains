@@ -12,6 +12,8 @@ interface GitActionsSectionProps {
   providerId?: string;
   /** Closes the panel this section lives in (a created PR dismisses it). */
   onClose: () => void;
+  onPrEditorOpenChange: (open: boolean, transitioning: boolean) => void;
+  onPrEditorTransitionEnd: () => void;
   /**
    * Rendered under the git actions — the session's subagent list. Kept as a
    * slot so this file stays about git and the panel decides the ordering. It
@@ -31,13 +33,14 @@ interface GitActionsSectionProps {
  * action — comes from `useGitActionsPanel`. Whether a row is *usable* is that
  * hook's business too, since a row that turns unusable has to close itself.
  *
- * Mounted only while the session panel is open (`DropdownMenu` renders nothing
- * when closed), so form state resets on close and the status query starts fresh
- * on each open — no manual teardown needed.
+ * Mounted while the session panel is open, including while its PR editor is
+ * expanded into a modal. A normal panel close unmounts it and resets the forms.
  */
 export function GitActionsSection({
   providerId,
   onClose,
+  onPrEditorOpenChange,
+  onPrEditorTransitionEnd,
   footer,
 }: GitActionsSectionProps) {
   const activeWorkspaceId = useAppSelector(
@@ -51,6 +54,8 @@ export function GitActionsSection({
       workspaceId={activeWorkspaceId}
       providerId={providerId}
       onClose={onClose}
+      onPrEditorOpenChange={onPrEditorOpenChange}
+      onPrEditorTransitionEnd={onPrEditorTransitionEnd}
       footer={footer}
     />
   );
@@ -61,6 +66,8 @@ function GitActions({
   workspaceId,
   providerId,
   onClose,
+  onPrEditorOpenChange,
+  onPrEditorTransitionEnd,
   footer,
 }: GitActionsSectionProps & { workspaceId: string }) {
   const panel = useGitActionsPanel(workspaceId);
@@ -74,7 +81,13 @@ function GitActions({
       {panel.hasRemote && <PullSection panel={panel} />}
       {/* No remote yet — push/PR are impossible. Publish takes the slot. */}
       {panel.hasRemote ? (
-        <PrSection panel={panel} providerId={providerId} onClose={onClose} />
+        <PrSection
+          panel={panel}
+          providerId={providerId}
+          onClose={onClose}
+          onEditorOpenChange={onPrEditorOpenChange}
+          onEditorTransitionEnd={onPrEditorTransitionEnd}
+        />
       ) : (
         <PublishSection panel={panel} />
       )}

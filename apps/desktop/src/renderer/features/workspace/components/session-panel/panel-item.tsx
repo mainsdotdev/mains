@@ -85,7 +85,7 @@ export function PanelItem({
   // instead of a bright icon sitting next to a greyed-out label.
   const dimmed = disabled && (onIconClick || hoverAction) ? "opacity-40" : "";
   const iconSlot = (
-    <span className={`shrink-0 text-primary-600 dark:text-primary-400 ${dimmed}`}>
+    <span aria-hidden="true" className={`shrink-0 text-primary-600 dark:text-primary-400 ${dimmed}`}>
       {loading ? <Refresh className="size-4 animate-spin" /> : icon}
     </span>
   );
@@ -230,9 +230,11 @@ export function PanelItem({
 export function PanelCollapse({
   isOpen,
   children,
+  viewTransitionName,
 }: {
   isOpen: boolean;
   children: ReactNode;
+  viewTransitionName?: string;
 }) {
   return (
     <div
@@ -241,7 +243,12 @@ export function PanelCollapse({
       }`}
     >
       <div className="min-h-0 overflow-hidden">
-        <div className="bg-primary-50 mt-0.5 mb-0.5 dark:bg-primary/5 rounded-lg">{children}</div>
+        <div
+          className="bg-primary-50 mt-0.5 mb-0.5 dark:bg-primary/5 rounded-lg"
+          style={{ viewTransitionName }}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );

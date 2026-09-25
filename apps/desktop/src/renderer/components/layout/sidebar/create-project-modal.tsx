@@ -62,9 +62,9 @@ export default function CreateProjectModal({
       initialFocusRef={nameInputRef}
       closeOnEscape={!isCreating}
       closeOnBackdrop={!isCreating}
-      className="max-w-md w-full rounded-4xl px-6 pt-5 pb-6"
+      className="max-w-md w-full rounded-3xl px-6 pt-5 pb-6"
     >
-      <Body as="h2" id={titleId} weight="medium" className="mb-2">
+      <Body as="h2" id={titleId} weight="medium" className="mb-4">
         Create New Project
       </Body>
 

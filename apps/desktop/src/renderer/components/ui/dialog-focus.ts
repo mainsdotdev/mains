@@ -33,6 +33,7 @@ interface DialogFocusOptions {
   dialogRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   initialFocusRef?: RefObject<HTMLElement | null>;
+  returnFocusRef?: RefObject<HTMLElement | null>;
   closeOnEscape?: boolean;
 }
 
@@ -45,6 +46,7 @@ export function useDialogFocus({
   dialogRef,
   onClose,
   initialFocusRef,
+  returnFocusRef,
   closeOnEscape = true,
 }: DialogFocusOptions) {
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -58,9 +60,10 @@ export function useDialogFocus({
     if (!isOpen) return;
 
     previousFocusRef.current =
-      document.activeElement instanceof HTMLElement
+      returnFocusRef?.current ??
+      (document.activeElement instanceof HTMLElement
         ? document.activeElement
-        : null;
+        : null);
 
     const focusFrame = requestAnimationFrame(() => {
       const dialog = dialogRef.current;
@@ -79,7 +82,7 @@ export function useDialogFocus({
 
       requestAnimationFrame(() => previousFocus.focus());
     };
-  }, [dialogRef, initialFocusRef, isOpen]);
+  }, [dialogRef, initialFocusRef, isOpen, returnFocusRef]);
 
   return useCallback(
     (event: ReactKeyboardEvent<HTMLElement>) => {
