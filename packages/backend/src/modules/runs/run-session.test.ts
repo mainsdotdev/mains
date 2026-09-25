@@ -74,7 +74,6 @@ vi.mock("../workspace", () => ({
   },
   recordWorkspaceDiff: vi.fn().mockResolvedValue(undefined),
   clearWorkspaceDiff: vi.fn().mockResolvedValue(false),
-  logWorkspaceActivity: vi.fn(),
 }));
 
 import { createRunSession } from "./run-session";
@@ -83,7 +82,6 @@ import { runsRepo } from "./runs.repo";
 import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
 import { APP_WRITER, worktreeWrites } from "../git";
-import { logWorkspaceActivity } from "../workspace";
 
 describe("RunSession", () => {
   beforeEach(() => {
@@ -166,7 +164,6 @@ describe("RunSession", () => {
       expect(gitService.getHeadSha).not.toHaveBeenCalled();
       expect(gitService.captureDiffSnapshot).not.toHaveBeenCalled();
       expect(gitService.snapshotWorkingTree).not.toHaveBeenCalled();
-      expect(logWorkspaceActivity).not.toHaveBeenCalled();
     });
 
     it("creates a turn at seedTurnIndex + 1 for continued runs", async () => {
@@ -1577,84 +1574,4 @@ describe("RunSession", () => {
     });
   });
 
-  // ─────────────────────────────────────────────────────────────
-  // persistFinalDiff — incremental "files changed" activity
-  // ─────────────────────────────────────────────────────────────
-  describe("persistFinalDiff — incremental activity", () => {
-    // Synthetic per-file diff chunk, terminated with a newline like real git
-    // output so its hash is stable regardless of whether other files follow.
-    const fileDiff = (name: string, body: string) =>
-      `diff --git a/${name} b/${name}\nindex 000..111 100644\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n${body}\n`;
-
-    const diffActivities = () =>
-      vi
-        .mocked(logWorkspaceActivity)
-        .mock.calls.filter(([p]) => p.type === "diff")
-        .map(([p]) => p);
-
-    const snap = (diffText: string, files: string[]) => ({
-      baseRef: "sha1",
-      diffText,
-      files,
-      untrackedFiles: [] as string[],
-      shortstat: `${files.length} file${files.length === 1 ? "" : "s"} changed`,
-    });
-
-    it("does not re-log pre-existing changes when the run touches nothing", async () => {
-      // a.ts is already dirty at run start; the run changes nothing.
-      vi.mocked(gitService.getHeadSha).mockResolvedValue("sha1");
-      vi.mocked(gitService.captureDiffSnapshot).mockResolvedValue(
-        snap(fileDiff("a.ts", "+x"), ["a.ts"]),
-      );
-
-      const session = makeSession();
-      await flushBackground(); // captureBaseRef snapshots the pre-existing diff
-
-      await session.finalize({ status: "succeeded" });
-
-      expect(diffActivities()).toHaveLength(0);
-    });
-
-    it("logs only the files changed since run start", async () => {
-      // Run start: a.ts dirty. Run end: a.ts unchanged, b.ts newly changed.
-      vi.mocked(gitService.getHeadSha).mockResolvedValue("sha1");
-      vi.mocked(gitService.captureDiffSnapshot)
-        .mockResolvedValueOnce(snap(fileDiff("a.ts", "+x"), ["a.ts"]))
-        .mockResolvedValue(
-          snap(`${fileDiff("a.ts", "+x")}${fileDiff("b.ts", "+y")}`, [
-            "a.ts",
-            "b.ts",
-          ]),
-        );
-
-      const session = makeSession();
-      await flushBackground();
-
-      await session.finalize({ status: "succeeded" });
-
-      const activities = diffActivities();
-      expect(activities).toHaveLength(1);
-      expect(activities[0].title).toBe("1 file changed");
-      expect((activities[0].metadata as any).fileNames).toEqual(["b.ts"]);
-    });
-
-    it("skips the activity log when the run-start baseline could not be captured", async () => {
-      // getHeadSha succeeds (baseRef is set) but the run-start snapshot fails
-      // (all-or-throw), so initialDiffHashes stays null — "baseline unknown",
-      // not "clean tree". We must NOT attribute the now-dirty a.ts to this run;
-      // an empty-Map fallback would have logged it as a spurious "1 file
-      // changed".
-      vi.mocked(gitService.getHeadSha).mockResolvedValue("sha1");
-      vi.mocked(gitService.captureDiffSnapshot)
-        .mockRejectedValueOnce(new Error("git boom")) // run-start snapshot fails → null baseline
-        .mockResolvedValue(snap(fileDiff("a.ts", "+x"), ["a.ts"])); // finalize snapshot
-
-      const session = makeSession();
-      await flushBackground();
-
-      await session.finalize({ status: "succeeded" });
-
-      expect(diffActivities()).toHaveLength(0);
-    });
-  });
 });

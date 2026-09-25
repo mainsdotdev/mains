@@ -26,6 +26,7 @@ import {
   createReview,
   createReviewFinding,
   createRun,
+  createRunTurn,
 } from "../../../../../../packages/backend/test/factories";
 import type { DatabaseInstance } from "../../../../../../packages/backend/src/db/types";
 import type Database from "better-sqlite3";
@@ -124,6 +125,7 @@ import {
   assertWorkspacePathExists,
 } from "@mains/backend/modules/workspace";
 import { workspaceRepo } from "../../../../../../packages/backend/src/modules/workspace/workspace.repo";
+import { runsRepo } from "../../../../../../packages/backend/src/modules/runs/runs.repo";
 import { projectsRepo } from "../../../../../../packages/backend/src/modules/projects/projects.repo";
 import { gitService } from "../../../../../../packages/backend/src/modules/git/git.service";
 import { appSettingsService } from "../../../../../../packages/backend/src/modules/appSettings/appSettings.service";
@@ -1286,6 +1288,124 @@ describe("workspaceService — activity", () => {
 
       const result = await workspaceService.listActivity(wsId);
       expect(result).toHaveLength(2);
+    });
+
+    it("uses each turn's stored file changes and hides the run-end diff entry", async () => {
+      createRun(db, { id: "run-1", workspaceId: wsId, status: "failed" });
+      const firstTurn = createRunTurn(db, { runId: "run-1", turnIndex: 0 });
+      const secondTurn = createRunTurn(db, { runId: "run-1", turnIndex: 1 });
+      await runsRepo.insertTurnChanges({
+        runId: "run-1",
+        turnId: firstTurn.id,
+        diffText: "first patch",
+        files: [
+          { path: "src/a.ts", status: "modified", additions: 1, deletions: 0, binary: false },
+          { path: "src/b.ts", status: "added", additions: 2, deletions: 0, binary: false },
+        ],
+        additions: 3,
+        deletions: 0,
+        truncated: false,
+      });
+      await runsRepo.insertTurnChanges({
+        runId: "run-1",
+        turnId: secondTurn.id,
+        diffText: "second patch",
+        files: [
+          { path: "src/a.ts", status: "modified", additions: 1, deletions: 1, binary: false },
+        ],
+        additions: 1,
+        deletions: 1,
+        truncated: false,
+      });
+      createWorkspaceActivity(db, {
+        id: "old-diff",
+        workspaceId: wsId,
+        type: "diff",
+        title: "3 files changed",
+        refId: "run-1",
+      });
+      createWorkspaceActivity(db, {
+        id: "commit",
+        workspaceId: wsId,
+        type: "commit",
+        title: "Commit",
+      });
+
+      const result = await workspaceService.listActivity(wsId);
+      const diffs = result.filter((activity) => activity.type === "diff");
+      expect(result).toHaveLength(3);
+      expect(diffs).toHaveLength(2);
+      expect(diffs.map((activity) => activity.title).sort()).toEqual([
+        "1 file changed",
+        "2 files changed",
+      ]);
+      expect(diffs.find((activity) => activity.metadata?.turnId === firstTurn.id)).toMatchObject({
+        refId: "run-1",
+        summary: "src/a.ts\nsrc/b.ts",
+        metadata: { files: 2, fileNames: ["src/a.ts", "src/b.ts"] },
+      });
+      expect(result.some((activity) => activity.id === "old-diff")).toBe(false);
+      expect(result.some((activity) => activity.id === "commit")).toBe(true);
+    });
+
+    it("keeps legacy diffs without turn data and reads past superseded rows for the limit", async () => {
+      createRun(db, { id: "run-1", workspaceId: wsId });
+      const turn = createRunTurn(db, { runId: "run-1", turnIndex: 0 });
+      await runsRepo.insertTurnChanges({
+        runId: "run-1",
+        turnId: turn.id,
+        diffText: "patch",
+        files: [
+          { path: "file.ts", status: "modified", additions: 1, deletions: 0, binary: false },
+        ],
+        additions: 1,
+        deletions: 0,
+        truncated: false,
+      });
+      for (const id of ["old-1", "old-2"]) {
+        createWorkspaceActivity(db, {
+          id,
+          workspaceId: wsId,
+          type: "diff",
+          title: "Old run-end diff",
+          refId: "run-1",
+          createdAt: new Date("2030-01-01"),
+        });
+      }
+      createWorkspaceActivity(db, {
+        id: "legacy",
+        workspaceId: wsId,
+        type: "diff",
+        title: "Legacy diff without a turn card",
+        refId: "older-run",
+        createdAt: new Date("2029-01-01"),
+      });
+
+      const result = await workspaceService.listActivity(wsId, 2);
+      expect(result).toHaveLength(2);
+      expect(result.map((activity) => activity.id)).toContain("legacy");
+      expect(result.some((activity) => activity.id.startsWith("turn-change:"))).toBe(true);
+    });
+
+    it("reflects a turn's undo state from the stored change row", async () => {
+      createRun(db, { id: "run-1", workspaceId: wsId });
+      const turn = createRunTurn(db, { runId: "run-1", turnIndex: 0 });
+      const changeId = await runsRepo.insertTurnChanges({
+        runId: "run-1",
+        turnId: turn.id,
+        diffText: "patch",
+        files: [
+          { path: "file.ts", status: "modified", additions: 1, deletions: 0, binary: false },
+        ],
+        additions: 1,
+        deletions: 0,
+        truncated: false,
+      });
+      const undoneAt = new Date("2026-09-25T08:00:00.000Z");
+      await runsRepo.markTurnChangesUndone(changeId, undoneAt);
+
+      const [activity] = await workspaceService.listActivity(wsId);
+      expect(activity.metadata?.undoneAt).toBe(undoneAt.getTime());
     });
   });
 

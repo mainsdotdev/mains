@@ -193,6 +193,7 @@ export const workspaceRepo = {
   async findActivityByWorkspace(
     workspaceId: string,
     limit = 50,
+    offset = 0,
   ): Promise<ActivityResponse[]> {
     const db = getDb();
     const rows = await db
@@ -200,7 +201,8 @@ export const workspaceRepo = {
       .from(workspaceActivity)
       .where(eq(workspaceActivity.workspaceId, workspaceId))
       .orderBy(desc(workspaceActivity.createdAt))
-      .limit(limit);
+      .limit(limit)
+      .offset(offset);
     return rows.map(mapActivityRow);
   },
 

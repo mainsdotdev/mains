@@ -543,6 +543,37 @@ export const runsRepo = {
   // ─────────────────────────────────────────────────────────────
   // Run Turn Changes
   // ─────────────────────────────────────────────────────────────
+  async findTurnChangesByWorkspace(workspaceId: string, limit: number) {
+    return getDb()
+      .select({
+        id: runTurnChanges.id,
+        runId: runTurnChanges.runId,
+        turnId: runTurnChanges.turnId,
+        filesJson: runTurnChanges.filesJson,
+        undoneAt: runTurnChanges.undoneAt,
+        createdAt: runTurnChanges.createdAt,
+        endedAt: runTurns.endedAt,
+      })
+      .from(runTurnChanges)
+      .innerJoin(runs, eq(runTurnChanges.runId, runs.id))
+      .innerJoin(runTurns, eq(runTurnChanges.turnId, runTurns.id))
+      .where(eq(runs.workspaceId, workspaceId))
+      .orderBy(
+        desc(runTurns.endedAt),
+        desc(runTurnChanges.createdAt),
+        desc(runTurnChanges.turnId),
+      )
+      .limit(limit);
+  },
+
+  async findRunIdsWithTurnChanges(runIds: string[]) {
+    if (runIds.length === 0) return [];
+    return getDb()
+      .selectDistinct({ runId: runTurnChanges.runId })
+      .from(runTurnChanges)
+      .where(inArray(runTurnChanges.runId, runIds));
+  },
+
   async insertTurnChanges(payload: CreateRunTurnChangesPayload): Promise<string> {
     const db = getDb();
     const id = randomUUID();

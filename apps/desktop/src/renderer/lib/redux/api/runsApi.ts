@@ -571,6 +571,7 @@ export const runsApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_result, _error, { runId }) => [
         { type: "RunTurns", id: runId },
+        "WorkspaceActivity",
       ],
     }),
 

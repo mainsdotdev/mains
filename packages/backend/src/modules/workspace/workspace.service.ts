@@ -8,6 +8,7 @@ import { workspaceRepo } from "./workspace.repo";
 import { projectsRepo } from "../projects/projects.repo";
 import { normalizeRemoteOrigin } from "../projects/projects.utils";
 import { gitService, type DiffSnapshot } from "../git";
+import { runTurnActivityService } from "../runs/run-turn-activity";
 import { appSettingsService } from "../appSettings/appSettings.service";
 import type { CreateProjectPayload, ProjectResponse } from "../projects/projects.dto";
 import type {
@@ -1059,7 +1060,61 @@ export const workspaceService = {
     workspaceId: string,
     limit?: number,
   ): Promise<ActivityResponse[]> {
-    return workspaceRepo.findActivityByWorkspace(workspaceId, limit);
+    const count = limit ?? 50;
+    if (count <= 0) return [];
+
+    // Keep the existing timeline events, but project file edits from the same
+    // run_turn_changes rows that power the transcript cards. Older run-end diff
+    // events remain visible only when that run has no turn-change records.
+    const turnChanges = await runTurnActivityService.listByWorkspace(workspaceId, count);
+    const oldestTurnAt = turnChanges.length === count
+      ? Math.min(...turnChanges.map((change) => change.createdAt.getTime()))
+      : null;
+    const activityRows: ActivityResponse[] = [];
+    let offset = 0;
+    while (activityRows.length < count) {
+      const page = await workspaceRepo.findActivityByWorkspace(workspaceId, count, offset);
+      if (page.length === 0) break;
+      const legacyRunIds = page
+        .filter((activity) => activity.type === "diff" && activity.refId)
+        .map((activity) => activity.refId!);
+      const superseded = await runTurnActivityService.runsWithChanges(legacyRunIds);
+      activityRows.push(
+        ...page.filter(
+          (activity) =>
+            activity.type !== "diff" || !activity.refId || !superseded.has(activity.refId),
+        ),
+      );
+      offset += page.length;
+      if (page.length < count) break;
+      // Once we have a full page of newer turn entries, older activity rows
+      // cannot enter the requested window.
+      if (oldestTurnAt !== null && page[page.length - 1].createdAt.getTime() < oldestTurnAt) break;
+    }
+
+    const fileActivities: ActivityResponse[] = turnChanges.map((change) => {
+      const fileNames = change.files.map((file) => file.path);
+      const fileCount = fileNames.length;
+      return {
+        id: `turn-change:${change.id}`,
+        workspaceId,
+        type: "diff",
+        title: `${fileCount} file${fileCount === 1 ? "" : "s"} changed`,
+        summary: fileNames.join("\n"),
+        metadata: {
+          files: fileCount,
+          fileNames,
+          turnId: change.turnId,
+          undoneAt: change.undoneAt?.getTime() ?? null,
+        },
+        refId: change.runId,
+        createdAt: change.createdAt,
+      };
+    });
+
+    return [...activityRows, ...fileActivities]
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))
+      .slice(0, count);
   },
 
   async createActivity(payload: CreateActivityPayload): Promise<string> {
