@@ -2,13 +2,13 @@ import type { CSSProperties, MouseEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import {
-  Box,
   Home,
   Plugin,
   Question,
   Relay,
   Search,
   Settings,
+  Task,
 } from "@/components/ui/icons";
 import { Clock } from "@/components/ui/icons/space";
 import { requestCommandMenu } from "@/features/command-menu/command-menu-bridge";
@@ -57,14 +57,13 @@ export function NavigationRail({
   const homeActive = isWorkspaceRoute(pathname);
   const settingsActive = isSettingsRoute(pathname);
   const destinations = [
-    ...(showTasks ? [{ label: "Tasks", path: "/tasks", Icon: Box }] : []),
-    { label: "Pulse", path: "/pulse", Icon: Clock },
-    {
+    ...(showTasks ? [    {
       label: "Plugins",
       path: "/plugins",
       Icon: Plugin,
       disabled: !pluginsAvailable,
-    },
+    },{ label: "Tasks", path: "/tasks", Icon: Task }] : []),
+    { label: "Pulse", path: "/pulse", Icon: Clock },
     { label: "Connect", path: "/relay", Icon: Relay },
   ];
   const buttonClass = (active: boolean) =>

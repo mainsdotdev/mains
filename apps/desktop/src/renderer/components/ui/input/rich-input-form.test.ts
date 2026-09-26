@@ -191,6 +191,95 @@ describe("RichInputForm file pasting", () => {
 });
 
 describe("RichInputForm file mentions", () => {
+  it("restores a file chip when its context arrives after the draft text", () => {
+    const path = "/repo/components/sections/hero-section.tsx";
+    const file = { path, basename: "hero-section.tsx" };
+    const query = `refactor @${path} `;
+    const onCaretContextChange = vi.fn();
+    const props = {
+      query,
+      onQueryChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onCaretContextChange,
+    };
+
+    const view = render(createElement(RichInputForm, {
+      ...props,
+      fileChipMap: new Map(),
+    }));
+    const editor = screen.getByRole("textbox");
+    expect(editor.querySelector('[data-file-chip="true"]')).toBeNull();
+
+    view.rerender(createElement(RichInputForm, {
+      ...props,
+      fileChipMap: new Map([[path, file]]),
+    }));
+
+    expect(editor.querySelector('[data-file-chip="true"]')?.getAttribute("data-file-path"))
+      .toBe(path);
+    editor.focus();
+    placeCaretAtEnd(editor);
+    act(() => document.dispatchEvent(new Event("selectionchange")));
+    const textBeforeCaret = onCaretContextChange.mock.lastCall?.[0] as string;
+    expect(textBeforeCaret.trim()).toBe("refactor");
+    expect(textBeforeCaret).not.toContain("@");
+  });
+
+  it("does not turn an existing chip into a raw path while context switches", () => {
+    const path = "/repo/hero-section.tsx";
+    const props = {
+      query: `refactor @${path} `,
+      onQueryChange: vi.fn(),
+      onSubmit: vi.fn(),
+    };
+    const view = render(createElement(RichInputForm, {
+      ...props,
+      fileChipMap: new Map([[path, { path, basename: "hero-section.tsx" }]]),
+    }));
+    const editor = screen.getByRole("textbox");
+    expect(editor.querySelector('[data-file-chip="true"]')).not.toBeNull();
+
+    view.rerender(createElement(RichInputForm, {
+      ...props,
+      fileChipMap: new Map(),
+    }));
+
+    expect(editor.querySelector('[data-file-chip="true"]')).not.toBeNull();
+  });
+
+  it("keeps the caret in place when editing removes a file chip", () => {
+    const path = "/repo/hero-section.tsx";
+    const fileChipMap = new Map([[path, { path, basename: "hero-section.tsx" }]]);
+    function Harness() {
+      const [query, setQuery] = useState(`refactor @${path} later`);
+      return createElement(RichInputForm, {
+        query,
+        onQueryChange: setQuery,
+        onSubmit: vi.fn(),
+        fileChipMap,
+      });
+    }
+
+    render(createElement(Harness));
+    const editor = screen.getByRole("textbox");
+    const leadingText = editor.firstChild as Text;
+    editor.focus();
+    const range = document.createRange();
+    range.setStart(leadingText, 3);
+    range.collapse(true);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    act(() => {
+      editor.querySelector('[data-file-chip="true"]')?.remove();
+      fireEvent.input(editor);
+    });
+
+    expect(selection.anchorNode).toBe(leadingText);
+    expect(selection.anchorOffset).toBe(3);
+  });
+
   it.each([
     { path: "/repo/apps", basename: "apps", isDirectory: true },
     { path: "/repo/app.tsx", basename: "app.tsx", isDirectory: false },

@@ -535,6 +535,10 @@ function serializeRoot(root: HTMLElement): string {
   return serializeChildren(root, lastLeaf(root));
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function rebuildContent(
   root: HTMLElement,
   text: string,
@@ -550,7 +554,6 @@ function rebuildContent(
       : document.createTextNode(text),
   );
 
-  const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const skillTokens =
     skillChipMap && skillChipMap.size > 0
       ? Array.from(skillChipMap.keys()).sort((a, b) => b.length - a.length)
@@ -573,19 +576,19 @@ function rebuildContent(
   const selectedSkills = skillTokens.filter((token) => token.startsWith("$"));
   const selectedApps = skillTokens.filter((token) => token.startsWith("@"));
   if (selectedSkills.length > 0) {
-    parts.push(`(?<skill>${selectedSkills.map(escRe).join("|")})(?![\\w-])`);
+    parts.push(`(?<skill>${selectedSkills.map(escapeRegExp).join("|")})(?![\\w-])`);
   }
   if (selectedApps.length > 0) {
-    parts.push(`(?<app>${selectedApps.map(escRe).join("|")})(?![\\w./-])`);
+    parts.push(`(?<app>${selectedApps.map(escapeRegExp).join("|")})(?![\\w./-])`);
   }
   // Code keys (`<path>#L<range>`) go before file paths: both start with `@` and a
   // code key extends a path, so the file alternative would otherwise win at `@path`.
   if (codeKeys.length > 0) {
-    parts.push(`@(?<code>${codeKeys.map(escRe).join("|")})(?![\\w-])`);
+    parts.push(`@(?<code>${codeKeys.map(escapeRegExp).join("|")})(?![\\w-])`);
   }
   if (filePaths.length > 0) {
     // Negative lookahead allows path chars (`.`, `/`, `-`, `_`, word) so we don't partial-match a longer path.
-    parts.push(`@(?<file>${filePaths.map(escRe).join("|")})(?![\\w./-])`);
+    parts.push(`@(?<file>${filePaths.map(escapeRegExp).join("|")})(?![\\w./-])`);
   }
   const re = new RegExp(parts.join("|"), "g");
 
@@ -638,6 +641,27 @@ function rebuildContent(
     }
     textNode.replaceWith(fragment);
   }
+}
+
+/** Find a raw file mention that became eligible for a chip after context arrived. */
+function hasUnrenderedFileToken(
+  root: HTMLElement,
+  fileChipMap?: ReadonlyMap<string, RichFileChipData>,
+): boolean {
+  if (!fileChipMap?.size) return false;
+  const paths = Array.from(fileChipMap.keys());
+  const token = new RegExp(`@(?:${paths.map(escapeRegExp).join("|")})(?![\\w./#-])`);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (
+      node.parentElement?.closest(
+        `code, [data-markdown-link], [${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`,
+      )
+    ) continue;
+    if (token.test(node.textContent ?? "")) return true;
+  }
+  return false;
 }
 
 function serializeFragment(node: Node): string {
@@ -772,18 +796,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
     const lastChipsRef = useRef<string>("");
     const lastFileChipsRef = useRef<string>("");
     const lastCodeChipsRef = useRef<string>("");
-    const skillChipMapRef = useRef<ReadonlyMap<string, RichSkillChipData> | undefined>(skillChipMap);
-    const fileChipMapRef = useRef<ReadonlyMap<string, RichFileChipData> | undefined>(fileChipMap);
-    const codeChipMapRef = useRef<ReadonlyMap<string, RichCodeChipData> | undefined>(codeChipMap);
-    useEffect(() => {
-      skillChipMapRef.current = skillChipMap;
-    }, [skillChipMap]);
-    useEffect(() => {
-      fileChipMapRef.current = fileChipMap;
-    }, [fileChipMap]);
-    useEffect(() => {
-      codeChipMapRef.current = codeChipMap;
-    }, [codeChipMap]);
+    const lastFileChipMapRef = useRef(fileChipMap);
 
     const fireCaretContext = useCallback(() => {
       if (!onCaretContextChange) return;
@@ -845,13 +858,18 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       fireCaretContext();
     }, [onQueryChange, onSkillChipsChange, onFileChipsChange, onCodeChipsChange, query, fireCaretContext]);
 
-    // Sync DOM when external `query` differs from current serialization.
-    // Only fires on real divergence (slash/file/issue picker rewrites the goal); typing leaves them in lockstep.
+    // Sync external query changes and restore raw file mentions when their context arrives later.
+    // Typing leaves the query and DOM in lockstep, so ordinary edits do not rebuild the editor.
     useEffect(() => {
       const root = editorRef.current;
       if (!root) return;
-      if (query === lastSerializedRef.current) return;
-      rebuildContent(root, query, skillChipMapRef.current, fileChipMapRef.current, codeChipMapRef.current);
+      const fileMapChanged = fileChipMap !== lastFileChipMapRef.current;
+      lastFileChipMapRef.current = fileChipMap;
+      if (
+        query === lastSerializedRef.current &&
+        !(fileMapChanged && hasUnrenderedFileToken(root, fileChipMap))
+      ) return;
+      rebuildContent(root, query, skillChipMap, fileChipMap, codeChipMap);
       lastSerializedRef.current = query;
       setIsEmpty(query.length === 0);
 
@@ -868,7 +886,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onCodeChipsChange?.(codeKeys);
 
       if (document.activeElement === root) placeCaretAtEnd(root);
-    }, [query, onSkillChipsChange, onFileChipsChange, onCodeChipsChange]);
+    }, [query, skillChipMap, fileChipMap, codeChipMap, onSkillChipsChange, onFileChipsChange, onCodeChipsChange]);
 
     useImperativeHandle(
       ref,
@@ -1001,8 +1019,8 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
         {isEmpty && placeholder && (
           <Text
             as="div"
-            tone="subtle"
-            className={`pointer-events-none absolute left-5 top-4 flex items-start gap-1.5 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}
+            tone="faint"
+            className={`pointer-events-none absolute left-5 top-4 flex items-start gap-1.5 opacity-75 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}
           >
             {placeholderIcon ? (
               <span
