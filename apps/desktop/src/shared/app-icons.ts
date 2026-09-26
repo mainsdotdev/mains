@@ -11,19 +11,24 @@ export const JAPANESE_GRADIENTS = [
 ] as const;
 
 export const UPDATES = [
-  { name: "Fiery Dawn", outside: "mains-17", inside: "mains-25" },
-  { name: "Golden Mist", outside: "mains-18", inside: "mains-26" },
-  { name: "Amber Horizon", outside: "mains-19", inside: "mains-27" },
-  { name: "Deep Sea", outside: "mains-20", inside: "mains-28" },
-  { name: "Summer Coast", outside: "mains-21", inside: "mains-29" },
-  { name: "Blue Depths", outside: "mains-22", inside: "mains-30" },
-  { name: "Neon Sunset", outside: "mains-23", inside: "mains-31" },
-  { name: "Purple Sunrise", outside: "mains-24", inside: "mains-32" },
+  { name: "Emerald Aurora", outside: "mains-17", inside: "mains-25" },
+  { name: "Silver Slate", outside: "mains-18", inside: "mains-26" },
+  { name: "Azure Haze", outside: "mains-19", inside: "mains-27" },
+  { name: "Midnight Tide", outside: "mains-20", inside: "mains-28" },
+  { name: "Copper Canyon", outside: "mains-21", inside: "mains-29" },
+  { name: "Violet Static", outside: "mains-22", inside: "mains-30" },
+  { name: "Golden Sand", outside: "mains-23", inside: "mains-31" },
+  { name: "Solar Drift", outside: "mains-24", inside: "mains-32" },
 ] as const;
 
 export const DEFAULT_APP_ICON_ID = "mains-default" as const;
 export const DARK_APP_ICON_ID = "mains-dark" as const;
 export const LIGHT_APP_ICON_ID = "mains-light" as const;
+export const BLUE_APP_ICON_ID = "mains-blue" as const;
+export const RED_APP_ICON_ID = "mains-red" as const;
+export const YELLOW_APP_ICON_ID = "mains-yellow" as const;
+export const PURPLE_APP_ICON_ID = "mains-purple" as const;
+export const GREEN_APP_ICON_ID = "mains-green" as const;
 
 export const APP_ICON_IDS = [
   DEFAULT_APP_ICON_ID,
@@ -33,6 +38,11 @@ export const APP_ICON_IDS = [
   ...UPDATES.map((gradient) => gradient.outside),
   DARK_APP_ICON_ID,
   LIGHT_APP_ICON_ID,
+  BLUE_APP_ICON_ID,
+  RED_APP_ICON_ID,
+  YELLOW_APP_ICON_ID,
+  PURPLE_APP_ICON_ID,
+  GREEN_APP_ICON_ID,
 ] as const;
 
 export type AppIconId = (typeof APP_ICON_IDS)[number];
