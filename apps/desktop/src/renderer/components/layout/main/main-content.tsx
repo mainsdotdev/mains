@@ -7,6 +7,7 @@ interface MainContentProps {
   children: ReactNode;
   marginLeft: string;
   marginRight: string;
+  transparentSurface?: boolean;
   /**
    * Room to keep clear on the right *inside* the content surface, for something
    * that floats over it (the session box). Published as a CSS variable rather
@@ -30,13 +31,14 @@ export function getCollapsedHeaderPaddingLeft(
 
   // Only the sidebar toggle remains in the titlebar. Native chrome also needs
   // room for the macOS traffic lights to its left.
-  return windowChrome && !isFullscreen ? "7rem" : "3rem";
+  return windowChrome && !isFullscreen ? "4.5rem" : "3rem";
 }
 
 export function MainContent({
   children,
   marginLeft,
   marginRight,
+  transparentSurface,
   contentInsetRight,
   hasRightPanel,
   sidebarCollapsed,
@@ -58,16 +60,15 @@ export function MainContent({
   // When header exists and the first tab is active, the content's top-left corner
   // must be sharp so it connects seamlessly with the active tab above it.
   // Exception: when sidebar is collapsed, always round top-left since there's no sidebar edge.
-  const rightRounding = browserOpen ? "rounded-tr-none rounded-br-none" : "";
-  const contentRounding = header
-    ? firstTabActive && !sidebarCollapsed
-      ? `rounded-xl rounded-tl-none ${rightRounding}`
-      : `rounded-xl ${rightRounding}`
-    : `rounded-xl ${rightRounding}`;
+  const contentRounding = header && firstTabActive && !sidebarCollapsed
+    ? "rounded-2xl rounded-tl-none"
+    : "rounded-2xl";
 
   return (
+    // Tabs extend one corner radius over the sidebar; the content surface
+    // keeps its own overflow clipped below the header.
     <main
-      className={`flex-1 overflow-hidden mx-1.25 my-1.25 flex flex-col`}
+      className={`flex-1 min-w-0 ${header ? "overflow-visible" : "overflow-hidden"} mx-1.25 my-1.25 flex flex-col`}
       style={{
         marginLeft,
         marginRight,
@@ -92,8 +93,11 @@ export function MainContent({
           {header}
         </div>
       )}
+      {!header && (
+        <div className="hidden h-(--shell-header-height) shrink-0 md:block" aria-hidden="true" />
+      )}
       <div
-        className={`flex-1 min-h-0 bg-primary dark:bg-primary-950 overflow-hidden ${contentRounding}`}
+        className={`flex-1 min-h-0 overflow-hidden ${contentRounding} ${transparentSurface ? "bg-transparent" : "bg-primary dark:bg-primary-950"}`}
       >
         <div
           className="h-full overflow-auto"

@@ -17,6 +17,10 @@ import {
   SESSION_PANEL_GUTTER,
   CONTENT_LEFT_VAR,
   CONTENT_RIGHT_VAR,
+  hasSidebarPanel,
+  isSettingsRoute,
+  isWorkspaceRoute,
+  NAV_RAIL_WIDTH,
 } from "./lib/layout";
 import { useBottomTerminal } from "./hooks/use-bottom-terminal";
 import { useBrowserPanel, BrowserPanelProvider } from "./hooks/use-browser-panel";
@@ -104,6 +108,9 @@ function AppContent() {
   useWindowRequests();
   useAppSettingsEvents();
   const location = useLocation();
+  const sidebarPanelRoute = hasSidebarPanel(location.pathname);
+  const settingsRoute = isSettingsRoute(location.pathname);
+  const workspaceRoute = isWorkspaceRoute(location.pathname);
   const hideRightPanel = shouldHideRightPanel(location.pathname);
   const variant = useWorkspaceVariant();
   const activeProviderId =
@@ -204,14 +211,17 @@ function AppContent() {
   // so viewport-fixed overlays (the Toaster) can center over the content
   // instead of the window. Onboarding renders full-screen without the shell,
   // so the edges collapse to zero there.
-  const contentLeft =
-    isMobile || sidebarCollapsed ? EDGE_GUTTER : SIDEBAR_WIDTH;
+  const contentLeft = isMobile
+    ? EDGE_GUTTER
+    : sidebarPanelRoute && (settingsRoute || !sidebarCollapsed)
+      ? `calc(${NAV_RAIL_WIDTH} + ${SIDEBAR_WIDTH})`
+      : `calc(${NAV_RAIL_WIDTH} + 0.5rem)`;
   const contentRight = isMobile ? EDGE_GUTTER : rightLaneWidth;
   const shellVisible = onboardingCompleted || isWeb;
 
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
-  }, { allowInEditable: true });
+  }, { enabled: isMobile || workspaceRoute, allowInEditable: true });
   useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
     enabled:
       showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
@@ -294,7 +304,7 @@ function AppContent() {
             aria-hidden
           />
         )}
-        {!(
+        {(isMobile || workspaceRoute) && !(
           isMobile &&
           (rightPanelVisible || browserPanel.isOpen || docViewer.isOpen)
         ) && (
@@ -307,6 +317,7 @@ function AppContent() {
         <MainContent
           marginLeft={contentLeft}
           marginRight={contentRight}
+          transparentSurface={workspaceRoute}
           contentInsetRight={contentInsetRight}
           hasRightPanel={
             !hideRightPanel && !rightPanelVisible && !browserPanel.isOpen && !docViewer.isOpen

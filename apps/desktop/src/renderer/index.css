@@ -108,7 +108,9 @@ html:not(.app-ready) *::after {
 
 
   /* Layout */
+  --nav-rail-width: 3rem;
   --sidebar-width: 18rem;
+  --shell-header-height: 2.5rem;
   --panel-width: 22rem;
   --browser-panel-width: 38rem;
   --session-panel-width: 21rem;

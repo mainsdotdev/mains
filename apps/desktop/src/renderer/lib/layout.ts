@@ -1,5 +1,19 @@
 const ROUTES_WITHOUT_RIGHT_PANEL = ["/settings", "/plugins", "/pulse", "/relay", "/tasks"];
 
+export function isWorkspaceRoute(pathname: string): boolean {
+  return pathname === "/" ||
+    pathname === "/code" || pathname.startsWith("/code/");
+}
+
+export function isSettingsRoute(pathname: string): boolean {
+  return pathname === "/settings" || pathname.startsWith("/settings/");
+}
+
+/** The list panel belongs to conversations and settings; other pages use the rail alone. */
+export function hasSidebarPanel(pathname: string): boolean {
+  return isWorkspaceRoute(pathname) || isSettingsRoute(pathname);
+}
+
 export function shouldHideRightPanel(pathname: string): boolean {
   return ROUTES_WITHOUT_RIGHT_PANEL.some(
     (route) => pathname === route || pathname.startsWith(`${route}/`)
@@ -27,6 +41,7 @@ export const LAYOUT_PANEL_ANIM_MS = 150;
  * `useLayoutWidthVars`. Widths are stored as plain pixel numbers.
  */
 export const SIDEBAR_WIDTH_VAR = "--sidebar-width";
+export const NAV_RAIL_WIDTH = "var(--nav-rail-width)";
 export const PANEL_WIDTH_VAR = "--panel-width";
 
 export const SIDEBAR_WIDTH_DEFAULT = 288; // 18rem

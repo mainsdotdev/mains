@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { SidebarHeader } from "./sidebar-header";
 import { SidebarFooter } from "./sidebar-footer";
 import { SidebarContent } from "./sidebar-content";
+import { NavigationRail } from "./navigation-rail";
 import DeleteConfirmationModal from "./delete-confirmation-modal";
 import NewButton from "./new-button";
 import SettingsView from "./settings-view";
@@ -38,7 +39,7 @@ import { BackgroundRunsDock } from "@/features/workspace/components/background-r
 import { Button, Text, Tooltip } from "@/components/ui";
 import { ResizeHandle } from "@/components/layout/resize-handle";
 import { useAppSelector, useAppDispatch } from "@/lib/redux/hooks";
-import { setSidebarWidth } from "@/lib/redux/slices/appSettingsSlice";
+import { setSidebarCollapsed, setSidebarWidth } from "@/lib/redux/slices/appSettingsSlice";
 import { setLayoutWidthVar } from "@/hooks/use-layout-width-vars";
 import {
   LAYOUT_PANEL_ANIM_MS,
@@ -46,6 +47,9 @@ import {
   SIDEBAR_WIDTH_MIN,
   SIDEBAR_WIDTH_MAX,
   SIDEBAR_WIDTH_DEFAULT,
+  hasSidebarPanel,
+  isSettingsRoute,
+  isWorkspaceRoute,
 } from "@/lib/layout";
 import { Clock } from "@/components/ui/icons/space";
 import type { ModeId } from "../../../../shared/modes";
@@ -68,6 +72,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const sidebarConfig = useSidebarConfig();
   const modeConfig = useModeConfig();
   const isChatShell = sidebarConfig.itemType === "chat";
+  const sidebarPanelRoute = hasSidebarPanel(location.pathname);
+  const isHomeRoute = isWorkspaceRoute(location.pathname);
+  const settingsRoute = isSettingsRoute(location.pathname);
   const { spaces, activeSpaceId, activeSpace } = useActiveSpace();
   const [updateSpace] = useUpdateSpaceMutation();
   const spaceProvider = useSpaceProviderVariant();
@@ -76,6 +83,34 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
   const { isSettingsOpen, handleOpenSettings, handleCloseSettings } =
     useSettingsNavigation();
+
+  const lastHomePath = useRef<{ spaceId: string | null; path: string } | null>(null);
+  useEffect(() => {
+    if (isHomeRoute) {
+      lastHomePath.current = {
+        spaceId: activeSpaceId,
+        path: location.pathname + location.search,
+      };
+    }
+  }, [isHomeRoute, activeSpaceId, location.pathname, location.search]);
+
+  const openSettings = () => {
+    dispatch(setSidebarCollapsed(false));
+    if (!isSettingsOpen) handleOpenSettings();
+  };
+  const handleHomeClick = () => {
+    dispatch(setSidebarCollapsed(false));
+    if (isHomeRoute) return;
+    const previous = lastHomePath.current;
+    navigate(
+      previous?.spaceId === activeSpaceId
+        ? previous.path
+        : sidebarConfig.defaultRoute,
+    );
+  };
+  useKeyboardShortcut("app.openSettings", openSettings, {
+    allowInEditable: true,
+  });
 
   // Global listeners
   useScriptNotifications();
@@ -90,7 +125,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     setHelpMenuState({
       isOpen: true,
-      position: { x: rect.right + 40, y: rect.bottom - 12 },
+      position: { x: rect.right + (isMobile ? 40 : 65), y: rect.bottom - 12 },
     });
   };
 
@@ -194,6 +229,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   // The resize handle lives inside the <aside>, so it slides out with it. Drop
   // it only once the sidebar is fully off-screen — pulling it on the `collapsed`
   // flag alone would strip it (and its tab stop) on the first animation frame.
+  const panelHidden =
+    (collapsed && (isMobile || !settingsRoute)) ||
+    (!isMobile && !sidebarPanelRoute);
   const [isAnimating, setIsAnimating] = useState(false);
   const isFirstRender = useRef(true);
   useEffect(() => {
@@ -204,8 +242,8 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     setIsAnimating(true);
     const timer = setTimeout(() => setIsAnimating(false), LAYOUT_PANEL_ANIM_MS);
     return () => clearTimeout(timer);
-  }, [collapsed]);
-  const showResizeHandle = !collapsed || isAnimating;
+  }, [panelHidden]);
+  const showResizeHandle = sidebarPanelRoute && (!panelHidden || isAnimating);
 
   // Suppress unused variable warning for handleRefreshConnections
   void handleRefreshConnections;
@@ -228,20 +266,53 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
   return (
     <>
+      {!isMobile && (
+        <NavigationRail
+          showTasks={modeConfig.showTasksNav}
+          pluginsAvailable={!isPluginsDisabledForAgent}
+          spaces={spaces}
+          activeSpaceId={activeSpaceId}
+          onHomeClick={handleHomeClick}
+          onSpaceChange={(spaceId) => {
+            dispatch(setSidebarCollapsed(false));
+            void handleSpaceChange(spaceId);
+          }}
+          onSettingsClick={openSettings}
+          onHelpClick={handleOpenHelpMenu}
+          helpMenuOpen={helpMenuState.isOpen}
+        />
+      )}
+      {/* Clip at the rail's outer edge (its width plus the 5px inset) as the panel slides. */}
+      <div
+        className="fixed inset-0 z-(--z-sidebar) pointer-events-none"
+        style={{
+          clipPath: isMobile
+            ? undefined
+            : "inset(0 0 0 calc(var(--nav-rail-width) + 0.3125rem))",
+        }}
+      >
       <aside
         ref={swipeRef}
-        className={`fixed top-0 bottom-0 left-0 z-(--z-sidebar) transition-[transform,opacity] duration-150 ease-out will-change-transform ${
-          isMobile ? "bg-primary dark:bg-primary-950 shadow-2xl" : ""
+        className={`absolute z-(--z-sidebar) transition-[transform,opacity] duration-150 ease-out will-change-transform ${
+          isMobile
+            ? "bg-primary dark:bg-primary-950 shadow-2xl"
+            : "rounded-l-xl "
         }`}
         style={{
+          top: isMobile ? 0 : "calc(var(--shell-header-height) + 0.3125rem)",
+          bottom: isMobile ? 0 : "0.3125rem",
           width: isMobile ? "100%" : "var(--sidebar-width)",
-          transform: collapsed
+          left: isMobile ? 0 : "var(--nav-rail-width)",
+          transform: panelHidden
             ? "translate3d(-100%,0,0)"
             : "translate3d(0,0,0)",
-          opacity: collapsed ? 0 : 1,
+          opacity: panelHidden ? 0 : 1,
+          pointerEvents: panelHidden ? "none" : "auto",
         }}
         role="complementary"
         aria-label="Workspace sidebar"
+        aria-hidden={panelHidden}
+        inert={panelHidden}
       >
         {isSettingsOpen ? (
           <SettingsView onClose={handleCloseSettings} />
@@ -303,7 +374,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 }
               />
             </div>
-            {modeConfig.showTasksNav && (
+            {isMobile && modeConfig.showTasksNav && (
               <div className="px-3 mb-px">
                 <Button
                   variant="subtle"
@@ -334,7 +405,8 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 </Button>
               </div>
             )}
-            <div className="px-3 mb-px">
+            {isMobile && (
+              <div className="px-3 mb-px">
               <Button
                 variant="subtle"
                 tooltip="View your pulse"
@@ -362,8 +434,10 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                   Pulse
                 </Text>
               </Button>
-            </div>
-            <div className="px-3 mb-px ">
+              </div>
+            )}
+            {isMobile && (
+              <div className="px-3 mb-px ">
               {isPluginsDisabledForAgent ? (
                 <Tooltip
                   content="Not available for this agent yet."
@@ -434,9 +508,11 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                   </Text>
                 </Button>
               )}
-            </div>
+              </div>
+            )}
 
-            <div className="px-3 mb-2">
+            {isMobile && (
+              <div className="px-3 mb-2">
               <Button
                 variant="subtle"
                 tooltip="Mains Connect"
@@ -467,7 +543,8 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 </Text>
 
               </Button>
-            </div>
+              </div>
+            )}
             <SidebarContent
               workspaces={workspaces}
               gitStateByWorkspaceId={gitStateByWorkspaceId}
@@ -480,14 +557,16 @@ export default function Sidebar({ collapsed }: SidebarProps) {
             />
             <BackgroundRunsDock />
             <UpdateBanner />
-            <SidebarFooter
-              spaces={spaces}
-              activeSpaceId={activeSpaceId}
-              onSpaceChange={handleSpaceChange}
-              onSettingsClick={handleOpenSettings}
-              onHelpClick={handleOpenHelpMenu}
-              helpMenuOpen={helpMenuState.isOpen}
-            />
+            {isMobile && (
+              <SidebarFooter
+                spaces={spaces}
+                activeSpaceId={activeSpaceId}
+                onSpaceChange={handleSpaceChange}
+                onSettingsClick={openSettings}
+                onHelpClick={handleOpenHelpMenu}
+                helpMenuOpen={helpMenuState.isOpen}
+              />
+            )}
           </div>
         )}
         {showResizeHandle && (
@@ -496,7 +575,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
             value={sidebarWidth}
             min={SIDEBAR_WIDTH_MIN}
             max={SIDEBAR_WIDTH_MAX}
-            computeWidth={(clientX) => clientX}
+            computeWidth={(clientX) =>
+              clientX - (swipeRef.current?.getBoundingClientRect().left ?? 0)
+            }
             onPreview={(w) => setLayoutWidthVar(SIDEBAR_WIDTH_VAR, w)}
             onCommit={(w) => dispatch(setSidebarWidth(w))}
             onReset={() => dispatch(setSidebarWidth(SIDEBAR_WIDTH_DEFAULT))}
@@ -504,6 +585,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           />
         )}
       </aside>
+      </div>
 
       <DeleteConfirmationModal
         isOpen={!!deleteWorkspace.workspaceToDelete}

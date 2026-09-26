@@ -116,7 +116,7 @@ export function AppIconPicker() {
       >
         <span
           className={cn(
-            "relative mb-1 flex size-17 items-center justify-center rounded-[19px] ring-1 ring-primary-950/10 dark:ring-primary-50/10",
+            "relative mb-1 flex size-17 items-center justify-center rounded-[19px]  dark:ring-primary-50/10",
           )}
         >
           <img

@@ -2,6 +2,7 @@ import { Button, Text, Tooltip } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
 import { useAppSelector } from "@/lib/redux/hooks";
 
+
 interface BaseTabProps {
   isActive: boolean;
   isFirst?: boolean;

@@ -98,7 +98,7 @@ export function DocumentViewerPanel() {
 
   return (
     <div
-      className="fixed top-1.25 bottom-1.25 right-1.25 dark:bg-primary-950 bg-primary rounded-tr-xl z-9999 flex flex-col border-l border-primary-200/70 dark:border-primary-800/50 transition-[transform,opacity] duration-300 ease-out overflow-hidden"
+      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[transform,opacity] duration-300 ease-out"
       style={{
         width: "var(--doc-viewer-panel-width)",
         transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
@@ -119,6 +119,9 @@ export function DocumentViewerPanel() {
         ariaLabel="Resize document panel"
       />
 
+      {/* Keep the full lane width for resizing while the inset surface leaves
+          the translucent app frame visible on every side. */}
+      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-primary-200/60 dark:border-primary-800/50">
         <DocIcon className="size-4 shrink-0 " />
@@ -214,6 +217,7 @@ export function DocumentViewerPanel() {
           No document selected
         </Text>
       )}
+      </div>
     </div>
   );
 }

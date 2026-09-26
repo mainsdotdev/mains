@@ -268,8 +268,10 @@ export function WorkspaceProviderPage({
         centers over this content column (not the whole window — the embedded
         browser panel is a native view layered above the renderer). */}
     <div
-      className={`relative flex flex-col h-full dark:bg-primary-950 ${routeTopRounding} overflow-hidden`}
+      className={`relative flex flex-col h-full ${routeTopRounding} overflow-hidden`}
     >
+      {/* Separate painted panes leave the translucent shell visible between chat and terminal. */}
+      <div className="flex min-h-0 flex-1 flex-col rounded-b-2xl bg-primary dark:bg-primary-950">
       {/* `content-inset` on the transcript and composer, but not on the
           terminal below them: the session box only covers the top-right of the
           content, so the terminal keeps the full width. */}
@@ -406,6 +408,7 @@ export function WorkspaceProviderPage({
           isNewRunTabActive={ws.showNewRunTab}
         />
       ) : null}
+      </div>
       </div>
       </div>
 

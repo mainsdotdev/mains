@@ -1225,12 +1225,14 @@ export function BrowserPanel() {
   if (!api) {
     return (
       <div
-        className="fixed inset-y-0 right-0 z-(--z-overlay) flex items-center justify-center border-l border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-950"
+        className="fixed inset-y-0 right-0 z-(--z-overlay)"
         style={{ width: "var(--browser-panel-width)" }}
       >
-        <Text as="div" size="sm" tone="secondary">
-          Browser panel is unavailable in this build.
-        </Text>
+        <div className="absolute inset-1.25 flex items-center justify-center rounded-2xl bg-primary dark:bg-primary-950">
+          <Text as="div" size="sm" tone="secondary">
+            Browser panel is unavailable in this build.
+          </Text>
+        </div>
       </div>
     );
   }
@@ -1243,7 +1245,7 @@ export function BrowserPanel() {
 
   return (
     <div
-      className="fixed bottom-1.25 right-1.25 top-1.25 z-9999 flex flex-col overflow-hidden rounded-tr-xl border-l border-primary-200/70 bg-primary transition-[transform,opacity] duration-300 ease-out dark:border-primary-800/50 dark:bg-primary-950"
+      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[transform,opacity] duration-300 ease-out"
       style={{
         width: "var(--browser-panel-width)",
         transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
@@ -1269,6 +1271,10 @@ export function BrowserPanel() {
         ariaLabel="Resize browser panel"
       />
 
+      {/* The lane keeps its full width for resizing. The painted surface is
+          inset, and its bottom padding keeps the native WebContentsView clear
+          of the rounded corners that CSS cannot clip. */}
+      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary pb-4 dark:bg-primary-950">
       <BrowserTabStrip
         tabs={browserState.tabs}
         activeTabId={browserState.activeTabId}
@@ -1693,6 +1699,7 @@ export function BrowserPanel() {
           </div>
         )}
       </BrowserDeviceStage>
+      </div>
     </div>
   );
 }
