@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkRunEvent } from "../../../../shared/adapter.types";
+import { installTestBackendRuntime } from "../../../../test/backend-runtime";
+import { imageProxyService, serveLocalImage } from "../../imageProxy";
 import {
   createCodexEventMapper,
   SUB_THREAD_TOOL_ITEM_TYPES,
@@ -10,6 +12,8 @@ import {
 } from "./codex-event-mapper";
 
 const tempDirs: string[] = [];
+let restoreRuntime: (() => void) | null = null;
+const ONE_PIXEL_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
 
 function createRunState(
   rootPath: string | null = null,
@@ -59,12 +63,101 @@ function createHarness(state = createRunState()) {
 }
 
 afterEach(() => {
+  restoreRuntime?.();
+  restoreRuntime = null;
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 describe("Codex event mapper", () => {
+  it("persists and serves an inline image result when savedPath is absent", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-image-"));
+    tempDirs.push(dataDir);
+    restoreRuntime = installTestBackendRuntime({ getPath: () => dataDir });
+    const { mapper } = createHarness();
+    const params = {
+      threadId: "thread-parent",
+      item: {
+        id: "image-1",
+        type: "imageGeneration",
+        status: "completed",
+        result: ONE_PIXEL_PNG,
+        savedPath: null,
+        transparentBackground: true,
+      },
+    };
+
+    const events = mapper.mapNotification("item/completed", params, "run-1");
+    const image = events.find((event) => event.type === "artifact" && event.kind === "image");
+    if (!image || image.type !== "artifact" || !image.path) throw new Error("Image artifact missing");
+    expect(image).toMatchObject({
+      metadata: {
+        kind: "image",
+        source: "codex_image_generation",
+        itemId: "image-1",
+        transparentBackground: true,
+        path: image.path,
+      },
+    });
+    expect(fs.readFileSync(image.path)).toEqual(Buffer.from(ONE_PIXEL_PNG, "base64"));
+    const signedUrl = imageProxyService.signLocalImageUrl(image.path);
+    expect(signedUrl).toBeTruthy();
+    const response = await serveLocalImage(new URL(signedUrl!));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from(ONE_PIXEL_PNG, "base64"));
+    expect(JSON.stringify(events)).not.toContain(ONE_PIXEL_PNG);
+    expect(
+      mapper.mapNotification("item/completed", params, "run-1")
+        .filter((event) => event.type === "artifact" && event.kind === "image"),
+    ).toHaveLength(0);
+  });
+
+  it("uses a valid savedPath once without writing an inline copy", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-image-"));
+    tempDirs.push(root);
+    const savedPath = path.join(root, "generated_images", "image.png");
+    fs.mkdirSync(path.dirname(savedPath));
+    fs.writeFileSync(savedPath, Buffer.from(ONE_PIXEL_PNG, "base64"));
+    const { mapper } = createHarness(createRunState(root));
+
+    const events = mapper.mapNotification("item/completed", {
+      threadId: "thread-parent",
+      item: {
+        id: "image-2",
+        type: "imageGeneration",
+        status: "completed",
+        result: "",
+        savedPath,
+      },
+    }, "run-1");
+
+    expect(events.filter((event) => event.type === "artifact" && event.kind === "image"))
+      .toEqual([expect.objectContaining({ path: savedPath })]);
+  });
+
+  it("reports an unavailable result without persisting base64 or a broken image card", () => {
+    const { mapper } = createHarness();
+    const events = mapper.mapNotification("item/completed", {
+      threadId: "thread-parent",
+      item: {
+        id: "image-3",
+        type: "imageGeneration",
+        status: "completed",
+        result: "invalid-base64",
+      },
+    }, "run-1");
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "log",
+      level: "error",
+      message: "Codex generated an image, but its output could not be displayed",
+    }));
+    expect(events.some((event) => event.type === "artifact" && event.kind === "image"))
+      .toBe(false);
+  });
+
   it("preserves MCP App resource context on completed tool calls", () => {
     const { mapper } = createHarness();
     const result = {

@@ -36,6 +36,7 @@ import { createRunSession, type RunSession, type RunSessionResult } from "./run-
 import {
   managedRunDir,
   removeManagedRunDir,
+  removeManagedRunImages,
   resolveRunExecution,
 } from "./run-execution";
 import {
@@ -81,8 +82,8 @@ import type {
 
 /** Longest side an image artifact is sent at — more than any phone shows. */
 const ARTIFACT_IMAGE_MAX_SIDE = 1600;
-/** A file sent as it is (a format the Mac can't scale) must fit in one message. */
-const ARTIFACT_IMAGE_RAW_LIMIT = 8 * 1024 * 1024;
+/** Node hosts send original bytes; Codex image generation can return up to 32 MiB. */
+const ARTIFACT_IMAGE_RAW_LIMIT = 32 * 1024 * 1024;
 /** Keep one document response comfortably below the WebSocket message ceiling. */
 const RUN_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024;
 /** A basename fallback is bounded so one malformed run directory cannot stall the host. */
@@ -835,11 +836,14 @@ export const runsService = {
     await syncCodexRunSession(run, "delete");
     removeManagedRunDir(run.id, run.mode);
     await runsRepo.deleteRun(id);
+    removeManagedRunImages(id);
   },
 
   /** Delete every run of a workspace (project removal cleanup). */
   async deleteRunsByWorkspace(workspaceId: string): Promise<void> {
+    const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
     await runsRepo.deleteRunsByWorkspaceId(workspaceId);
+    for (const runId of runIds) removeManagedRunImages(runId);
   },
 
   async archiveRun(id: string): Promise<RunResponse> {

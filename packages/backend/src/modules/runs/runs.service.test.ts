@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "fs";
+import { join } from "path";
 import { createTestDb } from "../../../test/setup-db";
 import {
   createAccount,
@@ -107,7 +108,7 @@ vi.mock("../workspace", async () => {
 
 import { runsService } from "./runs.service";
 import { runsRepo } from "./runs.repo";
-import { managedRunDir } from "./run-execution";
+import { managedRunDir, managedRunImageDir } from "./run-execution";
 import { runSessionRegistry } from "./run-session-registry";
 import { createWorkAdapter } from "../providers/adapters";
 import { collectionsService } from "../collections";
@@ -1435,6 +1436,34 @@ describe("runsService", () => {
       expect(() => statSync(runDir)).toThrow();
     });
 
+    it("removes app-owned generated images with their run", async () => {
+      createRun(db, { id: "image-delete", providerId: "codex" });
+      const imageDir = managedRunImageDir("image-delete");
+      mkdirSync(imageDir, { recursive: true });
+      writeFileSync(`${imageDir}/image.png`, "image bytes");
+
+      await runsService.deleteRun("image-delete");
+
+      expect(() => statSync(imageDir)).toThrow();
+    });
+
+    it("removes generated images when deleting all runs in a workspace", async () => {
+      createWorkspace(db, { id: "ws-image-delete" });
+      for (const id of ["image-ws-1", "image-ws-2"]) {
+        createRun(db, { id, workspaceId: "ws-image-delete", providerId: "codex" });
+        const imageDir = managedRunImageDir(id);
+        mkdirSync(imageDir, { recursive: true });
+        writeFileSync(`${imageDir}/image.png`, "image bytes");
+      }
+
+      await runsService.deleteRunsByWorkspace("ws-image-delete");
+
+      for (const id of ["image-ws-1", "image-ws-2"]) {
+        expect(() => statSync(managedRunImageDir(id))).toThrow();
+        expect(await runsService.getRunById(id)).toBeNull();
+      }
+    });
+
     it("returns error when run does not exist", async () => {
       await expect(runsService.deleteRun("nonexistent")).rejects.toThrow(
         "Run not found",
@@ -1734,6 +1763,29 @@ describe("runsService", () => {
     it("returns error when repo throws", async () => {
       vi.spyOn(runsRepo, "findArtifactsByRun").mockRejectedValueOnce(new Error("db error"));
       await expect(runsService.getArtifactsByRun("r1")).rejects.toThrow("db error");
+    });
+  });
+
+  describe("readArtifactImage", () => {
+    it("serves a generated image above the former 8 MiB raw preview limit", async () => {
+      createRun(db, { id: "large-generated-image", providerId: "codex" });
+      const imageDir = managedRunImageDir("large-generated-image");
+      const imagePath = join(imageDir, "generated-image.png");
+      mkdirSync(imageDir, { recursive: true });
+      const bytes = Buffer.alloc(9 * 1024 * 1024);
+      Buffer.from("89504e470d0a1a0a", "hex").copy(bytes);
+      writeFileSync(imagePath, bytes);
+      const artifact = createRunArtifact(db, {
+        runId: "large-generated-image",
+        kind: "image",
+        path: imagePath,
+      });
+
+      const preview = await runsService.readArtifactImage({ artifactId: artifact.id });
+
+      expect(preview.mime).toBe("image/png");
+      expect(Buffer.from(preview.base64, "base64").equals(bytes)).toBe(true);
+      await runsService.deleteRun("large-generated-image");
     });
   });
 

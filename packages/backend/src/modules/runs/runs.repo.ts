@@ -149,6 +149,14 @@ export const runsRepo = {
     return rows.map(mapRunRowToResponse);
   },
 
+  async findRunIdsByWorkspaceId(workspaceId: string): Promise<string[]> {
+    const rows = await getDb()
+      .select({ id: runs.id })
+      .from(runs)
+      .where(eq(runs.workspaceId, workspaceId));
+    return rows.map((row) => row.id);
+  },
+
   async findRunsByStatus(
     accountId: string,
     status: "queued" | "running" | "succeeded" | "failed" | "canceled"

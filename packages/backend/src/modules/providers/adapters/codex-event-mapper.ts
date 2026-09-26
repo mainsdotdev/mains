@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type {
   WorkRunEvent,
   WorkRunPlanStep,
@@ -10,6 +11,7 @@ import type {
 import type { MainsToolContext } from "./mains-tools.core";
 import { safeJson } from "./adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
+import { managedRunImageDir } from "../../runs/run-execution";
 
 export interface CodexThreadItem {
   id: string;
@@ -490,6 +492,65 @@ export function mapImageGenerationLifecycle(
   return events;
 }
 
+// The app-server result is base64 image data. savedPath is optional, so a
+// completed item must be materialized before the existing path-based image
+// artifact UI can display it. Match Codex's 32 MiB generated-image limit.
+const MAX_GENERATED_IMAGE_BYTES = 32 * 1024 * 1024;
+const MAX_GENERATED_IMAGE_BASE64_LENGTH = Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4;
+
+function inlineGeneratedImage(result: unknown): { bytes: Buffer; extension: string } | null {
+  if (typeof result !== "string") return null;
+  const encoded = result.trim();
+  if (
+    !encoded ||
+    encoded.length > MAX_GENERATED_IMAGE_BASE64_LENGTH ||
+    encoded.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)
+  ) return null;
+
+  const bytes = Buffer.from(encoded, "base64");
+  if (!bytes.length || bytes.length > MAX_GENERATED_IMAGE_BYTES) return null;
+  if (bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
+    return { bytes, extension: ".png" };
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return { bytes, extension: ".jpg" };
+  }
+  if (bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") {
+    return { bytes, extension: ".webp" };
+  }
+  return null;
+}
+
+function saveInlineGeneratedImage(runId: string, itemId: string, result: unknown): string | null {
+  const image = inlineGeneratedImage(result);
+  if (!image) return null;
+  try {
+    const directory = managedRunImageDir(runId);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const directoryStat = fs.lstatSync(directory);
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) return null;
+
+    const digest = createHash("sha256")
+      .update(itemId)
+      .update("\0")
+      .update(image.bytes)
+      .digest("hex");
+    const filePath = path.join(directory, `generated-image-${digest.slice(0, 24)}${image.extension}`);
+    try {
+      fs.writeFileSync(filePath, image.bytes, { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const stat = fs.lstatSync(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== image.bytes.length) throw error;
+    }
+    return filePath;
+  } catch (error) {
+    console.warn("[CodexEventMapper] Could not save generated image", error);
+    return null;
+  }
+}
+
 /**
  * Stateful Codex item projection module.
  *
@@ -713,6 +774,69 @@ export function createCodexEventMapper(
       }
     }
     return false;
+  }
+
+  function emitGeneratedImageArtifact(
+    events: WorkRunEvent[],
+    item: ThreadItem,
+    runId: string | undefined,
+    ts: number,
+  ): void {
+    if (!runId || item.status !== "completed") return;
+    const rs = getRunState(runId);
+    if (!rs) return;
+
+    const savedPath = optionalString(item.savedPath ?? item.saved_path);
+    let filePath: string | null = null;
+    if (savedPath && path.isAbsolute(savedPath)) {
+      const resolved = path.resolve(savedPath);
+      if (
+        isAllowedImagePath(resolved, rs.mainsCtx.rootPath) &&
+        /\.(?:png|jpe?g|webp|gif)$/i.test(resolved)
+      ) {
+        try {
+          const stat = fs.lstatSync(resolved);
+          if (
+            stat.isFile() &&
+            !stat.isSymbolicLink() &&
+            stat.size > 0 &&
+            stat.size <= MAX_GENERATED_IMAGE_BYTES
+          ) filePath = resolved;
+        } catch {
+          // Remote or missing savedPath: use the inline result instead.
+        }
+      }
+    }
+    filePath ??= saveInlineGeneratedImage(runId, item.id, item.result);
+    if (!filePath) {
+      events.push({
+        type: "log",
+        level: "error",
+        message: "Codex generated an image, but its output could not be displayed",
+        metadata: { itemId: item.id },
+        ts,
+      });
+      return;
+    }
+    if (rs.emittedImagePaths.has(filePath)) return;
+    rs.emittedImagePaths.add(filePath);
+    const transparentBackground = item.transparentBackground ?? item.transparent_background;
+    events.push({
+      type: "artifact",
+      kind: "image",
+      path: filePath,
+      metadata: {
+        kind: "image",
+        source: "codex_image_generation",
+        itemId: item.id,
+        path: filePath,
+        fileName: path.basename(filePath),
+        ...(typeof transparentBackground === "boolean"
+          ? { transparentBackground }
+          : {}),
+      },
+      ts,
+    });
   }
 
   /**
@@ -2414,6 +2538,7 @@ export function createCodexEventMapper(
       case "image_generation":
       case "imageGeneration": {
         events.push(...mapImageGenerationLifecycle(item, phase, runId, ts));
+        if (phase === "complete") emitGeneratedImageArtifact(events, item, runId, ts);
         break;
       }
 
@@ -3139,14 +3264,21 @@ export function createCodexEventMapper(
         break;
     }
 
-    if (phase === "complete") {
+    // The image-generation item can carry tens of megabytes of base64. Its
+    // output is handled above; scanning that string for file paths is costly.
+    const isImageGeneration = item.type === "imageGeneration" || item.type === "image_generation";
+    if (phase === "complete" && !isImageGeneration) {
       emitImageArtifacts(events, runId, item, ts);
     }
     // Agent messages are scanned above after citation directives are removed;
     // treating a cited source as an output document would misfile it as a
     // deliverable. Other item types still scan on every phase: a command like
     // `qlmanage … report.docx` can name a document before it completes.
-    if (item.type !== "agentMessage" && item.type !== "agent_message") {
+    if (
+      !isImageGeneration &&
+      item.type !== "agentMessage" &&
+      item.type !== "agent_message"
+    ) {
       emitDocumentArtifacts(events, runId, item, ts);
     }
 
