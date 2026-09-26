@@ -43,10 +43,8 @@ function optionalString(value: unknown): string | undefined {
 }
 
 /**
- * Codex has exposed the MCP App URI in three places over time: the current
- * item appContext, the deprecated item-level field, and the tool result's
- * standard/ChatGPT compatibility metadata. Keep all three readable so old
- * persisted threads gain widgets too.
+ * Prefer the tool descriptor's captured MCP App UI resource, while keeping
+ * older item and result metadata readable for persisted threads.
  */
 function mcpAppMetadata(
   item: ThreadItem,
@@ -54,10 +52,13 @@ function mcpAppMetadata(
   server: string,
   tool: string,
 ): CodexMcpAppMetadata | undefined {
+  const mcpAppUi = objectRecord(item.mcpAppUi ?? item.mcp_app_ui);
   const appContext = objectRecord(item.appContext ?? item.app_context);
   const resultMeta = objectRecord(objectRecord(result)?._meta);
   const uiMeta = objectRecord(resultMeta?.ui);
   const resourceUri = [
+    mcpAppUi?.resourceUri,
+    mcpAppUi?.resource_uri,
     appContext?.resourceUri,
     appContext?.resource_uri,
     item.mcpAppResourceUri,

@@ -411,6 +411,26 @@ describe("codex.driver / app-server protocol", () => {
     });
   });
 
+  it("reports the generated app-server version as supported", async () => {
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+
+    const driver = createCodexDriver({
+      binary: fixtureBinary,
+      timeout: 2000,
+    });
+    drivers.push(driver);
+
+    const accountInfo = await driver.getAccountInfo?.();
+
+    expect(accountInfo?.cli).toMatchObject({
+      version: CODEX_APP_SERVER_PROTOCOL_VERSION,
+      outdated: false,
+      compatibility: "supported",
+      minimumVersion: "0.153.0",
+      testedProtocolVersion: CODEX_APP_SERVER_PROTOCOL_VERSION,
+    });
+  });
+
   it("allows a newer CLI in forward-compatible mode and reports a warning", async () => {
     process.env.MAINS_CODEX_FIXTURE_VERSION = NEWER_THAN_TESTED;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);

@@ -78,7 +78,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.154.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.157.1";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
@@ -453,8 +453,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   /**
    * A persisted renderer selection can outlive the ordinary usage allowance.
    *
-   * Codex 0.154 exposes the Reserve bucket and model slug to app-server
-   * clients, but it does not expose the TUI's Reserve accept/recovery action.
+   * Codex exposes the Reserve bucket and model slug to app-server clients,
+   * but Mains has no Reserve accept/recovery action through this protocol.
    * Starting `gpt-5.6-luna` directly therefore still consumes the exhausted
    * ordinary bucket and fails with a generic usage-limit error. Stop before
    * creating a misleading thread until app-server gains that recovery verb.
@@ -470,7 +470,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     if (rateLimits?.ordinaryUsageAllowed === false) {
       if (getCodexReserveModelSlugs(rateLimits).length > 0) {
         throw new Error(
-          "Luna Reserve is available on this account, but Codex App Server 0.154.0 cannot start Reserve turns yet. Continue in the Codex app or wait for the normal usage limit to reset.",
+          "Luna Reserve is available on this account, but Mains cannot start Reserve turns yet. Continue in the Codex app or wait for the normal usage limit to reset.",
         );
       }
       throw new Error(

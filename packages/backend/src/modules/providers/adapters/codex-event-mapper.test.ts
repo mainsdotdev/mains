@@ -216,6 +216,37 @@ describe("Codex event mapper", () => {
     );
   });
 
+  it("uses the 0.157 MCP App UI descriptor when legacy resource metadata is absent", () => {
+    const { mapper } = createHarness();
+    const events = mapper.mapNotification("item/completed", {
+      threadId: "thread-parent",
+      item: {
+        id: "mcp-call-ui",
+        type: "mcpToolCall",
+        server: "codex_apps",
+        tool: "show_map",
+        arguments: {},
+        appContext: null,
+        mcpAppUi: {
+          resourceUri: "ui://maps/results.html",
+          preferredModelDisplayMode: "fullscreen",
+        },
+        result: { content: [] },
+        error: null,
+      },
+    }, "run-1");
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "tool_call",
+      metadata: expect.objectContaining({
+        mcpApp: expect.objectContaining({
+          resourceUri: "ui://maps/results.html",
+          originCallId: "mcp-call-ui",
+        }),
+      }),
+    }));
+  });
+
   it("owns parent thread registration and agent-message buffering", () => {
     const state = createRunState();
     state.threadId = null;
