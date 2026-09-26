@@ -524,6 +524,7 @@ export interface McpAppReadResourceRequest {
   uri: string;
   originCallId?: string;
   connectorId?: string;
+  linkId?: string | null;
 }
 
 export interface McpAppResourceContent {

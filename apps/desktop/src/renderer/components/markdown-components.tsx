@@ -2,13 +2,15 @@ import { createContext, useContext, useState } from "react";
 import type { ReactNode } from "react";
 import { Components } from "react-markdown";
 
-import { Button, Checkbox, Text } from "@/components/ui";
+import { Button, Checkbox, Text, toast } from "@/components/ui";
 import { CODE_FONT_SIZE_CSS } from "@/lib/appearance-fonts";
 import { faviconUrlForHref } from "@/lib/favicon-url";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { FileIconComponent } from "@/components/ui/icons";
 import { useOpenFileInEditor } from "@/features/workspace/hooks/use-open-file-in-editor";
+import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useOpenLink } from "@/hooks/use-open-link";
+import { useBrowserPanel } from "@/hooks/use-browser-panel";
 
 /**
  * Split a trailing line locator off a file href: `path.ts:114`,
@@ -59,6 +61,7 @@ export function MarkdownLink({
 }) {
   const openFileInEditor = useOpenFileInEditor();
   const openLink = useOpenLink();
+  const { openHtmlFile } = useBrowserPanel();
 
   // A fragment names a node in this very document — GFM footnote references
   // and their back-links are the common case. Handing it to the shell was a
@@ -91,9 +94,19 @@ export function MarkdownLink({
       dotIdx > 0 && dotIdx < basename.length - 1
         ? basename.slice(dotIdx + 1)
         : undefined;
+    const isHtml = extension?.toLowerCase() === "html" || extension?.toLowerCase() === "htm";
     return (
       <Button
-        onClick={() => openFileInEditor(decodeFileHrefPath(target.path))}
+        onClick={() => {
+          const filePath = decodeFileHrefPath(target.path);
+          if (isHtml && filePath.startsWith("/")) {
+            void openHtmlFile(filePath).catch((error) => {
+              toast.error(error instanceof Error ? error.message : "Failed to open HTML preview");
+            });
+          } else {
+            openFileInEditor(filePath);
+          }
+        }}
         title={href}
         className="inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none bg-primary-50 dark:bg-primary-300/10 text-primary-800 dark:text-primary-200 cursor-pointer hover:bg-primary-200/60 dark:hover:bg-primary-300/20 transition-colors"
       >
@@ -177,13 +190,19 @@ export function isRemoteImageSrc(src: string | undefined | null): src is string 
  * agent can embed secrets in the URL's query string, and the request fires
  * the moment the view renders (through the proxy or not — the request itself
  * is the leak). Remote images therefore render as a click-to-load
- * placeholder; local sources (data:, app capture schemes, workspace paths)
- * have no network side effect and load directly. There is deliberately no
+ * placeholder; local paths are decoded and served through the signed image
+ * protocol, while data: and app capture sources load directly. There is no
  * fallback to the raw URL on proxy error — that would reopen the channel.
  */
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const [loadApproved, setLoadApproved] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const remote = isRemoteImageSrc(src);
+  const localPath = src?.startsWith("/") && !src.startsWith("//") &&
+    !src.startsWith("/__")
+    ? decodeFileHrefPath(src)
+    : undefined;
+  const localUrl = useLocalImageUrl(localPath);
 
   if (remote && !loadApproved) {
     let host = src;
@@ -208,10 +227,14 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
     );
   }
 
+  const imageSrc = localPath ? localUrl : proxiedImageSrc(src) ?? src;
+  if (!imageSrc || failedSrc === src) return null;
+
   return (
     <img
-      src={proxiedImageSrc(src) ?? src}
+      src={imageSrc}
       alt={alt || ""}
+      onError={() => setFailedSrc(src ?? "")}
       className="max-w-full h-auto rounded-lg my-2 border border-primary-200 dark:border-primary-700"
     />
   );
@@ -222,12 +245,15 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
  * by props. A named component, not an inline arrow in the map below: it reads
  * context, and only a component may.
  */
-function MarkdownCode({ children }: { children?: ReactNode }) {
+function MarkdownCode({ children, colorSwatches = false }: { children?: ReactNode; colorSwatches?: boolean }) {
   const isInline = !useContext(InCodeBlock);
   if (isInline) {
+    const hexColor = colorSwatches && typeof children === "string" && /^#[0-9a-f]{6}$/i.test(children)
+      ? children
+      : null;
     // `size="inherit"` yields to the `0.9em` below: inline code stays relative
     // to its sentence so it never towers over the prose around it.
-    return (
+    const code = (
       <Text
         as="code"
         size="inherit"
@@ -235,6 +261,18 @@ function MarkdownCode({ children }: { children?: ReactNode }) {
       >
         {children}
       </Text>
+    );
+    if (!hexColor) return code;
+    return (
+      <span className="inline-flex items-center gap-1 whitespace-nowrap align-middle">
+        {code}
+        <span
+          role="img"
+          aria-label={`${hexColor} color swatch`}
+          className="inline-block size-3.5 shrink-0 rounded-[3px] ring-1 ring-primary-400/50 dark:ring-primary-500/60"
+          style={{ backgroundColor: hexColor }}
+        />
+      </span>
     );
   }
   // Blocks carry the Code font-size setting instead, which is a pixel value
@@ -404,6 +442,33 @@ export const markdownComponents: Components = {
 /** Agent-authored prose opts into origin-only favicons for external links. */
 export const agentMarkdownComponents: Components = {
   ...markdownComponents,
+  code: ({ children }) => <MarkdownCode colorSwatches>{children}</MarkdownCode>,
+  // Assistant tables are reading surfaces. Row separators keep palette and
+  // comparison tables scannable without the full document-style cell grid.
+  table: ({ children }) => (
+    <div className="my-4 overflow-x-auto">
+      <table className="min-w-full border-collapse">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => (
+    <thead className="border-b border-primary-300 dark:border-primary-700">{children}</thead>
+  ),
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => (
+    <tr className="border-b border-primary-200/70 last:border-b-0 dark:border-primary-700/70">
+      {children}
+    </tr>
+  ),
+  th: ({ children }) => (
+    <Text as="th" weight="semibold" align="left" className="px-3 py-2.5 first:pl-0 last:pr-0 font-sans">
+      {children}
+    </Text>
+  ),
+  td: ({ children }) => (
+    <Text as="td" className="px-3 py-2.5 first:pl-0 last:pr-0 font-sans">
+      {children}
+    </Text>
+  ),
   a: ({ href, children }) => (
     <MarkdownLink href={href} showFavicon openWebLinksInApp>
       {children}

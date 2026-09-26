@@ -842,12 +842,16 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   async function withLoadedMcpThread<Result>(
     threadId: string,
     operation: (server: CodexAppServer) => Promise<Result>,
+    readWithoutThread?: (server: CodexAppServer) => Promise<Result>,
   ): Promise<Result> {
     const server = await ensureServer();
     try {
       return await operation(server);
     } catch (error) {
       if (!isCodexMissingThreadError(error)) throw error;
+      // A hosted app's resource can be read through its explicit account target.
+      // This lets old cards reload when another Codex client owns the thread writer.
+      if (readWithoutThread) return readWithoutThread(server);
       await resumeMcpThread(server, threadId);
       return operation(server);
     }
@@ -928,6 +932,14 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       if (!threadId) {
         throw new Error(`No Codex thread found for run ${request.runId}`);
       }
+      const cliVersion = await getCodexVersion();
+      const targetVersionComparison = cliVersion
+        ? compareCodexVersions(cliVersion, "0.157.1")
+        : null;
+      const target = request.connectorId && request.linkId !== undefined &&
+        targetVersionComparison !== null && targetVersionComparison >= 0
+        ? { connectorId: request.connectorId, linkId: request.linkId }
+        : undefined;
       const params: CodexAppServerParams<"mcpServer/resource/read"> = {
         threadId,
         server: request.server,
@@ -938,9 +950,19 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         ...(request.connectorId
           ? { connectorId: request.connectorId }
           : {}),
+        ...(target ? { target } : {}),
       };
-      return withLoadedMcpThread(threadId, (server) =>
-        server.sendRequest("mcpServer/resource/read", params),
+      return withLoadedMcpThread(
+        threadId,
+        (server) => server.sendRequest("mcpServer/resource/read", params),
+        target
+          ? (server) => server.sendRequest("mcpServer/resource/read", {
+              server: request.server,
+              uri: request.uri,
+              connectorId: request.connectorId,
+              target,
+            })
+          : undefined,
       );
     },
 

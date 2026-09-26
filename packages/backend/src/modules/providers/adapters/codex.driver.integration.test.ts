@@ -121,6 +121,7 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_ACCOUNT;
   delete process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS;
   delete process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD;
+  delete process.env.MAINS_CODEX_FIXTURE_MCP_RESUME_ACTIVE_WRITER;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -271,6 +272,7 @@ describe("codex.driver / app-server protocol", () => {
       uri: "ui://fixture/card.html",
       originCallId: "call-1",
       connectorId: "connector-1",
+      linkId: "legacy-account",
     });
     const result = await driver.callMcpAppTool?.({
       runId: "run-mcp-app",
@@ -316,6 +318,46 @@ describe("codex.driver / app-server protocol", () => {
         }),
       ]),
     );
+  });
+
+  it("targets the selected MCP App account on Codex 0.157.1", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    await driver.createSession(request("run-mcp-target"));
+    await driver.readMcpAppResource?.({
+      runId: "run-mcp-target",
+      server: "fixture-mcp",
+      uri: "ui://fixture/card.html",
+      connectorId: "connector-1",
+      linkId: "linked-account-2",
+    });
+    await driver.readMcpAppResource?.({
+      runId: "run-mcp-target",
+      server: "fixture-mcp",
+      uri: "ui://fixture/card.html",
+      connectorId: "connector-1",
+      linkId: null,
+    });
+
+    const log = readProtocolLog(logPath);
+    expect(log).toContainEqual(expect.objectContaining({
+      method: "mcpServer/resource/read",
+      params: expect.objectContaining({
+        target: { connectorId: "connector-1", linkId: "linked-account-2" },
+      }),
+    }));
+    expect(log).toContainEqual(expect.objectContaining({
+      method: "mcpServer/resource/read",
+      params: expect.objectContaining({
+        target: { connectorId: "connector-1", linkId: null },
+      }),
+    }));
   });
 
   it("resumes an unsubscribed thread before retrying MCP App operations", async () => {
@@ -373,6 +415,47 @@ describe("codex.driver / app-server protocol", () => {
     expect(
       log.filter((message) => message.method === "mcpServer/tool/call"),
     ).toHaveLength(2);
+  });
+
+  it("rehydrates an MCP App from its explicit target when another client owns the thread writer", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+    process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD = "1";
+    process.env.MAINS_CODEX_FIXTURE_MCP_RESUME_ACTIVE_WRITER = "1";
+
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const session = await driver.createSession(request("run-mcp-shared-thread"));
+    await driver.cleanup?.(session.session);
+
+    const resource = await driver.readMcpAppResource?.({
+      runId: "run-mcp-shared-thread",
+      server: "fixture-mcp",
+      uri: "ui://fixture/card.html",
+      originCallId: "call-1",
+      connectorId: "connector-1",
+      linkId: "linked-account-2",
+    });
+
+    expect(resource?.contents[0]?.text).toContain("Fixture MCP App");
+    const log = readProtocolLog(logPath);
+    expect(log.filter((message) => message.method === "mcpServer/resource/read"))
+      .toEqual([
+        expect.objectContaining({ params: expect.objectContaining({
+          threadId: "thread-1",
+          originCallId: "call-1",
+        }) }),
+        expect.objectContaining({ params: {
+          server: "fixture-mcp",
+          uri: "ui://fixture/card.html",
+          connectorId: "connector-1",
+          target: { connectorId: "connector-1", linkId: "linked-account-2" },
+        } }),
+      ]);
+    expect(log.some((message) => message.method === "thread/resume")).toBe(false);
   });
 
   it("rejects Codex CLI versions older than the supported protocol", async () => {

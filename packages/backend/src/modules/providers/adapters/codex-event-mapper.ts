@@ -25,9 +25,10 @@ interface CodexMcpAppMetadata {
   resourceUri: string;
   originCallId: string;
   connectorId?: string;
-  linkId?: string;
+  linkId?: string | null;
   appName?: string;
   actionName?: string;
+  preferredModelDisplayMode?: "inline" | "fullscreen";
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -71,15 +72,24 @@ function mcpAppMetadata(
 
   if (!resourceUri) return undefined;
 
+  const linkIdValue = appContext && "linkId" in appContext
+    ? appContext.linkId
+    : appContext?.link_id;
+  const preferredDisplayMode =
+    mcpAppUi?.preferredModelDisplayMode ?? mcpAppUi?.preferred_model_display_mode;
   const optional = {
     connectorId: optionalString(
       appContext?.connectorId ?? appContext?.connector_id,
     ),
-    linkId: optionalString(appContext?.linkId ?? appContext?.link_id),
+    linkId: linkIdValue === null ? null : optionalString(linkIdValue),
     appName: optionalString(appContext?.appName ?? appContext?.app_name),
     actionName: optionalString(
       appContext?.actionName ?? appContext?.action_name,
     ),
+    preferredModelDisplayMode:
+      preferredDisplayMode === "fullscreen" || preferredDisplayMode === "inline"
+        ? preferredDisplayMode
+        : undefined,
   };
 
   return {
@@ -2528,6 +2538,35 @@ export function createCodexEventMapper(
         // Internal — no UI event needed.
         break;
 
+      case "imageView":
+      case "image_view": {
+        const imagePath = optionalString(item.path);
+        if (!imagePath) break;
+        const metadata = {
+          toolCallId: item.id,
+          itemId: item.id,
+          codexItemType: "imageView" as const,
+        };
+        if (phase === "start") {
+          events.push({
+            type: "tool_call",
+            toolName: "ImageView",
+            input: { path: imagePath },
+            startedAt: ts,
+            metadata: { phase: "start", ...metadata },
+          });
+        } else if (phase === "complete") {
+          events.push({
+            type: "tool_call",
+            toolName: "ImageView",
+            input: { path: imagePath },
+            endedAt: ts,
+            metadata: { phase: "complete", ...metadata },
+          });
+        }
+        break;
+      }
+
       case "function_call_output":
       case "functionCallOutput":
         // This is the response-side echo of a tool result, not a new tool
@@ -3268,7 +3307,8 @@ export function createCodexEventMapper(
     // The image-generation item can carry tens of megabytes of base64. Its
     // output is handled above; scanning that string for file paths is costly.
     const isImageGeneration = item.type === "imageGeneration" || item.type === "image_generation";
-    if (phase === "complete" && !isImageGeneration) {
+    const isImageView = item.type === "imageView" || item.type === "image_view";
+    if (phase === "complete" && !isImageGeneration && !isImageView) {
       emitImageArtifacts(events, runId, item, ts);
     }
     // Agent messages are scanned above after citation directives are removed;

@@ -63,6 +63,7 @@ export const CHANNELS = {
     clearHistory: "browser:clearHistory",
     closeTab: "browser:closeTab",
     createTab: "browser:createTab",
+    createHtmlPreviewTab: "browser:createHtmlPreviewTab",
     forgetContext: "browser:forgetContext",
     listOwnerKeys: "browser:listOwnerKeys",
     setContext: "browser:setContext",

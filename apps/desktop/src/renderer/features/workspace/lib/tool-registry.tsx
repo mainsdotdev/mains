@@ -11,6 +11,7 @@ import {
   Infinite,
   Layers,
   Mains,
+  Picture,
   Plus,
   Question,
   Read,
@@ -307,6 +308,13 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     aliases: ["read", "read_file"],
   },
   {
+    displayName: "ImageView",
+    groupKey: "imageview",
+    category: "File",
+    icon: <Picture className="size-4" />,
+    aliases: ["imageview", "image_view"],
+  },
+  {
     displayName: "View",
     groupKey: "view",
     category: "File",
@@ -467,6 +475,7 @@ export const PHRASES_BY_GROUP_KEY: Record<string, ToolPhrase> = {
   // Reads and searches.
   read: { one: "read a file", many: "read files", rank: 30 },
   view: { one: "viewed a file", many: "viewed files", rank: 30 },
+  imageview: { one: "viewed an image", many: "viewed images", rank: 30 },
   glob: { one: "looked for files", many: "looked for files", rank: 32 },
   grep: { one: "searched the code", many: "searched the code", rank: 32 },
   search: { one: "searched", many: "searched", rank: 32 },

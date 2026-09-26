@@ -101,6 +101,7 @@ export type { AlertProps } from "./alert";
 // Modal
 export { Modal, ModalHeader } from "./modal";
 export type { ModalHeaderProps, ModalProps } from "./modal";
+export { useDialogFocus } from "./dialog-focus";
 
 // Dropdown Menu
 export { DropdownMenu, DropdownMenuSub, DropdownMenuItem } from "./dropdown-menu";

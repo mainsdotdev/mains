@@ -71,6 +71,35 @@ afterEach(() => {
 });
 
 describe("Codex event mapper", () => {
+  it("records imageView as a view tool call without publishing the inspected image", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-image-view-"));
+    tempDirs.push(root);
+    const imagePath = path.join(root, "tmp", "pdfs", "page-1.png");
+    fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+    fs.writeFileSync(imagePath, Buffer.from(ONE_PIXEL_PNG, "base64"));
+    const { mapper } = createHarness(createRunState(root));
+
+    const events = mapper.mapThreadItem(
+      { type: "imageView", id: "view-page-1", path: imagePath },
+      "item/completed",
+      400,
+      "run-1",
+    );
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "tool_call",
+      toolName: "ImageView",
+      input: { path: imagePath },
+      metadata: expect.objectContaining({
+        phase: "complete",
+        toolCallId: "view-page-1",
+        codexItemType: "imageView",
+      }),
+    }));
+    expect(events.some((event) => event.type === "artifact" && event.kind === "image"))
+      .toBe(false);
+  });
+
   it("persists and serves an inline image result when savedPath is absent", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-image-"));
     tempDirs.push(dataDir);
@@ -208,6 +237,7 @@ describe("Codex event mapper", () => {
             resourceUri: "ui://widgets/flights.html",
             originCallId: "mcp-call-1",
             connectorId: "skyscanner",
+            linkId: null,
             appName: "Skyscanner",
             actionName: "Flights live prices create search",
           },
@@ -242,6 +272,7 @@ describe("Codex event mapper", () => {
         mcpApp: expect.objectContaining({
           resourceUri: "ui://maps/results.html",
           originCallId: "mcp-call-ui",
+          preferredModelDisplayMode: "fullscreen",
         }),
       }),
     }));

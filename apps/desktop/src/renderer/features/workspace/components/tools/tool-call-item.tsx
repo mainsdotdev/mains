@@ -26,6 +26,7 @@ import { EditDisplay, type EditParams } from "./edit-display";
 import { ApplyPatchDisplay } from "./apply-patch-display";
 import { DeleteDisplay, type DeleteParams } from "./delete-display";
 import { ViewDisplay, type ViewParams } from "./view-display";
+import { ImageViewDisplay, type ImageViewParams } from "./image-view-display";
 import { ToolSearchDisplay, type ToolSearchParams } from "./tool-search-display";
 import { WorkflowDisplay, type WorkflowParams } from "./workflow-display";
 import { SkillDisplay, type SkillParams } from "./skill-display";
@@ -187,6 +188,7 @@ const DISPATCH: Renderer[] = [
   withOutput<ReadParams>(["read"], ReadDisplay, summaryAs("file_path")),
   withOutput<DeleteParams>(["delete"], DeleteDisplay, summaryAs("file_path")),
   withOutput<ViewParams>(["view"], ViewDisplay, summaryAs("path")),
+  noOutput<ImageViewParams>(["imageview", "image_view"], ImageViewDisplay, summaryAs("path")),
   noOutput<IntentParams>(["report_intent"], IntentDisplay, summaryAs("intent")),
   withOutput<ToolSearchParams>(["toolsearch"], ToolSearchDisplay, summaryAs("query")),
   withOutput<WorkflowParams>(["workflow"], WorkflowDisplay, () => ({})),
@@ -251,6 +253,7 @@ const DISPATCH: Renderer[] = [
         params={ctx.metadataInput ?? ctx.params}
         output={ctx.event.metadata?.output}
         isCompact={ctx.isCompact}
+        status={eventToolStatus(ctx.event)}
         runId={typeof runId === "string" ? runId : undefined}
         mcpApp={mcpApp}
       />

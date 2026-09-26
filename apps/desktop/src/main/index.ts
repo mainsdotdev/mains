@@ -108,6 +108,7 @@ import {
   registerImageProxyScheme,
   registerImageProxyHandler,
 } from "./modules/imageProxy/imageProxy.protocol";
+import { registerBrowserPreviewHandler } from "./modules/browser/browser-preview.protocol";
 import {
   registerImageProxyIpc,
   unregisterImageProxyIpc,
@@ -844,6 +845,7 @@ async function initializeApp() {
     registerGitFlowIpc();
     registerTerminalIpc();
     registerImageProxyHandler();
+    registerBrowserPreviewHandler();
     registerImageProxyIpc();
     registerMcpAppsProtocolHandler();
     registerMcpAppsIpc();

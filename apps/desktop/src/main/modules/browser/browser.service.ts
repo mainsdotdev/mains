@@ -27,6 +27,11 @@ import {
   resolveBrowserInput,
 } from "../../../shared/browser-url";
 import {
+  browserPreviewUrl,
+  isBrowserPreviewUrlForTab,
+  requireHtmlPreviewPath,
+} from "./browser-preview";
+import {
   isPathInsideDirectory,
   nextDownloadPath,
 } from "./browser-downloads";
@@ -71,7 +76,7 @@ import {
   type KeyboardShortcutId,
 } from "../../../shared/keyboard-shortcuts";
 
-const BROWSER_PARTITION = "persist:mains-browser";
+export const BROWSER_PARTITION = "persist:mains-browser";
 const VIEW_BORDER_RADIUS_PX = 0;
 const CAPTURE_CACHE_MAX_BYTES = 100 * 1024 * 1024;
 const IDLE_HIBERNATE_MS = 2 * 60 * 1000;
@@ -103,6 +108,7 @@ interface BrowserTabRecord {
   id: string;
   ownerKey: string;
   url: string;
+  htmlPreviewPath: string | null;
   title: string;
   faviconUrl: string | null;
   canGoBack: boolean;
@@ -122,6 +128,7 @@ interface PersistedBrowserTab {
   id: string;
   ownerKey?: string;
   url: string;
+  htmlPreviewPath?: string;
   title: string;
   faviconUrl: string | null;
   zoomFactor: number;
@@ -168,6 +175,7 @@ function createTabRecord(
     id,
     ownerKey,
     url,
+    htmlPreviewPath: null,
     title,
     faviconUrl: null,
     canGoBack: false,
@@ -607,8 +615,21 @@ export const browserService = {
 
       for (const saved of parsed.tabs.slice(0, MAX_PERSISTED_TABS)) {
         if (!saved || typeof saved.id !== "string" || !saved.id) continue;
-        const url =
-          typeof saved.url === "string" && isAllowedBrowserUrl(saved.url)
+        let htmlPreviewPath: string | null = null;
+        if (
+          typeof saved.htmlPreviewPath === "string" &&
+          typeof saved.url === "string" &&
+          isBrowserPreviewUrlForTab(saved.id, saved.url)
+        ) {
+          try {
+            htmlPreviewPath = requireHtmlPreviewPath(saved.htmlPreviewPath);
+          } catch {
+            // A removed or changed output cannot be restored as a preview.
+          }
+        }
+        const url = htmlPreviewPath
+          ? browserPreviewUrl(saved.id)
+          : typeof saved.url === "string" && isAllowedBrowserUrl(saved.url)
             ? saved.url
             : BLANK_URL;
         const record = createTabRecord(
@@ -623,6 +644,7 @@ export const browserService = {
               ? saved.ownerKey
               : DEFAULT_OWNER_KEY,
         );
+        record.htmlPreviewPath = htmlPreviewPath;
         record.faviconUrl =
           typeof saved.faviconUrl === "string" ? saved.faviconUrl : null;
         record.zoomFactor = clampZoom(Number(saved.zoomFactor) || 1);
@@ -792,7 +814,10 @@ export const browserService = {
     });
 
     contents.on("will-navigate", (event, url) => {
-      if (isAllowedBrowserUrl(url)) {
+      if (
+        isAllowedBrowserUrl(url) ||
+        (record.htmlPreviewPath && isBrowserPreviewUrlForTab(record.id, url))
+      ) {
         record.deviceEmulationQueue.beginNavigation();
         return;
       }
@@ -1184,6 +1209,9 @@ export const browserService = {
         id: record.id,
         ownerKey: record.ownerKey,
         url: record.url,
+        ...(record.htmlPreviewPath && isBrowserPreviewUrlForTab(record.id, record.url)
+          ? { htmlPreviewPath: record.htmlPreviewPath }
+          : {}),
         title: record.title,
         faviconUrl: record.faviconUrl,
         zoomFactor: record.zoomFactor,
@@ -1897,6 +1925,30 @@ export const browserService = {
     return this.getState();
   },
 
+  async createHtmlPreviewTab(rawPath: string, ownerKey?: string): Promise<BrowserState> {
+    const htmlPreviewPath = requireHtmlPreviewPath(rawPath);
+    this._loadPersistedTabs();
+    const targetOwnerKey = ownerKey ?? this.activeOwnerKey;
+    if (Array.from(this.tabs.values()).filter((tab) => tab.ownerKey === targetOwnerKey).length >= MAX_TABS_PER_CONTEXT) {
+      throw new Error(`You can open up to ${MAX_TABS_PER_CONTEXT} browser tabs in one chat`);
+    }
+    const id = randomUUID();
+    const record = createTabRecord(browserPreviewUrl(id), path.basename(htmlPreviewPath), id, targetOwnerKey);
+    record.htmlPreviewPath = htmlPreviewPath;
+    this.tabs.set(id, record);
+    if (targetOwnerKey === this.activeOwnerKey) await this.activateTab(id);
+    else {
+      this.activeTabIdsByOwner[targetOwnerKey] = id;
+      this._schedulePersist();
+    }
+    return this.getState();
+  },
+
+  getHtmlPreviewPath(tabId: string): string | null {
+    this._loadPersistedTabs();
+    return this.tabs.get(tabId)?.htmlPreviewPath ?? null;
+  },
+
   async closeTab(tabId: string): Promise<BrowserState> {
     this._loadPersistedTabs();
     const record = this.tabs.get(tabId);
@@ -2030,7 +2082,9 @@ export const browserService = {
   async navigate(rawInput: string): Promise<null> {
     const record = this._activeTab();
     const view = await this._ensureTabView(record);
-    const url = resolveBrowserInput(rawInput);
+    const url = record.htmlPreviewPath && isBrowserPreviewUrlForTab(record.id, rawInput)
+      ? browserPreviewUrl(record.id)
+      : resolveBrowserInput(rawInput);
     record.url = url;
     if (url === BLANK_URL) record.title = "New tab";
     record.deviceEmulationQueue.beginNavigation();

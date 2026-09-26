@@ -1084,6 +1084,8 @@ const api = {
   browser: {
     createTab: (url?: string, ownerKey?: string) =>
       ipcRenderer.invoke(CHANNELS.browser.createTab, url, ownerKey),
+    createHtmlPreviewTab: (filePath: string, ownerKey?: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.createHtmlPreviewTab, filePath, ownerKey),
     setContext: (ownerKey: string, showBlankTab = false) =>
       ipcRenderer.invoke(CHANNELS.browser.setContext, ownerKey, showBlankTab),
     reassignTabs: (fromOwnerKey: string, toOwnerKey: string) =>
