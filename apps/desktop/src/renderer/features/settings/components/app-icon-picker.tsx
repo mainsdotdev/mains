@@ -14,6 +14,7 @@ import {
   DEFAULT_APP_ICON_ID,
   JAPANESE_GRADIENTS,
   LIGHT_APP_ICON_ID,
+  UPDATES,
   type AppIconId,
 } from "../../../../shared/app-icons";
 import { SettingsSection } from "./settings-layout";
@@ -27,17 +28,25 @@ const GRADIENT_TABS: { value: GradientVariant; label: string }[] = [
 const GRADIENT_TABS_ID = "app-icon-gradient-tabs";
 const GRADIENT_PANEL_ID = "app-icon-gradient-panel";
 const gridClassName = "grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-6";
+const GRADIENT_GROUPS = [
+  { id: "app-icon-japanese", name: "Japanese gradients", gradients: JAPANESE_GRADIENTS },
+  { id: "app-icon-updates", name: "Updates", gradients: UPDATES },
+] as const;
 
 function selectedIconLabel(id: AppIconId | null): string | null {
   if (id === DEFAULT_APP_ICON_ID) return "Original";
   if (id === DARK_APP_ICON_ID) return "Dark";
   if (id === LIGHT_APP_ICON_ID) return "Light";
 
-  const gradient = JAPANESE_GRADIENTS.find(
-    ({ inside, outside }) => id === inside || id === outside,
-  );
-  if (!gradient) return null;
-  return `${gradient.name} · ${id === gradient.inside ? "Inside" : "Outside"}`;
+  for (const group of GRADIENT_GROUPS) {
+    const gradient = group.gradients.find(
+      ({ inside, outside }) => id === inside || id === outside,
+    );
+    if (gradient) {
+      return `${gradient.name} · ${group.name} · ${id === gradient.inside ? "Inside" : "Outside"}`;
+    }
+  }
+  return null;
 }
 
 /** The app icon is a local Mac preference, independent of provider themes. */
@@ -53,7 +62,9 @@ export function AppIconPicker() {
       if (!active) return;
       if (response.success) {
         setSelected(response.data);
-        if (JAPANESE_GRADIENTS.some(({ outside }) => outside === response.data)) {
+        if (GRADIENT_GROUPS.some(({ gradients }) =>
+          gradients.some(({ outside }) => outside === response.data)
+        )) {
           setGradientVariant("outside");
         }
       } else toast.error(response.error);
@@ -143,13 +154,11 @@ export function AppIconPicker() {
           </div>
         </section>
 
-        <section aria-labelledby="app-icon-japanese">
-          <div className="mb-4eb flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <Text as="h3" id="app-icon-japanese" size="sm" weight="semibold">
-                Japanese gradients
-              </Text>
-            </div>
+        <section aria-labelledby="app-icon-gradients">
+          <div className="mb-4 flex flex-wrap items-end justify-end gap-3">
+            {/* <Text as="h3" id="app-icon-gradients" size="sm" weight="semibold">
+              Alternative icons
+            </Text> */}
             <SegmentedTabs
               id={GRADIENT_TABS_ID}
               value={gradientVariant}
@@ -165,11 +174,23 @@ export function AppIconPicker() {
             id={GRADIENT_PANEL_ID}
             role="tabpanel"
             aria-labelledby={getSegmentedTabId(GRADIENT_TABS_ID, gradientVariant)}
-            className={gridClassName}
           >
-            {JAPANESE_GRADIENTS.map(({ name, inside, outside }) =>
-              renderChoice(gradientVariant === "inside" ? inside : outside, name, gradientVariant),
-            )}
+            {GRADIENT_GROUPS.map(({ id, name, gradients }) => (
+              <section key={id} aria-labelledby={id} className="mb-6 last:mb-0">
+                <Text as="h4" id={id} size="sm" weight="semibold" className="mb-2">
+                  {name}
+                </Text>
+                <div className={gridClassName}>
+                  {gradients.map(({ name: gradientName, inside, outside }) =>
+                    renderChoice(
+                      gradientVariant === "inside" ? inside : outside,
+                      gradientName,
+                      gradientVariant,
+                    ),
+                  )}
+                </div>
+              </section>
+            ))}
           </div>
         </section>
       </div>
