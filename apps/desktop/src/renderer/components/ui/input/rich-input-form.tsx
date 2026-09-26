@@ -81,6 +81,8 @@ interface RichInputFormProps {
   onCodeChipsChange?: (keys: string[]) => void;
   /** Fires whenever the caret moves or content changes; receives the serialized text from start to caret. */
   onCaretContextChange?: (textBeforeCaret: string) => void;
+  /** Return true when pasted files were added as attachments. */
+  onPasteFiles?: (files: File[]) => boolean;
   placeholder?: string;
   placeholderIcon?: ReactNode;
   focusShortcutLabel?: string;
@@ -750,6 +752,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onFileChipsChange,
       onCodeChipsChange,
       onCaretContextChange,
+      onPasteFiles,
       placeholder,
       placeholderIcon,
       focusShortcutLabel,
@@ -940,6 +943,19 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
     );
 
     const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+      const files = Array.from(e.clipboardData.files ?? []);
+      if (files.length === 0) {
+        for (const item of Array.from(e.clipboardData.items ?? [])) {
+          if (item.kind !== "file") continue;
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length > 0 && onPasteFiles?.(files)) {
+        e.preventDefault();
+        return;
+      }
+
       e.preventDefault();
       const text = e.clipboardData.getData("text/plain");
       const sel = window.getSelection();
@@ -964,7 +980,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       sel.removeAllRanges();
       sel.addRange(after);
       fireChange();
-    }, [fireChange]);
+    }, [fireChange, onPasteFiles]);
 
     return (
       <div className="relative">

@@ -139,6 +139,57 @@ describe("RichInputForm Markdown editing", () => {
   });
 });
 
+describe("RichInputForm file pasting", () => {
+  it("hands pasted files to the attachment handler without inserting clipboard text", () => {
+    const onQueryChange = vi.fn();
+    const onPasteFiles = vi.fn(() => true);
+    const image = new File(["image"], "screenshot.png", { type: "image/png" });
+    const pdf = new File(["document"], "notes.pdf", { type: "application/pdf" });
+
+    render(createElement(RichInputForm, {
+      query: "Draft",
+      onQueryChange,
+      onSubmit: vi.fn(),
+      onPasteFiles,
+    }));
+
+    const editor = screen.getByRole("textbox");
+    placeCaretAtEnd(editor);
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [image, pdf],
+        getData: () => "file paths should not appear in the prompt",
+      },
+    });
+
+    expect(onPasteFiles).toHaveBeenCalledWith([image, pdf]);
+    expect(onQueryChange).not.toHaveBeenCalled();
+    expect(editor.textContent).toBe("Draft");
+  });
+
+  it("reads file clipboard items when the files list is empty", () => {
+    const image = new File(["image"], "screenshot.png", { type: "image/png" });
+    const onPasteFiles = vi.fn(() => true);
+
+    render(createElement(RichInputForm, {
+      query: "",
+      onQueryChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onPasteFiles,
+    }));
+
+    fireEvent.paste(screen.getByRole("textbox"), {
+      clipboardData: {
+        files: [],
+        items: [{ kind: "file", getAsFile: () => image }],
+        getData: () => "",
+      },
+    });
+
+    expect(onPasteFiles).toHaveBeenCalledWith([image]);
+  });
+});
+
 describe("RichInputForm file mentions", () => {
   it.each([
     { path: "/repo/apps", basename: "apps", isDirectory: true },

@@ -695,6 +695,17 @@ export function WorkspaceInput({
     [uploadedFiles, onUploadedFilesChange],
   );
 
+  const handlePasteFiles = useCallback(
+    (clipboardFiles: File[]): boolean => {
+      if (!onUploadedFilesChange) return false;
+      const files = clipboardFiles.filter(isAttachableUpload);
+      if (files.length === 0) return false;
+      onUploadedFilesChange([...uploadedFiles, ...files.map(fileToUploadedFile)]);
+      return true;
+    },
+    [uploadedFiles, onUploadedFilesChange],
+  );
+
   const handleRemoveUploadedFile = useCallback(
     (index: number) => {
       const removed = uploadedFiles[index];
@@ -907,6 +918,7 @@ export function WorkspaceInput({
             onFileChipsChange={handleFileChipsChange}
             onCodeChipsChange={handleCodeChipsChange}
             onCaretContextChange={handleCaretContext}
+            onPasteFiles={handlePasteFiles}
             skillChipMap={skillChipMap}
             fileChipMap={fileChipMap}
             codeChipMap={codeChipMap}
