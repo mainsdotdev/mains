@@ -97,6 +97,9 @@ import {
   applySavedThemeSource,
   registerThemeSourceIpc,
   unregisterThemeSourceIpc,
+  applySavedDockIcon,
+  registerDockIconIpc,
+  unregisterDockIconIpc,
   watchChildProcesses,
 } from "./windows";
 import { showTray, hideTray, startDockMenu, stopDockMenu } from "./status";
@@ -242,14 +245,24 @@ interface DetectedApp {
   icon: string | null;
 }
 
+interface MentionableAppBundle {
+  bundleId: string;
+  name: string;
+  path: string;
+}
+
 let isShuttingDown = false;
 let hasUnsavedChanges = false;
 let quitConfirmed = false;
 let installedAppsCache: DetectedApp[] | null = null;
 let installedAppsCacheTime = 0;
 let detectInFlight: Promise<DetectedApp[]> | null = null;
+let mentionableAppsCache: MentionableAppBundle[] | null = null;
+let mentionableAppsCacheTime = 0;
+let mentionableAppsInFlight: Promise<MentionableAppBundle[]> | null = null;
 let persistedAppsLoaded = false;
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const MAX_MENTIONABLE_APP_MATCHES = 40;
 /** Bump when `DetectedApp` or `KNOWN_APPS` changes shape — invalidates the disk cache. */
 const INSTALLED_APPS_CACHE_VERSION = 1;
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["https:", "http:", "mailto:"]);
@@ -525,6 +538,63 @@ async function scanBundleIdMap(): Promise<Map<string, string>> {
   return byBundleId;
 }
 
+/** The composer searches every app bundle, not only the developer apps in KNOWN_APPS. */
+async function listMentionableAppBundles(): Promise<MentionableAppBundle[]> {
+  if (mentionableAppsCache && Date.now() - mentionableAppsCacheTime < CACHE_TTL) {
+    return mentionableAppsCache;
+  }
+  if (mentionableAppsInFlight) return mentionableAppsInFlight;
+
+  mentionableAppsInFlight = scanBundleIdMap()
+    .then((byBundleId) => {
+      const knownNames = new Map(KNOWN_APPS.map((item) => [item.bundleId, item.name]));
+      const apps = Array.from(byBundleId, ([bundleId, appPath]) => ({
+        bundleId,
+        name: sanitizeAppDisplayName(
+          knownNames.get(bundleId) ?? path.basename(appPath, ".app"),
+        ),
+        path: appPath,
+      })).filter((item) => item.name.length > 0);
+      mentionableAppsCache = apps;
+      mentionableAppsCacheTime = Date.now();
+      return apps;
+    })
+    .finally(() => {
+      mentionableAppsInFlight = null;
+    });
+  return mentionableAppsInFlight;
+}
+
+async function searchMentionableApps(query: string): Promise<Array<{
+  bundleId: string;
+  name: string;
+  icon: string | null;
+}>> {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return [];
+  const apps = await listMentionableAppBundles();
+  const matches = apps
+    .filter((item) => item.name.toLocaleLowerCase().includes(needle))
+    .sort((a, b) => {
+      const aStarts = a.name.toLocaleLowerCase().startsWith(needle);
+      const bStarts = b.name.toLocaleLowerCase().startsWith(needle);
+      if (aStarts !== bStarts) return aStarts ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    })
+    .filter((item, index, sorted) =>
+      sorted.findIndex((candidate) =>
+        candidate.name.toLocaleLowerCase() === item.name.toLocaleLowerCase(),
+      ) === index,
+    )
+    .slice(0, MAX_MENTIONABLE_APP_MATCHES);
+  const result = matches.map((item) => ({ ...item, icon: null as string | null }));
+  await mapWithConcurrency(result, 8, async (item) => {
+    const iconId = `mention_${item.bundleId.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    item.icon = await getAppIcon(item.path, iconId);
+  });
+  return result.map(({ bundleId, name, icon }) => ({ bundleId, name, icon }));
+}
+
 function installedAppsCachePath(): string {
   return path.join(app.getPath("userData"), "installed-apps.json");
 }
@@ -734,6 +804,7 @@ async function initializeApp() {
     // Native chrome (vibrancy, menus, dialogs) in the user's theme from the
     // first frame — before the renderer is up to say which one it is.
     applySavedThemeSource();
+    applySavedDockIcon();
 
     // Running from the DMG or Downloads breaks auto-update: offer the move
     // before anything boots. On a move the app quits and relaunches itself.
@@ -858,6 +929,20 @@ async function initializeApp() {
       }
     });
 
+    ipcMain.handle(CHANNELS.shell.getMentionableApps, async (_, query: string) => {
+      if (process.platform !== "darwin" || typeof query !== "string") {
+        return { success: true, data: [] };
+      }
+      try {
+        return { success: true, data: await searchMentionableApps(query) };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Failed to search apps",
+        };
+      }
+    });
+
     ipcMain.handle(CHANNELS.shell.getAppsForFile, async (_, filePath: string) => {
       if (typeof filePath !== "string" || !path.isAbsolute(filePath)) {
         return { success: false, error: "Invalid path" };
@@ -931,6 +1016,7 @@ async function initializeApp() {
     });
     registerWindowRequestIpc();
     registerThemeSourceIpc();
+    registerDockIconIpc();
 
     // Build custom application menu
     const template: Electron.MenuItemConstructorOptions[] = [
@@ -1131,6 +1217,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.shell.showItemInFolder);
     ipcMain.removeHandler(CHANNELS.shell.openInApp);
     ipcMain.removeHandler(CHANNELS.shell.getInstalledApps);
+    ipcMain.removeHandler(CHANNELS.shell.getMentionableApps);
     ipcMain.removeHandler(CHANNELS.shell.getAppsForFile);
     ipcMain.removeHandler(CHANNELS.shell.openFileWithBundle);
     ipcMain.removeHandler(CHANNELS.app.setUnsavedChanges);
@@ -1138,6 +1225,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.app.quit);
     unregisterWindowRequestIpc();
     unregisterThemeSourceIpc();
+    unregisterDockIconIpc();
 
     // Close database
     await closeDatabase();

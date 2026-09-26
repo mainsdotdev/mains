@@ -26,6 +26,8 @@ export interface RichSkillChipData {
   iconSmall?: string;
   iconLarge?: string;
   brandColor?: string;
+  /** Serialized prompt token. Mac apps use @Name; skills use $name. */
+  token?: string;
 }
 
 export interface RichFileChipData {
@@ -54,7 +56,8 @@ export interface RichInputFormHandle {
   replaceTokenWithSkillChip: (
     triggerChar: "$" | "@" | "/",
     skill: RichSkillChipData,
-  ) => void;
+    appendIfNoToken?: boolean,
+  ) => boolean;
   /** Replace a leading "<trigger><filter>" token at the caret with an inline file chip + trailing space. Returns false if the caret was not in a text node (e.g. after focus moved to a dropdown) — caller should fall back to rewriting the query string with `@<path> ` so the sync effect can rebuild the chip. */
   replaceTokenWithFileChip: (
     triggerChar: "@" | "/",
@@ -81,7 +84,7 @@ interface RichInputFormProps {
   placeholder?: string;
   placeholderIcon?: ReactNode;
   focusShortcutLabel?: string;
-  /** Maps skill name → display data so `$<name>` tokens can be rebuilt as chips when query changes externally. */
+  /** Maps serialized token → display data so selected skills and apps survive external query changes. */
   skillChipMap?: ReadonlyMap<string, RichSkillChipData>;
   /** Maps file path → display data so `@<path>` tokens can be rebuilt as chips when query changes externally. */
   fileChipMap?: ReadonlyMap<string, RichFileChipData>;
@@ -91,6 +94,7 @@ interface RichInputFormProps {
 
 const CHIP_ATTR = "data-skill-chip";
 const CHIP_NAME_ATTR = "data-skill-name";
+const CHIP_TOKEN_ATTR = "data-skill-token";
 const FILE_CHIP_ATTR = "data-file-chip";
 const FILE_PATH_ATTR = "data-file-path";
 const CODE_CHIP_ATTR = "data-code-chip";
@@ -202,6 +206,7 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   const chip = document.createElement("span");
   chip.setAttribute(CHIP_ATTR, "true");
   chip.setAttribute(CHIP_NAME_ATTR, skill.name);
+  chip.setAttribute(CHIP_TOKEN_ATTR, skill.token ?? `$${skill.name}`);
   chip.contentEditable = "false";
   // Fixed height + leading-none + align-middle so the line box height stays constant
   // regardless of whether the chip carries an icon — keeps the caret height consistent.
@@ -404,7 +409,7 @@ function serializeEditorNode(node: Node, filler: Node | null): string {
   }
 
   if (node.getAttribute(CHIP_ATTR) === "true") {
-    return "$" + (node.getAttribute(CHIP_NAME_ATTR) ?? "");
+    return node.getAttribute(CHIP_TOKEN_ATTR) ?? "$" + (node.getAttribute(CHIP_NAME_ATTR) ?? "");
   }
   if (node.getAttribute(FILE_CHIP_ATTR) === "true") {
     return "@" + (node.getAttribute(FILE_PATH_ATTR) ?? "");
@@ -544,7 +549,7 @@ function rebuildContent(
   );
 
   const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const skillNames =
+  const skillTokens =
     skillChipMap && skillChipMap.size > 0
       ? Array.from(skillChipMap.keys()).sort((a, b) => b.length - a.length)
       : [];
@@ -557,14 +562,19 @@ function rebuildContent(
       ? Array.from(codeChipMap.keys()).sort((a, b) => b.length - a.length)
       : [];
 
-  if (skillNames.length === 0 && filePaths.length === 0 && codeKeys.length === 0) {
+  if (skillTokens.length === 0 && filePaths.length === 0 && codeKeys.length === 0) {
     return;
   }
 
   // Longer paths sorted first so `@src/foo.tsx.bak` wins over `@src/foo.tsx` when both are present.
   const parts: string[] = [];
-  if (skillNames.length > 0) {
-    parts.push(`\\$(?<skill>${skillNames.map(escRe).join("|")})(?![\\w-])`);
+  const selectedSkills = skillTokens.filter((token) => token.startsWith("$"));
+  const selectedApps = skillTokens.filter((token) => token.startsWith("@"));
+  if (selectedSkills.length > 0) {
+    parts.push(`(?<skill>${selectedSkills.map(escRe).join("|")})(?![\\w-])`);
+  }
+  if (selectedApps.length > 0) {
+    parts.push(`(?<app>${selectedApps.map(escRe).join("|")})(?![\\w./-])`);
   }
   // Code keys (`<path>#L<range>`) go before file paths: both start with `@` and a
   // code key extends a path, so the file alternative would otherwise win at `@path`.
@@ -598,11 +608,11 @@ function rebuildContent(
           document.createTextNode(value.slice(lastIndex, match.index)),
         );
       }
-      const skillName = match.groups?.skill;
+      const skillToken = match.groups?.skill ?? match.groups?.app;
       const filePath = match.groups?.file;
       const codeKey = match.groups?.code;
-      if (skillName) {
-        const data = skillChipMap!.get(skillName);
+      if (skillToken) {
+        const data = skillChipMap!.get(skillToken);
         fragment.appendChild(
           data ? buildChip(data) : document.createTextNode(match[0]),
         );
@@ -861,14 +871,15 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       ref,
       () => ({
         focus: () => editorRef.current?.focus(),
-        replaceTokenWithSkillChip: (triggerChar, skill) => {
+        replaceTokenWithSkillChip: (triggerChar, skill, appendIfNoToken = true) => {
           const root = editorRef.current;
-          if (!root) return;
+          if (!root) return false;
           const chip = buildChip(skill);
           if (replaceTokenAtCaret(root, triggerChar, { kind: "chip", chip })) {
             fireChange();
-            return;
+            return true;
           }
+          if (!appendIfNoToken) return false;
           // No matching trigger before the caret — insert chip wherever the caret sits, or at end.
           root.focus();
           const sel = window.getSelection();
@@ -881,7 +892,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
             root.appendChild(document.createTextNode(" "));
             placeCaretAtEnd(root);
             fireChange();
-            return;
+            return true;
           }
           const range = sel.getRangeAt(0);
           range.deleteContents();
@@ -894,6 +905,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           sel.removeAllRanges();
           sel.addRange(after);
           fireChange();
+          return true;
         },
         replaceTokenWithFileChip: (triggerChar, file) => {
           const root = editorRef.current;

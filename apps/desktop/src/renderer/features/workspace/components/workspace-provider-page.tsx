@@ -192,7 +192,7 @@ export function WorkspaceProviderPage({
     () =>
       // Chat/work render a single conversation with no tab strip; a null
       // header removes the whole header row (main-content degrades cleanly).
-      !modeConfig.showTabs || ws.showEmptyState ? null : (
+      !modeConfig.showTabs || ws.showEmptyState || ws.isEmptyStatePending ? null : (
         <WorkspaceTabs
           variant={variant}
           runs={ws.runs}
@@ -223,6 +223,7 @@ export function WorkspaceProviderPage({
       variant,
       modeConfig.showTabs,
       ws.showEmptyState,
+      ws.isEmptyStatePending,
       ws.runs,
       ws.activeTab,
       ws.selectedFile,
@@ -257,7 +258,7 @@ export function WorkspaceProviderPage({
     showNewRunTab: ws.showNewRunTab,
   });
 
-  useSetMainHeader(tabBar, !ws.showEmptyState && isFirstTabActive);
+  useSetMainHeader(tabBar, !ws.showEmptyState && !ws.isEmptyStatePending && isFirstTabActive);
 
   const routeTopRounding = useWorkspaceRouteTopRounding();
 
@@ -313,7 +314,7 @@ export function WorkspaceProviderPage({
           </div>
         ) : ws.showEmptyState ? (
           <WorkspaceEmptyState workspace={ws.currentWorkspace} />
-        ) : (
+        ) : ws.isEmptyStatePending ? null : (
           <WorkspaceEvents
             runs={ws.runs}
             activeTab={ws.activeTab}
@@ -384,7 +385,7 @@ export function WorkspaceProviderPage({
         />
       )}
 
-      {onboardingCompleted && !ws.showEmptyState && !ws.showNewRunTab ? (
+      {onboardingCompleted && !ws.showEmptyState && !ws.showNewRunTab && !ws.isEmptyStatePending ? (
         <WorkspaceInput
           goal={ws.goal}
           onGoalChange={ws.setGoal}

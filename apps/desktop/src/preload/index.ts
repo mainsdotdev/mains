@@ -10,7 +10,9 @@ import type {
 import type {
   KeyboardShortcutId,
 } from "../shared/keyboard-shortcuts";
+import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
+import type { ServiceResponse } from "@mains/contracts/service-response";
 
 type BrowserDownloadState =
   | "progressing"
@@ -1023,6 +1025,8 @@ const api = {
     showItemInFolder: (path: string) => ipcRenderer.invoke(CHANNELS.shell.showItemInFolder, path),
     openInApp: (appId: string, path: string) => ipcRenderer.invoke(CHANNELS.shell.openInApp, appId, path),
     getInstalledApps: () => ipcRenderer.invoke(CHANNELS.shell.getInstalledApps),
+    getMentionableApps: (query: string) =>
+      ipcRenderer.invoke(CHANNELS.shell.getMentionableApps, query),
     getAppsForFile: (filePath: string) =>
       ipcRenderer.invoke(CHANNELS.shell.getAppsForFile, filePath),
     openFileWithBundle: (filePath: string, bundleId: string) =>
@@ -1033,6 +1037,10 @@ const api = {
   },
   app: {
     quit: () => ipcRenderer.invoke(CHANNELS.app.quit),
+    getDockIcon: (): Promise<ServiceResponse<AppIconId>> =>
+      ipcRenderer.invoke(CHANNELS.app.getDockIcon),
+    setDockIcon: (id: AppIconId): Promise<ServiceResponse<AppIconId>> =>
+      ipcRenderer.invoke(CHANNELS.app.setDockIcon, id),
     // A notification or the menu bar asked the window for something: collect it.
     onWindowRequest: (callback: () => void) => {
       const listener = () => callback();

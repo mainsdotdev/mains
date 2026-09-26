@@ -181,3 +181,28 @@ describe("RichInputForm file mentions", () => {
     expect(onCaretContextChange).toHaveBeenLastCalledWith(" ");
   });
 });
+
+describe("RichInputForm Mac app mentions", () => {
+  it("renders and serializes a selected app as @Name without the menu capability label", () => {
+    const onQueryChange = vi.fn();
+    const app = {
+      name: "mac-app:com.raycast.macos",
+      displayName: "Raycast",
+      token: "@Raycast",
+    };
+    render(createElement(RichInputForm, {
+      query: "@Raycast",
+      onQueryChange,
+      onSubmit: vi.fn(),
+      skillChipMap: new Map([[app.token, app]]),
+    }));
+
+    const editor = screen.getByRole("textbox");
+    const chip = editor.querySelector('[data-skill-chip="true"]');
+    expect(chip?.textContent).toBe("Raycast");
+    expect(chip?.getAttribute("data-skill-token")).toBe("@Raycast");
+
+    pastePlainText(editor, " open settings");
+    expect(onQueryChange).toHaveBeenLastCalledWith("@Raycast open settings");
+  });
+});

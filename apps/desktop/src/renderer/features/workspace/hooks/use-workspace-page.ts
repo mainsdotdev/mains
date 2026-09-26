@@ -449,16 +449,18 @@ export function useWorkspacePage(providerId: string) {
 
   const showNewRunTab = isNewRunTab(activeTab);
 
-  // Only once the list is known: a workspace whose runs are still loading is
-  // not an empty one, and flashing the empty state would drop the tab strip.
-  const showEmptyState =
-    runsLoaded &&
+  // Until the list is known, this may be an empty workspace or one with runs.
+  // Keep its chrome hidden during that unresolved frame instead of briefly
+  // showing tabs and a pinned composer before the centered empty layout.
+  const isEmptyViewCandidate =
     runs.length === 0 &&
     !selectedFile &&
     openIssueTabs.length === 0 &&
     openSignalTabs.length === 0 &&
     openNoteTabs.length === 0 &&
     !showNewRunTab;
+  const showEmptyState = runsLoaded && isEmptyViewCandidate;
+  const isEmptyStatePending = !runsLoaded && isEmptyViewCandidate;
 
   const showInput =
     showEmptyState || isRunTab(activeTab) || isNewRunTab(activeTab);
@@ -488,6 +490,7 @@ export function useWorkspacePage(providerId: string) {
     eventsEndRef,
     currentWorkspace,
     showEmptyState,
+    isEmptyStatePending,
     showInput,
     showNewRunTab,
     // Handlers

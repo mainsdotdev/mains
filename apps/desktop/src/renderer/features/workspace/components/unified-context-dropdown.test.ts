@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UnifiedContextDropdown } from "./unified-context-dropdown";
 
+const getMentionableApps = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/redux/api/shellApi", () => ({
+  useGetMentionableAppsQuery: getMentionableApps,
+}));
+
 vi.mock("@/lib/redux/api", () => ({
   useListProjectIssuesQuery: () => ({ data: [], isLoading: false }),
 }));
@@ -18,8 +24,9 @@ const directory = {
   hasChildren: true,
 };
 
-function renderDropdown(overrides: { filterText?: string } = {}) {
+function renderDropdown(overrides: { filterText?: string; providerId?: string } = {}) {
   const onSelectFile = vi.fn();
+  const onSelectSkill = vi.fn();
   const onNavigateFile = vi.fn();
   const onClose = vi.fn();
 
@@ -27,12 +34,13 @@ function renderDropdown(overrides: { filterText?: string } = {}) {
     createElement(UnifiedContextDropdown, {
       isOpen: true,
       trigger: "@",
+      providerId: overrides.providerId,
       filterText: overrides.filterText ?? "",
       workspacePath: "/repo",
       commands: [],
       skills: [],
       onSelectCommand: vi.fn(),
-      onSelectSkill: vi.fn(),
+      onSelectSkill,
       onSelectFile,
       onNavigateFile,
       onSelectIssue: vi.fn(),
@@ -41,16 +49,57 @@ function renderDropdown(overrides: { filterText?: string } = {}) {
     }),
   );
 
-  return { onSelectFile, onNavigateFile, onClose };
+  return { onSelectFile, onSelectSkill, onNavigateFile, onClose };
 }
 
 beforeEach(() => {
+  getMentionableApps.mockReset();
+  getMentionableApps.mockReturnValue({ currentData: [], isFetching: false });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
     return 1;
   });
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
   Element.prototype.scrollIntoView = vi.fn();
+});
+
+describe("UnifiedContextDropdown Mac app mentions", () => {
+  it("offers installed apps with a Computer use badge for Codex and selects their context", async () => {
+    getMentionableApps.mockReturnValue({
+      currentData: [{ bundleId: "com.raycast.macos", name: "Raycast", icon: null }],
+      isFetching: false,
+    });
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { fileExplorer: { listDir: vi.fn(), searchFiles: vi.fn().mockResolvedValue({ success: true, data: [] }) } },
+    });
+    const { onSelectSkill } = renderDropdown({ filterText: "raycast", providerId: "codex" });
+
+    const row = screen.getByRole("menuitem", { name: /Raycast.*Computer use/ });
+    await userEvent.setup().click(row);
+
+    expect(onSelectSkill).toHaveBeenCalledWith(expect.objectContaining({
+      name: "mac-app:com.raycast.macos",
+      displayName: "Raycast",
+      scope: "computer",
+    }));
+    expect(getMentionableApps).toHaveBeenCalledWith("raycast", { skip: false });
+  });
+
+  it("does not offer computer-use apps for other providers", () => {
+    getMentionableApps.mockReturnValue({
+      currentData: [{ bundleId: "com.raycast.macos", name: "Raycast", icon: null }],
+      isFetching: false,
+    });
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { fileExplorer: { listDir: vi.fn(), searchFiles: vi.fn().mockResolvedValue({ success: true, data: [] }) } },
+    });
+    renderDropdown({ filterText: "raycast", providerId: "claude_code" });
+
+    expect(screen.queryByText("Computer use")).toBeNull();
+    expect(getMentionableApps).toHaveBeenCalledWith("raycast", { skip: true });
+  });
 });
 
 afterEach(() => {

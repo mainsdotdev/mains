@@ -12,7 +12,9 @@ export const CHANNELS = {
     consumeWindowRequest: "app:consumeWindowRequest",
     flushAndQuit: "app:flushAndQuit",
     fullscreenChange: "app:fullscreenChange",
+    getDockIcon: "app:getDockIcon",
     quit: "app:quit",
+    setDockIcon: "app:setDockIcon",
     setMenuBarIconVisible: "app:setMenuBarIconVisible",
     setThemeSource: "app:setThemeSource",
     setUnsavedChanges: "app:setUnsavedChanges",
@@ -372,6 +374,7 @@ export const CHANNELS = {
   shell: {
     getAppsForFile: "shell:getAppsForFile",
     getInstalledApps: "shell:getInstalledApps",
+    getMentionableApps: "shell:getMentionableApps",
     openExternal: "shell:openExternal",
     openFileWithBundle: "shell:openFileWithBundle",
     openInApp: "shell:openInApp",

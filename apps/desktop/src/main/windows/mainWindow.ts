@@ -1,8 +1,9 @@
-import { app, BrowserWindow, nativeImage, screen, shell } from "electron";
+import { app, BrowserWindow, screen, shell } from "electron";
 import path from "path";
-import fs, { existsSync } from "fs";
+import fs from "fs";
 import { CHANNELS } from "@mains/contracts/channels";
 import { attachCrashRecovery } from "./crash-recovery";
+import { getAppIconPath, getSavedDockIcon } from "./dock-icon";
 
 let mainWindow: BrowserWindow | null = null;
 /** Whether this process has ever shown a main window (false under `--serve`). */
@@ -68,20 +69,6 @@ export interface MainWindowOptions {
   onReadyToShow?: (window: BrowserWindow) => void;
 }
 
-// Get icon path based on app path
-function getIconPath(): string {
-  if (!app.isPackaged) {
-    // Development: icon is in src/renderer/public
-    return path.join(app.getAppPath(), "src/renderer/public/icon.png");
-  }
-  // Production: try extraResource first, then inside .vite/renderer
-  const resourcePath = path.join(process.resourcesPath, "icon.png");
-  if (existsSync(resourcePath)) {
-    return resourcePath;
-  }
-  return path.join(app.getAppPath(), ".vite/renderer/icon.png");
-}
-
 export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow {
   const { show = true, onReadyToShow } = options;
 
@@ -94,19 +81,7 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
   const saved = loadWindowState();
   const useSaved = saved && isStateVisible(saved);
 
-  const iconPath = getIconPath();
-
-  // Set dock icon on macOS
-  if (process.platform === "darwin" && app.dock) {
-    try {
-      const icon = nativeImage.createFromPath(iconPath);
-      if (!icon.isEmpty()) {
-        app.dock.setIcon(icon);
-      }
-    } catch (e) {
-      console.warn("Failed to set dock icon:", e);
-    }
-  }
+  const iconPath = getAppIconPath(getSavedDockIcon());
 
   hasOpenedMainWindow = true;
   mainWindow = new BrowserWindow({
