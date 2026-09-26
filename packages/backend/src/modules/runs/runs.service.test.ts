@@ -730,14 +730,12 @@ describe("runsService", () => {
       const request = startRun.mock.calls[0][0];
       expect(request.configSnapshot).toEqual({
         sandboxMode: "read-only",
-        personality: "friendly",
         planMode: false,
         goalMode: false,
       });
       const run = await runsService.getRunById(runId);
       expect(run?.configSnapshot).toEqual({
         sandboxMode: "read-only",
-        personality: "friendly",
         planMode: false,
         goalMode: false,
       });
@@ -985,7 +983,6 @@ describe("runsService", () => {
       const request = continueRun.mock.calls[0][0];
       expect(request.configSnapshot).toEqual({
         sandboxMode: "read-only",
-        personality: "friendly",
         planMode: false,
         goalMode: false,
       });

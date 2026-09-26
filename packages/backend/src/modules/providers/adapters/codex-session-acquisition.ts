@@ -432,16 +432,9 @@ export function createCodexSessionAcquisition(
       typeof overrides.sandboxMode === "string"
         ? (overrides.sandboxMode as CodexAdapterConfig["sandboxMode"])
         : config.sandboxMode;
-    // Codex's own tone lever: work/chat pin it through the mode harness, and
-    // developer leaves it to the provider setting.
-    const personality =
-      typeof overrides.personality === "string"
-        ? (overrides.personality as CodexAdapterConfig["personality"])
-        : config.personality;
     return {
       approvalPolicy: config.approvalMode ?? "on-request",
       sandbox: mapSandboxMode(sandboxMode),
-      personality: personality ?? "none",
       config: buildCodexConfigOverrides(
         config.networkAccessEnabled !== false,
       ),
@@ -720,8 +713,6 @@ export function createCodexSessionAcquisition(
     const forkOverrides = (
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
-    // `thread/fork` has no `personality` field — the forked thread inherits the
-    // source's — so only the fields the contract names are passed through.
     const settings = threadSettingsFor(forkOverrides);
     const forkResult = await server.sendRequest("thread/fork", {
       threadId: sourceThreadId,

@@ -66,7 +66,6 @@ export const seedProviders: CreateProviderPayload[] = [
       sandboxMode: "workspace-write",
       networkAccessEnabled: true,
       webSearchMode: "live",
-      personality: "none",
       modelReasoningEffort: "medium",
     },
     capabilities: {

@@ -114,10 +114,7 @@ export const MODE_HARNESSES: Record<ModeId, ModeHarnessDescriptor> = {
   },
   // Work: file tools stay, Bash goes, git ceremony goes (the git/PR mains
   // tools disappear via the registry's modes allowlist). acceptEdits is a
-  // default, not an override — an explicit caller choice still wins. Codex's
-  // `personality` carries the tone half of this mode natively: its templates
-  // land at the top of codex's own instructions, above anything a prompt delta
-  // can reach.
+  // default, not an override — an explicit caller choice still wins.
   //
   // Plan mode is pinned OFF as an override: the toggle lives in the
   // developer-only permission dropdown, so the work composer has no way to
@@ -133,10 +130,7 @@ export const MODE_HARNESSES: Record<ModeId, ModeHarnessDescriptor> = {
     configDefaults: {
       [PROVIDER_IDS.claude]: { permissionMode: "acceptEdits" },
       [PROVIDER_IDS.copilot]: { permissionMode: "acceptEdits" },
-      [PROVIDER_IDS.codex]: {
-        sandboxMode: "workspace-write",
-        personality: "friendly",
-      },
+      [PROVIDER_IDS.codex]: { sandboxMode: "workspace-write" },
       [PROVIDER_IDS.cursor]: { mode: "agent" },
     },
     configOverrides: {
@@ -163,9 +157,7 @@ export const MODE_HARNESSES: Record<ModeId, ModeHarnessDescriptor> = {
       ],
       disallowedTools: ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Task"],
     },
-    configDefaults: {
-      [PROVIDER_IDS.codex]: { personality: "friendly" },
-    },
+    configDefaults: {},
     configOverrides: {
       [PROVIDER_IDS.claude]: { permissionMode: "default" },
       [PROVIDER_IDS.copilot]: { permissionMode: "default" },
@@ -181,27 +173,6 @@ export const MODE_HARNESSES: Record<ModeId, ModeHarnessDescriptor> = {
 
 export function getModeHarness(mode: ModeId | null | undefined): ModeHarnessDescriptor {
   return MODE_HARNESSES[mode ?? DEFAULT_MODE_ID] ?? MODE_HARNESSES[DEFAULT_MODE_ID];
-}
-
-/**
- * The value a mode pins for one provider setting, or undefined when the mode
- * leaves it to the provider's own config. Overrides first, then defaults —
- * matching `composeConfigSnapshot`'s precedence minus the caller payload.
- *
- * Exists so a UI can ask "does this mode decide this for me?" without
- * re-listing the table: a settings control the harness pins is not a control,
- * and a second list of pinned keys would drift from this one.
- */
-export function modeProviderSetting(
-  mode: ModeId | null | undefined,
-  providerId: ProviderId,
-  key: string,
-): unknown {
-  const harness = getModeHarness(mode);
-  return (
-    harness.configOverrides[providerId]?.[key] ??
-    harness.configDefaults[providerId]?.[key]
-  );
 }
 
 // ─────────────────────────────────────────────────────────────

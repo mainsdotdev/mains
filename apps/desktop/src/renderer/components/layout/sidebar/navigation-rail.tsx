@@ -70,7 +70,7 @@ export function NavigationRail({
   const buttonClass = (active: boolean) =>
     `flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors ${
       active
-        ? "bg-primary/80 text-primary-950 dark:bg-primary-900 dark:text-primary-50"
+        ? ` text-primary-950  ${translucent ? " dark:bg-primary/5 bg-primary/50 " :" dark:bg-primary-900 bg-primary-200/50 "}  dark:text-primary-50`
         : "text-primary-700 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary-800/40"
     }`;
 

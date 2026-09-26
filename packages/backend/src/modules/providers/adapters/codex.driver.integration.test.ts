@@ -730,25 +730,23 @@ describe("codex.driver / app-server protocol", () => {
     expect(unsubscribedThreadIds).toEqual(["thread-1"]);
   });
 
-  it("lets the run's mode-resolved snapshot set the thread personality", async () => {
-    // Work/Chat pin `personality` through the mode harness; the provider
-    // setting is what Code spaces keep. The run snapshot has to win, the same
-    // way it already does for the sandbox.
+  it("ignores legacy personality settings on a new thread", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
 
-    const driver = createCodexDriver({
+    const legacyConfig = {
       binary: fixtureBinary,
       timeout: 500,
       personality: "pragmatic",
       sandboxMode: "workspace-write",
-    });
+    } as const;
+    const driver = createCodexDriver(legacyConfig);
     drivers.push(driver);
 
     const acquired = await driver.createSession({
-      ...request("run-personality"),
+      ...request("run-legacy-personality"),
       mode: "chat",
       configSnapshot: {
         personality: "friendly",
@@ -759,33 +757,42 @@ describe("codex.driver / app-server protocol", () => {
     const threadStart = readProtocolLog(logPath).find(
       (message) => message.method === "thread/start",
     );
-    expect(threadStart?.params).toMatchObject({
-      personality: "friendly",
-      sandbox: "read-only",
-    });
+    expect(threadStart?.params).toMatchObject({ sandbox: "read-only" });
+    expect(threadStart?.params).not.toHaveProperty("personality");
     await driver.cleanup?.(acquired.session);
   });
 
-  it("keeps the provider personality when the run pins none", async () => {
+  it("ignores legacy personality settings when resuming a thread", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
 
-    const driver = createCodexDriver({
+    const legacyConfig = {
       binary: fixtureBinary,
       timeout: 500,
       personality: "pragmatic",
-    });
+    } as const;
+    const driver = createCodexDriver(legacyConfig);
     drivers.push(driver);
 
-    const acquired = await driver.createSession(request("run-personality-default"));
-
-    const threadStart = readProtocolLog(logPath).find(
-      (message) => message.method === "thread/start",
-    );
-    expect(threadStart?.params).toMatchObject({ personality: "pragmatic" });
+    const acquired = await driver.createSession(request("run-legacy-personality-resume"));
     await driver.cleanup?.(acquired.session);
+    const resumed = await driver.resumeSession?.({
+      runId: "run-legacy-personality-resume",
+      accountId: "account-1",
+      execution: { workspaceId: "workspace-1", cwd: process.cwd() },
+      message: "Continue without legacy personality",
+      configSnapshot: { personality: "friendly", sandboxMode: "read-only" },
+    });
+    expect(resumed).toBeDefined();
+
+    const threadResume = readProtocolLog(logPath).find(
+      (message) => message.method === "thread/resume",
+    );
+    expect(threadResume?.params).toMatchObject({ sandbox: "read-only" });
+    expect(threadResume?.params).not.toHaveProperty("personality");
+    await driver.cleanup?.(resumed!.session);
   });
 
   it("lets the run snapshot turn plan mode off on a new thread", async () => {
@@ -1060,7 +1067,6 @@ describe("codex.driver / app-server protocol", () => {
     const driver = createCodexDriver({
       binary: fixtureBinary,
       timeout: 500,
-      personality: "friendly",
     });
     drivers.push(driver);
 
