@@ -42,9 +42,9 @@ export function useSidebarActions() {
   const [createWorkspaceFromSource] = useCreateWorkspaceFromSourceMutation();
   const [createCollection] = useCreateCollectionMutation();
 
-  const [isCloneModalOpen, setIsCloneModalOpen] = useState(false);
+  const [addProjectTab, setAddProjectTab] = useState<"clone" | "create" | null>(null);
+  const [isAddingLocal, setIsAddingLocal] = useState(false);
   const [isCloning, setIsCloning] = useState(false);
-  const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isCreateCollectionModalOpen, setIsCreateCollectionModalOpen] =
     useState(false);
@@ -75,6 +75,7 @@ export function useSidebarActions() {
 
   // Pick a folder, then hand it to the main-process workspace intake.
   const handleAddProject = async () => {
+    setIsAddingLocal(true);
     try {
       const selectedPath = await selectDirectory().unwrap();
       if (!selectedPath) return;
@@ -83,10 +84,13 @@ export function useSidebarActions() {
         source: { kind: "folder", path: selectedPath },
       }).unwrap();
       toast.success("Workspace added");
+      setAddProjectTab(null);
       goToWorkspace(workspace.id);
     } catch (error) {
       console.error("Failed to create workspace:", error);
       toast.error(getErrorMessage(error, "Failed to create workspace"));
+    } finally {
+      setIsAddingLocal(false);
     }
   };
 
@@ -135,7 +139,7 @@ export function useSidebarActions() {
         source: { kind: "clone", url, targetPath },
       }).unwrap();
       toast.success("Repository cloned and workspace created");
-      setIsCloneModalOpen(false);
+      setAddProjectTab(null);
       goToWorkspace(workspace.id);
     } catch (error) {
       console.error("Failed to clone repository:", error);
@@ -145,25 +149,21 @@ export function useSidebarActions() {
     }
   };
 
-  // Fallback for direct clicks — the dropdown items handle the usual paths.
-  const handleNewClick = async () => {
-    handleAddProject();
+  const handleOpenAddProjectModal = () => setAddProjectTab("clone");
+  const handleAddProjectTabChange = (tab: "clone" | "create") => {
+    setAddProjectTab(tab);
   };
 
   const handleOpenCloneModal = () => {
-    setIsCloneModalOpen(true);
+    setAddProjectTab("clone");
   };
 
-  const handleCloseCloneModal = () => {
-    setIsCloneModalOpen(false);
+  const handleCloseAddProjectModal = () => {
+    setAddProjectTab(null);
   };
 
   const handleOpenCreateProjectModal = () => {
-    setIsCreateProjectModalOpen(true);
-  };
-
-  const handleCloseCreateProjectModal = () => {
-    setIsCreateProjectModalOpen(false);
+    setAddProjectTab("create");
   };
 
   const handleCreateProject = async (name: string, parentPath?: string) => {
@@ -174,7 +174,7 @@ export function useSidebarActions() {
         source: { kind: "init", name, parentPath },
       }).unwrap();
       toast.success("Project created");
-      setIsCreateProjectModalOpen(false);
+      setAddProjectTab(null);
       goToWorkspace(workspace.id);
     } catch (error) {
       console.error("Failed to create project:", error);
@@ -186,18 +186,18 @@ export function useSidebarActions() {
 
   return {
     handleSpaceChange,
-    handleNewClick,
+    handleOpenAddProjectModal,
+    handleAddProjectTabChange,
+    handleCloseAddProjectModal,
+    addProjectTab,
     handleNewChat,
     handleAddProject,
+    isAddingLocal,
     handleCloneRepo,
     handleOpenCloneModal,
-    handleCloseCloneModal,
-    isCloneModalOpen,
     isCloning,
     handleCreateProject,
     handleOpenCreateProjectModal,
-    handleCloseCreateProjectModal,
-    isCreateProjectModalOpen,
     isCreatingProject,
     handleCreateCollection,
     handleOpenCreateCollectionModal,

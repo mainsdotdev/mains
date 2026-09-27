@@ -187,7 +187,6 @@ export function InputToolbar({
               onDocumentUpload={handleDocumentUpload}
               dropdownRef={fileDropdownRef}
               openUpward={true}
-              variant={variant}
             />
           <Input
             variant="bare"

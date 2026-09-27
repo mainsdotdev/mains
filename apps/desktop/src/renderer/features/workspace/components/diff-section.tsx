@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState } from "react";
-import { useAppDispatch } from "@/lib/redux/hooks";
 import {
   useGetLatestWorkspaceDiffQuery,
   useListReviewFindingsByWorkspaceQuery,
@@ -7,14 +6,11 @@ import {
   type WorkspaceDiff,
   type FindingSeverity,
 } from "@/lib/redux/api";
-import { setPendingGoal, setPendingAutoExecute, setPendingReviewTarget } from "@/lib/redux/slices/workspaceSlice";
-import { useWorkspaceVariant } from "@/hooks/use-workspace-variant";
 import { FileIconComponent } from "@/components/ui/icons";
 import {
   Diff,
   CircleDot,
-  Chat,
-  Codex,
+
   Refresh,
   Undo,
 } from "@/components/ui/icons";
@@ -143,8 +139,8 @@ export function DiffSection({
   workspaceId,
   onSelectDiffFile,
 }: DiffSectionProps) {
-  const dispatch = useAppDispatch();
-  const variant = useWorkspaceVariant();
+  // const dispatch = useAppDispatch();
+  // const variant = useWorkspaceVariant();
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
 
   const { currentData: diff, isFetching } = useGetLatestWorkspaceDiffQuery(
@@ -218,14 +214,14 @@ export function DiffSection({
     [workspaceId, discarding, discardWorkspacePaths],
   );
 
-  const handleReviewChanges = () => {
-    if (variant === "codex") {
-      dispatch(setPendingReviewTarget({ type: "uncommittedChanges" }));
-      return;
-    }
-    dispatch(setPendingGoal("Review code changes in this workspace"));
-    dispatch(setPendingAutoExecute(true));
-  };
+  // const handleReviewChanges = () => {
+  //   if (variant === "codex") {
+  //     dispatch(setPendingReviewTarget({ type: "uncommittedChanges" }));
+  //     return;
+  //   }
+  //   dispatch(setPendingGoal("Review code changes in this workspace"));
+  //   dispatch(setPendingAutoExecute(true));
+  // };
 
   if (isFetching) {
     return (
@@ -252,8 +248,7 @@ export function DiffSection({
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      {/* Action buttons */}
-      <div className="shrink-0 flex items-center gap-2 mb-2">
+      {/* <div className="shrink-0 flex items-center gap-2 mb-2">
         <Button
           onClick={handleReviewChanges}
           className="flex-1 flex items-center glass-outline justify-center gap-1.5 py-2 px-3 text-xs font-medium rounded-xl bg-primary-100/50 dark:bg-primary/5 hover:bg-primary-100 dark:hover:bg-primary/10 text-primary-900 dark:text-primary-100 transition-colors"
@@ -261,7 +256,7 @@ export function DiffSection({
           {variant === "codex" ? <Codex className="w-3.5 h-3.5" /> : <Chat className="w-3.5 h-3.5" />}
           Review Changes
         </Button>
-      </div>
+      </div> */}
 
       {/* Stats header */}
       <div className="shrink-0 flex items-center justify-between px-1 py-1.5 mb-1">

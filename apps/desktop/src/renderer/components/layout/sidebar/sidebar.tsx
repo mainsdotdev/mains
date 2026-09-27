@@ -10,16 +10,13 @@ import SettingsView from "./settings-view";
 import HelpMenu from "./help-menu";
 import { useCapabilities, useIsMobile } from "@/lib/platform";
 import {
-  Plus,
-  Connect,
   Project,
   Relay,
   Plugin,
   Box,
   New,
 } from "@/components/ui/icons";
-import CloneRepoModal from "./clone-repo-modal";
-import CreateProjectModal from "./create-project-modal";
+import AddProjectModal from "./add-project-modal";
 import CollectionModal from "./collection-modal";
 import { useDeleteWorkspace } from "@/features/workspace/hooks";
 import { useArchiveWorkspace } from "@/features/workspace/hooks";
@@ -146,18 +143,18 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
   const {
     handleSpaceChange,
-    handleNewClick,
+    handleOpenAddProjectModal,
+    handleAddProjectTabChange,
+    handleCloseAddProjectModal,
+    addProjectTab,
     handleNewChat,
     handleAddProject,
+    isAddingLocal,
     handleCloneRepo,
     handleOpenCloneModal,
-    handleCloseCloneModal,
-    isCloneModalOpen,
     isCloning,
     handleCreateProject,
     handleOpenCreateProjectModal,
-    handleCloseCreateProjectModal,
-    isCreateProjectModalOpen,
     isCreatingProject,
     handleCreateCollection,
     handleOpenCreateCollectionModal,
@@ -183,12 +180,6 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   );
   const addLocalShortcut = keyboardShortcutLabel(
     useKeyboardShortcutBinding("projects.addLocal"),
-  );
-  const cloneShortcut = keyboardShortcutLabel(
-    useKeyboardShortcutBinding("projects.clone"),
-  );
-  const createShortcut = keyboardShortcutLabel(
-    useKeyboardShortcutBinding("projects.create"),
   );
 
   useEffect(
@@ -323,10 +314,11 @@ export default function Sidebar({ collapsed }: SidebarProps) {
               providerId={activeSpace?.providerId}
               onModeChange={handleModeChange}
             />
-            <div className="px-3 py-px">
+            <div className="px-3 py-1">
               <NewButton
-                onClick={isChatShell ? () => handleNewChat() : handleNewClick}
+                onClick={isChatShell ? () => handleNewChat() : handleOpenAddProjectModal}
                 shortcutLabel={newItemShortcut}
+                opensDialog={!isChatShell}
                 icon={
                   isChatShell ? (
                     <New className="size-3.5 text-primary-900 dark:text-primary-100" />
@@ -336,42 +328,6 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 }
                 title={sidebarConfig.title}
                 actionPrefix={sidebarConfig.actionPrefix}
-                // An empty list turns the button into a direct action (\u2318N
-                // included) \u2014 the chat shell's "New chat".
-                dropdownItems={
-                  isChatShell
-                    ? []
-                    : [
-                        ...(nativeDialogs
-                          ? [
-                              {
-                                label: "Add from local",
-                                icon: (
-                                  <Plus className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
-                                ),
-                                shortcutLabel: addLocalShortcut,
-                                onClick: handleAddProject,
-                              },
-                            ]
-                          : []),
-                        {
-                          label: "Clone from URL",
-                          icon: (
-                            <Connect className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
-                          ),
-                          shortcutLabel: cloneShortcut,
-                          onClick: handleOpenCloneModal,
-                        },
-                        {
-                          label: "Create new project",
-                          icon: (
-                            <Project className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
-                          ),
-                          shortcutLabel: createShortcut,
-                          onClick: handleOpenCreateProjectModal,
-                        },
-                      ]
-                }
               />
             </div>
             {isMobile && modeConfig.showTasksNav && (
@@ -602,19 +558,20 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         onClose={handleCloseHelpMenu}
       />
 
-      <CloneRepoModal
-        isOpen={isCloneModalOpen}
-        isCloning={isCloning}
-        onClone={handleCloneRepo}
-        onClose={handleCloseCloneModal}
-      />
-
-      <CreateProjectModal
-        isOpen={isCreateProjectModalOpen}
-        isCreating={isCreatingProject}
-        onCreate={handleCreateProject}
-        onClose={handleCloseCreateProjectModal}
-      />
+      {addProjectTab && (
+        <AddProjectModal
+          activeTab={addProjectTab}
+          onTabChange={handleAddProjectTabChange}
+          isAddingLocal={isAddingLocal}
+          isCloning={isCloning}
+          isCreating={isCreatingProject}
+          addLocalShortcut={addLocalShortcut}
+          onAddLocal={() => void handleAddProject()}
+          onClone={handleCloneRepo}
+          onCreate={handleCreateProject}
+          onClose={handleCloseAddProjectModal}
+        />
+      )}
 
       <CollectionModal
         isOpen={isCreateCollectionModalOpen}

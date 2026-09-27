@@ -299,7 +299,7 @@ export function SidebarChatList({
       )}
       {(collectionRows.length > 0 || !query) && (
         <div>
-          <div className="flex items-center px-2 py-2">
+          <div className="flex items-center px-2 py-1">
             <Text as="span" size="s" tone="muted" weight="medium">
               Projects
             </Text>

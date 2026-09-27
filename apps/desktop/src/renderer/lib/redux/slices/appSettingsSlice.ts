@@ -119,7 +119,7 @@ const initialState: AppSettingsState = {
   uiFontFamily: "",
   codeFontFamily: "",
   bottomTerminalOpen: false,
-  workspaceListGrouping: "none",
+  workspaceListGrouping: "project",
   workspaceGroupExpanded: {},
   onboardingCliAutoSelectApplied: false,
 };

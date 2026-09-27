@@ -307,12 +307,13 @@ function buildTurnInput(
       request.attachments,
       request.runId,
     );
-    if (inlineTexts.length > 0 && input[0].type === "text") {
-      input[0].text =
-        `${prompt}\n\n---\n\nAttached documents:\n` +
-        inlineTexts.join("\n\n");
+    let attachmentPrompt = prompt;
+    if (inlineTexts.length > 0) {
+      attachmentPrompt +=
+        "\n\n---\n\nAttached documents:\n" + inlineTexts.join("\n\n");
     }
 
+    const filePaths: string[] = [];
     for (const attachmentPath of savedPaths) {
       const lowerPath = attachmentPath.toLowerCase();
       if (
@@ -327,8 +328,18 @@ function buildTurnInput(
           type: "localImage",
           path: attachmentPath,
         });
+      } else {
+        // App-server turn input has no document variant. Keep other files on
+        // disk and pass their paths so Codex can read them with its tools.
+        filePaths.push(attachmentPath);
       }
     }
+    if (filePaths.length > 0) {
+      attachmentPrompt +=
+        "\n\n---\n\nAttached files:\n" +
+        filePaths.map((filePath) => `- ${filePath}`).join("\n");
+    }
+    if (input[0].type === "text") input[0].text = attachmentPrompt;
   }
 
   return input;

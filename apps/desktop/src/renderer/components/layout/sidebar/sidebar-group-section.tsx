@@ -18,6 +18,7 @@ export function SidebarGroupSection({
   groupKey,
   label,
   labelTint,
+  labelWeight = "normal",
   icon,
   // count,
   action,
@@ -35,6 +36,7 @@ export function SidebarGroupSection({
    * title than the default. Absent or empty keeps the `contrast` tone.
    */
   labelTint?: string;
+  labelWeight?: "normal" | "medium";
   /** A function form gets the open state, so the glyph can track the accordion. */
   icon?: ReactNode | ((expanded: boolean) => ReactNode);
   count: number;
@@ -44,7 +46,12 @@ export function SidebarGroupSection({
    * under a project), the New mark for starting something fresh (a chat).
    * Defaults to New.
    */
-  action?: { label: string; onClick: () => void; icon?: ReactNode };
+  action?: {
+    label: string;
+    onClick: (event: MouseEvent<HTMLElement>) => void;
+    icon?: ReactNode;
+    menuOpen?: boolean;
+  };
   /**
    * Optional sibling action rendered before the primary "+" action. Its click
    * carries the event so a caller can anchor a menu to the button it came from.
@@ -108,7 +115,7 @@ export function SidebarGroupSection({
           size="s"
           tone={labelTint ? "inherit" : "contrast"}
           className={`truncate ${labelTint ?? ""}`}
-          weight="normal"
+          weight={labelWeight}
         >
           {label}
         </Text>
@@ -140,10 +147,12 @@ export function SidebarGroupSection({
                 tooltip={action.label}
                 onClick={(e) => {
                   e.stopPropagation();
-                  action.onClick();
+                  action.onClick(e);
                 }}
-                className="hidden group-hover/section:flex items-center p-0.5 cursor-pointer rounded-md"
+                className={`${action.menuOpen ? "flex" : "hidden group-hover/section:flex"} items-center p-0.5 cursor-pointer rounded-md`}
                 aria-label={action.label}
+                aria-haspopup={action.menuOpen !== undefined ? "menu" : undefined}
+                aria-expanded={action.menuOpen}
               >
                 {action.icon ?? <New className={SIDEBAR_ACTION_ICON} />}
               </Button>

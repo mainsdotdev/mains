@@ -215,6 +215,74 @@ describe("codex.driver / app-server protocol", () => {
     });
   });
 
+  it("includes attached documents alongside images in the Codex turn", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const runId = "run-file-attachments";
+    const uploadDir = path.join(os.tmpdir(), "mains-uploads", runId);
+    tempDirs.push(uploadDir);
+
+    const driver = createCodexDriver({
+      binary: fixtureBinary,
+      timeout: 2000,
+    });
+    drivers.push(driver);
+
+    const acquired = await driver.createSession({
+      ...request(runId),
+      goal: "Read the attached files",
+      attachments: [
+        {
+          name: "spec.pdf",
+          type: "document",
+          mimeType: "application/pdf",
+          data: Buffer.from("%PDF-1.4\nfixture").toString("base64"),
+        },
+        {
+          name: "notes.txt",
+          type: "document",
+          mimeType: "text/plain",
+          data: Buffer.from("Important note").toString("base64"),
+        },
+        {
+          name: "screen.png",
+          type: "image",
+          mimeType: "image/png",
+          data: Buffer.from("fixture-image").toString("base64"),
+        },
+      ],
+    });
+    await driver.executePrompt(
+      acquired.session,
+      acquired.prompt,
+      async () => undefined,
+      new AbortController().signal,
+    );
+
+    const turnStart = readProtocolLog(logPath).find(
+      (message) => message.method === "turn/start",
+    );
+    expect(turnStart?.params).toMatchObject({
+      input: [
+        {
+          type: "text",
+          text: expect.stringContaining(
+            `Attached files:\n- ${path.join(uploadDir, "spec.pdf")}`,
+          ),
+        },
+        {
+          type: "localImage",
+          path: path.join(uploadDir, "screen.png"),
+        },
+      ],
+    });
+    const input = (turnStart?.params as { input: Array<{ text?: string }> })?.input;
+    expect(input[0].text).toContain("[Attached document: notes.txt]\nImportant note");
+    expect(fs.readFileSync(path.join(uploadDir, "spec.pdf"), "utf8")).toBe("%PDF-1.4\nfixture");
+  });
+
   it("sends Codex thread archive, unarchive, and delete lifecycle requests", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);

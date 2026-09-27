@@ -27,26 +27,13 @@ import {
   OpenWith,
   Edit,
   Plus,
-  WorkspaceStatusIcon,
+  Branch,
   ProjectFolder,
 } from "@/components/ui/icons";
 import { useGetInstalledAppsQuery } from "@/lib/redux/api";
 import { useGetLatestWorkspaceDiffSummaryQuery } from "@/lib/redux/api/workspaceApi";
 //import { formatDate } from "@/lib/format-date";
-import { getWorkspaceStatusConfig } from "@/lib/workspace-status";
-import type { WorkspaceStatus } from "@/lib/redux/api/workspaceApi";
-
-type GroupingMode = "none" | "status" | "project";
-
-const STATUS_ORDER: WorkspaceStatus[] = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "in_review",
-  "done",
-  "canceled",
-  "duplicate",
-];
+import type { GroupingMode } from "./workspace-group-dropdown";
 
 function WorkspaceMenuSeparator() {
   return (
@@ -62,8 +49,8 @@ interface WorkspaceItemProps {
   id: string;
   name: string;
   rootPath?: string;
-  status?: WorkspaceStatus;
   branch?: string | null;
+  baseBranch?: string | null;
   /** False once the workspace's folder is gone from disk. */
   pathExists?: boolean;
   updatedAt?: Date;
@@ -77,7 +64,6 @@ interface WorkspaceItemProps {
   onArchive?: () => void;
   onSettings?: () => void;
   onCreateWorktree?: () => void;
-  onStatusChange?: (status: WorkspaceStatus) => void;
   onRenameBranch?: (newBranchName: string) => void;
 }
 
@@ -85,8 +71,8 @@ export default function WorkspaceItem({
   id,
   name,
   rootPath,
-  status = "todo",
   branch,
+  baseBranch,
   pathExists = true,
   //updatedAt,
   isActive = false,
@@ -99,11 +85,9 @@ export default function WorkspaceItem({
   onArchive,
   onSettings,
   onCreateWorktree,
-  onStatusChange,
   onRenameBranch,
 }: WorkspaceItemProps) {
   const { data: latestDiff } = useGetLatestWorkspaceDiffSummaryQuery(id);
-  const statusConfig = getWorkspaceStatusConfig(status);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   // Detecting installed apps sweeps every `.app` bundle in the main process, so
   // it isn't something to do for a menu that may never open. Start on hover
@@ -124,6 +108,7 @@ export default function WorkspaceItem({
 
   const insertions = latestDiff?.stats?.shortstat.match(/(\d+) insertion/)?.[1];
   const deletions = latestDiff?.stats?.shortstat.match(/(\d+) deletion/)?.[1];
+  const showBranchIcon = pathExists && !!branch && !!baseBranch && branch !== baseBranch;
 
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -210,43 +195,36 @@ export default function WorkspaceItem({
             onClick?.();
           }
         }}
-        className={`block  py-1.5
-           transition-all duration-200 ease-out cursor-pointer ${grouping !== "project" ? "rounded-2xl px-2.5" : "rounded-xl px-2"} ${
+        className={`block py-1.5
+           transition-all duration-200 ease-out cursor-pointer ${grouping !== "project" ? "rounded-2xl px-2.5" : "rounded-[10px] px-2.5"} ${
             isActive
               ? "bg-primary/50 glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
               : "bg-transparent group-hover:bg-primary/50 dark:group-hover:bg-primary/5"
           }`}
       >
         <div className="flex flex-col ">
-          <div className="flex items-center gap-1 min-w-0 flex-1 mb-0.5 ">
-            {grouping !== "project" && (
-              <><span className="shrink-0 ">
+          {grouping !== "project" && (
+            <div className="flex items-center gap-1 min-w-0 flex-1 mb-0.5 ">
+              <span className="shrink-0 ">
                 {projectIcon ?? (
                   <ProjectFolder className="size-3.5 text-primary-800 dark:text-primary-200" />
                 )}
-              </span><Text as="span" size="s" tone="contrast" className="truncate">
-                  {name}
-                </Text></>
-            )}
-
-          </div>
+              </span>
+              <Text as="span" size="s" tone="contrast" className="truncate">
+                {name}
+              </Text>
+            </div>
+          )}
           <div className="flex flex-col min-w-0">
-            <div className="flex items-center gap-1.5">
-              {grouping !== "status" ? (
-                <Tooltip content={statusConfig.label} position="top-right">
-                  <span
-                    title={statusConfig.label}
-                    className="shrink-0 flex items-center"
-                  >
-                    <WorkspaceStatusIcon
-                      status={status}
-                      className={`size-2.75 ml-0.5 ${statusConfig.iconColor}`}
-                    />
-                  </span>
-                </Tooltip>
-              ) : (
-                <span className="size-2.75 mr-2 flex items-center" />
-              )}
+            <div className={`flex items-center gap-1.5 ${grouping === "project" ? "pl-0" : "pl-0"}`}>
+              {showBranchIcon ? (
+                <Branch
+                  aria-hidden="true"
+                  className="size-3 shrink-0 text-primary-700 dark:text-primary-300"
+                />
+              ) : grouping === "project" ? (
+                <span aria-hidden="true" className="size-3.5 shrink-0" />
+              ) : <span aria-hidden="true" className="size-3.5 shrink-0" />}
               {!pathExists ? (
                 // Replaces the branch line rather than sitting next to it: with
                 // no folder there is no branch to show, and the reason the row
@@ -258,7 +236,7 @@ export default function WorkspaceItem({
                   <Muted
                     size="xs"
                     tone="warning"
-                    className={`truncate ${grouping === "status" ? "-ml-1.5" : ""}`}
+                    className="truncate"
                   >
                     Folder missing
                   </Muted>
@@ -267,7 +245,7 @@ export default function WorkspaceItem({
                 <Muted
                   size="xs"
                   tone="secondary"
-                  className={`truncate ${grouping === "status" ? "-ml-1.5" : ""}`}
+                  className="truncate"
                 >
                   {branch}
                 </Muted>
@@ -289,16 +267,7 @@ export default function WorkspaceItem({
                   className="text-xs bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200 rounded-md px-1 py-0.5 outline-none glass-input w-full max-w-35"
                 />
               )}
-              {/* {branch && updatedAt && (
-                <span className="text-primary-900 text-lg leading-6 dark:text-primary-100">
-                  ·
-                </span>
-              )}
-              {updatedAt && (
-                <Caption>
-                  {formatDate(new Date(updatedAt).toISOString())}
-                </Caption>
-              )} */}
+
             </div>
           </div>
         </div>
@@ -397,46 +366,13 @@ export default function WorkspaceItem({
             <WorkspaceMenuSeparator />
           </>
         )}
-        <DropdownMenuSub
-          label={
-            <>
-              <WorkspaceStatusIcon
-                status={status}
-                className={`size-3.25 ${statusConfig.iconColor}`}
-              />
-              <span>Status</span>
-            </>
-          }
-        >
-          {STATUS_ORDER.map((s) => {
-            const config = getWorkspaceStatusConfig(s);
-            return (
-              <DropdownMenuItem
-                key={s}
-                onClick={() => {
-                  setIsDropdownOpen(false);
-                  onStatusChange?.(s);
-                }}
-                className={
-                  s === status ? "bg-primary-200/40 dark:bg-primary/5" : ""
-                }
-              >
-                <WorkspaceStatusIcon
-                  status={s}
-                  className={`size-3.5 ${config.iconColor}`}
-                />
-                <span>{config.label}</span>
-              </DropdownMenuItem>
-            );
-          })}
-        </DropdownMenuSub>
         {branch && onRenameBranch && (
           <DropdownMenuItem onClick={handleRenameBranchClick}>
             <Edit className="size-3.5" />
             <span>Rename branch</span>
           </DropdownMenuItem>
         )}
-        <WorkspaceMenuSeparator />
+        {branch && onRenameBranch && <WorkspaceMenuSeparator />}
         {projectId && onCreateWorktree && (
           <DropdownMenuItem onClick={handleCreateWorktreeClick}>
             <Plus className="size-3.5" />

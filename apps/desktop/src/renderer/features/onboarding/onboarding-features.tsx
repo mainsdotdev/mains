@@ -154,19 +154,17 @@ export const CORE_FEATURES: CoreFeature[] = [
           {
             name: "Mode harness",
             branch: "feat/modes",
-            status: "in_progress",
             insertions: 214,
             deletions: 38,
           },
           {
             name: "Sidebar height",
             branch: "fix/sidebar-height",
-            status: "in_review",
             insertions: 12,
             deletions: 4,
           },
-          { name: "Usage ticks", branch: "chore/usage-ticks", status: "done" },
-          { name: "Mains", branch: "main", status: "todo" },
+          { name: "Usage ticks", branch: "chore/usage-ticks" },
+          { name: "Mains", branch: "main" },
         ]}
       />
     ),

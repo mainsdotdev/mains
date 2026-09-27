@@ -18,13 +18,11 @@ import {
   Danger,
   Search,
   Trash,
-  WorkspaceStatusIcon,
 } from "@/components/ui/icons";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { formatAbsoluteDate } from "@/lib/format-date";
 import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import { getProviderVariantById } from "@/lib/provider-variants";
-import { getWorkspaceStatusConfig } from "@/lib/workspace-status";
 import {
   useDeleteRunMutation,
   useDeleteWorkspaceMutation,
@@ -122,7 +120,6 @@ function ArchivedWorkspacesPanel({
         workspace.worktree?.name,
         workspace.baseBranch,
         workspace.rootPath,
-        getWorkspaceStatusConfig(workspace.status).label,
       ]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(normalizedSearch)),
@@ -485,7 +482,6 @@ export function ArchivedWorkspaceRow({
   onDelete: () => void;
 }) {
   const branch = workspace.worktree?.name ?? workspace.baseBranch;
-  const statusConfig = getWorkspaceStatusConfig(workspace.status);
   const projectMissing = workspace.projectName === null;
 
   return (
@@ -519,15 +515,8 @@ export function ArchivedWorkspaceRow({
         </div>
 
         <div className="mt-0.5 flex min-w-0 items-center gap-1">
-          <WorkspaceStatusIcon
-            status={workspace.status}
-            className={`size-2.5 shrink-0 ${statusConfig.iconColor}`}
-          />
-          <Caption className="shrink-0 opacity-70">
-            {statusConfig.label}
-          </Caption>
           <Caption className="truncate opacity-70">
-            • {formatAbsoluteDate(workspace.updatedAt)}
+            {formatAbsoluteDate(workspace.updatedAt)}
           </Caption>
         </div>
       </div>

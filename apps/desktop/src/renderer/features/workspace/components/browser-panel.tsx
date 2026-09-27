@@ -1274,7 +1274,7 @@ export function BrowserPanel() {
       {/* The lane keeps its full width for resizing. The painted surface is
           inset, and its bottom padding keeps the native WebContentsView clear
           of the rounded corners that CSS cannot clip. */}
-      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary pb-4 dark:bg-primary-950">
+      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
       <BrowserTabStrip
         tabs={browserState.tabs}
         activeTabId={browserState.activeTabId}

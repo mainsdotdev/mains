@@ -2,7 +2,7 @@ import { useState, useMemo, type MouseEvent, type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceListGrouping } from "@/lib/redux/slices/appSettingsSlice";
-import { Text, toast } from "@/components/ui";
+import { DropdownMenu, DropdownMenuItem, Text, toast } from "@/components/ui";
 import WorkspaceItem from "./workspace-item";
 import type {
   Workspace as WorkspaceResponse,
@@ -10,22 +10,16 @@ import type {
 } from "@/lib/redux/api/workspaceApi";
 import { LinkResourcesModal } from "@/features/workspace/components/link-resources-modal";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
-import { getWorkspaceStatusConfig } from "@/lib/workspace-status";
-import { Plus, WorkspaceStatusIcon } from "@/components/ui/icons";
-import type { WorkspaceStatus } from "@/lib/redux/api/workspaceApi";
+import { Option, Plus, Settings } from "@/components/ui/icons";
 import {
   useListProjectsQuery,
-  useUpdateWorkspaceMutation,
   useCreateWorkspaceFromSourceMutation,
   useRenameWorkspaceBranchMutation,
   useGetAccountQuery,
 } from "@/lib/redux/api";
 import type { Project } from "@/lib/redux/api/projectsApi";
 import { ProjectIcon } from "./project-icon";
-import {
-  SidebarGroupSection,
-  SIDEBAR_ACTION_ICON,
-} from "./sidebar-group-section";
+import { SidebarGroupSection } from "./sidebar-group-section";
 import { WorkspaceGroupDropdown, type GroupingMode } from "./workspace-group-dropdown";
 
 type WorkspaceGroup = {
@@ -52,16 +46,6 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-const STATUS_ORDER: WorkspaceStatus[] = [
-  "backlog",
-  "todo",
-  "in_progress",
-  "in_review",
-  "done",
-  "canceled",
-  "duplicate",
-];
-
 interface WorkspacesListProps {
   workspaces: WorkspaceResponse[];
   gitStateByWorkspaceId: ReadonlyMap<string, WorkspaceGitState>;
@@ -84,9 +68,10 @@ export default function WorkspacesList({
     projectId: string;
     workspaceName: string;
   }>({ isOpen: false, projectId: "", workspaceName: "" });
+  const [menuProject, setMenuProject] = useState<Project | null>(null);
+  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const navigate = useNavigate();
   const location = useLocation();
-  const [updateWorkspace] = useUpdateWorkspaceMutation();
   const [createWorkspaceFromSource] = useCreateWorkspaceFromSourceMutation();
   const [renameWorkspaceBranch] = useRenameWorkspaceBranchMutation();
   const { data: account } = useGetAccountQuery();
@@ -96,9 +81,12 @@ export default function WorkspacesList({
 
   // Grouping state
   const dispatch = useAppDispatch();
-  const grouping = useAppSelector(
+  const savedGrouping = useAppSelector(
     (state) => state.appSettings.workspaceListGrouping,
   );
+  // Older saved preferences can still contain "status". Display the new
+  // default until the persisted-state migration replaces that preference.
+  const grouping: GroupingMode = savedGrouping === "status" ? "project" : savedGrouping;
   const setGrouping = (mode: GroupingMode) =>
     dispatch(setWorkspaceListGrouping(mode));
 
@@ -161,6 +149,12 @@ export default function WorkspacesList({
     }
   };
 
+  const openProjectMenu = (project: Project, event: MouseEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setMenuPosition({ x: rect.right, y: rect.bottom + 4 });
+    setMenuProject(project);
+  };
+
   const handleRenameBranch = async (workspace: WorkspaceResponse, newBranchName: string) => {
     try {
       await renameWorkspaceBranch({
@@ -182,29 +176,6 @@ export default function WorkspacesList({
 
   // Compute groups
   const computeGroups = (): WorkspaceGroup[] => {
-    if (grouping === "status") {
-      const byStatus = new Map<WorkspaceStatus, WorkspaceResponse[]>();
-      for (const ws of sortedWorkspaces) {
-        const list = byStatus.get(ws.status) ?? [];
-        list.push(ws);
-        byStatus.set(ws.status, list);
-      }
-      return STATUS_ORDER.filter((s) => byStatus.has(s)).map((s) => {
-        const config = getWorkspaceStatusConfig(s);
-        return {
-          key: `status-${s}`,
-          label: config.label,
-          icon: (
-            <WorkspaceStatusIcon
-              status={s}
-              className={`size-3 ${config.iconColor}`}
-            />
-          ),
-          workspaces: byStatus.get(s)!,
-        };
-      });
-    }
-
     if (grouping === "project") {
       const byProject = new Map<string | null, WorkspaceResponse[]>();
       for (const ws of sortedWorkspaces) {
@@ -274,8 +245,8 @@ export default function WorkspacesList({
         id={workspace.id}
         name={workspace.name}
         rootPath={workspace.rootPath}
-        status={workspace.status}
         branch={branch}
+        baseBranch={workspace.baseBranch ?? projectData?.defaultBranch ?? null}
         pathExists={pathExists}
         updatedAt={workspace.updatedAt}
         isActive={isActive}
@@ -290,9 +261,6 @@ export default function WorkspacesList({
         onDelete={(e) => onDeleteWorkspace?.(workspace.id, e)}
         onLinkIssues={() => handleLinkIssues(workspace)}
         onArchive={() => onArchiveWorkspace?.(workspace.id)}
-        onStatusChange={(newStatus) =>
-          updateWorkspace({ id: workspace.id, payload: { status: newStatus } })
-        }
         onRenameBranch={
           canRenameBranch
             ? (newName) => handleRenameBranch(workspace, newName)
@@ -316,7 +284,7 @@ export default function WorkspacesList({
   };
 
   return (
-    <div className="pb-2">
+    <div className="pb-2 pt-2">
       <div
         // role="button"
         // tabIndex={0}
@@ -358,15 +326,16 @@ export default function WorkspacesList({
                 key={group.key}
                 groupKey={group.key}
                 label={group.label}
+                labelWeight="medium"
                 icon={group.icon}
                 count={group.workspaces.length}
                 action={
                   group.project
                     ? {
-                        label: "Create new worktree",
-                        onClick: () =>
-                          handleCreateWorktreeForProject(group.project!),
-                        icon: <Plus className={SIDEBAR_ACTION_ICON} />,
+                        label: "Project options",
+                        onClick: (event) => openProjectMenu(group.project!, event),
+                        icon: <Option className="size-3.5 text-primary-800 dark:text-primary-200" />,
+                        menuOpen: menuProject?.id === group.project.id,
                       }
                     : undefined
                 }
@@ -379,6 +348,36 @@ export default function WorkspacesList({
           </div>
         )}
       </div>
+
+      <DropdownMenu
+        isOpen={!!menuProject}
+        aria-label="Project actions"
+        position={menuPosition}
+        origin="top-left"
+        onClose={() => setMenuProject(null)}
+      >
+        <DropdownMenuItem
+          onClick={() => {
+            if (!menuProject) return;
+            const projectId = menuProject.id;
+            setMenuProject(null);
+            navigate(`/settings?section=projects&kind=code&id=${projectId}`);
+          }}
+        >
+          <Settings className="size-3.5" />
+          <span>Project settings</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => {
+            const project = menuProject;
+            setMenuProject(null);
+            if (project) void handleCreateWorktreeForProject(project);
+          }}
+        >
+          <Plus className="size-3.5" />
+          <span>New worktree</span>
+        </DropdownMenuItem>
+      </DropdownMenu>
 
       <LinkResourcesModal
         projectId={linkModalState.projectId}

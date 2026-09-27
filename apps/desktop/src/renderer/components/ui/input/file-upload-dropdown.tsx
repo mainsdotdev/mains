@@ -21,7 +21,6 @@ interface FileUploadDropdownProps {
   onDocumentUpload: () => void;
   dropdownRef: RefObject<HTMLDivElement | null>;
   openUpward?: boolean;
-  variant?: "claude" | "copilot" | "codex" | "cursor";
 }
 
 /**
@@ -35,25 +34,7 @@ export function FileUploadDropdown({
   onDocumentUpload,
   dropdownRef,
   openUpward = false,
-  variant,
 }: FileUploadDropdownProps) {
-  if (variant === "codex") {
-    return (
-      <div className="relative flex shrink-0 items-center" ref={dropdownRef}>
-        <Button
-          type="button"
-          tooltip="Upload image"
-          tooltipPosition="top"
-          onClick={onImageUpload}
-          className="shrink-0 rounded-full p-2 transition-colors hover:bg-primary-200/30 dark:hover:bg-primary-300/20 cursor-pointer"
-          aria-label="Upload image"
-        >
-          <Picture className="size-4 text-primary-950 dark:text-primary" />
-        </Button>
-      </div>
-    );
-  }
-
   return (
     <div className="relative flex shrink-0 items-center " ref={dropdownRef}>
       <Button
