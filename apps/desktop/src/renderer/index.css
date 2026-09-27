@@ -797,6 +797,10 @@ html.mains-web.dark #root {
   --glass-edge-danger: rgba(255, 255, 255, 0.42);
 }
 
+@theme static {
+  --glass-fill-command: color-mix(in srgb, var(--color-primary-100) 82%, transparent);
+}
+
 :root {
   /* The window frame behind the sidebar and around the content: translucent
      over the macOS vibrancy. An app theme replaces it with an opaque colour
@@ -842,6 +846,7 @@ html.mains-web.dark #root {
   --viz-cat-5: #d55181;
 
   --glass-fill-surface: var(--color-primary-900);
+  --glass-fill-command: color-mix(in srgb, var(--color-primary-950) 80%, transparent);
   --glass-fill-card: color-mix(in srgb, color-mix(in srgb, var(--color-primary-900) 78%, var(--color-primary-800)) 98%, transparent);
   --glass-fill-input: color-mix(in srgb, var(--color-primary-950) 75%, var(--color-primary-900));
   --glass-fill-toggle: var(--glass-fill-input);

@@ -19,8 +19,8 @@ export interface ModalProps {
   children?: ReactNode;
   /** Panel overrides — sizing (w-*, max-w-*) and radius. */
   className?: string;
-  /** "dim" matches Alert/WizardModal; "media" darkens + blurs for image/screenshot previews. */
-  backdrop?: "dim" | "media";
+  /** "dim" matches Alert/WizardModal; "command" keeps the app visible behind the palette. */
+  backdrop?: "dim" | "command" | "media";
   /** "panel" is the glass card; "bare" drops the fill, rim, radius, and shadow so media content floats on the backdrop. */
   surface?: "panel" | "bare";
   /** Vertical placement; command/search surfaces sit near the top edge. */
@@ -93,7 +93,9 @@ export function Modal({
           "absolute inset-0",
           backdrop === "media"
             ? "bg-black/80 "
-            : "dark:bg-primary-950/60 bg-primary/80",
+            : backdrop === "command"
+              ? "bg-primary-950/15 dark:bg-primary-950/35"
+              : "dark:bg-primary-950/60 bg-primary/80",
         )}
         role="presentation"
         onClick={closeOnBackdrop ? onClose : undefined}
@@ -121,7 +123,7 @@ export function Modal({
             motion === "none"
               ? "none"
               : motion === "command"
-              ? "commandMenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1) both"
+              ? "commandMenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards"
               : "wizardModalIn 20ms cubic-bezier(0.22, 1, 0.36, 1) both",
         }}
       >

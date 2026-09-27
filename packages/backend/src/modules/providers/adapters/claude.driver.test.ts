@@ -32,6 +32,13 @@ import {
   mapSDKMessage,
   resolveClaudeDefaultModelId,
   resolveClaudeTurnModel,
+  mapClaudeSessionTotals,
+  subtractClaudeSessionTotals,
+  supportsClaudeMcpApps,
+  mcpToolWireName,
+  buildClaudeMcpCatalog,
+  toMcpCallToolResult,
+  assertMcpToolCallableFromApp,
 } from "./claude.driver";
 import type { ClaudeTaskIndex, SDKSystemMessage } from "./claude.driver";
 import fs from "node:fs";
@@ -2405,5 +2412,327 @@ describe("claude.driver / buildClaudePermissionModeOptions with a tool policy", 
       buildClaudePermissionModeOptions("default"),
     );
     expect(buildClaudePermissionModeOptions("default").disallowedTools).toBeUndefined();
+  });
+});
+
+describe("claude.driver / session totals", () => {
+  const HAIKU = "claude-haiku-4-5-20251001";
+  const usage = (
+    costUSD: number,
+    inputTokens: number,
+    outputTokens: number,
+    cacheReadInputTokens: number,
+    cacheCreationInputTokens: number,
+  ) => ({
+    costUSD,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    webSearchRequests: 0,
+    contextWindow: 200_000,
+    maxOutputTokens: 64_000,
+  });
+
+  // Recorded from CLI 2.1.283: a first query, then a resume of the same session.
+  const firstQuery = { costUsd: 0.009298, modelUsage: { [HAIKU]: usage(0.009298, 913, 144, 10_087, 3_328) } };
+  const resumedResult = {
+    total_cost_usd: 0.011679,
+    modelUsage: { [HAIKU]: usage(0.011679, 923, 278, 23_502, 3_508) },
+  };
+
+  it("books a resumed query at its own share, not the session's running total", () => {
+    const own = subtractClaudeSessionTotals(resumedResult, firstQuery);
+
+    expect(own.costUsd).toBeCloseTo(0.002381, 9);
+    expect(own.modelUsage[HAIKU]).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 134,
+      cacheReadInputTokens: 13_415,
+      cacheCreationInputTokens: 180,
+      webSearchRequests: 0,
+    });
+    expect(own.modelUsage[HAIKU].costUSD).toBeCloseTo(0.002381, 9);
+  });
+
+  it("keeps what describes the model rather than the turn", () => {
+    const own = subtractClaudeSessionTotals(resumedResult, firstQuery);
+
+    expect(own.modelUsage[HAIKU]).toMatchObject({ contextWindow: 200_000, maxOutputTokens: 64_000 });
+    // Optional fields the CLI did not send stay absent rather than turning into zeros.
+    expect(own.modelUsage[HAIKU]).not.toHaveProperty("thinkingTokens");
+  });
+
+  it("subtracts thinking tokens when the CLI records them", () => {
+    // Recorded from a two-turn Mains run on CLI 2.1.283 (Opus 5.5): the second
+    // turn thought nothing, so the running total stayed at the first turn's 49.
+    const OPUS = "claude-opus-5-5";
+    const opus = (
+      costUSD: number,
+      inputTokens: number,
+      outputTokens: number,
+      cacheReadInputTokens: number,
+      cacheCreationInputTokens: number,
+    ) => ({
+      ...usage(costUSD, inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens),
+      thinkingTokens: 49,
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+    });
+    const afterFirstTurn = { costUsd: 0.253732, modelUsage: { [OPUS]: opus(0.253732, 2, 199, 0, 31_218) } };
+    const secondTurnResult = {
+      total_cost_usd: 0.2627636,
+      modelUsage: { [OPUS]: opus(0.2627636, 4, 246, 31_218, 31_448) },
+    };
+
+    const own = subtractClaudeSessionTotals(secondTurnResult, afterFirstTurn);
+
+    expect(own.costUsd).toBeCloseTo(0.0090316, 9);
+    expect(own.modelUsage[OPUS]).toMatchObject({
+      inputTokens: 2,
+      outputTokens: 47,
+      thinkingTokens: 0,
+      cacheReadInputTokens: 31_218,
+      cacheCreationInputTokens: 230,
+    });
+  });
+
+  it("takes the result as it is without a baseline", () => {
+    // A new session starts at zero; a CLI that could not answer leaves nothing to subtract.
+    expect(subtractClaudeSessionTotals(resumedResult, null)).toEqual({
+      costUsd: 0.011679,
+      modelUsage: resumedResult.modelUsage,
+    });
+  });
+
+  it("treats a result below its baseline as totals reset mid-query", () => {
+    // `/clear` resets the running totals, so the result already counts from zero.
+    const reset = { total_cost_usd: 0.004, modelUsage: { [HAIKU]: usage(0.004, 10, 50, 0, 900) } };
+
+    expect(subtractClaudeSessionTotals(reset, firstQuery)).toEqual({
+      costUsd: 0.004,
+      modelUsage: reset.modelUsage,
+    });
+  });
+
+  it("drops models only earlier turns used and keeps one new to this query", () => {
+    const SONNET = "claude-sonnet-5";
+    const baseline = {
+      costUsd: 0.05,
+      modelUsage: { [HAIKU]: usage(0.01, 900, 100, 0, 3_000), [SONNET]: usage(0.04, 50, 400, 0, 0) },
+    };
+    const result = {
+      total_cost_usd: 0.07,
+      modelUsage: {
+        [HAIKU]: usage(0.01, 900, 100, 0, 3_000),
+        [SONNET]: usage(0.04, 50, 400, 0, 0),
+        "claude-opus-5": usage(0.02, 20, 80, 0, 0),
+      },
+    };
+
+    const own = subtractClaudeSessionTotals(result, baseline);
+
+    expect(Object.keys(own.modelUsage)).toEqual(["claude-opus-5"]);
+    expect(own.modelUsage["claude-opus-5"]).toEqual(result.modelUsage["claude-opus-5"]);
+    expect(own.costUsd).toBeCloseTo(0.02, 9);
+  });
+
+  it("maps the /usage reply to the session's totals", () => {
+    expect(
+      mapClaudeSessionTotals({
+        session: {
+          total_cost_usd: 0.009298,
+          total_api_duration_ms: 1_200,
+          model_usage: firstQuery.modelUsage,
+        },
+        rate_limits: null,
+      }),
+    ).toEqual(firstQuery);
+  });
+
+  it("reads a fresh session as zero totals", () => {
+    expect(mapClaudeSessionTotals({ session: { total_cost_usd: 0, model_usage: {} } })).toEqual({
+      costUsd: 0,
+      modelUsage: {},
+    });
+  });
+
+  it("returns null for a reply without session totals", () => {
+    expect(mapClaudeSessionTotals(null)).toBeNull();
+    expect(mapClaudeSessionTotals({})).toBeNull();
+    expect(mapClaudeSessionTotals({ session: { total_cost_usd: "0.1" } })).toBeNull();
+  });
+});
+
+describe("claude.driver / MCP Apps", () => {
+  const URI = "ui://demo/weather.html";
+  // `mcpServerStatus()` as CLI 2.1.283 reports a server with two app tools.
+  const demo = {
+    name: "demo",
+    status: "connected",
+    source: "dynamic",
+    tools: [
+      {
+        name: "show_weather",
+        annotations: {},
+        _meta: { ui: { resourceUri: URI, visibility: ["model", "app"] } },
+      },
+      { name: "refresh_weather", annotations: {}, _meta: { ui: { resourceUri: URI, visibility: ["app"] } } },
+      { name: "plain_lookup", annotations: {} },
+      { name: "model_only", annotations: {}, _meta: { ui: { visibility: ["model"] } } },
+    ],
+  };
+
+  it("needs both the tool UI metadata and the resource reader", () => {
+    expect(supportsClaudeMcpApps(["mcp_tool_ui_meta_v1", "mcp_read_resource_v1"])).toBe(true);
+    expect(supportsClaudeMcpApps(["mcp_tool_ui_meta_v1"])).toBe(false);
+    expect(supportsClaudeMcpApps(undefined)).toBe(false);
+  });
+
+  it("names tools the way tool_use blocks do", () => {
+    expect(mcpToolWireName("demo", "show_weather")).toBe("mcp__demo__show_weather");
+    expect(mcpToolWireName("plugin:documents:docs", "doc_export")).toBe(
+      "mcp__plugin_documents_docs__doc_export",
+    );
+  });
+
+  it("indexes app tools and remembers every tool it saw", () => {
+    const catalog = buildClaudeMcpCatalog([demo]);
+
+    expect([...catalog.apps.keys()]).toEqual(["mcp__demo__show_weather", "mcp__demo__refresh_weather"]);
+    expect(catalog.apps.get("mcp__demo__show_weather")).toEqual({
+      server: "demo",
+      tool: "show_weather",
+      resourceUri: URI,
+    });
+    // A tool without a UI is still known, so it does not trigger another read.
+    expect(catalog.known.has("mcp__demo__plain_lookup")).toBe(true);
+  });
+
+  it("reads the deprecated flat ui/resourceUri key", () => {
+    const catalog = buildClaudeMcpCatalog([
+      { name: "old", tools: [{ name: "card", _meta: { "ui/resourceUri": "ui://old/card.html" } }] },
+    ]);
+
+    expect(catalog.apps.get("mcp__old__card")?.resourceUri).toBe("ui://old/card.html");
+  });
+
+  it("ignores in-process SDK servers and non-ui:// resources", () => {
+    const catalog = buildClaudeMcpCatalog([
+      { name: "mains", source: "sdk", tools: [{ name: "x", _meta: { ui: { resourceUri: "ui://m/x" } } }] },
+      { name: "web", tools: [{ name: "y", _meta: { ui: { resourceUri: "https://evil.example/y" } } }] },
+    ]);
+
+    expect(catalog.apps.size).toBe(0);
+    expect(catalog.known.has("mcp__mains__x")).toBe(false);
+  });
+
+  it("shapes the CLI's tool result as an MCP CallToolResult", () => {
+    // The user message's tool_use_result for show_weather, as CLI 2.1.283 sends it.
+    const toolUseResult = {
+      content: '{"city":"Istanbul","tempC":22,"condition":"sunny"}',
+      _meta: { probe: "result-meta" },
+      structuredContent: { city: "Istanbul", tempC: 22, condition: "sunny" },
+    };
+
+    expect(toMcpCallToolResult(toolUseResult)).toEqual({
+      content: [{ type: "text", text: '{"city":"Istanbul","tempC":22,"condition":"sunny"}' }],
+      structuredContent: { city: "Istanbul", tempC: 22, condition: "sunny" },
+      _meta: { probe: "result-meta" },
+    });
+  });
+
+  it("keeps content blocks and the error flag as they are", () => {
+    const blocks = [{ type: "text", text: "boom" }];
+
+    expect(toMcpCallToolResult({ content: blocks, isError: true })).toEqual({ content: blocks, isError: true });
+    expect(toMcpCallToolResult("plain text")).toBeUndefined();
+    expect(toMcpCallToolResult(null)).toBeUndefined();
+  });
+
+  it("lets an app call its server's tools unless one is kept for the model", () => {
+    expect(() => assertMcpToolCallableFromApp([demo], "demo", "refresh_weather")).not.toThrow();
+    // No visibility means the MCP Apps default, model and app.
+    expect(() => assertMcpToolCallableFromApp([demo], "demo", "plain_lookup")).not.toThrow();
+    expect(() => assertMcpToolCallableFromApp([demo], "demo", "model_only")).toThrow(
+      'Tool "model_only" is not available to apps',
+    );
+  });
+
+  it("fails closed on anything it cannot vouch for", () => {
+    expect(() => assertMcpToolCallableFromApp([demo], "demo", "delete_everything")).toThrow(
+      'MCP server "demo" has no tool "delete_everything"',
+    );
+    expect(() => assertMcpToolCallableFromApp([demo], "other", "show_weather")).toThrow(
+      'MCP server "other" is not available',
+    );
+    expect(() =>
+      assertMcpToolCallableFromApp([{ ...demo, status: "pending", tools: undefined }], "demo", "show_weather"),
+    ).toThrow('MCP server "demo" is not connected');
+    expect(() =>
+      assertMcpToolCallableFromApp([{ ...demo, source: "sdk" }], "demo", "show_weather"),
+    ).toThrow('MCP server "demo" is not available');
+  });
+
+  describe("tool call events", () => {
+    const toolUse = {
+      type: "assistant",
+      uuid: "a1",
+      session_id: "s1",
+      parent_tool_use_id: null,
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_1", name: "mcp__demo__show_weather", input: { city: "Istanbul" } }],
+      },
+    } as any;
+    const toolResult = {
+      type: "user",
+      session_id: "s1",
+      parent_tool_use_id: null,
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_1", content: '{"city":"Istanbul","tempC":22}' },
+        ],
+      },
+      tool_use_result: {
+        content: '{"city":"Istanbul","tempC":22}',
+        structuredContent: { city: "Istanbul", tempC: 22 },
+      },
+    } as any;
+    const mcpApp = {
+      server: "demo",
+      tool: "show_weather",
+      resourceUri: URI,
+      originCallId: "toolu_1",
+    };
+
+    it("marks an app tool's call with its app and its full result", () => {
+      const cs = makeClaudeSession({ mcpApps: { catalog: buildClaudeMcpCatalog([demo]) } });
+
+      const [start] = mapSDKMessage(toolUse, cs);
+      const [complete] = mapSDKMessage(toolResult, cs);
+
+      expect(start).toMatchObject({ metadata: { phase: "start", mcpApp } });
+      expect(complete).toMatchObject({
+        type: "tool_call",
+        output: {
+          content: [{ type: "text", text: '{"city":"Istanbul","tempC":22}' }],
+          structuredContent: { city: "Istanbul", tempC: 22 },
+        },
+        metadata: { phase: "complete", mcpApp },
+      });
+    });
+
+    it("leaves every call as it was when the CLI cannot serve apps", () => {
+      const cs = makeClaudeSession();
+
+      const [start] = mapSDKMessage(toolUse, cs);
+      const [complete] = mapSDKMessage(toolResult, cs);
+
+      expect(start).not.toHaveProperty("metadata.mcpApp");
+      expect(complete).toMatchObject({ output: '{"city":"Istanbul","tempC":22}' });
+      expect(complete).not.toHaveProperty("metadata.mcpApp");
+    });
   });
 });

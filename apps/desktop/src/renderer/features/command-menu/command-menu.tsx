@@ -689,6 +689,7 @@ export function CommandMenu() {
       initialFocusRef={inputRef}
       placement="top"
       motion="command"
+      backdrop="command"
       surface="bare"
       className="command-menu-motion w-[min(44rem,calc(100vw-2rem))] overflow-visible"
     >
@@ -698,7 +699,7 @@ export function CommandMenu() {
         loop
         className="flex min-h-0 flex-col gap-3 bg-transparent"
       >
-        <div className="glass-surface flex h-14 shrink-0 items-center gap-3 rounded-3xl px-4">
+        <div className="glass-command flex h-14 shrink-0 items-center gap-3 rounded-3xl px-4 backdrop-blur-2xl backdrop-saturate-125">
           <Mains className="size-5 shrink-0 text-primary-500 dark:text-primary-400" />
           <Command.Input
             ref={inputRef}
@@ -720,7 +721,7 @@ export function CommandMenu() {
           )}
         </div>
 
-        <div className="glass-surface min-h-0 overflow-hidden rounded-3xl ">
+        <div className="glass-command min-h-0 overflow-hidden rounded-4xl backdrop-blur-2xl backdrop-saturate-125">
           <Command.List
             aria-busy={isFetching}
             className="noscrollbar max-h-[min(31rem,62vh)] min-h-24 overflow-y-auto overscroll-contain py-1.5"
