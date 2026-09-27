@@ -480,6 +480,40 @@ export const workspaceService = {
     return workspaceRepo.findByAccountId(accountId);
   },
 
+  async reorder(payload: { accountId: string; orderedIds: string[] }): Promise<void> {
+    if (!payload || typeof payload.accountId !== "string" || !payload.accountId ||
+        !Array.isArray(payload.orderedIds) ||
+        payload.orderedIds.some((id) => typeof id !== "string") ||
+        new Set(payload.orderedIds).size !== payload.orderedIds.length) {
+      throw new Error("Invalid workspace order");
+    }
+    const active = await workspaceRepo.findByAccountId(payload.accountId);
+    const activeIds = new Set(active.map((workspace) => workspace.id));
+    if (payload.orderedIds.length !== activeIds.size ||
+        payload.orderedIds.some((id) => !activeIds.has(id))) {
+      throw new Error("Workspace order must include every active workspace in this account");
+    }
+    workspaceRepo.reorder(payload.accountId, payload.orderedIds);
+  },
+
+  async setPinned(payload: { id: string; accountId: string; pinned: boolean }): Promise<WorkspaceResponse> {
+    if (!payload || typeof payload.id !== "string" ||
+        typeof payload.accountId !== "string" || typeof payload.pinned !== "boolean") {
+      throw new Error("Invalid workspace pin request");
+    }
+    const workspace = await workspaceRepo.findById(payload.id);
+    if (!workspace) throw new Error("Workspace not found");
+    if (workspace.accountId !== payload.accountId) {
+      throw new Error("Workspace does not belong to this account");
+    }
+    const updated = await workspaceRepo.setPinned(
+      workspace.id,
+      payload.pinned ? new Date() : null,
+    );
+    if (!updated) throw new Error("Workspace not found");
+    return updated;
+  },
+
   async getByRootPath(
     accountId: string,
     rootPath: string,

@@ -98,6 +98,8 @@ export interface WorkspaceResponse {
   metadata: WorkspaceMetadata | null;
   status: WorkspaceStatus;
   isArchived: boolean;
+  sortOrder: number;
+  pinnedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

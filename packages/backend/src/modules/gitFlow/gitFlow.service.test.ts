@@ -94,6 +94,8 @@ describe("gitFlowService — live branch invariants", () => {
       metadata: null,
       status: "todo",
       isArchived: false,
+      sortOrder: 0,
+      pinnedAt: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     });

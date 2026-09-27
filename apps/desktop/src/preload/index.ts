@@ -283,6 +283,8 @@ const api = {
     get: (id: string) => ipcRenderer.invoke(CHANNELS.projects.get, id),
     listByAccount: (accountId: string) =>
       ipcRenderer.invoke(CHANNELS.projects.listByAccount, accountId),
+    reorder: (payload: { accountId: string; orderedIds: string[] }) =>
+      ipcRenderer.invoke(CHANNELS.projects.reorder, payload),
     findByRemoteOrigin: (accountId: string, remoteOrigin: string) =>
       ipcRenderer.invoke(CHANNELS.projects.findByRemoteOrigin, accountId, remoteOrigin),
     findOrCreate: (payload: unknown) =>
@@ -515,6 +517,10 @@ const api = {
     get: (id: string) => ipcRenderer.invoke(CHANNELS.workspace.get, id),
     listByAccount: (accountId: string) =>
       ipcRenderer.invoke(CHANNELS.workspace.listByAccount, accountId),
+    reorder: (payload: { accountId: string; orderedIds: string[] }) =>
+      ipcRenderer.invoke(CHANNELS.workspace.reorder, payload),
+    setPinned: (payload: { id: string; accountId: string; pinned: boolean }) =>
+      ipcRenderer.invoke(CHANNELS.workspace.setPinned, payload),
     listGitStates: () =>
       ipcRenderer.invoke(CHANNELS.workspace.listGitStates),
     getByRootPath: (accountId: string, rootPath: string) =>

@@ -12,13 +12,12 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { markdownComponents } from "@/components/markdown-components";
-import { FileIconComponent } from "@/components/ui/icons";
-import { Sparkles } from "@/components/ui/icons";
+import { At, FileIconComponent } from "@/components/ui/icons";
 import { applySignedSrc } from "@/lib/local-image-url";
 import { useIsMobile, isWeb } from "@/lib/platform";
 import Text from "../text";
 
-const sparklesIconMarkup = renderToStaticMarkup(<Sparkles className="w-3 h-3 shrink-0" />);
+const sparklesIconMarkup = renderToStaticMarkup(<At className="w-3 h-3 shrink-0" />);
 
 export interface RichSkillChipData {
   name: string;

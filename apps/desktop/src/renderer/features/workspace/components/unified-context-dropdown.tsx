@@ -2,7 +2,7 @@ import { ReactNode, RefObject, useCallback, useEffect, useMemo, useReducer, useS
 import { Button, DropdownWrapper, Text } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { CommandInfo, SkillInfo } from "@/lib/redux/api/providersApi";
-import { ArrowUp, Sparkles } from "@/components/ui/icons";
+import { ArrowUp, At } from "@/components/ui/icons";
 import { useDropdownKeyboardNavigation } from "@/features/workspace/hooks/use-dropdown-keyboard-navigation";
 import { FileIconComponent } from "@/components/ui/icons";
 import type { DirEntry, FileNode } from "@/features/workspace/types/file-explorer";
@@ -131,10 +131,10 @@ function SkillRowIcon({ skill }: { skill: SkillInfo }) {
   }
   return (
     <div
-      className="size-5 rounded shrink-0 flex items-center justify-center bg-primary-200/50 dark:bg-primary-700/50 text-primary-600 dark:text-primary-400"
+      className="size-6 rounded-md shrink-0 flex items-center justify-center bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200"
       style={skill.brandColor ? { backgroundColor: skill.brandColor, color: "#fff" } : undefined}
     >
-      <Sparkles className="size-3" />
+      <At className="size-4" />
     </div>
   );
 }

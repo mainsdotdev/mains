@@ -90,7 +90,10 @@ export function SidebarGroupSection({
           if ((event.target as HTMLElement).closest("button")) return;
           sortHandle?.listeners?.onPointerDown?.(event);
         }}
-        onClick={toggleExpanded}
+        onClick={() => {
+          if (sortHandle?.consumeDragClick()) return;
+          toggleExpanded();
+        }}
         onKeyDown={(e) => {
           sortHandle?.onKeyDown?.(e);
           if (e.defaultPrevented) return;

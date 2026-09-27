@@ -16,6 +16,7 @@ import {
   Input,
   SquareSpinner,
   Tooltip,
+  type SortableHandle,
 } from "@/components/ui";
 import {
   Trash,
@@ -29,6 +30,7 @@ import {
   Plus,
   Branch,
   ProjectFolder,
+  Pin,
 } from "@/components/ui/icons";
 import { useGetInstalledAppsQuery } from "@/lib/redux/api";
 import { useGetLatestWorkspaceDiffSummaryQuery } from "@/lib/redux/api/workspaceApi";
@@ -58,7 +60,10 @@ interface WorkspaceItemProps {
   projectId?: string | null;
   projectIcon?: ReactNode;
   grouping?: GroupingMode;
+  isPinned?: boolean;
+  sortHandle?: SortableHandle;
   onClick?: () => void;
+  onTogglePin?: () => void;
   onDelete?: (e: MouseEvent) => void;
   onLinkIssues?: () => void;
   onArchive?: () => void;
@@ -79,7 +84,10 @@ export default function WorkspaceItem({
   projectId,
   projectIcon,
   grouping = "none",
+  isPinned = false,
+  sortHandle,
   onClick,
+  onTogglePin,
   onDelete,
   onLinkIssues,
   onArchive,
@@ -142,6 +150,11 @@ export default function WorkspaceItem({
     onArchive?.();
   };
 
+  const handleTogglePinClick = () => {
+    setIsDropdownOpen(false);
+    onTogglePin?.();
+  };
+
   const handleSettingsClick = () => {
     setIsDropdownOpen(false);
     onSettings?.();
@@ -186,17 +199,27 @@ export default function WorkspaceItem({
   return (
     <div className="relative group" onMouseEnter={() => setHasHovered(true)}>
       <div
+        ref={sortHandle?.ref}
         role="button"
         tabIndex={0}
-        onClick={onClick}
+        onPointerDown={(event) => {
+          if ((event.target as HTMLElement).closest("button, input")) return;
+          sortHandle?.listeners?.onPointerDown?.(event);
+        }}
+        onClick={() => {
+          if (sortHandle?.consumeDragClick()) return;
+          onClick?.();
+        }}
         onKeyDown={(e) => {
+          sortHandle?.onKeyDown?.(e);
+          if (e.defaultPrevented) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onClick?.();
           }
         }}
         className={`block py-1.5
-           transition-all duration-200 ease-out cursor-pointer ${grouping !== "project" ? "rounded-2xl px-2.5" : "rounded-[10px] px-2.5"} ${
+           transition-all duration-200 ease-out ${sortHandle?.listeners ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${grouping !== "project" ? "rounded-2xl px-2.5" : "rounded-[10px] px-2.5"} ${
             isActive
               ? "bg-primary/50 glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
               : "bg-transparent group-hover:bg-primary/50 dark:group-hover:bg-primary/5"
@@ -390,6 +413,12 @@ export default function WorkspaceItem({
           </DropdownMenuItem>
         )}
         <WorkspaceMenuSeparator />
+        {onTogglePin && (
+          <DropdownMenuItem onClick={handleTogglePinClick}>
+            <Pin className="size-3.5" />
+            <span>{isPinned ? "Unpin" : "Pin"}</span>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={handleArchiveClick}>
           <Archive className="size-3.5" />
           <span>Archive</span>

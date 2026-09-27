@@ -1,4 +1,5 @@
 import {
+  At,
   Bash,
   BrowserCursor,
   Check,
@@ -262,7 +263,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     displayName: "Skill",
     groupKey: "skill",
     category: "Skill",
-    icon: <Sparkles className="size-4" />,
+    icon: <At className="size-4" />,
     aliases: ["skill"],
   },
   {

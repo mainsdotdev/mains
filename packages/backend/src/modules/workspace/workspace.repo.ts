@@ -1,4 +1,4 @@
-import { eq, desc, and, sql, inArray } from "drizzle-orm";
+import { eq, desc, and, sql, inArray, max } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
 import {
@@ -118,6 +118,10 @@ export const workspaceRepo = {
     payload: CreateWorkspacePayload & { id: string },
   ): Promise<string> {
     const db = getDb();
+    const [last] = await db
+      .select({ value: max(workspaces.sortOrder) })
+      .from(workspaces)
+      .where(eq(workspaces.accountId, payload.accountId));
     await db.insert(workspaces).values({
       id: payload.id,
       accountId: payload.accountId,
@@ -126,12 +130,31 @@ export const workspaceRepo = {
       rootPath: payload.rootPath,
       repoUrl: payload.repoUrl,
       baseBranch: payload.baseBranch,
+      sortOrder: (last?.value ?? -1) + 1,
       metadata: payload.metadata ? JSON.stringify(payload.metadata) : null,
       status:
         (payload as CreateWorkspacePayload & { status?: WorkspaceStatus })
           .status ?? "todo",
     });
     return payload.id;
+  },
+
+  reorder(accountId: string, orderedIds: string[]): void {
+    const db = getDb();
+    db.transaction(() => {
+      orderedIds.forEach((id, sortOrder) => {
+        db.update(workspaces)
+          .set({ sortOrder })
+          .where(and(eq(workspaces.id, id), eq(workspaces.accountId, accountId)))
+          .run();
+      });
+    });
+  },
+
+  async setPinned(id: string, pinnedAt: Date | null): Promise<WorkspaceResponse | null> {
+    const db = getDb();
+    await db.update(workspaces).set({ pinnedAt }).where(eq(workspaces.id, id));
+    return this.findById(id);
   },
 
   async update(
@@ -179,9 +202,19 @@ export const workspaceRepo = {
 
   async unarchive(id: string): Promise<WorkspaceResponse | null> {
     const db = getDb();
+    const workspace = await this.findById(id);
+    if (!workspace) return null;
+    const [last] = await db
+      .select({ value: max(workspaces.sortOrder) })
+      .from(workspaces)
+      .where(eq(workspaces.accountId, workspace.accountId));
     await db
       .update(workspaces)
-      .set({ isArchived: false, updatedAt: sql`(unixepoch())` })
+      .set({
+        isArchived: false,
+        sortOrder: (last?.value ?? -1) + 1,
+        updatedAt: sql`(unixepoch())`,
+      })
       .where(eq(workspaces.id, id));
     return this.findById(id);
   },
@@ -634,6 +667,8 @@ function mapWorkspaceRow(
     metadata: safeJsonParse(row.metadata),
     status: row.status as WorkspaceStatus,
     isArchived: row.isArchived,
+    sortOrder: row.sortOrder,
+    pinnedAt: row.pinnedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

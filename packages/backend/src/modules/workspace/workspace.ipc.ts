@@ -41,6 +41,16 @@ export function registerWorkspaceIpc(): void {
   );
 
   ipcMain.handle(
+    CHANNELS.workspace.reorder,
+    handle((payload: { accountId: string; orderedIds: string[] }) => workspaceService.reorder(payload)),
+  );
+
+  ipcMain.handle(
+    CHANNELS.workspace.setPinned,
+    handle((payload: { id: string; accountId: string; pinned: boolean }) => workspaceService.setPinned(payload)),
+  );
+
+  ipcMain.handle(
     CHANNELS.workspace.listGitStates,
     handle(() => workspaceService.listGitStates()),
   );
@@ -271,6 +281,8 @@ export function unregisterWorkspaceIpc(): void {
     CHANNELS.workspace.listArchived,
     CHANNELS.workspace.get,
     CHANNELS.workspace.listByAccount,
+    CHANNELS.workspace.reorder,
+    CHANNELS.workspace.setPinned,
     CHANNELS.workspace.listGitStates,
     CHANNELS.workspace.getByRootPath,
     CHANNELS.workspace.create,

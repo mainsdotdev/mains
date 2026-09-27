@@ -26,7 +26,7 @@ function StackedPluginIcon({ skill }: { skill: SkillInfo }) {
   }
   return (
     <div
-      className={`${frame} flex items-center justify-center bg-primary-200/50 dark:bg-primary-700/50 text-primary-600 dark:text-primary-400`}
+      className={`${frame} flex items-center justify-center bg-primary-200/60 dark:bg-primary/5 text-primary-600 dark:text-primary-400`}
       style={skill.brandColor ? { backgroundColor: skill.brandColor, color: "#fff" } : undefined}
     >
       <Sparkles className="size-2.5" />

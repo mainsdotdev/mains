@@ -236,6 +236,7 @@ export const CHANNELS = {
     list: "projects:list",
     listBranches: "projects:listBranches",
     listByAccount: "projects:listByAccount",
+    reorder: "projects:reorder",
     remove: "projects:remove",
     update: "projects:update",
     // ── resources ──
@@ -447,6 +448,8 @@ export const CHANNELS = {
     list: "workspace:list",
     listArchived: "workspace:listArchived",
     listByAccount: "workspace:listByAccount",
+    reorder: "workspace:reorder",
+    setPinned: "workspace:setPinned",
     listGitStates: "workspace:listGitStates",
     scriptComplete: "workspace:scriptComplete",
     selectDirectory: "workspace:selectDirectory",

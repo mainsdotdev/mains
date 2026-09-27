@@ -183,6 +183,13 @@
       "when": 1790063965370,
       "tag": "0025_purple_warbird",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1790515037315,
+      "tag": "0026_lucky_swordsman",
+      "breakpoints": true
     }
   ]
 }

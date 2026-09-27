@@ -1,6 +1,8 @@
 import {
   createContext,
   useContext,
+  useLayoutEffect,
+  useRef,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -42,6 +44,8 @@ export interface SortableHandle {
    * `event.defaultPrevented`.
    */
   onKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
+  /** True once after a drag, so a row's click action does not also fire. */
+  consumeDragClick: () => boolean;
 }
 
 /** `ids` with `activeId` moved into `overId`'s slot, or null when nothing moves. */
@@ -154,6 +158,27 @@ export function SortableItem({
     transition,
     isDragging,
   } = useSortable({ id });
+  const wasDragged = useRef(false);
+
+  useLayoutEffect(() => {
+    if (isDragging) {
+      wasDragged.current = true;
+      return;
+    }
+    if (!wasDragged.current) return;
+    // Pointer release may not dispatch a click on the handle. Only suppress
+    // the click from this drag, never a later deliberate click.
+    const timer = window.setTimeout(() => {
+      wasDragged.current = false;
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isDragging]);
+
+  const consumeDragClick = () => {
+    const dragged = wasDragged.current;
+    wasDragged.current = false;
+    return dragged;
+  };
 
   const onKeyDown = move
     ? (event: KeyboardEvent<HTMLElement>) => {
@@ -176,7 +201,9 @@ export function SortableItem({
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={`relative ${isDragging ? "z-10 opacity-80" : ""}`}
     >
-      {children({ ref: setActivatorNodeRef, listeners, onKeyDown })}
+      {/* The callback is handed to event handlers; the render prop never calls it. */}
+      {/* eslint-disable-next-line react-hooks/refs */}
+      {children({ ref: setActivatorNodeRef, listeners, onKeyDown, consumeDragClick })}
     </div>
   );
 }

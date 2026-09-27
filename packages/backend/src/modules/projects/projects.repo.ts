@@ -1,4 +1,4 @@
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, and, inArray, max } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
@@ -86,6 +86,10 @@ export const projectsRepo = {
 
   async insert(payload: CreateProjectPayload & { id: string }): Promise<string> {
     const db = getDb();
+    const [last] = await db
+      .select({ value: max(projects.sortOrder) })
+      .from(projects)
+      .where(eq(projects.accountId, payload.accountId));
     await db.insert(projects).values({
       id: payload.id,
       accountId: payload.accountId,
@@ -99,10 +103,23 @@ export const projectsRepo = {
       runScript: payload.runScript,
       archiveScript: payload.archiveScript,
       icon: payload.icon,
+      sortOrder: (last?.value ?? -1) + 1,
       commitInstructions: payload.commitInstructions,
       prInstructions: payload.prInstructions,
     });
     return payload.id;
+  },
+
+  reorder(accountId: string, orderedIds: string[]): void {
+    const db = getDb();
+    db.transaction(() => {
+      orderedIds.forEach((id, sortOrder) => {
+        db.update(projects)
+          .set({ sortOrder })
+          .where(and(eq(projects.id, id), eq(projects.accountId, accountId)))
+          .run();
+      });
+    });
   },
 
   async update(id: string, payload: UpdateProjectPayload): Promise<ProjectResponse | null> {
@@ -260,6 +277,7 @@ function mapRowToResponse(row: typeof projects.$inferSelect): ProjectResponse {
     runScript: row.runScript,
     archiveScript: row.archiveScript,
     icon: row.icon,
+    sortOrder: row.sortOrder,
     commitInstructions: row.commitInstructions,
     prInstructions: row.prInstructions,
     isArchived: row.isArchived,
