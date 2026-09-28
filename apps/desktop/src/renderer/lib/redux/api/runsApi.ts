@@ -4,6 +4,7 @@ import type { ModeId } from "../../../../shared/modes";
 import type { RunOutputFile } from "@mains/contracts/runs";
 import type { AppDispatch, RootState } from "../index";
 import { forgetDeletedUiContext } from "../ui-state-cleanup";
+import { detachArchivedRun } from "../slices/workspaceSlice";
 
 export type { RunOutputFile } from "@mains/contracts/runs";
 
@@ -437,10 +438,13 @@ export const runsApi = baseApi.injectEndpoints({
     }),
 
     archiveRun: builder.mutation<Run, string>({
-      query: (id) => ({
-        handler: CHANNELS.runs.archive,
-        args: [id],
-      }),
+      async queryFn(id, { dispatch, getState }, _extra, baseQuery) {
+        const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
+        const result = await baseQuery({ handler: CHANNELS.runs.archive, args: [id] });
+        if (result.error) return { error: result.error };
+        dispatch(detachArchivedRun({ backendId, runId: id }));
+        return { data: result.data as Run };
+      },
       invalidatesTags: (_result, _error, id) => ["Runs", { type: "Runs", id }],
     }),
 

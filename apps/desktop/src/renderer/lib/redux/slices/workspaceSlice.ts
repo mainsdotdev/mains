@@ -182,6 +182,23 @@ function restoreWorkspaceView(state: WorkspaceState, view?: WorkspaceViewSnapsho
   state.openNoteTabs = view?.openNoteTabs ?? [];
 }
 
+function detachRunFromViews(state: WorkspaceState, backendId: string, runId: string): void {
+  for (const [key, view] of Object.entries(state.workspaceViews)) {
+    if (!viewKeyBelongsToBackend(key, backendId)) continue;
+    if (view.activeTab === runId) view.activeTab = "editor";
+    if (view.previousNonEditorTab === runId) view.previousNonEditorTab = null;
+  }
+  if (state.workspaceViewKey && viewKeyBelongsToBackend(state.workspaceViewKey, backendId)) {
+    if (state.activeTab === runId) {
+      state.activeTab = "editor";
+      // A stale list may still contain this run until its query refreshes.
+      state.workspaceViewNeedsDefaultRun = false;
+    }
+    if (state.previousNonEditorTab === runId) state.previousNonEditorTab = null;
+  }
+  if (state.pendingRunId === runId) state.pendingRunId = null;
+}
+
 const workspaceSlice = createSlice({
   name: "workspace",
   initialState,
@@ -228,6 +245,9 @@ const workspaceSlice = createSlice({
       if (action.payload.text) state.draftTextByKey[action.payload.key] = action.payload.text;
       else delete state.draftTextByKey[action.payload.key];
     },
+    detachArchivedRun: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
+      detachRunFromViews(state, action.payload.backendId, action.payload.runId);
+    },
     forgetRunUiState: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
       const { backendId, runId } = action.payload;
       const ownerKey = runOwnerKey(backendId, runId);
@@ -239,21 +259,7 @@ const workspaceSlice = createSlice({
         state.composerContextReady = false;
       }
 
-      for (const [key, view] of Object.entries(state.workspaceViews)) {
-        if (!viewKeyBelongsToBackend(key, backendId)) continue;
-        if (view.activeTab === runId) view.activeTab = "editor";
-        if (view.previousNonEditorTab === runId) view.previousNonEditorTab = null;
-      }
-      if (state.workspaceViewKey && viewKeyBelongsToBackend(state.workspaceViewKey, backendId)) {
-        if (state.activeTab === runId) {
-          state.activeTab = "editor";
-          // The run list can still contain the deleted row until its query
-          // refreshes. Do not immediately auto-select that stale first row.
-          state.workspaceViewNeedsDefaultRun = false;
-        }
-        if (state.previousNonEditorTab === runId) state.previousNonEditorTab = null;
-      }
-      if (state.pendingRunId === runId) state.pendingRunId = null;
+      detachRunFromViews(state, backendId, runId);
     },
     forgetWorkspaceUiState: (state, action: PayloadAction<{ backendId: string; workspaceId: string }>) => {
       const { backendId, workspaceId } = action.payload;
@@ -500,6 +506,7 @@ export const {
   setComposerContextKey,
   setDraftText,
   forgetRunUiState,
+  detachArchivedRun,
   forgetWorkspaceUiState,
   setWorkspaceSidebarTab,
   setWorkspaceModel,
