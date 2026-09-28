@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.154.0",
+  "cliVersion": "0.157.1",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -27,7 +27,7 @@
     },
     {
       "path": "ContentItem.ts",
-      "sha256": "6a92779a292c119ca30ba6f9551d7b610f887af0048fa1289511aad084549c15"
+      "sha256": "82a9678802f672880ede5b3d61ae339474ca2a3f65c3cbad599f06ce219f2a06"
     },
     {
       "path": "FunctionCallOutputBody.ts",
@@ -35,7 +35,7 @@
     },
     {
       "path": "FunctionCallOutputContentItem.ts",
-      "sha256": "9eeae66678a736333a5a9ab116b186662512525cf1b3093a14e13e4d12fb78e5"
+      "sha256": "b9054d9f4e5a85b84d60493eecda675af9ebde7f15d98e09e3213aba3ef02e17"
     },
     {
       "path": "ImageDetail.ts",
@@ -51,7 +51,7 @@
     },
     {
       "path": "InitializeCapabilities.ts",
-      "sha256": "4abc3c8bf9f039c61a0ee0f92c21854e350ce9ef4ef6b770178040e47744cd7b"
+      "sha256": "dee58273861971585e0615804eaf50ba4690cd4846f02ed352ed211887a022a5"
     },
     {
       "path": "InitializeParams.ts",
@@ -103,7 +103,7 @@
     },
     {
       "path": "Personality.ts",
-      "sha256": "51eee5332b3af52cce2117922688523e90808390eec477434d9a089b36a21163"
+      "sha256": "b540186ecb477849153b05fa370d7518a38961c2f70161e47e2515343dd8d243"
     },
     {
       "path": "PlanType.ts",
@@ -180,6 +180,10 @@
     {
       "path": "v2/Account.ts",
       "sha256": "122259e3439c0c0f63e53a2f2e0028a9e6f153b3bc16c1a705f640b98ff8bf37"
+    },
+    {
+      "path": "v2/AccountRoutingOverride.ts",
+      "sha256": "0f6c6da11cdf2d6a0dc6e0e3a19c50390cea8b01aa860c24770bd109d39af890"
     },
     {
       "path": "v2/ActivePermissionProfile.ts",
@@ -403,7 +407,7 @@
     },
     {
       "path": "v2/GetAccountResponse.ts",
-      "sha256": "f16f348c9c37a760bd7b4c75c0b7d86a57d6cbd16bd6a1c4b06dffa39157b6a9"
+      "sha256": "e0d48a4d1993b7637062f347ebc7e943615de9b74c56afb2558ca1b024517cf3"
     },
     {
       "path": "v2/GitInfo.ts",
@@ -438,16 +442,28 @@
       "sha256": "8cdc3a063208916e1131bcc61770d755bcc0956c30498927d2ce2dcd40d7c434"
     },
     {
+      "path": "v2/McpAppDisplayMode.ts",
+      "sha256": "cf1b24f8b9ae2ab562b4ee7dc8e4c4154cc59fdf4470c070b33ac23055b440a8"
+    },
+    {
+      "path": "v2/McpAppUi.ts",
+      "sha256": "1f42ae93966adb031e670697814faa41c4ee4c00e86917bee59f4472bec66f61"
+    },
+    {
       "path": "v2/McpAuthStatus.ts",
       "sha256": "567dad6dbb3bc81cee7103965cf31fbfafec2d2e5c61bbc872630cbae9c380c8"
     },
     {
       "path": "v2/McpResourceReadParams.ts",
-      "sha256": "1842e7dca854501d4cb80f2eb3f5786dddbb38d2304b1841f91f6fde5d99c1ad"
+      "sha256": "68e5d44798d10810e3b75faad06f3abcd426d583033ee39ab5a0f991cd24a75c"
     },
     {
       "path": "v2/McpResourceReadResponse.ts",
       "sha256": "65f26c31e9b713ef755bf92affa7a423057619508f51a7afeffaa9f80b44cff2"
+    },
+    {
+      "path": "v2/McpResourceReadTarget.ts",
+      "sha256": "44d9689d7bc0481c95bbbe795aaf475e54c31b591e86257c6c2f03d3088e5e8a"
     },
     {
       "path": "v2/McpServerConnectionStatus.ts",
@@ -467,7 +483,7 @@
     },
     {
       "path": "v2/McpServerStatus.ts",
-      "sha256": "ce67de1c40f618d1c61ce147a2712a2af6f7a0dd7b48527f2bf777a10dacc593"
+      "sha256": "983c21342eb43aaa3bd534e62912403c3e20c59a69678d5c4b3642f56bfe00dc"
     },
     {
       "path": "v2/McpServerStatusDetail.ts",
@@ -519,7 +535,11 @@
     },
     {
       "path": "v2/Model.ts",
-      "sha256": "ff56f09e9b9f301f1c6ecc565e2bcf6355c6ea66880f3ac963b7754e74cbe0a3"
+      "sha256": "dfd08785a85631da29a50f495b8271ef0f8b9f2f140ab69155debfeba2ea70cf"
+    },
+    {
+      "path": "v2/ModelAccessPrograms.ts",
+      "sha256": "0d29296bc21669d32667833d6f92379db6c117a87107a5c65626ef65ce808ed4"
     },
     {
       "path": "v2/ModelAvailabilityNux.ts",
@@ -575,15 +595,27 @@
     },
     {
       "path": "v2/PluginDetail.ts",
-      "sha256": "42abe52a1f73e2dee242f4a8327ac800e0ccc299548ebd8411e94d5dc196e2d0"
+      "sha256": "0919e4864f5d61ecba7bed52421976bf9b4e2415e35a883c3b0b8f6edf3bc56e"
     },
     {
       "path": "v2/PluginDisabledReason.ts",
       "sha256": "6ee9da97c290fe832d73b4b8b10b9b8227c245d84487c72e65256741e04b52e6"
     },
     {
+      "path": "v2/PluginEntrypoint.ts",
+      "sha256": "2a8ee5e9cfbd50c9fb334d5d6b10d891faa6d97698a74b1b730a913a6c865e0e"
+    },
+    {
+      "path": "v2/PluginExtensions.ts",
+      "sha256": "320376210d0552bad25effa0aa27d85311a2800808021868955004c5dde3ace1"
+    },
+    {
       "path": "v2/PluginHookSummary.ts",
       "sha256": "6401aa6cadd5ab3ed036486265a8010903b573d89096d21256021270499ff7e8"
+    },
+    {
+      "path": "v2/PluginIcon.ts",
+      "sha256": "9e00210e032719d5ec1d5de2d8f246b1cc241417eec1952fb853f6385515c775"
     },
     {
       "path": "v2/PluginInstallParams.ts",
@@ -630,12 +662,32 @@
       "sha256": "cbb70abc33d3c61debf945e5e816e1aee6e4eb6d2392928cd615952472711e16"
     },
     {
+      "path": "v2/PluginQuickAction.ts",
+      "sha256": "c0967d3dde5346fae5d53bda8e2090b7e61b91a411234da145f84e865c7bfad8"
+    },
+    {
+      "path": "v2/PluginQuickActionTarget.ts",
+      "sha256": "6ba28e935637c6075c6c46c660bc70032c485cc2bf474d41b3c9133519913e39"
+    },
+    {
       "path": "v2/PluginReadParams.ts",
       "sha256": "fb2061d0d9f32261ea289e8c0aad2e65594f24873b09303b0cdd6cd658a844c0"
     },
     {
       "path": "v2/PluginReadResponse.ts",
       "sha256": "8665089557cfcbf3379504f36e6a45bcbb78ef33819b83cd3e79bafc8d542633"
+    },
+    {
+      "path": "v2/PluginSearchProvider.ts",
+      "sha256": "6635e8e1b38bdbaa10db6eb0e10a7f487386165192765f2a3350db0c5fd77071"
+    },
+    {
+      "path": "v2/PluginSearchProviderCall.ts",
+      "sha256": "fc40ac12b7937ed4b5f183ca2d47e3a0ae8df0e76f9f021ba0c5d905d5888bc7"
+    },
+    {
+      "path": "v2/PluginSettings.ts",
+      "sha256": "7d82f8d26bde1287829deb42824677d017e4147f79df575610c60f05a8386a3f"
     },
     {
       "path": "v2/PluginShareContext.ts",
@@ -663,7 +715,7 @@
     },
     {
       "path": "v2/PluginSummary.ts",
-      "sha256": "d5a603da2dc423601f26eeba5f46caeb8ad4e8e678a111d85b10dc3f07a751fe"
+      "sha256": "1ed06aa862378977c0972975f86686547fb3d6406c8a90fb55ebd350bf63af71"
     },
     {
       "path": "v2/PluginUninstallParams.ts",
@@ -807,7 +859,7 @@
     },
     {
       "path": "v2/Thread.ts",
-      "sha256": "a90071210b958953a9dca7b3884c2ab788d29c3a2cb346f72327377456436d8e"
+      "sha256": "1f9dc096a3c6735956ce38cbb7527e35b13e9ed663254ee13dba7414eab6d28c"
     },
     {
       "path": "v2/ThreadActiveFlag.ts",
@@ -843,7 +895,7 @@
     },
     {
       "path": "v2/ThreadForkResponse.ts",
-      "sha256": "475e27dbafd602352e5dffb5712156a9fcb067744b5b59637cbf59f760ceb02c"
+      "sha256": "1d4e0bdfe2beef2906fa58099764cf0a4c0820525998da8d3e02c94831caef25"
     },
     {
       "path": "v2/ThreadGoal.ts",
@@ -883,7 +935,7 @@
     },
     {
       "path": "v2/ThreadItem.ts",
-      "sha256": "ee25d621ee645f49a88e494effcdf625d88cc229edbb184827d8cf4c135ff6f4"
+      "sha256": "047df9febb13b40263fb5b0abe244171c4dcb5e83229bbf9efba31abae840746"
     },
     {
       "path": "v2/ThreadReadParams.ts",
@@ -899,11 +951,11 @@
     },
     {
       "path": "v2/ThreadResumeParams.ts",
-      "sha256": "e4f64c88205dbba2bf87635d12b9c5803dd6f19b84b5682a71df7fdcf87862fb"
+      "sha256": "6ea6561448792277f9b52ac9d920d71ef8c9be6e43621ee6329fb948329e8ff7"
     },
     {
       "path": "v2/ThreadResumeResponse.ts",
-      "sha256": "e986c7ead2f7e1bb3562ab7b7f1d0b0c0d217039122163b1c5382279226630a7"
+      "sha256": "080196e4c158212de187a0d3331de28bf8a62df17d90663cf5d1fc2665dd8177"
     },
     {
       "path": "v2/ThreadSection.ts",
@@ -919,11 +971,11 @@
     },
     {
       "path": "v2/ThreadStartParams.ts",
-      "sha256": "7a3fddbb0cf0585c52edbf19e3a1f6e691681f18ab509f7abfa416da7f0ac824"
+      "sha256": "dc8bebec4181a5502fc141b0122cc48e066b3b5c77d9fd2a4de875fcd6d66a68"
     },
     {
       "path": "v2/ThreadStartResponse.ts",
-      "sha256": "056e252e32c78761d250c7688cb102752ce8b6f445e509ae87766ba5588a8924"
+      "sha256": "62762558532dab6b3113a8e9385e282b05a7a1e68b9a31bb508a5d9acff45f26"
     },
     {
       "path": "v2/ThreadStartSource.ts",
@@ -979,7 +1031,7 @@
     },
     {
       "path": "v2/TurnStartParams.ts",
-      "sha256": "85713b9158fa110ac20b63e0ec6f76faff8872402d62531f14172cfc5b1eacf7"
+      "sha256": "18a8492238c2b7476d1db5a96ec4dd57df6eb49e05e49f13820eb9298c412dfa"
     },
     {
       "path": "v2/TurnStartResponse.ts",
@@ -999,11 +1051,15 @@
     },
     {
       "path": "v2/UserInput.ts",
-      "sha256": "20bb8914250b88e4831123fed101a7ea2336efab4c2b13fd6336651ff0c65808"
+      "sha256": "c033ab3da70c17ceae32e8b4770a2557f8ef9f59c07c5419387a45c55193fc59"
     },
     {
       "path": "v2/WebSearchAction.ts",
       "sha256": "f1dc1197e35b48fd16134a80353ebb606256126a634b4580406a5bffed1b0395"
+    },
+    {
+      "path": "v2/WorkspaceRouting.ts",
+      "sha256": "69f95681781834a6eb75e62cf2fda92b5ed79eed9e705ec1ba31cedbe51a00f2"
     },
     {
       "path": "v2/WriteStatus.ts",

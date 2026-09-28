@@ -6,15 +6,21 @@ interface SpaceSelectorProps {
   spaces: Space[];
   activeSpaceId: string | null;
   onSpaceChange: (spaceId: string) => void;
+  orientation?: "horizontal" | "vertical";
 }
 
 function SpaceSelector({
   spaces,
   activeSpaceId,
   onSpaceChange,
+  orientation = "horizontal",
 }: SpaceSelectorProps) {
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto noscrollbar px-1 ">
+    <div className={`flex items-center gap-1.5 noscrollbar px-1 ${
+      orientation === "vertical"
+        ? "min-h-0 flex-col overflow-y-auto overflow-x-hidden"
+        : "overflow-x-auto"
+    }`}>
       {spaces.map((space) => {
         const icon = parseIcon(space.icon);
         const isActive = activeSpaceId === space.id;

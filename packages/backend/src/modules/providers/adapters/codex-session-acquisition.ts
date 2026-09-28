@@ -307,12 +307,13 @@ function buildTurnInput(
       request.attachments,
       request.runId,
     );
-    if (inlineTexts.length > 0 && input[0].type === "text") {
-      input[0].text =
-        `${prompt}\n\n---\n\nAttached documents:\n` +
-        inlineTexts.join("\n\n");
+    let attachmentPrompt = prompt;
+    if (inlineTexts.length > 0) {
+      attachmentPrompt +=
+        "\n\n---\n\nAttached documents:\n" + inlineTexts.join("\n\n");
     }
 
+    const filePaths: string[] = [];
     for (const attachmentPath of savedPaths) {
       const lowerPath = attachmentPath.toLowerCase();
       if (
@@ -327,8 +328,18 @@ function buildTurnInput(
           type: "localImage",
           path: attachmentPath,
         });
+      } else {
+        // App-server turn input has no document variant. Keep other files on
+        // disk and pass their paths so Codex can read them with its tools.
+        filePaths.push(attachmentPath);
       }
     }
+    if (filePaths.length > 0) {
+      attachmentPrompt +=
+        "\n\n---\n\nAttached files:\n" +
+        filePaths.map((filePath) => `- ${filePath}`).join("\n");
+    }
+    if (input[0].type === "text") input[0].text = attachmentPrompt;
   }
 
   return input;
@@ -432,16 +443,9 @@ export function createCodexSessionAcquisition(
       typeof overrides.sandboxMode === "string"
         ? (overrides.sandboxMode as CodexAdapterConfig["sandboxMode"])
         : config.sandboxMode;
-    // Codex's own tone lever: work/chat pin it through the mode harness, and
-    // developer leaves it to the provider setting.
-    const personality =
-      typeof overrides.personality === "string"
-        ? (overrides.personality as CodexAdapterConfig["personality"])
-        : config.personality;
     return {
       approvalPolicy: config.approvalMode ?? "on-request",
       sandbox: mapSandboxMode(sandboxMode),
-      personality: personality ?? "none",
       config: buildCodexConfigOverrides(
         config.networkAccessEnabled !== false,
       ),
@@ -720,8 +724,6 @@ export function createCodexSessionAcquisition(
     const forkOverrides = (
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
-    // `thread/fork` has no `personality` field — the forked thread inherits the
-    // source's — so only the fields the contract names are passed through.
     const settings = threadSettingsFor(forkOverrides);
     const forkResult = await server.sendRequest("thread/fork", {
       threadId: sourceThreadId,

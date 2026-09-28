@@ -31,7 +31,7 @@ interface CollectionModalProps {
  * Keyed off the value itself rather than the picker's open tab — browsing the
  * other tab must not turn a chosen icon into its own name in text.
  */
-function IconPreview({ value, color }: { value: string; color: string }) {
+export function CollectionIconPreview({ value, color }: { value: string; color: string }) {
   const IconComp = value ? iconRegistry[value] : undefined;
   if (IconComp) return <IconComp className={`size-5 ${iconTintClass(color)}`} />;
   if (value) return <span className="text-lg leading-none">{value}</span>;
@@ -119,7 +119,7 @@ export default function CollectionModal({
             aria-expanded={isPickerOpen}
             className="size-9.5 flex items-center justify-center rounded-xl glass-outline cursor-pointer"
           >
-            <IconPreview value={icon} color={iconColor} />
+            <CollectionIconPreview value={icon} color={iconColor} />
           </Button>
           <IconPickerPanel
             icon={icon}

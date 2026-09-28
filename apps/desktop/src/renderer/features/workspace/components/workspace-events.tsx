@@ -41,7 +41,7 @@ import { isIssueTab, getIssueEntityId, isSignalTab, getSignalEntityId, isNoteTab
 import { AsciiLoader } from "./ascii-loader";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
-import { ArrowUp, Box, Fork } from "@/components/ui/icons";
+import { ArrowUp, Brain, Fork } from "@/components/ui/icons";
 import {
   useGetAppSettingsQuery,
   useGetProviderAccountInfoQuery,
@@ -187,7 +187,7 @@ function ModelChangeNotice({
         tone="faint"
         className="flex shrink-0 items-center gap-1.5"
       >
-        <Box className="size-4 shrink-0" aria-hidden />
+        <Brain className="size-4 shrink-0" aria-hidden />
         <span>
           Model changed from {fromLabel} to {toLabel}.
         </span>

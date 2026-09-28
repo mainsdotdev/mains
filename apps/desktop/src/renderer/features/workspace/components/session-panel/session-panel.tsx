@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
@@ -44,8 +44,8 @@ interface SessionPanelProps {
  * already claimed the right edge there is nothing left to give, and the box
  * overlaps the chat instead (`floating`).
  *
- * Everything inside mounts only while it is open, so form state resets and the
- * git status refetches on each open.
+ * The PR editor keeps this component mounted while the panel itself is hidden,
+ * preserving its draft until the editor returns or the PR is created.
  */
 export function SessionPanel({
   providerId,
@@ -59,19 +59,36 @@ export function SessionPanel({
     (state) => state.workspace.activeWorkspaceId,
   );
   const isOpen = useAppSelector((state) => state.appSettings.sessionPanelOpen);
+  const [prEditorOpen, setPrEditorOpen] = useState(false);
+  const [prTransitioning, setPrTransitioning] = useState(false);
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   const { showGitActions, showSources, showDeliverables } = useModeConfig();
   const showEnvironment = showGitActions && !!activeWorkspaceId;
   const showRunResources = showSources && !!runId;
   const hasContent = showEnvironment || showRunResources;
 
   const { isVisible, isAnimatedIn } = usePanelAnimation(
-    isOpen && hasContent,
+    (isOpen || prEditorOpen) && hasContent,
   );
 
   const close = useCallback(
-    () => dispatch(setSessionPanelOpen(false)),
+    () => {
+      setPrEditorOpen(false);
+      setPrTransitioning(false);
+      dispatch(setSessionPanelOpen(false));
+    },
     [dispatch],
   );
+
+  const onPrEditorOpenChange = useCallback(
+    (open: boolean, transitioning: boolean) => {
+      setPrEditorOpen(open);
+      setPrTransitioning(transitioning);
+      dispatch(setSessionPanelOpen(!open));
+    },
+    [dispatch],
+  );
+  const onPrEditorTransitionEnd = useCallback(() => setPrTransitioning(false), []);
 
   if (!isVisible || !hasContent) return null;
 
@@ -93,16 +110,29 @@ export function SessionPanel({
         // small overshoot on the way open, so it reads as inflating from the
         // button rather than sliding in from somewhere off-screen.
         transformOrigin: "top right",
-        transform: isAnimatedIn ? "scale(1)" : "scale(0.86)",
-        opacity: isAnimatedIn ? 1 : 0,
-        transition: [
-          `transform ${LAYOUT_PANEL_ANIM_MS}ms ${isAnimatedIn ? POP_EASE : COLLAPSE_EASE}`,
-          `opacity ${isAnimatedIn ? LAYOUT_PANEL_ANIM_MS : LAYOUT_PANEL_ANIM_MS * 0.6}ms ease-out`,
-          `right ${LAYOUT_PANEL_ANIM_MS}ms ease-out`,
-        ].join(", "),
+        transform: reducedMotion
+          ? "scale(1)"
+          : prEditorOpen
+            ? "translateX(0.5rem) scale(0.98)"
+            : isAnimatedIn
+              ? "scale(1)"
+              : "scale(0.86)",
+        opacity: prEditorOpen ? 0 : isAnimatedIn ? 1 : 0,
+        pointerEvents: prEditorOpen ? "none" : undefined,
+        transition: prTransitioning
+          ? "none"
+          : reducedMotion
+            ? "opacity 120ms ease-out"
+            : [
+              `transform ${LAYOUT_PANEL_ANIM_MS}ms ${isAnimatedIn ? POP_EASE : COLLAPSE_EASE}`,
+              `opacity ${isAnimatedIn ? LAYOUT_PANEL_ANIM_MS : LAYOUT_PANEL_ANIM_MS * 0.6}ms ease-out`,
+              `right ${LAYOUT_PANEL_ANIM_MS}ms ease-out`,
+              ].join(", "),
       }}
       role="complementary"
       aria-label="Session panel"
+      aria-hidden={prEditorOpen || undefined}
+      inert={prEditorOpen}
     >
       {/* Rows open their forms in place, so the box grows with its content —
           capped short of the viewport so it never runs off the bottom. */}
@@ -119,7 +149,12 @@ export function SessionPanel({
             >
               Environment
             </Text>
-            <GitActionsSection providerId={providerId} onClose={close} />
+            <GitActionsSection
+              providerId={providerId}
+              onClose={close}
+              onPrEditorOpenChange={onPrEditorOpenChange}
+              onPrEditorTransitionEnd={onPrEditorTransitionEnd}
+            />
           </section>
         )}
         {showRunResources && runId && (

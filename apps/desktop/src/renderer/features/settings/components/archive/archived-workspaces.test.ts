@@ -21,6 +21,8 @@ function archivedWorkspace(
     metadata: null,
     status: "done",
     isArchived: true,
+    sortOrder: 0,
+    pinnedAt: null,
     createdAt: new Date("2026-08-01T00:00:00Z"),
     updatedAt: new Date("2026-08-02T00:00:00Z"),
     projectName: "Project",

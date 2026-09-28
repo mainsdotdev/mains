@@ -7,7 +7,9 @@ function imageIdentity(event: RunEvent): { hash: string; generated: boolean } | 
   if (typeof hash !== "string" || typeof imagePath !== "string") return null;
   return {
     hash,
-    generated: imagePath.includes("/.codex/generated_images/"),
+    generated:
+      event.metadata.source === "codex_image_generation" ||
+      imagePath.includes("/.codex/generated_images/"),
   };
 }
 

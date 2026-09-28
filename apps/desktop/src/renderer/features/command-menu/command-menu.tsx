@@ -88,14 +88,14 @@ const ICON_TONE_CLASSES: Record<IconTone, string> = {
 };
 
 const PROJECT_ICON_BACKGROUND_CLASSES: Record<string, string> = {
-  default: "bg-primary-700 dark:bg-primary-600",
-  pink: "bg-pink-600 dark:bg-pink-500",
-  red: "bg-red-500 dark:bg-red-400",
-  orange: "bg-orange-500 dark:bg-orange-400",
-  amber: "bg-amber-500 dark:bg-amber-400",
-  green: "bg-lime-500 dark:bg-lime-400",
-  blue: "bg-blue-500 dark:bg-blue-400",
-  purple: "bg-indigo-500 dark:bg-indigo-400",
+  default: "bg-primary-950 dark:bg-primary-50",
+  violet: "bg-violet-600 dark:bg-violet-400",
+  rose: "bg-rose-600 dark:bg-rose-400",
+  orange: "bg-orange-600 dark:bg-orange-400",
+  amber: "bg-amber-600 dark:bg-amber-400",
+  green: "bg-green-600 dark:bg-green-500",
+  sky: "bg-sky-500 dark:bg-sky-500",
+  olive: "bg-olive-600 dark:bg-olive-400",
 };
 
 interface PendingDocument {
@@ -689,6 +689,7 @@ export function CommandMenu() {
       initialFocusRef={inputRef}
       placement="top"
       motion="command"
+      backdrop="command"
       surface="bare"
       className="command-menu-motion w-[min(44rem,calc(100vw-2rem))] overflow-visible"
     >
@@ -698,7 +699,7 @@ export function CommandMenu() {
         loop
         className="flex min-h-0 flex-col gap-3 bg-transparent"
       >
-        <div className="glass-surface flex h-14 shrink-0 items-center gap-3 rounded-3xl px-4">
+        <div className="glass-command flex h-14 shrink-0 items-center gap-3 rounded-3xl px-4 backdrop-blur-2xl backdrop-saturate-125">
           <Mains className="size-5 shrink-0 text-primary-500 dark:text-primary-400" />
           <Command.Input
             ref={inputRef}
@@ -720,7 +721,7 @@ export function CommandMenu() {
           )}
         </div>
 
-        <div className="glass-surface min-h-0 overflow-hidden rounded-3xl ">
+        <div className="glass-command min-h-0 overflow-hidden rounded-4xl backdrop-blur-2xl backdrop-saturate-125">
           <Command.List
             aria-busy={isFetching}
             className="noscrollbar max-h-[min(31rem,62vh)] min-h-24 overflow-y-auto overscroll-contain py-1.5"

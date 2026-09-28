@@ -1,5 +1,6 @@
 import {
   couldModifyFiles,
+  toolWrites,
   type WorkRunEvent,
 } from "../providers/adapters";
 import type { WorkRunUsage, StopReason } from "../../../shared/adapter.types";
@@ -10,12 +11,14 @@ import { appSettingsService } from "../appSettings";
 import {
   gitService,
   hashContent,
-  buildPerFileDiffHashes,
+  toWorktreePath,
+  worktreeWrites,
   type DiffSnapshot,
+  type WorktreeLocation,
 } from "../git";
+import { attributeTurnFiles, type TurnWrites } from "./turn-attribution";
 import {
   workspaceService,
-  logWorkspaceActivity,
   recordWorkspaceDiff,
   clearWorkspaceDiff,
 } from "../workspace";
@@ -23,7 +26,7 @@ import { createWorkAdapter } from "../providers/adapters";
 import { runSessionRegistry } from "./run-session-registry";
 import { showRunFinishedNotification } from "./run-notification-sink";
 import { emit } from "../../ipc-kit";
-import type { RunArtifactKind } from "./runs.dto";
+import type { RunArtifactKind, TurnFileChange } from "./runs.dto";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 // ─────────────────────────────────────────────────────────────
@@ -68,6 +71,15 @@ export interface RunSessionContext {
   initialPromptContent: string;
   /** Defaults to -1 (fresh run). continueRun passes the recovered max turn index. */
   seedTurnIndex?: number;
+}
+
+/** Where a turn began, for turn changes. */
+interface TurnBaseline {
+  /** Working-tree snapshot at the turn's start; null when none could be taken. */
+  tree: Promise<string | null>;
+  at: number;
+  /** What the turn's own tool calls wrote since. */
+  writes: TurnWrites;
 }
 
 export interface RunSessionResult {
@@ -127,20 +139,19 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
 
   // ─── Per-run state (was 8 module-scope Maps in runs.service.ts) ───
   let baseRef: string | null = null;
-  // Per-file diff hashes of the working tree as it stood at run start. Used at
-  // finalize to report only files THIS run touched, so pre-existing dirty files
-  // carried over from an earlier run aren't re-logged on every run.
-  // null = baseline not captured (git error / not yet snapshotted); an empty Map
-  // = captured a clean tree. persistFinalDiff treats these two cases differently.
-  let initialDiffHashes: Map<string, string> | null = null;
-  // Resolves when captureBaseRef finishes, so finalize can await the baseline
-  // instead of racing it on near-instant runs.
+  // Resolves when the run-start HEAD capture finishes, so final diff fallback
+  // can use it even when a near-instant run completes first.
   let baseRefCaptured: Promise<void> | null = null;
   let sleepBlockerId: number | null = null;
   let activeTurnId: number | null = null;
-  // Working-tree snapshot taken when the active turn began; closing the turn
-  // diffs it against a fresh one. See CONTEXT.md "turn changes".
-  let turnStartTree: Promise<string | null> | null = null;
+  // Where the active turn began — closing it diffs `tree` against a fresh
+  // snapshot — and what its own tool calls wrote since. See CONTEXT.md "turn
+  // changes".
+  let turnBaseline: TurnBaseline | null = null;
+  const sessionStartedAt = Date.now();
+  // The worktree this run shares with any parallel run; null without a
+  // workspace or outside a git repo.
+  const worktree: Promise<WorktreeLocation | null> = locateWorktree();
   let initialTurnReady: Promise<void> | null = null;
   let resolvedToolCallsReady: Promise<void> | null = null;
   let turnCounter: number = ctx.seedTurnIndex ?? -1;
@@ -154,6 +165,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // once the foreground call already returned "running in background"), so they
   // need an anchor that outlives it.
   const resolvedToolCalls = new Map<string, number>();
+  // callKey → the files a running tool call named at start, claimed for the
+  // turn only when it completes successfully (see noteToolWrites).
+  const pendingToolWrites = new Map<string, string[]>();
 
   async function hydrateResolvedToolCalls(): Promise<void> {
     try {
@@ -229,22 +243,6 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       baseRef = await gitService.getHeadSha(execution.cwd);
     } catch {
       // Not a git repo or git error – ignore
-      return;
-    }
-    // Snapshot the working tree's pre-existing changes against baseRef so
-    // the final activity log reflects only what THIS run changed. Files
-    // already dirty at run start are excluded unless this run touches them.
-    try {
-      const snapshot = await gitService.captureDiffSnapshot(
-        execution.cwd,
-        baseRef,
-      );
-      initialDiffHashes = buildPerFileDiffHashes(snapshot.diffText);
-    } catch {
-      // Leave initialDiffHashes null when the snapshot failed: an empty Map
-      // means "tree was clean at start" (every later change is ours), whereas
-      // null means "baseline unknown" — persistFinalDiff treats these
-      // differently.
     }
   }
 
@@ -268,25 +266,98 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     }
   }
 
+  function takeTurnBaseline(): TurnBaseline {
+    return {
+      at: Date.now(),
+      tree: captureTurnTree(),
+      writes: { paths: new Set(), unnamed: false },
+    };
+  }
+
+  async function locateWorktree(): Promise<WorktreeLocation | null> {
+    if (!workspaceId) return null;
+    try {
+      return (await gitService.locateWorktree(execution.cwd)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Note in the worktree's ledger the files a tool call may be writing, so a
+   * parallel run's turn leaves them out, and return them (worktree-relative).
+   * Recorded at start as well as at completion: a peer's turn can close
+   * between a write and the event that reports it.
+   *
+   * A shell marks the active turn at once — it may still be writing when the
+   * turn closes, and a failing command can still have written. Named files
+   * are claimed for the turn by the caller, only once the write went through.
+   */
+  async function noteToolWrites(
+    event: Extract<WorkRunEvent, { type: "tool_call" }>,
+  ): Promise<string[]> {
+    const location = await worktree;
+    if (!location) return [];
+    const writes = toolWrites(event.toolName, event.input);
+    if (writes.paths.length === 0 && !writes.unnamed) return [];
+    const paths: string[] = [];
+    for (const toolPath of writes.paths) {
+      const repoPath = toWorktreePath(location, execution.cwd, toolPath);
+      if (repoPath) paths.push(repoPath);
+    }
+    if (writes.unnamed && turnBaseline) turnBaseline.writes.unnamed = true;
+    worktreeWrites.record(
+      location.topLevel,
+      runId,
+      { paths, unnamed: writes.unnamed },
+      Date.now(),
+    );
+    return paths;
+  }
+
   /**
    * Diff a turn's start and end trees and store the result against the turn.
-   * Identical trees — every turn that only read — store nothing.
+   * Identical trees — every turn that only read — store nothing. When another
+   * run was live in the worktree meanwhile, only this run's own files are kept
+   * (see `attributeTurnFiles`).
    */
   async function persistTurnChanges(
     turnId: number,
-    startTree: Promise<string | null> | null,
+    baseline: TurnBaseline | null,
     endTree: Promise<string | null>,
   ): Promise<void> {
     try {
-      const [start, end] = await Promise.all([startTree, endTree]);
-      if (!start || !end || start === end) return;
-      const diff = await gitService.diffTrees(execution.cwd, start, end);
+      const [start, end] = await Promise.all([baseline?.tree, endTree]);
+      if (!baseline || !start || !end || start === end) return;
+      let diff = await gitService.diffTrees(execution.cwd, start, end);
       if (diff.files.length === 0) return;
+      let files: TurnFileChange[] = diff.files;
+
+      const location = await worktree;
+      const peers = location
+        ? worktreeWrites.peersSince(location.topLevel, runId, baseline.at)
+        : null;
+      if (peers?.concurrent) {
+        const kept = attributeTurnFiles(diff.files, baseline.writes, peers);
+        if (kept.length === 0) return;
+        if (kept.length < diff.files.length) {
+          diff = await gitService.diffTrees(
+            execution.cwd,
+            start,
+            end,
+            kept.flatMap((f) => (f.oldPath ? [f.path, f.oldPath] : [f.path])),
+          );
+        }
+        const shared = new Set(kept.filter((f) => f.shared).map((f) => f.path));
+        files = diff.files.map((f) => (shared.has(f.path) ? { ...f, shared: true } : f));
+        if (files.length === 0) return;
+      }
+
       await runsRepo.insertTurnChanges({
         runId,
         turnId,
         diffText: diff.diffText,
-        files: diff.files,
+        files,
         additions: diff.additions,
         deletions: diff.deletions,
         truncated: diff.truncated,
@@ -302,12 +373,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     if (activeTurnId !== null) {
       // One snapshot marks the boundary: the closing turn's end is the next
       // turn's start, so no change between them goes unattributed.
-      const boundaryTree = captureTurnTree();
-      await closeActiveTurn(undefined, boundaryTree);
-      turnStartTree = boundaryTree;
+      const boundary = takeTurnBaseline();
+      await closeActiveTurn(undefined, boundary.tree);
+      turnBaseline = boundary;
     }
     // The first turn's baseline was taken at session start (see Initialize).
-    turnStartTree ??= captureTurnTree();
+    turnBaseline ??= takeTurnBaseline();
     try {
       const nextIndex = turnCounter + 1;
       const id = await runsRepo.insertTurn({
@@ -331,8 +402,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     const turnId = activeTurnId;
     // Snapshot before the DB writes below, as close to the boundary as we get.
     const turnEndTree = endTree ?? captureTurnTree();
-    const turnStart = turnStartTree;
-    turnStartTree = null;
+    const baseline = turnBaseline;
+    turnBaseline = null;
     try {
       const now = new Date();
       const turns = await runsRepo.findTurnsByRun(runId);
@@ -358,7 +429,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     } catch (err) {
       console.error(`[RunSession ${runId}] Failed to close active turn:`, err);
     }
-    await persistTurnChanges(turnId, turnStart, turnEndTree);
+    await persistTurnChanges(turnId, baseline, turnEndTree);
   }
 
   // ─── Tool call cleanup ───
@@ -549,10 +620,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   async function persistFinalDiff(): Promise<void> {
     if (!workspaceId) return;
     clearLiveDiffSchedule();
-    // Make sure the run-start baseline finished capturing before we diff against
-    // it. Normally settled long ago; this only bites runs that finish almost
-    // immediately, where the fire-and-forget capture could still be in flight
-    // and leave initialDiffHashes transiently null.
+    // The run-start HEAD is only a fallback when the current HEAD is unreadable.
     if (baseRefCaptured) {
       try {
         await baseRefCaptured;
@@ -574,36 +642,6 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     try {
       await recordWorkspaceDiff(workspaceId, runId, snapshot);
       broadcastDiffUpdated();
-
-      // No reliable run-start baseline: null means "baseline unknown" (the git
-      // snapshot at run start failed), distinct from an empty Map ("tree was
-      // clean at start"). Without a baseline we can't separate this run's edits
-      // from pre-existing dirt, so skip the activity entry rather than
-      // mis-attributing carry-over changes. The diff above is still persisted.
-      if (initialDiffHashes === null) return;
-
-      // Report only files THIS run changed: compare the final per-file diff
-      // hashes against the baseline captured at run start. Files already dirty
-      // at run start and untouched here hash identically and are skipped, so a
-      // no-op run over a pre-existing dirty tree logs nothing.
-      const baseline = initialDiffHashes;
-      const incrementalFileNames: string[] = [];
-      for (const [file, hash] of buildPerFileDiffHashes(snapshot.diffText)) {
-        if (baseline.get(file) !== hash) incrementalFileNames.push(file);
-      }
-      const incrementalFileCount = incrementalFileNames.length;
-
-      if (incrementalFileCount > 0) {
-        const summaryLines = incrementalFileNames.map((f) => f.split("/").pop() ?? f).join(", ");
-        logWorkspaceActivity({
-          workspaceId,
-          type: "diff",
-          title: `${incrementalFileCount} file${incrementalFileCount === 1 ? "" : "s"} changed`,
-          summary: summaryLines,
-          refId: runId,
-          metadata: { files: incrementalFileCount, fileNames: incrementalFileNames },
-        });
-      }
     } catch (err) {
       console.error(`[RunSession ${runId}] persistFinalDiff failed:`, err);
     }
@@ -655,6 +693,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         : `${event.toolName}-${event.startedAt || Date.now()}`;
       pendingToolCalls.set(callKey, toolCallId);
       resolvedToolCalls.set(callKey, toolCallId);
+      const named = await noteToolWrites(event);
+      if (named.length > 0) pendingToolWrites.set(callKey, named);
       return;
     }
     if (phase === "end" || phase === "complete") {
@@ -692,6 +732,17 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       // Live diff: if this tool could have touched the filesystem, schedule a recomputation.
       if (!event.error && couldModifyFiles(event.toolName)) {
         scheduleLiveDiff();
+      }
+      const namedAtStart = (callKey && pendingToolWrites.get(callKey)) || [];
+      if (callKey) pendingToolWrites.delete(callKey);
+      const named = await noteToolWrites(event);
+      // A denied or failed edit wrote nothing. Claiming its file anyway would
+      // put a peer's edit to that same file on this turn's card.
+      const wrote = !event.error && (event.terminalStatus ?? "done") === "done";
+      if (wrote && turnBaseline) {
+        for (const repoPath of [...namedAtStart, ...named]) {
+          turnBaseline.writes.paths.add(repoPath);
+        }
       }
     }
   }
@@ -955,6 +1006,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     } catch (cleanupErr) {
       console.error(`[RunSession ${runId}] Cleanup failed:`, cleanupErr);
     } finally {
+      // After the last turn's changes are stored: that turn asked the ledger
+      // about peers, and closing may prune what it needed.
+      const endedAt = Date.now();
+      void worktree.then((location) => {
+        if (location) worktreeWrites.close(location.topLevel, runId, endedAt);
+      });
       releaseSleepBlocker();
       broadcastStatusChanged(result.status);
       broadcastEventPersisted();
@@ -975,7 +1032,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // Fire-and-forget initialization. Each helper handles its own errors.
   // The first turn's baseline goes first: it has to predate the agent's first
   // write, and the adapter starts as soon as this factory returns.
-  turnStartTree = captureTurnTree();
+  turnBaseline = takeTurnBaseline();
+  // Live in the worktree from the moment the first baseline was taken, so a
+  // parallel run's turn that overlaps this one knows to sort their files.
+  void worktree.then((location) => {
+    if (location) worktreeWrites.open(location.topLevel, runId, sessionStartedAt);
+  });
   // Keep the baseRef-capture promise so finalize can await it (see persistFinalDiff).
   baseRefCaptured = captureBaseRef();
   void acquireSleepBlocker();

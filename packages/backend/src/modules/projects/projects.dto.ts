@@ -15,6 +15,7 @@ export interface ProjectResponse {
   runScript: string | null;
   archiveScript: string | null;
   icon: string | null;
+  sortOrder: number;
   commitInstructions: string | null;
   prInstructions: string | null;
   isArchived: boolean;
@@ -97,4 +98,3 @@ export interface RemoveResourcePayload {
   projectId: string;
   resourceId: string;
 }
-

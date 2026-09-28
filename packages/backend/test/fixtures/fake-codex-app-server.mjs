@@ -169,6 +169,13 @@ input.on("line", (line) => {
     }
 
     case "thread/resume":
+      if (
+        process.env.MAINS_CODEX_FIXTURE_MCP_RESUME_ACTIVE_WRITER === "1" &&
+        !activeThreads.has(params.threadId)
+      ) {
+        respondError(id, -32600, `thread ${params.threadId} already has an active writer`);
+        break;
+      }
       activeThreads.add(params.threadId);
       respond(id, {
         model: fixtureResponseModel(params),
@@ -855,9 +862,17 @@ input.on("line", (line) => {
       break;
 
     case "mcpServer/resource/read":
+      if (params.originCallId && !params.threadId) {
+        respondError(id, -32600, "originCallId requires threadId");
+        break;
+      }
+      if (!params.threadId && !params.target) {
+        respondError(id, -32600, "threadId or target is required");
+        break;
+      }
       if (
         process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD === "1" &&
-        !activeThreads.has(params.threadId)
+        params.threadId && !activeThreads.has(params.threadId)
       ) {
         respondError(id, -32600, `thread not found: ${params.threadId}`);
         break;

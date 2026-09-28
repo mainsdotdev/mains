@@ -21,7 +21,7 @@ export function SidebarHeader({
     useKeyboardShortcutBinding("app.commandMenu"),
   );
   return (
-    <div className="flex shrink-0 items-center gap-2 px-3 pb-1 pt-11">
+    <div className="flex shrink-0 items-center gap-2 px-3 pb-1 pt-11 md:pt-1">
       <div className="flex min-w-0 flex-1 items-center">
         {mode ? (
           <SpaceModePicker
@@ -39,10 +39,10 @@ export function SidebarHeader({
       </div>
       <Button
         onClick={requestCommandMenu}
-        tooltip="Search Mains "
+        tooltip="Search Mains"
         tooltipShortcut={commandMenuShortcut}
         aria-label="Search Mains"
-        className="flex size-8 shrink-0 items-center justify-center rounded-full text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5"
+        className="flex size-8 shrink-0 items-center justify-center rounded-full text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5 md:hidden"
       >
         <Search aria-hidden="true" className="size-4" />
       </Button>

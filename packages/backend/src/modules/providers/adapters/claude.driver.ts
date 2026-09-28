@@ -37,6 +37,8 @@ import type {
   DriverOutcome,
   HookMatcher,
   HooksConfig,
+  McpAppCallToolResult,
+  McpAppResourceContent,
   ModelInfo,
   PluginDetail,
   PluginListResponse,
@@ -436,12 +438,19 @@ interface SDKUserMessage {
     non_execution_kind: string;
     user_feedback?: string;
   }>;
+  /**
+   * The tool's own result, beside the tool_result block the model reads. For an
+   * MCP tool it keeps what the block drops: `structuredContent` and `_meta`.
+   */
+  tool_use_result?: unknown;
 }
 
 interface SDKModelUsage {
   costUSD: number;
   inputTokens: number;
   outputTokens: number;
+  /** Already counted inside outputTokens; absent from CLIs that predate it. */
+  thinkingTokens?: number;
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
   webSearchRequests: number;
@@ -607,6 +616,8 @@ export interface SDKSystemMessage {
   skills?: string[];
   // subtype: "init"
   plugins?: { name: string; path: string }[];
+  /** Protocol features the CLI supports, e.g. `mcp_read_resource_v1`. */
+  capabilities?: string[];
   fast_mode_state?: FastModeState;
   fast_mode_disabled_reason?: FastModeDisabledReason;
   // subtype: "compact_boundary"
@@ -749,6 +760,8 @@ interface SDKSessionInfoLite {
   customTitle?: string;
   /** First meaningful user prompt — used to detect "no AI title yet". */
   firstPrompt?: string;
+  /** Where the session ran — an MCP host for its apps runs there too. */
+  cwd?: string;
 }
 
 interface SDKQuery extends AsyncGenerator<SDKMessage, void> {
@@ -764,6 +777,17 @@ interface SDKQuery extends AsyncGenerator<SDKMessage, void> {
   supportedCommands(): Promise<SDKSlashCommand[]>;
   supportedModels(): Promise<SDKModelInfo[]>;
   mcpServerStatus(): Promise<unknown[]>;
+  /** Read an MCP Apps `ui://` resource from a server the CLI dialed (SDK alpha). */
+  readMcpResource?(serverName: string, uri: string): Promise<{ contents: McpAppResourceContent[] }>;
+  /**
+   * Send a raw control request. Not in the SDK's types: it is the only way to
+   * reach `mcp_call`, which the protocol declares but no public method wraps.
+   */
+  request?(request: Record<string, unknown>): Promise<unknown>;
+  /** The `/usage` control request, experimental in the SDK — see readClaudeSessionTotals. */
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(opts?: {
+    skipBehaviors?: boolean;
+  }): Promise<unknown>;
   accountInfo(): Promise<{
     email?: string;
     organization?: string;
@@ -854,6 +878,11 @@ interface ClaudeSession {
   query?: SDKQuery;
   /** True for start/fork (a fresh run that owns its title), false for continue. */
   isInitial: boolean;
+  /**
+   * The session's MCP tools and the UIs they declare. Set at system/init when
+   * the CLI can serve MCP Apps; absent otherwise, so no tool call carries an app.
+   */
+  mcpApps?: { catalog: ClaudeMcpCatalog; refreshing?: Promise<void> };
 }
 
 const { info: logInfo, warn: logWarn, error: logError } = createLogger("[ClaudeDriver]");
@@ -1468,6 +1497,243 @@ export function buildContextUsageEvent(
 }
 
 /**
+ * A session's cost and per-model usage totals, as the CLI holds them.
+ *
+ * Since CLI 2.1.277 a resumed or forked session does not start its totals at
+ * zero: it continues from the totals its transcript saved, so a `result`
+ * carries the whole session's spend rather than this query's. Every Mains turn
+ * is its own query — a continue resumes, a fork forks — and turn costs are
+ * summed downstream, so a turn is booked as its result minus the totals the
+ * session held when the query opened.
+ */
+export interface ClaudeSessionTotals {
+  costUsd: number;
+  modelUsage: Record<string, SDKModelUsage>;
+}
+
+/** Map the `/usage` control reply to the session's totals; null when it carries none. */
+export function mapClaudeSessionTotals(response: unknown): ClaudeSessionTotals | null {
+  const session = (response as { session?: { total_cost_usd?: unknown; model_usage?: unknown } } | null)
+    ?.session;
+  if (!session || typeof session.total_cost_usd !== "number") return null;
+  const modelUsage =
+    session.model_usage && typeof session.model_usage === "object"
+      ? (session.model_usage as Record<string, SDKModelUsage>)
+      : {};
+  return { costUsd: session.total_cost_usd, modelUsage };
+}
+
+/** The fields that accumulate; `contextWindow` and `maxOutputTokens` describe the model. */
+const ADDITIVE_MODEL_USAGE_FIELDS = [
+  "costUSD",
+  "inputTokens",
+  "outputTokens",
+  "thinkingTokens",
+  "cacheReadInputTokens",
+  "cacheCreationInputTokens",
+  "webSearchRequests",
+] as const;
+
+/**
+ * This query's share of a `result`'s cumulative totals.
+ *
+ * Without a baseline the result is taken as it is: a new session starts at
+ * zero, and a CLI that could not report its totals leaves nothing to subtract.
+ * A result below its baseline means the totals were reset mid-query (`/clear`
+ * resets them), so it already counts from zero. Models only earlier turns used
+ * drop out rather than riding along as zero rows.
+ */
+export function subtractClaudeSessionTotals(
+  result: { total_cost_usd: number; modelUsage?: Record<string, SDKModelUsage> },
+  baseline: ClaudeSessionTotals | null,
+): ClaudeSessionTotals {
+  const modelUsage = result.modelUsage ?? {};
+  if (!baseline || result.total_cost_usd < baseline.costUsd) {
+    return { costUsd: result.total_cost_usd, modelUsage };
+  }
+  const own: Record<string, SDKModelUsage> = {};
+  for (const [model, usage] of Object.entries(modelUsage)) {
+    const before = baseline.modelUsage[model];
+    if (!before) {
+      own[model] = usage;
+      continue;
+    }
+    const entry = { ...usage };
+    let used = false;
+    for (const field of ADDITIVE_MODEL_USAGE_FIELDS) {
+      // An optional field the CLI did not send stays absent.
+      if (usage[field] === undefined) continue;
+      const value = Math.max(0, usage[field] - (before[field] ?? 0));
+      entry[field] = value;
+      if (value > 0) used = true;
+    }
+    if (used) own[model] = entry;
+  }
+  return { costUsd: result.total_cost_usd - baseline.costUsd, modelUsage: own };
+}
+
+const SESSION_TOTALS_TIMEOUT_MS = 5_000;
+
+/**
+ * Read the session's totals before the query's first result.
+ *
+ * The `/usage` control request is the only reader, and the SDK marks it
+ * experimental, so it is feature-detected. Asked for as the query opens, it
+ * answers with what the CLI loaded from the transcript; `skipBehaviors` skips
+ * the local transcript scan the reply does not need. Any failure books the
+ * turn at its raw result, which then includes earlier turns — hence the warning.
+ */
+async function readClaudeSessionTotals(query: SDKQuery): Promise<ClaudeSessionTotals | null> {
+  if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") {
+    logWarn("CLI cannot report session totals; this turn's cost will include earlier turns");
+    return null;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const totals = await Promise.race([
+      query
+        .usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })
+        .then(mapClaudeSessionTotals),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), SESSION_TOTALS_TIMEOUT_MS);
+      }),
+    ]);
+    if (!totals) logWarn("No session totals from the CLI; this turn's cost will include earlier turns");
+    return totals;
+  } catch (err) {
+    logWarn(
+      "Failed to read session totals; this turn's cost will include earlier turns:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MCP Apps (SEP-1865)
+// ─────────────────────────────────────────────────────────────
+
+/** Both are needed: one says which tool has a UI, the other reads that UI. */
+const MCP_APPS_CAPABILITIES = ["mcp_tool_ui_meta_v1", "mcp_read_resource_v1"];
+
+export function supportsClaudeMcpApps(capabilities: string[] | undefined): boolean {
+  return MCP_APPS_CAPABILITIES.every((capability) => capabilities?.includes(capability));
+}
+
+/** The CLI's own rule for names inside `mcp__<server>__<tool>`. */
+function normalizeMcpName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/** The name a tool_use block carries for an MCP tool. */
+export function mcpToolWireName(server: string, tool: string): string {
+  return `mcp__${normalizeMcpName(server)}__${normalizeMcpName(tool)}`;
+}
+
+/** An MCP tool that declares a `ui://` resource, keyed by its wire name. */
+export interface ClaudeMcpAppTool {
+  /** Server name as `mcpServerStatus()` reports it — what resource reads take. */
+  server: string;
+  tool: string;
+  resourceUri: string;
+}
+
+export interface ClaudeMcpCatalog {
+  /** Every MCP tool the CLI has reported, UI or not — so a miss means "ask again". */
+  known: Set<string>;
+  apps: Map<string, ClaudeMcpAppTool>;
+}
+
+interface McpStatusTool {
+  name?: unknown;
+  _meta?: { ui?: { resourceUri?: unknown; visibility?: unknown }; "ui/resourceUri"?: unknown };
+}
+
+interface McpStatusServer {
+  name?: unknown;
+  status?: unknown;
+  source?: unknown;
+  tools?: McpStatusTool[];
+}
+
+function mcpToolResourceUri(tool: McpStatusTool): string | undefined {
+  const uri = tool._meta?.ui?.resourceUri ?? tool._meta?.["ui/resourceUri"];
+  return typeof uri === "string" && uri.startsWith("ui://") ? uri : undefined;
+}
+
+/**
+ * Index `mcpServerStatus()` by wire name. In-process SDK servers are left out:
+ * the CLI refuses to read their resources, and mains registers no UI on them.
+ */
+export function buildClaudeMcpCatalog(statuses: unknown[]): ClaudeMcpCatalog {
+  const catalog: ClaudeMcpCatalog = { known: new Set(), apps: new Map() };
+  for (const status of statuses as McpStatusServer[]) {
+    if (typeof status?.name !== "string" || status.source === "sdk") continue;
+    for (const tool of Array.isArray(status.tools) ? status.tools : []) {
+      if (typeof tool?.name !== "string") continue;
+      const wireName = mcpToolWireName(status.name, tool.name);
+      catalog.known.add(wireName);
+      const resourceUri = mcpToolResourceUri(tool);
+      if (resourceUri) {
+        catalog.apps.set(wireName, { server: status.name, tool: tool.name, resourceUri });
+      }
+    }
+  }
+  return catalog;
+}
+
+/**
+ * Shape an MCP tool result the way an app widget reads it. The CLI hands the
+ * content over as a single string, where MCP has a list of content blocks.
+ */
+export function toMcpCallToolResult(raw: unknown): McpAppCallToolResult | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const result = raw as Record<string, unknown>;
+  const content =
+    typeof result.content === "string"
+      ? [{ type: "text", text: result.content }]
+      : Array.isArray(result.content)
+        ? result.content
+        : [];
+  return {
+    content,
+    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
+    ...(result._meta !== undefined ? { _meta: result._meta } : {}),
+  };
+}
+
+/**
+ * Refuse an app's tool call the MCP Apps rules do not allow. The app is
+ * untrusted page content and `mcp_call` skips permission checks, so the tool
+ * must be one its own server reports, and not one it keeps for the model
+ * (`visibility` without "app"). An unconnected server fails closed.
+ */
+export function assertMcpToolCallableFromApp(
+  statuses: unknown[],
+  server: string,
+  tool: string,
+): void {
+  const status = (statuses as McpStatusServer[]).find((s) => s?.name === server);
+  if (!status || status.source === "sdk") {
+    throw new Error(`MCP server "${server}" is not available`);
+  }
+  if (status.status !== "connected") {
+    throw new Error(`MCP server "${server}" is not connected`);
+  }
+  const entry = status.tools?.find((t) => t?.name === tool);
+  if (!entry) {
+    throw new Error(`MCP server "${server}" has no tool "${tool}"`);
+  }
+  const visibility = entry._meta?.ui?.visibility;
+  if (Array.isArray(visibility) && !visibility.includes("app")) {
+    throw new Error(`Tool "${tool}" is not available to apps`);
+  }
+}
+
+/**
  * Map a `system:task_*` message to a WorkRunTaskEvent.
  *
  * The CLI runs long tool calls as tasks: a Bash command that outlives the
@@ -1663,6 +1929,7 @@ export function mapSDKMessage(
               input: block.input,
               startedAt: ts,
             });
+            const mcpApp = cs.mcpApps?.catalog.apps.get(block.name);
             events.push({
               type: "tool_call",
               toolName: block.name,
@@ -1674,6 +1941,7 @@ export function mapSDKMessage(
                 rawType: msg.type,
                 parentToolUseId: assistantMsg.parent_tool_use_id || undefined,
                 isFromSubagent,
+                ...(mcpApp ? { mcpApp: { ...mcpApp, originCallId: toolCallId } } : {}),
               },
             });
 
@@ -1718,12 +1986,23 @@ export function mapSDKMessage(
         // they stay `running` in the DB until the run-end sweep. Emit a
         // `complete` event per block so the status flips running → done.
         const isFromSubagent = !!(userMsg as any).parent_tool_use_id;
+        // `tool_use_result` is one per message, so it belongs to a block only
+        // when the message carries a single result.
+        const soleToolResult =
+          content.filter((block) => block?.type === "tool_result").length === 1;
         for (const block of content) {
           if (block?.type !== "tool_result") continue;
           const toolUseId: string = block.tool_use_id || "";
           const prev = toolUseId ? cs.toolCallIndex.get(toolUseId) : undefined;
-          const output = block.content;
-          const error = block.is_error ? safeJson(output) : undefined;
+          const mcpApp = prev ? cs.mcpApps?.catalog.apps.get(prev.toolName) : undefined;
+          // An app widget renders from structuredContent, which only the
+          // message's tool_use_result keeps.
+          const appResult =
+            mcpApp && soleToolResult ? toMcpCallToolResult(userMsg.tool_use_result) : undefined;
+          const output = appResult
+            ? { ...appResult, ...(block.is_error ? { isError: true } : {}) }
+            : block.content;
+          const error = block.is_error ? safeJson(block.content) : undefined;
           const resultMeta = userMsg.tool_result_meta?.find((meta) => meta.id === toolUseId);
           const nonExecutionKind = resultMeta?.non_execution_kind;
           if (nonExecutionKind) {
@@ -1750,6 +2029,7 @@ export function mapSDKMessage(
               parentToolUseId: userMsg.parent_tool_use_id || undefined,
               nonExecutionKind,
               userFeedback: resultMeta?.user_feedback,
+              ...(mcpApp ? { mcpApp: { ...mcpApp, originCallId: toolUseId } } : {}),
             },
           });
 
@@ -2248,7 +2528,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // SDK loader state
   let sdkLoaded = false;
   let loadError: Error | null = null;
-  let queryFn: ((options: { prompt: string; options?: SDKOptions }) => SDKQuery) | null = null;
+  let queryFn:
+    | ((options: { prompt: string | AsyncIterable<unknown>; options?: SDKOptions }) => SDKQuery)
+    | null = null;
   let createSdkMcpServerFn: ((...args: any[]) => any) | null = null;
   let toolFn: ((...args: any[]) => any) | null = null;
   // Standalone SDK fn that reads a persisted session's info (incl. the CLI's
@@ -2294,6 +2576,21 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
   // Cross-run sessionId memo (resume lookup avoids hitting the DB every time)
   const sessionIdMemo = new Map<string, string>();
+
+  // MCP Apps reach a run's MCP servers after the fact, from the widget. While a
+  // turn streams they go through its query; otherwise through an MCP host.
+  const liveSessions = new Map<string, ClaudeSession>();
+  /** runId → the cwd its session ran in, for an MCP host that serves it later. */
+  const runCwdMemo = new Map<string, string>();
+  /**
+   * cwd → an idle CLI process that only answers control requests — no prompt
+   * ever reaches it, so no model turn runs. Keyed by cwd because that is what
+   * decides which MCP servers a session configures.
+   */
+  const mcpHosts = new Map<string, { query: SDKQuery; release: () => void; idleTimer?: NodeJS.Timeout }>();
+  // Each host is a whole CLI process (~250 MB), so they are few and short-lived.
+  const MCP_HOST_IDLE_MS = 2 * 60 * 1000;
+  const MAX_MCP_HOSTS = 3;
 
   // ─────────────────────────────────────────────────────────────
   // SDK loader
@@ -2343,7 +2640,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // Hook builders
   // ─────────────────────────────────────────────────────────────
 
-  function buildPostToolUseHook(onEvent: WorkRunEventHandler): SDKHookMatcher {
+  function buildPostToolUseHook(onEvent: WorkRunEventHandler, runId: string): SDKHookMatcher {
     return {
       hooks: [
         async (
@@ -2352,6 +2649,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         ): Promise<Record<string, unknown>> => {
           const toolName = (input.tool_name as string) || "unknown";
           const toolResponse = input.tool_response;
+
+          // The first completion for a call is the one kept, and this one only
+          // has the tool's text. An app's call is completed from the tool_result
+          // message instead, whose tool_use_result keeps structuredContent.
+          const session = liveSessions.get(runId);
+          if (session && (await mcpAppToolFor(session, toolName))) return {};
 
           if (toolResponse !== undefined) {
             await onEvent({
@@ -2480,6 +2783,57 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // SDK options builder
   // ─────────────────────────────────────────────────────────────
 
+  /**
+   * What every CLI process needs, a run or an MCP host: the executable, an env
+   * that signs in through the CLI, the setting sources, and local plugins.
+   */
+  function buildProcessOptions(): SDKOptions {
+    const packagedSdkBinary = config.binary
+      ? null
+      : findPackagedClaudeSdkBinary();
+    const executableOptions = buildClaudeExecutableOptions(
+      config.binary,
+      packagedSdkBinary,
+    );
+    if (config.binary && !executableOptions.pathToClaudeCodeExecutable) {
+      logWarn(
+        `Configured binary path "${config.binary}" is not a valid executable; using the SDK-bundled Claude CLI`,
+      );
+    } else if (executableOptions.pathToClaudeCodeExecutable) {
+      logInfo(
+        config.binary
+          ? "Using configured Claude CLI at:"
+          : "Using packaged SDK-bundled Claude CLI at:",
+        executableOptions.pathToClaudeCodeExecutable,
+      );
+    } else {
+      logInfo("Using SDK-bundled Claude CLI");
+    }
+
+    // Strip API key/auth token when using CLI (subscription mode) so the subprocess
+    // uses CLI login session rather than API billing.
+    const cleanEnv: Record<string, string | undefined> = { ...process.env };
+    delete cleanEnv.ANTHROPIC_API_KEY;
+    delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
+
+    const options: SDKOptions = {
+      ...executableOptions,
+      env: cleanEnv,
+      settingSources: config.settingSources ?? ["user", "project", "local"],
+    };
+
+    if (config.plugins && config.plugins.length > 0) {
+      options.plugins = config.plugins.map((p) => ({
+        type: "local" as const,
+        path: p.path,
+        ...(p.skipMcpDiscovery !== undefined ? { skipMcpDiscovery: p.skipMcpDiscovery } : {}),
+      }));
+      logInfo(`Loading ${options.plugins.length} local plugin(s)`);
+    }
+
+    return options;
+  }
+
   async function buildOptions(args: {
     model: string;
     workspacePath?: string;
@@ -2528,37 +2882,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       toolPolicy,
     } = args;
 
-    const packagedSdkBinary = config.binary
-      ? null
-      : findPackagedClaudeSdkBinary();
-    const executableOptions = buildClaudeExecutableOptions(
-      config.binary,
-      packagedSdkBinary,
-    );
-    if (config.binary && !executableOptions.pathToClaudeCodeExecutable) {
-      logWarn(
-        `Configured binary path "${config.binary}" is not a valid executable; using the SDK-bundled Claude CLI`,
-      );
-    } else if (executableOptions.pathToClaudeCodeExecutable) {
-      logInfo(
-        config.binary
-          ? "Using configured Claude CLI at:"
-          : "Using packaged SDK-bundled Claude CLI at:",
-        executableOptions.pathToClaudeCodeExecutable,
-      );
-    } else {
-      logInfo("Using SDK-bundled Claude CLI");
-    }
-
-    // Strip API key/auth token when using CLI (subscription mode) so the subprocess
-    // uses CLI login session rather than API billing.
-    const cleanEnv: Record<string, string | undefined> = { ...process.env };
-    delete cleanEnv.ANTHROPIC_API_KEY;
-    delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
-
+    const processOptions = buildProcessOptions();
     const permissionMode =
       runPermissionMode ?? config.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
-    const settingSources = config.settingSources ?? ["user", "project", "local"];
+    const settingSources = processOptions.settingSources!;
     // The bridge auto-allows this set, so it must see the *effective* list —
     // handing it the global default would auto-approve tools the run's policy
     // just denied.
@@ -2589,6 +2916,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     }
 
     const options: SDKOptions = {
+      ...processOptions,
       model,
       ...buildClaudePermissionModeOptions(
         permissionMode,
@@ -2596,9 +2924,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         toolPolicy,
       ),
       abortController,
-      ...executableOptions,
-      env: cleanEnv,
-      settingSources,
     };
 
     if (outputStyle) {
@@ -2627,15 +2952,6 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     const mergedAgents = mergeAgentsConfig(config.agents, runAgents);
     if (mergedAgents && Object.keys(mergedAgents).length > 0) {
       options.agents = convertAgentsConfig(mergedAgents);
-    }
-
-    if (config.plugins && config.plugins.length > 0) {
-      options.plugins = config.plugins.map((p) => ({
-        type: "local" as const,
-        path: p.path,
-        ...(p.skipMcpDiscovery !== undefined ? { skipMcpDiscovery: p.skipMcpDiscovery } : {}),
-      }));
-      logInfo(`Loading ${options.plugins.length} local plugin(s)`);
     }
 
     const mergedHooks = mergeHooksConfig(config.hooks, runHooks);
@@ -2706,7 +3022,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     if (runId && onEvent) {
       if (!options.hooks) options.hooks = {};
       if (!options.hooks.PostToolUse) options.hooks.PostToolUse = [];
-      options.hooks.PostToolUse.push(buildPostToolUseHook(onEvent));
+      options.hooks.PostToolUse.push(buildPostToolUseHook(onEvent, runId));
     }
 
     // Recorded once per session (the SDK default since 0.3.267, pinned here on
@@ -2888,6 +3204,123 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       /* ignore */
     }
     return undefined;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // MCP Apps
+  // ─────────────────────────────────────────────────────────────
+
+  /** Re-read the session's MCP tools; concurrent callers share one request. */
+  function refreshMcpCatalog(cs: ClaudeSession): Promise<void> {
+    const mcpApps = cs.mcpApps;
+    if (!mcpApps || !cs.query) return Promise.resolve();
+    mcpApps.refreshing ??= cs.query
+      .mcpServerStatus()
+      .then((statuses) => {
+        mcpApps.catalog = buildClaudeMcpCatalog(statuses);
+      })
+      .catch((err) => {
+        logWarn("Failed to read MCP tools for apps:", err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        mcpApps.refreshing = undefined;
+      });
+    return mcpApps.refreshing;
+  }
+
+  /**
+   * The app an MCP tool declares, if any. A tool the catalog has not seen — its
+   * server was still connecting at init — triggers one re-read.
+   */
+  async function mcpAppToolFor(
+    cs: ClaudeSession,
+    toolName: string,
+  ): Promise<ClaudeMcpAppTool | undefined> {
+    if (!cs.mcpApps || !toolName.startsWith("mcp__")) return undefined;
+    if (!cs.mcpApps.catalog.known.has(toolName)) await refreshMcpCatalog(cs);
+    return cs.mcpApps.catalog.apps.get(toolName);
+  }
+
+  /** The directory a run's session ran in, which decides its MCP servers. */
+  async function resolveRunCwd(runId: string): Promise<string> {
+    const cwd = liveSessions.get(runId)?.options.cwd ?? runCwdMemo.get(runId);
+    if (cwd) return cwd;
+    // After a restart the transcript is the record: it keeps the session's cwd.
+    const sessionId = await lookupSessionId(runId);
+    const info = sessionId && getSessionInfoFn ? await getSessionInfoFn(sessionId) : undefined;
+    if (!info?.cwd) throw new Error("Cannot find where this run's session ran");
+    runCwdMemo.set(runId, info.cwd);
+    return info.cwd;
+  }
+
+  function closeMcpHost(cwd: string): void {
+    const host = mcpHosts.get(cwd);
+    if (!host) return;
+    mcpHosts.delete(cwd);
+    if (host.idleTimer) clearTimeout(host.idleTimer);
+    host.release();
+    try {
+      host.query.close();
+    } catch (err) {
+      logWarn("Failed to close MCP host:", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** The MCP host for a cwd, started on first use and closed after it idles. */
+  async function mcpHostFor(cwd: string): Promise<SDKQuery> {
+    let host = mcpHosts.get(cwd);
+    if (host) {
+      mcpHosts.delete(cwd); // re-insert: Map order is the eviction order
+    } else {
+      await ensureSDK();
+      if (!queryFn) throw new Error("Claude SDK not properly initialized");
+      while (mcpHosts.size >= MAX_MCP_HOSTS) {
+        closeMcpHost(mcpHosts.keys().next().value as string);
+      }
+      let release!: () => void;
+      const idle = new Promise<void>((resolve) => (release = resolve));
+      // A prompt that never yields keeps stdin open and the process idle.
+      const noPrompt: AsyncIterable<never> = {
+        [Symbol.asyncIterator]: () => ({
+          next: () => idle.then(() => ({ done: true as const, value: undefined })),
+        }),
+      };
+      const options = buildProcessOptions();
+      options.cwd = cwd;
+      const mcpServers = readMcpServersFromSettings(options.settingSources!, cwd);
+      if (Object.keys(mcpServers).length > 0) options.mcpServers = mcpServers;
+      const query = queryFn({ prompt: noPrompt, options });
+      host = { query, release };
+    }
+    mcpHosts.set(cwd, host);
+    if (host.idleTimer) clearTimeout(host.idleTimer);
+    host.idleTimer = setTimeout(() => closeMcpHost(cwd), MCP_HOST_IDLE_MS);
+    host.idleTimer.unref?.();
+    return host.query;
+  }
+
+  /**
+   * Run an MCP control request for a run: through its live turn when there is
+   * one, otherwise through the MCP host for its cwd. A turn that closed under
+   * the request falls through to the host; any other failure is the answer.
+   */
+  async function withMcpQuery<T>(runId: string, fn: (query: SDKQuery) => Promise<T>): Promise<T> {
+    const live = liveSessions.get(runId)?.query;
+    if (live) {
+      try {
+        return await fn(live);
+      } catch (err) {
+        if (!/closed/i.test(err instanceof Error ? err.message : String(err))) throw err;
+      }
+    }
+    const cwd = await resolveRunCwd(runId);
+    try {
+      return await fn(await mcpHostFor(cwd));
+    } catch (err) {
+      // A host that died answers every request with the same error; drop it.
+      if (/closed/i.test(err instanceof Error ? err.message : String(err))) closeMcpHost(cwd);
+      throw err;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -3182,6 +3615,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       // Create the SDK query (this is when the prompt is bound to the session).
       const query = queryFn({ prompt, options: cs.options });
       cs.query = query;
+      liveSessions.set(cs.runId, cs);
+      if (cs.options.cwd) runCwdMemo.set(cs.runId, cs.options.cwd);
+      // A resumed or forked session's results continue from the totals its
+      // transcript saved; read them as the query opens, before the first result.
+      const sessionTotalsBefore = cs.options.resume
+        ? readClaudeSessionTotals(query)
+        : Promise.resolve(null);
 
       let timeoutId: NodeJS.Timeout | undefined;
       let timedOut = false;
@@ -3248,6 +3688,18 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
               cs.options.model,
             );
 
+            // MCP Apps: learn which tools carry a UI before their calls are mapped.
+            if (msg.type === "system" && (msg as SDKSystemMessage).subtype === "init") {
+              if (supportsClaudeMcpApps((msg as SDKSystemMessage).capabilities)) {
+                cs.mcpApps ??= { catalog: { known: new Set(), apps: new Map() } };
+                await refreshMcpCatalog(cs);
+              }
+            } else if (msg.type === "assistant" && cs.mcpApps) {
+              for (const block of (msg as SDKAssistantMessage).message?.content ?? []) {
+                if (block.type === "tool_use" && block.name) await mcpAppToolFor(cs, block.name);
+              }
+            }
+
             // Track whether any assistant text content has been streamed (for result-message dedup).
             if (msg.type === "assistant") {
               const aMsg = msg as SDKAssistantMessage;
@@ -3308,30 +3760,33 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                 cs.state.lastStopReason = resultMsg.stop_reason;
               }
 
+              // Turns are summed downstream, so the turn is booked at this
+              // query's share, not the session's running total.
+              const own = subtractClaudeSessionTotals(resultMsg, await sessionTotalsBefore);
               let inputTokens = 0,
                 outputTokens = 0,
                 cacheRead = 0,
                 cacheWrite = 0;
+              for (const usage of Object.values(own.modelUsage)) {
+                inputTokens += usage.inputTokens;
+                outputTokens += usage.outputTokens;
+                cacheRead += usage.cacheReadInputTokens;
+                cacheWrite += usage.cacheCreationInputTokens;
+              }
               // Fallback context meter: the entry with the largest window is the
               // main conversation model (not haiku subagents).
               let ctxModel: string | undefined;
               let ctxWindow = 0;
-              if (resultMsg.modelUsage) {
-                for (const [modelName, usage] of Object.entries(resultMsg.modelUsage)) {
-                  inputTokens += usage.inputTokens;
-                  outputTokens += usage.outputTokens;
-                  cacheRead += usage.cacheReadInputTokens;
-                  cacheWrite += usage.cacheCreationInputTokens;
-                  const window = usage.contextWindow ?? 0;
-                  if (window > ctxWindow) {
-                    ctxWindow = window;
-                    ctxModel = modelName;
-                  }
+              for (const [modelName, usage] of Object.entries(resultMsg.modelUsage ?? {})) {
+                const window = usage.contextWindow ?? 0;
+                if (window > ctxWindow) {
+                  ctxWindow = window;
+                  ctxModel = modelName;
                 }
               }
 
               cs.state.lastUsage = {
-                totalCostUsd: resultMsg.total_cost_usd,
+                totalCostUsd: own.costUsd,
                 durationMs: resultMsg.duration_ms,
                 numTurns: resultMsg.num_turns,
                 inputTokens: inputTokens || undefined,
@@ -3339,7 +3794,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                 cacheReadTokens: cacheRead || undefined,
                 cacheWriteTokens: cacheWrite || undefined,
                 model: primaryModel,
-                modelUsage: resultMsg.modelUsage,
+                modelUsage: resultMsg.modelUsage ? own.modelUsage : undefined,
               };
 
               // Fallback only — an authoritative snapshot already covered the turn.
@@ -3429,6 +3884,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
         signal.removeEventListener("abort", onAbort);
+        if (liveSessions.get(cs.runId) === cs) liveSessions.delete(cs.runId);
       }
     },
 
@@ -3449,6 +3905,35 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       }
 
       removeClaudeRuntimeSettings(cs.runtimeSettingsPath);
+    },
+
+    async readMcpAppResource(request) {
+      const result = await withMcpQuery(request.runId, (query) => {
+        if (typeof query.readMcpResource !== "function") {
+          throw new Error("This Claude Code version cannot read MCP App resources");
+        }
+        return query.readMcpResource(request.server, request.uri);
+      });
+      return { contents: result.contents ?? [], originCallId: request.originCallId ?? null };
+    },
+
+    // `meta` has nowhere to go: mcp_call takes a tool and its arguments only.
+    async callMcpAppTool(request) {
+      const raw = await withMcpQuery(request.runId, async (query) => {
+        if (typeof query.request !== "function") {
+          throw new Error("This Claude Code version cannot call MCP App tools");
+        }
+        assertMcpToolCallableFromApp(await query.mcpServerStatus(), request.server, request.tool);
+        return query.request({
+          subtype: "mcp_call",
+          tool: mcpToolWireName(request.server, request.tool),
+          ...(request.arguments !== undefined ? { arguments: request.arguments } : {}),
+        });
+      });
+      // The control reply wraps the tool result in `response`.
+      const result = toMcpCallToolResult((raw as { response?: unknown } | null)?.response ?? raw);
+      if (!result) throw new Error("MCP App tool call returned no result");
+      return result;
     },
 
     async canResumeSession(runId: string): Promise<boolean> {
@@ -3488,6 +3973,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       }
 
       sessionIdMemo.delete(runId);
+      runCwdMemo.delete(runId);
       runsRepo
         .updateRun(runId, { sessionId: null })
         .catch((err) => logError("Failed to clear session ID in DB:", err));
@@ -3499,6 +3985,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     async shutdown(): Promise<void> {
       sessionIdMemo.clear();
+      for (const cwd of [...mcpHosts.keys()]) closeMcpHost(cwd);
+      liveSessions.clear();
+      runCwdMemo.clear();
       sdkLoaded = false;
       loadError = null;
       queryFn = null;
@@ -3857,12 +4346,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       return { success: code === 0, output: `${stdout}${stderr}`.trim() };
     },
 
-    // The Claude Code CLI only writes its own auto-title (aiTitle) into the
-    // transcript in *interactive* mode — headless SDK query() runs never do, so
-    // reading it back (see executePrompt → readAutoTitle) returns nothing for
-    // app runs. Generate the title ourselves with a cheap one-shot model call,
-    // mirroring the codex driver. runs.service calls this at run start;
-    // readAutoTitle stays as a best-effort upgrade if a real aiTitle ever lands.
+    // The Claude Code CLI writes its own auto-title (aiTitle) into SDK
+    // transcripts too, but only for some sessions (a bare "hello" gets none),
+    // and only after the first turn. So the title is generated here with a
+    // cheap one-shot model call, mirroring the codex driver, and runs.service
+    // sets it at run start; when the CLI does write an aiTitle, readAutoTitle
+    // swaps it in once the initial run finishes (see executePrompt).
     async generateTitle(goal: string, context?: WorkRunContextItem[]): Promise<string> {
       try {
         let contextSnippet = "";

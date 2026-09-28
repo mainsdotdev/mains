@@ -249,6 +249,7 @@ export const projects = sqliteTable(
     runScript: text("run_script"),
     archiveScript: text("archive_script"),
     icon: text("icon"), // "icon:rocket", "emoji:🚀", or null
+    sortOrder: integer("sort_order").notNull().default(0),
     commitInstructions: text("commit_instructions"),
     prInstructions: text("pr_instructions"),
     isArchived: integer("is_archived", { mode: "boolean" })
@@ -271,6 +272,7 @@ export const projects = sqliteTable(
     index("idx_projects_account").on(t.accountId),
     index("idx_projects_remote_origin").on(t.remoteOrigin),
     index("idx_projects_updated").on(t.updatedAt),
+    index("idx_projects_account_sort").on(t.accountId, t.sortOrder),
     check(
       "check_projects_branches_json",
       sql`json_valid(${t.branches}) OR ${t.branches} IS NULL`,
@@ -307,6 +309,9 @@ export const workspaces = sqliteTable(
       .notNull()
       .default(false),
 
+    sortOrder: integer("sort_order").notNull().default(0),
+    pinnedAt: integer("pinned_at", { mode: "timestamp" }),
+
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -320,6 +325,8 @@ export const workspaces = sqliteTable(
     uniqueIndex("uniq_workspaces_account_root").on(t.accountId, t.rootPath),
     index("idx_workspaces_status").on(t.status),
     index("idx_workspaces_updated").on(t.updatedAt),
+    index("idx_workspaces_account_sort").on(t.accountId, t.sortOrder),
+    index("idx_workspaces_pinned").on(t.pinnedAt),
     check(
       "check_workspaces_metadata_json",
       sql`json_valid(${t.metadata}) OR ${t.metadata} IS NULL`,

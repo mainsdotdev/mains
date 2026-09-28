@@ -82,6 +82,29 @@ describe("projectsService", () => {
     });
   });
 
+  describe("reorder", () => {
+    it("persists a complete account-scoped project order", async () => {
+      createProject(db, { id: "first", sortOrder: 0 });
+      createProject(db, { id: "second", sortOrder: 1 });
+
+      await projectsService.reorder({
+        accountId: "default",
+        orderedIds: ["second", "first"],
+      });
+
+      expect((await projectsRepo.findById("second"))?.sortOrder).toBe(0);
+      expect((await projectsRepo.findById("first"))?.sortOrder).toBe(1);
+      await expect(projectsService.reorder({
+        accountId: "default",
+        orderedIds: ["second", "second"],
+      })).rejects.toThrow("Invalid project order");
+      await expect(projectsService.reorder({
+        accountId: "default",
+        orderedIds: ["second"],
+      })).rejects.toThrow("every active project");
+    });
+  });
+
   describe("findByRemoteOrigin", () => {
     it("finds project by normalized origin", async () => {
       createProject(db, {

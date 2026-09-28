@@ -6,6 +6,7 @@ export interface ReadMcpAppResourcePayload {
   resourceUri: string;
   originCallId?: string;
   connectorId?: string;
+  linkId?: string | null;
 }
 
 export interface ReadMcpAppResourceResponse {

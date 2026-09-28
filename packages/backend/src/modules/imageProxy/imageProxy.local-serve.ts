@@ -9,7 +9,7 @@ import { verifySignedPath } from "./imageProxy.signing";
 // mime guards. The HMAC signature is the authorization — there is no path
 // allowlist. See imageProxy.signing.ts.
 
-export const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
+export const MAX_IMAGE_SIZE = 32 * 1024 * 1024; // Codex image generation can return a 32 MB image.
 export const MAX_DOCUMENT_SIZE = 25 * 1024 * 1024; // 25 MB
 
 const LOCALIMG_EXT_MIME: Record<string, string> = {

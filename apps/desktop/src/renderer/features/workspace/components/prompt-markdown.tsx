@@ -66,11 +66,18 @@ function parseContextHref(
   }
 }
 
-function mentionPattern(skillNames: string[], filePaths: string[]): RegExp {
+function mentionPattern(skillTokens: string[], filePaths: string[]): RegExp {
   const parts: string[] = [];
+  const skillNames = skillTokens.filter((token) => token.startsWith("$"));
+  const appNames = skillTokens.filter((token) => token.startsWith("@"));
   if (skillNames.length > 0) {
     parts.push(
-      `\\$(?<skill>${skillNames.map((name) => name.replace(REGEX_ESC, "\\$&")).join("|")})(?::[\\w-]+)?(?![\\w-])`,
+      `(?<skill>${skillNames.map((name) => name.replace(REGEX_ESC, "\\$&")).join("|")})(?::[\\w-]+)?(?![\\w-])`,
+    );
+  }
+  if (appNames.length > 0) {
+    parts.push(
+      `(?<app>${appNames.map((name) => name.replace(REGEX_ESC, "\\$&")).join("|")})(?![\\w./-])`,
     );
   }
   // Code selections precede files because both begin with an absolute path and
@@ -95,13 +102,13 @@ function splitMentionText(value: string, pattern: RegExp): MarkdownNode[] {
       nodes.push({ type: "text", value: value.slice(lastIndex, match.index) });
     }
 
-    const kind: PromptContextKind = match.groups?.skill
+    const kind: PromptContextKind = match.groups?.skill || match.groups?.app
       ? "skill"
       : match.groups?.file
         ? "file"
         : "code";
     const contextValue =
-      match.groups?.skill ?? match.groups?.file ?? match.groups?.code ?? "";
+      match.groups?.skill ?? match.groups?.app ?? match.groups?.file ?? match.groups?.code ?? "";
     nodes.push({
       type: "link",
       url: contextHref(kind, contextValue),
@@ -249,8 +256,11 @@ export function PromptMarkdown({
   skills = [],
   files = [],
 }: PromptMarkdownProps) {
-  const skillsByName = useMemo(
-    () => new Map(skills.map((skill) => [skill.name, skill])),
+  const skillsByToken = useMemo(
+    () => new Map(skills.map((skill) => [
+      skill.scope === "computer" ? `@${skill.displayName || skill.name}` : `$${skill.name}`,
+      skill,
+    ])),
     [skills],
   );
   const filesByPath = useMemo(
@@ -260,10 +270,10 @@ export function PromptMarkdown({
   const contextPlugin = useMemo(
     () =>
       createPromptContextPlugin(
-        Array.from(skillsByName.keys()).sort((a, b) => b.length - a.length),
+        Array.from(skillsByToken.keys()).sort((a, b) => b.length - a.length),
         Array.from(filesByPath.keys()).sort((a, b) => b.length - a.length),
       ),
-    [skillsByName, filesByPath],
+    [skillsByToken, filesByPath],
   );
   const components = useMemo<Components>(
     () => ({
@@ -271,7 +281,7 @@ export function PromptMarkdown({
       a: ({ href, children: linkChildren }) => {
         const context = parseContextHref(href);
         if (context?.kind === "skill") {
-          const skill = skillsByName.get(context.value);
+          const skill = skillsByToken.get(context.value);
           if (skill) return <PromptSkillChip skill={skill} />;
         }
         if (context?.kind === "file") {
@@ -288,7 +298,7 @@ export function PromptMarkdown({
         );
       },
     }),
-    [filesByPath, skillsByName],
+    [filesByPath, skillsByToken],
   );
 
   return (

@@ -52,6 +52,7 @@ export function SidebarContent({
             workspaces={workspaces}
             gitStateByWorkspaceId={gitStateByWorkspaceId}
             isLoading={isLoadingWorkspaces}
+            searchQuery={searchQuery}
             onDeleteWorkspace={onDeleteWorkspace}
             onArchiveWorkspace={onArchiveWorkspace}
           />

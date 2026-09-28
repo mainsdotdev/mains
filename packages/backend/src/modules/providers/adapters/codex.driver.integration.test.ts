@@ -121,6 +121,7 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_ACCOUNT;
   delete process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS;
   delete process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD;
+  delete process.env.MAINS_CODEX_FIXTURE_MCP_RESUME_ACTIVE_WRITER;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -214,6 +215,74 @@ describe("codex.driver / app-server protocol", () => {
     });
   });
 
+  it("includes attached documents alongside images in the Codex turn", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const runId = "run-file-attachments";
+    const uploadDir = path.join(os.tmpdir(), "mains-uploads", runId);
+    tempDirs.push(uploadDir);
+
+    const driver = createCodexDriver({
+      binary: fixtureBinary,
+      timeout: 2000,
+    });
+    drivers.push(driver);
+
+    const acquired = await driver.createSession({
+      ...request(runId),
+      goal: "Read the attached files",
+      attachments: [
+        {
+          name: "spec.pdf",
+          type: "document",
+          mimeType: "application/pdf",
+          data: Buffer.from("%PDF-1.4\nfixture").toString("base64"),
+        },
+        {
+          name: "notes.txt",
+          type: "document",
+          mimeType: "text/plain",
+          data: Buffer.from("Important note").toString("base64"),
+        },
+        {
+          name: "screen.png",
+          type: "image",
+          mimeType: "image/png",
+          data: Buffer.from("fixture-image").toString("base64"),
+        },
+      ],
+    });
+    await driver.executePrompt(
+      acquired.session,
+      acquired.prompt,
+      async () => undefined,
+      new AbortController().signal,
+    );
+
+    const turnStart = readProtocolLog(logPath).find(
+      (message) => message.method === "turn/start",
+    );
+    expect(turnStart?.params).toMatchObject({
+      input: [
+        {
+          type: "text",
+          text: expect.stringContaining(
+            `Attached files:\n- ${path.join(uploadDir, "spec.pdf")}`,
+          ),
+        },
+        {
+          type: "localImage",
+          path: path.join(uploadDir, "screen.png"),
+        },
+      ],
+    });
+    const input = (turnStart?.params as { input: Array<{ text?: string }> })?.input;
+    expect(input[0].text).toContain("[Attached document: notes.txt]\nImportant note");
+    expect(fs.readFileSync(path.join(uploadDir, "spec.pdf"), "utf8")).toBe("%PDF-1.4\nfixture");
+  });
+
   it("sends Codex thread archive, unarchive, and delete lifecycle requests", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
@@ -271,6 +340,7 @@ describe("codex.driver / app-server protocol", () => {
       uri: "ui://fixture/card.html",
       originCallId: "call-1",
       connectorId: "connector-1",
+      linkId: "legacy-account",
     });
     const result = await driver.callMcpAppTool?.({
       runId: "run-mcp-app",
@@ -316,6 +386,46 @@ describe("codex.driver / app-server protocol", () => {
         }),
       ]),
     );
+  });
+
+  it("targets the selected MCP App account on Codex 0.157.1", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    await driver.createSession(request("run-mcp-target"));
+    await driver.readMcpAppResource?.({
+      runId: "run-mcp-target",
+      server: "fixture-mcp",
+      uri: "ui://fixture/card.html",
+      connectorId: "connector-1",
+      linkId: "linked-account-2",
+    });
+    await driver.readMcpAppResource?.({
+      runId: "run-mcp-target",
+      server: "fixture-mcp",
+      uri: "ui://fixture/card.html",
+      connectorId: "connector-1",
+      linkId: null,
+    });
+
+    const log = readProtocolLog(logPath);
+    expect(log).toContainEqual(expect.objectContaining({
+      method: "mcpServer/resource/read",
+      params: expect.objectContaining({
+        target: { connectorId: "connector-1", linkId: "linked-account-2" },
+      }),
+    }));
+    expect(log).toContainEqual(expect.objectContaining({
+      method: "mcpServer/resource/read",
+      params: expect.objectContaining({
+        target: { connectorId: "connector-1", linkId: null },
+      }),
+    }));
   });
 
   it("resumes an unsubscribed thread before retrying MCP App operations", async () => {
@@ -375,6 +485,47 @@ describe("codex.driver / app-server protocol", () => {
     ).toHaveLength(2);
   });
 
+  it("rehydrates an MCP App from its explicit target when another client owns the thread writer", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+    process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD = "1";
+    process.env.MAINS_CODEX_FIXTURE_MCP_RESUME_ACTIVE_WRITER = "1";
+
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const session = await driver.createSession(request("run-mcp-shared-thread"));
+    await driver.cleanup?.(session.session);
+
+    const resource = await driver.readMcpAppResource?.({
+      runId: "run-mcp-shared-thread",
+      server: "fixture-mcp",
+      uri: "ui://fixture/card.html",
+      originCallId: "call-1",
+      connectorId: "connector-1",
+      linkId: "linked-account-2",
+    });
+
+    expect(resource?.contents[0]?.text).toContain("Fixture MCP App");
+    const log = readProtocolLog(logPath);
+    expect(log.filter((message) => message.method === "mcpServer/resource/read"))
+      .toEqual([
+        expect.objectContaining({ params: expect.objectContaining({
+          threadId: "thread-1",
+          originCallId: "call-1",
+        }) }),
+        expect.objectContaining({ params: {
+          server: "fixture-mcp",
+          uri: "ui://fixture/card.html",
+          connectorId: "connector-1",
+          target: { connectorId: "connector-1", linkId: "linked-account-2" },
+        } }),
+      ]);
+    expect(log.some((message) => message.method === "thread/resume")).toBe(false);
+  });
+
   it("rejects Codex CLI versions older than the supported protocol", async () => {
     process.env.MAINS_CODEX_FIXTURE_VERSION = "0.152.9";
 
@@ -406,6 +557,26 @@ describe("codex.driver / app-server protocol", () => {
       version: "0.152.9",
       outdated: true,
       compatibility: "unsupported",
+      minimumVersion: "0.153.0",
+      testedProtocolVersion: CODEX_APP_SERVER_PROTOCOL_VERSION,
+    });
+  });
+
+  it("reports the generated app-server version as supported", async () => {
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+
+    const driver = createCodexDriver({
+      binary: fixtureBinary,
+      timeout: 2000,
+    });
+    drivers.push(driver);
+
+    const accountInfo = await driver.getAccountInfo?.();
+
+    expect(accountInfo?.cli).toMatchObject({
+      version: CODEX_APP_SERVER_PROTOCOL_VERSION,
+      outdated: false,
+      compatibility: "supported",
       minimumVersion: "0.153.0",
       testedProtocolVersion: CODEX_APP_SERVER_PROTOCOL_VERSION,
     });
@@ -730,25 +901,23 @@ describe("codex.driver / app-server protocol", () => {
     expect(unsubscribedThreadIds).toEqual(["thread-1"]);
   });
 
-  it("lets the run's mode-resolved snapshot set the thread personality", async () => {
-    // Work/Chat pin `personality` through the mode harness; the provider
-    // setting is what Code spaces keep. The run snapshot has to win, the same
-    // way it already does for the sandbox.
+  it("ignores legacy personality settings on a new thread", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
 
-    const driver = createCodexDriver({
+    const legacyConfig = {
       binary: fixtureBinary,
       timeout: 500,
       personality: "pragmatic",
       sandboxMode: "workspace-write",
-    });
+    } as const;
+    const driver = createCodexDriver(legacyConfig);
     drivers.push(driver);
 
     const acquired = await driver.createSession({
-      ...request("run-personality"),
+      ...request("run-legacy-personality"),
       mode: "chat",
       configSnapshot: {
         personality: "friendly",
@@ -759,33 +928,42 @@ describe("codex.driver / app-server protocol", () => {
     const threadStart = readProtocolLog(logPath).find(
       (message) => message.method === "thread/start",
     );
-    expect(threadStart?.params).toMatchObject({
-      personality: "friendly",
-      sandbox: "read-only",
-    });
+    expect(threadStart?.params).toMatchObject({ sandbox: "read-only" });
+    expect(threadStart?.params).not.toHaveProperty("personality");
     await driver.cleanup?.(acquired.session);
   });
 
-  it("keeps the provider personality when the run pins none", async () => {
+  it("ignores legacy personality settings when resuming a thread", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
 
-    const driver = createCodexDriver({
+    const legacyConfig = {
       binary: fixtureBinary,
       timeout: 500,
       personality: "pragmatic",
-    });
+    } as const;
+    const driver = createCodexDriver(legacyConfig);
     drivers.push(driver);
 
-    const acquired = await driver.createSession(request("run-personality-default"));
-
-    const threadStart = readProtocolLog(logPath).find(
-      (message) => message.method === "thread/start",
-    );
-    expect(threadStart?.params).toMatchObject({ personality: "pragmatic" });
+    const acquired = await driver.createSession(request("run-legacy-personality-resume"));
     await driver.cleanup?.(acquired.session);
+    const resumed = await driver.resumeSession?.({
+      runId: "run-legacy-personality-resume",
+      accountId: "account-1",
+      execution: { workspaceId: "workspace-1", cwd: process.cwd() },
+      message: "Continue without legacy personality",
+      configSnapshot: { personality: "friendly", sandboxMode: "read-only" },
+    });
+    expect(resumed).toBeDefined();
+
+    const threadResume = readProtocolLog(logPath).find(
+      (message) => message.method === "thread/resume",
+    );
+    expect(threadResume?.params).toMatchObject({ sandbox: "read-only" });
+    expect(threadResume?.params).not.toHaveProperty("personality");
+    await driver.cleanup?.(resumed!.session);
   });
 
   it("lets the run snapshot turn plan mode off on a new thread", async () => {
@@ -1060,7 +1238,6 @@ describe("codex.driver / app-server protocol", () => {
     const driver = createCodexDriver({
       binary: fixtureBinary,
       timeout: 500,
-      personality: "friendly",
     });
     drivers.push(driver);
 

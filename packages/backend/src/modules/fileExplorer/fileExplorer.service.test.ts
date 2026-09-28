@@ -17,9 +17,18 @@ vi.mock("./fileExplorer.roots", () => ({
     });
     if (!within) throw new Error("Path is outside your workspaces");
   },
+  assertWithinReadableContentRoots: async (realPath: string) => {
+    const nodePath = await import("path");
+    const within = allowedRoots.some((root) => {
+      const rel = nodePath.relative(root, realPath);
+      return rel === "" || (!rel.startsWith("..") && !nodePath.isAbsolute(rel));
+    });
+    if (!within) throw new Error("Path is outside your workspaces");
+  },
 }));
 
 import { fileExplorerService } from "./fileExplorer.service";
+import { worktreeWrites } from "../git";
 
 let tmpDir: string;
 
@@ -410,6 +419,24 @@ describe("fileExplorerService", () => {
   });
 
   describe("writeFileText", () => {
+    it("puts a save on the worktree's write ledger while a run is live", async () => {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: tmpDir });
+      await fs.mkdir(path.join(tmpDir, "src"));
+      const filePath = path.join(tmpDir, "src", "code.ts");
+      await fs.writeFile(filePath, "const x = 1;");
+      const topLevel = await fs.realpath(tmpDir);
+      const since = Date.now();
+      worktreeWrites.open(topLevel, "live-run", since);
+      try {
+        await fileExplorerService.writeFileText({ filePath, content: "const x = 2;" });
+        expect(worktreeWrites.peersSince(topLevel, "live-run", since).paths).toEqual(
+          new Set(["src/code.ts"]),
+        );
+      } finally {
+        worktreeWrites.close(topLevel, "live-run", Date.now());
+      }
+    });
+
     it("overwrites an existing file and returns the new mtime", async () => {
       const filePath = path.join(tmpDir, "code.ts");
       await fs.writeFile(filePath, "const x = 1;");
@@ -705,6 +732,128 @@ describe("fileExplorerService", () => {
           expect.objectContaining({ name: "button.tsx", type: "file" }),
         ]),
       );
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // searchText (runs the real ripgrep binary)
+  // ─────────────────────────────────────────────────────────────
+  describe("searchText", () => {
+    it("finds matches with line numbers and match ranges", async () => {
+      await fs.mkdir(path.join(tmpDir, "src"));
+      await fs.writeFile(
+        path.join(tmpDir, "src", "b.ts"),
+        "const one = 1;\nconst Foo = foo();\n",
+      );
+      await fs.writeFile(path.join(tmpDir, "a.txt"), "foo\n");
+      await fs.writeFile(path.join(tmpDir, "none.txt"), "bar\n");
+
+      const result = await fileExplorerService.searchText({
+        rootPath: tmpDir,
+        query: "foo",
+      });
+
+      expect(result.truncated).toBe(false);
+      expect(result.matchCount).toBe(3);
+      expect(result.files.map((f) => f.relativePath)).toEqual([
+        "a.txt",
+        "src/b.ts",
+      ]);
+      expect(result.files[1].fullPath).toBe(path.join(tmpDir, "src", "b.ts"));
+      expect(result.files[1].lines).toEqual([
+        {
+          line: 2,
+          preview: "const Foo = foo();",
+          previewStart: 0,
+          previewClipped: false,
+          ranges: [
+            { start: 6, end: 9 },
+            { start: 12, end: 15 },
+          ],
+        },
+      ]);
+    });
+
+    it("honours case, whole-word, and regex options", async () => {
+      await fs.writeFile(path.join(tmpDir, "a.txt"), "Foo\nfoobar\nfoo.b\n");
+
+      const lines = async (options: Record<string, unknown>) => {
+        const result = await fileExplorerService.searchText({
+          rootPath: tmpDir,
+          ...options,
+        } as any);
+        return result.files.flatMap((f) => f.lines.map((l) => l.line));
+      };
+
+      expect(await lines({ query: "foo" })).toEqual([1, 2, 3]);
+      expect(await lines({ query: "foo", caseSensitive: true })).toEqual([2, 3]);
+      expect(await lines({ query: "foo", wholeWord: true })).toEqual([1, 3]);
+      // Literal by default: "." matches only a dot.
+      expect(await lines({ query: "o.b" })).toEqual([3]);
+      expect(await lines({ query: "o.b", regex: true })).toEqual([2, 3]);
+    });
+
+    it("skips gitignored files and node_modules", async () => {
+      execFileSync("git", ["init"], { cwd: tmpDir });
+      await fs.writeFile(path.join(tmpDir, ".gitignore"), "ignored.txt\n");
+      await fs.writeFile(path.join(tmpDir, "ignored.txt"), "needle\n");
+      await fs.writeFile(path.join(tmpDir, "kept.txt"), "needle\n");
+      await fs.writeFile(path.join(tmpDir, ".env.example"), "needle\n");
+      await fs.mkdir(path.join(tmpDir, "node_modules", "dep"), { recursive: true });
+      await fs.writeFile(
+        path.join(tmpDir, "node_modules", "dep", "index.js"),
+        "needle\n",
+      );
+
+      const result = await fileExplorerService.searchText({
+        rootPath: tmpDir,
+        query: "needle",
+      });
+      expect(result.files.map((f) => f.relativePath)).toEqual([
+        ".env.example",
+        "kept.txt",
+      ]);
+    });
+
+    it("stops at the result cap and says so", async () => {
+      await fs.writeFile(
+        path.join(tmpDir, "many.txt"),
+        Array.from({ length: 50 }, () => "hit").join("\n"),
+      );
+
+      const result = await fileExplorerService.searchText({
+        rootPath: tmpDir,
+        query: "hit",
+        maxResults: 10,
+      });
+      expect(result.truncated).toBe(true);
+      expect(result.files[0].lines).toHaveLength(10);
+    });
+
+    it("reports an invalid regular expression", async () => {
+      await fs.writeFile(path.join(tmpDir, "a.txt"), "foo\n");
+      await expect(
+        fileExplorerService.searchText({
+          rootPath: tmpDir,
+          query: "foo(",
+          regex: true,
+        }),
+      ).rejects.toThrow(/^Invalid regular expression/);
+    });
+
+    it("returns nothing for an empty query", async () => {
+      const result = await fileExplorerService.searchText({
+        rootPath: tmpDir,
+        query: "",
+      });
+      expect(result).toEqual({ files: [], matchCount: 0, truncated: false });
+    });
+
+    it("refuses a root outside the content roots", async () => {
+      allowedRoots.splice(0, allowedRoots.length);
+      await expect(
+        fileExplorerService.searchText({ rootPath: tmpDir, query: "foo" }),
+      ).rejects.toThrow("Path is outside your workspaces");
     });
   });
 });

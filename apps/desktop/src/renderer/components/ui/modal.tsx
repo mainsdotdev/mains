@@ -19,20 +19,24 @@ export interface ModalProps {
   children?: ReactNode;
   /** Panel overrides — sizing (w-*, max-w-*) and radius. */
   className?: string;
-  /** "dim" matches Alert/WizardModal; "media" darkens + blurs for image/screenshot previews. */
-  backdrop?: "dim" | "media";
+  /** "dim" matches Alert/WizardModal; "command" keeps the app visible behind the palette. */
+  backdrop?: "dim" | "command" | "media";
   /** "panel" is the glass card; "bare" drops the fill, rim, radius, and shadow so media content floats on the backdrop. */
   surface?: "panel" | "bare";
   /** Vertical placement; command/search surfaces sit near the top edge. */
   placement?: "center" | "top";
-  /** Command surfaces use a restrained entrance without spring overshoot. */
-  motion?: "default" | "command";
+  /** Command surfaces use a restrained entrance; "none" lets a shared view transition own the motion. */
+  motion?: "default" | "command" | "none";
+  /** Pairs this dialog with another surface during a same-document view transition. */
+  viewTransitionName?: string;
   /** Name the dialog when its content does not use ModalHeader. */
   "aria-label"?: string;
   /** Link the dialog to a visible title when its content does not use ModalHeader. */
   "aria-labelledby"?: string;
   "aria-describedby"?: string;
   initialFocusRef?: RefObject<HTMLElement | null>;
+  /** Explicit opener to refocus when the dialog hides its source surface. */
+  returnFocusRef?: RefObject<HTMLElement | null>;
   closeOnEscape?: boolean;
   closeOnBackdrop?: boolean;
 }
@@ -54,10 +58,12 @@ export function Modal({
   surface = "panel",
   placement = "center",
   motion = "default",
+  viewTransitionName,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
   "aria-describedby": ariaDescribedBy,
   initialFocusRef,
+  returnFocusRef,
   closeOnEscape = true,
   closeOnBackdrop = true,
 }: ModalProps) {
@@ -69,6 +75,7 @@ export function Modal({
     dialogRef,
     onClose,
     initialFocusRef,
+    returnFocusRef,
     closeOnEscape,
   });
 
@@ -86,7 +93,9 @@ export function Modal({
           "absolute inset-0",
           backdrop === "media"
             ? "bg-black/80 "
-            : "dark:bg-primary-950/60 bg-primary/80",
+            : backdrop === "command"
+              ? "bg-primary-950/15 dark:bg-primary-950/35"
+              : "dark:bg-primary-950/60 bg-primary/80",
         )}
         role="presentation"
         onClick={closeOnBackdrop ? onClose : undefined}
@@ -109,9 +118,12 @@ export function Modal({
           className,
         )}
         style={{
+          viewTransitionName,
           animation:
-            motion === "command"
-              ? "commandMenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1) both"
+            motion === "none"
+              ? "none"
+              : motion === "command"
+              ? "commandMenuIn 120ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards"
               : "wizardModalIn 20ms cubic-bezier(0.22, 1, 0.36, 1) both",
         }}
       >
@@ -127,23 +139,32 @@ export function Modal({
 export interface ModalHeaderProps {
   onClose: () => void;
   children?: ReactNode;
+  closeIcon?: ReactNode;
+  closeLabel?: string;
 }
 
 /** Standard modal title bar: content on the left, close button on the right. */
-export function ModalHeader({ onClose, children }: ModalHeaderProps) {
+export function ModalHeader({
+  onClose,
+  children,
+  closeIcon,
+  closeLabel = "Close",
+}: ModalHeaderProps) {
   const titleId = useContext(ModalTitleContext) ?? undefined;
 
   return (
-    <div className="flex items-center justify-between px-4 py-2.5 border-b border-primary-200 dark:border-primary-800 shrink-0">
+    <div className="flex items-center justify-between px-4 py-2.5  shrink-0">
       <div id={titleId} className="flex items-center gap-2 min-w-0 flex-1">
         {children}
       </div>
       <Button
         onClick={onClose}
-        aria-label="Close"
+        aria-label={closeLabel}
+        tooltip={closeIcon ? closeLabel : undefined}
+        tooltipPosition="bottom-left"
         className="ml-3 shrink-0 p-1.5 rounded-full  hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
       >
-        <Close className="size-4 text-primary-500" />
+        {closeIcon ?? <Close className="size-4 text-primary-500" />}
       </Button>
     </div>
   );

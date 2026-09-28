@@ -1,11 +1,7 @@
-import type {
-  DragEventHandler,
-  MouseEvent,
-  ReactNode,
-} from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceGroupExpanded } from "@/lib/redux/slices/appSettingsSlice";
-import { Button, Text } from "@/components/ui";
+import { Button, Text, type SortableHandle } from "@/components/ui";
 import { ArrowUp, New } from "@/components/ui/icons";
 
 /** Shared by the header's own glyph and any a caller supplies in its place. */
@@ -22,12 +18,12 @@ export function SidebarGroupSection({
   groupKey,
   label,
   labelTint,
+  labelWeight = "normal",
   icon,
   // count,
   action,
   secondaryAction,
-  dragHandleProps,
-  onReorderKey,
+  sortHandle,
   children,
 }: {
   groupKey: string;
@@ -40,6 +36,7 @@ export function SidebarGroupSection({
    * title than the default. Absent or empty keeps the `contrast` tone.
    */
   labelTint?: string;
+  labelWeight?: "normal" | "medium";
   /** A function form gets the open state, so the glyph can track the accordion. */
   icon?: ReactNode | ((expanded: boolean) => ReactNode);
   count: number;
@@ -49,7 +46,12 @@ export function SidebarGroupSection({
    * under a project), the New mark for starting something fresh (a chat).
    * Defaults to New.
    */
-  action?: { label: string; onClick: () => void; icon?: ReactNode };
+  action?: {
+    label: string;
+    onClick: (event: MouseEvent<HTMLElement>) => void;
+    icon?: ReactNode;
+    menuOpen?: boolean;
+  };
   /**
    * Optional sibling action rendered before the primary "+" action. Its click
    * carries the event so a caller can anchor a menu to the button it came from.
@@ -59,14 +61,11 @@ export function SidebarGroupSection({
     onClick: (event: MouseEvent<HTMLElement>) => void;
     icon: ReactNode;
   };
-  dragHandleProps?: {
-    draggable: boolean;
-    onDragStart: DragEventHandler<HTMLDivElement>;
-    onDragOver: DragEventHandler<HTMLDivElement>;
-    onDrop: DragEventHandler<HTMLDivElement>;
-    onDragEnd: DragEventHandler<HTMLDivElement>;
-  };
-  onReorderKey?: (direction: "up" | "down") => void;
+  /**
+   * Makes the header the handle of a `SortableItem`: dragging it, or Alt+Arrow
+   * while it has focus, moves the whole section.
+   */
+  sortHandle?: SortableHandle;
   children: ReactNode;
 }) {
   const dispatch = useAppDispatch();
@@ -77,41 +76,34 @@ export function SidebarGroupSection({
   const toggleExpanded = () => {
     dispatch(setWorkspaceGroupExpanded({ groupKey, expanded: !expanded }));
   };
+  const isSortable = !!sortHandle?.listeners;
 
   return (
     <div className="">
       <div
+        ref={sortHandle?.ref}
         role="button"
         tabIndex={0}
-        draggable={dragHandleProps?.draggable}
-        onDragStart={(event) => {
-          if ((event.target as HTMLElement).closest("button")) {
-            event.preventDefault();
-            return;
-          }
-          dragHandleProps?.onDragStart(event);
+        onPointerDown={(event) => {
+          // A press on one of the header's own buttons is a click on that
+          // button, never the start of a drag.
+          if ((event.target as HTMLElement).closest("button")) return;
+          sortHandle?.listeners?.onPointerDown?.(event);
         }}
-        onDragOver={dragHandleProps?.onDragOver}
-        onDrop={dragHandleProps?.onDrop}
-        onDragEnd={dragHandleProps?.onDragEnd}
-        onClick={toggleExpanded}
+        onClick={() => {
+          if (sortHandle?.consumeDragClick()) return;
+          toggleExpanded();
+        }}
         onKeyDown={(e) => {
-          if (
-            onReorderKey &&
-            e.altKey &&
-            (e.key === "ArrowUp" || e.key === "ArrowDown")
-          ) {
-            e.preventDefault();
-            onReorderKey?.(e.key === "ArrowUp" ? "up" : "down");
-            return;
-          }
+          sortHandle?.onKeyDown?.(e);
+          if (e.defaultPrevented) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             toggleExpanded();
           }
         }}
         className={`group/section w-full flex items-center gap-1.5 px-2 py-1 mb-px rounded-lg hover:bg-primary/50 dark:hover:bg-primary/5 transition-colors ${
-          dragHandleProps?.draggable
+          isSortable
             ? "cursor-grab active:cursor-grabbing"
             : "cursor-pointer"
         }`}
@@ -126,7 +118,7 @@ export function SidebarGroupSection({
           size="s"
           tone={labelTint ? "inherit" : "contrast"}
           className={`truncate ${labelTint ?? ""}`}
-          weight="normal"
+          weight={labelWeight}
         >
           {label}
         </Text>
@@ -158,10 +150,12 @@ export function SidebarGroupSection({
                 tooltip={action.label}
                 onClick={(e) => {
                   e.stopPropagation();
-                  action.onClick();
+                  action.onClick(e);
                 }}
-                className="hidden group-hover/section:flex items-center p-0.5 cursor-pointer rounded-md"
+                className={`${action.menuOpen ? "flex" : "hidden group-hover/section:flex"} items-center p-0.5 cursor-pointer rounded-md`}
                 aria-label={action.label}
+                aria-haspopup={action.menuOpen !== undefined ? "menu" : undefined}
+                aria-expanded={action.menuOpen}
               >
                 {action.icon ?? <New className={SIDEBAR_ACTION_ICON} />}
               </Button>

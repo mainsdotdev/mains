@@ -30,6 +30,11 @@ export function registerProjectsIpc(): void {
   );
 
   ipcMain.handle(
+    CHANNELS.projects.reorder,
+    handle((payload: { accountId: string; orderedIds: string[] }) => projectsService.reorder(payload)),
+  );
+
+  ipcMain.handle(
     CHANNELS.projects.findByRemoteOrigin,
     handle((accountId: string, remoteOrigin: string) => projectsService.findByRemoteOrigin(accountId, remoteOrigin)),
   );
@@ -102,6 +107,7 @@ export function unregisterProjectsIpc(): void {
     CHANNELS.projects.list,
     CHANNELS.projects.get,
     CHANNELS.projects.listByAccount,
+    CHANNELS.projects.reorder,
     CHANNELS.projects.findByRemoteOrigin,
     CHANNELS.projects.findOrCreate,
     CHANNELS.projects.create,

@@ -44,9 +44,15 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../providers/adapters", () => ({
+vi.mock("../providers/adapters", async () => ({
   createWorkAdapter: vi.fn(),
   couldModifyFiles: vi.fn().mockReturnValue(false),
+  // The real classifier: turn-change attribution depends on what it names.
+  toolWrites: (
+    await vi.importActual<typeof import("../providers/adapters/adapter.shared")>(
+      "../providers/adapters/adapter.shared",
+    )
+  ).toolWrites,
 }));
 
 // gitService is throw-style: getHeadSha resolves a plain sha / rejects, and
@@ -58,6 +64,7 @@ vi.mock("../git/git.service", () => ({
     captureDiffSnapshot: vi.fn(),
     snapshotWorkingTree: vi.fn(),
     diffTrees: vi.fn(),
+    locateWorktree: vi.fn(),
   },
 }));
 
@@ -67,7 +74,6 @@ vi.mock("../workspace", () => ({
   },
   recordWorkspaceDiff: vi.fn().mockResolvedValue(undefined),
   clearWorkspaceDiff: vi.fn().mockResolvedValue(false),
-  logWorkspaceActivity: vi.fn(),
 }));
 
 import { createRunSession } from "./run-session";
@@ -75,7 +81,7 @@ import { runSessionRegistry } from "./run-session-registry";
 import { runsRepo } from "./runs.repo";
 import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
-import { logWorkspaceActivity } from "../workspace";
+import { APP_WRITER, worktreeWrites } from "../git";
 
 describe("RunSession", () => {
   beforeEach(() => {
@@ -102,6 +108,8 @@ describe("RunSession", () => {
     // Default: the working tree never changes, so no turn records changes.
     vi.mocked(gitService.snapshotWorkingTree).mockReset().mockResolvedValue("tree-same");
     vi.mocked(gitService.diffTrees).mockReset();
+    // Default: no worktree, so no run is ever told apart from a parallel one.
+    vi.mocked(gitService.locateWorktree).mockReset();
     vi.mocked(createWorkAdapter).mockReset();
     vi.mocked(couldModifyFiles).mockReturnValue(false);
   });
@@ -156,7 +164,6 @@ describe("RunSession", () => {
       expect(gitService.getHeadSha).not.toHaveBeenCalled();
       expect(gitService.captureDiffSnapshot).not.toHaveBeenCalled();
       expect(gitService.snapshotWorkingTree).not.toHaveBeenCalled();
-      expect(logWorkspaceActivity).not.toHaveBeenCalled();
     });
 
     it("creates a turn at seedTurnIndex + 1 for continued runs", async () => {
@@ -231,6 +238,221 @@ describe("RunSession", () => {
       const [turn] = await runsRepo.findTurnsByRun("r1");
       expect(turn.status).toBe("completed");
       expect(turn.changes).toBeNull();
+    });
+
+    describe("sharing the worktree", () => {
+      // The working tree both runs see; tests move it forward as files change.
+      let tree: string;
+      let topLevel: string;
+      // What changed between the first tree and each later one.
+      const changed: Record<string, string[]> = {};
+
+      const editEvents = (toolCallId: string, filePath: string) =>
+        (["start", "complete"] as const).map((phase) => ({
+          type: "tool_call",
+          toolName: "Edit",
+          input: { file_path: filePath },
+          metadata: { phase, toolCallId },
+        }));
+
+      async function edit(session: ReturnType<typeof makeSession>, id: string, filePath: string) {
+        for (const event of editEvents(id, filePath)) await session.project(event as any);
+      }
+
+      beforeEach(() => {
+        createRun(db, {
+          id: "r2",
+          accountId: "default",
+          providerId: "copilot_cli",
+          workspaceId: "w1",
+          status: "running",
+        });
+        tree = "t0";
+        // A worktree of its own per test: the ledger is module state.
+        topLevel = `/tmp/w1-${Math.random()}`;
+        vi.mocked(gitService.locateWorktree).mockResolvedValue({ topLevel, prefix: "" });
+        vi.mocked(gitService.snapshotWorkingTree).mockImplementation(async () => tree);
+        vi.mocked(gitService.diffTrees).mockImplementation(
+          async (_cwd, _from, to, paths) => {
+            const files = (changed[to] ?? [])
+              .filter((p) => !paths || paths.includes(p))
+              .map((p) => ({
+                path: p,
+                status: "modified" as const,
+                additions: 1,
+                deletions: 1,
+                binary: false,
+              }));
+            return {
+              diffText: files.map((f) => `diff --git a/${f.path} b/${f.path}\n`).join(""),
+              files,
+              additions: files.length,
+              deletions: files.length,
+              truncated: false,
+            };
+          },
+        );
+      });
+
+      const storedPaths = async (runId: string) => {
+        const [turn] = await runsRepo.findTurnsByRun(runId);
+        return turn.changes?.files.map((f) => f.path) ?? null;
+      };
+
+      it("leaves the other run's edits off a turn that edited nothing", async () => {
+        // The reported case: a review turn runs a typecheck while another run
+        // edits files in the same worktree.
+        const review = makeSession();
+        const editor = makeSession({ runId: "r2" });
+        await flushBackground();
+
+        await review.project({
+          type: "tool_call",
+          toolName: "Bash",
+          input: { command: "npm run typecheck" },
+          metadata: { phase: "start", toolCallId: "tc-typecheck" },
+        } as any);
+        await edit(editor, "tc-edit", "/tmp/w1/pulse-list.tsx");
+        changed.t1 = ["pulse-list.tsx"];
+        tree = "t1";
+
+        await editor.finalize({ status: "succeeded" });
+        await review.finalize({ status: "succeeded" });
+
+        expect(await storedPaths("r2")).toEqual(["pulse-list.tsx"]);
+        expect(await storedPaths("r1")).toBeNull();
+      });
+
+      it("keeps only this run's own files, from a patch narrowed to them", async () => {
+        const mine = makeSession();
+        const theirs = makeSession({ runId: "r2" });
+        await flushBackground();
+
+        await edit(mine, "tc-a", "/tmp/w1/a.ts");
+        await edit(theirs, "tc-b", "b.ts");
+        changed.t2 = ["a.ts", "b.ts"];
+        tree = "t2";
+
+        await mine.finalize({ status: "succeeded" });
+        await theirs.finalize({ status: "succeeded" });
+
+        expect(await storedPaths("r1")).toEqual(["a.ts"]);
+        expect(await storedPaths("r2")).toEqual(["b.ts"]);
+        expect(gitService.diffTrees).toHaveBeenCalledWith("/tmp/w1", "t0", "t2", ["a.ts"]);
+        const [turn] = await runsRepo.findTurnsByRun("r1");
+        const stored = await runsRepo.findTurnChanges("r1", turn.id);
+        expect(stored?.diffText).toBe("diff --git a/a.ts b/a.ts\n");
+      });
+
+      it("marks a file both runs edited as shared", async () => {
+        const mine = makeSession();
+        const theirs = makeSession({ runId: "r2" });
+        await flushBackground();
+
+        await edit(mine, "tc-a", "a.ts");
+        await edit(theirs, "tc-b", "a.ts");
+        changed.t3 = ["a.ts"];
+        tree = "t3";
+
+        await theirs.finalize({ status: "succeeded" });
+        await mine.finalize({ status: "succeeded" });
+
+        const [turn] = await runsRepo.findTurnsByRun("r1");
+        expect(turn.changes?.files).toEqual([
+          expect.objectContaining({ path: "a.ts", shared: true }),
+        ]);
+      });
+
+      it("does not claim a file whose edit failed, so a peer's edit to it stays off", async () => {
+        const mine = makeSession();
+        const theirs = makeSession({ runId: "r2" });
+        await flushBackground();
+
+        await mine.project({
+          type: "tool_call",
+          toolName: "Edit",
+          input: { file_path: "a.ts" },
+          metadata: { phase: "start", toolCallId: "tc-a" },
+        } as any);
+        // Completion without input: the claim comes from the start event, and
+        // the error withdraws it.
+        await mine.project({
+          type: "tool_call",
+          toolName: "Edit",
+          error: "old_string not found",
+          metadata: { phase: "complete", toolCallId: "tc-a" },
+        } as any);
+        await edit(theirs, "tc-b", "a.ts");
+        changed.t5 = ["a.ts"];
+        tree = "t5";
+
+        await theirs.finalize({ status: "succeeded" });
+        await mine.finalize({ status: "succeeded" });
+
+        expect(await storedPaths("r1")).toBeNull();
+        expect(await storedPaths("r2")).toEqual(["a.ts"]);
+      });
+
+      it("claims a file named only at start once the call succeeds", async () => {
+        const mine = makeSession();
+        const theirs = makeSession({ runId: "r2" });
+        await flushBackground();
+
+        await mine.project({
+          type: "tool_call",
+          toolName: "Write",
+          input: { file_path: "new.ts" },
+          metadata: { phase: "start", toolCallId: "tc-w" },
+        } as any);
+        await mine.project({
+          type: "tool_call",
+          toolName: "Write",
+          metadata: { phase: "complete", toolCallId: "tc-w" },
+        } as any);
+        changed.t6 = ["new.ts"];
+        tree = "t6";
+
+        await mine.finalize({ status: "succeeded" });
+        await theirs.finalize({ status: "succeeded" });
+
+        expect(await storedPaths("r1")).toEqual(["new.ts"]);
+      });
+
+      it("leaves what the app itself wrote during the turn off the card", async () => {
+        // A pull in the git panel while a run works alone.
+        const session = makeSession();
+        await flushBackground();
+        await edit(session, "tc-a", "a.ts");
+        worktreeWrites.record(
+          topLevel,
+          APP_WRITER,
+          { paths: ["pulled.ts", "a.ts"], unnamed: false },
+          Date.now(),
+        );
+        changed.t7 = ["a.ts", "pulled.ts"];
+        tree = "t7";
+
+        await session.finalize({ status: "succeeded" });
+
+        const [turn] = await runsRepo.findTurnsByRun("r1");
+        expect(turn.changes?.files).toEqual([
+          expect.objectContaining({ path: "a.ts", shared: true }),
+        ]);
+      });
+
+      it("keeps every change when the run had the worktree to itself", async () => {
+        // Alone, nothing to sort out: a file the user or a codegen step wrote
+        // still counts, exactly as before.
+        const session = makeSession();
+        await flushBackground();
+        changed.t4 = ["edited-by-hand.ts"];
+        tree = "t4";
+
+        await session.finalize({ status: "succeeded" });
+
+        expect(await storedPaths("r1")).toEqual(["edited-by-hand.ts"]);
+        expect(gitService.diffTrees).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
@@ -1352,84 +1574,4 @@ describe("RunSession", () => {
     });
   });
 
-  // ─────────────────────────────────────────────────────────────
-  // persistFinalDiff — incremental "files changed" activity
-  // ─────────────────────────────────────────────────────────────
-  describe("persistFinalDiff — incremental activity", () => {
-    // Synthetic per-file diff chunk, terminated with a newline like real git
-    // output so its hash is stable regardless of whether other files follow.
-    const fileDiff = (name: string, body: string) =>
-      `diff --git a/${name} b/${name}\nindex 000..111 100644\n--- a/${name}\n+++ b/${name}\n@@ -1 +1 @@\n${body}\n`;
-
-    const diffActivities = () =>
-      vi
-        .mocked(logWorkspaceActivity)
-        .mock.calls.filter(([p]) => p.type === "diff")
-        .map(([p]) => p);
-
-    const snap = (diffText: string, files: string[]) => ({
-      baseRef: "sha1",
-      diffText,
-      files,
-      untrackedFiles: [] as string[],
-      shortstat: `${files.length} file${files.length === 1 ? "" : "s"} changed`,
-    });
-
-    it("does not re-log pre-existing changes when the run touches nothing", async () => {
-      // a.ts is already dirty at run start; the run changes nothing.
-      vi.mocked(gitService.getHeadSha).mockResolvedValue("sha1");
-      vi.mocked(gitService.captureDiffSnapshot).mockResolvedValue(
-        snap(fileDiff("a.ts", "+x"), ["a.ts"]),
-      );
-
-      const session = makeSession();
-      await flushBackground(); // captureBaseRef snapshots the pre-existing diff
-
-      await session.finalize({ status: "succeeded" });
-
-      expect(diffActivities()).toHaveLength(0);
-    });
-
-    it("logs only the files changed since run start", async () => {
-      // Run start: a.ts dirty. Run end: a.ts unchanged, b.ts newly changed.
-      vi.mocked(gitService.getHeadSha).mockResolvedValue("sha1");
-      vi.mocked(gitService.captureDiffSnapshot)
-        .mockResolvedValueOnce(snap(fileDiff("a.ts", "+x"), ["a.ts"]))
-        .mockResolvedValue(
-          snap(`${fileDiff("a.ts", "+x")}${fileDiff("b.ts", "+y")}`, [
-            "a.ts",
-            "b.ts",
-          ]),
-        );
-
-      const session = makeSession();
-      await flushBackground();
-
-      await session.finalize({ status: "succeeded" });
-
-      const activities = diffActivities();
-      expect(activities).toHaveLength(1);
-      expect(activities[0].title).toBe("1 file changed");
-      expect((activities[0].metadata as any).fileNames).toEqual(["b.ts"]);
-    });
-
-    it("skips the activity log when the run-start baseline could not be captured", async () => {
-      // getHeadSha succeeds (baseRef is set) but the run-start snapshot fails
-      // (all-or-throw), so initialDiffHashes stays null — "baseline unknown",
-      // not "clean tree". We must NOT attribute the now-dirty a.ts to this run;
-      // an empty-Map fallback would have logged it as a spurious "1 file
-      // changed".
-      vi.mocked(gitService.getHeadSha).mockResolvedValue("sha1");
-      vi.mocked(gitService.captureDiffSnapshot)
-        .mockRejectedValueOnce(new Error("git boom")) // run-start snapshot fails → null baseline
-        .mockResolvedValue(snap(fileDiff("a.ts", "+x"), ["a.ts"])); // finalize snapshot
-
-      const session = makeSession();
-      await flushBackground();
-
-      await session.finalize({ status: "succeeded" });
-
-      expect(diffActivities()).toHaveLength(0);
-    });
-  });
 });

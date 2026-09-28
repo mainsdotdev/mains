@@ -234,6 +234,18 @@ export function registerBrowserIpc(): void {
     }),
   );
   ipcMain.handle(
+    CHANNELS.browser.createHtmlPreviewTab,
+    handle((filePath: unknown, ownerKey: unknown) => {
+      if (typeof filePath !== "string") {
+        throw new Error("filePath must be a string");
+      }
+      return browserService.createHtmlPreviewTab(
+        filePath,
+        ownerKey === undefined ? undefined : requireOwnerKey(ownerKey),
+      );
+    }),
+  );
+  ipcMain.handle(
     CHANNELS.browser.setContext,
     handle((ownerKey: unknown, showBlankTab: unknown) =>
       browserService.setContext(requireOwnerKey(ownerKey), showBlankTab === true)),
@@ -426,6 +438,7 @@ export function registerBrowserIpc(): void {
 export function unregisterBrowserIpc(): void {
   [
     CHANNELS.browser.createTab,
+    CHANNELS.browser.createHtmlPreviewTab,
     CHANNELS.browser.setContext,
     CHANNELS.browser.reassignTabs,
     CHANNELS.browser.listOwnerKeys,

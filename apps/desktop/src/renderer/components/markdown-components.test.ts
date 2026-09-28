@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 
 import { AgentMarkdown } from "./agent-markdown";
@@ -12,17 +12,29 @@ import {
 
 const linkHarness = vi.hoisted(() => ({
   openLink: vi.fn(),
+  openFile: vi.fn(),
+  openHtmlFile: vi.fn(),
+  signImage: vi.fn(),
 }));
 
 vi.mock("@/features/workspace/hooks/use-open-file-in-editor", () => ({
-  useOpenFileInEditor: () => vi.fn(),
+  useOpenFileInEditor: () => linkHarness.openFile,
 }));
 vi.mock("@/hooks/use-open-link", () => ({
   useOpenLink: () => linkHarness.openLink,
 }));
+vi.mock("@/hooks/use-browser-panel", () => ({
+  useBrowserPanel: () => ({ openHtmlFile: linkHarness.openHtmlFile }),
+}));
 
 afterEach(cleanup);
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  Object.defineProperty(window, "api", {
+    configurable: true,
+    value: { imageProxy: { sign: linkHarness.signImage } },
+  });
+});
 
 function renderMarkdown(source: string) {
   return render(createElement(AgentMarkdown, null, source));
@@ -46,7 +58,62 @@ describe("isRemoteImageSrc", () => {
   });
 });
 
+describe("markdownComponents / images", () => {
+  it("loads an encoded local image path through the signed image protocol", async () => {
+    const signed = "mains-localimg://img/?path=preview&sig=test";
+    linkHarness.signImage.mockResolvedValue({ success: true, data: signed });
+    renderMarkdown(
+      "![OkanBilal CV preview](/Users/example/Library/Application%20Support/mains/runs/run-1/work/okanbilal-cv-preview.png)",
+    );
+
+    await waitFor(() => {
+      expect(linkHarness.signImage).toHaveBeenCalledWith(
+        "/Users/example/Library/Application Support/mains/runs/run-1/work/okanbilal-cv-preview.png",
+      );
+      expect(screen.getByRole("img", { name: "OkanBilal CV preview" }).getAttribute("src"))
+        .toBe("/__localimg?path=preview&sig=test");
+    });
+  });
+
+  it("keeps remote images behind the load action", () => {
+    renderMarkdown("![Remote preview](https://example.com/image.png?token=secret)");
+
+    expect(screen.queryByRole("img", { name: "Remote preview" })).toBeNull();
+    expect(linkHarness.signImage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /remote image from example.com/ }));
+    expect(screen.getByRole("img", { name: "Remote preview" }).getAttribute("src"))
+      .toContain(encodeURIComponent("https://example.com/image.png?token=secret"));
+  });
+});
+
 describe("markdownComponents / code", () => {
+  it("shows a color swatch beside an exact HEX code in an assistant table", () => {
+    const { container } = renderMarkdown(
+      "| Palet | Renkler |\n|---|---|\n| Sakura | `#FEF4F4` → `#F5B1AA` → `#E9546B` |",
+    );
+
+    const code = screen.getByText("#FEF4F4");
+    expect(code.tagName).toBe("CODE");
+    const swatch = container.querySelector('[aria-label="#FEF4F4 color swatch"]');
+    expect(swatch).not.toBeNull();
+    expect((swatch as HTMLElement).style.backgroundColor).toBe("rgb(254, 244, 244)");
+    expect(container.querySelectorAll('[aria-label$="color swatch"]')).toHaveLength(3);
+  });
+
+  it("does not decorate non-colors or HEX values inside fenced code", () => {
+    const { container } = renderMarkdown(
+      "`#FEF4F4-extra` and `#abc`\n\n```css\ncolor: #FEF4F4;\n```",
+    );
+    expect(container.querySelector('[aria-label$="color swatch"]')).toBeNull();
+  });
+
+  it("keeps assistant tables light, with row separators instead of a full grid", () => {
+    const { container } = renderMarkdown("| Palet | Renk |\n|---|---|\n| Sakura | `#FEF4F4` |");
+    expect(container.querySelector("table")?.parentElement?.className).not.toContain("border border-");
+    expect(container.querySelector("th")?.className).not.toContain("border-r");
+    expect(container.querySelector("tbody tr")?.className).toContain("border-b");
+  });
+
   it("renders a fence with no language as a block, not a row of inline pills", () => {
     // react-markdown only sets `language-*` when the fence names one, so a bare
     // ``` block and an inline span carry identical props. Reading the parent
@@ -127,6 +194,44 @@ describe("assistant markdown / math", () => {
 });
 
 describe("markdownComponents / links", () => {
+  it("opens generated HTML in the browser panel instead of the editor", () => {
+    linkHarness.openHtmlFile.mockResolvedValue(undefined);
+    renderMarkdown(
+      "[dosyayı aç](</Users/example/Application Support/mains/runs/run-1/work/palet.html>)",
+    );
+
+    fireEvent.click(screen.getByText("dosyayı aç").closest("button")!);
+
+    expect(linkHarness.openHtmlFile).toHaveBeenCalledWith(
+      "/Users/example/Application Support/mains/runs/run-1/work/palet.html",
+    );
+    expect(linkHarness.openFile).not.toHaveBeenCalled();
+  });
+
+  it("decodes spaces in a Collection source file link before opening it", () => {
+    renderMarkdown(
+      "[Blueprint.pdf](/Users/example/Application%20Support/mains/runs/run-1/work/collection-sources/source-1/content.pdf)",
+    );
+
+    fireEvent.click(screen.getByText("Blueprint.pdf").closest("button")!);
+
+    expect(linkHarness.openFile).toHaveBeenCalledWith(
+      "/Users/example/Application Support/mains/runs/run-1/work/collection-sources/source-1/content.pdf",
+    );
+  });
+
+  it("decodes reserved characters in a cited file path before opening it", () => {
+    renderMarkdown(
+      "[Recipe #1 (draft).pdf](/Users/example/Application%20Support/Recipe%20%231%20%28draft%29.pdf)",
+    );
+
+    fireEvent.click(screen.getByText("Recipe #1 (draft).pdf").closest("button")!);
+
+    expect(linkHarness.openFile).toHaveBeenCalledWith(
+      "/Users/example/Application Support/Recipe #1 (draft).pdf",
+    );
+  });
+
   it("derives favicon requests from the origin only", () => {
     expect(
       faviconUrlForHref(
@@ -136,6 +241,15 @@ describe("markdownComponents / links", () => {
     expect(faviconUrlForHref("mailto:hello@example.com")).toBeNull();
     expect(faviconUrlForHref("#footnote-1")).toBeNull();
     expect(faviconUrlForHref("not a url")).toBeNull();
+  });
+
+  it("uses Figma's declared icon for Figma links without matching lookalike hosts", () => {
+    expect(faviconUrlForHref("https://www.figma.com/design/file?node-id=1:2"))
+      .toBe("https://static.figma.com/app/icon/2/favicon.png");
+    expect(faviconUrlForHref("https://figma.com/file/abc"))
+      .toBe("https://static.figma.com/app/icon/2/favicon.png");
+    expect(faviconUrlForHref("https://www.figma.com.evil.example/design/file"))
+      .toBe("https://www.figma.com.evil.example/favicon.ico");
   });
 
   it("keeps a long external URL inline with the surrounding prompt text", () => {

@@ -81,6 +81,23 @@ describe("browserService — tabs by chat", () => {
     expect(state.tabs.some((tab) => tab.url === "https://example.com/a")).toBe(false);
   });
 
+  it("restores a local HTML preview tab without a file URL", async () => {
+    const htmlPath = join(harness.userData, "palette.html");
+    writeFileSync(htmlPath, "<!doctype html><title>Palette</title>");
+    await browserService.setContext("chat-a");
+    await browserService.createHtmlPreviewTab(htmlPath);
+    const first = browserService.getState().tabs[0];
+    expect(first.url).toBe(`mains-preview://${first.tabId}/`);
+    expect(browserService.getHtmlPreviewPath(first.tabId)).toBe(htmlPath);
+    browserService._persistNow();
+    resetInMemory();
+
+    await browserService.setContext("chat-a");
+    const restored = browserService.getState().tabs[0];
+    expect(restored.url).toBe(`mains-preview://${first.tabId}/`);
+    expect(browserService.getHtmlPreviewPath(first.tabId)).toBe(htmlPath);
+  });
+
   it("moves a pre-run draft's tabs to the created chat", async () => {
     await browserService.setContext("draft-a");
     await browserService.createTab("https://example.com/docs");

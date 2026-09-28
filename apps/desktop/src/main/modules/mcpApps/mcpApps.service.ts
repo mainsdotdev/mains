@@ -67,6 +67,12 @@ function stringList(value: unknown): string[] | undefined {
   return strings.length > 0 ? strings : undefined;
 }
 
+function displayModes(value: unknown): Array<"inline" | "fullscreen"> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return [...new Set(value.filter((mode): mode is "inline" | "fullscreen" =>
+    mode === "inline" || mode === "fullscreen"))];
+}
+
 function normalizeCsp(value: unknown): McpAppResourceCsp | undefined {
   const source = record(value);
   if (!source) return undefined;
@@ -98,6 +104,7 @@ function normalizePermissions(value: unknown): McpAppResourcePermissions | undef
 function normalizeResourceMeta(value: unknown): McpAppResourceMeta {
   const meta = record(value) ?? {};
   const ui = record(meta.ui) ?? {};
+  const openaiUi = record(meta["openai/ui"]) ?? {};
   const csp = sanitizeMcpAppResourceCsp(
     normalizeCsp(ui.csp ?? meta["ui/csp"] ?? meta["openai/widgetCSP"]),
   );
@@ -109,11 +116,15 @@ function normalizeResourceMeta(value: unknown): McpAppResourceMeta {
   );
   const borderValue =
     ui.prefersBorder ?? meta["ui/prefersBorder"] ?? meta["openai/widgetPrefersBorder"];
+  const availableDisplayModes = displayModes(
+    ui.availableDisplayModes ?? openaiUi.availableDisplayModes,
+  );
   return {
     ...(csp ? { csp } : {}),
     ...(permissions ? { permissions } : {}),
     ...(domain ? { domain } : {}),
     ...(typeof borderValue === "boolean" ? { prefersBorder: borderValue } : {}),
+    ...(availableDisplayModes ? { availableDisplayModes } : {}),
   };
 }
 
@@ -170,6 +181,9 @@ export const mcpAppsService = {
       uri: resourceUri,
       originCallId: optionalString(raw.originCallId, "originCallId"),
       connectorId: optionalString(raw.connectorId, "connectorId"),
+      ...(raw.linkId !== undefined
+        ? { linkId: raw.linkId === null ? null : optionalString(raw.linkId, "linkId") }
+        : {}),
     });
     const content =
       result.contents.find((item) => item.uri === resourceUri && typeof item.text === "string") ??

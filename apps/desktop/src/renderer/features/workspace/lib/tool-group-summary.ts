@@ -45,6 +45,12 @@ function capitalize(sentence: string): string {
  * header at all in that case.
  */
 export function summarizeToolCalls(events: RunEvent[]): string {
+  if (
+    events.length > 0 &&
+    events.every((event) => event.metadata?.codexItemType === "imageView")
+  ) {
+    return events.length === 1 ? "Viewed an image" : `Viewed ${events.length} images`;
+  }
   const clauses = new Map<string, Clause>();
   // Vendors collapse into a single clause naming the integrations, because
   // "used the Linear integration, used the Gmail integration" is a list of

@@ -2,7 +2,6 @@ import { useMemo, useState, type ReactNode } from "react";
 import { Button, Text } from "@/components/ui";
 import {
   Bug,
-  Chart,
   FileIconComponent,
   Link,
   Note,
@@ -70,8 +69,11 @@ function SectionHeading({
 
 function resourceIcon(resource: SessionResource, imageUrl?: string): ReactNode {
   switch (resource.kind) {
+    // An interactive deliverable is still a file (usually .html): it takes that
+    // file's icon like any other, and the "Interactive" badge says the rest.
     case "file":
     case "document":
+    case "visualization":
       return <FileIconComponent fileName={resource.title} className="size-4" />;
     case "folder":
       return (
@@ -107,8 +109,6 @@ function resourceIcon(resource: SessionResource, imageUrl?: string): ReactNode {
       return <Bug className="size-4" />;
     case "selection":
       return <Read className="size-4" />;
-    case "visualization":
-      return <Chart className="size-4" />;
     case "note":
       return <Note className="size-4" />;
   }

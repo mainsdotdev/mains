@@ -69,8 +69,8 @@ describe("buildSessionResources", () => {
       context: [
         context({
           id: 1,
-          ref: "/runs/sources/brief.pdf",
-          metadata: { origin: "collection-source" },
+          ref: "/collections/source-1/content.pdf",
+          metadata: { origin: "collection-source", sourceName: "brief.pdf" },
         }),
         context({
           id: 2,

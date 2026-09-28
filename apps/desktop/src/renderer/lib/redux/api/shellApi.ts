@@ -9,6 +9,13 @@ export interface InstalledApp {
   icon: string | null;
 }
 
+/** Installed macOS app offered as a Computer use mention in the Codex composer. */
+export interface MentionableApp {
+  bundleId: string;
+  name: string;
+  icon: string | null;
+}
+
 /** Launch Services–reported app that can open a given file (macOS). */
 export interface FileHandlerApp {
   bundleId: string;
@@ -26,6 +33,13 @@ export const shellApi = baseApi.injectEndpoints({
       providesTags: ['InstalledApps'],
       keepUnusedDataFor: 3600,
     }),
+    getMentionableApps: builder.query<MentionableApp[], string>({
+      query: (query) => ({
+        handler: CHANNELS.shell.getMentionableApps,
+        args: [query],
+      }),
+      keepUnusedDataFor: 3600,
+    }),
     getAppsForFile: builder.query<FileHandlerApp[], string>({
       query: (filePath) => ({
         handler: CHANNELS.shell.getAppsForFile,
@@ -40,5 +54,6 @@ export const shellApi = baseApi.injectEndpoints({
 
 export const {
   useGetInstalledAppsQuery,
+  useGetMentionableAppsQuery,
   useLazyGetAppsForFileQuery,
 } = shellApi;

@@ -298,6 +298,8 @@ export interface WorkspaceResponse {
   projectId: string;
   name: string;
   rootPath: string;
+  sortOrder: number;
+  pinnedAt: Date | null;
   /** backlog | todo | in_progress | in_review | done | canceled | duplicate */
   status?: string;
   isArchived: boolean;
@@ -327,6 +329,7 @@ export interface ProjectResponse {
   id: string;
   name: string;
   icon: string | null;
+  sortOrder: number;
   isArchived?: boolean;
 }
 

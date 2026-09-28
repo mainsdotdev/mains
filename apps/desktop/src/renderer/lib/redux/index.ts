@@ -33,12 +33,18 @@ const appSettingsMigrations = {
   1: reparseAppTheme,
   // The provider-colour accent was dropped; the parse reads it as the theme's.
   2: reparseAppTheme,
+  // Project groups are now the default. Existing saved "none" and the
+  // retired "status" option both move to that default once.
+  3: (state: PersistedState) => state && {
+    ...state,
+    workspaceListGrouping: "project",
+  },
 };
 
 const appSettingsPersistConfig = {
   key: "appSettings",
   storage,
-  version: 2,
+  version: 3,
   migrate: createMigrate(appSettingsMigrations),
   whitelist: [
     "sidebarCollapsed",

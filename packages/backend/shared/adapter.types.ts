@@ -524,6 +524,7 @@ export interface McpAppReadResourceRequest {
   uri: string;
   originCallId?: string;
   connectorId?: string;
+  linkId?: string | null;
 }
 
 export interface McpAppResourceContent {
@@ -1023,8 +1024,6 @@ export interface CodexAdapterConfig {
   webSearchMode?: "disabled" | "cached" | "live";
   /** Skip git repo check for non-git directories */
   skipGitRepoCheck?: boolean;
-  /** Thread personality — controls the agent's conversational style */
-  personality?: "friendly" | "pragmatic" | "none";
   /**
    * When true, sends `collaborationMode: { mode: "plan", … }` on `turn/start`,
    * activating Codex's built-in plan preset (medium reasoning, plan instructions).

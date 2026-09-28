@@ -78,7 +78,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.154.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.157.1";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
@@ -453,8 +453,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   /**
    * A persisted renderer selection can outlive the ordinary usage allowance.
    *
-   * Codex 0.154 exposes the Reserve bucket and model slug to app-server
-   * clients, but it does not expose the TUI's Reserve accept/recovery action.
+   * Codex exposes the Reserve bucket and model slug to app-server clients,
+   * but Mains has no Reserve accept/recovery action through this protocol.
    * Starting `gpt-5.6-luna` directly therefore still consumes the exhausted
    * ordinary bucket and fails with a generic usage-limit error. Stop before
    * creating a misleading thread until app-server gains that recovery verb.
@@ -470,7 +470,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     if (rateLimits?.ordinaryUsageAllowed === false) {
       if (getCodexReserveModelSlugs(rateLimits).length > 0) {
         throw new Error(
-          "Luna Reserve is available on this account, but Codex App Server 0.154.0 cannot start Reserve turns yet. Continue in the Codex app or wait for the normal usage limit to reset.",
+          "Luna Reserve is available on this account, but Mains cannot start Reserve turns yet. Continue in the Codex app or wait for the normal usage limit to reset.",
         );
       }
       throw new Error(
@@ -842,12 +842,16 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   async function withLoadedMcpThread<Result>(
     threadId: string,
     operation: (server: CodexAppServer) => Promise<Result>,
+    readWithoutThread?: (server: CodexAppServer) => Promise<Result>,
   ): Promise<Result> {
     const server = await ensureServer();
     try {
       return await operation(server);
     } catch (error) {
       if (!isCodexMissingThreadError(error)) throw error;
+      // A hosted app's resource can be read through its explicit account target.
+      // This lets old cards reload when another Codex client owns the thread writer.
+      if (readWithoutThread) return readWithoutThread(server);
       await resumeMcpThread(server, threadId);
       return operation(server);
     }
@@ -928,6 +932,14 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       if (!threadId) {
         throw new Error(`No Codex thread found for run ${request.runId}`);
       }
+      const cliVersion = await getCodexVersion();
+      const targetVersionComparison = cliVersion
+        ? compareCodexVersions(cliVersion, "0.157.1")
+        : null;
+      const target = request.connectorId && request.linkId !== undefined &&
+        targetVersionComparison !== null && targetVersionComparison >= 0
+        ? { connectorId: request.connectorId, linkId: request.linkId }
+        : undefined;
       const params: CodexAppServerParams<"mcpServer/resource/read"> = {
         threadId,
         server: request.server,
@@ -938,9 +950,19 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         ...(request.connectorId
           ? { connectorId: request.connectorId }
           : {}),
+        ...(target ? { target } : {}),
       };
-      return withLoadedMcpThread(threadId, (server) =>
-        server.sendRequest("mcpServer/resource/read", params),
+      return withLoadedMcpThread(
+        threadId,
+        (server) => server.sendRequest("mcpServer/resource/read", params),
+        target
+          ? (server) => server.sendRequest("mcpServer/resource/read", {
+              server: request.server,
+              uri: request.uri,
+              connectorId: request.connectorId,
+              target,
+            })
+          : undefined,
       );
     },
 

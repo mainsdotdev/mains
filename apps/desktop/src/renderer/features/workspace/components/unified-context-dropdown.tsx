@@ -2,12 +2,14 @@ import { ReactNode, RefObject, useCallback, useEffect, useMemo, useReducer, useS
 import { Button, DropdownWrapper, Text } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { CommandInfo, SkillInfo } from "@/lib/redux/api/providersApi";
-import { ArrowUp, Sparkles } from "@/components/ui/icons";
+import { ArrowUp, At } from "@/components/ui/icons";
 import { useDropdownKeyboardNavigation } from "@/features/workspace/hooks/use-dropdown-keyboard-navigation";
 import { FileIconComponent } from "@/components/ui/icons";
 import type { DirEntry, FileNode } from "@/features/workspace/types/file-explorer";
 import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
 import { useListProjectIssuesQuery } from "@/lib/redux/api";
+import { useGetMentionableAppsQuery } from "@/lib/redux/api/shellApi";
+import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import { ProviderIcon } from "./provider-icon";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 
@@ -129,10 +131,10 @@ function SkillRowIcon({ skill }: { skill: SkillInfo }) {
   }
   return (
     <div
-      className="size-5 rounded shrink-0 flex items-center justify-center bg-primary-200/50 dark:bg-primary-700/50 text-primary-600 dark:text-primary-400"
+      className="size-6 rounded-md shrink-0 flex items-center justify-center bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200"
       style={skill.brandColor ? { backgroundColor: skill.brandColor, color: "#fff" } : undefined}
     >
-      <Sparkles className="size-3" />
+      <At className="size-4" />
     </div>
   );
 }
@@ -141,12 +143,14 @@ function RowButton({
   active,
   onHover,
   onSelect,
+  ariaLabel,
   className = "",
   children,
 }: {
   active: boolean;
   onHover: () => void;
   onSelect: () => void;
+  ariaLabel?: string;
   className?: string;
   children: ReactNode;
 }) {
@@ -154,6 +158,7 @@ function RowButton({
     <Button
       type="button"
       role="menuitem"
+      aria-label={ariaLabel}
       data-dropdown-active={active ? "true" : undefined}
       onMouseEnter={onHover}
       onClick={onSelect}
@@ -175,6 +180,7 @@ type FlatRow =
 interface UnifiedContextDropdownProps {
   isOpen: boolean;
   trigger: UnifiedContextTrigger;
+  providerId?: string;
   /** Restrict the menu to one skill bucket (toolbar-opened pickers). */
   bucket?: UnifiedContextBucket | null;
   filterText: string;
@@ -268,6 +274,7 @@ function SectionHeading({
 export function UnifiedContextDropdown({
   isOpen,
   trigger,
+  providerId,
   bucket = null,
   filterText,
   workspacePath,
@@ -290,6 +297,11 @@ export function UnifiedContextDropdown({
   const wantsFiles = isCombined && Boolean(workspacePath);
   const wantsIssues = isCombined || (!pluginsOnly && trigger === "#");
   const wantsCommands = isCombined;
+  const wantsMacApps = providerId === PROVIDER_IDS.codex && trigger === "@" && !pluginsOnly && filterText.trim().length > 0;
+
+  const { currentData: mentionableApps = [], isFetching: isSearchingMacApps } = useGetMentionableAppsQuery(filterText, {
+    skip: !isOpen || !wantsMacApps,
+  });
 
   const [fetchState, dispatchFetch] = useReducer(fetchReducer, {
     entries: [],
@@ -425,6 +437,17 @@ export function UnifiedContextDropdown({
     };
   }, [skills, filterText]);
 
+  const matchingMacApps = useMemo<SkillInfo[]>(
+    () => (wantsMacApps ? mentionableApps : []).map((app) => ({
+      name: `mac-app:${app.bundleId}`,
+      displayName: app.name,
+      iconSmall: app.icon ?? undefined,
+      scope: "computer",
+      userInvokable: true,
+    })),
+    [mentionableApps, wantsMacApps],
+  );
+
   const filteredFileEntries = useMemo(() => {
     if (isWorkspaceFileSearch) return fetchState.entries;
     if (!nameFilter) return fetchState.entries;
@@ -450,7 +473,7 @@ export function UnifiedContextDropdown({
   const sections = useMemo(() => {
     return buildSections(
       wantsSkills ? pluginSkills : [],
-      wantsSkills && !pluginsOnly ? macSkills : [],
+      wantsSkills && !pluginsOnly ? [...matchingMacApps, ...macSkills] : [],
       wantsSkills && !pluginsOnly ? regularSkills : [],
       wantsFiles ? sortedFiles : [],
       dirPath,
@@ -463,6 +486,7 @@ export function UnifiedContextDropdown({
     pluginsOnly,
     pluginSkills,
     macSkills,
+    matchingMacApps,
     regularSkills,
     wantsFiles,
     sortedFiles,
@@ -542,7 +566,9 @@ export function UnifiedContextDropdown({
 
   const isLoading =
     flatRows.length === 0 &&
-    (trigger === "$" || pluginsOnly
+    (wantsMacApps && isSearchingMacApps
+      ? true
+      : trigger === "$" || pluginsOnly
       ? isLoadingSkills
       : trigger === "#"
         ? Boolean(projectId) && isLoadingIssues
@@ -625,11 +651,15 @@ export function UnifiedContextDropdown({
                       const skill = row.skill;
                       const title = skill.displayName || skill.name;
                       const desc = skill.shortDescription || skill.description;
-                      const scopeLabel = getScopeLabel(skill.scope || skill.source);
+                      const isComputerApp = skill.scope === "computer" && providerId === PROVIDER_IDS.codex;
+                      const scopeLabel = isComputerApp
+                        ? "Computer use"
+                        : getScopeLabel(skill.scope || skill.source);
                       return (
                         <RowButton
                           key={`${row.bucket}-${skill.name}-${skill.path ?? ""}`}
                           {...rowProps}
+                          ariaLabel={isComputerApp ? `${title}, Computer use` : undefined}
                           className="text-xs"
                         >
                           <div className="flex items-start gap-2">

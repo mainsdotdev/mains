@@ -3,10 +3,7 @@ import { Settings, Question } from "@/components/ui/icons";
 import SpaceSelector from "./space-selector";
 import type { Space } from "@/lib/redux/api";
 import { Button } from "@/components/ui";
-import {
-  useKeyboardShortcut,
-  useKeyboardShortcutBinding,
-} from "@/providers/keyboard-shortcuts-provider";
+import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SidebarFooterProps {
@@ -27,9 +24,6 @@ export function SidebarFooter({
   helpMenuOpen,
 }: SidebarFooterProps) {
 
-  useKeyboardShortcut("app.openSettings", onSettingsClick, {
-    allowInEditable: true,
-  });
   const settingsShortcut = keyboardShortcutLabel(
     useKeyboardShortcutBinding("app.openSettings"),
   );

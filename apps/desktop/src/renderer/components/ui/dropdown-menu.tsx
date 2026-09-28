@@ -316,7 +316,7 @@ export function DropdownMenu({
         aria-labelledby={ariaLabelledBy}
         onKeyDown={handleMenuKeyDown}
         className={cn(
-          "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in p-1.5",
+          "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in p-1.25",
           className,
         )}
         style={{
@@ -477,7 +477,7 @@ export function DropdownMenuSub({
         onMouseEnter={() => openSubmenu(false)}
         onMouseLeave={startCloseTimer}
         className={cn(
-          "flex w-full cursor-pointer items-center gap-3 px-1.5 rounded-xl py-1.5 text-s",
+          "flex w-full cursor-pointer items-center gap-3 px-1.5 rounded-[10px] py-1.5 text-s",
           "text-primary-700 transition-colors hover:bg-primary-200/40 hover:text-primary-900",
           "dark:text-primary-300 dark:hover:bg-primary/5 dark:hover:text-primary-100",
           className,
@@ -549,7 +549,7 @@ export function DropdownMenuItem({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "flex w-full items-center gap-3 px-2 py-1.5 rounded-xl text-s",
+        "flex w-full items-center gap-3 px-1.5 py-1.5 rounded-[10px] text-s",
         "focus-visible:ring-0 focus-visible:ring-offset-0",
         "transition-colors hover:bg-primary-200/40 ",
         "dark:hover:bg-primary/5 ",
