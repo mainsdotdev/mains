@@ -55,7 +55,7 @@ export const PANEL_WIDTH_MAX = 500;
 export const BROWSER_PANEL_WIDTH_VAR = "--browser-panel-width";
 export const BROWSER_PANEL_WIDTH_DEFAULT = 608; // 38rem
 export const BROWSER_PANEL_WIDTH_MIN = 420;
-export const BROWSER_PANEL_WIDTH_MAX = 960;
+export const BROWSER_PANEL_WIDTH_MAX = 1260;
 
 /**
  * Gap left on either side of the session panel — between it and whatever panel
