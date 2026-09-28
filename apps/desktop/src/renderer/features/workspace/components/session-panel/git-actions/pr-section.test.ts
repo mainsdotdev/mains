@@ -150,7 +150,7 @@ describe("pull request editor", () => {
     expect(startViewTransition).toHaveBeenCalledTimes(1);
     expect(onEditorOpenChange).toHaveBeenLastCalledWith(true, true);
 
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Back to panel" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Minimize PR view" }));
     expect(startViewTransition).toHaveBeenCalledTimes(2);
     expect(onEditorOpenChange).toHaveBeenLastCalledWith(false, true);
     await waitFor(() => expect(onEditorTransitionEnd).toHaveBeenCalledTimes(2));
