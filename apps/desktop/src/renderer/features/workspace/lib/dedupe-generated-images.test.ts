@@ -3,13 +3,13 @@ import type { RunArtifact, RunEvent } from "../types";
 import { dedupeGeneratedImageCopies } from "./dedupe-generated-images";
 import { mapArtifactToEvent } from "./run-event-mappers";
 
-function event(id: string, kind: string, path?: string, hash?: string): RunEvent {
+function event(id: string, kind: string, path?: string, hash?: string, source?: string): RunEvent {
   return {
     id,
     type: "artifact",
     content: "",
     timestamp: new Date(),
-    metadata: { kind, ...(path ? { path } : {}), ...(hash ? { imageContentHash: hash } : {}) },
+    metadata: { kind, ...(path ? { path } : {}), ...(hash ? { imageContentHash: hash } : {}), ...(source ? { source } : {}) },
   };
 }
 
@@ -54,5 +54,17 @@ describe("dedupeGeneratedImageCopies", () => {
   it("keeps a generated image until its saved copy exists", () => {
     const events = [event("generated", "image", generated, "sha256:same")];
     expect(dedupeGeneratedImageCopies(events)).toBe(events);
+  });
+
+  it("deduplicates an app-owned inline result when the user saves the same image", () => {
+    const inline = "/Users/me/Library/Application Support/mains/generated-images/run-1/inline.png";
+    const events = [
+      event("prompt", "user-prompt"),
+      event("inline", "image", inline, "sha256:same", "codex_image_generation"),
+      event("saved", "image", saved, "sha256:same"),
+    ];
+    expect(dedupeGeneratedImageCopies(events).map((item) => item.id)).toEqual([
+      "prompt", "saved",
+    ]);
   });
 });

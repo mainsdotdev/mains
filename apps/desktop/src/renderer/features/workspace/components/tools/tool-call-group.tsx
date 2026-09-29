@@ -28,7 +28,9 @@ function ToolCallGroupImpl({
   const [showBottomFade, setShowBottomFade] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
-  const isExpanded = expandedOverride ?? defaultExpanded;
+  const isImageViewGroup = group.events.length > 0 &&
+    group.events.every((event) => event.metadata?.codexItemType === "imageView");
+  const isExpanded = expandedOverride ?? (isImageViewGroup || defaultExpanded);
   const pluginLogos = usePluginLogoMap();
 
   const updateScrollFades = useCallback(() => {

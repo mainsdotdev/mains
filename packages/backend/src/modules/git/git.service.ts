@@ -6,11 +6,16 @@ import { captureDiffSnapshot, openGit, type DiffSnapshot } from "./git-snapshot"
 import {
   applyPatch,
   canApplyPatch,
+  changedPaths,
   diffTrees,
+  locateWorktree,
+  patchPaths,
   snapshotWorkingTree,
   type ApplyPatchOptions,
   type TreeDiff,
+  type WorktreeLocation,
 } from "./git-tree-snapshot";
+import { noteAppWrites, toWorktreePath, worktreeWrites } from "./worktree-writes";
 
 // ─────────────────────────────────────────────────────────────
 // git service — main-process-internal deep module.
@@ -335,13 +340,22 @@ export const gitService = {
     return snapshotWorkingTree(rootPath);
   },
 
-  /** Patch, per-file stats, and totals between two tree objects. */
+  /**
+   * Patch, per-file stats, and totals between two tree objects; narrowed to
+   * `paths` (worktree-root-relative) when given.
+   */
   async diffTrees(
     rootPath: string,
     fromTree: string,
     toTree: string,
+    paths?: string[],
   ): Promise<TreeDiff> {
-    return diffTrees(rootPath, fromTree, toTree);
+    return diffTrees(rootPath, fromTree, toTree, paths);
+  },
+
+  /** The worktree `rootPath` belongs to, and where in it `rootPath` sits. */
+  async locateWorktree(rootPath: string): Promise<WorktreeLocation> {
+    return locateWorktree(rootPath);
   },
 
   /** Whether `patch` applies cleanly to the working tree right now. */
@@ -353,13 +367,17 @@ export const gitService = {
     return canApplyPatch(rootPath, patch, options);
   },
 
-  /** Apply `patch` to the working tree only (atomic across files). */
+  /**
+   * Apply `patch` to the working tree only (atomic across files). Its files
+   * go on the worktree's write ledger, so a live run's turn leaves them out.
+   */
   async applyPatch(
     rootPath: string,
     patch: string,
     options?: ApplyPatchOptions,
   ): Promise<void> {
-    return applyPatch(rootPath, patch, options);
+    await applyPatch(rootPath, patch, options);
+    await noteAppWrites(rootPath, () => patchPaths(rootPath, patch));
   },
 
   /** Whether the path is inside a git repository. */
@@ -604,7 +622,8 @@ export const gitService = {
    * outcome, in the same spirit as `checkoutBranch` not stashing for anyone.
    *
    * Returns how many commits arrived, so callers don't re-derive "already up
-   * to date" from a diffless HEAD comparison.
+   * to date" from a diffless HEAD comparison. What arrived goes on the
+   * worktree's write ledger, so a live run's turn leaves those files out.
    */
   async pullFastForward(
     rootPath: string,
@@ -614,6 +633,7 @@ export const gitService = {
     await git.raw(["pull", "--ff-only"]);
     const head = (await git.revparse(["HEAD"])).trim();
     if (head === before) return { received: 0, head };
+    await noteAppWrites(rootPath, () => changedPaths(rootPath, before, head));
     const count = (
       await git.raw(["rev-list", "--count", `${before}..${head}`])
     ).trim();
@@ -661,10 +681,22 @@ export const gitService = {
    *
    * A name that exists only on the remote resolves the way it does on the
    * command line — git creates the local tracking branch.
+   *
+   * The files the switch rewrote go on the worktree's write ledger, so a live
+   * run's turn leaves them out.
    */
   async checkoutBranch(rootPath: string, branch: string): Promise<void> {
     assertRef(branch);
-    await getGit(rootPath).checkout(branch);
+    const git = getGit(rootPath);
+    // Only worth a git call while a run is live to ask; an unborn HEAD has
+    // nothing on disk for the switch to rewrite.
+    const before = worktreeWrites.watching()
+      ? await git.revparse(["HEAD"]).then((sha) => sha.trim(), () => null)
+      : null;
+    await git.checkout(branch);
+    if (before) {
+      await noteAppWrites(rootPath, () => changedPaths(rootPath, before, "HEAD"));
+    }
   },
 
   /**
@@ -742,5 +774,9 @@ export const gitService = {
         fs.rmSync(path.join(rootPath, filePath), { force: true });
       }
     }
+    // On the worktree's write ledger, so a live run's turn leaves them out.
+    await noteAppWrites(rootPath, (location) =>
+      paths.map((filePath) => toWorktreePath(location, rootPath, filePath)),
+    );
   },
 };

@@ -10,6 +10,9 @@ import type {
 import type {
   KeyboardShortcutId,
 } from "../shared/keyboard-shortcuts";
+import type { AppIconId } from "../shared/app-icons";
+import type { TextSearchQuery } from "@mains/contracts/text-search";
+import type { ServiceResponse } from "@mains/contracts/service-response";
 
 type BrowserDownloadState =
   | "progressing"
@@ -280,6 +283,8 @@ const api = {
     get: (id: string) => ipcRenderer.invoke(CHANNELS.projects.get, id),
     listByAccount: (accountId: string) =>
       ipcRenderer.invoke(CHANNELS.projects.listByAccount, accountId),
+    reorder: (payload: { accountId: string; orderedIds: string[] }) =>
+      ipcRenderer.invoke(CHANNELS.projects.reorder, payload),
     findByRemoteOrigin: (accountId: string, remoteOrigin: string) =>
       ipcRenderer.invoke(CHANNELS.projects.findByRemoteOrigin, accountId, remoteOrigin),
     findOrCreate: (payload: unknown) =>
@@ -512,6 +517,10 @@ const api = {
     get: (id: string) => ipcRenderer.invoke(CHANNELS.workspace.get, id),
     listByAccount: (accountId: string) =>
       ipcRenderer.invoke(CHANNELS.workspace.listByAccount, accountId),
+    reorder: (payload: { accountId: string; orderedIds: string[] }) =>
+      ipcRenderer.invoke(CHANNELS.workspace.reorder, payload),
+    setPinned: (payload: { id: string; accountId: string; pinned: boolean }) =>
+      ipcRenderer.invoke(CHANNELS.workspace.setPinned, payload),
     listGitStates: () =>
       ipcRenderer.invoke(CHANNELS.workspace.listGitStates),
     getByRootPath: (accountId: string, rootPath: string) =>
@@ -916,6 +925,12 @@ const api = {
       excludePatterns?: string[];
     }) => ipcRenderer.invoke(CHANNELS.fileExplorer.searchFiles, options),
     /**
+     * Search file contents under a root with ripgrep (.gitignore applies).
+     * Resolves to a ServiceResponse<TextSearchResult>.
+     */
+    searchText: (options: TextSearchQuery) =>
+      ipcRenderer.invoke(CHANNELS.fileExplorer.searchText, options),
+    /**
      * Overwrite an existing regular file with UTF-8 text. Same 2MB cap and
      * regular-file safeguards as readFileText; does not create new files.
      * Pass expectedMtimeMs to reject the write if the file changed on disk.
@@ -1016,6 +1031,8 @@ const api = {
     showItemInFolder: (path: string) => ipcRenderer.invoke(CHANNELS.shell.showItemInFolder, path),
     openInApp: (appId: string, path: string) => ipcRenderer.invoke(CHANNELS.shell.openInApp, appId, path),
     getInstalledApps: () => ipcRenderer.invoke(CHANNELS.shell.getInstalledApps),
+    getMentionableApps: (query: string) =>
+      ipcRenderer.invoke(CHANNELS.shell.getMentionableApps, query),
     getAppsForFile: (filePath: string) =>
       ipcRenderer.invoke(CHANNELS.shell.getAppsForFile, filePath),
     openFileWithBundle: (filePath: string, bundleId: string) =>
@@ -1026,6 +1043,10 @@ const api = {
   },
   app: {
     quit: () => ipcRenderer.invoke(CHANNELS.app.quit),
+    getDockIcon: (): Promise<ServiceResponse<AppIconId>> =>
+      ipcRenderer.invoke(CHANNELS.app.getDockIcon),
+    setDockIcon: (id: AppIconId): Promise<ServiceResponse<AppIconId>> =>
+      ipcRenderer.invoke(CHANNELS.app.setDockIcon, id),
     // A notification or the menu bar asked the window for something: collect it.
     onWindowRequest: (callback: () => void) => {
       const listener = () => callback();
@@ -1069,6 +1090,8 @@ const api = {
   browser: {
     createTab: (url?: string, ownerKey?: string) =>
       ipcRenderer.invoke(CHANNELS.browser.createTab, url, ownerKey),
+    createHtmlPreviewTab: (filePath: string, ownerKey?: string) =>
+      ipcRenderer.invoke(CHANNELS.browser.createHtmlPreviewTab, filePath, ownerKey),
     setContext: (ownerKey: string, showBlankTab = false) =>
       ipcRenderer.invoke(CHANNELS.browser.setContext, ownerKey, showBlankTab),
     reassignTabs: (fromOwnerKey: string, toOwnerKey: string) =>

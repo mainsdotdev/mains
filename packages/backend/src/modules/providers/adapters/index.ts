@@ -115,4 +115,9 @@ export {
 } from "./adapter.factory";
 
 // Shared helpers
-export { couldModifyFiles, FILE_MODIFYING_TOOLS } from "./adapter.shared";
+export {
+  couldModifyFiles,
+  FILE_MODIFYING_TOOLS,
+  toolWrites,
+  type ToolWrites,
+} from "./adapter.shared";

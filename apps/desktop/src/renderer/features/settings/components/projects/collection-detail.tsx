@@ -7,6 +7,7 @@ import {
   toast,
 } from "@/components/ui";
 import SpaceIconPicker from "@/components/layout/sidebar/space-icon-picker";
+import { CollectionSettingsModal } from "@/components/layout/sidebar/collection-settings-modal";
 import {
   useGetAccountQuery,
   useGetCollectionQuery,
@@ -43,6 +44,7 @@ function CollectionDetailForm({
   const [iconColor, setIconColor] = useState(parsedIcon.color);
   const [isIconPickerOpen, setIsIconPickerOpen] = useState(false);
   const [showDeleteAlert, setShowDeleteAlert] = useState(false);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [updateCollection, { isLoading: isSaving }] =
     useUpdateCollectionMutation();
   const [removeCollection, { isLoading: isDeleting }] =
@@ -139,6 +141,23 @@ function CollectionDetailForm({
         </Button>
       </div>
 
+      <SettingsSection title="Sources">
+        <SettingsRow
+          variant="detail"
+          title="Available sources"
+          description="See shared project files and references used by its chats."
+        >
+          <Button
+            type="button"
+            variant="subtle"
+            className="text-primary-900 dark:text-primary-100"
+            onClick={() => setShowProjectSettings(true)}
+          >
+            Open project settings
+          </Button>
+        </SettingsRow>
+      </SettingsSection>
+
       <SettingsSection title="Danger Zone">
         <SettingsRow
           variant="detail"
@@ -167,6 +186,13 @@ function CollectionDetailForm({
         onSecondary={() => setShowDeleteAlert(false)}
         isPrimaryLoading={isDeleting}
       />
+      {showProjectSettings && (
+        <CollectionSettingsModal
+          accountId={accountId}
+          collection={collection}
+          onClose={() => setShowProjectSettings(false)}
+        />
+      )}
     </SettingsPageShell>
   );
 }

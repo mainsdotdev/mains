@@ -12,13 +12,12 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { markdownComponents } from "@/components/markdown-components";
-import { FileIconComponent } from "@/components/ui/icons";
-import { Sparkles } from "@/components/ui/icons";
+import { At, FileIconComponent } from "@/components/ui/icons";
 import { applySignedSrc } from "@/lib/local-image-url";
 import { useIsMobile, isWeb } from "@/lib/platform";
 import Text from "../text";
 
-const sparklesIconMarkup = renderToStaticMarkup(<Sparkles className="w-3 h-3 shrink-0" />);
+const sparklesIconMarkup = renderToStaticMarkup(<At className="w-3 h-3 shrink-0" />);
 
 export interface RichSkillChipData {
   name: string;
@@ -26,6 +25,8 @@ export interface RichSkillChipData {
   iconSmall?: string;
   iconLarge?: string;
   brandColor?: string;
+  /** Serialized prompt token. Mac apps use @Name; skills use $name. */
+  token?: string;
 }
 
 export interface RichFileChipData {
@@ -54,7 +55,8 @@ export interface RichInputFormHandle {
   replaceTokenWithSkillChip: (
     triggerChar: "$" | "@" | "/",
     skill: RichSkillChipData,
-  ) => void;
+    appendIfNoToken?: boolean,
+  ) => boolean;
   /** Replace a leading "<trigger><filter>" token at the caret with an inline file chip + trailing space. Returns false if the caret was not in a text node (e.g. after focus moved to a dropdown) — caller should fall back to rewriting the query string with `@<path> ` so the sync effect can rebuild the chip. */
   replaceTokenWithFileChip: (
     triggerChar: "@" | "/",
@@ -78,10 +80,12 @@ interface RichInputFormProps {
   onCodeChipsChange?: (keys: string[]) => void;
   /** Fires whenever the caret moves or content changes; receives the serialized text from start to caret. */
   onCaretContextChange?: (textBeforeCaret: string) => void;
+  /** Return true when pasted files were added as attachments. */
+  onPasteFiles?: (files: File[]) => boolean;
   placeholder?: string;
   placeholderIcon?: ReactNode;
   focusShortcutLabel?: string;
-  /** Maps skill name → display data so `$<name>` tokens can be rebuilt as chips when query changes externally. */
+  /** Maps serialized token → display data so selected skills and apps survive external query changes. */
   skillChipMap?: ReadonlyMap<string, RichSkillChipData>;
   /** Maps file path → display data so `@<path>` tokens can be rebuilt as chips when query changes externally. */
   fileChipMap?: ReadonlyMap<string, RichFileChipData>;
@@ -91,6 +95,7 @@ interface RichInputFormProps {
 
 const CHIP_ATTR = "data-skill-chip";
 const CHIP_NAME_ATTR = "data-skill-name";
+const CHIP_TOKEN_ATTR = "data-skill-token";
 const FILE_CHIP_ATTR = "data-file-chip";
 const FILE_PATH_ATTR = "data-file-path";
 const CODE_CHIP_ATTR = "data-code-chip";
@@ -202,6 +207,7 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   const chip = document.createElement("span");
   chip.setAttribute(CHIP_ATTR, "true");
   chip.setAttribute(CHIP_NAME_ATTR, skill.name);
+  chip.setAttribute(CHIP_TOKEN_ATTR, skill.token ?? `$${skill.name}`);
   chip.contentEditable = "false";
   // Fixed height + leading-none + align-middle so the line box height stays constant
   // regardless of whether the chip carries an icon — keeps the caret height consistent.
@@ -404,7 +410,7 @@ function serializeEditorNode(node: Node, filler: Node | null): string {
   }
 
   if (node.getAttribute(CHIP_ATTR) === "true") {
-    return "$" + (node.getAttribute(CHIP_NAME_ATTR) ?? "");
+    return node.getAttribute(CHIP_TOKEN_ATTR) ?? "$" + (node.getAttribute(CHIP_NAME_ATTR) ?? "");
   }
   if (node.getAttribute(FILE_CHIP_ATTR) === "true") {
     return "@" + (node.getAttribute(FILE_PATH_ATTR) ?? "");
@@ -528,6 +534,10 @@ function serializeRoot(root: HTMLElement): string {
   return serializeChildren(root, lastLeaf(root));
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function rebuildContent(
   root: HTMLElement,
   text: string,
@@ -543,8 +553,7 @@ function rebuildContent(
       : document.createTextNode(text),
   );
 
-  const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const skillNames =
+  const skillTokens =
     skillChipMap && skillChipMap.size > 0
       ? Array.from(skillChipMap.keys()).sort((a, b) => b.length - a.length)
       : [];
@@ -557,23 +566,28 @@ function rebuildContent(
       ? Array.from(codeChipMap.keys()).sort((a, b) => b.length - a.length)
       : [];
 
-  if (skillNames.length === 0 && filePaths.length === 0 && codeKeys.length === 0) {
+  if (skillTokens.length === 0 && filePaths.length === 0 && codeKeys.length === 0) {
     return;
   }
 
   // Longer paths sorted first so `@src/foo.tsx.bak` wins over `@src/foo.tsx` when both are present.
   const parts: string[] = [];
-  if (skillNames.length > 0) {
-    parts.push(`\\$(?<skill>${skillNames.map(escRe).join("|")})(?![\\w-])`);
+  const selectedSkills = skillTokens.filter((token) => token.startsWith("$"));
+  const selectedApps = skillTokens.filter((token) => token.startsWith("@"));
+  if (selectedSkills.length > 0) {
+    parts.push(`(?<skill>${selectedSkills.map(escapeRegExp).join("|")})(?![\\w-])`);
+  }
+  if (selectedApps.length > 0) {
+    parts.push(`(?<app>${selectedApps.map(escapeRegExp).join("|")})(?![\\w./-])`);
   }
   // Code keys (`<path>#L<range>`) go before file paths: both start with `@` and a
   // code key extends a path, so the file alternative would otherwise win at `@path`.
   if (codeKeys.length > 0) {
-    parts.push(`@(?<code>${codeKeys.map(escRe).join("|")})(?![\\w-])`);
+    parts.push(`@(?<code>${codeKeys.map(escapeRegExp).join("|")})(?![\\w-])`);
   }
   if (filePaths.length > 0) {
     // Negative lookahead allows path chars (`.`, `/`, `-`, `_`, word) so we don't partial-match a longer path.
-    parts.push(`@(?<file>${filePaths.map(escRe).join("|")})(?![\\w./-])`);
+    parts.push(`@(?<file>${filePaths.map(escapeRegExp).join("|")})(?![\\w./-])`);
   }
   const re = new RegExp(parts.join("|"), "g");
 
@@ -598,11 +612,11 @@ function rebuildContent(
           document.createTextNode(value.slice(lastIndex, match.index)),
         );
       }
-      const skillName = match.groups?.skill;
+      const skillToken = match.groups?.skill ?? match.groups?.app;
       const filePath = match.groups?.file;
       const codeKey = match.groups?.code;
-      if (skillName) {
-        const data = skillChipMap!.get(skillName);
+      if (skillToken) {
+        const data = skillChipMap!.get(skillToken);
         fragment.appendChild(
           data ? buildChip(data) : document.createTextNode(match[0]),
         );
@@ -626,6 +640,27 @@ function rebuildContent(
     }
     textNode.replaceWith(fragment);
   }
+}
+
+/** Find a raw file mention that became eligible for a chip after context arrived. */
+function hasUnrenderedFileToken(
+  root: HTMLElement,
+  fileChipMap?: ReadonlyMap<string, RichFileChipData>,
+): boolean {
+  if (!fileChipMap?.size) return false;
+  const paths = Array.from(fileChipMap.keys());
+  const token = new RegExp(`@(?:${paths.map(escapeRegExp).join("|")})(?![\\w./#-])`);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (
+      node.parentElement?.closest(
+        `code, [data-markdown-link], [${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`,
+      )
+    ) continue;
+    if (token.test(node.textContent ?? "")) return true;
+  }
+  return false;
 }
 
 function serializeFragment(node: Node): string {
@@ -740,6 +775,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onFileChipsChange,
       onCodeChipsChange,
       onCaretContextChange,
+      onPasteFiles,
       placeholder,
       placeholderIcon,
       focusShortcutLabel,
@@ -759,18 +795,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
     const lastChipsRef = useRef<string>("");
     const lastFileChipsRef = useRef<string>("");
     const lastCodeChipsRef = useRef<string>("");
-    const skillChipMapRef = useRef<ReadonlyMap<string, RichSkillChipData> | undefined>(skillChipMap);
-    const fileChipMapRef = useRef<ReadonlyMap<string, RichFileChipData> | undefined>(fileChipMap);
-    const codeChipMapRef = useRef<ReadonlyMap<string, RichCodeChipData> | undefined>(codeChipMap);
-    useEffect(() => {
-      skillChipMapRef.current = skillChipMap;
-    }, [skillChipMap]);
-    useEffect(() => {
-      fileChipMapRef.current = fileChipMap;
-    }, [fileChipMap]);
-    useEffect(() => {
-      codeChipMapRef.current = codeChipMap;
-    }, [codeChipMap]);
+    const lastFileChipMapRef = useRef(fileChipMap);
 
     const fireCaretContext = useCallback(() => {
       if (!onCaretContextChange) return;
@@ -832,13 +857,18 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       fireCaretContext();
     }, [onQueryChange, onSkillChipsChange, onFileChipsChange, onCodeChipsChange, query, fireCaretContext]);
 
-    // Sync DOM when external `query` differs from current serialization.
-    // Only fires on real divergence (slash/file/issue picker rewrites the goal); typing leaves them in lockstep.
+    // Sync external query changes and restore raw file mentions when their context arrives later.
+    // Typing leaves the query and DOM in lockstep, so ordinary edits do not rebuild the editor.
     useEffect(() => {
       const root = editorRef.current;
       if (!root) return;
-      if (query === lastSerializedRef.current) return;
-      rebuildContent(root, query, skillChipMapRef.current, fileChipMapRef.current, codeChipMapRef.current);
+      const fileMapChanged = fileChipMap !== lastFileChipMapRef.current;
+      lastFileChipMapRef.current = fileChipMap;
+      if (
+        query === lastSerializedRef.current &&
+        !(fileMapChanged && hasUnrenderedFileToken(root, fileChipMap))
+      ) return;
+      rebuildContent(root, query, skillChipMap, fileChipMap, codeChipMap);
       lastSerializedRef.current = query;
       setIsEmpty(query.length === 0);
 
@@ -855,20 +885,21 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onCodeChipsChange?.(codeKeys);
 
       if (document.activeElement === root) placeCaretAtEnd(root);
-    }, [query, onSkillChipsChange, onFileChipsChange, onCodeChipsChange]);
+    }, [query, skillChipMap, fileChipMap, codeChipMap, onSkillChipsChange, onFileChipsChange, onCodeChipsChange]);
 
     useImperativeHandle(
       ref,
       () => ({
         focus: () => editorRef.current?.focus(),
-        replaceTokenWithSkillChip: (triggerChar, skill) => {
+        replaceTokenWithSkillChip: (triggerChar, skill, appendIfNoToken = true) => {
           const root = editorRef.current;
-          if (!root) return;
+          if (!root) return false;
           const chip = buildChip(skill);
           if (replaceTokenAtCaret(root, triggerChar, { kind: "chip", chip })) {
             fireChange();
-            return;
+            return true;
           }
+          if (!appendIfNoToken) return false;
           // No matching trigger before the caret — insert chip wherever the caret sits, or at end.
           root.focus();
           const sel = window.getSelection();
@@ -881,7 +912,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
             root.appendChild(document.createTextNode(" "));
             placeCaretAtEnd(root);
             fireChange();
-            return;
+            return true;
           }
           const range = sel.getRangeAt(0);
           range.deleteContents();
@@ -894,6 +925,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           sel.removeAllRanges();
           sel.addRange(after);
           fireChange();
+          return true;
         },
         replaceTokenWithFileChip: (triggerChar, file) => {
           const root = editorRef.current;
@@ -928,6 +960,19 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
     );
 
     const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+      const files = Array.from(e.clipboardData.files ?? []);
+      if (files.length === 0) {
+        for (const item of Array.from(e.clipboardData.items ?? [])) {
+          if (item.kind !== "file") continue;
+          const file = item.getAsFile();
+          if (file) files.push(file);
+        }
+      }
+      if (files.length > 0 && onPasteFiles?.(files)) {
+        e.preventDefault();
+        return;
+      }
+
       e.preventDefault();
       const text = e.clipboardData.getData("text/plain");
       const sel = window.getSelection();
@@ -952,7 +997,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       sel.removeAllRanges();
       sel.addRange(after);
       fireChange();
-    }, [fireChange]);
+    }, [fireChange, onPasteFiles]);
 
     return (
       <div className="relative">
@@ -973,8 +1018,8 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
         {isEmpty && placeholder && (
           <Text
             as="div"
-            tone="subtle"
-            className={`pointer-events-none absolute left-5 top-4 flex items-start gap-1.5 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}
+            tone="faint"
+            className={`pointer-events-none absolute left-5 top-4 flex items-start gap-1.5 opacity-75 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}
           >
             {placeholderIcon ? (
               <span

@@ -108,7 +108,9 @@ html:not(.app-ready) *::after {
 
 
   /* Layout */
+  --nav-rail-width: 3rem;
   --sidebar-width: 18rem;
+  --shell-header-height: 2.5rem;
   --panel-width: 22rem;
   --browser-panel-width: 38rem;
   --session-panel-width: 21rem;
@@ -795,6 +797,10 @@ html.mains-web.dark #root {
   --glass-edge-danger: rgba(255, 255, 255, 0.42);
 }
 
+@theme static {
+  --glass-fill-command: color-mix(in srgb, var(--color-primary-100) 82%, transparent);
+}
+
 :root {
   /* The window frame behind the sidebar and around the content: translucent
      over the macOS vibrancy. An app theme replaces it with an opaque colour
@@ -840,6 +846,7 @@ html.mains-web.dark #root {
   --viz-cat-5: #d55181;
 
   --glass-fill-surface: var(--color-primary-900);
+  --glass-fill-command: color-mix(in srgb, var(--color-primary-950) 80%, transparent);
   --glass-fill-card: color-mix(in srgb, color-mix(in srgb, var(--color-primary-900) 78%, var(--color-primary-800)) 98%, transparent);
   --glass-fill-input: color-mix(in srgb, var(--color-primary-950) 75%, var(--color-primary-900));
   --glass-fill-toggle: var(--glass-fill-input);
@@ -1357,3 +1364,40 @@ html.mains-web.dark #root {
 .preview-git-press { animation-name: preview-git-press; }
 .preview-git-before { animation-name: preview-git-before; }
 .preview-git-after { animation-name: preview-git-after; }
+
+/* The PR form snapshots keep their native pixel size as the shared surface
+   grows or shrinks. Cropping and overlapping their fades preserves visible
+   content throughout the move without stretching the text. */
+::view-transition-group(pr-editor) {
+  background: var(--glass-fill-surface);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  animation-duration: 340ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+::view-transition-old(pr-editor),
+::view-transition-new(pr-editor) {
+  width: 100%;
+  height: 100%;
+  object-fit: none;
+  object-position: top left;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(pr-editor) {
+  animation: pr-editor-content-out 200ms ease-in both;
+}
+
+::view-transition-new(pr-editor) {
+  animation: pr-editor-content-in 280ms ease-out 40ms both;
+}
+
+@keyframes pr-editor-content-out {
+  to { opacity: 0; }
+}
+
+@keyframes pr-editor-content-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

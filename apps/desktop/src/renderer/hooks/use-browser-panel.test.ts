@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const harness = vi.hoisted(() => ({
   dispatch: vi.fn(),
   createTab: vi.fn(),
+  createHtmlPreviewTab: vi.fn(),
   setContext: vi.fn(),
   pathname: "/workspace/run-1",
   browserPanelOpen: false,
@@ -49,10 +50,11 @@ describe("BrowserPanelProvider", () => {
     harness.pathname = "/workspace/run-1";
     harness.browserPanelOpen = false;
     harness.createTab.mockResolvedValue({ success: true, data: {} });
+    harness.createHtmlPreviewTab.mockResolvedValue({ success: true, data: {} });
     harness.setContext.mockResolvedValue({ success: true, data: {} });
     Object.defineProperty(window, "api", {
       configurable: true,
-      value: { browser: { createTab: harness.createTab, setContext: harness.setContext } },
+      value: { browser: { createTab: harness.createTab, createHtmlPreviewTab: harness.createHtmlPreviewTab, setContext: harness.setContext } },
     });
   });
 
@@ -83,6 +85,18 @@ describe("BrowserPanelProvider", () => {
       "appSettings/setDocumentViewerDoc",
       "appSettings/setBrowserPanelOpen",
     ]);
+  });
+
+  it("opens a local HTML file in a browser preview tab for the active chat", async () => {
+    render(createElement(BrowserPanelProvider, null, createElement(Consumer)));
+
+    await act(async () => {
+      await panel!.openHtmlFile("/tmp/palette.html");
+    });
+
+    expect(harness.setContext).toHaveBeenCalledWith("chat-1");
+    expect(harness.createHtmlPreviewTab).toHaveBeenCalledWith("/tmp/palette.html", "chat-1");
+    expect(harness.createTab).not.toHaveBeenCalled();
   });
 
   it("hides on Settings without clearing the chat's open browser", () => {

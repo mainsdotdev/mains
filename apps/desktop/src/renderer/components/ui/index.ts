@@ -20,6 +20,15 @@ export type {
 // Scrolling
 export { HorizontalFadeScroller } from "./horizontal-fade-scroller";
 
+// Sortable list
+export {
+  moveIdByStep,
+  reorderIds,
+  SortableItem,
+  SortableList,
+} from "./sortable-list";
+export type { SortableDirection, SortableHandle } from "./sortable-list";
+
 // Text
 export {
   default as Text,
@@ -92,6 +101,7 @@ export type { AlertProps } from "./alert";
 // Modal
 export { Modal, ModalHeader } from "./modal";
 export type { ModalHeaderProps, ModalProps } from "./modal";
+export { useDialogFocus } from "./dialog-focus";
 
 // Dropdown Menu
 export { DropdownMenu, DropdownMenuSub, DropdownMenuItem } from "./dropdown-menu";

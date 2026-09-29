@@ -125,6 +125,12 @@ function fileToUploadedFile(file: File): UploadedFile {
   };
 }
 
+function skillMentionToken(skill: { name: string; displayName?: string; scope?: string }): string {
+  return skill.scope === "computer"
+    ? `@${skill.displayName || skill.name}`
+    : `$${skill.name}`;
+}
+
 interface UnifiedMenuState {
   visible: boolean;
   filter: string;
@@ -411,15 +417,21 @@ export function WorkspaceInput({
         brandColor: skill.brandColor,
         scope: skill.scope,
       });
-      inputRef.current?.replaceTokenWithSkillChip(trigger, {
+      const token = skillMentionToken(skill);
+      const replaced = inputRef.current?.replaceTokenWithSkillChip(trigger, {
         name: skill.name,
         displayName: skill.displayName,
         iconSmall: skill.iconSmall,
         iconLarge: skill.iconLarge,
         brandColor: skill.brandColor,
-      });
+        token,
+      }, skill.scope !== "computer");
+      if (skill.scope === "computer" && !replaced) {
+        const next = replaceMentionInGoal(goal, trigger, unifiedMenu.filter, `${token} `);
+        if (next !== null) onGoalChange(next);
+      }
     },
-    [addContext],
+    [addContext, goal, onGoalChange, unifiedMenu.filter],
   );
 
   const handleUnifiedSkillSelect = useCallback(
@@ -486,12 +498,13 @@ export function WorkspaceInput({
   const skillChipMap = useMemo(() => {
     const m = new Map<string, RichSkillChipData>();
     for (const s of contextSkills) {
-      m.set(s.name, {
+      m.set(skillMentionToken(s), {
         name: s.name,
         displayName: s.displayName,
         iconSmall: s.iconSmall,
         iconLarge: s.iconLarge,
         brandColor: s.brandColor,
+        token: skillMentionToken(s),
       });
     }
     return m;
@@ -678,6 +691,17 @@ export function WorkspaceInput({
       if (files.length === 0) return;
       const newFiles: UploadedFile[] = files.map(fileToUploadedFile);
       merge([...uploadedFiles, ...newFiles]);
+    },
+    [uploadedFiles, onUploadedFilesChange],
+  );
+
+  const handlePasteFiles = useCallback(
+    (clipboardFiles: File[]): boolean => {
+      if (!onUploadedFilesChange) return false;
+      const files = clipboardFiles.filter(isAttachableUpload);
+      if (files.length === 0) return false;
+      onUploadedFilesChange([...uploadedFiles, ...files.map(fileToUploadedFile)]);
+      return true;
     },
     [uploadedFiles, onUploadedFilesChange],
   );
@@ -894,6 +918,7 @@ export function WorkspaceInput({
             onFileChipsChange={handleFileChipsChange}
             onCodeChipsChange={handleCodeChipsChange}
             onCaretContextChange={handleCaretContext}
+            onPasteFiles={handlePasteFiles}
             skillChipMap={skillChipMap}
             fileChipMap={fileChipMap}
             codeChipMap={codeChipMap}
@@ -904,6 +929,7 @@ export function WorkspaceInput({
           <UnifiedContextDropdown
             isOpen={unifiedMenu.visible}
             trigger={unifiedMenu.trigger}
+            providerId={activeProviderId}
             bucket={unifiedMenu.bucket}
             filterText={unifiedMenu.filter}
             workspacePath={workspacePath}

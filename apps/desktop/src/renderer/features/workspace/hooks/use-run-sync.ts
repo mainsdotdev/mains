@@ -138,12 +138,13 @@ export function useRunSync({
   }, [activeRunId, activeRunStatus, loadRunDetails, dispatch]);
 
   // Run status is workspace-scoped, not tab-scoped. Keep listening while any
-  // open run is pending so an inactive tab cannot miss its terminal event.
+  // run is open, so an inactive tab cannot miss its terminal event and a
+  // settled run continued from elsewhere comes back to life here.
   useEffect(() => {
     if (!statusSyncPolicy.listen) return;
 
-    return appEvents.runs.onStatusChanged(async ({ runId }) => {
-      const targetRunId = statusSyncPolicy.targetRunId(runId);
+    return appEvents.runs.onStatusChanged(async ({ runId, status }) => {
+      const targetRunId = statusSyncPolicy.targetRunId(runId, status);
       if (!targetRunId) return;
 
       const result = await appApi.runs.getById(targetRunId);

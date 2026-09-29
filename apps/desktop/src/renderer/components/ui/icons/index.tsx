@@ -163,6 +163,14 @@ export { default as Quit} from "./quit"
 export { default as Keyboard } from "./keyboard";
 export { default as Pin} from "./pin"
 export { default as PinFilled} from "./pin-filled"
+export { default as Maximize} from "./maximize"
+export { default as MinimizeView } from "./minimize-view";
+export { default as Merge} from "./merge"
+export { default as At} from "./at"
+
+
+
+
 
 
 

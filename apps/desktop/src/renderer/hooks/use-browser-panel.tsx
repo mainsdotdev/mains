@@ -21,6 +21,7 @@ interface BrowserPanelContextValue {
   ownerKey: string;
   open: () => void;
   openUrl: (url: string) => Promise<void>;
+  openHtmlFile: (filePath: string) => Promise<void>;
   close: () => void;
   toggle: () => void;
 }
@@ -60,6 +61,20 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
       throw new Error(response.error || "Failed to open browser tab");
     }
   }, [open, ownerKey]);
+  const openHtmlFile = useCallback(async (filePath: string) => {
+    const api = window.api?.browser;
+    if (!api?.createHtmlPreviewTab) throw new Error("HTML preview is unavailable");
+
+    open();
+    const contextResponse = await api.setContext(ownerKey);
+    if (contextResponse?.success === false) {
+      throw new Error(contextResponse.error || "Failed to open browser tabs");
+    }
+    const response = await api.createHtmlPreviewTab(filePath, ownerKey);
+    if (response?.success === false) {
+      throw new Error(response.error || "Failed to open HTML preview");
+    }
+  }, [open, ownerKey]);
   const close = useCallback(() => dispatch(setBrowserPanelOpen(false)), [dispatch]);
   const toggle = useCallback(() => {
     if (!persistedOpen) dispatch(setSessionPanelOpen(false));
@@ -67,8 +82,8 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
   }, [dispatch, persistedOpen]);
 
   const value = useMemo(
-    () => ({ isOpen, ownerKey, open, openUrl, close, toggle }),
-    [isOpen, ownerKey, open, openUrl, close, toggle],
+    () => ({ isOpen, ownerKey, open, openUrl, openHtmlFile, close, toggle }),
+    [isOpen, ownerKey, open, openUrl, openHtmlFile, close, toggle],
   );
 
   return (
@@ -86,6 +101,7 @@ export function useBrowserPanel(): BrowserPanelContextValue {
       ownerKey: "default",
       open: () => {},
       openUrl: async () => {},
+      openHtmlFile: async () => {},
       close: () => {},
       toggle: () => {},
     };

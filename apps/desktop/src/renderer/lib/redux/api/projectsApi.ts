@@ -18,6 +18,7 @@ export interface Project {
   runScript: string | null;
   archiveScript: string | null;
   icon: string | null;
+  sortOrder: number;
   commitInstructions: string | null;
   prInstructions: string | null;
   isArchived: boolean;
@@ -127,6 +128,32 @@ export const projectsApi = baseApi.injectEndpoints({
         args: [accountId],
       }),
       providesTags: ["Projects"],
+    }),
+
+    reorderProjects: builder.mutation<void, { accountId: string; orderedIds: string[] }>({
+      query: (payload) => ({
+        handler: CHANNELS.projects.reorder,
+        args: [payload],
+      }),
+      async onQueryStarted({ accountId, orderedIds }, { dispatch, queryFulfilled }) {
+        const order = new Map(orderedIds.map((id, index) => [id, index]));
+        const reorder = (projects: Project[]) => {
+          projects.forEach((project) => {
+            const index = order.get(project.id);
+            if (index !== undefined) project.sortOrder = index;
+          });
+        };
+        const patches = [
+          dispatch(projectsApi.util.updateQueryData("listProjects", undefined, reorder)),
+          dispatch(projectsApi.util.updateQueryData("listProjectsByAccount", accountId, reorder)),
+        ];
+        try {
+          await queryFulfilled;
+        } catch {
+          patches.forEach((patch) => patch.undo());
+        }
+      },
+      invalidatesTags: (_result, error) => (error ? [] : ["Projects"]),
     }),
 
     findProjectByRemoteOrigin: builder.query<
@@ -292,6 +319,7 @@ export const {
   useListProjectBranchesQuery,
   useListProjectsByAccountQuery,
   useLazyListProjectsByAccountQuery,
+  useReorderProjectsMutation,
   useFindProjectByRemoteOriginQuery,
   useLazyFindProjectByRemoteOriginQuery,
   useFindOrCreateProjectMutation,

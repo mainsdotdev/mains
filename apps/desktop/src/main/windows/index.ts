@@ -23,6 +23,12 @@ export {
 } from "./theme-source";
 
 export {
+  applySavedDockIcon,
+  registerDockIconIpc,
+  unregisterDockIconIpc,
+} from "./dock-icon";
+
+export {
   requestWindow,
   consumeWindowRequest,
   registerWindowRequestIpc,

@@ -21,6 +21,40 @@ function baseEvents(): RunEvent[] {
 }
 
 describe("groupEvents", () => {
+  it("restores legacy imageView logs as tool calls and hides their large preview artifacts", () => {
+    const firstPage = "/runs/work/tmp/pdfs/page-1.png";
+    const secondPage = "/runs/work/tmp/pdfs/page-2.png";
+    const events = [
+      ev({ id: "log-1", type: "log", content: `[codex:item:imageView] ${JSON.stringify({ type: "imageView", id: "view-1", path: firstPage })}`, metadata: { kind: "log", level: "info" } }),
+      ev({ id: "image-1", metadata: { kind: "image", path: firstPage } }),
+      ev({ id: "log-2", type: "log", content: `[codex:item:imageView] ${JSON.stringify({ type: "imageView", id: "view-2", path: secondPage })}`, metadata: { kind: "log", level: "info" } }),
+      ev({ id: "image-2", metadata: { kind: "image", path: secondPage } }),
+      ev({ id: "result", content: "Created the PDF", metadata: { kind: "report" } }),
+    ];
+
+    const groups = groupEvents(events);
+    expect(groups.map((group) => group.type)).toEqual(["tool_calls", "response"]);
+    expect(groups[0].events).toHaveLength(2);
+    expect(groups[0].events[0]).toMatchObject({
+      type: "tool_call",
+      metadata: { toolName: "ImageView", input: { path: firstPage } },
+    });
+    expect(groups[0].events[1].metadata?.input).toEqual({ path: secondPage });
+    expect(groups.flatMap((group) => group.events).some((event) => event.metadata?.kind === "image"))
+      .toBe(false);
+  });
+
+  it("keeps a generated image visible even if Codex also inspected its path", () => {
+    const imagePath = "/runs/work/output/illustration.png";
+    const groups = groupEvents([
+      ev({ id: "view", type: "tool_call", content: `ImageView: ${JSON.stringify({ path: imagePath })}`, metadata: { codexItemType: "imageView", input: { path: imagePath } } }),
+      ev({ id: "generated", metadata: { kind: "image", source: "codex_image_generation", path: imagePath } }),
+    ]);
+
+    expect(groups.map((group) => group.type)).toEqual(["tool_calls", "response"]);
+    expect(groups[1].events[0].id).toBe("generated");
+  });
+
   it("merges consecutive image artifacts into one response group", () => {
     const groups = groupEvents([
       ev({ id: "i1", metadata: { kind: "image", path: "/a/1.png" } }),

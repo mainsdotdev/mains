@@ -38,11 +38,11 @@ import {
   Search,
   Check,
   Apps,
-  Sparkles,
   External,
   Plus,
   ArrowUp,
   Close,
+  Plugin,
 } from "@/components/ui/icons";
 
 // ── Helpers ──
@@ -261,8 +261,8 @@ function AppIncludeIcon({
     );
   }
   return (
-    <div className="size-7 rounded-lg bg-primary-200/50 dark:bg-primary-700/30 flex items-center justify-center shrink-0">
-      <Apps className="size-4 text-primary-800 dark:text-primary" />
+    <div className="size-7 rounded-lg bg-primary-200 dark:bg-primary/10 flex items-center justify-center shrink-0">
+      <Apps className="size-4 text-primary-800 dark:text-primary-200" />
     </div>
   );
 }
@@ -332,7 +332,7 @@ function ConnectionBadge({
       ? "bg-success/15"
       : tone === "warning"
         ? "bg-warning/15"
-        : "bg-primary-200/60 dark:bg-primary-800/20";
+        : "bg-primary-200/60 dark:bg-primary/10";
   return (
     <Text
       as="span"
@@ -392,7 +392,7 @@ function PluginCard({
               as="span"
               size="t"
               tone="subtle"
-              className="shrink-0 px-1.5 py-0.5 rounded-full bg-primary-200/60 dark:bg-primary-800/40"
+              className="shrink-0 px-1.5 py-0.5 rounded-full bg-primary-200 dark:bg-primary/10"
             >
               Disabled
             </Text>
@@ -774,8 +774,8 @@ function PluginDetail({
                 key={skill.name}
                 className="flex items-center gap-3 px-4 py-3"
               >
-                <div className="size-7 rounded-lg bg-primary-200/50 dark:bg-primary-700/30 flex items-center justify-center shrink-0">
-                  <Sparkles className="size-4 text-primary-800 dark:text-primary" />
+                <div className="size-7 rounded-lg bg-primary-200/60 dark:bg-primary/10 flex items-center justify-center shrink-0">
+                  <Plugin className="size-4 -rotate-45  text-primary-800 dark:text-primary-200" />
                 </div>
                 <div className="min-w-0">
                   <IncludeText
@@ -793,7 +793,7 @@ function PluginDetail({
                   key={server.name}
                   className="flex items-center gap-3 px-4 py-3"
                 >
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-200/50 dark:bg-primary-700/30">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary-200/60 dark:bg-primary/10">
                     <Text as="span" size="xs" tone="subtle">
                       MCP
                     </Text>
@@ -842,7 +842,7 @@ function PluginDetail({
                 size="xs"
                 tone="muted"
                 weight="medium"
-                className="px-3 py-1 rounded-full bg-primary-200/50 dark:bg-primary-700/30"
+                className="px-3 py-1 rounded-full bg-primary-200/60 dark:bg-primary/10"
               >
                 {cap}
               </Text>
@@ -991,7 +991,7 @@ function IncludeText({
 
 function PromptRow({ prompt }: { prompt: string }) {
   return (
-    <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary-100/50 dark:bg-primary-800/30 group">
+    <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary-200/60 dark:bg-primary/10 group">
       <Text as="span" tone="muted" className="flex-1">
         {prompt}
       </Text>
@@ -1340,7 +1340,7 @@ function ProviderPluginCatalog({
               onClick={() => setSearch("")}
               title="Clear search"
               aria-label="Clear search"
-              className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-primary-600 hover:bg-primary/20 hover:text-primary-800 dark:text-primary-400 dark:hover:bg-primary/10 dark:hover:text-primary-200"
+              className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-primary-600 hover:bg-primary-200/60 hover:text-primary-800 dark:text-primary-400 dark:hover:bg-primary/10 dark:hover:text-primary-200"
             >
               <Close className="size-3" />
             </Button>

@@ -300,7 +300,13 @@ export interface RunTurnResponse {
 // ─────────────────────────────────────────────────────────────
 // Run Turn Changes DTOs
 // ─────────────────────────────────────────────────────────────
-export type TurnFileChange = TreeDiffFile;
+export interface TurnFileChange extends TreeDiffFile {
+  /**
+   * A parallel run in the same worktree may have written this file during the
+   * turn too, so its patch can hold their hunks — the turn can't be undone.
+   */
+  shared?: boolean;
+}
 
 /** The transcript card's view of a turn's changes — everything but the patch. */
 export interface RunTurnChangesSummary {

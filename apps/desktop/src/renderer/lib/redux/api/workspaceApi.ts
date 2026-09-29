@@ -42,6 +42,8 @@ export interface Workspace {
   metadata: WorkspaceMetadata | null;
   status: WorkspaceStatus;
   isArchived: boolean;
+  sortOrder: number;
+  pinnedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -280,6 +282,43 @@ export const workspaceApi = baseApi.injectEndpoints({
         args: [accountId],
       }),
       providesTags: ["Workspaces"],
+    }),
+
+    reorderWorkspaces: builder.mutation<void, { accountId: string; orderedIds: string[] }>({
+      query: (payload) => ({
+        handler: CHANNELS.workspace.reorder,
+        args: [payload],
+      }),
+      async onQueryStarted({ accountId, orderedIds }, { dispatch, queryFulfilled }) {
+        const order = new Map(orderedIds.map((id, index) => [id, index]));
+        const reorder = (workspaces: Workspace[]) => {
+          workspaces.forEach((workspace) => {
+            const index = order.get(workspace.id);
+            if (index !== undefined) workspace.sortOrder = index;
+          });
+        };
+        const patches = [
+          dispatch(workspaceApi.util.updateQueryData("listWorkspaces", undefined, reorder)),
+          dispatch(workspaceApi.util.updateQueryData("listWorkspacesByAccount", accountId, reorder)),
+        ];
+        try {
+          await queryFulfilled;
+        } catch {
+          patches.forEach((patch) => patch.undo());
+        }
+      },
+      invalidatesTags: (_result, error) => (error ? [] : ["Workspaces"]),
+    }),
+
+    setWorkspacePinned: builder.mutation<
+      Workspace,
+      { id: string; accountId: string; pinned: boolean }
+    >({
+      query: (payload) => ({
+        handler: CHANNELS.workspace.setPinned,
+        args: [payload],
+      }),
+      invalidatesTags: (_result, error) => (error ? [] : ["Workspaces"]),
     }),
 
     listWorkspaceGitStates: builder.query<WorkspaceGitState[], void>({
@@ -677,6 +716,8 @@ export const {
   useLazyGetWorkspaceQuery,
   useListWorkspacesByAccountQuery,
   useLazyListWorkspacesByAccountQuery,
+  useReorderWorkspacesMutation,
+  useSetWorkspacePinnedMutation,
   useListWorkspaceGitStatesQuery,
   useGetWorkspaceByRootPathQuery,
   useLazyGetWorkspaceByRootPathQuery,

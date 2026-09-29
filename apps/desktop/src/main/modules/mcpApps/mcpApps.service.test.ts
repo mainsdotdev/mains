@@ -60,6 +60,9 @@ describe("mcpAppsService", () => {
             resource_domains: ["https://cdn.example.com"],
           },
           "openai/widgetPrefersBorder": false,
+          "openai/ui": {
+            availableDisplayModes: ["fullscreen", "pip"],
+          },
         },
       }],
       originCallId: "call-1",
@@ -71,6 +74,7 @@ describe("mcpAppsService", () => {
       resourceUri: "ui://widgets/flights.html",
       originCallId: "call-1",
       connectorId: "skyscanner",
+      linkId: "linked-account-2",
     });
 
     expect(harness.readResource).toHaveBeenCalledWith({
@@ -79,6 +83,7 @@ describe("mcpAppsService", () => {
       uri: "ui://widgets/flights.html",
       originCallId: "call-1",
       connectorId: "skyscanner",
+      linkId: "linked-account-2",
     });
     expect(harness.registerDocument).toHaveBeenCalledWith(
       "<main>Flights</main>",
@@ -90,9 +95,11 @@ describe("mcpAppsService", () => {
           baseUriDomains: undefined,
         },
         prefersBorder: false,
+        availableDisplayModes: ["fullscreen"],
       },
     );
     expect(result.url).toBe("mains-mcp-app://resource/token/index.html");
+    expect(result.meta.availableDisplayModes).toEqual(["fullscreen"]);
   });
 
   it("accepts the legacy ChatGPT Apps HTML media type", async () => {

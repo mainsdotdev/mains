@@ -10,9 +10,7 @@ import type { IssueWithEntity, SignalWithEntity } from "@/lib/redux/api";
 import type { ReviewTab as ReviewTabType } from "@/lib/redux/slices/workspaceSlice";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { LAYOUT_PANEL_ANIM_MS } from "@/lib/layout";
 import { getProviderVariant } from "@/lib/provider-variants";
-import { useAppSelector } from "@/lib/redux/hooks";
 import { useIsMobile } from "@/lib/platform";
 import { ProviderIcon } from "./provider-icon";
 import { MobileTabSwitcher, type MobileTab } from "./mobile-tab-switcher";
@@ -71,7 +69,6 @@ export function WorkspaceTabs({
   onSelectNewRunTab,
   onCloseNewRunTab,
 }: WorkspaceTabsProps) {
-  const sidebarCollapsed = useAppSelector((state) => state.appSettings.sidebarCollapsed);
   const isMobile = useIsMobile();
 
   if (isMobile) {
@@ -157,18 +154,9 @@ export function WorkspaceTabs({
   }
 
   return (
-    <div className="flex items-end">
-      <div
-        className="relative flex-1 flex items-end overflow-x-auto noscrollbar"
-        style={{
-          // Clears the sidebar toggle once the sidebar is gone. Third
-          // and last term of the strip's left edge (content margin + header
-          // padding + this), so it runs on the same clock as the other two —
-          // untransitioned it snapped 12px ahead of them.
-          paddingLeft: sidebarCollapsed ? "0.75rem" : undefined,
-          transition: `padding ${LAYOUT_PANEL_ANIM_MS}ms ease-out`,
-        }}
-      >
+    <div className="-ml-3 flex items-end">
+      {/* The first tab starts at the content edge; later tabs can curve over the sidebar. */}
+      <div className="relative flex-1 flex items-end overflow-x-auto pl-3 noscrollbar">
         {hasSelectedFile && (
           <EditorTab
             isActive={activeTab === "editor"}
@@ -201,11 +189,7 @@ export function WorkspaceTabs({
               key={tabId}
               signal={signal}
               isActive={activeTab === tabId}
-              isFirst={
-                !hasSelectedFile &&
-                issueTabs.length === 0 &&
-                i === 0
-              }
+              isFirst={!hasSelectedFile && issueTabs.length === 0 && i === 0}
               onClick={() => onSelectSignalTab?.(signal.signal.entityId)}
               onClose={(e) => onCloseSignalTab?.(signal.signal.entityId, e)}
             />
@@ -219,12 +203,7 @@ export function WorkspaceTabs({
               key={tabId}
               review={note}
               isActive={activeTab === tabId}
-              isFirst={
-                !hasSelectedFile &&
-                issueTabs.length === 0 &&
-                signalTabs.length === 0 &&
-                i === 0
-              }
+              isFirst={!hasSelectedFile && issueTabs.length === 0 && signalTabs.length === 0 && i === 0}
               onClick={() => onSelectNoteTab?.(note.id)}
               onClose={(e) => onCloseNoteTab?.(note.id, e)}
             />
@@ -249,6 +228,7 @@ export function WorkspaceTabs({
             <NewRunTab
               variant={variant!}
               isActive={activeTab === "new-run"}
+              isFirst={!hasSelectedFile && issueTabs.length === 0 && signalTabs.length === 0 && noteTabs.length === 0 && runs.length === 0}
               onClick={() => onSelectNewRunTab?.()}
               onClose={(e) => onCloseNewRunTab?.(e)}
             />
@@ -268,11 +248,13 @@ export function WorkspaceTabs({
 
 function NewRunTab({
   isActive,
+  isFirst,
   variant,
   onClick,
   onClose,
 }: {
   isActive: boolean;
+  isFirst?: boolean;
   variant: "copilot" | "claude" | "codex" | "cursor";
   onClick: () => void;
   onClose: (e: React.MouseEvent) => void;
@@ -282,6 +264,7 @@ function NewRunTab({
   return (
     <BaseTab
       isActive={isActive}
+      isFirst={isFirst}
       onClick={onClick}
       onClose={onClose}
       icon={<ProviderIcon className={cn( "size-4", accentClassName)} />}

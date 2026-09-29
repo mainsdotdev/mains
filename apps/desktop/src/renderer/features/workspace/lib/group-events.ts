@@ -58,6 +58,65 @@ function isMcpAppEvent(event: RunEvent): boolean {
   return event.type === "tool_call" && !!event.metadata?.mcpApp;
 }
 
+function isImageViewToolEvent(event: RunEvent): boolean {
+  return event.type === "tool_call" && event.metadata?.codexItemType === "imageView";
+}
+
+/** Older Codex runs persisted imageView as an internal log plus a generic image
+ * artifact. Recover the tool call at display time so reopening those runs also
+ * shows the inspection step rather than a full-size PDF page preview. */
+function restoreLegacyImageViews(events: RunEvent[]): RunEvent[] {
+  const legacyPrefix = "[codex:item:imageView] ";
+  const restored = new Map<string, RunEvent>();
+  const viewedPaths = new Set<string>();
+
+  for (const event of events) {
+    if (isImageViewToolEvent(event)) {
+      const input = event.metadata?.input;
+      const imagePath = input && typeof input === "object"
+        ? (input as Record<string, unknown>).path
+        : undefined;
+      if (typeof imagePath === "string") viewedPaths.add(imagePath);
+      continue;
+    }
+    if (event.type !== "log" || !event.content.startsWith(legacyPrefix)) continue;
+    try {
+      const item = JSON.parse(event.content.slice(legacyPrefix.length)) as Record<string, unknown>;
+      if (item.type !== "imageView" || typeof item.path !== "string" || !item.path) continue;
+      const input = { path: item.path };
+      viewedPaths.add(item.path);
+      restored.set(event.id, {
+        id: `image-view-${event.id}`,
+        type: "tool_call",
+        content: `ImageView: ${JSON.stringify(input)}`,
+        timestamp: event.timestamp,
+        metadata: {
+          status: "done",
+          toolName: "ImageView",
+          toolCallId: item.id,
+          codexItemType: "imageView",
+          input,
+        },
+      });
+    } catch {
+      // Keep an unparseable diagnostic log as-is.
+    }
+  }
+
+  if (restored.size === 0 && viewedPaths.size === 0) return events;
+  return events.flatMap((event) => {
+    const recovered = restored.get(event.id);
+    if (recovered) return [recovered];
+    if (
+      event.type === "artifact" &&
+      event.metadata?.kind === "image" &&
+      event.metadata?.source !== "codex_image_generation" &&
+      viewedPaths.has(event.metadata?.path as string)
+    ) return [];
+    return [event];
+  });
+}
+
 export function isPlanToolCallGroup(group: EventGroup): boolean {
   if (group.type !== "tool_calls") return false;
   return group.events.some((ev) => isPlanToolEvent(ev));
@@ -80,7 +139,7 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
     }
   };
 
-  for (const event of events) {
+  for (const event of restoreLegacyImageViews(events)) {
     if (event.type === "tool_call") {
       // Subagent machinery lives in the session panel, not the chat: spawn
       // calls (Codex collab variants and Claude's Agent/Task) and the
@@ -109,6 +168,12 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
           endTime: event.timestamp,
         });
       } else {
+        // Image inspection is its own activity. Keep adjacent image views
+        // together and separate them from commands that created the files.
+        if (
+          currentToolGroup.length > 0 &&
+          isImageViewToolEvent(currentToolGroup[0]) !== isImageViewToolEvent(event)
+        ) flushToolGroup();
         currentToolGroup.push(event);
       }
     } else if (event.type === "artifact") {

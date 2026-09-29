@@ -36,9 +36,13 @@ import { createRunSession, type RunSession, type RunSessionResult } from "./run-
 import {
   managedRunDir,
   removeManagedRunDir,
+  removeManagedRunImages,
   resolveRunExecution,
 } from "./run-execution";
-import { materializeCollectionSourceContext } from "./run-collection-sources";
+import {
+  buildCollectionSourceInstructions,
+  syncCollectionSourceDirectory,
+} from "./run-collection-sources";
 import { sanitizeRunAttachments } from "./run-attachments";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
@@ -78,8 +82,8 @@ import type {
 
 /** Longest side an image artifact is sent at — more than any phone shows. */
 const ARTIFACT_IMAGE_MAX_SIDE = 1600;
-/** A file sent as it is (a format the Mac can't scale) must fit in one message. */
-const ARTIFACT_IMAGE_RAW_LIMIT = 8 * 1024 * 1024;
+/** Node hosts send original bytes; Codex image generation can return up to 32 MiB. */
+const ARTIFACT_IMAGE_RAW_LIMIT = 32 * 1024 * 1024;
 /** Keep one document response comfortably below the WebSocket message ceiling. */
 const RUN_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024;
 /** A basename fallback is bounded so one malformed run directory cannot stall the host. */
@@ -91,12 +95,24 @@ const RUN_OUTPUT_MAX_FILES = 500;
 const RUN_OUTPUT_MAX_DEPTH = 12;
 const RUN_OUTPUT_EXCLUDES = new Set([
   ".mains",
+  "project-resources",
+  "collection-sources",
   ".git",
   "node_modules",
   "bower_components",
   ".DS_Store",
   "Thumbs.db",
 ]);
+
+function withProjectResources(
+  baseInstructions: string | null,
+  projectInstructions: string | null,
+): string | null {
+  const parts = [baseInstructions, projectInstructions].filter(
+    (part): part is string => Boolean(part),
+  );
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
 /** Image types the phone decodes on its own, by extension — `nativeImage` reads only PNG and JPEG. */
 const RAW_IMAGE_MIMES: Record<string, string> = {
   png: "image/png",
@@ -129,8 +145,9 @@ function isWithin(parent: string, child: string): boolean {
 }
 
 /**
- * Visible files created in a managed Work/Chat directory. The `.mains` tree is
- * copied input context, not output, and symlinks are deliberately not followed.
+ * Visible files created in a managed Work/Chat directory. Legacy source copies
+ * and the Collection source link are input context, not output. Symlinks are
+ * deliberately not followed.
  */
 async function listManagedOutputFiles(root: string): Promise<RunOutputFile[]> {
   const files: RunOutputFile[] = [];
@@ -759,6 +776,13 @@ export const runsService = {
       collectionId ?? null,
     );
     if (!updated) throw new Error("Run not found");
+    if (!run.workspaceId) {
+      await syncCollectionSourceDirectory({
+        cwd: managedRunDir(run.id, run.mode),
+        accountId: run.accountId,
+        collectionId,
+      });
+    }
     emit("runs:updated", { runId: run.id, ts: Date.now() });
     return updated;
   },
@@ -812,11 +836,14 @@ export const runsService = {
     await syncCodexRunSession(run, "delete");
     removeManagedRunDir(run.id, run.mode);
     await runsRepo.deleteRun(id);
+    removeManagedRunImages(id);
   },
 
   /** Delete every run of a workspace (project removal cleanup). */
   async deleteRunsByWorkspace(workspaceId: string): Promise<void> {
+    const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
     await runsRepo.deleteRunsByWorkspaceId(workspaceId);
+    for (const runId of runIds) removeManagedRunImages(runId);
   },
 
   async archiveRun(id: string): Promise<RunResponse> {
@@ -1020,7 +1047,7 @@ export const runsService = {
         mode,
       );
       const execution = resolveRunExecution({ runId, mode, workspace });
-      const extraInstructions = composeExtraInstructions(mode, space?.systemPrompt);
+      const baseInstructions = composeExtraInstructions(mode, space?.systemPrompt);
       // Persist the *composed* values — the run row records what actually ran.
       // Pin Claude's selected output style when the chat is created. A later
       // provider-settings change must not restyle an existing conversation.
@@ -1052,16 +1079,13 @@ export const runsService = {
       });
       await runsRepo.updateRun(runId, { startedAt: new Date() });
 
-      const collectionContext = await materializeCollectionSourceContext({
+      const projectInstructions = await buildCollectionSourceInstructions({
         runId,
         accountId: payload.accountId,
         collectionId,
-        execution,
+        cwd: execution.workspaceId ? null : execution.cwd,
       });
-      const effectiveInitialContext: WorkRunContextItem[] = [
-        ...collectionContext,
-        ...((payload.initialContext ?? []) as WorkRunContextItem[]),
-      ];
+      const extraInstructions = withProjectResources(baseInstructions, projectInstructions);
 
       if (payload.initialContext && payload.initialContext.length > 0) {
         for (const ctx of payload.initialContext) {
@@ -1099,10 +1123,7 @@ export const runsService = {
           systemPrompt: payload.systemPrompt,
           mode,
           extraInstructions,
-          context:
-            effectiveInitialContext.length > 0
-              ? effectiveInitialContext
-              : undefined,
+          context: payload.initialContext as WorkRunContextItem[] | undefined,
           toolPolicy,
           configSnapshot,
           attachments,
@@ -1327,16 +1348,12 @@ export const runsService = {
         toolPolicySnapshot: toolPolicy ?? undefined,
       });
 
-      const collectionContext = await materializeCollectionSourceContext({
+      const projectInstructions = await buildCollectionSourceInstructions({
         runId,
         accountId,
         collectionId: run.collectionId,
-        execution,
+        cwd: execution.workspaceId ? null : execution.cwd,
       });
-      const effectiveAdditionalContext: WorkRunContextItem[] = [
-        ...collectionContext,
-        ...((additionalContext ?? []) as WorkRunContextItem[]),
-      ];
 
       if (additionalContext && additionalContext.length > 0) {
         for (const ctx of additionalContext) {
@@ -1375,13 +1392,13 @@ export const runsService = {
           model: payload.model ?? previousModel,
           systemPrompt: run.systemPrompt,
           mode: run.mode,
-          extraInstructions: composeExtraInstructions(run.mode, space?.systemPrompt),
+          extraInstructions: withProjectResources(
+            composeExtraInstructions(run.mode, space?.systemPrompt),
+            projectInstructions,
+          ),
           toolPolicy,
           configSnapshot,
-          context:
-            effectiveAdditionalContext.length > 0
-              ? effectiveAdditionalContext
-              : undefined,
+          context: additionalContext as WorkRunContextItem[] | undefined,
           attachments,
           contextIssues: payload.contextIssues,
           contextSignals: payload.contextSignals,
@@ -1488,16 +1505,12 @@ export const runsService = {
         workspace,
       });
 
-      const collectionContext = await materializeCollectionSourceContext({
+      const projectInstructions = await buildCollectionSourceInstructions({
         runId: newRunId,
         accountId,
         collectionId: sourceRun.collectionId,
-        execution,
+        cwd: execution.workspaceId ? null : execution.cwd,
       });
-      const effectiveAdditionalContext: WorkRunContextItem[] = [
-        ...collectionContext,
-        ...((payload.additionalContext ?? []) as WorkRunContextItem[]),
-      ];
       if (payload.additionalContext) {
         for (const item of payload.additionalContext) {
           await runsRepo.insertContext({
@@ -1538,13 +1551,13 @@ export const runsService = {
           // model the source happened to start with.
           model: sourceModel,
           mode: sourceRun.mode,
-          extraInstructions: composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
+          extraInstructions: withProjectResources(
+            composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
+            projectInstructions,
+          ),
           toolPolicy,
           configSnapshot,
-          context:
-            effectiveAdditionalContext.length > 0
-              ? effectiveAdditionalContext
-              : undefined,
+          context: payload.additionalContext as WorkRunContextItem[] | undefined,
           attachments,
         },
         (event: WorkRunEvent) =>
@@ -1628,7 +1641,8 @@ export const runsService = {
 
   /**
    * Reverse-apply one turn's stored patch to its workspace. Refused while the
-   * run is live (the agent may be editing the same files) and when any file
+   * run is live (the agent may be editing the same files), when a parallel
+   * run wrote one of its files during the turn (`shared`), and when any file
    * the turn touched has moved on since — `git apply --check` decides that,
    * and a failed check writes nothing. See CONTEXT.md "turn changes".
    */
@@ -1647,6 +1661,12 @@ export const runsService = {
     if (changes.truncated) {
       throw new Error(
         "This turn's changes were too large to store in full, so they can't be undone.",
+      );
+    }
+    // Reverse-applying would take the parallel run's edits to these files too.
+    if (changes.files.some((f) => f.shared)) {
+      throw new Error(
+        "A parallel run changed some of these files too, so this turn can't be undone automatically.",
       );
     }
     const workspace = run.workspaceId

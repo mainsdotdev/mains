@@ -41,11 +41,17 @@ export function CheckboxOption({
  * placeholder was. Inert to the pointer and hidden from assistive tech — the
  * field underneath is still the thing being clicked and read.
  */
-export function ShinePlaceholder({ children }: { children: ReactNode }) {
+export function ShinePlaceholder({
+  children,
+  size = "xs",
+}: {
+  children: ReactNode;
+  size?: "xs" | "sm";
+}) {
   return (
     <Text
       as="span"
-      size="xs"
+      size={size}
       tone="inherit"
       aria-hidden
       className="shine-text pointer-events-none absolute inset-x-3 top-2 truncate"

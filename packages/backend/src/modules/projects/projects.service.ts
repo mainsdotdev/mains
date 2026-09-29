@@ -38,6 +38,22 @@ export const projectsService = {
     return projectsRepo.findByAccountId(accountId);
   },
 
+  async reorder(payload: { accountId: string; orderedIds: string[] }): Promise<void> {
+    if (!payload || typeof payload.accountId !== "string" || !payload.accountId ||
+        !Array.isArray(payload.orderedIds) ||
+        payload.orderedIds.some((id) => typeof id !== "string") ||
+        new Set(payload.orderedIds).size !== payload.orderedIds.length) {
+      throw new Error("Invalid project order");
+    }
+    const active = await projectsRepo.findByAccountId(payload.accountId);
+    const activeIds = new Set(active.map((project) => project.id));
+    if (payload.orderedIds.length !== activeIds.size ||
+        payload.orderedIds.some((id) => !activeIds.has(id))) {
+      throw new Error("Project order must include every active project in this account");
+    }
+    projectsRepo.reorder(payload.accountId, payload.orderedIds);
+  },
+
   async findByRemoteOrigin(
     accountId: string,
     remoteOrigin: string,

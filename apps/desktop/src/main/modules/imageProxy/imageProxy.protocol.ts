@@ -92,7 +92,7 @@ function enforceMaxBytes(
 }
 
 /**
- * Register the mains-img scheme as privileged.
+ * Register Mains content schemes as privileged.
  * MUST be called BEFORE app.ready.
  */
 export function registerImageProxyScheme() {
@@ -152,6 +152,14 @@ export function registerImageProxyScheme() {
     },
     {
       scheme: "mains-mcp-app",
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+      },
+    },
+    {
+      scheme: "mains-preview",
       privileges: {
         standard: true,
         secure: true,

@@ -43,7 +43,7 @@ import {
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useAppThemeSettings } from "@/hooks/use-app-theme";
 import { useDarkMode } from "@/hooks/use-dark-mode";
-import { useIsMobile } from "@/lib/platform";
+import { useCapabilities, useIsMobile } from "@/lib/platform";
 import {
   SettingsDivider,
   SettingsPageShell,
@@ -53,6 +53,7 @@ import {
 import { ThemePicker, ThemeSelect, type ThemeValue } from "./theme-picker";
 import { ThemePresetStrip, type ThemePresetOption } from "./theme-preset-strip";
 import { ColorField } from "./color-field";
+import { AppIconPicker } from "./app-icon-picker";
 
 const ALL_PROVIDERS = "all";
 /** The "Default (…)" entry of a provider scope: follow the default. */
@@ -367,6 +368,7 @@ function CodeFontSizeSlider() {
  */
 export default function AppearanceSettings() {
   const isMobile = useIsMobile();
+  const { windowChrome } = useCapabilities();
   const { spaces } = useActiveSpace();
   const { darkMode } = useDarkMode();
   const [scope, setScope] = useState(ALL_PROVIDERS);
@@ -464,6 +466,7 @@ export default function AppearanceSettings() {
           <CodeFontSizeSlider />
         </SettingsRow>
       </SettingsSection>
+      {windowChrome && <AppIconPicker />}
     </SettingsPageShell>
   );
 }

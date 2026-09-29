@@ -32,6 +32,16 @@ export function managedRunDir(runId: string, mode: ModeId): string {
   return path.join(userDataRoot(), "runs", runId, mode);
 }
 
+/** App-owned copies of inline generated images, kept outside the workspace. */
+export function managedRunImageDir(runId: string): string {
+  assertSafeRunId(runId);
+  return path.join(userDataRoot(), "generated-images", runId);
+}
+
+export function removeManagedRunImages(runId: string): void {
+  fs.rmSync(managedRunImageDir(runId), { recursive: true, force: true });
+}
+
 /** Remove the app-owned execution tree for one workspace-less run. */
 export function removeManagedRunDir(runId: string, mode: ModeId): void {
   if (mode === "developer") return;

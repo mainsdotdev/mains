@@ -8,14 +8,11 @@ import {
   ChevronUp,
   ProjectFolder,
   Sparkles,
-  WorkspaceStatusIcon,
 } from "@/components/ui/icons";
 import { PanelItem } from "@/features/workspace/components/session-panel/panel-item";
 import { ShinePlaceholder } from "@/features/workspace/components/session-panel/git-actions/controls";
-import { getWorkspaceStatusConfig } from "@/lib/workspace-status";
 import { MODE_CONFIGS } from "@/lib/mode-config";
 import type { ModeId } from "@mains/contracts/modes";
-import type { WorkspaceStatus } from "@/lib/redux/api/workspaceApi";
 import { cn } from "@/lib/cn";
 import { AsciiSpinner, Text } from "@/components/ui";
 
@@ -179,14 +176,13 @@ export function ListPreview({
 export interface WorkspaceListRow {
   name: string;
   branch: string;
-  status: WorkspaceStatus;
   insertions?: number;
   deletions?: number;
 }
 
 /**
  * The sidebar's workspace list. Mirrors `layout/sidebar/workspace-item.tsx`:
- * project icon + name on the first line, status glyph + branch on the second,
+ * project icon + name on the first line, branch on the second,
  * diff stats on the right, and the active row wearing the glass outline — the
  * first row at rest, moving down the list on hover. Rows only — a search field
  * would just repeat the one in ListPreview.
@@ -198,38 +194,31 @@ export function WorkspaceListPreview({ rows }: { rows: WorkspaceListRow[] }) {
         gap="0.375rem"
         selectionClassName="rounded-xl bg-primary/50 glass-outline dark:bg-primary/5"
       >
-        {rows.map((row) => {
-          const status = getWorkspaceStatusConfig(row.status);
-          return (
-            <div key={row.name} className="relative rounded-xl px-2.5 py-1.5">
-              <div className="mb-0.5 flex items-center gap-1">
-                <ProjectFolder className="size-3.5 shrink-0 text-primary-800 dark:text-primary-200" />
-                <span className="truncate text-[11px] text-primary-900 dark:text-primary-50">
-                  {row.name}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <WorkspaceStatusIcon
-                  status={row.status}
-                  className={cn("ml-0.5 size-2.75 shrink-0", status.iconColor)}
-                />
-                <span className="truncate text-[10px] text-primary-500 dark:text-primary-400">
-                  {row.branch}
-                </span>
-              </div>
-              {(row.insertions != null || row.deletions != null) && (
-                <span className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center gap-1 font-mono text-[9px] tabular-nums">
-                  {row.insertions != null && (
-                    <span className="text-success">+{row.insertions}</span>
-                  )}
-                  {row.deletions != null && (
-                    <span className="text-danger">-{row.deletions}</span>
-                  )}
-                </span>
-              )}
+        {rows.map((row) => (
+          <div key={row.name} className="relative rounded-xl px-2.5 py-1.5">
+            <div className="mb-0.5 flex items-center gap-1">
+              <ProjectFolder className="size-3.5 shrink-0 text-primary-800 dark:text-primary-200" />
+              <span className="truncate text-[11px] text-primary-900 dark:text-primary-50">
+                {row.name}
+              </span>
             </div>
-          );
-        })}
+            <div className="flex items-center gap-1.5 pl-4.5">
+              <span className="truncate text-[10px] text-primary-500 dark:text-primary-400">
+                {row.branch}
+              </span>
+            </div>
+            {(row.insertions != null || row.deletions != null) && (
+              <span className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center gap-1 font-mono text-[9px] tabular-nums">
+                {row.insertions != null && (
+                  <span className="text-success">+{row.insertions}</span>
+                )}
+                {row.deletions != null && (
+                  <span className="text-danger">-{row.deletions}</span>
+                )}
+              </span>
+            )}
+          </div>
+        ))}
       </CyclingRows>
     </Frame>
   );

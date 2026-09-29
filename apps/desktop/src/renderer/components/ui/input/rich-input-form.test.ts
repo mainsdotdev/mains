@@ -139,7 +139,147 @@ describe("RichInputForm Markdown editing", () => {
   });
 });
 
+describe("RichInputForm file pasting", () => {
+  it("hands pasted files to the attachment handler without inserting clipboard text", () => {
+    const onQueryChange = vi.fn();
+    const onPasteFiles = vi.fn(() => true);
+    const image = new File(["image"], "screenshot.png", { type: "image/png" });
+    const pdf = new File(["document"], "notes.pdf", { type: "application/pdf" });
+
+    render(createElement(RichInputForm, {
+      query: "Draft",
+      onQueryChange,
+      onSubmit: vi.fn(),
+      onPasteFiles,
+    }));
+
+    const editor = screen.getByRole("textbox");
+    placeCaretAtEnd(editor);
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [image, pdf],
+        getData: () => "file paths should not appear in the prompt",
+      },
+    });
+
+    expect(onPasteFiles).toHaveBeenCalledWith([image, pdf]);
+    expect(onQueryChange).not.toHaveBeenCalled();
+    expect(editor.textContent).toBe("Draft");
+  });
+
+  it("reads file clipboard items when the files list is empty", () => {
+    const image = new File(["image"], "screenshot.png", { type: "image/png" });
+    const onPasteFiles = vi.fn(() => true);
+
+    render(createElement(RichInputForm, {
+      query: "",
+      onQueryChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onPasteFiles,
+    }));
+
+    fireEvent.paste(screen.getByRole("textbox"), {
+      clipboardData: {
+        files: [],
+        items: [{ kind: "file", getAsFile: () => image }],
+        getData: () => "",
+      },
+    });
+
+    expect(onPasteFiles).toHaveBeenCalledWith([image]);
+  });
+});
+
 describe("RichInputForm file mentions", () => {
+  it("restores a file chip when its context arrives after the draft text", () => {
+    const path = "/repo/components/sections/hero-section.tsx";
+    const file = { path, basename: "hero-section.tsx" };
+    const query = `refactor @${path} `;
+    const onCaretContextChange = vi.fn();
+    const props = {
+      query,
+      onQueryChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onCaretContextChange,
+    };
+
+    const view = render(createElement(RichInputForm, {
+      ...props,
+      fileChipMap: new Map(),
+    }));
+    const editor = screen.getByRole("textbox");
+    expect(editor.querySelector('[data-file-chip="true"]')).toBeNull();
+
+    view.rerender(createElement(RichInputForm, {
+      ...props,
+      fileChipMap: new Map([[path, file]]),
+    }));
+
+    expect(editor.querySelector('[data-file-chip="true"]')?.getAttribute("data-file-path"))
+      .toBe(path);
+    editor.focus();
+    placeCaretAtEnd(editor);
+    act(() => document.dispatchEvent(new Event("selectionchange")));
+    const textBeforeCaret = onCaretContextChange.mock.lastCall?.[0] as string;
+    expect(textBeforeCaret.trim()).toBe("refactor");
+    expect(textBeforeCaret).not.toContain("@");
+  });
+
+  it("does not turn an existing chip into a raw path while context switches", () => {
+    const path = "/repo/hero-section.tsx";
+    const props = {
+      query: `refactor @${path} `,
+      onQueryChange: vi.fn(),
+      onSubmit: vi.fn(),
+    };
+    const view = render(createElement(RichInputForm, {
+      ...props,
+      fileChipMap: new Map([[path, { path, basename: "hero-section.tsx" }]]),
+    }));
+    const editor = screen.getByRole("textbox");
+    expect(editor.querySelector('[data-file-chip="true"]')).not.toBeNull();
+
+    view.rerender(createElement(RichInputForm, {
+      ...props,
+      fileChipMap: new Map(),
+    }));
+
+    expect(editor.querySelector('[data-file-chip="true"]')).not.toBeNull();
+  });
+
+  it("keeps the caret in place when editing removes a file chip", () => {
+    const path = "/repo/hero-section.tsx";
+    const fileChipMap = new Map([[path, { path, basename: "hero-section.tsx" }]]);
+    function Harness() {
+      const [query, setQuery] = useState(`refactor @${path} later`);
+      return createElement(RichInputForm, {
+        query,
+        onQueryChange: setQuery,
+        onSubmit: vi.fn(),
+        fileChipMap,
+      });
+    }
+
+    render(createElement(Harness));
+    const editor = screen.getByRole("textbox");
+    const leadingText = editor.firstChild as Text;
+    editor.focus();
+    const range = document.createRange();
+    range.setStart(leadingText, 3);
+    range.collapse(true);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    act(() => {
+      editor.querySelector('[data-file-chip="true"]')?.remove();
+      fireEvent.input(editor);
+    });
+
+    expect(selection.anchorNode).toBe(leadingText);
+    expect(selection.anchorOffset).toBe(3);
+  });
+
   it.each([
     { path: "/repo/apps", basename: "apps", isDirectory: true },
     { path: "/repo/app.tsx", basename: "app.tsx", isDirectory: false },
@@ -179,5 +319,30 @@ describe("RichInputForm file mentions", () => {
     selection.addRange(afterChip);
     act(() => document.dispatchEvent(new Event("selectionchange")));
     expect(onCaretContextChange).toHaveBeenLastCalledWith(" ");
+  });
+});
+
+describe("RichInputForm Mac app mentions", () => {
+  it("renders and serializes a selected app as @Name without the menu capability label", () => {
+    const onQueryChange = vi.fn();
+    const app = {
+      name: "mac-app:com.raycast.macos",
+      displayName: "Raycast",
+      token: "@Raycast",
+    };
+    render(createElement(RichInputForm, {
+      query: "@Raycast",
+      onQueryChange,
+      onSubmit: vi.fn(),
+      skillChipMap: new Map([[app.token, app]]),
+    }));
+
+    const editor = screen.getByRole("textbox");
+    const chip = editor.querySelector('[data-skill-chip="true"]');
+    expect(chip?.textContent).toBe("Raycast");
+    expect(chip?.getAttribute("data-skill-token")).toBe("@Raycast");
+
+    pastePlainText(editor, " open settings");
+    expect(onQueryChange).toHaveBeenLastCalledWith("@Raycast open settings");
   });
 });

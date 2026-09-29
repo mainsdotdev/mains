@@ -158,6 +158,8 @@ export function ActivitySection({ workspaceId }: ActivitySectionProps) {
                           </Text>
                         )}
                       </>
+                    ) : activity.type === "diff" && (activity.metadata as any)?.undoneAt ? (
+                      <>{activity.title} (undone)</>
                     ) : activity.type === "finding" && (activity.metadata as any)?.count ? (
                       <>Mains added {(activity.metadata as any).count} finding{(activity.metadata as any).count === 1 ? "" : "s"}</>
                     ) : (

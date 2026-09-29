@@ -1,8 +1,8 @@
 import {
   useMemo,
   useState,
-  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
@@ -10,17 +10,18 @@ import {
   Button,
   DropdownMenu,
   DropdownMenuItem,
+  SortableItem,
+  SortableList,
   Text,
   toast,
 } from "@/components/ui";
-import { Edit, Option, Plus, Trash } from "@/components/ui/icons";
+import { Option, Plus, Settings, Trash } from "@/components/ui/icons";
 import {
   useGetAccountQuery,
   useListCollectionsQuery,
   useRemoveCollectionMutation,
   useReorderCollectionsMutation,
   useSetActiveSpaceMutation,
-  useUpdateCollectionMutation,
   useUpdateSpaceMutation,
   type Collection,
   type RecentRun,
@@ -39,14 +40,11 @@ import { SidebarGroupSection } from "./sidebar-group-section";
 import { ChatItem, chatLabel } from "./chat-item";
 import { ProjectIcon } from "./project-icon";
 import { useRecentChats } from "./use-recent-chats";
-import { CollectionSourcesModal } from "./collection-sources-modal";
-import CollectionModal from "./collection-modal";
+import { CollectionSettingsModal } from "./collection-settings-modal";
 import DeleteConfirmationModal from "./delete-confirmation-modal";
-import { moveCollectionId } from "./collection-order";
 
 /** How many rows the flat Recents section shows. */
 const RECENTS_LIMIT = 20;
-const COLLECTION_DRAG_MIME = "application/x-mains-collection";
 
 interface SidebarChatListProps {
   searchQuery: string;
@@ -74,31 +72,21 @@ export function SidebarChatList({
   const [updateSpace] = useUpdateSpaceMutation();
   const { renameChat, toggleChatPin, moveChat, archiveChat, deleteChat } =
     useChatActions();
-  const [updateCollection] = useUpdateCollectionMutation();
   const [removeCollection] = useRemoveCollectionMutation();
   const [reorderCollections, { isLoading: isReorderingCollections }] =
     useReorderCollectionsMutation();
-  const [sourcesCollection, setSourcesCollection] =
+  const [settingsCollection, setSettingsCollection] =
     useState<Collection | null>(null);
   // One row's ⋯ menu at a time, plus the two dialogs it can open. Anchored to
   // the button it was opened from, like the chat row's own menu.
   const [menuCollection, setMenuCollection] = useState<Collection | null>(null);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
-  const [editCollection, setEditCollection] = useState<Collection | null>(null);
-  const [isSavingCollection, setIsSavingCollection] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Collection | null>(null);
   const [isDeletingCollection, setIsDeletingCollection] = useState(false);
   // Archiving is reversible and fires straight from the menu; deleting is not,
   // so it parks the run here until the confirmation comes back.
   const [deleteRunTarget, setDeleteRunTarget] = useState<RecentRun | null>(null);
   const [isDeletingRun, setIsDeletingRun] = useState(false);
-  const [draggedCollectionId, setDraggedCollectionId] = useState<string | null>(
-    null,
-  );
-  const [collectionDropTarget, setCollectionDropTarget] = useState<{
-    id: string;
-    edge: "before" | "after";
-  } | null>(null);
 
   const activeTab = useAppSelector((state) => state.workspace.activeTab);
   const { data: recentRuns, isLoading } = useRecentChats();
@@ -154,9 +142,25 @@ export function SidebarChatList({
       : rows;
     return filtered;
   }, [collections, query, runsByCollection]);
+  const collectionIds = useMemo(
+    () => collectionRows.map((collection) => collection.id),
+    [collectionRows],
+  );
 
   const canReorderCollections =
     !query && collectionRows.length > 1 && !isReorderingCollections;
+
+  // Empty states. Waits for the collections query, so "No projects yet" never
+  // flashes before the list arrives. Recents stays up with a note when there
+  // are no chats at all; a search that matches nothing says so instead of
+  // leaving the sidebar blank.
+  const hasNoProjects = !!collections && collectionRows.length === 0;
+  const hasNoChats = !query && runs.length === 0;
+  const hasNoMatches =
+    !!query &&
+    pinnedRuns.length === 0 &&
+    collectionRows.length === 0 &&
+    standaloneRuns.length === 0;
 
   const persistCollectionOrder = (orderedIds: string[]) => {
     if (!account) return;
@@ -166,81 +170,6 @@ export function SidebarChatList({
         console.error("Failed to reorder projects:", error);
         toast.error("Failed to reorder projects");
       });
-  };
-
-  const handleCollectionDragStart = (
-    collectionId: string,
-    event: ReactDragEvent<HTMLDivElement>,
-  ) => {
-    if (!canReorderCollections) {
-      event.preventDefault();
-      return;
-    }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData(COLLECTION_DRAG_MIME, collectionId);
-    setDraggedCollectionId(collectionId);
-    setCollectionDropTarget(null);
-  };
-
-  const collectionDropEdge = (event: ReactDragEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return event.clientY < rect.top + rect.height / 2
-      ? ("before" as const)
-      : ("after" as const);
-  };
-
-  const handleCollectionDragOver = (
-    collectionId: string,
-    event: ReactDragEvent<HTMLDivElement>,
-  ) => {
-    if (!draggedCollectionId || draggedCollectionId === collectionId) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setCollectionDropTarget({
-      id: collectionId,
-      edge: collectionDropEdge(event),
-    });
-  };
-
-  const clearCollectionDrag = () => {
-    setDraggedCollectionId(null);
-    setCollectionDropTarget(null);
-  };
-
-  const handleCollectionDrop = (
-    targetId: string,
-    event: ReactDragEvent<HTMLDivElement>,
-  ) => {
-    event.preventDefault();
-    const sourceId =
-      draggedCollectionId || event.dataTransfer.getData(COLLECTION_DRAG_MIME);
-    const currentIds = collectionRows.map((collection) => collection.id);
-    const nextIds = moveCollectionId(
-      currentIds,
-      sourceId,
-      targetId,
-      collectionDropEdge(event),
-    );
-    clearCollectionDrag();
-    if (nextIds.every((id, index) => id === currentIds[index])) return;
-    persistCollectionOrder(nextIds);
-  };
-
-  const handleCollectionReorderKey = (
-    collectionId: string,
-    direction: "up" | "down",
-  ) => {
-    if (!canReorderCollections) return;
-    const currentIds = collectionRows.map((collection) => collection.id);
-    const index = currentIds.indexOf(collectionId);
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-    if (index < 0 || targetIndex < 0 || targetIndex >= currentIds.length) return;
-    const nextIds = [...currentIds];
-    [nextIds[index], nextIds[targetIndex]] = [
-      nextIds[targetIndex],
-      nextIds[index],
-    ];
-    persistCollectionOrder(nextIds);
   };
 
   const handleSelectChat = async (run: RecentRun) => {
@@ -301,27 +230,6 @@ export function SidebarChatList({
     const rect = event.currentTarget.getBoundingClientRect();
     setMenuPosition({ x: rect.right, y: rect.bottom + 4 });
     setMenuCollection(collection);
-  };
-
-  const handleSaveCollection = async (draft: {
-    name: string;
-    icon: string | null;
-  }) => {
-    if (!editCollection || !account) return;
-    setIsSavingCollection(true);
-    try {
-      await updateCollection({
-        id: editCollection.id,
-        accountId: account.id,
-        payload: { name: draft.name, icon: draft.icon },
-      }).unwrap();
-      setEditCollection(null);
-    } catch (error) {
-      console.error("Failed to update collection:", error);
-      toast.error("Failed to save project");
-    } finally {
-      setIsSavingCollection(false);
-    }
   };
 
   const handleDeleteCollection = async () => {
@@ -391,7 +299,7 @@ export function SidebarChatList({
       )}
       {(collectionRows.length > 0 || !query) && (
         <div>
-          <div className="flex items-center px-2 py-2">
+          <div className="flex items-center px-2 py-1">
             <Text as="span" size="s" tone="muted" weight="medium">
               Projects
             </Text>
@@ -404,92 +312,71 @@ export function SidebarChatList({
               <Plus className="size-3  text-primary-800 dark:text-primary-200 " />
             </Button>
           </div>
-          <div className="flex flex-col gap-1">
+          <SortableList
+            ids={collectionIds}
+            onReorder={persistCollectionOrder}
+            disabled={!canReorderCollections}
+            className="flex flex-col gap-1"
+          >
             {collectionRows.map((collection: Collection) => {
               const collectionRuns = runsByCollection.get(collection.id) ?? [];
-              const dropTarget =
-                collectionDropTarget?.id === collection.id
-                  ? collectionDropTarget.edge
-                  : null;
               return (
-                <div
-                  key={collection.id}
-                  className={`relative ${
-                    draggedCollectionId === collection.id ? "opacity-50" : ""
-                  }`}
-                >
-                  {dropTarget && (
-                    <div
-                      className={`pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-primary-500 ${
-                        dropTarget === "before" ? "top-0" : "bottom-0"
-                      }`}
-                    />
-                  )}
-                  <SidebarGroupSection
-                    groupKey={`collection-${collection.id}`}
-                    label={collection.name}
-                    // The title wears the icon's tint: an emoji or an untinted
-                    // icon resolves to "", which leaves the neutral tone.
-                    labelTint={iconColorClass(
-                      splitStoredIcon(collection.icon).color,
-                    )}
-                    icon={(expanded) => (
-                      <ProjectIcon
-                        icon={collection.icon}
-                        projectName={collection.name}
-                        expanded={expanded}
-                      />
-                    )}
-                    count={collectionRuns.length}
-                    action={{
-                      label: "New chat in project",
-                      onClick: () => onNewChatInCollection(collection.id),
-                    }}
-                    secondaryAction={{
-                      label: "Project options",
-                      onClick: (event) => openCollectionMenu(collection, event),
-                      icon: (
-                        <Option className="size-3 text-primary-800 dark:text-primary-200" />
-                      ),
-                    }}
-                    dragHandleProps={{
-                      draggable: canReorderCollections,
-                      onDragStart: (event) =>
-                        handleCollectionDragStart(collection.id, event),
-                      onDragOver: (event) =>
-                        handleCollectionDragOver(collection.id, event),
-                      onDrop: (event) =>
-                        handleCollectionDrop(collection.id, event),
-                      onDragEnd: clearCollectionDrag,
-                    }}
-                    onReorderKey={
-                      canReorderCollections
-                        ? (direction) =>
-                            handleCollectionReorderKey(collection.id, direction)
-                        : undefined
-                    }
-                  >
-                    <div className="flex flex-col space-y-0.5">
-                      {collectionRuns.length > 0 ? (
-                        collectionRuns.map((run) => renderChat(run))
-                      ) : (
-                        // Same gutter a chat row inside a project takes, so
-                        // the placeholder sits where the missing chats would.
-                        <div className="pl-7 pr-2.5 py-1">
-                          <Text as="span" size="xxs" tone="muted">
-                            No chats
-                          </Text>
-                        </div>
+                <SortableItem key={collection.id} id={collection.id}>
+                  {(sortHandle) => (
+                    <SidebarGroupSection
+                      groupKey={`collection-${collection.id}`}
+                      label={collection.name}
+                      // The title wears the icon's tint: an emoji or an
+                      // untinted icon resolves to "", which leaves the neutral
+                      // tone.
+                      labelTint={iconColorClass(
+                        splitStoredIcon(collection.icon).color,
                       )}
-                    </div>
-                  </SidebarGroupSection>
-                </div>
+                      icon={(expanded) => (
+                        <ProjectIcon
+                          icon={collection.icon}
+                          projectName={collection.name}
+                          expanded={expanded}
+                        />
+                      )}
+                      count={collectionRuns.length}
+                      action={{
+                        label: "New chat in project",
+                        onClick: () => onNewChatInCollection(collection.id),
+                      }}
+                      secondaryAction={{
+                        label: "Project options",
+                        onClick: (event) =>
+                          openCollectionMenu(collection, event),
+                        icon: (
+                          <Option className="size-3 text-primary-800 dark:text-primary-200" />
+                        ),
+                      }}
+                      sortHandle={sortHandle}
+                    >
+                      <div className="flex flex-col space-y-0.5">
+                        {collectionRuns.length > 0 ? (
+                          collectionRuns.map((run) => renderChat(run))
+                        ) : (
+                          // Same gutter a chat row inside a project takes, so
+                          // the placeholder sits where the missing chats would.
+                          <div className="pl-7 pr-2.5 py-1">
+                            <Text as="span" size="xxs" tone="muted">
+                              No chats
+                            </Text>
+                          </div>
+                        )}
+                      </div>
+                    </SidebarGroupSection>
+                  )}
+                </SortableItem>
               );
             })}
-          </div>
+          </SortableList>
+          {hasNoProjects && <EmptyListNote>No projects yet</EmptyListNote>}
         </div>
       )}
-      {standaloneRuns.length > 0 && (
+      {(standaloneRuns.length > 0 || hasNoChats) && (
         <SidebarGroupSection
           groupKey="recents"
           label="Recents"
@@ -498,13 +385,18 @@ export function SidebarChatList({
           // arrive.
           count={Math.min(standaloneRuns.length, RECENTS_LIMIT)}
         >
-          <div className="flex flex-col space-y-0.5">
-            {standaloneRuns
-              .slice(0, RECENTS_LIMIT)
-              .map((run) => renderChat(run, true))}
-          </div>
+          {hasNoChats ? (
+            <EmptyListNote>No chats yet</EmptyListNote>
+          ) : (
+            <div className="flex flex-col space-y-0.5">
+              {standaloneRuns
+                .slice(0, RECENTS_LIMIT)
+                .map((run) => renderChat(run, true))}
+            </div>
+          )}
         </SidebarGroupSection>
       )}
+      {hasNoMatches && <EmptyListNote>No matching chats</EmptyListNote>}
 
       <DropdownMenu
         isOpen={!!menuCollection}
@@ -515,12 +407,12 @@ export function SidebarChatList({
       >
         <DropdownMenuItem
           onClick={() => {
-            setEditCollection(menuCollection);
+            setSettingsCollection(menuCollection);
             setMenuCollection(null);
           }}
         >
-          <Edit className="size-3.5" />
-          <span>Edit</span>
+          <Settings className="size-3.5" />
+          <span>Project settings</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           variant="danger"
@@ -533,13 +425,14 @@ export function SidebarChatList({
           <span>Delete</span>
         </DropdownMenuItem>
       </DropdownMenu>
-      <CollectionModal
-        isOpen={!!editCollection}
-        collection={editCollection}
-        isSaving={isSavingCollection}
-        onSave={handleSaveCollection}
-        onClose={() => setEditCollection(null)}
-      />
+      {settingsCollection && account && (
+        <CollectionSettingsModal
+          key={settingsCollection.id}
+          accountId={account.id}
+          collection={settingsCollection}
+          onClose={() => setSettingsCollection(null)}
+        />
+      )}
       <DeleteConfirmationModal
         isOpen={!!deleteTarget}
         isDeleting={isDeletingCollection}
@@ -561,12 +454,15 @@ export function SidebarChatList({
         onConfirm={() => void handleDeleteRun()}
         onCancel={() => setDeleteRunTarget(null)}
       />
-      <CollectionSourcesModal
-        key={sourcesCollection?.id ?? "closed"}
-        accountId={account?.id ?? ""}
-        collection={sourcesCollection}
-        onClose={() => setSourcesCollection(null)}
-      />
+    </div>
+  );
+}
+
+/** The empty-list line the workspace list shows, so both sidebars read alike. */
+function EmptyListNote({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-center h-16">
+      <Text size="xs">{children}</Text>
     </div>
   );
 }

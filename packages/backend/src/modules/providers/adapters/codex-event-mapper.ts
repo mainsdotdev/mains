@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type {
   WorkRunEvent,
   WorkRunPlanStep,
@@ -10,6 +11,7 @@ import type {
 import type { MainsToolContext } from "./mains-tools.core";
 import { safeJson } from "./adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
+import { managedRunImageDir } from "../../runs/run-execution";
 
 export interface CodexThreadItem {
   id: string;
@@ -23,9 +25,10 @@ interface CodexMcpAppMetadata {
   resourceUri: string;
   originCallId: string;
   connectorId?: string;
-  linkId?: string;
+  linkId?: string | null;
   appName?: string;
   actionName?: string;
+  preferredModelDisplayMode?: "inline" | "fullscreen";
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -41,10 +44,8 @@ function optionalString(value: unknown): string | undefined {
 }
 
 /**
- * Codex has exposed the MCP App URI in three places over time: the current
- * item appContext, the deprecated item-level field, and the tool result's
- * standard/ChatGPT compatibility metadata. Keep all three readable so old
- * persisted threads gain widgets too.
+ * Prefer the tool descriptor's captured MCP App UI resource, while keeping
+ * older item and result metadata readable for persisted threads.
  */
 function mcpAppMetadata(
   item: ThreadItem,
@@ -52,10 +53,13 @@ function mcpAppMetadata(
   server: string,
   tool: string,
 ): CodexMcpAppMetadata | undefined {
+  const mcpAppUi = objectRecord(item.mcpAppUi ?? item.mcp_app_ui);
   const appContext = objectRecord(item.appContext ?? item.app_context);
   const resultMeta = objectRecord(objectRecord(result)?._meta);
   const uiMeta = objectRecord(resultMeta?.ui);
   const resourceUri = [
+    mcpAppUi?.resourceUri,
+    mcpAppUi?.resource_uri,
     appContext?.resourceUri,
     appContext?.resource_uri,
     item.mcpAppResourceUri,
@@ -68,15 +72,24 @@ function mcpAppMetadata(
 
   if (!resourceUri) return undefined;
 
+  const linkIdValue = appContext && "linkId" in appContext
+    ? appContext.linkId
+    : appContext?.link_id;
+  const preferredDisplayMode =
+    mcpAppUi?.preferredModelDisplayMode ?? mcpAppUi?.preferred_model_display_mode;
   const optional = {
     connectorId: optionalString(
       appContext?.connectorId ?? appContext?.connector_id,
     ),
-    linkId: optionalString(appContext?.linkId ?? appContext?.link_id),
+    linkId: linkIdValue === null ? null : optionalString(linkIdValue),
     appName: optionalString(appContext?.appName ?? appContext?.app_name),
     actionName: optionalString(
       appContext?.actionName ?? appContext?.action_name,
     ),
+    preferredModelDisplayMode:
+      preferredDisplayMode === "fullscreen" || preferredDisplayMode === "inline"
+        ? preferredDisplayMode
+        : undefined,
   };
 
   return {
@@ -490,6 +503,65 @@ export function mapImageGenerationLifecycle(
   return events;
 }
 
+// The app-server result is base64 image data. savedPath is optional, so a
+// completed item must be materialized before the existing path-based image
+// artifact UI can display it. Match Codex's 32 MiB generated-image limit.
+const MAX_GENERATED_IMAGE_BYTES = 32 * 1024 * 1024;
+const MAX_GENERATED_IMAGE_BASE64_LENGTH = Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4;
+
+function inlineGeneratedImage(result: unknown): { bytes: Buffer; extension: string } | null {
+  if (typeof result !== "string") return null;
+  const encoded = result.trim();
+  if (
+    !encoded ||
+    encoded.length > MAX_GENERATED_IMAGE_BASE64_LENGTH ||
+    encoded.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)
+  ) return null;
+
+  const bytes = Buffer.from(encoded, "base64");
+  if (!bytes.length || bytes.length > MAX_GENERATED_IMAGE_BYTES) return null;
+  if (bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) {
+    return { bytes, extension: ".png" };
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return { bytes, extension: ".jpg" };
+  }
+  if (bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") {
+    return { bytes, extension: ".webp" };
+  }
+  return null;
+}
+
+function saveInlineGeneratedImage(runId: string, itemId: string, result: unknown): string | null {
+  const image = inlineGeneratedImage(result);
+  if (!image) return null;
+  try {
+    const directory = managedRunImageDir(runId);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const directoryStat = fs.lstatSync(directory);
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) return null;
+
+    const digest = createHash("sha256")
+      .update(itemId)
+      .update("\0")
+      .update(image.bytes)
+      .digest("hex");
+    const filePath = path.join(directory, `generated-image-${digest.slice(0, 24)}${image.extension}`);
+    try {
+      fs.writeFileSync(filePath, image.bytes, { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const stat = fs.lstatSync(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== image.bytes.length) throw error;
+    }
+    return filePath;
+  } catch (error) {
+    console.warn("[CodexEventMapper] Could not save generated image", error);
+    return null;
+  }
+}
+
 /**
  * Stateful Codex item projection module.
  *
@@ -713,6 +785,69 @@ export function createCodexEventMapper(
       }
     }
     return false;
+  }
+
+  function emitGeneratedImageArtifact(
+    events: WorkRunEvent[],
+    item: ThreadItem,
+    runId: string | undefined,
+    ts: number,
+  ): void {
+    if (!runId || item.status !== "completed") return;
+    const rs = getRunState(runId);
+    if (!rs) return;
+
+    const savedPath = optionalString(item.savedPath ?? item.saved_path);
+    let filePath: string | null = null;
+    if (savedPath && path.isAbsolute(savedPath)) {
+      const resolved = path.resolve(savedPath);
+      if (
+        isAllowedImagePath(resolved, rs.mainsCtx.rootPath) &&
+        /\.(?:png|jpe?g|webp|gif)$/i.test(resolved)
+      ) {
+        try {
+          const stat = fs.lstatSync(resolved);
+          if (
+            stat.isFile() &&
+            !stat.isSymbolicLink() &&
+            stat.size > 0 &&
+            stat.size <= MAX_GENERATED_IMAGE_BYTES
+          ) filePath = resolved;
+        } catch {
+          // Remote or missing savedPath: use the inline result instead.
+        }
+      }
+    }
+    filePath ??= saveInlineGeneratedImage(runId, item.id, item.result);
+    if (!filePath) {
+      events.push({
+        type: "log",
+        level: "error",
+        message: "Codex generated an image, but its output could not be displayed",
+        metadata: { itemId: item.id },
+        ts,
+      });
+      return;
+    }
+    if (rs.emittedImagePaths.has(filePath)) return;
+    rs.emittedImagePaths.add(filePath);
+    const transparentBackground = item.transparentBackground ?? item.transparent_background;
+    events.push({
+      type: "artifact",
+      kind: "image",
+      path: filePath,
+      metadata: {
+        kind: "image",
+        source: "codex_image_generation",
+        itemId: item.id,
+        path: filePath,
+        fileName: path.basename(filePath),
+        ...(typeof transparentBackground === "boolean"
+          ? { transparentBackground }
+          : {}),
+      },
+      ts,
+    });
   }
 
   /**
@@ -1075,6 +1210,54 @@ export function createCodexEventMapper(
     return { text: cleaned, followups };
   }
 
+  // Codex emits file citations as inline remark directives. Turn each one
+  // into the Markdown file chip the renderer already knows how to open. The
+  // streaming preview omits directives until the completed message arrives.
+  const FILE_CITATION_DIRECTIVE_REGEX =
+    /[ \t\r\n]*:codex-file-citation\{((?:[^"{}]|"(?:\\.|[^"\\])*")*)\}/g;
+  const FILE_CITATION_ATTRIBUTE_REGEX =
+    /([A-Za-z][\w-]*)="((?:\\.|[^"\\])*)"/g;
+
+  function fileCitationPath(attributes: string): string | null {
+    let cursor = 0;
+    let filePath: string | null = null;
+    for (const match of attributes.matchAll(FILE_CITATION_ATTRIBUTE_REGEX)) {
+      const index = match.index ?? 0;
+      if (attributes.slice(cursor, index).trim()) return null;
+      cursor = index + match[0].length;
+      if (match[1] !== "path") continue;
+      try {
+        filePath = JSON.parse(`"${match[2]}"`) as string;
+      } catch {
+        return null;
+      }
+    }
+    if (attributes.slice(cursor).trim()) return null;
+    const resolved = filePath?.trim();
+    if (!resolved || resolved.startsWith("//") || /^[A-Za-z][\w+.-]*:/.test(resolved) || resolved.includes("\0")) {
+      return null;
+    }
+    return resolved;
+  }
+
+  function projectFileCitations(text: string, renderLinks: boolean): string {
+    if (!text.includes(":codex-file-citation")) return text;
+    return text
+      .replace(FILE_CITATION_DIRECTIVE_REGEX, (_match, attributes: string) => {
+        const filePath = fileCitationPath(attributes);
+        if (!renderLinks || !filePath) return "";
+        const label = path.basename(filePath).replace(/[\\[\]]/g, "\\$&");
+        const href = filePath
+          .split("/")
+          .map((segment) => encodeURIComponent(segment).replace(/[()]/g, (char) =>
+            char === "(" ? "%28" : "%29"))
+          .join("/");
+        return ` [${label || "File"}](${href})`;
+      })
+      // An incomplete streaming directive should not flash as raw syntax.
+      .replace(/[ \t]*:codex-file-citation(?:\{[^\n]*)?$/gm, "");
+  }
+
   function emitAgentMessageContent(
     events: WorkRunEvent[],
     runId: string,
@@ -1084,7 +1267,8 @@ export function createCodexEventMapper(
     extraMetadata: Record<string, unknown> = {},
   ): boolean {
     const { text: messageText, followups } = extractFollowupDirectives(rawText);
-    const parts = parseAgentMessageParts(messageText);
+    const parts = parseAgentMessageParts(projectFileCitations(messageText, true));
+    const textWithoutCitations = projectFileCitations(messageText, false);
     const documentText: string[] = [];
     let emitted = false;
     const metadata = {
@@ -1119,7 +1303,7 @@ export function createCodexEventMapper(
       emitDocumentArtifactsFromText(
         events,
         runId,
-        documentText.join("\n"),
+        stripAnnotationMarkers(textWithoutCitations),
         ts,
       );
     }
@@ -1749,7 +1933,7 @@ export function createCodexEventMapper(
             events.push({
               type: "artifact",
               kind: "report",
-              content: stripAnnotationMarkers(runState.agentMessageBuffer),
+              content: projectFileCitations(stripAnnotationMarkers(runState.agentMessageBuffer), false),
               metadata: { source: "agent_message_streaming" },
               ephemeral: true,
               streamId: `codex-msg-${runId}-${runState.currentMessageItemId ?? "default"}`,
@@ -2354,6 +2538,35 @@ export function createCodexEventMapper(
         // Internal — no UI event needed.
         break;
 
+      case "imageView":
+      case "image_view": {
+        const imagePath = optionalString(item.path);
+        if (!imagePath) break;
+        const metadata = {
+          toolCallId: item.id,
+          itemId: item.id,
+          codexItemType: "imageView" as const,
+        };
+        if (phase === "start") {
+          events.push({
+            type: "tool_call",
+            toolName: "ImageView",
+            input: { path: imagePath },
+            startedAt: ts,
+            metadata: { phase: "start", ...metadata },
+          });
+        } else if (phase === "complete") {
+          events.push({
+            type: "tool_call",
+            toolName: "ImageView",
+            input: { path: imagePath },
+            endedAt: ts,
+            metadata: { phase: "complete", ...metadata },
+          });
+        }
+        break;
+      }
+
       case "function_call_output":
       case "functionCallOutput":
         // This is the response-side echo of a tool result, not a new tool
@@ -2365,6 +2578,7 @@ export function createCodexEventMapper(
       case "image_generation":
       case "imageGeneration": {
         events.push(...mapImageGenerationLifecycle(item, phase, runId, ts));
+        if (phase === "complete") emitGeneratedImageArtifact(events, item, runId, ts);
         break;
       }
 
@@ -3090,13 +3304,24 @@ export function createCodexEventMapper(
         break;
     }
 
-    if (phase === "complete") {
+    // The image-generation item can carry tens of megabytes of base64. Its
+    // output is handled above; scanning that string for file paths is costly.
+    const isImageGeneration = item.type === "imageGeneration" || item.type === "image_generation";
+    const isImageView = item.type === "imageView" || item.type === "image_view";
+    if (phase === "complete" && !isImageGeneration && !isImageView) {
       emitImageArtifacts(events, runId, item, ts);
     }
-    // Document scan runs on every phase (start/update/complete): a command like
-    // `qlmanage … report.docx` references a doc that already exists at start,
-    // and the existence + dedup guards make repeat scans harmless.
-    emitDocumentArtifacts(events, runId, item, ts);
+    // Agent messages are scanned above after citation directives are removed;
+    // treating a cited source as an output document would misfile it as a
+    // deliverable. Other item types still scan on every phase: a command like
+    // `qlmanage … report.docx` can name a document before it completes.
+    if (
+      !isImageGeneration &&
+      item.type !== "agentMessage" &&
+      item.type !== "agent_message"
+    ) {
+      emitDocumentArtifacts(events, runId, item, ts);
+    }
 
     return events;
   }

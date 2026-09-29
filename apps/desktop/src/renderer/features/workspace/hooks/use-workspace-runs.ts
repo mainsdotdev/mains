@@ -222,6 +222,7 @@ export function useWorkspaceRuns(
       // A remembered list already put a run on screen; the reload refreshes
       // the list around it rather than jumping to another one.
       const wasShown = runLists.has(wsId);
+      const rememberedRunId = runLists.get(wsId)?.[0]?.id;
       let filteredRuns: Run[] = [];
       try {
         const result = await appApi.runs.getByWorkspace(wsId, {
@@ -256,6 +257,14 @@ export function useWorkspaceRuns(
         if (target === requested) {
           dispatch(setActiveTab(target.id));
         }
+      } else if (
+        rememberedRunId &&
+        filteredRuns.some((run) => run.id === rememberedRunId)
+      ) {
+        // Prefetch only caches the tab list. The render-time workspace swap
+        // selects its first run, so load that transcript even when no new tab
+        // selection is needed.
+        loadRunDetails(rememberedRunId);
       }
     },
     [runLists, loadRunDetails, providerId, mode, dispatch],

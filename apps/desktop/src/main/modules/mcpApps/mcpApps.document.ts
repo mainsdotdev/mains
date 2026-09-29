@@ -17,6 +17,7 @@ export interface McpAppResourceMeta {
   permissions?: McpAppResourcePermissions;
   domain?: string;
   prefersBorder?: boolean;
+  availableDisplayModes?: Array<"inline" | "fullscreen">;
 }
 
 const WEB_ORIGIN = /^(https?):\/\/(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d{1,5})?\/?$/i;

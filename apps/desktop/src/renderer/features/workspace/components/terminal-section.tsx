@@ -34,39 +34,44 @@ export function TerminalSection({
 
   return (
     <div
-      className={`shrink-0 overflow-hidden transition-[height] duration-300 ease-out ${isOpen ? "border-t border-primary-200/50 dark:border-primary-800/50" : ""} `}
-      style={{ height: isOpen ? BOTTOM_TERMINAL_HEIGHT : "0px" }}
+      className="shrink-0 overflow-hidden transition-[height,padding-top] duration-300 ease-out"
+      style={{
+        height: isOpen ? BOTTOM_TERMINAL_HEIGHT : "0px",
+        paddingTop: isOpen ? "0.3125rem" : "0px",
+      }}
     >
-      <div className="flex items-center justify-between px-3 py-1.5">
-        <div className="flex items-center gap-1">
-          <Bash className="size-4 text-primary-600 dark:text-primary-400" />
-          <Body size="s" tone="muted" weight="medium">
-            {title}
-          </Body>
+      <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
+        <div className="flex items-center justify-between px-3 pt-3 pb-1">
+          <div className="flex items-center gap-1">
+            <Bash className="size-3.5 text-primary-600 dark:text-primary-400" />
+            <Body size="s" tone="subtle" weight="normal">
+              {title}
+            </Body>
+          </div>
+          {onClose && (
+            <Button
+              tooltip="Close terminal"
+              tooltipPosition="top-left"
+              onClick={onClose}
+              className="rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 p-1 text-primary-900 dark:text-primary-100 transition-all duration-300 ease-out"
+            >
+              <Close className="size-4" />
+            </Button>
+          )}
         </div>
-        {onClose && (
-          <Button
-            tooltip="Close terminal"
-            tooltipPosition="top-left"
-            onClick={onClose}
-            className="rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 p-1 text-primary-900 dark:text-primary-100 transition-all duration-300 ease-out"
-          >
-            <Close className="size-4" />
-          </Button>
+        {isOpen && (
+          <div className="min-h-0 flex-1 px-3">
+            <Suspense fallback={null}>
+              <XtermTerminal
+                id={terminalId}
+                rootPath={rootPath}
+                pendingCommand={pendingCommand}
+                onPendingCommandSent={onPendingCommandSent}
+              />
+            </Suspense>
+          </div>
         )}
       </div>
-      {isOpen && (
-        <div className="h-52">
-          <Suspense fallback={null}>
-            <XtermTerminal
-              id={terminalId}
-              rootPath={rootPath}
-              pendingCommand={pendingCommand}
-              onPendingCommandSent={onPendingCommandSent}
-            />
-          </Suspense>
-        </div>
-      )}
     </div>
   );
 }

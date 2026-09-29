@@ -11,7 +11,8 @@ import {
 import { baseApi } from "./baseApi";
 import { runsApi } from "./runsApi";
 import { workspaceApi } from "./workspaceApi";
-import workspaceReducer, { activateWorkspaceView, setDraftText } from "../slices/workspaceSlice";
+import workspaceReducer, { activateWorkspaceView, setActiveTab, setDraftText } from "../slices/workspaceSlice";
+import { selectSessionRunId } from "@/features/workspace/components/session-panel/select-session-run";
 import appSettingsReducer, { setBrowserPanelOpen, setRightPaneContextKey } from "../slices/appSettingsSlice";
 import backendsReducer from "../slices/backendsSlice";
 
@@ -101,6 +102,62 @@ describe("archived runs cache", () => {
 
     subscription.unsubscribe();
     store.dispatch(baseApi.util.resetApiState());
+  });
+
+  it("removes the archived run behind the empty view only after success", async () => {
+    let shouldFail = true;
+    setTransport({
+      kind: "test",
+      invoke: async (channel) => {
+        if (channel === CHANNELS.runs.archive) {
+          return shouldFail ? fail("cannot archive") : ok({ id: "run-a" });
+        }
+        throw new Error(`Unexpected channel: ${channel}`);
+      },
+      subscribe: () => () => undefined,
+      status: () => "connected",
+      onStatusChange: () => () => undefined,
+    });
+    const store = createStore();
+    const view = JSON.stringify(["local", "space", "codex", "developer", "ws-a"]);
+    const draft = runOwnerKey("local", "run-a");
+    store.dispatch(activateWorkspaceView({ key: view, workspaceId: "ws-a", providerId: "codex" }));
+    store.dispatch(setActiveTab("run-a"));
+    store.dispatch(setActiveTab("editor"));
+    store.dispatch(setDraftText({ key: draft, text: "unfinished" }));
+
+    await expect(store.dispatch(runsApi.endpoints.archiveRun.initiate("run-a")).unwrap()).rejects.toBeTruthy();
+    expect(selectSessionRunId(store.getState().workspace)).toBe("run-a");
+
+    shouldFail = false;
+    await store.dispatch(runsApi.endpoints.archiveRun.initiate("run-a")).unwrap();
+    expect(selectSessionRunId(store.getState().workspace)).toBeNull();
+    expect(store.getState().workspace.draftTextByKey[draft]).toBe("unfinished");
+  });
+
+  it("removes an archived run from a saved workspace view", async () => {
+    setTransport({
+      kind: "test",
+      invoke: async (channel) => {
+        if (channel === CHANNELS.runs.archive) return ok({ id: "run-a" });
+        throw new Error(`Unexpected channel: ${channel}`);
+      },
+      subscribe: () => () => undefined,
+      status: () => "connected",
+      onStatusChange: () => () => undefined,
+    });
+    const store = createStore();
+    const viewA = JSON.stringify(["local", "space", "codex", "developer", "ws-a"]);
+    const viewB = JSON.stringify(["local", "space", "codex", "developer", "ws-b"]);
+    store.dispatch(activateWorkspaceView({ key: viewA, workspaceId: "ws-a", providerId: "codex" }));
+    store.dispatch(setActiveTab("run-a"));
+    store.dispatch(activateWorkspaceView({ key: viewB, workspaceId: "ws-b", providerId: "codex" }));
+    store.dispatch(setActiveTab("run-b"));
+
+    await store.dispatch(runsApi.endpoints.archiveRun.initiate("run-a")).unwrap();
+    expect(store.getState().workspace.activeTab).toBe("run-b");
+    store.dispatch(activateWorkspaceView({ key: viewA, workspaceId: "ws-a", providerId: "codex" }));
+    expect(selectSessionRunId(store.getState().workspace)).toBeNull();
   });
 });
 

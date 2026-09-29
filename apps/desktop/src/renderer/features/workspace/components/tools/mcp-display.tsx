@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Text } from "@/components/ui";
 import { resolveTool } from "../../lib/resolve-tool";
-import { ToolHeader, ToolCollapse } from "./_shared";
+import { ToolHeader, ToolCollapse, type ToolStatus } from "./_shared";
 import {
   McpAppDisplay,
   type McpAppToolMetadata,
@@ -15,6 +15,7 @@ interface McpDisplayProps {
   /** MCP tool call result (`metadata.output`), often `{ content: [{ type: "text", text: string }] }`. */
   output?: unknown;
   isCompact?: boolean;
+  status?: ToolStatus;
   runId?: string;
   mcpApp?: McpAppToolMetadata;
 }
@@ -62,6 +63,26 @@ function extractMcpOutputSegments(value: unknown): string[] {
     }
   }
   return segments;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/** An app resource is tied to a completed, successful originating tool call. */
+function hasUsableMcpAppResult(output: unknown): boolean {
+  const result = asRecord(output);
+  if (!result || result.isError === true) return false;
+
+  const structured = asRecord(result.structuredContent);
+  if (typeof structured?.error_code === "string") return false;
+
+  const meta = asRecord(result._meta);
+  const codexApps = asRecord(meta?._codex_apps);
+  const authFailure = asRecord(codexApps?.connector_auth_failure);
+  return authFailure?.is_auth_failure !== true;
 }
 
 function formatCodePayload(raw: string): string {
@@ -121,6 +142,7 @@ export function McpDisplay({
   params,
   output,
   isCompact = false,
+  status = "done",
   runId,
   mcpApp,
 }: McpDisplayProps) {
@@ -144,7 +166,7 @@ export function McpDisplay({
 
       </ToolHeader>
 
-      {runId && mcpApp && (
+      {runId && mcpApp && status === "done" && hasUsableMcpAppResult(output) && (
         <McpAppDisplay
           runId={runId}
           app={mcpApp}

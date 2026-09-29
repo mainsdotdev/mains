@@ -13,6 +13,12 @@ function call(id: string, content: string): RunEvent {
 }
 
 describe("summarizeToolCalls", () => {
+  it("counts inspected images in their own tool group", () => {
+    const first = { ...call("v1", "ImageView: {}"), metadata: { codexItemType: "imageView" } };
+    const second = { ...call("v2", "ImageView: {}"), metadata: { codexItemType: "imageView" } };
+    expect(summarizeToolCalls([first, second])).toBe("Viewed 2 images");
+  });
+
   it("counts each kind of work once, in sentence form", () => {
     expect(
       summarizeToolCalls([

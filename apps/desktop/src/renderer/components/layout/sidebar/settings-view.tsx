@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import { Body, Button, Text } from "@/components/ui";
-import { ChevronUp, ProjectFolder } from "@/components/ui/icons";
+import { Button, Text } from "@/components/ui";
+import { ProjectFolder } from "@/components/ui/icons";
 import {
   useGetAccountQuery,
   useListCollectionsQuery,
@@ -21,9 +21,7 @@ import {
 import { useActiveSpace } from "@/hooks/use-active-space";
 import {
   useKeyboardShortcut,
-  useKeyboardShortcutBinding,
 } from "@/providers/keyboard-shortcuts-provider";
-import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SettingsViewProps {
   onClose: () => void;
@@ -36,9 +34,6 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
   const isMobile = useIsMobile();
   const { activeSpace } = useActiveSpace();
   const showCollections = activeSpace?.mode !== "developer";
-  const closeSettingsShortcut = keyboardShortcutLabel(
-    useKeyboardShortcutBinding("app.closeSettings"),
-  );
   useKeyboardShortcut("app.closeSettings", onClose, {
     allowInEditable: true,
   });
@@ -104,8 +99,8 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
         animation: "slide-fade-down 200ms cubic-bezier(0.23, 1, 0.32, 1)",
       }}
     >
-      <div className="flex flex-col items-start pt-12 pb-1 px-4">
-        <Body align="left">Settings</Body>
+      <div className="flex flex-col items-start pt-12 pb-1 px-5 md:pt-2">
+        <Text size="base" weight="medium" align="left">Settings</Text>
       </div>
 
       <div className="flex-1 px-3 mb-1 mt-2 overflow-y-auto noscrollbar">
@@ -183,28 +178,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
         )}
       </div>
 
-      <div
-        className="px-2 mb-2.5 group animate-slide-up shrink-0"
-        style={{
-          animation: `slide-from-bottom 0.2s ease-out 0.1s both`,
-        }}
-      >
-        <Button
-          tooltip={"Close settings"}
-          tooltipShortcut={closeSettingsShortcut}
-          variant="bare"
-          tooltipPosition="top-right"
-          onClick={onClose}
-          fullWidth
-          className="shrink-0 max-w-18 justify-start  rounded-full flex items-center cursor-pointer px-2 py-1 gap-1 bg-transparent dark:bg-transparent transition-transform duration-200"
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-        >
-          <ChevronUp className="size-4 rotate-270 text-primary-900 dark:text-primary-100" />
-          <Text as="span" size="s" weight="normal">
-            Back
-          </Text>
-        </Button>
-      </div>
+
     </div>
   );
 }
