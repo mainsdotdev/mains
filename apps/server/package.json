@@ -1,6 +1,6 @@
 {
   "name": "@mains/server",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Standalone Mains backend and web UI",
   "type": "commonjs",
   "license": "MIT",
