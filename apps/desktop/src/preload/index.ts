@@ -711,6 +711,7 @@ const api = {
         metadata?: Record<string, unknown>;
       }>;
       configSnapshot?: Record<string, unknown>;
+      additionalDirectories?: string[];
       toolPolicySnapshot?: Record<string, unknown>;
       attachments?: Array<{ name: string; type: string; data?: string; sourcePath?: string; mimeType: string }>;
       contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
@@ -727,6 +728,7 @@ const api = {
       accountId: string;
       message: string;
       model?: string;
+      additionalDirectories?: string[];
       additionalContext?: Array<{
         kind: "file" | "diff" | "selection" | "note";
         ref?: string;

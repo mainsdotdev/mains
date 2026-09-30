@@ -629,6 +629,8 @@ export function WorkspaceProviderPage({
                 projectId={ws.currentWorkspace?.projectId ?? undefined}
                 uploadedFiles={ws.uploadedFiles}
                 onUploadedFilesChange={ws.setUploadedFiles}
+                additionalDirectories={ws.additionalDirectories}
+                onAdditionalDirectoriesChange={ws.setAdditionalDirectories}
                 onStop={handleStop}
                 isNewRunTabActive={ws.showNewRunTab}
                 newChatProjectName={newChatProject?.name}
@@ -734,6 +736,8 @@ export function WorkspaceProviderPage({
           projectId={ws.currentWorkspace?.projectId ?? undefined}
           uploadedFiles={ws.uploadedFiles}
           onUploadedFilesChange={ws.setUploadedFiles}
+          additionalDirectories={ws.additionalDirectories}
+          onAdditionalDirectoriesChange={ws.setAdditionalDirectories}
           onStop={handleStop}
           isNewRunTabActive={ws.showNewRunTab}
         />

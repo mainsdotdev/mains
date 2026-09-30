@@ -3,7 +3,7 @@ import { Edit } from "@/components/ui/icons";
 import { normalizePatchForPatchDiff } from "../../lib/patch-utils";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { FileIconComponent } from "@/components/ui/icons";
-import { TOOL_ROW_TEXT, ToolCollapse, ToolDiffBody, ToolHeader } from "./_shared";
+import { TOOL_ROW_TEXT, ToolCollapse, ToolDiffBody, ToolDiffStats, ToolHeader } from "./_shared";
 
 export interface EditParams {
   // Claude params
@@ -42,8 +42,8 @@ export function EditDisplay({
   })();
   const {
     lines: patchLines,
-    // added,
-    // removed,
+    added,
+    removed,
   } = useMemo(() => parsePatch(output, params), [output, params]);
   const hasDiff = patchLines.length > 0;
 
@@ -61,6 +61,7 @@ export function EditDisplay({
         isExpanded={isExpanded}
         onToggle={() => setIsExpanded((v) => !v)}
         isCompact={isCompact}
+        afterChevron={<ToolDiffStats added={added} removed={removed} />}
       >
         <span
           role={filePath ? "link" : undefined}
@@ -81,19 +82,6 @@ export function EditDisplay({
           )}
           <span className="truncate">{fileName}</span>
         </span>
-        {/* {(added > 0 || removed > 0) && (
-          <span className={`text-xs shrink-0 ${TOOL_ROW_TEXT}`}>
-            {added > 0 && (
-              <Text as="span" size="inherit" tone="success">
-                +{added}
-              </Text>
-            )}
-            {added > 0 && removed > 0 && " "}
-            {removed > 0 && (
-              <Text as="span" size="inherit" tone="danger">-{removed}</Text>
-            )}
-          </span>
-        )} */}
       </ToolHeader>
 
       {hasDiff && (
@@ -266,10 +254,10 @@ function parsePatchLines(raw: string[]): {
   for (const l of raw) {
     if (l.startsWith("+")) {
       lines.push({ type: "add", text: l.slice(1) });
-      added++;
+      added += l.slice(1).split("\n").length;
     } else if (l.startsWith("-")) {
       lines.push({ type: "remove", text: l.slice(1) });
-      removed++;
+      removed += l.slice(1).split("\n").length;
     } else {
       lines.push({ type: "context", text: l.startsWith(" ") ? l.slice(1) : l });
     }

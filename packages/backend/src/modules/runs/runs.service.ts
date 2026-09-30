@@ -93,6 +93,39 @@ const RUN_TEXT_SEARCH_EXCLUDES = new Set([".git", "node_modules"]);
 /** A run folder is app-owned, but still bound traversal in case a tool explodes it. */
 const RUN_OUTPUT_MAX_FILES = 500;
 const RUN_OUTPUT_MAX_DEPTH = 12;
+const MAX_ADDITIONAL_DIRECTORIES = 20;
+
+/** Resolve grants on the host before they reach either provider runtime. */
+function normalizeAdditionalDirectories(
+  snapshot: Record<string, unknown> | null,
+  providerId: string,
+): Record<string, unknown> | null {
+  if (!snapshot || !("additionalDirectories" in snapshot)) return snapshot;
+  if (providerId !== PROVIDER_IDS.claude && providerId !== PROVIDER_IDS.codex) {
+    throw new Error("Additional directories are supported by Claude and Codex only");
+  }
+  const input = snapshot.additionalDirectories;
+  if (!Array.isArray(input) || input.length > MAX_ADDITIONAL_DIRECTORIES) {
+    throw new Error(`Choose at most ${MAX_ADDITIONAL_DIRECTORIES} additional directories`);
+  }
+  const resolved = new Set<string>();
+  for (const value of input) {
+    if (typeof value !== "string" || !path.isAbsolute(value)) {
+      throw new Error("Additional directory paths must be absolute");
+    }
+    let realPath: string;
+    try {
+      realPath = fs.realpathSync(value);
+      if (!fs.statSync(realPath).isDirectory()) {
+        throw new Error("not a directory");
+      }
+    } catch {
+      throw new Error(`Additional directory is unavailable: ${value}`);
+    }
+    resolved.add(realPath);
+  }
+  return { ...snapshot, additionalDirectories: [...resolved] };
+}
 const RUN_OUTPUT_EXCLUDES = new Set([
   ".mains",
   "project-resources",
@@ -1037,7 +1070,6 @@ export const runsService = {
           throw new Error("Workspace does not belong to this account");
         }
         assertWorkspacePathExists(workspace.rootPath, workspace.name);
-        await workspaceService.update(workspace.id, { status: "in_progress" });
       } else if (payload.workspaceId) {
         throw new Error("Work and Chat runs do not use a workspace");
       }
@@ -1046,7 +1078,6 @@ export const runsService = {
         payload.accountId,
         mode,
       );
-      const execution = resolveRunExecution({ runId, mode, workspace });
       const baseInstructions = composeExtraInstructions(mode, space?.systemPrompt);
       // Persist the *composed* values — the run row records what actually ran.
       // Pin Claude's selected output style when the chat is created. A later
@@ -1056,11 +1087,21 @@ export const runsService = {
         typeof provider.config?.outputStyle === "string"
           ? { outputStyle: provider.config.outputStyle }
           : {};
-      const configSnapshot = composeConfigSnapshot(mode, payload.providerId, {
-        ...providerOutputStyle,
-        ...(payload.configSnapshot ?? {}),
-      });
+      const configSnapshot = normalizeAdditionalDirectories(
+        composeConfigSnapshot(mode, payload.providerId, {
+          ...providerOutputStyle,
+          ...(payload.configSnapshot ?? {}),
+          ...(payload.additionalDirectories !== undefined
+            ? { additionalDirectories: payload.additionalDirectories }
+            : {}),
+        }),
+        payload.providerId,
+      );
       const toolPolicy = composeToolPolicy(mode, payload.toolPolicySnapshot);
+      const execution = resolveRunExecution({ runId, mode, workspace });
+      if (workspace) {
+        await workspaceService.update(workspace.id, { status: "in_progress" });
+      }
 
       await runsRepo.insertRun({
         id: runId,
@@ -1325,19 +1366,23 @@ export const runsService = {
       );
       const previousModel = latestKnownModel(existingTurns, run.model);
 
-      if (workspace) {
-        await workspaceService.update(workspace.id, { status: "in_progress" });
-      }
-
       const toolPolicy = composeToolPolicy(
         run.mode,
         run.toolPolicySnapshot,
       );
-      const configSnapshot = composeConfigSnapshot(
-        run.mode,
+      const configSnapshot = normalizeAdditionalDirectories(
+        composeConfigSnapshot(run.mode, run.providerId, {
+          ...(run.configSnapshot ?? {}),
+          ...(payload.additionalDirectories !== undefined
+            ? { additionalDirectories: payload.additionalDirectories }
+            : {}),
+        }),
         run.providerId,
-        run.configSnapshot,
       );
+
+      if (workspace) {
+        await workspaceService.update(workspace.id, { status: "in_progress" });
+      }
 
       await runsRepo.updateRun(runId, {
         status: "running",

@@ -17,6 +17,8 @@ import {
   Button,
   DropdownWrapper,
   RichInputForm,
+  Tooltip,
+  toast,
   type UploadedFile,
   type RichInputFormHandle,
   type RichSkillChipData,
@@ -59,6 +61,11 @@ import {
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
+const EMPTY_DIRECTORIES: string[] = [];
+
+function directoryName(folderPath: string): string {
+  return folderPath.replace(/\/+$/, "").split("/").pop() || folderPath;
+}
 
 function looksLikeImageFile(file: File): boolean {
   if (file.type.startsWith("image/")) return true;
@@ -166,6 +173,8 @@ interface WorkspaceInputProps {
   projectId?: string;
   uploadedFiles?: UploadedFile[];
   onUploadedFilesChange?: (files: UploadedFile[]) => void;
+  additionalDirectories?: string[];
+  onAdditionalDirectoriesChange?: (directories: string[]) => void;
   onStop?: () => void;
   /** When true (e.g. new-run draft tab active), focus the prompt after layout. */
   isNewRunTabActive?: boolean;
@@ -198,6 +207,8 @@ export function WorkspaceInput({
   projectId,
   uploadedFiles = EMPTY_UPLOADED_FILES,
   onUploadedFilesChange,
+  additionalDirectories = EMPTY_DIRECTORIES,
+  onAdditionalDirectoriesChange,
   onStop,
   isNewRunTabActive = false,
   newChatProjectName,
@@ -361,6 +372,10 @@ export function WorkspaceInput({
 
   // Detect @ / context menu when goal is set externally (e.g. quick actions)
   useEffect(() => {
+    if (/^\/add-dir\s+/.test(goal)) {
+      updateUnifiedMenu({ visible: false, filter: "" });
+      return;
+    }
     const slashMatch = goal.match(/(?:^|\s)\/(\S*)$/);
     if (slashMatch) {
       updateUnifiedMenu({ filter: slashMatch[1], visible: true, trigger: "/" });
@@ -384,6 +399,10 @@ export function WorkspaceInput({
   // Triggers fire based on the text BEFORE the caret, so users can insert mentions
   // mid-text — not just at the end of the prompt.
   const handleCaretContext = useCallback((before: string) => {
+    if (/^\/add-dir\s+/.test(before)) {
+      updateUnifiedMenu({ visible: false, filter: "" });
+      return;
+    }
     const match = before.match(/(?:^|\s)([/@#$])(\S*)$/);
     if (match) {
       updateUnifiedMenu({
@@ -397,8 +416,44 @@ export function WorkspaceInput({
     }
   }, []);
 
+  const addAdditionalDirectory = useCallback((folderPath: string) => {
+    const normalized = folderPath.trim();
+    if (!normalized.startsWith("/")) {
+      toast.error("Enter an absolute folder path on the Mac running Mains.");
+      return;
+    }
+    if (!additionalDirectories.includes(normalized)) {
+      onAdditionalDirectoriesChange?.([...additionalDirectories, normalized]);
+    }
+  }, [additionalDirectories, onAdditionalDirectoriesChange]);
+
+  const pickAdditionalDirectory = useCallback(async () => {
+    try {
+      const result = await window.api.workspace.selectDirectory();
+      if (!result.success) {
+        toast.error(result.error || "Could not open the folder picker. You can type /add-dir /absolute/path instead.");
+        return;
+      }
+      if (result.data) addAdditionalDirectory(result.data);
+    } catch {
+      toast.error("Could not open the folder picker. You can type /add-dir /absolute/path instead.");
+    }
+  }, [addAdditionalDirectory]);
+
   const handleSlashCommandSelect = useCallback(
     (command: CommandInfo) => {
+      if (command.name === "add-dir" &&
+        (activeProviderId === PROVIDER_IDS.claude || activeProviderId === PROVIDER_IDS.codex)) {
+      const t = unifiedMenu.trigger;
+      const ok = inputRef.current?.replaceTokenWithText(t, "") ?? false;
+      if (!ok) {
+        const next = replaceMentionInGoal(goal, t, unifiedMenu.filter, "");
+        if (next !== null) onGoalChange(next);
+      }
+      updateUnifiedMenu({ visible: false, filter: "" });
+      void pickAdditionalDirectory();
+      return;
+    }
       const replacement = `/${command.name} `;
       const t = unifiedMenu.trigger;
       const ok =
@@ -414,7 +469,7 @@ export function WorkspaceInput({
       }
       updateUnifiedMenu({ visible: false, filter: "" });
     },
-    [goal, onGoalChange, unifiedMenu.filter, unifiedMenu.trigger],
+    [activeProviderId, goal, onGoalChange, pickAdditionalDirectory,unifiedMenu.filter, unifiedMenu.trigger],
   );
 
   const handleSkillSelect = useCallback(
@@ -657,9 +712,22 @@ export function WorkspaceInput({
   );
 
   const handleSubmit = useCallback(() => {
+    if (activeProviderId === PROVIDER_IDS.claude || activeProviderId === PROVIDER_IDS.codex) {
+      const match = goal.trim().match(/^\/add-dir(?:\s+(.+))?$/);
+      if (match) {
+        if (match[1]) {
+          const folderPath = match[1].trim().replace(/^(["'])(.*)\1$/, "$2");
+          addAdditionalDirectory(folderPath);
+        } else {
+          void pickAdditionalDirectory();
+        }
+        onGoalChange("");
+        return;
+      }
+    }
     if (unifiedMenu.visible) return;
     onSubmit();
-  }, [unifiedMenu.visible, onSubmit]);
+  }, [unifiedMenu.visible, activeProviderId, goal, addAdditionalDirectory, pickAdditionalDirectory, onGoalChange, onSubmit]);
 
   const [isFileDragOver, setIsFileDragOver] = useState(false);
 
@@ -977,6 +1045,30 @@ export function WorkspaceInput({
           </div>
         )}
         <ContextChips />
+        {additionalDirectories.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-4 pt-3">
+            {additionalDirectories.map((folderPath) => (
+              <Tooltip
+                key={folderPath}
+                content={folderPath}
+                hideOnClick
+                className="max-w-xs whitespace-normal wrap-break-word"
+              >
+                <Button
+                  type="button"
+                  aria-label={`Remove access to ${folderPath}`}
+                  onClick={() => onAdditionalDirectoriesChange?.(
+                    additionalDirectories.filter((entry) => entry !== folderPath),
+                  )}
+                  className="min-w-0 max-w-64 flex items-center gap-1.5 rounded-full glass-button px-2.5 py-1 text-xs text-primary-700 dark:text-primary-300"
+                >
+                  <span className="min-w-0 truncate">{directoryName(folderPath)}</span>
+                  <span aria-hidden="true" className="shrink-0 text-primary-500">×</span>
+                </Button>
+              </Tooltip>
+            ))}
+          </div>
+        )}
         <ComposerAttachments
           files={uploadedFiles}
           onRemove={handleRemoveUploadedFile}

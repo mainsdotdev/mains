@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   existsSync,
   lstatSync,
+  mkdtempSync,
+  realpathSync,
   mkdirSync,
   rmSync,
   statSync,
@@ -9,6 +11,7 @@ import {
   writeFileSync,
 } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
 import { createTestDb } from "../../../test/setup-db";
 import {
   createAccount,
@@ -707,6 +710,78 @@ describe("runsService", () => {
       expect(continueRun.mock.calls[0][0].configSnapshot.outputStyle).toBe(
         "Concise",
       );
+    });
+
+    it("scopes extra folder grants to one chat and replaces them on continuation", async () => {
+      const first = mkdtempSync(join(tmpdir(), "mains-added-dir-"));
+      const second = mkdtempSync(join(tmpdir(), "mains-added-dir-"));
+      try {
+        createSpace(db, {
+          id: "sp-folders",
+          accountId: "default",
+          providerId: "claude_code",
+          mode: "work",
+        });
+        const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+        const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+        vi.mocked(createWorkAdapter).mockReturnValue({
+          startRun,
+          continueRun,
+          canResumeSession: vi.fn().mockResolvedValue(true),
+        } as any);
+
+        const { runId } = await runsService.executeRun({
+          accountId: "default",
+          spaceId: "sp-folders",
+          providerId: "claude_code",
+          goal: "read the folder",
+          additionalDirectories: [first, join(first, ".")],
+        });
+        await flushBackground();
+        expect(startRun.mock.calls[0][0].configSnapshot.additionalDirectories).toEqual([realpathSync(first)]);
+        expect((await runsService.getRunById(runId))?.configSnapshot?.additionalDirectories).toEqual([realpathSync(first)]);
+
+        await runsService.continueRun({
+          runId,
+          accountId: "default",
+          message: "use the other folder",
+          additionalDirectories: [second],
+        });
+        await flushBackground();
+        expect(continueRun.mock.calls[0][0].configSnapshot.additionalDirectories).toEqual([realpathSync(second)]);
+        expect((await runsService.getRunById(runId))?.configSnapshot?.additionalDirectories).toEqual([realpathSync(second)]);
+
+        await runsService.continueRun({
+          runId,
+          accountId: "default",
+          message: "stop using extra folders",
+          additionalDirectories: [],
+        });
+        await flushBackground();
+        expect(continueRun.mock.calls[1][0].configSnapshot.additionalDirectories).toEqual([]);
+        expect((await runsService.getRunById(runId))?.configSnapshot?.additionalDirectories).toEqual([]);
+      } finally {
+        rmSync(first, { recursive: true, force: true });
+        rmSync(second, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects a missing extra folder before opening a provider session", async () => {
+      createSpace(db, {
+        id: "sp-missing-folder",
+        accountId: "default",
+        providerId: "claude_code",
+        mode: "work",
+      });
+      const startRun = mockStartAdapter();
+      await expect(runsService.executeRun({
+        accountId: "default",
+        spaceId: "sp-missing-folder",
+        providerId: "claude_code",
+        goal: "read the folder",
+        additionalDirectories: [join(tmpdir(), "mains-folder-that-does-not-exist")],
+      })).rejects.toThrow("Additional directory is unavailable");
+      expect(startRun).not.toHaveBeenCalled();
     });
 
     it("chat's overrides beat the caller's snapshot — codex stays read-only", async () => {
