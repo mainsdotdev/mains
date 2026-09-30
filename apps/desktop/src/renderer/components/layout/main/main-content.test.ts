@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MainHeaderProvider, useSetMainHeader } from "@/hooks/use-main-header";
@@ -10,17 +10,25 @@ vi.mock("@/lib/platform", () => ({
   useCapabilities: () => ({ windowChrome: true }),
 }));
 
-const runHeader = createElement("button", null, "Selected run");
+type MainContentProps = ComponentProps<typeof MainContent>;
+
+const runHeader =createElement("button", null, "Selected run");
 
 function RunContent({ expanded, collapsed }: { expanded: boolean; collapsed: boolean }) {
   useSetMainHeader(runHeader, true);
-  return createElement(MainContent, {
+  // children goes in as createElement's third argument, which its typings don't count.
+  const props: Omit<MainContentProps, "children"> = {
     marginLeft: collapsed ? "4rem" : "22rem",
     marginRight: "38rem",
     sidebarCollapsed: collapsed,
     browserOpen: true,
     headerHidden: expanded,
-  }, createElement("div", null, "Run transcript"));
+  };
+  return createElement(
+    MainContent,
+    props as MainContentProps,
+    createElement("div", null, "Run transcript"),
+  );
 }
 
 beforeEach(() => {
