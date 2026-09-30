@@ -324,6 +324,7 @@ function AppContent() {
             !hideRightPanel && !rightPanelVisible && !browserPanel.isOpen && !docViewer.isOpen
           }
           browserOpen={browserPanel.isOpen || docViewer.isOpen}
+          headerHidden={browserPanel.isExpanded}
           sidebarCollapsed={sidebarCollapsed}
         >
           <ErrorBoundary level="route">

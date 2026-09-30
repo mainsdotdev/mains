@@ -900,7 +900,7 @@ export function WorkspaceInput({
           ? "rounded-[28px] text-primary-950 dark:text-primary-50"
           : "rounded-[28px] glass-surface pb-2"}
         ${layout === "default" ? "mb-4" : ""}
-        ${isFileDragOver ? "ring-2 ring-primary/60 ring-offset-2 ring-offset-background" : ""}`}
+        ${isFileDragOver ? "ring dark:ring-primary/50 ring-primary-950/50 ring-offset-2 " : ""}`}
         onFocusCapture={(event) => {
           if (layout === "floating" && event.target instanceof HTMLElement && event.target.getAttribute("role") === "textbox") {
             onFloatingFocus?.();
