@@ -388,7 +388,7 @@ describe("codex.driver / app-server protocol", () => {
     );
   });
 
-  it("targets the selected MCP App account on Codex 0.157.1", async () => {
+  it("targets the selected MCP App account on the tested Codex protocol", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
