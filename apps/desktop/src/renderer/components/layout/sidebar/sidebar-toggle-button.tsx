@@ -7,11 +7,13 @@ import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 interface SidebarToggleButtonProps {
   isOpen: boolean;
+  browserExpanded?: boolean;
   onClick: () => void;
 }
 
 export function SidebarToggleButton({
   isOpen,
+  browserExpanded,
   onClick,
 }: SidebarToggleButtonProps) {
   const { windowChrome } = useCapabilities();
@@ -32,7 +34,7 @@ export function SidebarToggleButton({
 
   return (
     <div
-      className="fixed z-(--z-panel-toggle) flex h-7 items-center gap-1 transition-all duration-300 ease-out"
+      className={`fixed flex h-7 items-center gap-1 transition-all duration-300 ease-out ${browserExpanded ? "z-10000" : "z-(--z-panel-toggle)"}`}
       style={{
         top: "calc(0.5875rem + env(safe-area-inset-top))",
         left: reserveTrafficLights ? "5.5rem" : "0.75rem",

@@ -2,6 +2,7 @@ import {
   useReducer,
   useRef,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useState,
   useMemo,
@@ -12,6 +13,7 @@ import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { ContextCodeSelection } from "@/features/workspace/lib/composer-context";
 import { useComposerContext } from "../hooks/use-composer-context";
 import {
+  AsciiSpinner,
   Button,
   DropdownWrapper,
   RichInputForm,
@@ -22,6 +24,7 @@ import {
   type RichCodeChipData,
 } from "@/components/ui";
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
+import type { BrowserChatMode } from "@/hooks/use-browser-panel";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useIsMobile } from "@/lib/platform";
 import { useClickOutside } from "@/hooks/use-click-outside";
@@ -171,7 +174,12 @@ interface WorkspaceInputProps {
   /** Project glyph rendered as part of the empty placeholder. */
   newChatProjectIcon?: React.ReactNode;
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
-  layout?: "default" | "centered";
+  layout?: "default" | "centered" | "browser";
+  browserChatMode?: BrowserChatMode;
+  onBrowserFocus?: () => void;
+  browserAutoFocus?: boolean;
+  /** Selected run activity shown in the compact browser composer while idle. */
+  browserStatusPlaceholder?: string | null;
 }
 
 export function WorkspaceInput({
@@ -195,8 +203,17 @@ export function WorkspaceInput({
   newChatProjectName,
   newChatProjectIcon,
   layout = "default",
+  browserChatMode,
+  onBrowserFocus,
+  browserAutoFocus = false,
+  browserStatusPlaceholder,
 }: WorkspaceInputProps) {
   const inputRef = useRef<RichInputFormHandle>(null);
+  useEffect(() => {
+    if (layout !== "browser" || !browserAutoFocus) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [layout, browserAutoFocus]);
   const unifiedContextDropdownRef = useRef<HTMLDivElement>(null);
   const pluginsButtonRef = useRef<HTMLButtonElement>(null);
   const {
@@ -252,7 +269,7 @@ export function WorkspaceInput({
     workspacePath,
   );
 
-  const contextUsage = useContextUsage(activeRun?.id ?? null);
+  const contextUsage = useContextUsage(layout === "browser" ? null : (activeRun?.id ?? null));
 
   // Preflight auth probe: catches "signed out entirely" before the first run
   // is even sent. Refresh-token failures can't be predicted from local state —
@@ -648,6 +665,14 @@ export function WorkspaceInput({
 
   const sendTargetDropdownRef = useRef<HTMLDivElement>(null);
   const [targetMenuOpen, setTargetMenuOpen] = useState(false);
+  const previousBrowserChatMode = useRef(browserChatMode);
+  useLayoutEffect(() => {
+    const previousMode = previousBrowserChatMode.current;
+    previousBrowserChatMode.current = browserChatMode;
+    if (layout !== "browser" || previousMode === browserChatMode) return;
+    updateUnifiedMenu({ visible: false, filter: "" });
+    setTargetMenuOpen(false);
+  }, [browserChatMode, layout]);
   useClickOutside(sendTargetDropdownRef, () => {
     if (targetMenuOpen) setTargetMenuOpen(false);
   });
@@ -777,6 +802,9 @@ export function WorkspaceInput({
     composerPlaceholder,
     newChatProjectName,
   ]);
+  const browserRunStatus = layout === "browser" && !isFileDragOver
+    ? browserStatusPlaceholder
+    : null;
 
   //Copilot related TODO:
   const authErrorMessage = (() => {
@@ -794,6 +822,46 @@ export function WorkspaceInput({
       return msg;
     return null;
   })();
+
+  const toolbar = (
+    <InputToolbar
+      browserChatMode={browserChatMode}
+      variant={providerVariant}
+      isLoading={isLoading}
+      onSubmit={handleSubmit}
+      onGoalChange={onGoalChange}
+      selectedModelDisplayName={selectedModelDisplayName}
+      modelDisplayNames={modelDisplayNames}
+      modelEffortLevelsByDisplayName={modelEffortLevelsByDisplayName}
+      onModelChange={handleModelChange}
+      isLoadingModels={isLoadingModels}
+      permissionMode={permissionMode}
+      onPermissionModeChange={handlePermissionModeChange}
+      planMode={planMode}
+      onPlanModeToggle={handlePlanModeToggle}
+      goalMode={goalMode}
+      onGoalModeToggle={handleGoalModeToggle}
+      pluginSkills={pluginSkills}
+      pluginsMenuOpen={pluginsMenuOpen}
+      onTogglePluginsMenu={handleTogglePluginsMenu}
+      pluginsButtonRef={pluginsButtonRef}
+      thinkingMode={thinkingMode}
+      onThinkingModeToggle={handleThinkingModeToggle}
+      fastMode={fastMode}
+      onFastModeToggle={handleFastModeToggle}
+      supportsFastMode={selectedModelInfo?.supportsFastMode ?? false}
+      effortLevel={effortLevel}
+      onEffortLevelChange={handleEffortLevelChange}
+      supportedEffortLevels={selectedModelInfo?.supportedEffortLevels}
+      supportsUltracode={supportsUltracode}
+      isRunning={activeRun?.status === "running"}
+      onStop={onStop}
+      uploadedFiles={uploadedFiles}
+      onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
+      disabled={!!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
+      layout={layout === "browser" ? "browser" : "default"}
+    />
+  );
 
   return (
     <>
@@ -827,16 +895,23 @@ export function WorkspaceInput({
       )}
 
       <div
-        className={`relative w-full max-w-210 mx-auto flex flex-col pb-2 rounded-[28px] glass-surface
-        cursor-pointer transition-all
+        className={`relative mx-auto flex w-full max-w-210 flex-col cursor-pointer transition-all
+        ${layout === "browser"
+          ? "rounded-[28px] text-primary-950 dark:text-primary-50"
+          : "rounded-[28px] glass-surface pb-2"}
         ${layout === "default" ? "mb-4" : ""}
         ${isFileDragOver ? "ring-2 ring-primary/60 ring-offset-2 ring-offset-background" : ""}`}
+        onFocusCapture={(event) => {
+          if (layout === "browser" && event.target instanceof HTMLElement && event.target.getAttribute("role") === "textbox") {
+            onBrowserFocus?.();
+          }
+        }}
         onDragEnter={handleWrapperDragEnter}
         onDragLeave={handleWrapperDragLeave}
         onDragOver={handleWrapperDragOver}
         onDrop={handleWrapperDrop}
       >
-        {contextUsage && (
+        {layout !== "browser" && contextUsage && (
           <div className="absolute left-full bottom-2.5 ml-3 z-10">
             <ContextUsageRing usage={contextUsage} />
           </div>
@@ -863,7 +938,7 @@ export function WorkspaceInput({
                 isOpen={targetMenuOpen}
                 aria-label="Send message to"
                 openUpward
-                minWidth="min-w-60"
+                minWidth="min-w-20"
               >
                 <div className="max-h-80 overflow-auto noscrollbar py-1">
                   {sendTarget.options.map((option) => {
@@ -922,9 +997,15 @@ export function WorkspaceInput({
             skillChipMap={skillChipMap}
             fileChipMap={fileChipMap}
             codeChipMap={codeChipMap}
-            placeholder={inputPlaceholder}
-            placeholderIcon={newChatProjectName ? newChatProjectIcon : undefined}
-            focusShortcutLabel={focusComposerShortcut}
+            placeholder={browserRunStatus || inputPlaceholder}
+            placeholderIcon={browserRunStatus
+              ? <AsciiSpinner
+                  variant={providerVariant}
+                  kind={activeRun?.status === "queued" ? "circle" : "square"}
+                />
+              : newChatProjectName ? newChatProjectIcon : undefined}
+            focusShortcutLabel={layout === "browser" ? undefined : focusComposerShortcut}
+            compact={layout === "browser"}
           />
           <UnifiedContextDropdown
             isOpen={unifiedMenu.visible}
@@ -946,45 +1027,9 @@ export function WorkspaceInput({
             dropdownRef={unifiedContextDropdownRef}
             triggerRef={pluginsButtonRef}
           />
+          {layout === "browser" && toolbar}
         </div>
-        <InputToolbar
-          variant={providerVariant}
-          isLoading={isLoading}
-          onSubmit={handleSubmit}
-          onGoalChange={onGoalChange}
-          selectedModelDisplayName={selectedModelDisplayName}
-          modelDisplayNames={modelDisplayNames}
-          modelEffortLevelsByDisplayName={modelEffortLevelsByDisplayName}
-          onModelChange={handleModelChange}
-          isLoadingModels={isLoadingModels}
-          permissionMode={permissionMode}
-          onPermissionModeChange={handlePermissionModeChange}
-          planMode={planMode}
-          onPlanModeToggle={handlePlanModeToggle}
-          goalMode={goalMode}
-          onGoalModeToggle={handleGoalModeToggle}
-          pluginSkills={pluginSkills}
-          pluginsMenuOpen={pluginsMenuOpen}
-          onTogglePluginsMenu={handleTogglePluginsMenu}
-          pluginsButtonRef={pluginsButtonRef}
-          thinkingMode={thinkingMode}
-          onThinkingModeToggle={handleThinkingModeToggle}
-          fastMode={fastMode}
-          onFastModeToggle={handleFastModeToggle}
-          supportsFastMode={selectedModelInfo?.supportsFastMode ?? false}
-          effortLevel={effortLevel}
-          onEffortLevelChange={handleEffortLevelChange}
-          supportedEffortLevels={selectedModelInfo?.supportedEffortLevels}
-          supportsUltracode={supportsUltracode}
-          isRunning={activeRun?.status === "running"}
-          onStop={onStop}
-          uploadedFiles={uploadedFiles}
-          onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
-          disabled={
-            !!authErrorMessage ||
-            (!isLoadingModels && modelDisplayNames.length === 0)
-          }
-        />
+        {layout !== "browser" && toolbar}
       </div>
     </>
   );

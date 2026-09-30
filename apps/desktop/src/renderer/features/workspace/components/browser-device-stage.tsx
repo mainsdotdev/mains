@@ -205,7 +205,7 @@ export function BrowserDeviceStage({
   return (
     <div
       ref={stageRef}
-      className={`relative mb-px flex-1 overflow-hidden transition-colors ${
+      className={`relative mb-px min-w-0 flex-1 overflow-hidden transition-colors ${
         enabled
           ? "bg-primary-200/70 dark:bg-primary-800/55"
           : "bg-transparent"

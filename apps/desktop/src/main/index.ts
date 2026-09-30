@@ -149,6 +149,10 @@ import {
   browserService,
 } from "./modules/browser";
 import {
+  registerBrowserChatWindowIpc,
+  unregisterBrowserChatWindowIpc,
+} from "./modules/browser/browser-chat-window";
+import {
   registerAppshotsIpc,
   unregisterAppshotsIpc,
   appshotsService,
@@ -857,6 +861,7 @@ async function initializeApp() {
     registerGuardsIpc();
     registerPullRequestsIpc();
     registerBrowserIpc();
+    registerBrowserChatWindowIpc();
     registerAppshotsIpc();
     registerKeyboardShortcutsIpc();
     registerSshIpc();
@@ -1206,6 +1211,7 @@ async function cleanupApp() {
     await shutdownAllGuardAdapters();
     try { browserService.destroy(); } catch { /* ignore */ }
     unregisterBrowserIpc();
+    unregisterBrowserChatWindowIpc();
     appshotsService.stop();
     unregisterAppshotsIpc();
     unregisterKeyboardShortcutsIpc();

@@ -310,6 +310,7 @@ function AppContent() {
         ) && (
           <SidebarToggleButton
             isOpen={!sidebarCollapsed}
+            browserExpanded={browserPanel.isExpanded}
             onClick={() => dispatch(setSidebarCollapsed(!sidebarCollapsed))}
           />
         )}

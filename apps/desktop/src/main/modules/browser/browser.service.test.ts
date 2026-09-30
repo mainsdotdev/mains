@@ -18,6 +18,7 @@ vi.mock("../keyboardShortcuts", () => ({
 }));
 
 import { browserService } from "./browser.service";
+import { CHANNELS } from "@mains/contracts/channels";
 import { runOwnerKey } from "../../../shared/ui-state-keys";
 
 function resetInMemory() {
@@ -55,6 +56,45 @@ describe("browserService — tabs by chat", () => {
     browserService._persistNow();
     expect(JSON.parse(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8")).tabs)
       .toEqual([]);
+  });
+
+  it("reports a click in the active live page without blocking the page", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/a");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const view = {
+      webContents: {
+        on: (name: string, listener: (...args: unknown[]) => void) => { listeners.set(name, listener); },
+        setWindowOpenHandler: vi.fn(),
+      },
+    } as unknown as Parameters<typeof browserService._wireView>[1];
+    browserService._wireView(record, view);
+    browserService.visible = true;
+    const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => undefined);
+    const preventDefault = vi.fn();
+    const onMouse = listeners.get("before-mouse-event")!;
+
+    onMouse({ preventDefault }, { type: "mouseMove" });
+    expect(send).not.toHaveBeenCalled();
+    onMouse({ preventDefault }, { type: "mouseDown" });
+    expect(send).toHaveBeenCalledWith(CHANNELS.browser.chatAction, { type: "pagePointerDown" });
+    expect(preventDefault).not.toHaveBeenCalled();
+    send.mockRestore();
+  });
+
+  it("remounts the selected chat's page when leaving a floating overlay", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/a");
+    browserService.setVisible(false);
+    await browserService.setContext("chat-b");
+    await browserService.createTab("https://example.com/b");
+    await browserService.setContext("chat-a");
+    const mount = vi.spyOn(browserService, "_mountActiveView").mockResolvedValue(undefined);
+    browserService.setVisible(true);
+    expect(mount).toHaveBeenCalledOnce();
+    expect(browserService.getState().ownerKey).toBe("chat-a");
+    mount.mockRestore();
   });
 
   it("restores the last active tab and URL for each chat after a restart", async () => {

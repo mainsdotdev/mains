@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui";
-import { Close, Plus, Web } from "@/components/ui/icons";
+import { Chat, Close, Maximize, MinimizeView, Plus, Web } from "@/components/ui/icons";
+import { useCapabilities } from "@/lib/platform";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 
 export interface BrowserTabViewModel {
@@ -44,6 +45,11 @@ interface BrowserTabStripProps {
   onClose: (tabId: string) => void;
   onCreate: () => void;
   onClosePanel: () => void;
+  isExpanded: boolean;
+  sidebarCollapsed?: boolean;
+  onToggleExpanded: () => void;
+  chatVisible?: boolean;
+  onToggleChat?: () => void;
   newTabShortcutLabel?: string;
   closeTabShortcutLabel?: string;
 }
@@ -91,11 +97,24 @@ export function BrowserTabStrip({
   onClose,
   onCreate,
   onClosePanel,
+  isExpanded,
+  sidebarCollapsed,
+  onToggleExpanded,
+  chatVisible,
+  onToggleChat,
   newTabShortcutLabel,
   closeTabShortcutLabel,
 }: BrowserTabStripProps) {
+  const { windowChrome } = useCapabilities();
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    if (!windowChrome) return;
+    return window.api.app.onFullscreenChange(setIsFullscreen);
+  }, [windowChrome]);
+  const reserveTrafficLights = isExpanded && sidebarCollapsed && windowChrome && !isFullscreen;
+
   return (
-    <div className="flex min-h-10 items-center border-b border-primary-200/60 px-2 dark:border-primary-800/50">
+    <div className={`flex min-h-10 items-center border-b border-primary-200/60 pr-2 dark:border-primary-800/50 ${reserveTrafficLights ? "pl-4" : "pl-2"}`}>
       <div
         className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 scrollbar-none [&::-webkit-scrollbar]:hidden"
       >
@@ -164,6 +183,28 @@ export function BrowserTabStrip({
           <Plus className="size-3.5" />
         </Button>
       </div>
+      {isExpanded && onToggleChat && (
+        <Button
+          onClick={onToggleChat}
+          tooltip={chatVisible ? "Browse page" : "Show chat"}
+          tooltipPosition="bottom-left"
+          aria-label={chatVisible ? "Browse page" : "Show chat"}
+          aria-pressed={chatVisible}
+          className="ml-1 shrink-0 rounded-full p-1 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
+        >
+          <Chat className="size-3.5" />
+        </Button>
+      )}
+      <Button
+        onClick={onToggleExpanded}
+        tooltip={isExpanded ? "Restore browser panel" : "Expand browser"}
+        tooltipPosition="bottom-left"
+        aria-label={isExpanded ? "Restore browser panel" : "Expand browser"}
+        aria-pressed={isExpanded}
+        className="ml-1 shrink-0 rounded-full p-1 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
+      >
+        {isExpanded ? <MinimizeView className="size-3.5" /> : <Maximize className="size-3.5" />}
+      </Button>
       <Button
         onClick={onClosePanel}
         tooltip="Close browser"

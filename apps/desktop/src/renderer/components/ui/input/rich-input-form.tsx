@@ -85,6 +85,7 @@ interface RichInputFormProps {
   placeholder?: string;
   placeholderIcon?: ReactNode;
   focusShortcutLabel?: string;
+  compact?: boolean;
   /** Maps serialized token → display data so selected skills and apps survive external query changes. */
   skillChipMap?: ReadonlyMap<string, RichSkillChipData>;
   /** Maps file path → display data so `@<path>` tokens can be rebuilt as chips when query changes externally. */
@@ -779,6 +780,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       placeholder,
       placeholderIcon,
       focusShortcutLabel,
+      compact = false,
       skillChipMap,
       fileChipMap,
       codeChipMap,
@@ -1011,15 +1013,15 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           onInput={fireChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          className="rounded-2xl w-full pl-5 pr-24 pt-4 pb-1 text-sm outline-none whitespace-pre-wrap wrap-break-word [&>p]:my-2 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0
-            min-h-12 max-h-80 overflow-y-auto noscrollbar
-            dark:text-primary-300 text-primary-700"
+          className={`w-full text-sm outline-none whitespace-pre-wrap wrap-break-word [&>p]:my-2 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 overflow-y-auto noscrollbar dark:text-primary-300 text-primary-700 ${compact
+            ? "min-h-12 max-h-40 rounded-[28px] py-3 pl-12 pr-28"
+            : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1"}`}
         />
         {isEmpty && placeholder && (
           <Text
             as="div"
             tone="faint"
-            className={`pointer-events-none absolute left-5 top-4 flex items-start gap-1.5 opacity-75 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}
+            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-36 top-3" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}`}
           >
             {placeholderIcon ? (
               <span
@@ -1029,7 +1031,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
                 {placeholderIcon}
               </span>
             ) : null}
-            <span>{placeholder}</span>
+            <span className={compact ? "min-w-0 truncate" : undefined}>{placeholder}</span>
           </Text>
         )}
         {showFocusHint && focusShortcutLabel && (

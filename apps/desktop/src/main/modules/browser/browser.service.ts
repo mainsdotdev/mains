@@ -16,6 +16,7 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
+import { getMainWindow } from "../../windows/mainWindow";
 import { isRunOwnerKey, isWorkspaceDraftOwnerKey } from "../../../shared/ui-state-keys";
 import {
   buildInspectorScript,
@@ -594,6 +595,10 @@ export const browserService = {
   },
 
   _findHost(): BrowserWindow | null {
+    // The floating chat is a child BrowserWindow. Browser tabs always belong
+    // to the app shell even while that child has keyboard focus.
+    const main = getMainWindow();
+    if (main && !main.isDestroyed()) return main;
     return (
       BrowserWindow.getFocusedWindow() ||
       BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ||
@@ -730,6 +735,13 @@ export const browserService = {
 
   _wireView(record: BrowserTabRecord, view: WebContentsView) {
     const contents = view.webContents;
+
+    contents.on("before-mouse-event", (_event, mouse) => {
+      if (mouse.type !== "mouseDown" || !this.visible || this.activeTabId !== record.id) return;
+      // The live page is a separate WebContentsView, so DOM click handlers in
+      // the app renderer cannot collapse its floating chat.
+      this._sendToRenderer(CHANNELS.browser.chatAction, { type: "pagePointerDown" });
+    });
 
     contents.setWindowOpenHandler(({ url }) => {
       if (isAllowedBrowserUrl(url)) {
@@ -1295,7 +1307,11 @@ export const browserService = {
     view.setVisible(true);
     this._scheduleDeviceEmulation(record);
     void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
-    view.webContents.focus();
+    // A focused floating chat is a separate child window. Remounting a tab or
+    // restoring its visibility must not steal keyboard focus from its input.
+    if (BrowserWindow.getFocusedWindow() === this.host) {
+      view.webContents.focus();
+    }
   },
 
   async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">, ownerKey: string) {
@@ -2069,6 +2085,9 @@ export const browserService = {
     this.visible = visible;
     if (visible) {
       this._clearIdleTimer();
+      // The active owner may have changed while a renderer overlay hid the
+      // native view. Reattach (or create) that owner's view before browsing.
+      void this._mountActiveView();
       this._scheduleDeviceEmulation(record);
       if (view && !view.webContents.isDestroyed()) {
         void record.deviceEmulationQueue.readyAfterPaint(view.webContents);

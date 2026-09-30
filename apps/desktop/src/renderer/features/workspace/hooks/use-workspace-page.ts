@@ -19,13 +19,14 @@ import { useComposerContext } from "./use-composer-context";
 import { useTransientUploads } from "./use-transient-uploads";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import { useActiveSpace } from "@/hooks/use-active-space";
-import { setRightPaneContextKey } from "@/lib/redux/slices/appSettingsSlice";
+import { setRightPaneContextKey, transferRightPaneContext } from "@/lib/redux/slices/appSettingsSlice";
 import { useWorkspaceData } from "./use-workspace-data";
 import { useWorkspaceRuns } from "./use-workspace-runs";
 import { useFileContentLoader } from "./use-file-content-loader";
 import { useTabHandlers } from "./use-tab-handlers";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
 import { collectionIdForVisibleRun } from "@/features/workspace/lib/run-collection-context";
+import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 
 export function useWorkspacePage(providerId: string) {
   const dispatch = useAppDispatch();
@@ -178,6 +179,9 @@ export function useWorkspacePage(providerId: string) {
     ? runs.find((r) => r.id === composeTargetRunId)
     : undefined;
   const ownerKey = composerOwnerKey(contextParts, composeTargetRunId);
+  const browserExpansionKey = mode === "developer" && workspaceId
+    ? workspaceBrowserExpansionKey(backendId, workspaceId)
+    : ownerKey;
   const goal = useAppSelector((state) => state.workspace.draftTextByKey[ownerKey] ?? "");
   const setGoal = useCallback((text: string) => {
     dispatch(setDraftText({ key: ownerKey, text }));
@@ -187,8 +191,8 @@ export function useWorkspacePage(providerId: string) {
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey) return;
     dispatch(setComposerContextKey(ownerKey));
-    dispatch(setRightPaneContextKey(ownerKey));
-  }, [activeViewKey, viewKey, ownerKey, dispatch]);
+    dispatch(setRightPaneContextKey({ ownerKey, browserExpansionKey }));
+  }, [activeViewKey, viewKey, ownerKey, browserExpansionKey, dispatch]);
 
   // Quick actions target the currently visible composer, even after it was
   // unmounted while visiting Settings.
@@ -349,10 +353,12 @@ export function useWorkspacePage(providerId: string) {
         selectedCollectionId,
       );
       if (newRunId) {
+        const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+        dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
         if (!composeTargetRunId) {
           await (window as any).api?.browser?.reassignTabs?.(
             ownerKey,
-            composerOwnerKey(contextParts, newRunId),
+            nextOwnerKey,
           );
         }
         clearInputState();
@@ -409,9 +415,11 @@ export function useWorkspacePage(providerId: string) {
             selectedCollectionId,
           );
           if (newRunId) {
+            const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+            dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
             await (window as any).api?.browser?.reassignTabs?.(
               ownerKey,
-              composerOwnerKey(contextParts, newRunId),
+              nextOwnerKey,
             );
             clearInputState();
             dispatch(setActiveTab(newRunId));
@@ -480,6 +488,7 @@ export function useWorkspacePage(providerId: string) {
     goal,
     setGoal,
     uploadedFiles,
+    contextItems,
     setUploadedFiles,
     canResume,
     selectedModel,

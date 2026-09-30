@@ -22,7 +22,7 @@ import {
 } from "@/lib/app-themes";
 import { isNewRunTab } from "@/features/workspace/lib/repo-utils";
 import { openNewRunTab, setActiveTab } from "./workspaceSlice";
-import { isWorkspaceDraftOwnerKey, runOwnerKey } from "../../../../shared/ui-state-keys";
+import { isWorkspaceDraftOwnerKey, runOwnerKey, workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 
 /** The document currently shown in the document viewer panel. */
 export interface DocumentViewerDoc {
@@ -42,6 +42,11 @@ export interface AppSettingsState {
   sidebarCollapsed: boolean;
   rightPanelOpen: boolean;
   browserPanelOpen: boolean;
+  /** Temporary browser takeover of the workspace content. */
+  browserPanelExpanded: boolean;
+  /** Code workspaces share this preference; Work and Chat use the conversation key. */
+  browserExpandedByContext: Record<string, boolean>;
+  activeBrowserExpansionContextKey: string;
   activeRightPaneContextKey: string;
   rightPaneByContext: Record<string, "none" | "workspace" | "browser" | "document">;
   /** Loaded documents only live for this app session. */
@@ -99,6 +104,9 @@ const initialState: AppSettingsState = {
   sidebarCollapsed: false,
   rightPanelOpen: false,
   browserPanelOpen: false,
+  browserPanelExpanded: false,
+  browserExpandedByContext: {},
+  activeBrowserExpansionContextKey: "default",
   activeRightPaneContextKey: "default",
   rightPaneByContext: {},
   documentViewerDocByContext: {},
@@ -128,9 +136,34 @@ const appSettingsSlice = createSlice({
   name: "appSettings",
   initialState,
   reducers: {
-    setRightPaneContextKey: (state, action: PayloadAction<string>) => {
-      const next = action.payload;
-      if (state.activeRightPaneContextKey === next) return;
+    transferRightPaneContext: (state, action: PayloadAction<{ fromKey: string; toKey: string }>) => {
+      const { fromKey, toKey } = action.payload;
+      if (state.activeRightPaneContextKey !== fromKey || fromKey === toKey) return;
+      const pane = state.documentViewerOpen && state.documentViewerDoc
+        ? "document"
+        : state.browserPanelOpen
+          ? "browser"
+          : state.rightPanelOpen
+            ? "workspace"
+            : "none";
+      state.rightPaneByContext[toKey] = pane;
+      if (state.browserExpandedByContext[toKey] === undefined &&
+          state.browserExpandedByContext[fromKey] !== undefined) {
+        state.browserExpandedByContext[toKey] = state.browserExpandedByContext[fromKey];
+      }
+      if (pane === "document" && state.documentViewerDoc) {
+        state.documentViewerDocByContext[toKey] = state.documentViewerDoc;
+      }
+    },
+    setRightPaneContextKey: (state, action: PayloadAction<{ ownerKey: string; browserExpansionKey: string }>) => {
+      const { ownerKey: next, browserExpansionKey } = action.payload;
+      if (state.activeRightPaneContextKey === next) {
+        if (state.activeBrowserExpansionContextKey === browserExpansionKey) return;
+        state.activeBrowserExpansionContextKey = browserExpansionKey;
+        state.browserPanelExpanded = state.browserPanelOpen &&
+          !!state.browserExpandedByContext[browserExpansionKey];
+        return;
+      }
       const previousPane = state.documentViewerOpen && state.documentViewerDoc
         ? "document"
         : state.browserPanelOpen
@@ -145,9 +178,11 @@ const appSettingsSlice = createSlice({
         delete state.documentViewerDocByContext[state.activeRightPaneContextKey];
       }
       state.activeRightPaneContextKey = next;
+      state.activeBrowserExpansionContextKey = browserExpansionKey;
       const pane = state.rightPaneByContext[next] ?? "none";
       state.rightPanelOpen = pane === "workspace";
       state.browserPanelOpen = pane === "browser";
+      state.browserPanelExpanded = pane === "browser" && !!state.browserExpandedByContext[browserExpansionKey];
       state.documentViewerDoc = pane === "document"
         ? state.documentViewerDocByContext[next] ?? null
         : null;
@@ -158,10 +193,13 @@ const appSettingsSlice = createSlice({
       const key = runOwnerKey(action.payload.backendId, action.payload.runId);
       delete state.rightPaneByContext[key];
       delete state.documentViewerDocByContext[key];
+      delete state.browserExpandedByContext[key];
       if (state.activeRightPaneContextKey === key) {
         state.activeRightPaneContextKey = "default";
+        state.activeBrowserExpansionContextKey = "default";
         state.rightPanelOpen = false;
         state.browserPanelOpen = false;
+        state.browserPanelExpanded = false;
         state.documentViewerOpen = false;
         state.documentViewerDoc = null;
         state.sessionPanelOpen = false;
@@ -169,16 +207,28 @@ const appSettingsSlice = createSlice({
     },
     forgetWorkspaceRightPanes: (state, action: PayloadAction<{ backendId: string; workspaceId: string }>) => {
       const { backendId, workspaceId } = action.payload;
+      const expansionKey = workspaceBrowserExpansionKey(backendId, workspaceId);
+      delete state.browserExpandedByContext[expansionKey];
       for (const key of Object.keys(state.rightPaneByContext)) {
         if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.rightPaneByContext[key];
       }
       for (const key of Object.keys(state.documentViewerDocByContext)) {
         if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.documentViewerDocByContext[key];
       }
+      for (const key of Object.keys(state.browserExpandedByContext)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.browserExpandedByContext[key];
+      }
+      if (state.activeBrowserExpansionContextKey === expansionKey ||
+          isWorkspaceDraftOwnerKey(state.activeBrowserExpansionContextKey, backendId, workspaceId)) {
+        state.activeBrowserExpansionContextKey = "default";
+        state.browserPanelExpanded = false;
+      }
       if (isWorkspaceDraftOwnerKey(state.activeRightPaneContextKey, backendId, workspaceId)) {
         state.activeRightPaneContextKey = "default";
+        state.activeBrowserExpansionContextKey = "default";
         state.rightPanelOpen = false;
         state.browserPanelOpen = false;
+        state.browserPanelExpanded = false;
         state.documentViewerOpen = false;
         state.documentViewerDoc = null;
         state.sessionPanelOpen = false;
@@ -189,6 +239,13 @@ const appSettingsSlice = createSlice({
     },
     setBrowserPanelOpen: (state, action: PayloadAction<boolean>) => {
       state.browserPanelOpen = action.payload;
+      state.browserPanelExpanded = action.payload &&
+        !!state.browserExpandedByContext[state.activeBrowserExpansionContextKey];
+      if (!action.payload) state.browserExpandedByContext[state.activeBrowserExpansionContextKey] = false;
+    },
+    setBrowserPanelExpanded: (state, action: PayloadAction<boolean>) => {
+      state.browserPanelExpanded = state.browserPanelOpen && action.payload;
+      state.browserExpandedByContext[state.activeBrowserExpansionContextKey] = state.browserPanelExpanded;
     },
     setRightPanelOpen: (state, action: PayloadAction<boolean>) => {
       state.rightPanelOpen = action.payload;
@@ -288,10 +345,12 @@ const appSettingsSlice = createSlice({
 
 export const {
   setRightPaneContextKey,
+  transferRightPaneContext,
   forgetRunRightPane,
   forgetWorkspaceRightPanes,
   setSidebarCollapsed,
   setBrowserPanelOpen,
+  setBrowserPanelExpanded,
   setRightPanelOpen,
   setSessionPanelOpen,
   setSubagentPanelCollapsed,

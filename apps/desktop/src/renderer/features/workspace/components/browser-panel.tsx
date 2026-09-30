@@ -35,6 +35,7 @@ import {
   View,
 } from "@/components/ui/icons";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
+import { isElectron } from "@/lib/platform";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setBrowserPanelWidth } from "@/lib/redux/slices/appSettingsSlice";
 import { setLayoutWidthVar } from "@/hooks/use-layout-width-vars";
@@ -53,6 +54,7 @@ import {
 import { BrowserDeviceToolbar } from "./browser-device-toolbar";
 import { BrowserDeviceStage } from "./browser-device-stage";
 import { BrowserFindBar } from "./browser-find-bar";
+import { browserChatWindowGeometry } from "../lib/browser-chat-window-geometry";
 import {
   BrowserDownloadsPanel,
   type BrowserDownloadViewModel,
@@ -136,9 +138,21 @@ function waitForPaint(): Promise<void> {
 }
 
 export function BrowserPanel() {
-  const { isOpen, close, ownerKey } = useBrowserPanel();
+  const {
+    isOpen,
+    isExpanded,
+    chatMode,
+    setChatMode,
+    chatVisible,
+    setChatVisible,
+    toggleExpanded,
+    setChatHost,
+    close,
+    ownerKey,
+  } = useBrowserPanel();
   const dispatch = useAppDispatch();
   const viewportRef = useRef<HTMLDivElement>(null);
+  const chatStageRef = useRef<HTMLDivElement>(null);
   const locationInputRef = useRef<HTMLInputElement>(null);
   const browserMenuButtonRef = useRef<HTMLButtonElement>(null);
   const activeTabIdRef = useRef("");
@@ -146,6 +160,8 @@ export function BrowserPanel() {
   const browserMenuOpeningRef = useRef(false);
   const browserMenuPreviewNameRef = useRef<string | null>(null);
   const browserMenuPreviewRevisionRef = useRef(0);
+  const chatPreviewNameRef = useRef<string | null>(null);
+  const chatPreviewRevisionRef = useRef(0);
   // DOM overlays that sit over the page — the device toolbar's dropdowns and
   // the address suggestions. The page is a native view drawn above the DOM,
   // so while any is open it is swapped for a screenshot of itself.
@@ -187,6 +203,8 @@ export function BrowserPanel() {
   const [browserMenuPreviewName, setBrowserMenuPreviewName] = useState<
     string | null
   >(null);
+  const [chatPreviewName, setChatPreviewName] = useState<string | null>(null);
+  const [chatViewportRevision, setChatViewportRevision] = useState(0);
   const [browserMenuPosition, setBrowserMenuPosition] = useState({
     x: 0,
     y: 0,
@@ -217,6 +235,10 @@ export function BrowserPanel() {
   const browserPanelWidth = useAppSelector(
     (state) => state.appSettings.browserPanelWidth,
   );
+  const sidebarCollapsed = useAppSelector(
+    (state) => state.appSettings.sidebarCollapsed,
+  );
+  const [nativeComposerHeight, setNativeComposerHeight] = useState(48);
   const activeTab =
     browserState.tabs.find((tab) => tab.tabId === browserState.activeTabId) ??
     null;
@@ -355,6 +377,60 @@ export function BrowserPanel() {
 
   const isVisible = animState !== "closed";
   const isAnimatedIn = animState === "open";
+  // A native child window draws the chat above the live WebContentsView. The
+  // old screenshot path remains only for the standalone web renderer.
+  const chatOverlayActive = isOpen && isExpanded && chatVisible && !isElectron;
+  const nativeChatActive = isOpen && isExpanded && chatVisible && isElectron;
+
+  useEffect(() => {
+    if (!isElectron) return;
+    return window.api.browserChat.onAction((action) => {
+      if (action.type === "composerHeight") setNativeComposerHeight(action.height);
+    });
+  }, []);
+
+  const setChatStage = useCallback((node: HTMLDivElement | null) => {
+    chatStageRef.current = node;
+    setChatHost(node);
+  }, [setChatHost]);
+
+  const syncNativeChatWindow = useCallback(() => {
+    if (!isElectron) return;
+    const rect = chatStageRef.current?.getBoundingClientRect();
+    const geometry = rect
+      ? browserChatWindowGeometry(rect, chatMode, nativeComposerHeight)
+      : {
+          bounds: { x: 0, y: 0, width: 1, height: 1 },
+          card: { x: 0, y: 0, width: 1, height: 1 },
+        };
+    void window.api.browserChat.updateWindow({
+      visible: nativeChatActive && !!rect,
+      ...geometry,
+    });
+  }, [chatMode, nativeChatActive, nativeComposerHeight]);
+
+  useLayoutEffect(() => {
+    if (!isElectron) return;
+    syncNativeChatWindow();
+    const stage = chatStageRef.current;
+    const observer = stage ? new ResizeObserver(syncNativeChatWindow) : null;
+    if (stage && observer) observer.observe(stage);
+    window.addEventListener("resize", syncNativeChatWindow);
+    const afterTransition = window.setTimeout(syncNativeChatWindow, 360);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", syncNativeChatWindow);
+      window.clearTimeout(afterTransition);
+    };
+  }, [syncNativeChatWindow]);
+
+  useEffect(() => () => {
+    if (isElectron) void window.api.browserChat.updateWindow({
+      visible: false,
+      bounds: { x: 0, y: 0, width: 1, height: 1 },
+      card: { x: 0, y: 0, width: 1, height: 1 },
+    });
+  }, []);
 
   const syncBounds = useCallback(() => {
     const node = viewportRef.current;
@@ -401,15 +477,105 @@ export function BrowserPanel() {
     const postAnimation = setTimeout(syncBounds, 360);
     const node = viewportRef.current;
     if (!node) return () => clearTimeout(postAnimation);
-    const observer = new ResizeObserver(syncBounds);
+    const onResize = () => {
+      syncBounds();
+      if (chatOverlayActive) setChatViewportRevision((revision) => revision + 1);
+    };
+    const observer = new ResizeObserver(onResize);
     observer.observe(node);
-    window.addEventListener("resize", syncBounds);
+    window.addEventListener("resize", onResize);
     return () => {
       clearTimeout(postAnimation);
       observer.disconnect();
-      window.removeEventListener("resize", syncBounds);
+      window.removeEventListener("resize", onResize);
     };
-  }, [attached, isOpen, syncBounds]);
+  }, [attached, chatOverlayActive, isOpen, syncBounds]);
+
+  // The standalone web renderer keeps its screenshot fallback. Desktop chat
+  // uses a native child window and leaves the browser view live throughout.
+  useEffect(() => {
+    if (isElectron) return;
+    if (!api) return;
+    const revision = ++chatPreviewRevisionRef.current;
+    if (!chatOverlayActive || !attached) {
+      const previous = chatPreviewNameRef.current;
+      chatPreviewNameRef.current = null;
+      queueMicrotask(() => {
+        if (revision === chatPreviewRevisionRef.current) setChatPreviewName(null);
+      });
+      if (previous) void api.deleteCapture(previous);
+      if (
+        !chatOverlayActive &&
+        isOpen &&
+        attached &&
+        !browserMenuOpen &&
+        overlaysOpenRef.current.size === 0
+      ) {
+        void api.setVisible(true);
+        syncBounds();
+      }
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      void (async () => {
+        let pendingName: string | null = null;
+        try {
+          const viewport = viewportRef.current;
+          if (viewport) {
+            await api.setBounds(
+              browserPanelBounds(viewport.getBoundingClientRect()),
+            );
+          }
+          if (revision !== chatPreviewRevisionRef.current) return;
+          if (!isBlank) {
+            const response = await api.captureScreenshot("viewport");
+            const captureName = response?.success
+              ? (response.data as ContextBrowserSelection | undefined)?.screenshotCaptureName
+              : undefined;
+            if (captureName) {
+              pendingName = captureName;
+              await preloadImage(browserCaptureUrl(captureName));
+              if (revision !== chatPreviewRevisionRef.current) return;
+              const previous = chatPreviewNameRef.current;
+              chatPreviewNameRef.current = captureName;
+              setChatPreviewName(captureName);
+              pendingName = null;
+              await waitForPaint();
+              if (previous && previous !== captureName) {
+                await api.deleteCapture(previous);
+              }
+            }
+          }
+          if (revision === chatPreviewRevisionRef.current) {
+            await api.setVisible(false);
+          }
+        } catch {
+          // Preserve the last good frame when a hidden tab cannot be captured.
+          if (revision === chatPreviewRevisionRef.current) await api.setVisible(false);
+        } finally {
+          if (pendingName) await api.deleteCapture(pendingName);
+        }
+      })();
+    }, 380);
+    return () => {
+      if (timer) clearTimeout(timer);
+      chatPreviewRevisionRef.current += 1;
+    };
+  }, [
+    api,
+    attached,
+    browserMenuOpen,
+    chatOverlayActive,
+    isBlank,
+    isOpen,
+    browserState.activeTabId,
+    activeTab?.isLoading,
+    activeTab?.url,
+    chatViewportRevision,
+    syncBounds,
+  ]);
 
   useEffect(() => {
     if (!api) return;
@@ -530,7 +696,7 @@ export function BrowserPanel() {
   }, [api]);
 
   const refreshBrowserMenuPreview = useCallback(async () => {
-    if (!api || !browserMenuOpen) return;
+    if (!api || !browserMenuOpen || chatOverlayActive) return;
 
     const operation = browserMenuOperationRef.current;
     const revision = browserMenuPreviewRevisionRef.current + 1;
@@ -573,7 +739,7 @@ export function BrowserPanel() {
         await api.deleteCapture(pendingCaptureName);
       }
     }
-  }, [api, browserMenuOpen]);
+  }, [api, browserMenuOpen, chatOverlayActive]);
 
   const setZoom = useCallback(
     async (factor: number) => {
@@ -598,12 +764,12 @@ export function BrowserPanel() {
   );
 
   const restoreBrowserView = useCallback(async () => {
-    if (api && isOpen) {
+    if (api && isOpen && !chatOverlayActive) {
       await api.setVisible(true);
       syncBounds();
     }
     await clearBrowserMenuPreview();
-  }, [api, clearBrowserMenuPreview, isOpen, syncBounds]);
+  }, [api, chatOverlayActive, clearBrowserMenuPreview, isOpen, syncBounds]);
 
   const suspendBrowserViewForOverlay = useCallback(async () => {
     if (!api || !isOpen || overlaysOpenRef.current.size === 0) return;
@@ -614,7 +780,7 @@ export function BrowserPanel() {
     let previousCaptureName: string | null = null;
 
     try {
-      if (!isBlank) {
+      if (!isBlank && !chatOverlayActive) {
         try {
           const response = await api.captureScreenshot("viewport");
           const captureName = response?.success
@@ -684,7 +850,7 @@ export function BrowserPanel() {
         await api.deleteCapture(pendingCaptureName);
       }
     }
-  }, [api, clearBrowserMenuPreview, isBlank, isOpen, restoreBrowserView]);
+  }, [api, chatOverlayActive, clearBrowserMenuPreview, isBlank, isOpen, restoreBrowserView]);
 
   const handleOverlayOpenChange = useCallback(
     (id: BrowserOverlayId, open: boolean) => {
@@ -776,7 +942,7 @@ export function BrowserPanel() {
     let pendingCaptureName: string | null = null;
 
     try {
-      if (!isBlank) {
+      if (!isBlank && !chatOverlayActive) {
         const response = await api.captureScreenshot("viewport");
         const captureName = response?.success
           ? (response.data as ContextBrowserSelection | undefined)
@@ -826,6 +992,7 @@ export function BrowserPanel() {
   }, [
     api,
     browserMenuOpen,
+    chatOverlayActive,
     clearBrowserMenuPreview,
     closeBrowserMenu,
     isBlank,
@@ -1217,16 +1384,24 @@ export function BrowserPanel() {
       if (captureName) {
         void getBrowserApi()?.deleteCapture(captureName);
       }
+      const chatCaptureName = chatPreviewNameRef.current;
+      chatPreviewNameRef.current = null;
+      if (chatCaptureName) void getBrowserApi()?.deleteCapture(chatCaptureName);
     };
   }, []);
 
   if (!isVisible) return null;
+  const panelWidth = isExpanded
+    ? sidebarCollapsed
+      ? "calc(100% - var(--content-left) - 4rem)"
+      : "calc(100% - var(--content-left) + 0.3rem)"
+    : "var(--browser-panel-width)";
 
   if (!api) {
     return (
       <div
         className="fixed inset-y-0 right-0 z-(--z-overlay)"
-        style={{ width: "var(--browser-panel-width)" }}
+        style={{ width: panelWidth }}
       >
         <div className="absolute inset-1.25 flex items-center justify-center rounded-2xl bg-primary dark:bg-primary-950">
           <Text as="div" size="sm" tone="secondary">
@@ -1245,36 +1420,43 @@ export function BrowserPanel() {
 
   return (
     <div
-      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[transform,opacity] duration-300 ease-out"
+      data-browser-panel=""
+      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[width,transform,opacity] duration-300 ease-out"
       style={{
-        width: "var(--browser-panel-width)",
+        width: panelWidth,
         transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
         opacity: isAnimatedIn ? 1 : 0,
       }}
       role="complementary"
       aria-label="Embedded browser"
+      onPointerDownCapture={(event) => {
+        if (!isExpanded || chatMode !== "details") return;
+        if ((event.target as Element).closest("[data-browser-chat-surface]")) return;
+        setChatMode("input");
+      }}
     >
-      <ResizeHandle
-        edge="left"
-        value={browserPanelWidth}
-        min={BROWSER_PANEL_WIDTH_MIN}
-        max={BROWSER_PANEL_WIDTH_MAX}
-        computeWidth={(clientX) => window.innerWidth - clientX}
-        onPreview={(width) => setLayoutWidthVar(BROWSER_PANEL_WIDTH_VAR, width)}
-        onCommit={(width) => dispatch(setBrowserPanelWidth(width))}
-        onReset={() => dispatch(setBrowserPanelWidth(BROWSER_PANEL_WIDTH_DEFAULT))}
-        onDragStart={() => void api.setVisible(false)}
-        onDragEnd={() => {
-          void api.setVisible(true);
-          syncBounds();
-        }}
-        ariaLabel="Resize browser panel"
-      />
+      {!isExpanded && (
+        <ResizeHandle
+          edge="left"
+          value={browserPanelWidth}
+          min={BROWSER_PANEL_WIDTH_MIN}
+          max={BROWSER_PANEL_WIDTH_MAX}
+          computeWidth={(clientX) => window.innerWidth - clientX}
+          onPreview={(width) => setLayoutWidthVar(BROWSER_PANEL_WIDTH_VAR, width)}
+          onCommit={(width) => dispatch(setBrowserPanelWidth(width))}
+          onReset={() => dispatch(setBrowserPanelWidth(BROWSER_PANEL_WIDTH_DEFAULT))}
+          onDragStart={() => void api.setVisible(false)}
+          onDragEnd={() => {
+            void api.setVisible(true);
+            syncBounds();
+          }}
+          ariaLabel="Resize browser panel"
+        />
+      )}
 
-      {/* The lane keeps its full width for resizing. The painted surface is
-          inset, and its bottom padding keeps the native WebContentsView clear
-          of the rounded corners that CSS cannot clip. */}
-      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
+      {/* Both panel sizes retain the translucent frame gap. The painted surface
+          stays inset so native page content clears its rounded corners. */}
+      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950 -pl-20">
       <BrowserTabStrip
         tabs={browserState.tabs}
         activeTabId={browserState.activeTabId}
@@ -1282,6 +1464,11 @@ export function BrowserPanel() {
         onClose={closeTab}
         onCreate={createTab}
         onClosePanel={() => void closePanel()}
+        isExpanded={isExpanded}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleExpanded={toggleExpanded}
+        chatVisible={chatVisible}
+        onToggleChat={() => setChatVisible(!chatVisible)}
         newTabShortcutLabel={keyboardShortcutLabel(newTabShortcut)}
         closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}
       />
@@ -1293,7 +1480,9 @@ export function BrowserPanel() {
               tooltip="Back"
               tooltipShortcut={keyboardShortcutLabel(backShortcut)}
               tooltipPosition="top"
-              onClick={() => void api.back()}
+              onClick={() => {
+                void api.back();
+              }}
               disabled={!activeTab?.canGoBack}
               className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label="Back"
@@ -1304,7 +1493,9 @@ export function BrowserPanel() {
               tooltip="Forward"
               tooltipShortcut={keyboardShortcutLabel(forwardShortcut)}
               tooltipPosition="top"
-              onClick={() => void api.forward()}
+              onClick={() => {
+                void api.forward();
+              }}
               disabled={!activeTab?.canGoForward}
               className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label="Forward"
@@ -1314,9 +1505,9 @@ export function BrowserPanel() {
             <Button
               tooltip={activeTab?.isLoading ? "Stop" : "Reload"}
               tooltipPosition="top"
-              onClick={() =>
-                void (activeTab?.isLoading ? api.stop() : api.reload())
-              }
+              onClick={() => {
+                void (activeTab?.isLoading ? api.stop() : api.reload());
+              }}
               className="group rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
             >
@@ -1659,6 +1850,7 @@ export function BrowserPanel() {
         />
       )}
 
+      <div className={`relative flex min-h-0 flex-1 ${sidebarCollapsed && isExpanded ? "-ml-17" : ""}`}>
       <BrowserDeviceStage
         device={activeTab?.deviceEmulation ?? null}
         viewportRef={viewportRef}
@@ -1674,6 +1866,14 @@ export function BrowserPanel() {
               Search the web or enter a local development URL.
             </Text>
           </div>
+        )}
+        {chatPreviewName && (
+          <img
+            src={browserCaptureUrl(chatPreviewName)}
+            alt=""
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-1 size-full select-none object-fill"
+          />
         )}
         {browserMenuPreviewName && (
           <img
@@ -1699,6 +1899,25 @@ export function BrowserPanel() {
           </div>
         )}
       </BrowserDeviceStage>
+      {chatOverlayActive && (
+        <button
+          type="button"
+          aria-label={chatMode === "details" ? "Collapse chat to input" : "Interact with browser page"}
+          onClick={() => {
+            if (chatMode === "details") setChatMode("input");
+            else setChatVisible(false);
+          }}
+          className="absolute inset-0 z-2 cursor-default"
+        />
+      )}
+      {isExpanded && chatVisible && (
+        <div
+          ref={setChatStage}
+          className="pointer-events-none absolute inset-0 z-10"
+          aria-label="Browser chat"
+        />
+      )}
+      </div>
       </div>
     </div>
   );

@@ -417,6 +417,7 @@ interface WorkspaceEventsProps {
   onApplyPlan?: () => void;
   onDismissPlan?: () => void;
   hasPendingPlanApproval?: boolean;
+  browserChat?: boolean;
 }
 
 export function WorkspaceEvents({
@@ -435,6 +436,7 @@ export function WorkspaceEvents({
   onApplyPlan,
   onDismissPlan,
   hasPendingPlanApproval = false,
+  browserChat = false,
 }: WorkspaceEventsProps) {
   const isEditorActive = activeTab === "editor";
   const isIssueActive = isIssueTab(activeTab);
@@ -704,7 +706,7 @@ export function WorkspaceEvents({
               />
             )
           ) : (
-            <InfoGroup group={group} workspaceRootPath={currentWorkspace?.rootPath} />
+            <InfoGroup group={group} workspaceRootPath={currentWorkspace?.rootPath} browserChat={browserChat} />
           )}
           {group.type !== "prompt_suggestion" && turnChangesCard}
           {group.type !== "prompt_suggestion" && sessionBarForThis && (
@@ -732,6 +734,7 @@ export function WorkspaceEvents({
       onDismissPlan,
       hasPendingPlanApproval,
       isRunning,
+      browserChat,
       currentWorkspace?.rootPath,
       modelChanges,
       providerModels,
@@ -784,12 +787,10 @@ export function WorkspaceEvents({
             ref={transcriptRef}
             className={`h-full overflow-y-auto noscrollbar ${isRunTabActive ? "" : "hidden"}`}
           >
-            {/* The gutter sits *outside* the width cap, so the column measures
-                the same 840px here as the composer does below it — padding
-                inside the cap would eat into the transcript alone and leave it
-                visibly narrower than the box it feeds. */}
-            <div className={CONTENT_COLUMN_GUTTER}>
-            <div className="min-h-75 max-w-210 mx-auto space-y-4 pt-12 pb-24">
+            {/* The main transcript shares its gutter with the composer. Browser
+                chat uses 16px sides and omits the turn rail so text stays clear. */}
+            <div className={browserChat ? "px-4" : CONTENT_COLUMN_GUTTER}>
+            <div className={browserChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" :"min-h-75 max-w-210 mx-auto space-y-4 pt-12 pb-24" }>
               {turnRenderRows.map((row, rowIndex) => {
                 const isLastRow = rowIndex === turnRenderRows.length - 1;
                 let rowKey: string;
@@ -855,7 +856,7 @@ export function WorkspaceEvents({
             </div>
           </div>
         )}
-        {hasRunContent && (
+        {hasRunContent && !browserChat && (
           <TurnRail
             markers={turnMarkers}
             onSelect={scrollToTurn}
@@ -863,9 +864,8 @@ export function WorkspaceEvents({
           />
         )}
         {showEmpty && <WorkspaceEmptyState workspace={currentWorkspace} />}
-        {/* Top/bottom fade overlays — only shown on run content (chat), not on editor/issue/note tabs.
-            `hasRunContent` already excludes editor/issue/signal/note/new-run tabs, so no extra guards needed. */}
-        {hasRunContent && (
+        {/* Browser chat uses its own surface; only the main transcript keeps these scroll fades. */}
+        {hasRunContent && !browserChat && (
           <>
             <div className="absolute top-0 left-0 right-0 h-6 bg-linear-to-b from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none z-(--z-base)" />
             <div className="absolute bottom-0 left-0 right-0 h-6 bg-linear-to-t from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none" />

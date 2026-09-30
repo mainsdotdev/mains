@@ -3,27 +3,42 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useState,
   type ReactNode,
 } from "react";
 import { useLocation } from "react-router-dom";
 import { shouldHideRightPanel } from "@/lib/layout";
+import { isElectron } from "@/lib/platform";
+import type { BrowserChatContext } from "../../shared/browser-chat-window";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import {
   setBrowserPanelOpen,
+  setBrowserPanelExpanded,
   setDocumentViewerDoc,
   setDocumentViewerOpen,
   setRightPanelOpen,
   setSessionPanelOpen,
 } from "@/lib/redux/slices/appSettingsSlice";
 
+export type BrowserChatMode = "details" | "input" | "icon";
+
 interface BrowserPanelContextValue {
   isOpen: boolean;
+  isExpanded: boolean;
+  chatMode: BrowserChatMode;
+  chatVisible: boolean;
+  chatHost: HTMLDivElement | null;
+  nativeOverlay: boolean;
   ownerKey: string;
   open: () => void;
   openUrl: (url: string) => Promise<void>;
   openHtmlFile: (filePath: string) => Promise<void>;
   close: () => void;
   toggle: () => void;
+  toggleExpanded: () => void;
+  setChatMode: (mode: BrowserChatMode) => void;
+  setChatVisible: (visible: boolean) => void;
+  setChatHost: (node: HTMLDivElement | null) => void;
 }
 
 const BrowserPanelContext = createContext<BrowserPanelContextValue | null>(null);
@@ -31,10 +46,14 @@ const BrowserPanelContext = createContext<BrowserPanelContextValue | null>(null)
 export function BrowserPanelProvider({ children }: { children: ReactNode }) {
   const dispatch = useAppDispatch();
   const persistedOpen = useAppSelector((state) => state.appSettings.browserPanelOpen);
+  const expanded = useAppSelector((state) => state.appSettings.browserPanelExpanded);
   const ownerKey = useAppSelector((state) => state.workspace.composerContextKey);
   const ownerReady = useAppSelector((state) => state.workspace.composerContextReady);
   const { pathname } = useLocation();
   const isOpen = persistedOpen && ownerReady && !shouldHideRightPanel(pathname);
+  const [chatMode, setChatMode] = useState<BrowserChatMode>("input");
+  const [chatVisible, setChatVisible] = useState(true);
+  const [chatHost, setChatHost] = useState<HTMLDivElement | null>(null);
 
   // The browser takes over the right edge, which the session box sits against —
   // close every other right-edge owner regardless of where the open originated.
@@ -75,15 +94,41 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
       throw new Error(response.error || "Failed to open HTML preview");
     }
   }, [open, ownerKey]);
-  const close = useCallback(() => dispatch(setBrowserPanelOpen(false)), [dispatch]);
+  const close = useCallback(() => {
+    dispatch(setBrowserPanelOpen(false));
+  }, [dispatch]);
   const toggle = useCallback(() => {
     if (!persistedOpen) dispatch(setSessionPanelOpen(false));
     dispatch(setBrowserPanelOpen(!persistedOpen));
   }, [dispatch, persistedOpen]);
+  const toggleExpanded = useCallback(() => {
+    if (!expanded) {
+      setChatMode("input");
+      setChatVisible(true);
+    }
+    dispatch(setBrowserPanelExpanded(!expanded));
+  }, [dispatch, expanded]);
 
   const value = useMemo(
-    () => ({ isOpen, ownerKey, open, openUrl, openHtmlFile, close, toggle }),
-    [isOpen, ownerKey, open, openUrl, openHtmlFile, close, toggle],
+    () => ({
+      isOpen,
+      isExpanded: isOpen && expanded,
+      chatMode,
+      chatVisible,
+      chatHost,
+      nativeOverlay: isElectron,
+      ownerKey,
+      open,
+      openUrl,
+      openHtmlFile,
+      close,
+      toggle,
+      toggleExpanded,
+      setChatMode,
+      setChatVisible,
+      setChatHost,
+    }),
+    [isOpen, expanded, chatMode, chatVisible, chatHost, ownerKey, open, openUrl, openHtmlFile, close, toggle, toggleExpanded],
   );
 
   return (
@@ -98,13 +143,55 @@ export function useBrowserPanel(): BrowserPanelContextValue {
   if (!ctx) {
     return {
       isOpen: false,
+      isExpanded: false,
+      chatMode: "input",
+      chatVisible: false,
+      chatHost: null,
+      nativeOverlay: false,
       ownerKey: "default",
       open: () => {},
       openUrl: async () => {},
       openHtmlFile: async () => {},
       close: () => {},
       toggle: () => {},
+      toggleExpanded: () => {},
+      setChatMode: () => {},
+      setChatVisible: () => {},
+      setChatHost: () => {},
     };
   }
   return ctx;
+}
+
+/** The floating native window reuses the regular workspace chat in its own renderer. */
+export function BrowserChatWindowProvider({
+  context,
+  children,
+}: {
+  context: BrowserChatContext;
+  children: ReactNode;
+}) {
+  const [chatHost, setChatHost] = useState<HTMLDivElement | null>(null);
+  const setChatMode = useCallback((next: BrowserChatMode) => {
+    void window.api.browserChat.postAction({ type: "mode", mode: next });
+  }, []);
+  const value = useMemo<BrowserPanelContextValue>(() => ({
+    isOpen: true,
+    isExpanded: true,
+    chatMode: context.mode,
+    chatVisible: true,
+    chatHost,
+    nativeOverlay: true,
+    ownerKey: context.ownerKey,
+    open: () => {},
+    openUrl: async () => {},
+    openHtmlFile: async () => {},
+    close: () => {},
+    toggle: () => {},
+    toggleExpanded: () => {},
+    setChatMode,
+    setChatVisible: () => {},
+    setChatHost,
+  }), [chatHost, context.ownerKey, context.mode, setChatMode]);
+  return <BrowserPanelContext.Provider value={value}>{children}</BrowserPanelContext.Provider>;
 }

@@ -376,6 +376,15 @@ const workspaceSlice = createSlice({
       state.contextItemsByKey[key] = next;
       if (key === state.composerContextKey) state.contextItems = next;
     },
+    /** Apply the composer context from the other trusted desktop renderer. */
+    setContextItemsForKey: (
+      state,
+      action: PayloadAction<{ key: string; items: ContextItem[] }>,
+    ) => {
+      const { key, items } = action.payload;
+      state.contextItemsByKey[key] = items;
+      if (key === state.composerContextKey) state.contextItems = items;
+    },
     /**
      * Detach by kind + key rather than by object identity: the caller usually
      * holds a copy from a render, not the instance in the store.
@@ -524,6 +533,7 @@ export const {
   setActiveTab,
   addContextItem,
   addContextItemForKey,
+  setContextItemsForKey,
   removeContextItem,
   clearContextItems,
   openIssueTab,

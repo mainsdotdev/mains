@@ -11,13 +11,17 @@ const harness = vi.hoisted(() => ({
   setContext: vi.fn(),
   pathname: "/workspace/run-1",
   browserPanelOpen: false,
+  browserPanelExpanded: false,
 }));
 
 vi.mock("@/lib/redux/hooks", () => ({
   useAppDispatch: () => harness.dispatch,
   useAppSelector: (selector: (state: unknown) => unknown) =>
     selector({
-      appSettings: { browserPanelOpen: harness.browserPanelOpen },
+      appSettings: {
+        browserPanelOpen: harness.browserPanelOpen,
+        browserPanelExpanded: harness.browserPanelExpanded,
+      },
       workspace: { composerContextKey: "chat-1", composerContextReady: true },
     }),
 }));
@@ -49,6 +53,7 @@ describe("BrowserPanelProvider", () => {
     vi.clearAllMocks();
     harness.pathname = "/workspace/run-1";
     harness.browserPanelOpen = false;
+    harness.browserPanelExpanded = false;
     harness.createTab.mockResolvedValue({ success: true, data: {} });
     harness.createHtmlPreviewTab.mockResolvedValue({ success: true, data: {} });
     harness.setContext.mockResolvedValue({ success: true, data: {} });
@@ -105,5 +110,18 @@ describe("BrowserPanelProvider", () => {
     render(createElement(BrowserPanelProvider, null, createElement(Consumer)));
     expect(panel?.isOpen).toBe(false);
     expect(harness.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("expands the selected chat's browser without changing its owner", () => {
+    harness.browserPanelOpen = true;
+    render(createElement(BrowserPanelProvider, null, createElement(Consumer)));
+
+    act(() => panel!.toggleExpanded());
+
+    expect(harness.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: "appSettings/setBrowserPanelExpanded",
+      payload: true,
+    }));
+    expect(panel?.ownerKey).toBe("chat-1");
   });
 });

@@ -184,7 +184,14 @@ function toEpochMs(value: unknown): number | null {
  * row was created — and stops at `endedAt`, so a finished card held in the dock
  * shows how long the run took rather than a clock that keeps running.
  */
-export function formatRunElapsed(run: ActiveRun, nowMs: number): string {
+export function formatRunElapsed(
+  run: {
+    startedAt?: Date | number | string | null;
+    createdAt?: Date | number | string | null;
+    endedAt?: Date | number | string | null;
+  },
+  nowMs: number,
+): string {
   const since = toEpochMs(run.startedAt) ?? toEpochMs(run.createdAt) ?? nowMs;
   const until = toEpochMs(run.endedAt) ?? nowMs;
   const totalSeconds = Math.max(0, Math.floor((until - since) / 1000));
