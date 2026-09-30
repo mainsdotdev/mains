@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
 import { MemoryRouter } from "react-router-dom";
@@ -53,10 +53,11 @@ vi.mock("@/features/workspace/hooks", () => ({
 vi.mock("@/features/workspace/components", () => ({
   WorkspaceEmptyState: () => createElement("div", { "data-testid": "empty" }),
   WorkspaceEvents: () => createElement("div", { "data-testid": "events" }),
-  WorkspaceInput: ({ layout, floatingStatusPlaceholder }: { layout?: string; floatingStatusPlaceholder?: string | null }) =>
+  WorkspaceInput: ({ layout, floatingStatusPlaceholder, onSubmit }: { layout?: string; floatingStatusPlaceholder?: string | null; onSubmit: () => void }) =>
     createElement("div", {
       "data-testid": layout === "centered" ? "centered-input" : layout === "floating" ? "browser-input" : "pinned-input",
       "data-status-placeholder": floatingStatusPlaceholder ?? "",
+      onClick: onSubmit,
     }),
   WorkspaceTabs: () => createElement("div", { "data-testid": "tabs" }),
   TerminalSection: () => null,
@@ -109,7 +110,7 @@ function Header() {
   return createElement("header", null, header);
 }
 
-function renderPage() {
+function renderPage(browserChatOnly = false) {
   return render(
     createElement(
       MemoryRouter,
@@ -119,6 +120,7 @@ function renderPage() {
         createElement(WorkspaceProviderPage, {
           providerId: "codex",
           variant: "codex",
+          browserChatOnly,
         }),
       ),
     ),
@@ -293,7 +295,7 @@ describe("WorkspaceProviderPage while changing spaces", () => {
       .toBe("");
   });
 
-  it("keeps the expanded browser when the child chat starts its first run", () => {
+  it.each([false, true])("registers the child chat's first run even if the browser collapsed while sending (%s)", (collapseBeforeReply) => {
     let paneState = appSettingsReducer(undefined, setRightPaneContextKey({ ownerKey: "draft", browserExpansionKey: "draft" }));
     paneState = appSettingsReducer(paneState, setBrowserPanelOpen(true));
     paneState = appSettingsReducer(paneState, setBrowserPanelExpanded(true));
@@ -335,13 +337,21 @@ describe("WorkspaceProviderPage while changing spaces", () => {
       },
     });
 
-    renderPage();
+    const view = renderPage();
     expect(onAction).toBeDefined();
     expect(window.api.browserChat.publishContext).toHaveBeenCalledWith(
       expect.objectContaining({
         activeSpace: expect.objectContaining({ id: "space-codex", providerId: "codex" }),
       }),
     );
+    if (collapseBeforeReply) {
+      browser.isExpanded = false;
+      view.rerender(createElement(MemoryRouter, null,
+        createElement(MainHeaderProvider, null,
+          createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" }),
+        ),
+      ));
+    }
     act(() => onAction?.({ type: "selectRun", ownerKey: "draft", runId: "run-1" }));
     const runKey = runOwnerKey("local", "run-1");
     paneState = appSettingsReducer(paneState, setRightPaneContextKey({ ownerKey: runKey, browserExpansionKey: runKey }));
@@ -349,5 +359,28 @@ describe("WorkspaceProviderPage while changing spaces", () => {
     expect(paneState.browserPanelOpen).toBe(true);
     expect(paneState.browserPanelExpanded).toBe(true);
     expect(page.state.handleSelectRunTab).toHaveBeenCalledWith("run-1");
+  });
+
+  it("reports the submitted run even when parent context echoes have changed the child's tab", async () => {
+    page.state = {
+      runs: [], activeTab: "new-run", selectedFile: null,
+      openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: true,
+      currentWorkspace: null, currentEvents: [], currentTurns: [],
+      activeRunId: null, activeRun: null, composerRun: null,
+      goal: "new conversation", uploadedFiles: [],
+      handleExecute: vi.fn().mockResolvedValue("created-run"),
+    };
+    browser.isExpanded = true;
+    browser.nativeOverlay = true;
+    browser.chatHost = document.createElement("div");
+    document.body.appendChild(browser.chatHost);
+    const postAction = vi.fn();
+    vi.stubGlobal("api", { browserChat: { postAction } });
+    renderPage(true);
+    fireEvent.click(screen.getByTestId("browser-input"));
+    await waitFor(() => expect(postAction).toHaveBeenCalledWith({
+      type: "selectRun", ownerKey: "draft", runId: "created-run",
+    }));
   });
 });

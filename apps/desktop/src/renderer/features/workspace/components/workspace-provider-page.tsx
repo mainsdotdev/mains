@@ -23,7 +23,6 @@ import {
 } from "@/features/workspace/hooks";
 import { CONTENT_COLUMN_GUTTER } from "@/features/workspace/lib/content-column";
 import { isFirstWorkspaceTabActive } from "@/features/workspace/lib/is-first-workspace-tab-active";
-import { isRunTab } from "@/features/workspace/lib/repo-utils";
 import { projectForNewChat } from "@/features/workspace/lib/run-collection-context";
 import {
   useAbortRunMutation,
@@ -198,7 +197,10 @@ export function WorkspaceProviderPage({
   useEffect(() => {
     if (browserChatOnly || !nativeOverlay) return;
     return window.api.browserChat.onAction((action) => {
-      if (!browserExpanded) return;
+      // A submission can finish after the browser was collapsed. Its run and
+      // composer updates still belong to the parent; only presentation needs
+      // an expanded browser.
+      if (!browserExpanded && (action.type === "mode" || action.type === "pagePointerDown")) return;
       switch (action.type) {
         case "pagePointerDown":
           if (browserChatMode === "details") setBrowserChatMode("input");
@@ -467,8 +469,7 @@ export function WorkspaceProviderPage({
     }).catch(() => { /* The file remains in the child composer for retry. */ });
   }, [browserChatOnly, browserOwnerKey, setChatUploads]);
   const handleBrowserSubmit = useCallback(async () => {
-    const previousTab = store.getState().workspace.activeTab;
-    await executeChat();
+    const submittedRunId = await executeChat();
     if (!browserChatOnly) return;
     const currentDraft = store.getState().workspace.draftTextByKey[browserOwnerKey] ?? "";
     void window.api.browserChat.postAction({
@@ -480,10 +481,11 @@ export function WorkspaceProviderPage({
         type: "uploads", ownerKey: browserOwnerKey, uploads,
       });
     }).catch(() => { /* The existing parent copy remains available. */ });
-    const nextTab = store.getState().workspace.activeTab;
-    if (nextTab !== previousTab && isRunTab(nextTab)) {
+    // Parent context echoes can change the child's tab while execute awaits
+    // IPC. Report the operation's result instead of inspecting that UI state.
+    if (submittedRunId) {
       void window.api.browserChat.postAction({
-        type: "selectRun", ownerKey: browserOwnerKey, runId: nextTab,
+        type: "selectRun", ownerKey: browserOwnerKey, runId: submittedRunId,
       });
     }
   }, [browserChatOnly, browserOwnerKey, executeChat]);

@@ -21,6 +21,17 @@ export const UPDATES = [
   { name: "Solar Drift", outside: "mains-24", inside: "mains-32" },
 ] as const;
 
+export const RISOGRAPH_ICONS = [
+  { id: "risograph/navy-orange", name: "Navy Orange" },
+  { id: "risograph/pink-orange", name: "Pink Orange" },
+  { id: "risograph/pink-blush", name: "Pink Blush" },
+  { id: "risograph/orange-violet", name: "Orange Violet" },
+  { id: "risograph/cocoa-blush", name: "Cocoa Blush" },
+  { id: "risograph/cobalt-pink", name: "Cobalt Pink" },
+  { id: "risograph/chartreuse-lilac", name: "Chartreuse Lilac" },
+  { id: "risograph/mocha-cream", name: "Mocha Cream" },
+] as const;
+
 export const DEFAULT_APP_ICON_ID = "mains-default" as const;
 export const DARK_APP_ICON_ID = "mains-dark" as const;
 export const LIGHT_APP_ICON_ID = "mains-light" as const;
@@ -36,6 +47,7 @@ export const APP_ICON_IDS = [
   ...JAPANESE_GRADIENTS.map((gradient) => gradient.outside),
   ...UPDATES.map((gradient) => gradient.inside),
   ...UPDATES.map((gradient) => gradient.outside),
+  ...RISOGRAPH_ICONS.map((icon) => icon.id),
   DARK_APP_ICON_ID,
   LIGHT_APP_ICON_ID,
   BLUE_APP_ICON_ID,

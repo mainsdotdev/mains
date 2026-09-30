@@ -133,7 +133,7 @@ export function useWorkspacePage(providerId: string) {
   const {
     runs,
     runsLoaded,
-    activeRun,
+    activeRunId: selectedRunId,
     currentEvents,
     isTranscriptLoading,
     currentTurns,
@@ -155,6 +155,12 @@ export function useWorkspacePage(providerId: string) {
     visibleRunId,
     switchableWorkspaceIds,
   );
+
+  // The tab is authoritative. The run hook can still retain the previous
+  // selection while a New Run tab is visible or a synced run is loading.
+  const activeRun = isRunTab(activeTab)
+    ? runs.find((run) => run.id === activeTab)
+    : undefined;
 
   // Resolve the conversation that owns the composer and browser. An editor
   // opened from a run stays with that run unless the target pill chooses new.
@@ -236,8 +242,8 @@ export function useWorkspacePage(providerId: string) {
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey || !showTabs) return; // tab-less neutral state is the new-chat screen
-    if (isRunTab(activeTab) && runs.some((r) => r.id === activeTab)) {
-      if (activeRun?.id !== activeTab) selectTab(activeTab);
+    if (isRunTab(activeTab)) {
+      if (selectedRunId !== activeTab) selectTab(activeTab);
       return;
     }
     if (workspaceViewNeedsDefaultRun && runs.length > 0 && !selectedFile && activeTab === "editor") {
@@ -247,7 +253,7 @@ export function useWorkspacePage(providerId: string) {
       dispatch(setActiveTab(target.id));
       selectTab(target.id);
     }
-  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, activeRun?.id, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
+  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, selectedRunId, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
 
   // Tab-less modes use "editor" as the neutral placeholder for a new chat.
   useEffect(() => {
@@ -326,6 +332,9 @@ export function useWorkspacePage(providerId: string) {
       toast.error("Select a workspace before sending a prompt.");
       return;
     }
+    // A selected run from the other window may still be joining the list.
+    // Sending during that fetch must not turn its conversation into a new run.
+    if (composeTargetRunId && !composeTargetRun) return;
     // A run still working can take no second prompt — and must not become a
     // new run either. The send button already reads Stop; Enter in the editor
     // reaches here all the same, so the submit itself has to say no.
@@ -362,6 +371,7 @@ export function useWorkspacePage(providerId: string) {
           additionalDirectories,
         )) ?? false;
       if (success) clearInputState();
+      return success ? composeTargetRunId : null;
     } else {
       const newRunId = await executeRun(
         goal,
@@ -388,6 +398,7 @@ export function useWorkspacePage(providerId: string) {
           navigate(`/code/runs/${newRunId}`);
         }
       }
+      return newRunId;
     }
   }, [
     goal,
@@ -487,7 +498,7 @@ export function useWorkspacePage(providerId: string) {
   // The run the composer acts on — the retarget target on the editor tab,
   // otherwise the active tab's run. Drives the input's running/stop state and
   // context-usage ring.
-  const composerRun = isRetargetable ? composeTargetRun : activeRun;
+  const composerRun = composeTargetRun;
 
   const showNewRunTab = isNewRunTab(activeTab);
 

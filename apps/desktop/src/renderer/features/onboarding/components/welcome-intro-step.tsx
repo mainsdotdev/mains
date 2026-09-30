@@ -1,11 +1,11 @@
 import { Body, Heading1, Text } from "@/components/ui";
-import { MainsColor } from "@/components/ui/icons";
+import { Mains } from "@/components/ui/icons";
 
 /** Full-screen welcome hero shown as the first onboarding step. */
 export function WelcomeIntroStep() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center text-center">
-        <MainsColor className="text-primary-800 dark:text-primary-200 size-16 " />
+        <Mains className="text-primary-800 dark:text-primary-200 size-16 " />
       <Text
         as="span"
         size="xs"

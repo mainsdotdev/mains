@@ -1,6 +1,6 @@
 import { ComponentType, SVGProps } from "react";
 import * as Icons from "@/components/ui/icons/space";
-import { Codex, Cursor } from "@/components/ui/icons";
+import { Codex, Cursor, MainsColor } from "@/components/ui/icons";
 
 export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -56,16 +56,23 @@ export const iconRegistry: Record<string, IconComponent> = {
   smartphone: Icons.Smartphone,
   teacup: Icons.Teacup,
   world: Icons.World,
-  academy: Icons.Academy,
-  backpack: Icons.Backpack,
-  bookmark: Icons.Bookmark,
-  calendar: Icons.Calendar,
-  dumbbell: Icons.Dumbbell,
-  gamepad: Icons.Gamepad,
-  price: Icons.Price,
-  rocket: Icons.Rocket,
-  scan: Icons.Scan,
-  smile: Icons.Smile,
+
+  armchair: Icons.Armchair,
+  "black-hole": Icons.BlackHole,
+  cpu: Icons.Cpu,
+  database: Icons.Database,
+  "document-text": Icons.DocumentText,
+  feed: Icons.Feed,
+  "gamepad-minimalistic": Icons.GamepadMinimalistic,
+  "heart-pulse": Icons.HeartPulse,
+  "home-1": Icons.Home1,
+  key: Icons.Key,
+  like: Icons.Like,
+  masks: Icons.Masks,
+  telescope: Icons.Telescope,
+  "text-italic-square": Icons.TextItalicSquare,
+
+  mains:MainsColor,
 
 
 

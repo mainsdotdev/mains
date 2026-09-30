@@ -14,7 +14,7 @@
  * LRU, incremental cursors, in-flight dedup — lives in `lib/run-cache.ts`.
  */
 
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { appApi } from "@/lib/transport";
 import type { Run, RunEvent, RunArtifact, ToolCall } from "../types";
 import type { RunTurn } from "@/lib/redux/api";
@@ -96,6 +96,13 @@ export function useWorkspaceRuns(
     setLoadedKey(remembered ? viewKey : null);
   }
   const runsLoaded = viewKey === null || loadedKey === viewKey;
+
+  // A run selected through the floating window may need to join this list.
+  // Its asynchronous fetch must not insert into a view navigated to later.
+  const selectionRevisionRef = useRef(0);
+  useLayoutEffect(() => () => {
+    selectionRevisionRef.current += 1;
+  }, [viewKey, providerId, mode]);
 
   // --- Internal helpers ---
 
@@ -500,6 +507,7 @@ export function useWorkspaceRuns(
 
   const selectTab = useCallback(
     (runId: string) => {
+      const revision = selectionRevisionRef.current;
       const wasPending = runs.some(
         (run) =>
           run.id === runId &&
@@ -513,13 +521,22 @@ export function useWorkspaceRuns(
       void loadRunDetails(runId);
       void (async () => {
         const result = await appApi.runs.getById(runId);
-        if (!result.success || !result.data) return;
+        if (revision !== selectionRevisionRef.current || !result.success || !result.data) return;
+        const run = result.data;
+        if (run.isArchived ||
+          (providerId && run.providerId !== providerId) ||
+          (mode && run.mode !== mode) ||
+          (workspaceId && run.workspaceId !== workspaceId)) return;
 
-        onRunUpdated(result.data);
-        if (wasPending) await finalizeRun(result.data);
+        // The other renderer can create a run after this window loaded its
+        // workspace. Selecting it must also make its tab available locally.
+        setRuns((previous) => previous.some((item) => item.id === run.id)
+          ? previous.map((item) => item.id === run.id ? run : item)
+          : [run, ...previous]);
+        if (wasPending) await finalizeRun(run);
       })();
     },
-    [runs, loadRunDetails, finalizeRun, onRunUpdated],
+    [runs, loadRunDetails, finalizeRun, workspaceId, providerId, mode],
   );
 
   const activeRun = runs.find((r) => r.id === activeRunId);

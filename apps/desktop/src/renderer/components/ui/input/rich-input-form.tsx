@@ -1039,7 +1039,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
             as="kbd"
             size="t"
             tone="faint"
-            className="absolute cursor-default right-2 top-4 px-1.5 py-0.5 opacity-80 font-sans"
+            className="absolute cursor-default right-2 top-3.5 px-1.5 py-0.5 opacity-80 font-sans"
           >
             {focusShortcutLabel} to focus
           </Text>
