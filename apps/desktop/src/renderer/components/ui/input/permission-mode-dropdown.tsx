@@ -150,6 +150,7 @@ interface PermissionModeDropdownProps {
   onPlanModeToggle?: () => void;
   /** Codex-only: when goal mode is on, plan mode is mutually exclusive and shown disabled. */
   goalMode?: boolean;
+  iconOnly?: boolean;
 }
 
 export function PermissionModeDropdown({
@@ -164,6 +165,7 @@ export function PermissionModeDropdown({
   planMode = false,
   onPlanModeToggle,
   goalMode = false,
+  iconOnly = false,
 }: PermissionModeDropdownProps) {
   const isCodex = variant === "codex";
   const showPlanRow = isCodex && !!onPlanModeToggle;
@@ -181,33 +183,37 @@ export function PermissionModeDropdown({
     ? BYPASS_TRIGGER.chevron
     : "text-primary-600 dark:text-primary-400";
   return (
-    <div className="relative mx-0.5" ref={dropdownRef}>
+    <div className={iconOnly ? "relative" : "relative mx-0.5"} ref={dropdownRef}>
       <Button
-        tooltip="Permission Mode"
+        tooltip={iconOnly ? `Permission: ${modeLabels[permissionMode] ?? permissionMode}` : "Permission Mode"}
         type="button"
         onClick={onToggle}
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        className="flex items-center gap-1.5 px-2 py-1.5 rounded-full text-s transition-all cursor-pointer hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 text-primary-950 dark:text-primary"
+        className={`flex items-center gap-1.5 rounded-full text-s transition-all cursor-pointer hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 text-primary-950 dark:text-primary ${iconOnly ? "size-9 justify-center p-0" : "px-2 py-1.5"}`}
+        aria-label={iconOnly ? "Permission mode" : undefined}
       >
         <PermissionModeIcon
           mode={permissionMode}
-          className={`size-3.5 ${triggerIconClass}`}
+          className={`${iconOnly ? "size-4.5" : "size-3.5"} ${triggerIconClass}`}
         />
-        {!isMobile && (
+        {!iconOnly && !isMobile && (
           <span className={isBypass ? BYPASS_TRIGGER.trigger : ""}>
             {modeLabels[permissionMode] ?? permissionMode}
             {showPlanSuffix ? " + Plan" : ""}
           </span>
         )}
-        <ArrowUp
-          className={`size-3.5 rotate-180 ${triggerChevronClass}`}
-        />
+        {!iconOnly && (
+          <ArrowUp
+            className={`size-3.5 rotate-180 ${triggerChevronClass}`}
+          />
+        )}
       </Button>
       <DropdownWrapper
         isOpen={isOpen}
         aria-label="Permission mode"
         openUpward={true}
+        position={iconOnly ? "right" : "left"}
         minWidth={!isMobile ? "min-w-64" : "min-w-52"}
       >
         <div className="p-1.5 space-y-0.5">
@@ -221,7 +227,7 @@ export function PermissionModeDropdown({
               onPermissionModeChange(mode.value);
               onToggle();
             }}
-            className={`w-full text-left px-2 py-1.5 cursor-pointer rounded-xl transition-colors flex items-center gap-2 
+            className={`w-full text-left px-2 py-1.5 cursor-pointer rounded-xl transition-colors flex items-center gap-2
               ${
               permissionMode === mode.value
                 ? "bg-primary-200/60 dark:bg-primary-200/10 text-primary-950 dark:text-primary"

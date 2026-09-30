@@ -380,6 +380,8 @@ export interface StartRunPayload {
   systemPrompt?: string;
   initialContext?: StartRunContextItem[];
   configSnapshot?: Record<string, unknown>;
+  /** Extra local folders explicitly granted to this conversation. */
+  additionalDirectories?: string[];
   toolPolicySnapshot?: Record<string, unknown>;
   /** File attachments (images/documents) serialized as base64 for IPC */
   attachments?: FileAttachment[];
@@ -417,6 +419,8 @@ export interface ContinueRunPayload {
   message: string;
   /** Model to use for this continuation (overrides provider default) */
   model?: string | null;
+  /** Replaces this conversation's extra folder grants for the next turn. */
+  additionalDirectories?: string[];
   /** Additional context to add */
   additionalContext?: StartRunContextItem[];
   /** File attachments (images/documents) serialized as base64 for IPC */

@@ -205,15 +205,16 @@ html {
   font-feature-settings: "cv05" 1, "cv08" 1;
 }
 
-/* While a layout handle is being dragged, suspend the sidebar/main width &
-   margin transitions so the resize tracks the pointer 1:1 instead of lagging. */
+/* While a layout handle is being dragged, suspend pane transitions so the
+   browser cover tracks the sidebar instead of exposing the chat tab below. */
 body[data-resizing] {
   cursor: col-resize !important;
   user-select: none !important;
 }
 body[data-resizing] aside,
 body[data-resizing] main,
-body[data-resizing] [data-layout-toggle] {
+body[data-resizing] [data-layout-toggle],
+body[data-resizing] [data-browser-panel] {
   transition: none !important;
 }
 body[data-resizing] iframe {

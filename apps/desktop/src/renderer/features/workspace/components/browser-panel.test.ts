@@ -14,11 +14,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   closePanel: vi.fn(),
+  toggleExpanded: vi.fn(),
+  setChatVisible: vi.fn(),
+  setChatMode: vi.fn(),
+  setChatHost: vi.fn(),
+  expanded: false,
+  chatVisible: true,
+  chatMode: "input",
 }));
 
 vi.mock("@/hooks/use-browser-panel", () => ({
   useBrowserPanel: () => ({
     isOpen: true,
+    isExpanded: mocks.expanded,
+    chatMode: mocks.chatMode,
+    setChatMode: mocks.setChatMode,
+    chatVisible: mocks.chatVisible,
+    setChatVisible: mocks.setChatVisible,
+    setChatHost: mocks.setChatHost,
+    toggleExpanded: mocks.toggleExpanded,
     close: mocks.closePanel,
   }),
 }));
@@ -66,6 +80,8 @@ function createBrowserApi() {
     detach: vi.fn().mockResolvedValue({ success: true, data: null }),
     setBounds: vi.fn().mockResolvedValue({ success: true, data: null }),
     setVisible: vi.fn().mockResolvedValue({ success: true, data: null }),
+    createTab: vi.fn().mockResolvedValue({ success: true, data: null }),
+    activateTab: vi.fn().mockResolvedValue({ success: true, data: null }),
     navigate: vi.fn().mockResolvedValue({ success: true, data: null }),
     getState: vi.fn().mockResolvedValue({
       success: true,
@@ -91,6 +107,9 @@ function createBrowserApi() {
 describe("BrowserPanel browser menu", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+    mocks.expanded = false;
+    mocks.chatVisible = true;
+    mocks.chatMode = "input";
   });
 
   afterEach(() => {
@@ -98,6 +117,89 @@ describe("BrowserPanel browser menu", () => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
     delete (window as unknown as { api?: unknown }).api;
+  });
+
+  it("places expand beside close and fills the workspace on expansion", async () => {
+    const api = createBrowserApi();
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { browser: api },
+    });
+
+    const { unmount } = render(createElement(BrowserPanel));
+    await screen.findByRole("button", { name: "Open New tab" });
+    const expand = screen.getByRole("button", { name: "Expand browser" });
+    const close = screen.getByRole("button", { name: "Close browser" });
+    expect(expand.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(expand);
+    expect(mocks.toggleExpanded).toHaveBeenCalledOnce();
+
+    unmount();
+    mocks.expanded = true;
+    const { rerender } = render(createElement(BrowserPanel));
+    await screen.findByRole("button", { name: "Open New tab" });
+    expect(screen.getByRole("complementary", { name: "Embedded browser" }).getAttribute("style"))
+      .toContain("calc(100% - var(--content-left)");
+    expect(screen.getByRole("button", { name: "Restore browser panel" })).toBeTruthy();
+    expect(screen.getByLabelText("Browser chat")).toBeTruthy();
+    expect(screen.getByLabelText("Browser chat").className).toContain("absolute inset-0");
+    mocks.chatMode = "details";
+    rerender(createElement(BrowserPanel));
+    fireEvent.click(screen.getByRole("button", { name: "Collapse chat to input" }));
+    expect(mocks.setChatMode).toHaveBeenCalledWith("input");
+    mocks.chatMode = "input";
+    rerender(createElement(BrowserPanel));
+    expect(screen.getByRole("button", { name: "Interact with browser page" })).toBeTruthy();
+    await waitFor(() => expect(api.setVisible).toHaveBeenCalledWith(false), { timeout: 2000 });
+    fireEvent.click(screen.getByRole("button", { name: "Interact with browser page" }));
+    expect(mocks.setChatVisible).toHaveBeenCalledWith(false);
+    api.setVisible.mockClear();
+    mocks.chatVisible = false;
+    rerender(createElement(BrowserPanel));
+    expect(screen.queryByLabelText("Browser chat")).toBeNull();
+    await waitFor(() => expect(api.setVisible).toHaveBeenCalledWith(true));
+    expect(screen.queryByLabelText("Resize browser panel")).toBeNull();
+  });
+
+  it("keeps the floating chat open while navigating and changing browser tabs", async () => {
+    mocks.expanded = true;
+    const secondTab = { ...blankTab, tabId: "second", title: "Second tab" };
+    const api = createBrowserApi();
+    api.getState.mockResolvedValue({
+      success: true,
+      data: { activeTabId: blankTab.tabId, tabs: [blankTab, secondTab] },
+    });
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { browser: api },
+    });
+
+    render(createElement(BrowserPanel));
+    fireEvent.click(await screen.findByRole("button", { name: "Open Second tab" }));
+    const address = screen.getByRole("combobox", { name: "Search or enter address" });
+    fireEvent.change(address, { target: { value: "https://mains.dev" } });
+    fireEvent.keyDown(address, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "New browser tab" }));
+
+    expect(api.activateTab).toHaveBeenCalledWith("second");
+    expect(api.navigate).toHaveBeenCalledWith("https://mains.dev");
+    expect(api.createTab).toHaveBeenCalled();
+    expect(mocks.setChatVisible).not.toHaveBeenCalled();
+  });
+
+  it("compacts the floating chat when the browser toolbar is used", async () => {
+    mocks.expanded = true;
+    mocks.chatMode = "details";
+    const api = createBrowserApi();
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { browser: api },
+    });
+
+    render(createElement(BrowserPanel));
+    const newTab = await screen.findByRole("button", { name: "New browser tab" });
+    fireEvent.pointerDown(newTab);
+    expect(mocks.setChatMode).toHaveBeenCalledWith("input");
   });
 
   it("opens on a blank tab, keeps global sections available, and disables page actions", async () => {

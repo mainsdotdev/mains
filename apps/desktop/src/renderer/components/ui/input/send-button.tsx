@@ -6,10 +6,20 @@ interface SendButtonProps {
   onSubmit: () => void;
   onStop?: () => void;
   disabled?: boolean;
+  compact?: boolean;
 }
 
-export function SendButton({ loading, onSubmit, onStop, disabled = false }: SendButtonProps) {
+export function SendButton({
+  loading,
+  onSubmit,
+  onStop,
+  disabled = false,
+  compact = false,
+}: SendButtonProps) {
   const isDisabled = loading || disabled;
+  const sizing = compact
+    ? "flex size-8 items-center justify-center px-0"
+    : "p-1.5";
 
   if (loading && onStop) {
     return (
@@ -17,7 +27,7 @@ export function SendButton({ loading, onSubmit, onStop, disabled = false }: Send
         type="button"
         tooltip="Stop run"
         onClick={onStop}
-        className="p-1.5 glass-button rounded-full relative"
+        className={`${sizing} glass-button rounded-full relative`}
         aria-label="Stop run"
       >
         <Stop className="w-5 h-5 text-primary-800 dark:text-primary" />
@@ -32,7 +42,7 @@ export function SendButton({ loading, onSubmit, onStop, disabled = false }: Send
       onClick={() => {
         if (!isDisabled) onSubmit();
       }}
-      className={` p-1.5 glass-button rounded-full relative ${
+      className={`${sizing} glass-button rounded-full relative ${
         isDisabled ? "opacity-70 cursor-not-allowed" : ""
       }`}
       aria-label={loading ? "Submitting..." : "Send prompt"}

@@ -2861,6 +2861,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     mode?: ModeId;
     /** Per-run tool policy from the mode harness. */
     toolPolicy?: WorkRunToolPolicy | null;
+    additionalDirectories?: string[];
   }): Promise<SDKOptions> {
     const {
       model,
@@ -2880,6 +2881,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       outputStyle,
       mode,
       toolPolicy,
+      additionalDirectories,
     } = args;
 
     const processOptions = buildProcessOptions();
@@ -2938,6 +2940,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     }
 
     if (workspacePath) options.cwd = workspacePath;
+    const grantedDirectories = additionalDirectories ?? config.additionalDirectories;
+    if (grantedDirectories?.length) options.additionalDirectories = grantedDirectories;
 
     if (resumeSessionId) {
       options.resume = resumeSessionId;
@@ -3489,6 +3493,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
             : config.outputStyle ?? undefined,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
+        additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
       });
 
       const session = newSession(request.runId, options, abortController, true, permissionModeRef);
@@ -3531,6 +3536,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
             : undefined,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
+        additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
       });
 
       const session = newSession(request.runId, options, abortController, false, permissionModeRef);
@@ -3579,6 +3585,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
             : undefined,
         mode: request.mode,
         toolPolicy: request.toolPolicy,
+        additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
       });
 
       const session = newSession(request.runId, options, abortController, true, permissionModeRef);

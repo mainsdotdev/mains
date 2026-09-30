@@ -180,7 +180,7 @@ describe("permanent deletion UI cleanup", () => {
     const store = createStore();
     const owner = runOwnerKey("local", "run-a");
     store.dispatch(setDraftText({ key: owner, text: "unfinished" }));
-    store.dispatch(setRightPaneContextKey(owner));
+    store.dispatch(setRightPaneContextKey({ ownerKey: owner, browserExpansionKey: owner }));
     store.dispatch(setBrowserPanelOpen(true));
 
     await expect(store.dispatch(runsApi.endpoints.deleteRun.initiate("run-a")).unwrap()).rejects.toBeTruthy();

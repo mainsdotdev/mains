@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { useState, useRef, useCallback, useEffect, type RefObject } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, type RefObject } from "react";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { SkillInfo } from "@/lib/redux/api/providersApi";
 import { PluginsButton } from "./plugins-button";
@@ -21,6 +21,7 @@ import {
 } from "@/components/ui";
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import { useClickOutside } from "@/hooks/use-click-outside";
+import type { FloatingChatMode } from "../../../../shared/floating-chat";
 
 type EffortLevel = "minimal" | "low" | "medium" | "high" | "max" | "xhigh";
 
@@ -73,6 +74,8 @@ interface InputToolbarProps {
   onUploadedFilesChange: (files: UploadedFile[]) => void;
   // Disable send
   disabled?: boolean;
+  layout?: "default" | "floating";
+  floatingChatMode?: FloatingChatMode;
 }
 
 export function InputToolbar({
@@ -109,6 +112,8 @@ export function InputToolbar({
   uploadedFiles,
   onUploadedFilesChange,
   disabled,
+  layout = "default",
+  floatingChatMode,
 }: InputToolbarProps) {
   const isMobile = useIsMobile();
   const modeConfig = useModeConfig();
@@ -119,6 +124,16 @@ export function InputToolbar({
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const fileDropdownRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const previousFloatingChatMode = useRef(floatingChatMode);
+
+  useLayoutEffect(() => {
+    const previousMode = previousFloatingChatMode.current;
+    previousFloatingChatMode.current = floatingChatMode;
+    if (layout !== "floating" || previousMode === floatingChatMode) return;
+    setShowModelDropdown(false);
+    setShowFileDropdown(false);
+    setShowPermissionDropdown(false);
+  }, [floatingChatMode, layout]);
 
   const { isRecording, toggle: toggleDictation } = useSpeechRecognition(
     (value) => onGoalChange(value),
@@ -171,6 +186,72 @@ export function InputToolbar({
     },
     [uploadedFiles, onUploadedFilesChange],
   );
+
+  if (layout === "floating") {
+    return (
+      <div className="pointer-events-none absolute inset-x-1.5 bottom-1.5 flex items-center justify-between">
+        <div className="pointer-events-auto flex items-center">
+          <FileUploadDropdown
+            isOpen={showFileDropdown}
+            onToggle={() => setShowFileDropdown(!showFileDropdown)}
+            onImageUpload={handleImageUpload}
+            onDocumentUpload={handleDocumentUpload}
+            dropdownRef={fileDropdownRef}
+            openUpward
+            compact
+          />
+          <Input
+            variant="bare"
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            aria-label="Upload files"
+            multiple
+            onChange={handleFileChange}
+          />
+        </div>
+        <div className="pointer-events-auto flex items-center gap-0.75">
+          <ModelSelectDropdown
+            model={selectedModelDisplayName}
+            models={modelDisplayNames}
+            modelEffortLevelsByModel={modelEffortLevelsByDisplayName}
+            onModelChange={onModelChange}
+            thinkingMode={thinkingMode}
+            effortLevel={effortLevel}
+            onEffortLevelChange={onEffortLevelChange}
+            onThinkingModeToggle={onThinkingModeToggle}
+            isOpen={showModelDropdown}
+            onToggle={() => setShowModelDropdown(!showModelDropdown)}
+            onClose={() => setShowModelDropdown(false)}
+            dropdownRef={modelDropdownRef}
+            openUpward
+            isLoading={isLoadingModels}
+            variant={variant}
+            iconOnly
+          />
+          <PermissionModeDropdown
+            permissionMode={permissionMode}
+            onPermissionModeChange={onPermissionModeChange}
+            isOpen={showPermissionDropdown}
+            onToggle={() => setShowPermissionDropdown(!showPermissionDropdown)}
+            dropdownRef={permissionDropdownRef}
+            variant={variant}
+            planMode={modeConfig.showPlanControls ? planMode : false}
+            onPlanModeToggle={modeConfig.showPlanControls ? onPlanModeToggle : undefined}
+            goalMode={goalMode}
+            iconOnly
+          />
+          <SendButton
+            loading={isLoading || isRunning}
+            onSubmit={onSubmit}
+            onStop={isRunning ? onStop : undefined}
+            disabled={disabled}
+            compact
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-start space-x-2 px-3 pt-6">

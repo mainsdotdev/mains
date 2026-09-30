@@ -1091,6 +1091,8 @@ export interface ClaudeCodeAdapterConfig {
   timeout?: number;
   /** Permission mode for tool access */
   permissionMode?: ClaudePermissionMode;
+    /** Extra local folders granted to Claude alongside the session cwd. */
+    additionalDirectories?: string[];
   /** Claude Code output style pinned at session creation and reapplied on resume. */
   outputStyle?: string | null;
   /**

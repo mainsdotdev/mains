@@ -13,6 +13,11 @@ import type {
 import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
+import type {
+  BrowserChatAction,
+  BrowserChatContext,
+  BrowserChatWindowState,
+} from "../shared/browser-chat-window";
 
 type BrowserDownloadState =
   | "progressing"
@@ -706,6 +711,7 @@ const api = {
         metadata?: Record<string, unknown>;
       }>;
       configSnapshot?: Record<string, unknown>;
+      additionalDirectories?: string[];
       toolPolicySnapshot?: Record<string, unknown>;
       attachments?: Array<{ name: string; type: string; data?: string; sourcePath?: string; mimeType: string }>;
       contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
@@ -722,6 +728,7 @@ const api = {
       accountId: string;
       message: string;
       model?: string;
+      additionalDirectories?: string[];
       additionalContext?: Array<{
         kind: "file" | "diff" | "selection" | "note";
         ref?: string;
@@ -1087,6 +1094,29 @@ const api = {
   },
 
   // Embedded browser panel operations
+  browserChat: {
+    updateWindow: (state: BrowserChatWindowState) =>
+      ipcRenderer.invoke(CHANNELS.browser.chatUpdateWindow, state),
+    publishContext: (context: BrowserChatContext) =>
+      ipcRenderer.invoke(CHANNELS.browser.chatPublishContext, context),
+    getContext: () => ipcRenderer.invoke(CHANNELS.browser.chatGetContext),
+    postAction: (action: BrowserChatAction) =>
+      ipcRenderer.invoke(CHANNELS.browser.chatPostAction, action),
+    setInteractive: (interactive: boolean) =>
+      ipcRenderer.invoke(CHANNELS.browser.chatSetInteractive, interactive),
+    setOverlayInteractive: (interactive: boolean) =>
+      ipcRenderer.invoke(CHANNELS.browser.chatSetOverlayInteractive, interactive),
+    onContext: (callback: (context: BrowserChatContext) => void) => {
+      const listener = (_event: unknown, context: BrowserChatContext) => callback(context);
+      ipcRenderer.on(CHANNELS.browser.chatContext, listener);
+      return () => { ipcRenderer.removeListener(CHANNELS.browser.chatContext, listener); };
+    },
+    onAction: (callback: (action: BrowserChatAction) => void) => {
+      const listener = (_event: unknown, action: BrowserChatAction) => callback(action);
+      ipcRenderer.on(CHANNELS.browser.chatAction, listener);
+      return () => { ipcRenderer.removeListener(CHANNELS.browser.chatAction, listener); };
+    },
+  },
   browser: {
     createTab: (url?: string, ownerKey?: string) =>
       ipcRenderer.invoke(CHANNELS.browser.createTab, url, ownerKey),

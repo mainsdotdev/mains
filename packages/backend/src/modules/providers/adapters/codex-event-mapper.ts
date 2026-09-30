@@ -762,9 +762,13 @@ export function createCodexEventMapper(
     return out;
   }
 
-  /** Codex writes what it generates here, so the directory is the provenance. */
+  function codexGeneratedImageDir(): string {
+    return path.join(os.homedir(), ".codex", "generated_images");
+  }
+
+  /** Codex stores images from all its threads under this shared directory. */
   function isCodexGeneratedImage(resolved: string): boolean {
-    const codexGenDir = path.join(os.homedir(), ".codex", "generated_images");
+    const codexGenDir = codexGeneratedImageDir();
     return resolved === codexGenDir || resolved.startsWith(codexGenDir + path.sep);
   }
 
@@ -900,12 +904,16 @@ export function createCodexEventMapper(
       } catch {
         continue;
       }
-      // Produced or merely looked at? Codex's own directory answers it
-      // outright; inside the workspace the answer is the file's age, the same
-      // gate the document scanner uses. A picture the agent opened to read —
-      // an icon in the repo, a screenshot it was pointed at — is something the
-      // turn worked *with*, and putting it inline next to what the turn
-      // produced is what made the transcript look nothing like Codex.
+      // A directory listing may include images from earlier or concurrently
+      // running Codex threads. Only discover images under this run's thread
+      // directory; image-generation items are emitted separately above.
+      if (isCodexGeneratedImage(resolved)) {
+        const imageThreadId = path.relative(codexGeneratedImageDir(), resolved).split(path.sep)[0];
+        if (!rs.threadId || imageThreadId !== rs.threadId || stat.mtimeMs < rs.runStartedAt) {
+          continue;
+        }
+      }
+      // Pre-existing workspace images are inputs rather than deliverables.
       const viewed =
         !isCodexGeneratedImage(resolved) &&
         stat.mtimeMs < rs.runStartedAt - DOC_MTIME_SKEW_MS;

@@ -3,6 +3,11 @@ export function runOwnerKey(backendId: string | null, runId: string): string {
   return JSON.stringify([backendId ?? "local", "run", runId]);
 }
 
+/** Browser expansion in Code mode is shared by chats in one workspace. */
+export function workspaceBrowserExpansionKey(backendId: string | null, workspaceId: string): string {
+  return JSON.stringify([backendId ?? "local", "browser-workspace", workspaceId]);
+}
+
 function keyParts(key: string): unknown[] | null {
   try {
     const parts: unknown = JSON.parse(key);

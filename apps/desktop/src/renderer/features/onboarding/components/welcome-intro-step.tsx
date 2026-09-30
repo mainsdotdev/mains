@@ -5,7 +5,7 @@ import { MainsColor } from "@/components/ui/icons";
 export function WelcomeIntroStep() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center text-center">
-        <MainsColor className=" size-24 " />
+        <MainsColor className="text-primary-800 dark:text-primary-200 size-16 " />
       <Text
         as="span"
         size="xs"

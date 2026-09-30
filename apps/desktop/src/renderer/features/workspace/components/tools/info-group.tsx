@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useRef,
+  useCallback,
   type MouseEvent,
 } from "react";
 import { AgentMarkdown } from "@/components/agent-markdown";
@@ -70,9 +71,10 @@ function resolveImagePath(
 interface InfoGroupProps {
   group: EventGroup;
   workspaceRootPath?: string;
+  floatingChat?: boolean;
 }
 
-function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
+function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoGroupProps) {
   const event = group.events[0];
   const [previewAtt, setPreviewAtt] = useState<{
     name: string;
@@ -218,7 +220,7 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
               />
             ))}
             {message && (
-              <div className="min-w-0 max-w-full px-3.5 py-2 rounded-2xl bg-primary-50 dark:bg-primary/5">
+              <div className={`min-w-0 max-w-full px-3.5 py-2 rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}>
                 <div className="prose prose-sm dark:prose-invert max-w-none text-left">
                   <PromptMarkdown skills={skills} files={files}>
                     {message}
@@ -292,8 +294,8 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
 
   if (event.type === "artifact" && event.metadata?.kind === "image") {
     // Consecutive image artifacts arrive merged into one group (see
-    // `groupEvents`) — a single image keeps the file-card layout, several
-    // render side by side as a gallery of tiles.
+    // `groupEvents`) — a single image keeps its usual preview, while several
+    // share a selected preview and a compact thumbnail rail.
     const images = group.events
       .filter((e) => e.type === "artifact" && e.metadata?.kind === "image")
       .map((e) => {
@@ -318,21 +320,7 @@ function InfoGroupImpl({ group, workspaceRootPath }: InfoGroupProps) {
             onPreview={setPreviewAtt}
           />
         ) : (
-          <div
-            className={`grid gap-2 ${
-              images.length === 2 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3"
-            }`}
-          >
-            {images.map((img) => (
-              <ImageArtifact
-                key={img.absPath}
-                absPath={img.absPath}
-                fileName={img.fileName}
-                onPreview={setPreviewAtt}
-                variant="tile"
-              />
-            ))}
-          </div>
+          <ImageArtifactGallery images={images} onPreview={setPreviewAtt} />
         )}
         {previewAtt && (
           <ImagePreviewModal
@@ -480,6 +468,124 @@ function AttachmentDocumentCard({
   );
 }
 
+function ImageArtifactGallery({
+  images,
+  onPreview,
+}: {
+  images: Array<{ absPath: string; fileName: string }>;
+  onPreview: (att: { name: string; dataUrl: string }) => void;
+}) {
+  const [selectedPath, setSelectedPath] = useState(images[0].absPath);
+  const selected = images.find((image) => image.absPath === selectedPath) ?? images[0];
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [fade, setFade] = useState({ top: false, bottom: false });
+
+  const updateFade = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const top = el.scrollTop > 4;
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 4;
+    setFade((current) =>
+      current.top === top && current.bottom === bottom
+        ? current
+        : { top, bottom },
+    );
+  }, []);
+
+  useEffect(() => {
+    updateFade();
+    const observer = new ResizeObserver(updateFade);
+    if (scrollRef.current) observer.observe(scrollRef.current);
+    if (contentRef.current) observer.observe(contentRef.current);
+    return () => observer.disconnect();
+  }, [updateFade]);
+
+  const mask = `linear-gradient(to bottom, ${
+    fade.top ? "transparent, black 3rem" : "black"
+  }, ${fade.bottom ? "black calc(100% - 3rem), transparent" : "black"})`;
+
+  return (
+    <div className="relative my-4 w-full max-w-165">
+      <div className="mr-17 min-w-0 sm:mr-21">
+        <ImageArtifact
+          key={selected.absPath}
+          absPath={selected.absPath}
+          fileName={selected.fileName}
+          onPreview={onPreview}
+          variant="gallery"
+        />
+      </div>
+      <div
+        ref={scrollRef}
+        role="group"
+        aria-label="Generated images"
+        onScroll={updateFade}
+        className="noscrollbar absolute inset-y-0 right-0 w-14 overflow-y-auto sm:w-18"
+        style={{ maskImage: mask, WebkitMaskImage: mask }}
+      >
+        <div ref={contentRef} className="flex flex-col gap-2 p-0.5">
+          {images.map((image, index) => (
+            <ImageGalleryThumbnail
+              key={`${image.absPath}-${index}`}
+              image={image}
+              index={index}
+              total={images.length}
+              selected={image.absPath === selected.absPath}
+              onSelect={() => setSelectedPath(image.absPath)}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImageGalleryThumbnail({
+  image,
+  index,
+  total,
+  selected,
+  onSelect,
+}: {
+  image: { absPath: string; fileName: string };
+  index: number;
+  total: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const url = useLocalImageUrl(image.absPath);
+  const [thumbFailed, setThumbFailed] = useState(false);
+
+  return (
+    <Button
+      type="button"
+      onClick={onSelect}
+      aria-label={`Select image ${index + 1} of ${total}: ${image.fileName}`}
+      aria-pressed={selected}
+      title={image.fileName}
+      className={`flex aspect-square w-full shrink-0 items-center justify-center overflow-hidden rounded-2xl  transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 ${
+        selected
+          ? "border border-accent/40 outline-none"
+          : "glass-outline"
+      }  `}
+    >
+      {url && !thumbFailed ? (
+        <img
+          src={url}
+          alt=""
+          className="size-full object-contain"
+          loading="lazy"
+          draggable={false}
+          onError={() => setThumbFailed(true)}
+        />
+      ) : (
+        <Picture className="size-5 text-primary-500" aria-hidden />
+      )}
+    </Button>
+  );
+}
+
 function ImageArtifact({
   absPath,
   fileName,
@@ -489,8 +595,8 @@ function ImageArtifact({
   absPath: string;
   fileName: string;
   onPreview: (att: { name: string; dataUrl: string }) => void;
-  /** `preview` = open image; `tile` = compact gallery cell for multi-image groups. */
-  variant?: "preview" | "tile";
+  /** `gallery` fills the selected-image stage; `preview` keeps the single-image size. */
+  variant?: "preview" | "gallery";
 }) {
   const url = useLocalImageUrl(absPath);
   const { revealInFolder } = useCapabilities();
@@ -582,82 +688,29 @@ function ImageArtifact({
     </DropdownMenu>
   );
 
-  if (variant === "tile") {
-    return (
-      <div
-        className="group/image-tile my-4 relative overflow-hidden rounded-3xl bg-primary-50 dark:bg-primary-900/85 shadow-sm"
-        title={absPath}
-      >
-        <Button
-          type="button"
-          onClick={openInMains}
-          className="block w-full cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          aria-label={`Preview ${fileName} in Mains`}
-        >
-          <div className="aspect-4/3 w-full flex items-center justify-center overflow-hidden">
-            {url && !thumbFailed ? (
-              <img
-                src={url}
-                alt={fileName}
-                className="size-full object-cover"
-                loading="lazy"
-                draggable={false}
-                onError={() => setThumbFailed(true)}
-              />
-            ) : (
-              <Picture className="size-7 text-primary-600 dark:text-primary-400" />
-            )}
-          </div>
-        </Button>
-        <div className="absolute inset-x-0 bottom-0 px-2.5 pb-2 pt-6 bg-linear-to-t from-black/60 to-transparent opacity-0 group-hover/image-tile:opacity-100 transition-opacity pointer-events-none">
-          <Text
-            as="span"
-            size="xs"
-            tone="inherit"
-            className="block text-white truncate"
-          >
-            {fileName}
-          </Text>
-        </div>
-        <Button
-          ref={openBtnRef}
-          type="button"
-          onClick={openMenu}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-white bg-black/50 hover:bg-black/70 opacity-0 group-hover/image-tile:opacity-100 transition-opacity cursor-pointer"
-        >
-          Open
-          <ArrowUp className="size-3 rotate-180" />
-        </Button>
-        {menu}
-      </div>
-    );
-  }
-
   return (
     <div
-      className="group/image-preview relative my-4 w-fit max-w-full"
+      className={`group/image-preview relative ${variant === "gallery" ? "w-full" : "my-4 w-fit max-w-full"}`}
       title={absPath}
     >
       <Button
         type="button"
         onClick={openInMains}
-        className="block max-w-full overflow-hidden rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className={`block max-w-full overflow-hidden rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-accent ${variant === "gallery" ? "w-full bg-primary-50 dark:bg-primary-900/85" : ""}`}
         aria-label={`Preview ${fileName} in Mains`}
       >
-        <div className="flex max-h-144 max-w-[24rem] items-center justify-center overflow-hidden">
+        <div className={`flex items-center justify-center overflow-hidden ${variant === "gallery" ? "aspect-square w-full max-h-144" : "max-h-144 max-w-[24rem]"}`}>
           {url && !thumbFailed ? (
             <img
               src={url}
               alt={fileName}
-              className="block h-auto max-h-144 w-auto max-w-full object-contain"
+              className={variant === "gallery" ? "block size-full object-contain" : "block h-auto max-h-144 w-auto max-w-full object-contain"}
               loading="lazy"
               draggable={false}
               onError={() => setThumbFailed(true)}
             />
           ) : (
-            <div className="flex h-44 w-72 items-center justify-center rounded-2xl bg-primary-100/70 dark:bg-primary-900/70">
+            <div className={`flex items-center justify-center rounded-2xl bg-primary-100/70 dark:bg-primary-900/70 ${variant === "gallery" ? "size-full" : "h-44 w-72"}`}>
               <Picture className="size-7 text-primary-500" />
             </div>
           )}

@@ -57,12 +57,13 @@ export function NavigationRail({
   const homeActive = isWorkspaceRoute(pathname);
   const settingsActive = isSettingsRoute(pathname);
   const destinations = [
-    ...(showTasks ? [    {
+    {
       label: "Plugins",
       path: "/plugins",
       Icon: Plugin,
       disabled: !pluginsAvailable,
-    },{ label: "Tasks", path: "/tasks", Icon: Task }] : []),
+    },
+    ...(showTasks ? [{ label: "Tasks", path: "/tasks", Icon: Task }] : []),
     { label: "Pulse", path: "/pulse", Icon: Clock },
     { label: "Connect", path: "/relay", Icon: Relay },
   ];

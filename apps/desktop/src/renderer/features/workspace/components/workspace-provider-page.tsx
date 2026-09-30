@@ -1,4 +1,6 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import type { RefObject } from "react";
@@ -21,6 +23,7 @@ import {
 } from "@/features/workspace/hooks";
 import { CONTENT_COLUMN_GUTTER } from "@/features/workspace/lib/content-column";
 import { isFirstWorkspaceTabActive } from "@/features/workspace/lib/is-first-workspace-tab-active";
+import { isRunTab } from "@/features/workspace/lib/repo-utils";
 import { projectForNewChat } from "@/features/workspace/lib/run-collection-context";
 import {
   useAbortRunMutation,
@@ -29,26 +32,47 @@ import {
   useGetProviderByIdQuery,
   useUpdateProviderMutation,
 } from "@/lib/redux/api";
-import { useAppSelector } from "@/lib/redux/hooks";
+import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
+import { setContextItemsForKey } from "@/lib/redux/slices/workspaceSlice";
+import { transferRightPaneContext } from "@/lib/redux/slices/appSettingsSlice";
+import type { ContextItem } from "@/features/workspace/lib/composer-context";
 import { useSetMainHeader } from "@/hooks/use-main-header";
 import { useWorkspaceRouteTopRounding } from "@/hooks/use-workspace-route-top-rounding";
 import { useBottomTerminal } from "@/hooks/use-bottom-terminal";
+import { useBrowserPanel } from "@/hooks/use-browser-panel";
+import { useActiveSpace } from "@/hooks/use-active-space";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import {
   isExitPlanApproval,
   respondToExitPlanApproval,
 } from "@/features/workspace/lib/plan-approval";
+import { FloatingChatOverlay } from "./floating-chat-overlay";
+import { floatingChatRunStatus } from "../lib/floating-chat-run-status";
+import { store } from "@/lib/redux";
+import { baseApi } from "@/lib/redux/api/baseApi";
+import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
+import { deserializeBrowserChatUploads } from "@/features/workspace/lib/upload-bridge";
+import type { UploadedFile } from "@/components/ui";
+import type { BrowserChatUpload } from "../../../../shared/browser-chat-window";
+import { getTransientUploadsForOwner } from "@/features/workspace/hooks/use-transient-uploads";
+import { runOwnerKey } from "../../../../shared/ui-state-keys";
 
 interface WorkspaceProviderPageProps {
   providerId: string;
   variant: ProviderVariant;
+  /** Only the floating chat is mounted in the native child renderer. */
+  browserChatOnly?: boolean;
 }
 
 export function WorkspaceProviderPage({
   providerId,
   variant,
+  browserChatOnly = false,
 }: WorkspaceProviderPageProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const dispatch = useAppDispatch();
   // Per-variant page behavior comes straight from the descriptor table —
   // no props to forget or default divergently. Per-mode shape comes from its
   // sibling table the same way.
@@ -81,10 +105,152 @@ export function WorkspaceProviderPage({
     selectedCollection,
   );
   const ws = useWorkspacePage(providerId);
+  const { activeSpace } = useActiveSpace();
   const [abortRun] = useAbortRunMutation();
   const { data: providerData } = useGetProviderByIdQuery(providerId);
+  useEffect(() => {
+    if (browserChatOnly && providerData) {
+      void window.api.browserChat.postAction({ type: "providerChanged", providerId });
+    }
+  }, [browserChatOnly, providerData, providerId]);
   const [updateProvider] = useUpdateProviderMutation();
   const bottomTerminal = useBottomTerminal();
+  const browserPanel = useBrowserPanel();
+  const {
+    isExpanded: browserExpanded,
+    chatVisible: browserChatVisible,
+    setChatMode: setBrowserChatMode,
+    nativeOverlay,
+    ownerKey: browserOwnerKey,
+    chatMode: browserChatMode,
+  } = browserPanel;
+  const {
+    activeTab: chatActiveTab,
+    goal: chatDraft,
+    selectedModel: chatSelectedModel,
+    contextItems: chatContextItems,
+    setGoal: setChatDraft,
+    handleModelChange: changeChatModel,
+    handleSelectRunTab: selectChatRunTab,
+    handleExecute: executeChat,
+    setUploadedFiles: setChatUploads,
+  } = ws;
+  const wasBrowserExpandedRef = useRef(false);
+  const uploadRevisionRef = useRef(0);
+  const [uploadSnapshot, setUploadSnapshot] = useState<{
+    ownerKey: string;
+    version: number;
+    uploads: BrowserChatUpload[];
+  }>({ ownerKey: "", version: 0, uploads: [] });
+
+  useEffect(() => {
+    if (browserChatOnly) return;
+    let active = true;
+    void serializeAttachments(ws.uploadedFiles).then((uploads) => {
+      if (active) {
+        setUploadSnapshot((previous) => ({
+          ownerKey: browserOwnerKey,
+          version: previous.version + 1,
+          uploads,
+        }));
+      }
+    }).catch(() => { /* Keep the current attachments when a file cannot be read. */ });
+    return () => { active = false; };
+  }, [browserChatOnly, browserOwnerKey, ws.uploadedFiles]);
+
+  // The primary renderer owns the selected run, draft, and presentation mode.
+  // The child window runs the same workspace UI against the same backend, with
+  // these small UI-only values kept in step through local Electron IPC.
+  useEffect(() => {
+    if (browserChatOnly || !nativeOverlay || !browserExpanded ||
+      !activeSpace || activeSpace.providerId !== providerId) return;
+    const publish = () => {
+      void window.api.browserChat.publishContext({
+        route: location.pathname,
+        activeTab: chatActiveTab,
+        activeSpace,
+        providerId,
+        ownerKey: browserOwnerKey,
+        mode: browserChatMode,
+        draft: chatDraft,
+        selectedModel: chatSelectedModel,
+        selectedCollectionId,
+        contextItems: chatContextItems,
+        uploadsVersion: uploadSnapshot.version,
+        uploads: uploadSnapshot.ownerKey === browserOwnerKey ? uploadSnapshot.uploads : [],
+        dark: document.documentElement.classList.contains("dark"),
+        themeCss: document.getElementById("mains-app-theme")?.textContent ?? "",
+        rootStyle: document.documentElement.style.cssText,
+      });
+    };
+    publish();
+    const observer = new MutationObserver(publish);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style"] });
+    observer.observe(document.head, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, [
+    browserChatOnly, nativeOverlay, browserExpanded,
+    browserOwnerKey, browserChatMode, location.pathname,
+    chatActiveTab, chatDraft, chatSelectedModel, chatContextItems,
+    activeSpace, providerId, selectedCollectionId, uploadSnapshot,
+  ]);
+
+  useEffect(() => {
+    if (browserChatOnly || !nativeOverlay) return;
+    return window.api.browserChat.onAction((action) => {
+      if (!browserExpanded) return;
+      switch (action.type) {
+        case "pagePointerDown":
+          if (browserChatMode === "details") setBrowserChatMode("input");
+          break;
+        case "mode":
+          setBrowserChatMode(action.mode);
+          break;
+        case "draft":
+          if (action.ownerKey === browserOwnerKey) setChatDraft(action.draft);
+          break;
+        case "model":
+          if (action.providerId === providerId) changeChatModel(action.model);
+          break;
+        case "selectRun":
+          if (action.ownerKey !== browserOwnerKey) break;
+          dispatch(transferRightPaneContext({
+            fromKey: action.ownerKey,
+            toKey: runOwnerKey(store.getState().backends.activeBackendId ?? "local", action.runId),
+          }));
+          selectChatRunTab(action.runId);
+          if (!modeConfig.showTabs) navigate(`/code/runs/${action.runId}`);
+          break;
+        case "contextItems":
+          if (action.ownerKey === browserOwnerKey) {
+            dispatch(setContextItemsForKey({ key: action.ownerKey, items: action.items as ContextItem[] }));
+          }
+          break;
+        case "providerChanged":
+          if (action.providerId === providerId) {
+            dispatch(baseApi.util.invalidateTags([{ type: "Providers", id: providerId }]));
+          }
+          break;
+        case "uploads":
+          if (action.ownerKey === browserOwnerKey) {
+            setChatUploads(deserializeBrowserChatUploads(action.uploads));
+          }
+          break;
+      }
+    });
+  }, [
+    browserChatOnly, nativeOverlay, browserExpanded, browserChatMode,
+    browserOwnerKey, setBrowserChatMode, modeConfig.showTabs,
+    navigate, providerId, setChatDraft, changeChatModel, selectChatRunTab,
+    setChatUploads, dispatch,
+  ]);
+  useLayoutEffect(() => {
+    const enteringExpandedBrowser = browserExpanded && !wasBrowserExpandedRef.current;
+    wasBrowserExpandedRef.current = browserExpanded;
+    if (!browserChatOnly && enteringExpandedBrowser && browserChatVisible && ws.activeRunId) {
+      setBrowserChatMode("details");
+    }
+  }, [browserChatOnly, browserExpanded, browserChatVisible, setBrowserChatMode, ws.activeRunId]);
   const authTerminal = useProviderAuthTerminal();
   const activeAuthTerminal =
     authTerminal.session?.providerId === providerId
@@ -261,9 +427,173 @@ export function WorkspaceProviderPage({
   useSetMainHeader(tabBar, !ws.showEmptyState && !ws.isEmptyStatePending && isFirstTabActive);
 
   const routeTopRounding = useWorkspaceRouteTopRounding();
+  const browserSelectedRun = ws.activeRun?.id === ws.activeRunId
+    ? ws.activeRun
+    : null;
+  const [browserStatusNowMs, setBrowserStatusNowMs] = useState(() => Date.now());
+  const browserStatusClockActive = browserPanel.isExpanded &&
+    (browserChatOnly || !browserPanel.nativeOverlay) &&
+    browserPanel.chatMode === "input" &&
+    browserSelectedRun?.status === "running";
+  useEffect(() => {
+    if (!browserStatusClockActive) return;
+    const timer = window.setInterval(() => setBrowserStatusNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [browserStatusClockActive]);
+  const handleBrowserDraftChange = useCallback((draft: string) => {
+    setChatDraft(draft);
+    if (browserChatOnly) {
+      void window.api.browserChat.postAction({
+        type: "draft", ownerKey: browserOwnerKey, draft,
+      });
+    }
+  }, [browserChatOnly, browserOwnerKey, setChatDraft]);
+  const handleBrowserModelChange = useCallback((model: string) => {
+    changeChatModel(model);
+    if (browserChatOnly) {
+      void window.api.browserChat.postAction({ type: "model", providerId, model });
+    }
+  }, [browserChatOnly, providerId, changeChatModel]);
+  const handleBrowserUploadsChange = useCallback((files: UploadedFile[]) => {
+    setChatUploads(files);
+    if (!browserChatOnly) return;
+    const revision = ++uploadRevisionRef.current;
+    void serializeAttachments(files).then((uploads) => {
+      if (revision === uploadRevisionRef.current) {
+        void window.api.browserChat.postAction({
+          type: "uploads", ownerKey: browserOwnerKey, uploads,
+        });
+      }
+    }).catch(() => { /* The file remains in the child composer for retry. */ });
+  }, [browserChatOnly, browserOwnerKey, setChatUploads]);
+  const handleBrowserSubmit = useCallback(async () => {
+    const previousTab = store.getState().workspace.activeTab;
+    await executeChat();
+    if (!browserChatOnly) return;
+    const currentDraft = store.getState().workspace.draftTextByKey[browserOwnerKey] ?? "";
+    void window.api.browserChat.postAction({
+      type: "draft", ownerKey: browserOwnerKey, draft: currentDraft,
+    });
+    const remainingUploads = getTransientUploadsForOwner(browserOwnerKey);
+    void serializeAttachments(remainingUploads).then((uploads) => {
+      void window.api.browserChat.postAction({
+        type: "uploads", ownerKey: browserOwnerKey, uploads,
+      });
+    }).catch(() => { /* The existing parent copy remains available. */ });
+    const nextTab = store.getState().workspace.activeTab;
+    if (nextTab !== previousTab && isRunTab(nextTab)) {
+      void window.api.browserChat.postAction({
+        type: "selectRun", ownerKey: browserOwnerKey, runId: nextTab,
+      });
+    }
+  }, [browserChatOnly, browserOwnerKey, executeChat]);
+  const handleBrowserComposerHeight = useCallback((height: number) => {
+    if (browserChatOnly) {
+      void window.api.browserChat.postAction({ type: "composerHeight", height });
+    }
+  }, [browserChatOnly]);
+  const browserComposer = (browserChatOnly || !browserPanel.nativeOverlay) && onboardingCompleted && !ws.isEmptyStatePending ? (
+    <WorkspaceInput
+      goal={ws.goal}
+      onGoalChange={handleBrowserDraftChange}
+      onSubmit={handleBrowserSubmit}
+      isLoading={ws.isLoading}
+      activeRun={ws.composerRun}
+      canResume={ws.canResume ?? false}
+      providerId={providerId}
+      selectedModel={ws.selectedModel}
+      onModelChange={handleBrowserModelChange}
+      sendTarget={null}
+      workspacePath={ws.currentWorkspace?.rootPath}
+      projectId={ws.currentWorkspace?.projectId ?? undefined}
+      uploadedFiles={ws.uploadedFiles}
+      onUploadedFilesChange={handleBrowserUploadsChange}
+      onStop={handleStop}
+      isNewRunTabActive={false}
+      newChatProjectName={newChatProject?.name}
+      newChatProjectIcon={newChatProject ? (
+        <ProjectIcon icon={newChatProject.icon} projectName={newChatProject.name} />
+      ) : undefined}
+      layout="floating"
+      floatingChatMode={browserPanel.chatMode}
+      floatingStatusPlaceholder={browserPanel.chatMode === "input"
+        ? floatingChatRunStatus(ws.currentEvents, browserSelectedRun, browserStatusNowMs)
+        : null}
+      floatingAutoFocus={browserPanel.chatMode === "details"}
+      onFloatingFocus={() => browserPanel.setChatMode("details")}
+    />
+  ) : null;
+
+  const browserChat = browserPanel.isExpanded && browserPanel.chatHost &&
+    (browserChatOnly || !browserPanel.nativeOverlay)
+    ? createPortal(
+        <FloatingChatOverlay
+          title={browserSelectedRun?.title?.trim() || browserSelectedRun?.goal?.trim() || "New chat"}
+          iconTooltip={browserSelectedRun?.title?.trim() || "New run"}
+          activity={browserSelectedRun?.status === "running" || browserSelectedRun?.status === "queued"
+            ? browserSelectedRun.status : null}
+          mode={browserPanel.chatMode}
+          onShowDetails={() => browserPanel.setChatMode("details")}
+          onMinimize={() => browserPanel.setChatMode("icon")}
+          onComposerHeightChange={browserChatOnly ? handleBrowserComposerHeight : undefined}
+          composer={browserComposer}
+        >
+          {browserSelectedRun && (
+            <>
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <WorkspaceEvents
+                  runs={ws.runs}
+                  activeTab={ws.activeTab}
+                  currentEvents={ws.currentEvents}
+                  isTranscriptLoading={ws.isTranscriptLoading}
+                  currentWorkspace={ws.currentWorkspace}
+                  eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
+                  issueTabs={ws.openIssueTabs}
+                  signalTabs={ws.openSignalTabs}
+                  turns={ws.currentTurns}
+                  variant={variant}
+                  onForkRun={enableForkRun ? ws.handleForkRun : undefined}
+                  onSuggestionSelect={enableSuggestions ? handleSuggestionSelect : undefined}
+                  onApplyPlan={handleApplyPlan}
+                  onDismissPlan={handleDismissPlan}
+                  hasPendingPlanApproval={!!currentPlanApproval}
+                  floatingChat
+                />
+              </div>
+              {currentApproval && !currentPlanApproval && (
+                <div className="max-h-[40vh] shrink-0 overflow-y-auto px-3">
+                  <ToolApprovalDialog
+                    request={currentApproval}
+                    onRespond={respondToolApproval}
+                    variant={variant}
+                  />
+                </div>
+              )}
+              {ws.currentWorkspace && !ws.showEmptyState && !ws.showNewRunTab && (
+                <div className="shrink-0 px-3">
+                  <GoalSummaryBar
+                    providerId={providerId}
+                    runId={ws.activeRun?.id}
+                    isRunning={ws.activeRun?.status === "running"}
+                    enabled={getProviderVariant(variant).supportsGoalMode}
+                    rootPath={ws.currentWorkspace.rootPath}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </FloatingChatOverlay>,
+        browserPanel.chatHost,
+      )
+    : null;
+
+  if (browserChatOnly) {
+    return <PluginLogoProvider providerId={providerId}>{browserChat}</PluginLogoProvider>;
+  }
 
   return (
     <PluginLogoProvider providerId={providerId}>
+    {browserChat}
     {/* `relative` anchors the absolutely-positioned TodoSummaryBar toast so it
         centers over this content column (not the whole window — the embedded
         browser panel is a native view layered above the renderer). */}
@@ -276,7 +606,7 @@ export function WorkspaceProviderPage({
           terminal below them: the session box only covers the top-right of the
           content, so the terminal keeps the full width. */}
       <div className="content-inset flex-1 overflow-hidden noscrollbar min-h-0">
-        {useCenteredPromptLayout ? (
+        {browserPanel.isExpanded ? null : useCenteredPromptLayout ? (
           <div
             className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-8 overflow-y-auto py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
           >
@@ -299,6 +629,8 @@ export function WorkspaceProviderPage({
                 projectId={ws.currentWorkspace?.projectId ?? undefined}
                 uploadedFiles={ws.uploadedFiles}
                 onUploadedFilesChange={ws.setUploadedFiles}
+                additionalDirectories={ws.additionalDirectories}
+                onAdditionalDirectoriesChange={ws.setAdditionalDirectories}
                 onStop={handleStop}
                 isNewRunTabActive={ws.showNewRunTab}
                 newChatProjectName={newChatProject?.name}
@@ -351,7 +683,7 @@ export function WorkspaceProviderPage({
           then hangs off the right edge while the left keeps its padding. */}
       <div className="content-inset">
       <div className={CONTENT_COLUMN_GUTTER}>
-      {currentApproval &&
+      {!browserPanel.isExpanded && currentApproval &&
         !currentPlanApproval &&
         !ws.showEmptyState &&
         !ws.showNewRunTab && (
@@ -369,7 +701,7 @@ export function WorkspaceProviderPage({
           Gated on the run's status (which stays "running" for the whole run)
           rather than `isLoading` (which only tracks the brief start/continue
           IPC call, making the bar flash and vanish mid-run). */}
-      {ws.showEmptyState || ws.showNewRunTab || ws.activeRun?.status !== "running" ? null : (
+      {browserPanel.isExpanded || ws.showEmptyState || ws.showNewRunTab || ws.activeRun?.status !== "running" ? null : (
         <TodoSummaryBar
           events={ws.currentEvents}
           structuralPlan={currentStructuralPlan}
@@ -377,7 +709,7 @@ export function WorkspaceProviderPage({
         />
       )}
 
-      {ws.currentWorkspace && !ws.showEmptyState && !ws.showNewRunTab && (
+      {!browserPanel.isExpanded && ws.currentWorkspace && !ws.showEmptyState && !ws.showNewRunTab && (
         <GoalSummaryBar
           providerId={providerId}
           runId={ws.activeRun?.id}
@@ -387,7 +719,7 @@ export function WorkspaceProviderPage({
         />
       )}
 
-      {onboardingCompleted && !ws.showEmptyState && !ws.showNewRunTab && !ws.isEmptyStatePending ? (
+      {!browserPanel.isExpanded && onboardingCompleted && !ws.showEmptyState && !ws.showNewRunTab && !ws.isEmptyStatePending ? (
         <WorkspaceInput
           goal={ws.goal}
           onGoalChange={ws.setGoal}
@@ -404,6 +736,8 @@ export function WorkspaceProviderPage({
           projectId={ws.currentWorkspace?.projectId ?? undefined}
           uploadedFiles={ws.uploadedFiles}
           onUploadedFilesChange={ws.setUploadedFiles}
+          additionalDirectories={ws.additionalDirectories}
+          onAdditionalDirectoriesChange={ws.setAdditionalDirectories}
           onStop={handleStop}
           isNewRunTabActive={ws.showNewRunTab}
         />

@@ -1,25 +1,10 @@
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
-import type { ProviderId } from "../../../../shared/provider-ids";
-import type { ModeId } from "../../../../shared/modes";
+import type { ProviderId } from "@mains/contracts/provider-ids";
+import type { ModeId } from "@mains/contracts/modes";
+import type { Space } from "../../../../shared/space";
 
-export interface Space {
-  id: string;
-  accountId: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  systemPrompt: string | null;
-  model: string | null;
-  icon: string | null;
-  themeConfig: string | null;
-  providerId: ProviderId;
-  mode: ModeId;
-  sortOrder: number;
-  isArchived: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
+export type { Space } from "../../../../shared/space";
 
 export interface CreateSpacePayload {
   name: string;

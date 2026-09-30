@@ -4,18 +4,23 @@
 import "./lib/platform/web-bootstrap";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import { markAppReady } from "./lib/app-ready";
 import "./index.css";
 
 const root = ReactDOM.createRoot(
   document.getElementById("root") as HTMLElement
 );
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const isBrowserChatOverlay = new URLSearchParams(window.location.search).has("browserChatOverlay");
+const rootModule = isBrowserChatOverlay
+  ? import("./browser-chat-app")
+  : import("./App");
+void rootModule.then(({ default: AppRoot }) => {
+  root.render(
+    <React.StrictMode>
+      <AppRoot />
+    </React.StrictMode>,
+  );
+});
 
 // Keep animations disabled (see the `.app-ready` gate in index.css) until the
 // launch churn has actually settled, not just until the first paint: fonts

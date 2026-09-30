@@ -1,8 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { isPointerHeadingToSubmenu } from "./model-select-dropdown";
+import {
+  effortSubmenuLeft,
+  isPointerHeadingToSubmenu,
+} from "./model-select-dropdown";
 
-// The effort submenu is anchored to its model row and opens to the right of the
-// model menu, so the normal travel path is short and roughly horizontal. It
+describe("effortSubmenuLeft", () => {
+  const menu = { left: 300, right: 500 };
+
+  it("opens left of the compact browser picker even when the right side has room", () => {
+    expect(effortSubmenuLeft(menu, 160, 1200, true)).toBe(134);
+  });
+
+  it("keeps the regular picker adaptive and inside the viewport", () => {
+    expect(effortSubmenuLeft(menu, 144, 1200, false)).toBe(506);
+    expect(effortSubmenuLeft(menu, 144, 550, false)).toBe(150);
+  });
+});
+
+// The regular picker's effort submenu is anchored to its model row and opens to
+// the right when space allows, so travel is short and roughly horizontal. It
 // only turns diagonal when a tall submenu gets clamped into the viewport — the
 // case these tests pin down, using the geometry from a real Claude picker
 // (model menu x 293–673 with ~72px rows; submenu x 687–969, clamped to

@@ -19,13 +19,17 @@ import { useComposerContext } from "./use-composer-context";
 import { useTransientUploads } from "./use-transient-uploads";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import { useActiveSpace } from "@/hooks/use-active-space";
-import { setRightPaneContextKey } from "@/lib/redux/slices/appSettingsSlice";
+import { setRightPaneContextKey, transferRightPaneContext } from "@/lib/redux/slices/appSettingsSlice";
 import { useWorkspaceData } from "./use-workspace-data";
 import { useWorkspaceRuns } from "./use-workspace-runs";
 import { useFileContentLoader } from "./use-file-content-loader";
 import { useTabHandlers } from "./use-tab-handlers";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
 import { collectionIdForVisibleRun } from "@/features/workspace/lib/run-collection-context";
+import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
+
+const EMPTY_DIRECTORIES: string[] = [];
+
 
 export function useWorkspacePage(providerId: string) {
   const dispatch = useAppDispatch();
@@ -178,17 +182,29 @@ export function useWorkspacePage(providerId: string) {
     ? runs.find((r) => r.id === composeTargetRunId)
     : undefined;
   const ownerKey = composerOwnerKey(contextParts, composeTargetRunId);
+  const browserExpansionKey = mode === "developer" && workspaceId
+    ? workspaceBrowserExpansionKey(backendId, workspaceId)
+    : ownerKey;
   const goal = useAppSelector((state) => state.workspace.draftTextByKey[ownerKey] ?? "");
   const setGoal = useCallback((text: string) => {
     dispatch(setDraftText({ key: ownerKey, text }));
   }, [dispatch, ownerKey]);
   const [uploadedFiles, setUploadedFiles] = useTransientUploads(ownerKey);
+  const [directoryDrafts, setDirectoryDrafts] = useState<Record<string, string[]>>({});
+  const storedDirectories = composeTargetRun?.configSnapshot?.additionalDirectories;
+  const additionalDirectories = useMemo(() => directoryDrafts[ownerKey] ??
+    (Array.isArray(storedDirectories)
+      ? storedDirectories.filter((value): value is string => typeof value === "string")
+      : EMPTY_DIRECTORIES), [directoryDrafts, ownerKey, storedDirectories]);
+  const setAdditionalDirectories = useCallback((directories: string[]) => {
+    setDirectoryDrafts((current) => ({ ...current, [ownerKey]: directories }));
+  }, [ownerKey]);
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey) return;
     dispatch(setComposerContextKey(ownerKey));
-    dispatch(setRightPaneContextKey(ownerKey));
-  }, [activeViewKey, viewKey, ownerKey, dispatch]);
+    dispatch(setRightPaneContextKey({ ownerKey, browserExpansionKey }));
+  }, [activeViewKey, viewKey, ownerKey, browserExpansionKey, dispatch]);
 
   // Quick actions target the currently visible composer, even after it was
   // unmounted while visiting Settings.
@@ -296,7 +312,14 @@ export function useWorkspacePage(providerId: string) {
     setGoal("");
     setUploadedFiles([]);
     clearContext();
-  }, [setGoal, setUploadedFiles, clearContext]);
+    if (!composeTargetRunId) {
+      setDirectoryDrafts((current) => {
+        const next = { ...current };
+        delete next[ownerKey];
+        return next;
+      });
+    }
+  }, [setGoal, setUploadedFiles, clearContext, composeTargetRunId, ownerKey]);
 
   const handleExecute = useCallback(async () => {
     if (mode === "developer" && !workspaceId) {
@@ -336,6 +359,7 @@ export function useWorkspacePage(providerId: string) {
           selectedModel,
           attachments,
           contextItems,
+          additionalDirectories,
         )) ?? false;
       if (success) clearInputState();
     } else {
@@ -347,12 +371,15 @@ export function useWorkspacePage(providerId: string) {
         attachments,
         contextItems,
         selectedCollectionId,
+        additionalDirectories,
       );
       if (newRunId) {
+        const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+        dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
         if (!composeTargetRunId) {
           await (window as any).api?.browser?.reassignTabs?.(
             ownerKey,
-            composerOwnerKey(contextParts, newRunId),
+            nextOwnerKey,
           );
         }
         clearInputState();
@@ -366,6 +393,7 @@ export function useWorkspacePage(providerId: string) {
     goal,
     uploadedFiles,
     contextItems,
+    additionalDirectories,
     mode,
     workspaceId,
     selectedWorkspace,
@@ -396,8 +424,9 @@ export function useWorkspacePage(providerId: string) {
       const run = async () => {
         if (activeRunId && canResume && activeRun && activeRun.status !== "running") {
           const success =
-            (await continueRun(activeRunId, goal, selectedModel)) ?? false;
-          if (success) clearInputState();
+      (await continueRun(activeRunId, goal, selectedModel, undefined, undefined,
+  additionalDirectories)) ?? false;
+            if (success) clearInputState();
         } else {
           const newRunId = await executeRun(
             goal,
@@ -407,11 +436,14 @@ export function useWorkspacePage(providerId: string) {
             undefined,
             undefined,
             selectedCollectionId,
+            additionalDirectories
           );
           if (newRunId) {
+            const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+            dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
             await (window as any).api?.browser?.reassignTabs?.(
               ownerKey,
-              composerOwnerKey(contextParts, newRunId),
+              nextOwnerKey,
             );
             clearInputState();
             dispatch(setActiveTab(newRunId));
@@ -421,7 +453,7 @@ export function useWorkspacePage(providerId: string) {
       };
       run();
     }
-  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
+  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, additionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
 
   const runLabel = (r: { title?: string; goal: string }) =>
     r.title?.trim() ? r.title : r.goal;
@@ -480,7 +512,10 @@ export function useWorkspacePage(providerId: string) {
     goal,
     setGoal,
     uploadedFiles,
+    contextItems,
     setUploadedFiles,
+    additionalDirectories,
+    setAdditionalDirectories,
     canResume,
     selectedModel,
     activeTab,

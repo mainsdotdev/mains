@@ -5,6 +5,7 @@ export { default as Archive } from "./archive";
 export { default as ArrowUp } from "./arrow-up";
 export { default as BookOpen } from "./book-open";
 export { default as Brain } from "./brain";
+export { default as Hand } from "./hand";
 export { default as Sparkles } from "./sparkles";
 export { default as Asterisk } from "./asterisk";
 export { default as Attach } from "./attach";
