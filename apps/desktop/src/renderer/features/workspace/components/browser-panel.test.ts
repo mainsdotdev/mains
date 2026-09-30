@@ -139,7 +139,7 @@ describe("BrowserPanel browser menu", () => {
     const { rerender } = render(createElement(BrowserPanel));
     await screen.findByRole("button", { name: "Open New tab" });
     expect(screen.getByRole("complementary", { name: "Embedded browser" }).getAttribute("style"))
-      .toContain("calc(100% - var(--content-left))");
+      .toContain("calc(100% - var(--content-left)");
     expect(screen.getByRole("button", { name: "Restore browser panel" })).toBeTruthy();
     expect(screen.getByLabelText("Browser chat")).toBeTruthy();
     expect(screen.getByLabelText("Browser chat").className).toContain("absolute inset-0");

@@ -70,10 +70,10 @@ function resolveImagePath(
 interface InfoGroupProps {
   group: EventGroup;
   workspaceRootPath?: string;
-  browserChat?: boolean;
+  floatingChat?: boolean;
 }
 
-function InfoGroupImpl({ group, workspaceRootPath, browserChat = false }: InfoGroupProps) {
+function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoGroupProps) {
   const event = group.events[0];
   const [previewAtt, setPreviewAtt] = useState<{
     name: string;
@@ -219,7 +219,7 @@ function InfoGroupImpl({ group, workspaceRootPath, browserChat = false }: InfoGr
               />
             ))}
             {message && (
-              <div className={`min-w-0 max-w-full px-3.5 py-2 rounded-2xl ${browserChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}>
+              <div className={`min-w-0 max-w-full px-3.5 py-2 rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}>
                 <div className="prose prose-sm dark:prose-invert max-w-none text-left">
                   <PromptMarkdown skills={skills} files={files}>
                     {message}

@@ -11,7 +11,7 @@ describe("browser chat pointer hit testing", () => {
     root.id = "root";
     const stage = document.createElement("div");
     const surface = document.createElement("div");
-    surface.dataset.browserChatSurface = "";
+    surface.dataset.floatingChatSurface = "";
     const button = document.createElement("button");
     surface.append(button);
     stage.append(surface);

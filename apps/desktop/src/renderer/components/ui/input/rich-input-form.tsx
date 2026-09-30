@@ -1021,7 +1021,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           <Text
             as="div"
             tone="faint"
-            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-36 top-3" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}`}
+            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-36 top-3.5" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}`}
           >
             {placeholderIcon ? (
               <span

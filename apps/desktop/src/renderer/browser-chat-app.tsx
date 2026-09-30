@@ -94,7 +94,7 @@ function usePassThroughMouse() {
     };
     const onMove = (event: MouseEvent) => {
       const element = document.elementFromPoint(event.clientX, event.clientY);
-      update(element?.closest("[data-browser-chat-surface]")
+      update(element?.closest("[data-floating-chat-surface]")
         ? "card"
         : isBrowserChatInteractiveTarget(element, document) ? "portal" : "none");
     };

@@ -4,7 +4,7 @@ export function isBrowserChatInteractiveTarget(
   doc: Document,
 ): boolean {
   if (!element) return false;
-  if (element.closest("[data-browser-chat-surface]")) return true;
+  if (element.closest("[data-floating-chat-surface]")) return true;
   const root = doc.getElementById("root");
   return element !== doc.body && element !== doc.documentElement &&
     element !== root && !root?.contains(element);

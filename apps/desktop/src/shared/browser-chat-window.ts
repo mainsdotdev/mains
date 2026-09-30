@@ -1,6 +1,5 @@
 import type { Space } from "./space";
-
-export type BrowserChatMode = "details" | "input" | "icon";
+import type { FloatingChatMode } from "./floating-chat";
 
 export interface BrowserChatUpload {
   name: string;
@@ -24,7 +23,7 @@ export interface BrowserChatContext {
   activeSpace: Space;
   providerId: string;
   ownerKey: string;
-  mode: BrowserChatMode;
+  mode: FloatingChatMode;
   draft: string;
   selectedModel: string;
   selectedCollectionId: string | null;
@@ -38,7 +37,7 @@ export interface BrowserChatContext {
 }
 
 export type BrowserChatAction =
-  | { type: "mode"; mode: BrowserChatMode }
+  | { type: "mode"; mode: FloatingChatMode }
   | { type: "pagePointerDown" }
   | { type: "composerHeight"; height: number }
   | { type: "draft"; ownerKey: string; draft: string }

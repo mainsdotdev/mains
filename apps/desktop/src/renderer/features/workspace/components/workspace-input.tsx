@@ -24,7 +24,7 @@ import {
   type RichCodeChipData,
 } from "@/components/ui";
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
-import type { BrowserChatMode } from "@/hooks/use-browser-panel";
+import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useIsMobile } from "@/lib/platform";
 import { useClickOutside } from "@/hooks/use-click-outside";
@@ -174,12 +174,12 @@ interface WorkspaceInputProps {
   /** Project glyph rendered as part of the empty placeholder. */
   newChatProjectIcon?: React.ReactNode;
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
-  layout?: "default" | "centered" | "browser";
-  browserChatMode?: BrowserChatMode;
-  onBrowserFocus?: () => void;
-  browserAutoFocus?: boolean;
-  /** Selected run activity shown in the compact browser composer while idle. */
-  browserStatusPlaceholder?: string | null;
+  layout?: "default" | "centered" | "floating";
+  floatingChatMode?: FloatingChatMode;
+  onFloatingFocus?: () => void;
+  floatingAutoFocus?: boolean;
+  /** Selected run activity shown in the compact floating composer while idle. */
+  floatingStatusPlaceholder?: string | null;
 }
 
 export function WorkspaceInput({
@@ -203,17 +203,17 @@ export function WorkspaceInput({
   newChatProjectName,
   newChatProjectIcon,
   layout = "default",
-  browserChatMode,
-  onBrowserFocus,
-  browserAutoFocus = false,
-  browserStatusPlaceholder,
+  floatingChatMode,
+  onFloatingFocus,
+  floatingAutoFocus = false,
+  floatingStatusPlaceholder,
 }: WorkspaceInputProps) {
   const inputRef = useRef<RichInputFormHandle>(null);
   useEffect(() => {
-    if (layout !== "browser" || !browserAutoFocus) return;
+    if (layout !== "floating" || !floatingAutoFocus) return;
     const frame = requestAnimationFrame(() => inputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [layout, browserAutoFocus]);
+  }, [layout, floatingAutoFocus]);
   const unifiedContextDropdownRef = useRef<HTMLDivElement>(null);
   const pluginsButtonRef = useRef<HTMLButtonElement>(null);
   const {
@@ -269,7 +269,7 @@ export function WorkspaceInput({
     workspacePath,
   );
 
-  const contextUsage = useContextUsage(layout === "browser" ? null : (activeRun?.id ?? null));
+  const contextUsage = useContextUsage(layout === "floating" ? null : (activeRun?.id ?? null));
 
   // Preflight auth probe: catches "signed out entirely" before the first run
   // is even sent. Refresh-token failures can't be predicted from local state —
@@ -665,14 +665,14 @@ export function WorkspaceInput({
 
   const sendTargetDropdownRef = useRef<HTMLDivElement>(null);
   const [targetMenuOpen, setTargetMenuOpen] = useState(false);
-  const previousBrowserChatMode = useRef(browserChatMode);
+  const previousFloatingChatMode = useRef(floatingChatMode);
   useLayoutEffect(() => {
-    const previousMode = previousBrowserChatMode.current;
-    previousBrowserChatMode.current = browserChatMode;
-    if (layout !== "browser" || previousMode === browserChatMode) return;
+    const previousMode = previousFloatingChatMode.current;
+    previousFloatingChatMode.current = floatingChatMode;
+    if (layout !== "floating" || previousMode === floatingChatMode) return;
     updateUnifiedMenu({ visible: false, filter: "" });
     setTargetMenuOpen(false);
-  }, [browserChatMode, layout]);
+  }, [floatingChatMode, layout]);
   useClickOutside(sendTargetDropdownRef, () => {
     if (targetMenuOpen) setTargetMenuOpen(false);
   });
@@ -802,8 +802,8 @@ export function WorkspaceInput({
     composerPlaceholder,
     newChatProjectName,
   ]);
-  const browserRunStatus = layout === "browser" && !isFileDragOver
-    ? browserStatusPlaceholder
+  const floatingRunStatus = layout === "floating" && !isFileDragOver
+    ? floatingStatusPlaceholder
     : null;
 
   //Copilot related TODO:
@@ -825,7 +825,7 @@ export function WorkspaceInput({
 
   const toolbar = (
     <InputToolbar
-      browserChatMode={browserChatMode}
+      floatingChatMode={floatingChatMode}
       variant={providerVariant}
       isLoading={isLoading}
       onSubmit={handleSubmit}
@@ -859,7 +859,7 @@ export function WorkspaceInput({
       uploadedFiles={uploadedFiles}
       onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
       disabled={!!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
-      layout={layout === "browser" ? "browser" : "default"}
+      layout={layout === "floating" ? "floating" : "default"}
     />
   );
 
@@ -896,14 +896,14 @@ export function WorkspaceInput({
 
       <div
         className={`relative mx-auto flex w-full max-w-210 flex-col cursor-pointer transition-all
-        ${layout === "browser"
+        ${layout === "floating"
           ? "rounded-[28px] text-primary-950 dark:text-primary-50"
           : "rounded-[28px] glass-surface pb-2"}
         ${layout === "default" ? "mb-4" : ""}
         ${isFileDragOver ? "ring-2 ring-primary/60 ring-offset-2 ring-offset-background" : ""}`}
         onFocusCapture={(event) => {
-          if (layout === "browser" && event.target instanceof HTMLElement && event.target.getAttribute("role") === "textbox") {
-            onBrowserFocus?.();
+          if (layout === "floating" && event.target instanceof HTMLElement && event.target.getAttribute("role") === "textbox") {
+            onFloatingFocus?.();
           }
         }}
         onDragEnter={handleWrapperDragEnter}
@@ -911,7 +911,7 @@ export function WorkspaceInput({
         onDragOver={handleWrapperDragOver}
         onDrop={handleWrapperDrop}
       >
-        {layout !== "browser" && contextUsage && (
+        {layout !== "floating" && contextUsage && (
           <div className="absolute left-full bottom-2.5 ml-3 z-10">
             <ContextUsageRing usage={contextUsage} />
           </div>
@@ -997,15 +997,15 @@ export function WorkspaceInput({
             skillChipMap={skillChipMap}
             fileChipMap={fileChipMap}
             codeChipMap={codeChipMap}
-            placeholder={browserRunStatus || inputPlaceholder}
-            placeholderIcon={browserRunStatus
+            placeholder={floatingRunStatus || inputPlaceholder}
+            placeholderIcon={floatingRunStatus
               ? <AsciiSpinner
                   variant={providerVariant}
                   kind={activeRun?.status === "queued" ? "circle" : "square"}
                 />
               : newChatProjectName ? newChatProjectIcon : undefined}
-            focusShortcutLabel={layout === "browser" ? undefined : focusComposerShortcut}
-            compact={layout === "browser"}
+            focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
+            compact={layout === "floating"}
           />
           <UnifiedContextDropdown
             isOpen={unifiedMenu.visible}
@@ -1027,9 +1027,9 @@ export function WorkspaceInput({
             dropdownRef={unifiedContextDropdownRef}
             triggerRef={pluginsButtonRef}
           />
-          {layout === "browser" && toolbar}
+          {layout === "floating" && toolbar}
         </div>
-        {layout !== "browser" && toolbar}
+        {layout !== "floating" && toolbar}
       </div>
     </>
   );

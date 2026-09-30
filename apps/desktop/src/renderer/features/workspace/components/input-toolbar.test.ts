@@ -15,12 +15,12 @@ vi.mock("@/hooks/use-mode-config", () => ({
 
 import { InputToolbar } from "./input-toolbar";
 
-describe("browser composer controls", () => {
+describe("floating composer controls", () => {
   it("keeps attachment, model and effort, permissions, and send in one row", () => {
     const onSubmit = vi.fn();
     const props: Parameters<typeof InputToolbar>[0] = {
       variant: "codex",
-      layout: "browser",
+      layout: "floating",
       isLoading: false,
       onSubmit,
       onGoalChange: vi.fn(),
@@ -74,11 +74,11 @@ describe("browser composer controls", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
-  it("closes browser menus and the effort submenu when focus mode changes", () => {
+  it("closes floating composer menus and the effort submenu when focus mode changes", () => {
     const props: Parameters<typeof InputToolbar>[0] = {
       variant: "codex",
-      layout: "browser",
-      browserChatMode: "details",
+      layout: "floating",
+      floatingChatMode: "details",
       isLoading: false,
       onSubmit: vi.fn(),
       onGoalChange: vi.fn(),
@@ -111,7 +111,7 @@ describe("browser composer controls", () => {
     fireEvent.click(permission);
     expect(screen.getAllByRole("menu").length).toBeGreaterThanOrEqual(3);
 
-    rerender(createElement(InputToolbar, { ...props, browserChatMode: "input" }));
+    rerender(createElement(InputToolbar, { ...props, floatingChatMode: "input" }));
     expect(screen.queryAllByRole("menu")).toHaveLength(0);
     expect(model.getAttribute("aria-expanded")).toBe("false");
     expect(permission.getAttribute("aria-expanded")).toBe("false");
@@ -121,7 +121,7 @@ describe("browser composer controls", () => {
     expect(screen.getByRole("menu", { name: "Model selection" })).toBeTruthy();
     expect(screen.queryByRole("menu", { name: /effort level/i })).toBeNull();
 
-    rerender(createElement(InputToolbar, { ...props, browserChatMode: "icon" }));
+    rerender(createElement(InputToolbar, { ...props, floatingChatMode: "icon" }));
     expect(screen.queryAllByRole("menu")).toHaveLength(0);
   });
 });

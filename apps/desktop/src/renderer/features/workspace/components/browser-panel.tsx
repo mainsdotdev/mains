@@ -1431,7 +1431,7 @@ export function BrowserPanel() {
       aria-label="Embedded browser"
       onPointerDownCapture={(event) => {
         if (!isExpanded || chatMode !== "details") return;
-        if ((event.target as Element).closest("[data-browser-chat-surface]")) return;
+        if ((event.target as Element).closest("[data-floating-chat-surface]")) return;
         setChatMode("input");
       }}
     >

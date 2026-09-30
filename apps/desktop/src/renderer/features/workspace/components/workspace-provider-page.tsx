@@ -47,7 +47,8 @@ import {
   isExitPlanApproval,
   respondToExitPlanApproval,
 } from "@/features/workspace/lib/plan-approval";
-import { BrowserChatOverlay, browserChatRunStatus } from "./browser-chat-overlay";
+import { FloatingChatOverlay } from "./floating-chat-overlay";
+import { floatingChatRunStatus } from "../lib/floating-chat-run-status";
 import { store } from "@/lib/redux";
 import { baseApi } from "@/lib/redux/api/baseApi";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
@@ -513,21 +514,24 @@ export function WorkspaceProviderPage({
       newChatProjectIcon={newChatProject ? (
         <ProjectIcon icon={newChatProject.icon} projectName={newChatProject.name} />
       ) : undefined}
-      layout="browser"
-      browserChatMode={browserPanel.chatMode}
-      browserStatusPlaceholder={browserPanel.chatMode === "input"
-        ? browserChatRunStatus(ws.currentEvents, browserSelectedRun, browserStatusNowMs)
+      layout="floating"
+      floatingChatMode={browserPanel.chatMode}
+      floatingStatusPlaceholder={browserPanel.chatMode === "input"
+        ? floatingChatRunStatus(ws.currentEvents, browserSelectedRun, browserStatusNowMs)
         : null}
-      browserAutoFocus={browserPanel.chatMode === "details"}
-      onBrowserFocus={() => browserPanel.setChatMode("details")}
+      floatingAutoFocus={browserPanel.chatMode === "details"}
+      onFloatingFocus={() => browserPanel.setChatMode("details")}
     />
   ) : null;
 
   const browserChat = browserPanel.isExpanded && browserPanel.chatHost &&
     (browserChatOnly || !browserPanel.nativeOverlay)
     ? createPortal(
-        <BrowserChatOverlay
-          run={browserSelectedRun}
+        <FloatingChatOverlay
+          title={browserSelectedRun?.title?.trim() || browserSelectedRun?.goal?.trim() || "New chat"}
+          iconTooltip={browserSelectedRun?.title?.trim() || "New run"}
+          activity={browserSelectedRun?.status === "running" || browserSelectedRun?.status === "queued"
+            ? browserSelectedRun.status : null}
           mode={browserPanel.chatMode}
           onShowDetails={() => browserPanel.setChatMode("details")}
           onMinimize={() => browserPanel.setChatMode("icon")}
@@ -553,7 +557,7 @@ export function WorkspaceProviderPage({
                   onApplyPlan={handleApplyPlan}
                   onDismissPlan={handleDismissPlan}
                   hasPendingPlanApproval={!!currentPlanApproval}
-                  browserChat
+                  floatingChat
                 />
               </div>
               {currentApproval && !currentPlanApproval && (
@@ -578,7 +582,7 @@ export function WorkspaceProviderPage({
               )}
             </>
           )}
-        </BrowserChatOverlay>,
+        </FloatingChatOverlay>,
         browserPanel.chatHost,
       )
     : null;

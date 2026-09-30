@@ -53,10 +53,10 @@ vi.mock("@/features/workspace/hooks", () => ({
 vi.mock("@/features/workspace/components", () => ({
   WorkspaceEmptyState: () => createElement("div", { "data-testid": "empty" }),
   WorkspaceEvents: () => createElement("div", { "data-testid": "events" }),
-  WorkspaceInput: ({ layout, browserStatusPlaceholder }: { layout?: string; browserStatusPlaceholder?: string | null }) =>
+  WorkspaceInput: ({ layout, floatingStatusPlaceholder }: { layout?: string; floatingStatusPlaceholder?: string | null }) =>
     createElement("div", {
-      "data-testid": layout === "centered" ? "centered-input" : layout === "browser" ? "browser-input" : "pinned-input",
-      "data-status-placeholder": browserStatusPlaceholder ?? "",
+      "data-testid": layout === "centered" ? "centered-input" : layout === "floating" ? "browser-input" : "pinned-input",
+      "data-status-placeholder": floatingStatusPlaceholder ?? "",
     }),
   WorkspaceTabs: () => createElement("div", { "data-testid": "tabs" }),
   TerminalSection: () => null,

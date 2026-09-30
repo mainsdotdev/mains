@@ -10,47 +10,7 @@ import {
 } from "motion/react";
 import { AsciiSpinner, Button } from "@/components/ui";
 import { Chat, Minimize } from "@/components/ui/icons";
-import type { BrowserChatMode } from "@/hooks/use-browser-panel";
-import { formatRunElapsed, lastActivityLine } from "../lib/background-runs";
-import type { Run, RunEvent } from "../types";
-
-function latestRunActivity(events: RunEvent[], liveOnly = false): string | null {
-  for (let i = events.length - 1; i >= 0; i--) {
-    const event = events[i];
-    if (liveOnly && event.metadata?.streaming !== true) continue;
-    if (event.metadata?.isFromSubagent || !event.content.trim()) continue;
-    const kind = event.metadata?.kind;
-    if (
-      event.type === "artifact" &&
-      (kind === "thinking" || kind === "response" || kind === "text" || kind === "report")
-    ) {
-      const line = lastActivityLine(event.content);
-      if (line) return line.replace(/\s+/g, " ");
-    }
-    if (event.type === "log" && event.content.startsWith("[thinking] ")) {
-      const line = lastActivityLine(event.content.slice("[thinking] ".length));
-      if (line) return line.replace(/\s+/g, " ");
-    }
-  }
-  return null;
-}
-
-/** The compact composer shows the selected run's progress while it is active. */
-export function browserChatRunStatus(
-  events: RunEvent[],
-  run: Run | null,
-  nowMs: number,
-): string | null {
-  if (run?.status !== "running" && run?.status !== "queued") return null;
-  if (run.status === "queued") {
-    return `Queued · ${run.title?.trim() || run.goal?.trim() || "Waiting to start"}`;
-  }
-  const elapsed = formatRunElapsed(run, nowMs);
-  // Older transcript rows can belong to a previous turn. The compact bar
-  // mirrors the background card's live activity line instead.
-  const activity = latestRunActivity(events, true);
-  return `Working for ${elapsed}${activity ? ` · ${activity}` : ""}`;
-}
+import type { FloatingChatMode } from "../../../../shared/floating-chat";
 
 const CHAT_BAR_SIZE = 48;
 const CHAT_WIDTH = 540;
@@ -68,9 +28,9 @@ const VERTICAL_TRANSITION = {
   ease: "linear" as const,
 };
 
-export function browserChatTransition(
-  from: BrowserChatMode,
-  to: BrowserChatMode,
+export function floatingChatTransition(
+  from: FloatingChatMode,
+  to: FloatingChatMode,
   reduceMotion: boolean,
 ) {
   if (reduceMotion) return { duration: 0 };
@@ -84,8 +44,8 @@ export function browserChatTransition(
 }
 
 /** All non-icon states share a width so the composer grows straight upward. */
-export function browserChatSize(
-  mode: BrowserChatMode,
+export function floatingChatSize(
+  mode: FloatingChatMode,
   stage: { width: number; height: number },
   composerHeight = CHAT_BAR_SIZE,
 ): { width: number; height: number } {
@@ -117,9 +77,12 @@ export function browserChatSize(
   };
 }
 
-interface BrowserChatOverlayProps {
-  run: Run | null;
-  mode: BrowserChatMode;
+interface FloatingChatOverlayProps {
+  /** The host owns chat/run selection; this surface only displays its title and activity. */
+  title?: string;
+  iconTooltip?: string;
+  activity?: "running" | "queued" | null;
+  mode: FloatingChatMode;
   onShowDetails: () => void;
   onMinimize: () => void;
   onComposerHeightChange?: (height: number) => void;
@@ -127,15 +90,18 @@ interface BrowserChatOverlayProps {
   children?: ReactNode;
 }
 
-export function BrowserChatOverlay({
-  run,
+/** Host supplies chat content and controls; this surface owns its layout and transitions. */
+export function FloatingChatOverlay({
+  title = "New chat",
+  iconTooltip,
+  activity = null,
   mode,
   onShowDetails,
   onMinimize,
   onComposerHeightChange,
   composer,
   children,
-}: BrowserChatOverlayProps) {
+}: FloatingChatOverlayProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const [composerHeight, setComposerHeight] = useState(CHAT_BAR_SIZE);
@@ -150,7 +116,7 @@ export function BrowserChatOverlay({
         : window.innerHeight,
   }));
   const reduceMotion = useReducedMotion();
-  const initialSize = browserChatSize(mode, stageSize, composerHeight);
+  const initialSize = floatingChatSize(mode, stageSize, composerHeight);
   const surfaceWidth = useMotionValue(initialSize.width);
   const surfaceHeight = useMotionValue(initialSize.height);
   const surfaceRadius = useMotionValue(mode === "icon" ? 24 : 28);
@@ -173,7 +139,7 @@ export function BrowserChatOverlay({
     ) return;
     lastVisualTarget.current = { mode, ...stageSize, composerHeight, reduceMotion };
 
-    const size = browserChatSize(mode, stageSize, composerHeight);
+    const size = floatingChatSize(mode, stageSize, composerHeight);
     const from = {
       width: surfaceWidth.get(),
       height: surfaceHeight.get(),
@@ -229,7 +195,7 @@ export function BrowserChatOverlay({
     }
     const transition = previous.mode === mode
       ? { type: "tween" as const, duration: 0.18, ease: [0.22, 1, 0.36, 1] as const }
-      : browserChatTransition(previous.mode, mode, false);
+      : floatingChatTransition(previous.mode, mode, false);
     const animation = animate(0, 1, { ...transition, onUpdate: frame });
     void animation.then(() => {
       finish();
@@ -289,17 +255,15 @@ export function BrowserChatOverlay({
     if (mode !== "icon") onComposerHeightChange?.(composerHeight);
   }, [composerHeight, mode, onComposerHeightChange]);
 
-  const title = run?.title?.trim() || run?.goal?.trim() || "New chat";
-  const runIsActive = run?.status === "running" || run?.status === "queued";
-  const fullWidth = browserChatSize("details", stageSize, composerHeight).width;
+  const fullWidth = floatingChatSize("details", stageSize, composerHeight).width;
 
   return (
     <LazyMotion features={domAnimation}>
       <MotionConfig reducedMotion="user">
         <m.div
           ref={surfaceRef}
-          data-testid="browser-chat-surface"
-          data-browser-chat-surface=""
+          data-testid="floating-chat-surface"
+          data-floating-chat-surface=""
           data-state={mode}
           role={mode === "details" ? "region" : undefined}
           aria-label={mode === "details" ? "Selected chat" : undefined}
@@ -346,7 +310,7 @@ export function BrowserChatOverlay({
               className="flex min-h-0 flex-1 flex-col"
               style={{ paddingBottom: animatedComposerHeight }}
             >
-              {run ? children : <div className="min-h-0 flex-1" />}
+              {children}
             </m.div>
           </m.div>
           <m.div
@@ -384,14 +348,14 @@ export function BrowserChatOverlay({
               }}
               aria-label="Show chat"
               tooltipPosition="top-left"
-              tooltip={run?.title?.trim() || "New run"}
+              tooltip={iconTooltip || title}
               tabIndex={mode === "icon" ? 0 : -1}
               className="flex size-full items-center justify-center rounded-full text-primary-800 hover:bg-primary-100 dark:text-primary-100 dark:hover:bg-primary-800"
             >
-              {runIsActive ? (
+              {activity ? (
                 <AsciiSpinner
                   variant="inherit"
-                  kind={run.status === "queued" ? "circle" : "square"}
+                  kind={activity === "queued" ? "circle" : "square"}
                   className="size-4"
                 />
               ) : (

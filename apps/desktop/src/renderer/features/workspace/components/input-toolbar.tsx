@@ -21,7 +21,7 @@ import {
 } from "@/components/ui";
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import { useClickOutside } from "@/hooks/use-click-outside";
-import type { BrowserChatMode } from "@/hooks/use-browser-panel";
+import type { FloatingChatMode } from "../../../../shared/floating-chat";
 
 type EffortLevel = "minimal" | "low" | "medium" | "high" | "max" | "xhigh";
 
@@ -74,8 +74,8 @@ interface InputToolbarProps {
   onUploadedFilesChange: (files: UploadedFile[]) => void;
   // Disable send
   disabled?: boolean;
-  layout?: "default" | "browser";
-  browserChatMode?: BrowserChatMode;
+  layout?: "default" | "floating";
+  floatingChatMode?: FloatingChatMode;
 }
 
 export function InputToolbar({
@@ -113,7 +113,7 @@ export function InputToolbar({
   onUploadedFilesChange,
   disabled,
   layout = "default",
-  browserChatMode,
+  floatingChatMode,
 }: InputToolbarProps) {
   const isMobile = useIsMobile();
   const modeConfig = useModeConfig();
@@ -124,16 +124,16 @@ export function InputToolbar({
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const fileDropdownRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const previousBrowserChatMode = useRef(browserChatMode);
+  const previousFloatingChatMode = useRef(floatingChatMode);
 
   useLayoutEffect(() => {
-    const previousMode = previousBrowserChatMode.current;
-    previousBrowserChatMode.current = browserChatMode;
-    if (layout !== "browser" || previousMode === browserChatMode) return;
+    const previousMode = previousFloatingChatMode.current;
+    previousFloatingChatMode.current = floatingChatMode;
+    if (layout !== "floating" || previousMode === floatingChatMode) return;
     setShowModelDropdown(false);
     setShowFileDropdown(false);
     setShowPermissionDropdown(false);
-  }, [browserChatMode, layout]);
+  }, [floatingChatMode, layout]);
 
   const { isRecording, toggle: toggleDictation } = useSpeechRecognition(
     (value) => onGoalChange(value),
@@ -187,7 +187,7 @@ export function InputToolbar({
     [uploadedFiles, onUploadedFilesChange],
   );
 
-  if (layout === "browser") {
+  if (layout === "floating") {
     return (
       <div className="pointer-events-none absolute inset-x-1.5 bottom-1.5 flex items-center justify-between">
         <div className="pointer-events-auto flex items-center">

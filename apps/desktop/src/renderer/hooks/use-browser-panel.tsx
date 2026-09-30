@@ -10,6 +10,7 @@ import { useLocation } from "react-router-dom";
 import { shouldHideRightPanel } from "@/lib/layout";
 import { isElectron } from "@/lib/platform";
 import type { BrowserChatContext } from "../../shared/browser-chat-window";
+import type { FloatingChatMode } from "../../shared/floating-chat";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import {
   setBrowserPanelOpen,
@@ -20,12 +21,10 @@ import {
   setSessionPanelOpen,
 } from "@/lib/redux/slices/appSettingsSlice";
 
-export type BrowserChatMode = "details" | "input" | "icon";
-
 interface BrowserPanelContextValue {
   isOpen: boolean;
   isExpanded: boolean;
-  chatMode: BrowserChatMode;
+  chatMode: FloatingChatMode;
   chatVisible: boolean;
   chatHost: HTMLDivElement | null;
   nativeOverlay: boolean;
@@ -36,7 +35,7 @@ interface BrowserPanelContextValue {
   close: () => void;
   toggle: () => void;
   toggleExpanded: () => void;
-  setChatMode: (mode: BrowserChatMode) => void;
+  setChatMode: (mode: FloatingChatMode) => void;
   setChatVisible: (visible: boolean) => void;
   setChatHost: (node: HTMLDivElement | null) => void;
 }
@@ -51,7 +50,7 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
   const ownerReady = useAppSelector((state) => state.workspace.composerContextReady);
   const { pathname } = useLocation();
   const isOpen = persistedOpen && ownerReady && !shouldHideRightPanel(pathname);
-  const [chatMode, setChatMode] = useState<BrowserChatMode>("input");
+  const [chatMode, setChatMode] = useState<FloatingChatMode>("input");
   const [chatVisible, setChatVisible] = useState(true);
   const [chatHost, setChatHost] = useState<HTMLDivElement | null>(null);
 
@@ -172,7 +171,7 @@ export function BrowserChatWindowProvider({
   children: ReactNode;
 }) {
   const [chatHost, setChatHost] = useState<HTMLDivElement | null>(null);
-  const setChatMode = useCallback((next: BrowserChatMode) => {
+  const setChatMode = useCallback((next: FloatingChatMode) => {
     void window.api.browserChat.postAction({ type: "mode", mode: next });
   }, []);
   const value = useMemo<BrowserPanelContextValue>(() => ({
