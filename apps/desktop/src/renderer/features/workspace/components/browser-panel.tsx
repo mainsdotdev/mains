@@ -54,6 +54,7 @@ import {
 import { BrowserDeviceToolbar } from "./browser-device-toolbar";
 import { BrowserDeviceStage } from "./browser-device-stage";
 import { BrowserFindBar } from "./browser-find-bar";
+import { BrowserNewTabPage } from "./browser-new-tab-page";
 import { browserChatWindowGeometry } from "../lib/browser-chat-window-geometry";
 import {
   BrowserDownloadsPanel,
@@ -1858,14 +1859,7 @@ export function BrowserPanel() {
         onFrameChange={syncBounds}
       >
         {isBlank && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-8 text-center pointer-events-none">
-            <Text as="div" size="sm" tone="secondary">
-              A fresh tab, ready when you are.
-            </Text>
-            <Text as="div" size="xxs" tone="subtle">
-              Search the web or enter a local development URL.
-            </Text>
-          </div>
+          <BrowserNewTabPage entries={historyEntries} onNavigate={navigate} />
         )}
         {chatPreviewName && (
           <img

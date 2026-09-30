@@ -97,6 +97,70 @@ describe("browserService — tabs by chat", () => {
     mount.mockRestore();
   });
 
+  it("keeps the native view hidden on blank tabs, including after an overlay closes", async () => {
+    await browserService.createTab();
+    const tab = browserService.tabs.get(browserService.activeTabId!)!;
+    const view = {
+      setVisible: vi.fn(),
+      setBounds: vi.fn(),
+      webContents: {
+        isDestroyed: () => false,
+        isLoading: () => false,
+        focus: vi.fn(),
+      },
+    };
+    tab.view = view as unknown as typeof tab.view;
+    browserService.host = {
+      isDestroyed: () => false,
+      contentView: { children: [view] },
+    } as unknown as typeof browserService.host;
+    browserService.visible = true;
+
+    await browserService._mountActiveView();
+    expect(view.setVisible).toHaveBeenLastCalledWith(false);
+    expect(view.webContents.focus).not.toHaveBeenCalled();
+
+    browserService.setVisible(true);
+    await Promise.resolve();
+    expect(browserService.visible).toBe(true);
+    expect(view.setVisible.mock.calls.every(([visible]) => !visible)).toBe(true);
+  });
+
+  it("shows a page opened from a blank tab and hides it when returning to blank", async () => {
+    await browserService.createTab();
+    const tab = browserService.tabs.get(browserService.activeTabId!)!;
+    let url = "about:blank";
+    const view = {
+      setVisible: vi.fn(),
+      webContents: {
+        isDestroyed: () => false,
+        getURL: () => url,
+        getTitle: () => "",
+        isLoading: () => false,
+        getZoomFactor: () => 1,
+        loadURL: vi.fn(async (next: string) => { url = next; }),
+        navigationHistory: {
+          canGoBack: () => false,
+          canGoForward: () => false,
+        },
+      },
+    };
+    tab.view = view as unknown as typeof tab.view;
+    browserService.visible = true;
+
+    await browserService.navigate("https://mains.dev/");
+    expect(view.setVisible).toHaveBeenLastCalledWith(true);
+    expect(tab.url).toBe("https://mains.dev/");
+
+    url = "about:blank";
+    browserService._syncRecord(tab);
+    expect(view.setVisible).toHaveBeenLastCalledWith(false);
+
+    browserService.visible = false;
+    await browserService.navigate("https://mains.dev/");
+    expect(view.setVisible).toHaveBeenLastCalledWith(false);
+  });
+
   it("restores the last active tab and URL for each chat after a restart", async () => {
     await browserService.setContext("chat-a");
     await browserService.createTab("https://example.com/a");

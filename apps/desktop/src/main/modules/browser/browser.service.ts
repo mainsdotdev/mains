@@ -1088,7 +1088,11 @@ export const browserService = {
   _syncRecord(record: BrowserTabRecord) {
     const contents = record.view?.webContents;
     if (!contents || contents.isDestroyed()) return;
+    const wasBlank = record.url === BLANK_URL;
     record.url = contents.getURL() || record.url || BLANK_URL;
+    if (wasBlank !== (record.url === BLANK_URL) && this.activeTabId === record.id) {
+      record.view?.setVisible(this.visible && record.url !== BLANK_URL);
+    }
     record.title =
       contents.getTitle() ||
       (record.url === BLANK_URL ? "New tab" : record.url);
@@ -1304,12 +1308,13 @@ export const browserService = {
       this.host.contentView.addChildView(view);
     }
     if (this.bounds) view.setBounds(this.bounds);
-    view.setVisible(true);
+    // The renderer owns the new-tab page, including its clickable history.
+    view.setVisible(record.url !== BLANK_URL);
     this._scheduleDeviceEmulation(record);
     void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
     // A focused floating chat is a separate child window. Remounting a tab or
     // restoring its visibility must not steal keyboard focus from its input.
-    if (BrowserWindow.getFocusedWindow() === this.host) {
+    if (record.url !== BLANK_URL && BrowserWindow.getFocusedWindow() === this.host) {
       view.webContents.focus();
     }
   },
@@ -2080,7 +2085,9 @@ export const browserService = {
   setVisible(visible: boolean): null {
     const record = this._activeTab();
     const view = record.view;
-    if (view && !view.webContents.isDestroyed()) view.setVisible(visible);
+    if (view && !view.webContents.isDestroyed()) {
+      view.setVisible(visible && record.url !== BLANK_URL);
+    }
     if (!visible) record.deviceEmulationQueue.cancel();
     this.visible = visible;
     if (visible) {
@@ -2106,6 +2113,9 @@ export const browserService = {
       : resolveBrowserInput(rawInput);
     record.url = url;
     if (url === BLANK_URL) record.title = "New tab";
+    if (this.activeTabId === record.id) {
+      view.setVisible(this.visible && url !== BLANK_URL);
+    }
     record.deviceEmulationQueue.beginNavigation();
     try {
       await view.webContents.loadURL(url);
