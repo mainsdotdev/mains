@@ -1,7 +1,8 @@
 import type { McpAppResourceMeta } from "./mcpApps.document";
 
 export interface ReadMcpAppResourcePayload {
-  runId: string;
+  runId?: string;
+  sessionId?: string;
   server: string;
   resourceUri: string;
   originCallId?: string;
@@ -16,7 +17,8 @@ export interface ReadMcpAppResourceResponse {
 }
 
 export interface CallMcpAppToolPayload {
-  runId: string;
+  runId?: string;
+  sessionId?: string;
   server: string;
   tool: string;
   arguments?: Record<string, unknown>;

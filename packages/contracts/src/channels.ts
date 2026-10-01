@@ -222,6 +222,9 @@ export const CHANNELS = {
     sign: "imageProxy:sign",
   },
   mcpApps: {
+    listEntrypoints: "mcpApps:listEntrypoints",
+    openExtension: "mcpApps:openExtension",
+    closeExtension: "mcpApps:closeExtension",
     callTool: "mcpApps:callTool",
     readResource: "mcpApps:readResource",
     sendMessage: "mcpApps:sendMessage",

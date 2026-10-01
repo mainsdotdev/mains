@@ -272,6 +272,14 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.listConnectors = driver.listConnectors.bind(driver);
   if (driver.startConnectorOAuth)
     adapter.startConnectorOAuth = driver.startConnectorOAuth.bind(driver);
+  if (driver.listMcpAppEntrypoints)
+    adapter.listMcpAppEntrypoints = driver.listMcpAppEntrypoints.bind(driver);
+  if (driver.openMcpAppSession)
+    adapter.openMcpAppSession = driver.openMcpAppSession.bind(driver);
+  if (driver.callMcpAppSessionTool)
+    adapter.callMcpAppSessionTool = driver.callMcpAppSessionTool.bind(driver);
+  if (driver.closeMcpAppSession)
+    adapter.closeMcpAppSession = driver.closeMcpAppSession.bind(driver);
   if (driver.readMcpAppResource)
     adapter.readMcpAppResource = driver.readMcpAppResource.bind(driver);
   if (driver.callMcpAppTool)

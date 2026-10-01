@@ -30,7 +30,7 @@ export interface McpAppToolMetadata {
   server: string;
   tool: string;
   resourceUri: string;
-  originCallId: string;
+  originCallId?: string;
   connectorId?: string;
   linkId?: string | null;
   appName?: string;
@@ -62,7 +62,11 @@ interface LoadedMcpAppResource {
 }
 
 interface McpAppDisplayProps {
-  runId: string;
+  runId?: string;
+  sessionId?: string;
+  presentation?: "page";
+  /** Host compatibility failures that apps can handle through their own fallback. */
+  unsupportedTools?: Readonly<Record<string, string>>;
   app: McpAppToolMetadata;
   input: Record<string, unknown> | null;
   output?: unknown;
@@ -107,11 +111,12 @@ function normalizeToolResult(value: unknown): CallToolResult {
 function hostContext(
   isDark: boolean,
   displayMode: McpAppDisplayMode,
+  isPage = false,
 ): McpUiHostContext {
   return {
     theme: isDark ? "dark" : "light",
     displayMode,
-    availableDisplayModes: HOST_DISPLAY_MODES,
+    availableDisplayModes: isPage ? ["fullscreen"] : HOST_DISPLAY_MODES,
     locale: navigator.language || "en",
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     userAgent: `Mains/${__APP_VERSION__}`,
@@ -152,12 +157,16 @@ function compatibilityOutput(result: CallToolResult): unknown {
 
 export function McpAppDisplay({
   runId,
+  sessionId,
+  presentation: pagePresentation,
+  unsupportedTools,
   app,
   input,
   output,
   title,
 }: McpAppDisplayProps) {
-  const resourceKey = `${runId}:${app.server}:${app.resourceUri}:${app.originCallId}`;
+  const isPage = pagePresentation === "page";
+  const resourceKey = `${sessionId ?? runId}:${app.server}:${app.resourceUri}:${app.originCallId ?? ""}`;
   const toolResult = useMemo(() => normalizeToolResult(output), [output]);
   const hasResult = output !== undefined && output !== null && output !== "";
   const isDark = useIsDarkMode();
@@ -207,9 +216,9 @@ export function McpAppDisplay({
   const presentation = presentationOverride?.key === resourceKey
     ? presentationOverride.mode
     : initialDisplayMode;
-  const isFullscreen = presentation === "fullscreen";
-  const isCollapsed = presentation === "collapsed";
-  const displayMode: McpAppDisplayMode = isFullscreen ? "fullscreen" : "inline";
+  const isFullscreen = !isPage && presentation === "fullscreen";
+  const isCollapsed = !isPage && presentation === "collapsed";
+  const displayMode: McpAppDisplayMode = isPage || isFullscreen ? "fullscreen" : "inline";
   const displayModeRef = useRef(displayMode);
   const appDisplayModesRef = useRef(appDisplayModes);
   const hasDeclaredDisplayModesRef = useRef(false);
@@ -228,8 +237,8 @@ export function McpAppDisplay({
   });
   useSuppressBrowserView(isFullscreen && !!resource);
   const widgetStateKey = useMemo(
-    () => `mcp-app-state:${runId}:${app.server}:${app.resourceUri}`,
-    [runId, app.server, app.resourceUri],
+    () => `mcp-app-state:${sessionId ?? runId}:${app.server}:${app.resourceUri}`,
+    [sessionId, runId, app.server, app.resourceUri],
   );
 
   useEffect(() => {
@@ -255,6 +264,7 @@ export function McpAppDisplay({
     void window.api.mcpApps
       .readResource({
         runId,
+        sessionId,
         server: app.server,
         resourceUri: app.resourceUri,
         originCallId: app.originCallId,
@@ -277,7 +287,7 @@ export function McpAppDisplay({
     return () => {
       cancelled = true;
     };
-  }, [resourceKey, runId, app.server, app.resourceUri, app.originCallId, app.connectorId, app.linkId]);
+  }, [resourceKey, runId, sessionId, app.server, app.resourceUri, app.originCallId, app.connectorId, app.linkId]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -294,8 +304,11 @@ export function McpAppDisplay({
       args?: Record<string, unknown>,
       meta?: Record<string, unknown>,
     ): Promise<CallToolResult> => {
+      const unsupported = unsupportedTools?.[tool] ?? unsupportedTools?.[tool.split(".").at(-1) ?? ""];
+      if (unsupported) return { isError: true, content: [{ type: "text", text: unsupported }] };
       const response = (await window.api.mcpApps.callTool({
         runId,
+        sessionId,
         server: app.server,
         tool,
         arguments: args,
@@ -306,6 +319,7 @@ export function McpAppDisplay({
     };
 
     const sendMessage = async (content: unknown) => {
+      if (!runId) throw new Error("Open this app in a conversation to send a message");
       const response = (await window.api.mcpApps.sendMessage({
         runId,
         content,
@@ -318,7 +332,8 @@ export function McpAppDisplay({
     const openLink = async (rawUrl: unknown) => {
       const url = externalHttpUrl(rawUrl);
       if (!url) return { isError: true };
-      await openBrowserUrl(url);
+      if (isPage) await window.api.shell.openExternal(url);
+      else await openBrowserUrl(url);
       return {};
     };
 
@@ -328,7 +343,7 @@ export function McpAppDisplay({
       {
         openLinks: {},
         serverTools: {},
-        message: { text: {} },
+        ...(runId ? { message: { text: {} } } : {}),
         updateModelContext: { text: {}, structuredContent: {} },
         sandbox: {
           csp: resource.meta.csp as McpUiResourceCsp | undefined,
@@ -340,9 +355,10 @@ export function McpAppDisplay({
           ...hostContext(
             latestIsDarkRef.current,
             displayModeRef.current,
+            isPage,
           ),
           toolInfo: {
-            id: app.originCallId,
+            id: app.originCallId ?? sessionId,
             tool: { name: app.tool, inputSchema: { type: "object" } },
           },
         },
@@ -363,6 +379,7 @@ export function McpAppDisplay({
       return {};
     };
     const requestDisplayMode = (requested: unknown): McpAppDisplayMode => {
+      if (isPage) return "fullscreen";
       if (
         (requested === "inline" || requested === "fullscreen") &&
         (appDisplayModesRef.current.includes(requested) ||
@@ -400,7 +417,7 @@ export function McpAppDisplay({
           setPresentationOverride({ key: resourceKey, mode: fallback });
         }
       }
-      bridge.setHostContext(hostContext(latestIsDarkRef.current, displayModeRef.current));
+      bridge.setHostContext(hostContext(latestIsDarkRef.current, displayModeRef.current, isPage));
       void bridge.sendToolInput({ arguments: latestInputRef.current });
       if (hasResultRef.current) {
         const result = latestResultRef.current;
@@ -560,6 +577,9 @@ export function McpAppDisplay({
     resourceKey,
     isCollapsed,
     runId,
+    sessionId,
+    isPage,
+    unsupportedTools,
     app.server,
     app.tool,
     app.originCallId,
@@ -591,7 +611,7 @@ export function McpAppDisplay({
     latestIsDarkRef.current = isDark;
     const updateHostContext = () => {
       if (initializedRef.current) {
-        bridgeRef.current?.setHostContext(hostContext(isDark, displayMode));
+        bridgeRef.current?.setHostContext(hostContext(isDark, displayMode, isPage));
       }
       iframeRef.current?.contentWindow?.postMessage(
         {
@@ -607,7 +627,7 @@ export function McpAppDisplay({
     updateHostContext();
     window.addEventListener("resize", updateHostContext);
     return () => window.removeEventListener("resize", updateHostContext);
-  }, [isDark, displayMode]);
+  }, [isDark, displayMode, isPage]);
 
   useEffect(() => {
     if (!isCollapsed) return;
@@ -623,7 +643,7 @@ export function McpAppDisplay({
     );
   }
 
-  if (resource && appDisplayModes.length === 0) {
+  if (resource && (appDisplayModes.length === 0 || (isPage && !appDisplayModes.includes("fullscreen")))) {
     return (
       <div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-700 dark:text-red-300">
         This app does not support a display mode available in Mains.
@@ -660,7 +680,9 @@ export function McpAppDisplay({
       aria-label={isFullscreen ? `${app.appName ?? title} interactive app` : undefined}
       tabIndex={isFullscreen ? -1 : undefined}
       onKeyDown={isFullscreen ? handleDialogKeyDown : undefined}
-      className={isFullscreen
+      className={isPage
+        ? "flex h-full min-h-0 flex-col overflow-hidden bg-primary dark:bg-primary-950"
+        : isFullscreen
         ? "fixed inset-0 z-(--z-modal) flex min-h-0 flex-col bg-white shadow-2xl outline-none dark:bg-primary-950"
         : `mt-2 min-h-28 overflow-hidden bg-primary-50/50 dark:bg-primary/5 ${
           resource?.meta.prefersBorder === false ? "rounded-lg" : "rounded-xl"
@@ -672,7 +694,7 @@ export function McpAppDisplay({
           Loading app…
         </div>
       )}
-      {resource && appDisplayModes.includes("fullscreen") && (
+      {!isPage && resource && appDisplayModes.includes("fullscreen") && (
         <div className={`flex shrink-0 items-center justify-between border-b border-primary-200/70 dark:border-primary-800/70 ${
           isFullscreen
             ? `h-14 pr-5 ${windowChrome && !isNativeFullscreen ? "pl-24" : "pl-5"}`
@@ -705,12 +727,13 @@ export function McpAppDisplay({
       )}
       <iframe
         ref={iframeRef}
+        src="mains-mcp-app://uninitialized/index.html"
         title={`${title} interactive app`}
         className={resource
-          ? `block w-full border-0 bg-transparent ${isFullscreen ? "min-h-0 flex-1" : ""}`
+          ? `block w-full border-0 bg-transparent ${isPage || isFullscreen ? "min-h-0 flex-1" : ""}`
           : "hidden"}
-        style={isFullscreen ? undefined : { height }}
-        sandbox="allow-scripts allow-forms"
+        style={isPage || isFullscreen ? undefined : { height }}
+        sandbox="allow-scripts allow-forms allow-same-origin"
         allow={allow || undefined}
         referrerPolicy="no-referrer"
       />

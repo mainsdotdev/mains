@@ -50,6 +50,7 @@ import { workspaceRepo } from "../../workspace/workspace.repo";
 import { adoptConfig, createLogger, resolveCatalogDefaultId } from "./adapter.shared";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import { CodexAppServer } from "./codex-app-server.client";
+import { createCodexMcpApps } from "./codex-mcp-apps";
 import {
   createCodexCapabilities,
   mapRateLimitSnapshot,
@@ -449,6 +450,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     getCliHealth: () => getCodexCliHealth(),
     logger: codexLogger,
   });
+  const mcpApps = createCodexMcpApps({
+    ensureServer: () => ensureServer(),
+    readInventory: capabilities.readMcpInventory,
+    listEntrypoints: capabilities.listMcpAppEntrypoints,
+  });
 
   /**
    * A persisted renderer selection can outlive the ordinary usage allowance.
@@ -685,6 +691,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         appServer = null;
       }
       mcpThreadResumePromises.clear();
+      mcpApps.clear();
       capabilities.onServerClosed();
       runCoordinator.handleServerClose();
     });
@@ -927,6 +934,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       runCoordinator.deleteRun(runId);
     },
 
+    listMcpAppEntrypoints: capabilities.listMcpAppEntrypoints,
+    openMcpAppSession: mcpApps.open,
+    callMcpAppSessionTool: mcpApps.callTool,
+    closeMcpAppSession: mcpApps.close,
+
     async readMcpAppResource(request) {
       const threadId = await findThreadIdForRun(request.runId);
       if (!threadId) {
@@ -1002,6 +1014,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     async shutdown(): Promise<void> {
       runCoordinator.shutdown();
       capabilities.shutdown();
+      mcpApps.clear();
 
       if (appServer) {
         await appServer.stop();

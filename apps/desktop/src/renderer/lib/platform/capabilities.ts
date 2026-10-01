@@ -31,6 +31,8 @@ export interface Capabilities {
   appshots: boolean;
   /** Interactive terminal (works over WS too). */
   terminal: boolean;
+  /** Native sandbox host for plugin-provided app extensions. */
+  mcpAppExtensions: boolean;
 }
 
 const ELECTRON: Capabilities = {
@@ -46,6 +48,7 @@ const ELECTRON: Capabilities = {
   nativeNotifications: true,
   appshots: true,
   terminal: true,
+  mcpAppExtensions: true,
 };
 
 const WEB: Capabilities = {
@@ -61,6 +64,7 @@ const WEB: Capabilities = {
   nativeNotifications: false,
   appshots: false,
   terminal: true, // runs on the backend, streamed over WS
+  mcpAppExtensions: false,
 };
 
 export const capabilities: Capabilities = isElectron ? ELECTRON : WEB;

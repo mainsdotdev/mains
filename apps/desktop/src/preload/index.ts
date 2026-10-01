@@ -1025,6 +1025,12 @@ const api = {
     sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.visualizations.sign, absPath),
   },
   mcpApps: {
+    listEntrypoints: (payload: { providerId: string }) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.listEntrypoints, payload),
+    openExtension: (payload: { providerId: string; entrypointId: string }) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.openExtension, payload),
+    closeExtension: (payload: { sessionId: string }) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.closeExtension, payload),
     readResource: (payload: unknown) =>
       ipcRenderer.invoke(CHANNELS.mcpApps.readResource, payload),
     callTool: (payload: unknown) =>

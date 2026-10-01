@@ -25,6 +25,8 @@ import {
 } from "./adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexAppServerResult } from "./codex-app-server-protocol/rpc";
+import type { McpServerStatus } from "./codex-app-server-protocol/generated/v2/McpServerStatus";
+import { discoverMcpAppEntrypoints, installedMcpAppEntrypoints, type McpAppPluginSource } from "./codex-mcp-apps";
 
 interface CodexCapabilitiesOptions {
   /**
@@ -606,6 +608,7 @@ export function createCodexCapabilities(
   let installedPluginsInFlight: Promise<PluginListResponse> | null = null;
   let pluginCapabilityPromise: Promise<void> | null = null;
   let pluginCacheGeneration = 0;
+  const mcpAppPluginSources = new Map<string, Promise<Pick<McpAppPluginSource, "connectorIds" | "mcpServers">>>();
 
   // ── Session install overlay ──────────────────────────────────
   // `plugin/installed` is answered from an install registry the app-server
@@ -826,6 +829,7 @@ export function createCodexCapabilities(
     installedPluginsCache = null;
     pluginCatalogInFlight = null;
     installedPluginsInFlight = null;
+    mcpAppPluginSources.clear();
   }
 
   async function listModels(): Promise<ModelInfo[]> {
@@ -1023,8 +1027,9 @@ export function createCodexCapabilities(
     return request;
   }
 
-  async function listInstalledPlugins(): Promise<PluginListResponse> {
+  async function listInstalledPlugins(forceRefresh = false): Promise<PluginListResponse> {
     if (
+      !forceRefresh &&
       installedPluginsCache &&
       Date.now() - installedPluginsCache.fetchedAt <
         INSTALLED_PLUGINS_TTL_MS
@@ -1151,7 +1156,7 @@ export function createCodexCapabilities(
     return { ...detail, apps, mcpServerStatuses };
   }
 
-  async function readPlugin(
+  async function readPluginMetadata(
     pluginName: string,
     marketplacePath: string,
   ): Promise<PluginDetail> {
@@ -1177,10 +1182,14 @@ export function createCodexCapabilities(
       params,
       30000,
     );
-    const detail = mapPluginDetail(
+    return mapPluginDetail(
       result.plugin as unknown as Record<string, unknown>,
     );
-    return enrichPluginConnectorState(server, detail);
+  }
+
+  async function readPlugin(pluginName: string, marketplacePath: string): Promise<PluginDetail> {
+    const server = await options.ensureServer();
+    return enrichPluginConnectorState(server, await readPluginMetadata(pluginName, marketplacePath));
   }
 
   async function installPlugin(
@@ -1487,6 +1496,63 @@ export function createCodexCapabilities(
     });
   }
 
+  async function readMcpInventory(): Promise<McpServerStatus[]> {
+    const server = await options.ensureServer();
+    const inventory: McpServerStatus[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: CodexAppServerResult<"mcpServerStatus/list"> =
+        await server.sendRequest("mcpServerStatus/list", {
+          cursor, limit: 100, detail: "toolsAndAuthOnly",
+        });
+      inventory.push(...page.data);
+      cursor = page.nextCursor;
+    } while (cursor);
+    return inventory;
+  }
+
+  async function listMcpAppEntrypoints() {
+    const entries = discoverMcpAppEntrypoints(await readMcpInventory());
+    if (!entries.length) return [];
+    const installed = await listInstalledPlugins(true);
+    if (installed.remoteSyncError) throw new Error(installed.remoteSyncError);
+    const plugins = installed.marketplaces.flatMap((marketplace) => marketplace.plugins
+      .filter((plugin) => plugin.installed && plugin.enabled)
+      .map((plugin) => ({ plugin, marketplacePath: marketplace.path })));
+    const sources: McpAppPluginSource[] = plugins.map(({ plugin }) => ({ plugin, connectorIds: [], mcpServers: [] }));
+    const sourceById = new Map(sources.map((source) => [source.plugin.id, source]));
+    const readSources = async (candidates: typeof plugins) => {
+      const results = await Promise.allSettled(candidates.map(async ({ plugin, marketplacePath }) => {
+        let request = mcpAppPluginSources.get(plugin.id);
+        if (!request) {
+          request = readPluginMetadata(marketplacePath ? plugin.name : plugin.id, marketplacePath).then((detail) => ({
+            connectorIds: detail.apps.map((app) => app.id), mcpServers: detail.mcpServers,
+          }));
+          mcpAppPluginSources.set(plugin.id, request);
+          void request.catch(() => {
+            if (mcpAppPluginSources.get(plugin.id) === request) mcpAppPluginSources.delete(plugin.id);
+          });
+        }
+        Object.assign(sourceById.get(plugin.id)!, await request);
+      }));
+      for (const result of results) {
+        if (result.status === "rejected") logger.warn("Failed to discover plugin app ownership:", result.reason);
+      }
+    };
+    // Names only prioritize metadata reads. Returned entries require exact ownership.
+    const normalize = (value: string) => value.toLowerCase().replace(/[\s._-]+/g, "");
+    const unowned = entries.filter((entry) => !entry.pluginId);
+    const preferred = plugins.filter(({ plugin }) => unowned.some((entry) =>
+      normalize(entry.name) === normalize(plugin.interface?.displayName ?? plugin.name)));
+    await readSources(preferred);
+    const matched = new Set(installedMcpAppEntrypoints(entries, sources).map((entry) => entry.id));
+    if (unowned.some((entry) => !matched.has(entry.id))) {
+      const readIds = new Set(preferred.map(({ plugin }) => plugin.id));
+      await readSources(plugins.filter(({ plugin }) => !readIds.has(plugin.id)));
+    }
+    return installedMcpAppEntrypoints(entries, sources);
+  }
+
   return {
     listModels,
     getAccountInfo,
@@ -1501,8 +1567,11 @@ export function createCodexCapabilities(
     setPluginEnabled,
     listConnectors,
     startConnectorOAuth,
+    readMcpInventory,
+    listMcpAppEntrypoints,
     onServerClosed(): void {
       pluginCapabilityPromise = null;
+      invalidatePluginCaches();
     },
     shutdown(): void {
       pluginCapabilityPromise = null;

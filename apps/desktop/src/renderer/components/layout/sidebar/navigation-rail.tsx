@@ -1,4 +1,5 @@
 import type { CSSProperties, MouseEvent } from "react";
+import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import {
@@ -19,6 +20,9 @@ import { isSettingsRoute, isWorkspaceRoute } from "@/lib/layout";
 import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 import SpaceSelector from "./space-selector";
+import { useMcpAppExtensions } from "@/hooks/use-mcp-app-extensions";
+import { mcpAppPath } from "@/lib/mcp-app-extensions";
+import { McpAppIcon } from "./mcp-app-icon";
 
 interface NavigationRailProps {
   showTasks: boolean;
@@ -56,7 +60,10 @@ export function NavigationRail({
   );
   const homeActive = isWorkspaceRoute(pathname);
   const settingsActive = isSettingsRoute(pathname);
-  const destinations = [
+  const { entries: appExtensions } = useMcpAppExtensions();
+  const destinations: Array<{
+    label: string; path: string; Icon: typeof Plugin; disabled?: boolean; app?: McpAppEntrypoint;
+  }> = [
     {
       label: "Plugins",
       path: "/plugins",
@@ -64,6 +71,7 @@ export function NavigationRail({
       disabled: !pluginsAvailable,
     },
     ...(showTasks ? [{ label: "Tasks", path: "/tasks", Icon: Task }] : []),
+    ...appExtensions.map((app) => ({ label: app.name, path: mcpAppPath(app), Icon: Plugin, app })),
     { label: "Pulse", path: "/pulse", Icon: Clock },
     { label: "Connect", path: "/relay", Icon: Relay },
   ];
@@ -85,7 +93,7 @@ export function NavigationRail({
       }
       aria-label="Primary navigation"
     >
-      <nav className="flex flex-col items-center gap-2" aria-label="Pages">
+      <nav className="flex min-h-0 flex-col items-center gap-2 overflow-y-auto" aria-label="Pages">
         <Button
           variant="bare"
           className={buttonClass(homeActive)}
@@ -108,7 +116,7 @@ export function NavigationRail({
         >
           <Search className="size-5" aria-hidden />
         </Button>
-        {destinations.map(({ label, path, Icon, disabled }) => {
+        {destinations.map(({ label, path, Icon, disabled, app }) => {
           const active = pathname === path || pathname.startsWith(`${path}/`);
           return (
             <Button
@@ -122,10 +130,10 @@ export function NavigationRail({
               disabled={disabled}
               onClick={() => navigate(path)}
             >
-              <Icon
+              {app ? <McpAppIcon icons={app.icons} isDarkMode={isDarkMode} /> : <Icon
                 className={`size-5 ${label === "Plugins" ? "-rotate-45" : ""}`}
                 aria-hidden
-              />
+              />}
             </Button>
           );
         })}

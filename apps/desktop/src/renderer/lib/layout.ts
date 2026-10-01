@@ -1,4 +1,4 @@
-const ROUTES_WITHOUT_RIGHT_PANEL = ["/settings", "/plugins", "/pulse", "/relay", "/tasks"];
+const ROUTES_WITHOUT_RIGHT_PANEL = ["/settings", "/plugins", "/pulse", "/relay", "/tasks", "/apps"];
 
 export function isWorkspaceRoute(pathname: string): boolean {
   return pathname === "/" ||

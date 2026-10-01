@@ -235,6 +235,19 @@ _Avoid_: importing `@/features/…` from anything under `components/ui/`; deep-i
 The app shell that hosts whatever route is active: `main/` (route table), `sidebar/`, `right-panel/`, `page-shell`, `resize-handle`. A shell exists to compose features, so importing from `features/` is the *correct* direction here and is deliberately not linted. What does not belong is feature UI that merely happens to be positioned by the shell — the session panel (environment, sources, deliverables) and the subagent panel both lived here and were only ever about the active workspace's run; they live under `features/workspace/components/` now, and the shell renders them from `App.tsx`.
 _Avoid_: adding a panel to `components/layout/` because that's where panels used to go — ask whether it renders anything outside its feature's state.
 
+## MCP App extensions
+
+**app entrypoint**:
+A plugin tool that explicitly declares a `global` or `thread` entrypoint in `openai/ui` metadata and supplies a `ui://` resource. Discovery joins the live Codex tool inventory with installed, enabled plugins: ownership comes from `server.pluginId` or the connector/server ids in `plugin/read`, never display-name matching. The desktop rail shows only `global` entrypoints, using tool/server/plugin icon metadata, and opens `/apps/<encoded-entrypoint-id>` through one `/apps/:appId` route. Each account link retains its own identity. Discovery is gated by the provider descriptor, native platform capability, and local IPC transport. The shared query refreshes after plugin mutations and when the window regains focus; ownership metadata is cached until plugin changes. `mcp-app-extensions.ts` contains only routing and vendor compatibility behavior, not a plugin allowlist.
+
+**app extension session**:
+A temporary MCP connection outside a model run. `codex-mcp-apps.ts` owns an idle ephemeral app-server thread and allows only that app's UI-visible tools from the same connector/account. The desktop `mcpApps` service registers its HTML; `McpAppDisplay` hosts it as a page using the standard MCP Apps bridge. Leaving/reloading the page closes the session and revokes the document. These sessions do not start model turns or advertise conversation messaging.
+_Avoid_: fabricating run rows for standalone apps; borrowing another run's MCP thread; allowing an app to call a different connector or account; putting Electron protocol code in the shared backend.
+
+**app document origin**:
+Each document gets a distinct `mains-mcp-app://<uuid>` origin, separate from Mains and other documents. The sandbox permits same-origin storage for canvas libraries while the document's CSP limits network/resource/frame access. Browser identity headers omit Electron product tokens; authentication and Origin headers are preserved. Vendor origin allowlists remain authoritative: as tested on 2026-10-01, tldraw's UI loads and MCP calls succeed, but its live sync rejects the Mains origin with 403. The preview shows that limitation and returns an explicit host compatibility error for `_dotcom_zero`, allowing tldraw's own MCP file-list fallback.
+_Avoid_: sharing Mains' origin with third-party HTML; pretending to be an OpenAI or vendor origin; stripping Origin to work around a vendor refusal; disabling browser security.
+
 ## Provider variants
 
 Renderer-side vocabulary for the workspace UI shared across the four agent providers, all hosted on the single `/code` route.

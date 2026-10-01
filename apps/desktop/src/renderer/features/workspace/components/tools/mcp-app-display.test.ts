@@ -7,10 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readResource: vi.fn(),
+  callTool: vi.fn(),
   openUrl: vi.fn(),
+  openExternal: vi.fn(),
   bridges: [] as Array<{
     onrequestdisplaymode?: (request: { mode: "inline" | "fullscreen" | "pip" }) => Promise<{ mode: string }>;
     oninitialized?: () => void;
+    oncalltool?: (request: { name: string; arguments?: Record<string, unknown> }) => Promise<unknown>;
+    onopenlink?: (request: { url: string }) => Promise<unknown>;
+    capabilities: Record<string, unknown>;
     getAppCapabilities: ReturnType<typeof vi.fn>;
     setHostContext: ReturnType<typeof vi.fn>;
   }>,
@@ -30,7 +35,11 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => ({
     close = vi.fn().mockResolvedValue(undefined);
     sendToolInput = vi.fn().mockResolvedValue(undefined);
     sendToolResult = vi.fn().mockResolvedValue(undefined);
-    constructor() { mocks.bridges.push(this); }
+    capabilities: Record<string, unknown>;
+    constructor(_client: unknown, _info: unknown, capabilities: Record<string, unknown>) {
+      this.capabilities = capabilities;
+      mocks.bridges.push(this);
+    }
   },
   PostMessageTransport: class {},
   buildAllowAttribute: () => "",
@@ -74,7 +83,10 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", () => undefined);
   Object.defineProperty(window, "api", {
     configurable: true,
-    value: { mcpApps: { readResource: mocks.readResource } },
+    value: {
+      mcpApps: { readResource: mocks.readResource, callTool: mocks.callTool },
+      shell: { openExternal: mocks.openExternal },
+    },
   });
 });
 
@@ -206,5 +218,37 @@ describe("MCP App display modes", () => {
       expect(await bridge.onrequestdisplaymode?.({ mode: "fullscreen" }))
         .toEqual({ mode: "inline" });
     });
+  });
+
+  it("hosts a sidebar app as a page and routes tools through its session without advertising chat", async () => {
+    mocks.readResource.mockResolvedValue({ success: true, data: {
+      url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] },
+    } });
+    mocks.callTool.mockResolvedValue({ success: true, data: { content: [] } });
+    render(createElement(McpAppDisplay, {
+      sessionId: "app-session", presentation: "page", app: { ...app, originCallId: undefined },
+      unsupportedTools: { _dotcom_zero: "Live sync does not support this host" },
+      input: {}, title: "tldraw",
+    }));
+    await screen.findByTitle("tldraw interactive app");
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+    const bridge = mocks.bridges[0];
+    act(() => bridge.oninitialized?.());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Return to chat" })).toBeNull();
+    expect(bridge.capabilities.message).toBeUndefined();
+    expect(bridge.setHostContext).toHaveBeenCalledWith(expect.objectContaining({
+      displayMode: "fullscreen", availableDisplayModes: ["fullscreen"],
+    }));
+    await bridge.oncalltool?.({ name: "_dotcom_boards" });
+    expect(mocks.callTool).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "app-session", tool: "_dotcom_boards" }));
+    expect(await bridge.onrequestdisplaymode?.({ mode: "inline" })).toEqual({ mode: "fullscreen" });
+    await bridge.onopenlink?.({ url: "https://www.tldraw.com/" });
+    expect(mocks.openExternal).toHaveBeenCalledWith("https://www.tldraw.com/");
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect(await bridge.oncalltool?.({ name: "_dotcom_zero" })).toEqual({
+      isError: true, content: [{ type: "text", text: "Live sync does not support this host" }],
+    });
+    expect(mocks.callTool).toHaveBeenCalledTimes(1);
   });
 });

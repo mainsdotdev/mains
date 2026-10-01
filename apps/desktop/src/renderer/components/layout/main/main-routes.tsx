@@ -14,6 +14,7 @@ const PluginsPage = lazy(() => import("@/routes/Plugins"));
 const Pulse = lazy(() => import("@/routes/Pulse"));
 const Relay = lazy(() => import("@/routes/Relay"));
 const Tasks = lazy(() => import("@/routes/Tasks"));
+const McpApp = lazy(() => import("@/routes/McpApp"));
 
 function DefaultRoute() {
   const { activeSpace } = useActiveSpace();
@@ -54,6 +55,7 @@ export function MainRoutes() {
         <Route path="/code/:workspaceId" element={<CodePage />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/plugins" element={<PluginsPage />} />
+        <Route path="/apps/:appId" element={<McpApp />} />
         <Route path="/pulse" element={<Pulse />} />
         <Route path="/relay" element={<Relay />} />
         <Route path="/tasks" element={<TasksRoute />} />

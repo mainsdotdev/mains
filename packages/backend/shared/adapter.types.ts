@@ -5,6 +5,7 @@
 
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
 import type { ModeId } from "@mains/contracts/modes";
+import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { ModeToolPolicy } from "./mode-harness";
 import type {
   PluginAvailability,
@@ -555,6 +556,13 @@ export interface McpAppCallToolResult {
   _meta?: unknown;
 }
 
+export interface McpAppExtensionSession {
+  id: string;
+  app: McpAppEntrypoint;
+  resource: McpAppReadResourceResult;
+  output: McpAppCallToolResult;
+}
+
 /**
  * Interface that all work run adapters must implement
  */
@@ -753,6 +761,17 @@ export interface WorkRunAdapter {
   /** Start or repeat OAuth for a configured connector MCP server. */
   startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
 
+  /** Discover and host plugin entrypoints independently of an agent run. */
+  listMcpAppEntrypoints?(): Promise<McpAppEntrypoint[]>;
+  openMcpAppSession?(entrypointId: string): Promise<McpAppExtensionSession>;
+  callMcpAppSessionTool?(
+    sessionId: string,
+    tool: string,
+    args?: Record<string, unknown>,
+    meta?: Record<string, unknown>,
+  ): Promise<McpAppCallToolResult>;
+  closeMcpAppSession?(sessionId: string): Promise<void>;
+
   /** Read an MCP App HTML resource through this run's existing provider thread. */
   readMcpAppResource?(
     request: McpAppReadResourceRequest,
@@ -882,6 +901,15 @@ export interface ProviderDriver {
   updatePlugin?(pluginId: string): Promise<void>;
   listConnectors?(forceRefresh?: boolean): Promise<ConnectorOverview>;
   startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
+  listMcpAppEntrypoints?(): Promise<McpAppEntrypoint[]>;
+  openMcpAppSession?(entrypointId: string): Promise<McpAppExtensionSession>;
+  callMcpAppSessionTool?(
+    sessionId: string,
+    tool: string,
+    args?: Record<string, unknown>,
+    meta?: Record<string, unknown>,
+  ): Promise<McpAppCallToolResult>;
+  closeMcpAppSession?(sessionId: string): Promise<void>;
   readMcpAppResource?(
     request: McpAppReadResourceRequest,
   ): Promise<McpAppReadResourceResult>;

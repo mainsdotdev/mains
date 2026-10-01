@@ -89,6 +89,8 @@ export interface ProviderVariantDescriptor {
   supportsSkills: boolean;
   /** Whether the provider's driver implements the plugin API (gates the Plugins page). */
   supportsPlugins: boolean;
+  /** Global plugin UIs opened without an agent turn. */
+  supportsMcpAppExtensions: boolean;
 
   // ── /code page wiring (was per-route props before the agent routes unified) ──
   planExit: PlanExitConfig;
@@ -121,6 +123,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsGoalMode: false,
     supportsSkills: true,
     supportsPlugins: true,
+    supportsMcpAppExtensions: false,
     planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
     enableForkRun: true,
     enableSuggestions: true,
@@ -142,6 +145,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsGoalMode: false,
     supportsSkills: false,
     supportsPlugins: false,
+    supportsMcpAppExtensions: false,
     planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
     enableForkRun: false,
     enableSuggestions: false,
@@ -163,6 +167,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsGoalMode: true,
     supportsSkills: true,
     supportsPlugins: true,
+    supportsMcpAppExtensions: true,
     planExit: { key: "planMode", planValue: true, nextValue: false },
     enableForkRun: true,
     enableSuggestions: true,
@@ -184,6 +189,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsGoalMode: false,
     supportsSkills: false,
     supportsPlugins: false,
+    supportsMcpAppExtensions: false,
     planExit: { key: "mode", planValue: "plan", nextValue: "agent" },
     enableForkRun: true,
     enableSuggestions: true,
