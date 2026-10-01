@@ -1,14 +1,16 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useCapabilities } from "@/lib/platform";
+import { cn } from "@/lib/cn";
 
 interface MainLayoutProps {
   children: ReactNode;
+  className?: string;
 }
 
-export function MainLayout({ children }: MainLayoutProps) {
+export function MainLayout({ children, className }: MainLayoutProps) {
   return (
     // `--app-frame` comes from index.css, or from the app theme in force.
-    <div className="app-root flex flex-col h-screen bg-(--app-frame) transition-colors duration-300 ease-in-out">
+    <div className={cn("app-root flex flex-col h-screen bg-(--app-frame) transition-colors duration-300 ease-in-out", className)}>
       <DragRegion />
       <div className="flex h-full">{children}</div>
     </div>

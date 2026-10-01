@@ -4,8 +4,13 @@ import fs from "fs";
 import { CHANNELS } from "@mains/contracts/channels";
 import { attachCrashRecovery } from "./crash-recovery";
 import { getAppIconPath, getSavedDockIcon } from "./dock-icon";
+import { createOnboardingWindowState } from "./onboarding-window";
+import { createOnboardingStartupState } from "./onboarding-startup";
 
 let mainWindow: BrowserWindow | null = null;
+let onboardingWindow: ReturnType<typeof createOnboardingWindowState> | null = null;
+let onboardingStartup: ReturnType<typeof createOnboardingStartupState> | null = null;
+let resolveWindowPresentation: (() => void) | null = null;
 /** Whether this process has ever shown a main window (false under `--serve`). */
 let hasOpenedMainWindow = false;
 
@@ -66,11 +71,12 @@ function isStateVisible(state: WindowState): boolean {
 
 export interface MainWindowOptions {
   show?: boolean;
+  showStartupSplash?: boolean;
   onReadyToShow?: (window: BrowserWindow) => void;
 }
 
 export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow {
-  const { show = true, onReadyToShow } = options;
+  const { show = true, showStartupSplash = false, onReadyToShow } = options;
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.focus();
@@ -115,15 +121,19 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
     } : {}),
   });
 
-  // Restore maximized state
-  if (useSaved && saved.isMaximized) {
-    mainWindow.maximize();
-  }
+  const window = mainWindow;
+  const presentation = createOnboardingWindowState(window, Boolean(useSaved && saved.isMaximized));
+  onboardingWindow = presentation;
+  const startup = createOnboardingStartupState(showStartupSplash);
+  onboardingStartup = startup;
+  let resolvePresentation!: () => void;
+  const presentationReady = new Promise<void>((resolve) => { resolvePresentation = resolve; });
+  resolveWindowPresentation = resolvePresentation;
 
   // Save state on resize/move
   const persistState = () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      saveWindowState(mainWindow);
+    if (!window.isDestroyed() && !presentation.isTemporary()) {
+      saveWindowState(window);
     }
   };
   mainWindow.on("resize", persistState);
@@ -132,11 +142,23 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
   mainWindow.on("unmaximize", persistState);
 
   // Handle ready-to-show event
-  mainWindow.once("ready-to-show", () => {
-    if (onReadyToShow && mainWindow) {
-      onReadyToShow(mainWindow);
-    } else if (show && mainWindow) {
-      mainWindow.show();
+  mainWindow.once("ready-to-show", async () => {
+    // Wait for the rehydrated onboarding flag before exposing the window. A
+    // broken renderer still gets a visible window for the recovery UI.
+    const fallback = setTimeout(() => {
+      void presentation.setOnboarding(startup.needsOnboarding()).then(resolvePresentation, (error) => {
+        console.error("Unable to initialize window presentation", error);
+        resolvePresentation();
+      });
+    }, 3000);
+    await presentationReady;
+    clearTimeout(fallback);
+    if (window.isDestroyed()) return;
+    startup.finish();
+    if (onReadyToShow) {
+      onReadyToShow(window);
+    } else if (show) {
+      window.show();
     }
   });
 
@@ -210,6 +232,11 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
   });
 
   mainWindow.on("closed", () => {
+    startup.finish();
+    resolvePresentation();
+    onboardingWindow = null;
+    onboardingStartup = null;
+    resolveWindowPresentation = null;
     mainWindow = null;
   });
 
@@ -218,6 +245,22 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow;
+}
+
+/** Only the main renderer controls its temporary onboarding presentation. */
+export async function setMainWindowOnboarding(onboarding: boolean, contentReady = true): Promise<void> {
+  const presentation = onboardingWindow;
+  const startup = onboardingStartup;
+  const ready = resolveWindowPresentation;
+  if (!presentation || !startup) throw new Error("Main window is not available");
+  if (!startup.update(onboarding, contentReady)) return;
+  try {
+    await presentation.setOnboarding(onboarding);
+  } finally {
+    // The boot announcement prepares bounds/splash, but only mounted content
+    // releases the hidden main window.
+    if (contentReady) ready?.();
+  }
 }
 
 /**

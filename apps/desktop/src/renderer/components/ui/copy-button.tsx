@@ -23,6 +23,7 @@ export function CopyButton({
     <Button
       type="button"
       variant={variant}
+      aria-label={tooltip}
       tooltip={isCopied && copiedTooltip ? copiedTooltip : tooltip}
       onClick={() => void copy(text)}
       className={className}

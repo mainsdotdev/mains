@@ -1068,6 +1068,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.app.setMenuBarIconVisible, visible),
     setThemeSource: (theme: "system" | "light" | "dark") =>
       ipcRenderer.invoke(CHANNELS.app.setThemeSource, theme),
+    setOnboardingWindow: (onboarding: boolean, contentReady = true): Promise<ServiceResponse<null>> =>
+      ipcRenderer.invoke(CHANNELS.app.setOnboardingWindow, onboarding, contentReady),
     onFlushAndQuit: (callback: () => void) => {
       const listener = () => callback();
       ipcRenderer.on(CHANNELS.app.flushAndQuit, listener);

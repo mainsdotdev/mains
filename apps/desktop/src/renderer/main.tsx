@@ -5,12 +5,14 @@ import "./lib/platform/web-bootstrap";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { markAppReady } from "./lib/app-ready";
+import { announceOnboardingStartup } from "./lib/onboarding-startup";
 import "./index.css";
 
 const root = ReactDOM.createRoot(
   document.getElementById("root") as HTMLElement
 );
 const isBrowserChatOverlay = new URLSearchParams(window.location.search).has("browserChatOverlay");
+if (!isBrowserChatOverlay) void announceOnboardingStartup();
 const rootModule = isBrowserChatOverlay
   ? import("./browser-chat-app")
   : import("./App");
