@@ -95,7 +95,7 @@ describe("resolveAppTheme", () => {
     expect(theme.light).toEqual({
       palette: null,
       accent: null,
-      translucent: true,
+      translucent: false,
     });
     expect(renderAppThemeCss(theme)).toBe("");
   });
@@ -162,22 +162,20 @@ describe("resolveAppTheme", () => {
     expect(tokensIn(css, "dark")).toBeNull();
   });
 
-  it("keeps a theme's frame opaque unless asked, and stock's translucent", () => {
+  it("keeps every theme's frame opaque unless asked", () => {
     const frameOf = (choice: AppearanceChoice, appearance: ThemeAppearance) =>
       tokensIn(renderAppThemeCss(resolveAppTheme(both(choice))), appearance);
 
-    expect(frameOf(pick("tokyo-night"), "dark")?.get("--app-frame")).toMatch(
-      /^#[0-9a-f]{6}$/,
-    );
+    expect(frameOf(pick("tokyo-night"), "dark")?.has("--app-frame")).toBe(false);
     expect(
       frameOf(pick("tokyo-night", { translucent: true }), "dark")?.get(
         "--app-frame",
       ),
     ).toContain("transparent");
-    // Stock paints nothing until its frame is made opaque — then only that.
+    // Stock paints nothing until its frame is made translucent — then only that.
     expect(frameOf(stock, "light")).toBeNull();
     expect([
-      ...frameOf(pick(DEFAULT_APP_THEME_ID, { translucent: false }), "light")!.keys(),
+      ...frameOf(pick(DEFAULT_APP_THEME_ID, { translucent: true }), "light")!.keys(),
     ]).toEqual(["--app-frame"]);
   });
 });
