@@ -242,6 +242,7 @@ A plugin tool that explicitly declares a `global` or `thread` entrypoint in `ope
 
 **app extension session**:
 A temporary MCP connection outside a model run. `codex-mcp-apps.ts` owns an idle ephemeral app-server thread and allows only that app's UI-visible tools from the same connector/account. The desktop `mcpApps` service registers its HTML; `McpAppDisplay` hosts it as a page using the standard MCP Apps bridge. Leaving/reloading the page closes the session and revokes the document. These sessions do not start model turns or advertise conversation messaging.
+Opening reuses one live inventory for ownership validation and tool scoping. Rail, connector overview, and plugin runtime reads share concurrent MCP inventory requests, with a 60-second discovery budget; settled requests are discarded, and plugin changes/server shutdown invalidate pending reuse. Explicit resource targets belong only to `codex_apps`. Synthetic link ids request the protocol's no-auth target (`linkId: null`), subject to the app's resource policy; the original link identity still scopes allowed tools.
 _Avoid_: fabricating run rows for standalone apps; borrowing another run's MCP thread; allowing an app to call a different connector or account; putting Electron protocol code in the shared backend.
 
 **app document origin**:

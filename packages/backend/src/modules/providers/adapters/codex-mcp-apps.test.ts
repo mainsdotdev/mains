@@ -35,12 +35,18 @@ describe("Codex app extension sessions", () => {
     vi.resetAllMocks();
     threads = 0;
     readInventory.mockResolvedValue(inventory);
-    sendRequest.mockImplementation(async (method: string) => {
+    sendRequest.mockImplementation(async (method: string, params?: any) => {
       if (method === "thread/start") return { thread: { id: `thread-${++threads}` } };
-      if (method === "mcpServer/resource/read") return {
-        contents: [{ uri: "ui://tldraw/app.html", mimeType: "text/html;profile=mcp-app", text: "<main>tldraw</main>" }],
-        originCallId: null,
-      };
+      if (method === "mcpServer/resource/read") {
+        if (params.target && (params.server !== "codex_apps" || !params.target.connectorId?.trim() ||
+          (typeof params.target.linkId === "string" && (!params.target.linkId.trim() || params.target.linkId.startsWith("synthetic_link::"))))) {
+          throw new Error("target requires codex_apps, a connectorId, and a real linkId or null");
+        }
+        return {
+          contents: [{ uri: "ui://tldraw/app.html", mimeType: "text/html;profile=mcp-app", text: "<main>tldraw</main>" }],
+          originCallId: null,
+        };
+      }
       if (method === "mcpServer/tool/call") return { content: [], structuredContent: { boards: [] } };
       return {};
     });
@@ -111,6 +117,39 @@ describe("Codex app extension sessions", () => {
       await expect(apps.callTool(session.id, name)).rejects.toThrow("not available");
     }
     expect(sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("opens a synthetic link without treating it as a real account or granting another account's tools", async () => {
+    const linkId = "synthetic_link::tldraw";
+    const statuses = [{ ...inventory[0], tools: { ...inventory[0].tools,
+      home: tool("tldraw.tldraw_home", { ...inventory[0].tools.home!._meta as object, link_id: linkId }),
+      boards: tool("tldraw._dotcom_boards", { ui: { visibility: ["app"] }, link_id: linkId }),
+    } }] as McpServerStatus[];
+    readInventory.mockResolvedValue(statuses);
+    const apps = host();
+    const session = await apps.open(discoverMcpAppEntrypoints(statuses)[0].id);
+    expect(sendRequest).toHaveBeenCalledWith("mcpServer/resource/read", expect.objectContaining({
+      target: { connectorId: "tldraw", linkId: null },
+    }));
+    await apps.callTool(session.id, "_dotcom_boards");
+    await expect(apps.callTool(session.id, "private")).rejects.toThrow("not available");
+  });
+
+  it("does not send a hosted app target to a plugin's own MCP server", async () => {
+    const statuses = [{ ...inventory[0], name: "plugin-local" }];
+    readInventory.mockResolvedValue(statuses);
+    await host().open(discoverMcpAppEntrypoints(statuses)[0].id);
+    const params = sendRequest.mock.calls.find(([method]) => method === "mcpServer/resource/read")?.[1];
+    expect(params.server).toBe("plugin-local");
+    expect(params).not.toHaveProperty("target");
+  });
+
+  it("validates installed ownership with the same inventory used to scope tools", async () => {
+    const listEntrypoints = vi.fn(async (statuses: McpServerStatus[]) => discoverMcpAppEntrypoints(statuses));
+    const apps = createCodexMcpApps({ ensureServer: async () => server, readInventory, listEntrypoints });
+    await apps.open(discoverMcpAppEntrypoints(inventory)[0].id);
+    expect(readInventory).toHaveBeenCalledTimes(1);
+    expect(listEntrypoints).toHaveBeenCalledWith(inventory);
   });
 
   it("rechecks installed entrypoints before opening a retained runtime tool", async () => {

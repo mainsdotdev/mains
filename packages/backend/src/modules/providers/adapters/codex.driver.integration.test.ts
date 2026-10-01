@@ -400,14 +400,14 @@ describe("codex.driver / app-server protocol", () => {
     await driver.createSession(request("run-mcp-target"));
     await driver.readMcpAppResource?.({
       runId: "run-mcp-target",
-      server: "fixture-mcp",
+      server: "codex_apps",
       uri: "ui://fixture/card.html",
       connectorId: "connector-1",
       linkId: "linked-account-2",
     });
     await driver.readMcpAppResource?.({
       runId: "run-mcp-target",
-      server: "fixture-mcp",
+      server: "codex_apps",
       uri: "ui://fixture/card.html",
       connectorId: "connector-1",
       linkId: null,
@@ -426,6 +426,29 @@ describe("codex.driver / app-server protocol", () => {
         target: { connectorId: "connector-1", linkId: null },
       }),
     }));
+  });
+
+  it("uses no-auth targets for synthetic links and legacy discovery for independent MCP servers", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    await driver.createSession(request("run-mcp-legacy-target"));
+    await driver.readMcpAppResource?.({
+      runId: "run-mcp-legacy-target", server: "fixture-mcp", uri: "ui://fixture/card.html",
+      connectorId: "connector-1", linkId: "linked-account-2",
+    });
+    await driver.readMcpAppResource?.({
+      runId: "run-mcp-legacy-target", server: "codex_apps", uri: "ui://fixture/card.html",
+      connectorId: "connector-1", linkId: "synthetic_link::connector-1",
+    });
+    const reads = readProtocolLog(logPath).filter((message) => message.method === "mcpServer/resource/read");
+    expect(reads).toHaveLength(2);
+    expect(reads[0].params).not.toHaveProperty("target");
+    expect(reads[1].params).toMatchObject({ target: { connectorId: "connector-1", linkId: null } });
   });
 
   it("resumes an unsubscribed thread before retrying MCP App operations", async () => {
@@ -501,7 +524,7 @@ describe("codex.driver / app-server protocol", () => {
 
     const resource = await driver.readMcpAppResource?.({
       runId: "run-mcp-shared-thread",
-      server: "fixture-mcp",
+      server: "codex_apps",
       uri: "ui://fixture/card.html",
       originCallId: "call-1",
       connectorId: "connector-1",
@@ -517,7 +540,7 @@ describe("codex.driver / app-server protocol", () => {
           originCallId: "call-1",
         }) }),
         expect.objectContaining({ params: {
-          server: "fixture-mcp",
+          server: "codex_apps",
           uri: "ui://fixture/card.html",
           connectorId: "connector-1",
           target: { connectorId: "connector-1", linkId: "linked-account-2" },

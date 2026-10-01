@@ -862,6 +862,13 @@ input.on("line", (line) => {
       break;
 
     case "mcpServer/resource/read":
+      if (!params.originCallId && params.target && (
+        params.server !== "codex_apps" || !params.target.connectorId?.trim() ||
+        (typeof params.target.linkId === "string" && (!params.target.linkId.trim() || params.target.linkId.startsWith("synthetic_link::")))
+      )) {
+        respondError(id, -32600, "target requires codex_apps, a connectorId, and a real linkId or null");
+        break;
+      }
       if (params.originCallId && !params.threadId) {
         respondError(id, -32600, "originCallId requires threadId");
         break;

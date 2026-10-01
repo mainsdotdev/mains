@@ -50,7 +50,7 @@ import { workspaceRepo } from "../../workspace/workspace.repo";
 import { adoptConfig, createLogger, resolveCatalogDefaultId } from "./adapter.shared";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import { CodexAppServer } from "./codex-app-server.client";
-import { createCodexMcpApps } from "./codex-mcp-apps";
+import { codexMcpResourceTarget, createCodexMcpApps } from "./codex-mcp-apps";
 import {
   createCodexCapabilities,
   mapRateLimitSnapshot,
@@ -948,9 +948,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       const targetVersionComparison = cliVersion
         ? compareCodexVersions(cliVersion, "0.157.1")
         : null;
-      const target = request.connectorId && request.linkId !== undefined &&
-        targetVersionComparison !== null && targetVersionComparison >= 0
-        ? { connectorId: request.connectorId, linkId: request.linkId }
+      const target = targetVersionComparison !== null && targetVersionComparison >= 0
+        ? codexMcpResourceTarget(request)
         : undefined;
       const params: CodexAppServerParams<"mcpServer/resource/read"> = {
         threadId,

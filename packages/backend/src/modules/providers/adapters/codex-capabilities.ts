@@ -56,6 +56,8 @@ interface RemotePluginReference {
 
 const PLUGIN_CATALOG_TTL_MS = 15 * 60 * 1000;
 const INSTALLED_PLUGINS_TTL_MS = 5 * 60 * 1000;
+// Cold discovery can wait for remote MCP servers to initialize.
+const MCP_DISCOVERY_TIMEOUT_MS = 60_000;
 
 function isUnsupportedRpc(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -609,6 +611,7 @@ export function createCodexCapabilities(
   let pluginCapabilityPromise: Promise<void> | null = null;
   let pluginCacheGeneration = 0;
   const mcpAppPluginSources = new Map<string, Promise<Pick<McpAppPluginSource, "connectorIds" | "mcpServers">>>();
+  let mcpInventoryInFlight: Promise<McpServerStatus[]> | null = null;
 
   // ── Session install overlay ──────────────────────────────────
   // `plugin/installed` is answered from an install registry the app-server
@@ -830,6 +833,7 @@ export function createCodexCapabilities(
     pluginCatalogInFlight = null;
     installedPluginsInFlight = null;
     mcpAppPluginSources.clear();
+    mcpInventoryInFlight = null;
   }
 
   async function listModels(): Promise<ModelInfo[]> {
@@ -1117,31 +1121,21 @@ export function createCodexCapabilities(
         NonNullable<PluginDetail["mcpServerStatuses"]>[number]
       >();
       try {
-        let cursor: string | null = null;
-        do {
-          const page: CodexAppServerResult<"mcpServerStatus/list"> =
-            await server.sendRequest("mcpServerStatus/list", {
-              cursor,
-              limit: 100,
-              detail: "toolsAndAuthOnly",
-            });
-          for (const status of page.data) {
-            if (!wantedNames.has(status.name)) continue;
-            runtimeByName.set(status.name, {
-              name: status.name,
-              runtimeStatus: status.runtimeStatus,
-              authStatus: status.authStatus,
-              pluginId: status.pluginId,
-              title: status.serverInfo?.title ?? status.serverInfo?.name,
-              description: status.serverInfo?.description,
-              websiteUrl: status.serverInfo?.websiteUrl,
-              toolCount: Object.values(status.tools ?? {}).filter(Boolean)
-                .length,
-              toolsError: status.toolsError,
-            });
-          }
-          cursor = page.nextCursor;
-        } while (cursor && runtimeByName.size < wantedNames.size);
+        for (const status of await readMcpInventory()) {
+          if (!wantedNames.has(status.name)) continue;
+          runtimeByName.set(status.name, {
+            name: status.name,
+            runtimeStatus: status.runtimeStatus,
+            authStatus: status.authStatus,
+            pluginId: status.pluginId,
+            title: status.serverInfo?.title ?? status.serverInfo?.name,
+            description: status.serverInfo?.description,
+            websiteUrl: status.serverInfo?.websiteUrl,
+            toolCount: Object.values(status.tools ?? {}).filter(Boolean)
+              .length,
+            toolsError: status.toolsError,
+          });
+        }
 
         mcpServerStatuses = mcpServerStatuses.map(
           (mcp) => runtimeByName.get(mcp.name) ?? mcp,
@@ -1456,29 +1450,19 @@ export function createCodexCapabilities(
 
     const mcpServers: ConnectorOverview["mcpServers"] = [];
     try {
-      let cursor: string | null = null;
-      do {
-        const page: CodexAppServerResult<"mcpServerStatus/list"> =
-          await server.sendRequest("mcpServerStatus/list", {
-            cursor,
-            limit: 100,
-            detail: "toolsAndAuthOnly",
-          });
-        for (const status of page.data) {
-          mcpServers.push({
-            name: status.name,
-            runtimeStatus: status.runtimeStatus,
-            authStatus: status.authStatus,
-            pluginId: status.pluginId,
-            title: status.serverInfo?.title ?? status.serverInfo?.name,
-            description: status.serverInfo?.description,
-            websiteUrl: status.serverInfo?.websiteUrl,
-            toolCount: Object.values(status.tools).filter(Boolean).length,
-            toolsError: status.toolsError,
-          });
-        }
-        cursor = page.nextCursor;
-      } while (cursor);
+      for (const status of await readMcpInventory()) {
+        mcpServers.push({
+          name: status.name,
+          runtimeStatus: status.runtimeStatus,
+          authStatus: status.authStatus,
+          pluginId: status.pluginId,
+          title: status.serverInfo?.title ?? status.serverInfo?.name,
+          description: status.serverInfo?.description,
+          websiteUrl: status.serverInfo?.websiteUrl,
+          toolCount: Object.values(status.tools).filter(Boolean).length,
+          toolsError: status.toolsError,
+        });
+      }
     } catch (error) {
       if (!isUnsupportedRpc(error)) {
         logger.warn("Failed to read MCP server status:", error);
@@ -1496,23 +1480,32 @@ export function createCodexCapabilities(
     });
   }
 
-  async function readMcpInventory(): Promise<McpServerStatus[]> {
-    const server = await options.ensureServer();
-    const inventory: McpServerStatus[] = [];
-    let cursor: string | null = null;
-    do {
-      const page: CodexAppServerResult<"mcpServerStatus/list"> =
-        await server.sendRequest("mcpServerStatus/list", {
-          cursor, limit: 100, detail: "toolsAndAuthOnly",
-        });
-      inventory.push(...page.data);
-      cursor = page.nextCursor;
-    } while (cursor);
-    return inventory;
+  function readMcpInventory(): Promise<McpServerStatus[]> {
+    if (mcpInventoryInFlight) return mcpInventoryInFlight;
+    const request = (async () => {
+      const server = await options.ensureServer();
+      const inventory: McpServerStatus[] = [];
+      let cursor: string | null = null;
+      do {
+        const page: CodexAppServerResult<"mcpServerStatus/list"> =
+          await server.sendRequest("mcpServerStatus/list", {
+            cursor, limit: 100, detail: "toolsAndAuthOnly",
+          }, MCP_DISCOVERY_TIMEOUT_MS);
+        inventory.push(...page.data);
+        cursor = page.nextCursor;
+      } while (cursor);
+      return inventory;
+    })();
+    mcpInventoryInFlight = request;
+    const clear = () => {
+      if (mcpInventoryInFlight === request) mcpInventoryInFlight = null;
+    };
+    void request.then(clear, clear);
+    return request;
   }
 
-  async function listMcpAppEntrypoints() {
-    const entries = discoverMcpAppEntrypoints(await readMcpInventory());
+  async function listMcpAppEntrypoints(inventory?: McpServerStatus[]) {
+    const entries = discoverMcpAppEntrypoints(inventory ?? await readMcpInventory());
     if (!entries.length) return [];
     const installed = await listInstalledPlugins(true);
     if (installed.remoteSyncError) throw new Error(installed.remoteSyncError);

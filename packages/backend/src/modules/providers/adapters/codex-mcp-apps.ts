@@ -4,6 +4,7 @@ import type { McpAppCallToolResult, McpAppExtensionSession, PluginInfo } from ".
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import type { McpServerStatus } from "./codex-app-server-protocol/generated/v2/McpServerStatus";
+import type { McpResourceReadTarget } from "./codex-app-server-protocol/generated/v2/McpResourceReadTarget";
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -12,6 +13,18 @@ function record(value: unknown): Record<string, unknown> {
 
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Synthetic links identify an unlinked app, not an authenticated account. */
+export function codexMcpResourceTarget(app: {
+  server: string;
+  connectorId?: string;
+  linkId?: string | null;
+}): McpResourceReadTarget | undefined {
+  const connectorId = text(app.connectorId);
+  const linkId = app.linkId === null ? null : text(app.linkId);
+  if (app.server !== "codex_apps" || !connectorId || linkId === undefined) return undefined;
+  return { connectorId, linkId: linkId?.startsWith("synthetic_link::") ? null : linkId };
 }
 
 function icons(value: unknown): McpAppIcon[] | undefined {
@@ -82,7 +95,7 @@ export function installedMcpAppEntrypoints(
 interface Options {
   ensureServer: () => Promise<CodexAppServer>;
   readInventory: () => Promise<McpServerStatus[]>;
-  listEntrypoints?: () => Promise<McpAppEntrypoint[]>;
+  listEntrypoints?: (inventory: McpServerStatus[]) => Promise<McpAppEntrypoint[]>;
 }
 
 /** Idle ephemeral threads provide MCP connections; this module never starts a turn. */
@@ -105,7 +118,7 @@ export function createCodexMcpApps({ ensureServer, readInventory, listEntrypoint
     async open(entrypointId: string): Promise<McpAppExtensionSession> {
       if (sessions.size >= 16) throw new Error("Close an app before opening another one");
       const inventory = await readInventory();
-      const entries = listEntrypoints ? await listEntrypoints() : discoverMcpAppEntrypoints(inventory);
+      const entries = listEntrypoints ? await listEntrypoints(inventory) : discoverMcpAppEntrypoints(inventory);
       const app = entries.find((entry) => entry.id === entrypointId);
       if (!app) throw new Error("This plugin app is no longer available");
       const tools = new Map<string, string>();
@@ -131,13 +144,13 @@ export function createCodexMcpApps({ ensureServer, readInventory, listEntrypoint
       const id = randomUUID();
       sessions.set(id, { server, threadId: thread.id, app, tools });
       try {
+        const target = codexMcpResourceTarget(app);
         const resource = await server.sendRequest("mcpServer/resource/read", {
           threadId: thread.id,
           server: app.server,
           uri: app.resourceUri,
           ...(app.connectorId ? { connectorId: app.connectorId } : {}),
-          ...(app.connectorId && app.linkId !== undefined
-            ? { target: { connectorId: app.connectorId, linkId: app.linkId } } : {}),
+          ...(target ? { target } : {}),
         });
         const output = await server.sendRequest("mcpServer/tool/call", {
           threadId: thread.id, server: app.server, tool: app.tool, arguments: {},
