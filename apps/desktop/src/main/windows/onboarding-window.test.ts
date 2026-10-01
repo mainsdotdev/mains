@@ -98,8 +98,12 @@ const savedState = { ...workspaceBounds, isMaximized: false };
 const statePath = () => path.join(mocks.userData, "window-state.json");
 const readState = () => JSON.parse(fs.readFileSync(statePath(), "utf8"));
 const createWindow = (options = {}) => createMainWindow(options) as BrowserWindow & ReturnType<typeof fakeWindow>;
+// The window only animates its bounds on macOS; pin the platform so CI's
+// Linux runner exercises the same path the app ships with.
+const hostPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 
 beforeEach(() => {
+  Object.defineProperty(process, "platform", { ...hostPlatform, value: "darwin" });
   mocks.userData = fs.mkdtempSync(path.join(os.tmpdir(), "mains-onboarding-window-"));
   mocks.workArea = { x: 1440, y: 24, width: 1280, height: 776 };
   mocks.reducedMotion = false;
@@ -114,6 +118,7 @@ afterEach(() => {
   fs.rmSync(mocks.userData, { recursive: true, force: true });
   vi.restoreAllMocks();
   vi.useRealTimers();
+  Object.defineProperty(process, "platform", hostPlatform);
 });
 
 describe("native onboarding window", () => {
