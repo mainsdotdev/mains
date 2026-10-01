@@ -803,10 +803,9 @@ html.mains-web.dark #root {
 }
 
 :root {
-  /* The window frame behind the sidebar and around the content: translucent
-     over the macOS vibrancy. An app theme replaces it with an opaque colour
-     (lib/app-themes.ts). */
-  --app-frame: #ffffffb3;
+  /* The window frame shares the workspace composer's fill. Optional sidebar
+     translucency is applied by lib/app-themes.ts. */
+  --app-frame: var(--glass-fill-surface);
 
   --glass-rim: rgba(0, 0, 0, 0.08);
   --glass-rim-shadow: rgba(255, 255, 255, 0);
@@ -832,8 +831,6 @@ html.mains-web.dark #root {
 
 /* Dark mode is a token swap — the utility itself never forks. */
 .dark {
-  --app-frame: #00000070;
-
   --glass-rim: rgba(255, 255, 255, 0.08);
   --glass-rim-shadow: rgba(0, 0, 0, 0);
   --glass-outline-rim: rgba(255, 255, 255, 0.08);
