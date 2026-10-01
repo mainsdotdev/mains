@@ -1,4 +1,5 @@
 import { Input, NativeSelect, SegmentedTabs } from "@/components/ui";
+import { SelectOption } from "@/components/ui/icons";
 import {
   appThemesFor,
   paintedPalette,
@@ -56,21 +57,24 @@ export function ThemeStep({
       <ThemePreview appearance={appearance} variant={provider} />
       <label className="onboarding-preset-select">
         <span>Color theme</span>
-        <NativeSelect
-          variant="bare"
-          value={selected}
-          className="onboarding-select"
-          onChange={(event) => onPresetChange(event.target.value)}
-        >
-          {!presets.some((preset) => preset.id === selected) && (
-            <option value={selected}>Current theme</option>
-          )}
-          {presets.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.name}
-            </option>
-          ))}
-        </NativeSelect>
+        <span className="onboarding-select-field glass-input">
+          <NativeSelect
+            variant="bare"
+            value={selected}
+            className="onboarding-select"
+            onChange={(event) => onPresetChange(event.target.value)}
+          >
+            {!presets.some((preset) => preset.id === selected) && (
+              <option value={selected}>Current theme</option>
+            )}
+            {presets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                {preset.name}
+              </option>
+            ))}
+          </NativeSelect>
+          <SelectOption className="onboarding-select-icon" aria-hidden="true" />
+        </span>
       </label>
       <fieldset className="onboarding-swatches">
         <legend className="sr-only">Featured color themes</legend>

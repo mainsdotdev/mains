@@ -1,11 +1,11 @@
 import { getProviderVariant } from "@/lib/provider-variants";
 import { ONBOARDING_AGENT_SLUGS } from "../onboarding-agents";
+import { RisoBackdrop } from "./riso-backdrop";
 
 export function WelcomeIntroStep() {
   return (
     <div className="onboarding-welcome" aria-hidden="true">
-      <div className="onboarding-welcome-orbit" />
-      <div className="onboarding-welcome-orbit onboarding-welcome-orbit-inner" />
+      <RisoBackdrop className="onboarding-welcome-riso" />
       <div className="onboarding-welcome-mark glass-outline">
         <img
           src={"./icon-no-bg.png"}
