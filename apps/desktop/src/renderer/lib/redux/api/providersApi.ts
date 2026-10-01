@@ -268,6 +268,9 @@ export interface AccountInfo {
     type: "claude";
     email: string;
     planType: string;
+  } | {
+    type: "copilot";
+    login: string | null;
   } | null;
   requiresOpenaiAuth: boolean;
   cli?: ProviderCliInfo;

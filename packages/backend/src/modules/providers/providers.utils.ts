@@ -152,7 +152,6 @@ const isWindows = process.platform === "win32";
 // Cached CLI paths
 let cachedCliPath: string | null = null;
 let cachedClaudeSdkCliPath: string | null = null;
-let cachedCopilotCliPath: string | null = null;
 
 /**
  * Check if a path points to an executable file (NOT a directory)
@@ -496,72 +495,51 @@ export function findClaudeBinary(): string | null {
   return null;
 }
 
-/**
- * Find the Copilot CLI binary for the Copilot SDK.
- *
- * The SDK's internal `getBundledCliPath()` uses `import.meta.resolve()` which
- * breaks in bundled CJS / packaged Electron contexts.
- *
- * Additionally, when `cliPath` ends with `.js`, the SDK spawns it via
- * `process.execPath` (the Electron binary), which fails because the
- * `RunAsNode` fuse is disabled in the packaged app.
- *
- * Solution: resolve the **native** platform binary from `@github/copilot-{platform}-{arch}`
- * and pass it directly. The SDK spawns non-JS paths as standalone executables.
- */
-export function findCopilotCliPath(): string | null {
-  // In development, the SDK's own getBundledCliPath() works fine:
-  // it uses import.meta.resolve() + process.execPath (Electron as Node).
-  // RunAsNode fuse is only enforced in packaged builds, so dev is fine.
-  // Return null to let the SDK use its default resolution.
-  try {
-    if (!getBackendRuntime().isPackaged()) {
-      return null;
+export interface CopilotRuntime {
+  path: string;
+  source: ProviderCliSource;
+}
+
+/** The same native executable for runs, discovery, account checks and login. */
+export function resolveCopilotRuntime(configuredBinary?: string): CopilotRuntime | null {
+  if (configuredBinary) {
+    const configured = path.resolve(configuredBinary);
+    if (isExecutableFile(configured)) return { path: configured, source: "configured" };
+  }
+
+  const runtime = getBackendRuntime();
+  const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
+  const binaryName = process.platform === "win32" ? "copilot.exe" : "copilot";
+  if (runtime.isPackaged()) {
+    const appPath = runtime.getAppPath();
+    const candidates = [
+      path.join(appPath + ".unpacked", ".vite", "build", "node_modules", nativePkg, binaryName),
+    ];
+    if (!appPath.endsWith(".asar")) {
+      candidates.push(path.join(appPath, ".vite", "build", "node_modules", nativePkg, binaryName));
     }
+    const binary = candidates.find(isExecutableFile);
+    return binary ? { path: binary, source: "bundled" } : null;
+  }
+
+  try {
+    const hostRequire = createRequire(path.join(runtime.getAppPath(), "package.json"));
+    const sdkRequire = createRequire(hostRequire.resolve("@github/copilot-sdk"));
+    const binary = sdkRequire.resolve(nativePkg);
+    return isExecutableFile(binary) ? { path: binary, source: "bundled" } : null;
   } catch {
     return null;
   }
+}
 
-  if (cachedCopilotCliPath) {
-    if (fs.existsSync(cachedCopilotCliPath)) {
-      return cachedCopilotCliPath;
-    }
-    cachedCopilotCliPath = null;
-  }
+/** Prevent the bundled launcher from switching to a separately updated cache. */
+export function copilotRuntimeArgs(runtime: CopilotRuntime): string[] {
+  return runtime.source === "bundled" ? ["--no-auto-update"] : [];
+}
 
-  const platform = process.platform;
-  const arch = process.arch;
-  // The native binary package, e.g. "@github/copilot-darwin-arm64"
-  const nativePkg = `@github/copilot-${platform}-${arch}`;
-  // The binary name inside the package
-  const binaryName = platform === "win32" ? "copilot.exe" : "copilot";
-
-  const appPath = getBackendRuntime().getAppPath();
-
-  const candidates: string[] = [
-    // Unpacked ASAR location (native binaries must be outside ASAR to execute)
-    path.join(appPath + ".unpacked", ".vite", "build", "node_modules", nativePkg, binaryName),
-    // Inside ASAR (in case unpackDir covers it transparently)
-    path.join(appPath, ".vite", "build", "node_modules", nativePkg, binaryName),
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) {
-        const stat = fs.statSync(candidate);
-        if (stat.isFile()) {
-          logInfo("Found Copilot native binary at:", candidate);
-          cachedCopilotCliPath = candidate;
-          return candidate;
-        }
-      }
-    } catch {
-      // Ignore errors and continue checking other candidates
-    }
-  }
-
-  logWarn(`Copilot native binary (${nativePkg}/${binaryName}) not found in packaged app`);
-  return null;
+export function copilotAuthLoginCommand(runtime: CopilotRuntime): string {
+  const quoted = `'${runtime.path.replace(/'/g, `'\\''`)}'`;
+  return [quoted, ...copilotRuntimeArgs(runtime), "login"].join(" ");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -604,8 +582,7 @@ function firstExecutable(candidates: string[]): string | null {
 
 /**
  * Locate the `copilot` CLI binary on the user's machine.
- * Detection-only — separate from findCopilotCliPath() which targets
- * the SDK's bundled native binary inside the packaged app.
+ * System installation discovery; provider execution uses resolveCopilotRuntime.
  */
 export function findCopilotBinaryPath(): string | null {
   const onPath = whichBinary("copilot");
@@ -683,12 +660,14 @@ export type { DetectedClis } from "@mains/contracts/provider-cli";
  * Detect provider runtimes available on this backend, including bundled ones.
  * Used by the onboarding flow to pre-select detected agents.
  */
-export function detectInstalledClis(claudeBinary?: string): DetectedClis {
+export function detectInstalledClis(claudeBinary?: string, copilotBinary?: string): DetectedClis {
   const claude = resolveClaudeRuntime(claudeBinary);
+  const copilot = resolveCopilotRuntime(copilotBinary);
   return {
     claude: claude !== null,
     ...(claude ? { claudeSource: claude.source } : {}),
-    copilot: findCopilotBinaryPath() !== null,
+    copilot: copilot !== null,
+    ...(copilot ? { copilotSource: copilot.source } : {}),
     codex: findCodexBinaryPath() !== null,
     cursor: findCursorBinaryPath() !== null,
   };

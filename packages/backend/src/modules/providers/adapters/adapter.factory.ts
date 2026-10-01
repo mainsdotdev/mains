@@ -28,7 +28,6 @@ import { createCodexDriver } from "./codex.driver";
 import { createCopilotDriver } from "./copilot.driver";
 import { createCursorDriver } from "./cursor.driver";
 import { createWorkRunAdapter } from "./work-run-core";
-import { findCopilotCliPath } from "../providers.utils";
 import {
   PROVIDER_IDS,
   SUPPORTED_PROVIDER_IDS,
@@ -55,40 +54,16 @@ export const isSupportedWorkProvider = isProviderId as (
 const adapterCache = new Map<string, WorkRunAdapter>();
 
 /**
- * Resolved Copilot CLI entry point, memoized: `createWorkAdapter` runs on every
- * provider-touching IPC, and the resolution walks the filesystem.
- */
-let copilotBinaryPath: string | null | undefined;
-
-function resolveCopilotBinary(): string | null {
-  if (copilotBinaryPath === undefined) {
-    copilotBinaryPath = findCopilotCliPath() ?? null;
-  }
-  return copilotBinaryPath;
-}
-
-/**
  * The adapter config for a provider: its stored `config` blob plus the
  * `defaultModel` column, which lives outside it.
  */
 function buildAdapterConfig(provider: ProviderResponse): AdapterConfig {
   switch (provider.id) {
-    case PROVIDER_IDS.copilot: {
-      const config: CopilotAdapterConfig = {
+    case PROVIDER_IDS.copilot:
+      return {
         ...(provider.config as CopilotAdapterConfig | null),
         defaultModel: provider.defaultModel ?? undefined,
-      };
-      // Resolve the Copilot CLI entry point if not explicitly configured.
-      // The SDK's internal resolution uses import.meta.resolve() which
-      // breaks in bundled CJS / packaged Electron contexts.
-      if (!config.binary) {
-        const resolvedPath = resolveCopilotBinary();
-        if (resolvedPath) {
-          config.binary = resolvedPath;
-        }
-      }
-      return config;
-    }
+      } satisfies CopilotAdapterConfig;
 
     case PROVIDER_IDS.claude:
       return {

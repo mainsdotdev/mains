@@ -443,17 +443,17 @@ export function WorkspaceInput({
   const handleSlashCommandSelect = useCallback(
     (command: CommandInfo) => {
       if (command.name === "add-dir" &&
-        (activeProviderId === PROVIDER_IDS.claude || activeProviderId === PROVIDER_IDS.codex)) {
-      const t = unifiedMenu.trigger;
-      const ok = inputRef.current?.replaceTokenWithText(t, "") ?? false;
-      if (!ok) {
-        const next = replaceMentionInGoal(goal, t, unifiedMenu.filter, "");
-        if (next !== null) onGoalChange(next);
+        activeDescriptor.supportsAdditionalDirectories) {
+        const t = unifiedMenu.trigger;
+        const ok = inputRef.current?.replaceTokenWithText(t, "") ?? false;
+        if (!ok) {
+          const next = replaceMentionInGoal(goal, t, unifiedMenu.filter, "");
+          if (next !== null) onGoalChange(next);
+        }
+        updateUnifiedMenu({ visible: false, filter: "" });
+        void pickAdditionalDirectory();
+        return;
       }
-      updateUnifiedMenu({ visible: false, filter: "" });
-      void pickAdditionalDirectory();
-      return;
-    }
       const replacement = `/${command.name} `;
       const t = unifiedMenu.trigger;
       const ok =
@@ -469,7 +469,7 @@ export function WorkspaceInput({
       }
       updateUnifiedMenu({ visible: false, filter: "" });
     },
-    [activeProviderId, goal, onGoalChange, pickAdditionalDirectory,unifiedMenu.filter, unifiedMenu.trigger],
+    [activeDescriptor.supportsAdditionalDirectories, goal, onGoalChange, pickAdditionalDirectory, unifiedMenu.filter, unifiedMenu.trigger],
   );
 
   const handleSkillSelect = useCallback(
@@ -712,7 +712,7 @@ export function WorkspaceInput({
   );
 
   const handleSubmit = useCallback(() => {
-    if (activeProviderId === PROVIDER_IDS.claude || activeProviderId === PROVIDER_IDS.codex) {
+    if (activeDescriptor.supportsAdditionalDirectories) {
       const match = goal.trim().match(/^\/add-dir(?:\s+(.+))?$/);
       if (match) {
         if (match[1]) {
@@ -727,7 +727,7 @@ export function WorkspaceInput({
     }
     if (unifiedMenu.visible) return;
     onSubmit();
-  }, [unifiedMenu.visible, activeProviderId, goal, addAdditionalDirectory, pickAdditionalDirectory, onGoalChange, onSubmit]);
+  }, [unifiedMenu.visible, activeDescriptor.supportsAdditionalDirectories, goal, addAdditionalDirectory, pickAdditionalDirectory, onGoalChange, onSubmit]);
 
   const [isFileDragOver, setIsFileDragOver] = useState(false);
 

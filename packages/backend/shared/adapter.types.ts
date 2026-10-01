@@ -1082,7 +1082,7 @@ export interface CodexAdapterConfig {
  * Configuration for Copilot adapter stored in providers.config
  */
 export interface CopilotAdapterConfig {
-  /** Path to copilot CLI binary (defaults to "copilot" from PATH) */
+  /** Explicit CLI override; otherwise use Mains' bundled Copilot runtime. */
   binary?: string;
   /** Transport method: "stdio" (default) or "tcp" */
   useStdio?: boolean;

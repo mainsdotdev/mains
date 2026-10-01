@@ -34,6 +34,7 @@ export function onboardingProviders(
 ): OnboardingProvider[] {
   const sources: Partial<Record<ProviderVariant, ProviderCliSource | undefined>> = {
     claude: detected?.claudeSource,
+    copilot: detected?.copilotSource,
   };
   return ONBOARDING_AGENT_SLUGS.map((variant) => {
     const { providerId } = getProviderVariant(variant);

@@ -101,10 +101,16 @@ function normalizeAdditionalDirectories(
   providerId: string,
 ): Record<string, unknown> | null {
   if (!snapshot || !("additionalDirectories" in snapshot)) return snapshot;
+  const input = snapshot.additionalDirectories;
   if (providerId !== PROVIDER_IDS.claude && providerId !== PROVIDER_IDS.codex) {
+    // Older composers sent [] for every provider. No directories means no
+    // grant; drop the unsupported field while preserving the other settings.
+    if (Array.isArray(input) && input.length === 0) {
+      const { additionalDirectories: _directories, ...remaining } = snapshot;
+      return remaining;
+    }
     throw new Error("Additional directories are supported by Claude and Codex only");
   }
-  const input = snapshot.additionalDirectories;
   if (!Array.isArray(input) || input.length > MAX_ADDITIONAL_DIRECTORIES) {
     throw new Error(`Choose at most ${MAX_ADDITIONAL_DIRECTORIES} additional directories`);
   }

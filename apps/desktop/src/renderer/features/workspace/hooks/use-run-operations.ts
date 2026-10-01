@@ -118,7 +118,7 @@ export function useRunOperations({
           providerId: selectedProvider,
           goal: goal.trim(),
           model: model || undefined,
-          additionalDirectories,
+          ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
           initialContext,
           ...contextPayload,
         });
@@ -160,7 +160,7 @@ export function useRunOperations({
         accountId,
         message: message.trim(),
         model: model || undefined,
-        additionalDirectories,
+        ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
         additionalContext: initialContext,
         ...contextPayload,
       });

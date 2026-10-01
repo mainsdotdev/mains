@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { mergePathDirs, resolveClaudeRuntime } from "./providers.utils";
+import { mergePathDirs, resolveClaudeRuntime, resolveCopilotRuntime } from "./providers.utils";
 
 describe("providers.utils / development Claude runtime", () => {
   it("resolves the SDK's native dependency without a system installation", () => {
@@ -9,6 +9,16 @@ describe("providers.utils / development Claude runtime", () => {
     expect(runtime?.source).toBe("bundled");
     expect(runtime?.path).toContain(`claude-agent-sdk-${process.platform}-${process.arch}`);
     expect(path.basename(runtime!.path)).toBe(process.platform === "win32" ? "claude.exe" : "claude");
+    expect(fs.statSync(runtime!.path).isFile()).toBe(true);
+  });
+});
+
+describe("providers.utils / development Copilot runtime", () => {
+  it("resolves the host SDK's native dependency without a system installation", () => {
+    const runtime = resolveCopilotRuntime();
+    expect(runtime?.source).toBe("bundled");
+    expect(runtime?.path).toContain(`copilot-${process.platform}-${process.arch}`);
+    expect(path.basename(runtime!.path)).toBe(process.platform === "win32" ? "copilot.exe" : "copilot");
     expect(fs.statSync(runtime!.path).isFile()).toBe(true);
   });
 });

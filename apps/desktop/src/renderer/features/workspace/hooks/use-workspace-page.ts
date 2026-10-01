@@ -19,6 +19,7 @@ import { useComposerContext } from "./use-composer-context";
 import { useTransientUploads } from "./use-transient-uploads";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import { useActiveSpace } from "@/hooks/use-active-space";
+import { getProviderVariantById } from "@/lib/provider-variants";
 import { setRightPaneContextKey, transferRightPaneContext } from "@/lib/redux/slices/appSettingsSlice";
 import { useWorkspaceData } from "./use-workspace-data";
 import { useWorkspaceRuns } from "./use-workspace-runs";
@@ -202,6 +203,9 @@ export function useWorkspacePage(providerId: string) {
     (Array.isArray(storedDirectories)
       ? storedDirectories.filter((value): value is string => typeof value === "string")
       : EMPTY_DIRECTORIES), [directoryDrafts, ownerKey, storedDirectories]);
+  const runAdditionalDirectories = getProviderVariantById(providerId)?.supportsAdditionalDirectories
+    ? additionalDirectories
+    : undefined;
   const setAdditionalDirectories = useCallback((directories: string[]) => {
     setDirectoryDrafts((current) => ({ ...current, [ownerKey]: directories }));
   }, [ownerKey]);
@@ -368,7 +372,7 @@ export function useWorkspacePage(providerId: string) {
           selectedModel,
           attachments,
           contextItems,
-          additionalDirectories,
+          runAdditionalDirectories,
         )) ?? false;
       if (success) clearInputState();
       return success ? composeTargetRunId : null;
@@ -381,7 +385,7 @@ export function useWorkspacePage(providerId: string) {
         attachments,
         contextItems,
         selectedCollectionId,
-        additionalDirectories,
+        runAdditionalDirectories,
       );
       if (newRunId) {
         const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
@@ -404,7 +408,7 @@ export function useWorkspacePage(providerId: string) {
     goal,
     uploadedFiles,
     contextItems,
-    additionalDirectories,
+    runAdditionalDirectories,
     mode,
     workspaceId,
     selectedWorkspace,
@@ -434,10 +438,15 @@ export function useWorkspacePage(providerId: string) {
       if (activeRun && (activeRun.status === "running" || activeRun.status === "queued")) return;
       const run = async () => {
         if (activeRunId && canResume && activeRun && activeRun.status !== "running") {
-          const success =
-      (await continueRun(activeRunId, goal, selectedModel, undefined, undefined,
-  additionalDirectories)) ?? false;
-            if (success) clearInputState();
+          const success = (await continueRun(
+            activeRunId,
+            goal,
+            selectedModel,
+            undefined,
+            undefined,
+            runAdditionalDirectories,
+          )) ?? false;
+          if (success) clearInputState();
         } else {
           const newRunId = await executeRun(
             goal,
@@ -447,7 +456,7 @@ export function useWorkspacePage(providerId: string) {
             undefined,
             undefined,
             selectedCollectionId,
-            additionalDirectories
+            runAdditionalDirectories,
           );
           if (newRunId) {
             const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
@@ -464,7 +473,7 @@ export function useWorkspacePage(providerId: string) {
       };
       run();
     }
-  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, additionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
+  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, runAdditionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
 
   const runLabel = (r: { title?: string; goal: string }) =>
     r.title?.trim() ? r.title : r.goal;

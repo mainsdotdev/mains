@@ -21,8 +21,8 @@ const SETUP: Record<ProviderVariant, { command: string | null; docs: string }> =
       docs: "https://developers.openai.com/codex/cli",
     },
     copilot: {
-      command: "npm install -g @github/copilot",
-      docs: "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli",
+      command: null,
+      docs: "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli",
     },
     cursor: {
       command: "curl https://cursor.com/install -fsS | bash",
@@ -49,24 +49,38 @@ export function AgentsStep({
 }: AgentsStepProps) {
   const [setup, setSetup] = useState<ProviderVariant | null>(null);
   const claude = getProviderVariant("claude");
+  const copilot = getProviderVariant("copilot");
   const claudeOption = options.find((option) => option.variant === claude.variant);
-  const {
-    data: claudeAccount,
-    refetch: refetchClaudeAccount,
-    isFetching: isCheckingAccount,
-  } = useGetProviderAccountInfoQuery(claude.providerId, {
+  const copilotOption = options.find((option) => option.variant === copilot.variant);
+  const claudeAccountQuery = useGetProviderAccountInfoQuery(claude.providerId, {
     skip: !claudeOption?.available,
     refetchOnFocus: true,
     refetchOnMountOrArgChange: true,
   });
-  const claudeSignedIn = !!claudeOption?.available && !!claudeAccount?.account;
+  const copilotAccountQuery = useGetProviderAccountInfoQuery(copilot.providerId, {
+    skip: !copilotOption?.available,
+    refetchOnFocus: true,
+    refetchOnMountOrArgChange: true,
+  });
+  const accountQueries: Partial<Record<ProviderVariant, typeof claudeAccountQuery>> = {
+    claude: claudeAccountQuery,
+    copilot: copilotAccountQuery,
+  };
+  const setupProvider = setup ? getProviderVariant(setup) : null;
+  const setupOption = options.find((option) => option.variant === setup);
+  const setupQuery = setup ? accountQueries[setup] : undefined;
+  const connectedAccount = setupOption?.available ? setupQuery?.data?.account : null;
+  const isSignedIn = !!connectedAccount;
+  const isCheckingAccount = setupQuery?.isFetching ?? false;
   const authTerminal = useProviderAuthTerminal();
   const closeAuthTerminal = authTerminal.close;
   const authTerminalProviderId = authTerminal.session?.providerId;
   useEffect(() => closeAuthTerminal, [closeAuthTerminal]);
   const recheck = () => {
     onRecheck();
-    if (claudeOption?.available) void refetchClaudeAccount();
+    for (const option of options) {
+      if (option.available) void accountQueries[option.variant]?.refetch();
+    }
   };
   const setupHeading = useRef<HTMLHeadingElement>(null);
   const setupTriggers = useRef<
@@ -80,18 +94,15 @@ export function AgentsStep({
   }, [setup]);
   useEffect(() => {
     if (
-      setup === claude.variant &&
-      claudeSignedIn &&
-      authTerminalProviderId === claude.providerId
+      isSignedIn &&
+      authTerminalProviderId === setupProvider?.providerId
     ) {
       closeAuthTerminal();
       setupHeading.current?.focus({ preventScroll: true });
     }
   }, [
-    setup,
-    claude.variant,
-    claude.providerId,
-    claudeSignedIn,
+    setupProvider?.providerId,
+    isSignedIn,
     authTerminalProviderId,
     closeAuthTerminal,
   ]);
@@ -112,14 +123,9 @@ export function AgentsStep({
     const instructions = SETUP[setup];
     const Icon = provider.icon;
     const option = options.find((option) => option.variant === setup);
-    const connectedAccount =
-      option?.available && provider.providerId === claude.providerId
-        ? claudeAccount?.account
-        : null;
-    const isSignedIn = !!connectedAccount;
     const loginCommand =
-      provider.providerId === claude.providerId
-        ? claudeAccount?.cli?.authLoginCommand
+      instructions.command === null
+        ? setupQuery?.data?.cli?.authLoginCommand
         : provider.authLoginCommand;
     const activeTerminal = authTerminal.session?.providerId === provider.providerId
       ? authTerminal.session
@@ -152,12 +158,14 @@ export function AgentsStep({
           {isSignedIn
             ? connectedAccount?.type === "claude"
               ? `Signed in as ${connectedAccount.email}.`
-              : "Claude is ready to use."
+              : connectedAccount?.type === "copilot" && connectedAccount.login
+                ? `Signed in as ${connectedAccount.login}.`
+                : `${provider.label} is ready to use.`
             : instructions.command
               ? "Install the CLI in your terminal, then sign in to your account."
               : option?.installed
-                ? "Sign in to connect your Claude account. No separate installation is needed."
-                : "Claude is included with Mains. Reinstall Mains to restore it, then recheck."}
+                ? `Sign in to connect your ${provider.label} account. No separate installation is needed.`
+                : `${provider.label} is included with Mains. Reinstall Mains to restore it, then recheck.`}
         </p>
         {instructions.command && (
           <div className="onboarding-command glass-outline">
@@ -271,8 +279,7 @@ export function AgentsStep({
           const provider = getProviderVariant(option.variant);
           const Icon = provider.icon;
           const needsSignIn = option.available &&
-            provider.providerId === claude.providerId &&
-            claudeAccount?.account === null;
+            accountQueries[option.variant]?.data?.account === null;
           return (
             <div className="onboarding-provider-row" key={option.variant}>
               <label

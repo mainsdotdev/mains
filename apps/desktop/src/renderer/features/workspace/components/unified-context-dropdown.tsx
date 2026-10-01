@@ -10,6 +10,7 @@ import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
 import { useListProjectIssuesQuery } from "@/lib/redux/api";
 import { useGetMentionableAppsQuery } from "@/lib/redux/api/shellApi";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import { getProviderVariantById } from "@/lib/provider-variants";
 import { ProviderIcon } from "./provider-icon";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 
@@ -407,7 +408,7 @@ export function UnifiedContextDropdown({
   const filteredCommands = useMemo(() => {
     const userFacing = commands.filter((cmd) => cmd.userFacing !== false);
     if (
-      (providerId === PROVIDER_IDS.claude || providerId === PROVIDER_IDS.codex) &&
+      getProviderVariantById(providerId ?? "")?.supportsAdditionalDirectories &&
       !userFacing.some((cmd) => cmd.name === ADD_DIRECTORY_COMMAND.name)
     ) {
       userFacing.unshift(ADD_DIRECTORY_COMMAND);

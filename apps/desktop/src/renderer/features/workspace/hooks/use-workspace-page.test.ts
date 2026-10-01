@@ -138,7 +138,7 @@ beforeEach(() => {
   mocks.getTurns.mockResolvedValue({ success: true, data: [] });
 });
 
-function workspacePage() {
+function workspacePage(providerId = "claude_code") {
   const store = configureStore({
     reducer: {
       workspace: workspaceReducer,
@@ -151,8 +151,84 @@ function workspacePage() {
     { store } as ComponentProps<typeof Provider>,
     createElement(MemoryRouter, { initialEntries: ["/code/ws-1"] }, children),
   );
-  return { store, ...renderHook(() => useWorkspacePage("claude_code"), { wrapper }) };
+  return { store, ...renderHook(() => useWorkspacePage(providerId), { wrapper }) };
 }
+
+describe("workspace additional directory payload", () => {
+  it.each([
+    ["copilot_cli", false],
+    ["cursor", false],
+    ["copilot_cli", true],
+    ["cursor", true],
+  ] as const)("omits directory grants for a new %s prompt (auto=%s)", async (providerId, auto) => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [] });
+    const page = workspacePage(providerId);
+    await waitFor(() => expect(page.result.current.showEmptyState).toBe(true));
+
+    act(() => {
+      page.result.current.setGoal("hi");
+      if (auto) page.result.current.setAutoExecute(true);
+    });
+    if (!auto) await act(async () => { await page.result.current.handleExecute(); });
+    await waitFor(() => expect(mocks.executeRun).toHaveBeenCalled());
+    expect(mocks.executeRun.mock.calls[0][7]).toBeUndefined();
+  });
+
+  it.each([
+    ["copilot_cli", false],
+    ["cursor", false],
+    ["copilot_cli", true],
+    ["cursor", true],
+  ] as const)("omits directory grants for a %s follow-up (auto=%s)", async (providerId, auto) => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    const existing = { ...run, providerId, workspaceId: "ws-1", mode: "developer" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
+    mocks.getById.mockResolvedValue({ success: true, data: existing });
+    mocks.checkCanResume.mockResolvedValue(true);
+    const page = workspacePage(providerId);
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+
+    act(() => {
+      page.result.current.setGoal("continue");
+      if (auto) page.result.current.setAutoExecute(true);
+    });
+    if (!auto) await act(async () => { await page.result.current.handleExecute(); });
+    await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    expect(mocks.continueRun.mock.calls[0][5]).toBeUndefined();
+    expect(mocks.executeRun).not.toHaveBeenCalled();
+  });
+
+  it.each(["claude_code", "codex"])("keeps directory grants and explicit clearing for %s", async (providerId) => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    const existing = {
+      ...run,
+      providerId,
+      workspaceId: "ws-1",
+      mode: "developer",
+      configSnapshot: { additionalDirectories: ["/tmp/extra-project"] },
+    };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
+    mocks.getById.mockResolvedValue({ success: true, data: existing });
+    mocks.checkCanResume.mockResolvedValue(true);
+    const page = workspacePage(providerId);
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+
+    act(() => page.result.current.setGoal("read the extra folder"));
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(mocks.continueRun.mock.calls[0][5]).toEqual(["/tmp/extra-project"]);
+
+    act(() => {
+      page.result.current.setAdditionalDirectories([]);
+      page.result.current.setGoal("stop using the extra folder");
+    });
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(mocks.continueRun.mock.calls[1][5]).toEqual([]);
+  });
+});
 
 describe("workspace conversations across renderers", () => {
   it("loads the parent's newly selected run in an already mounted floating chat", async () => {

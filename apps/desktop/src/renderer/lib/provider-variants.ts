@@ -87,6 +87,8 @@ export interface ProviderVariantDescriptor {
   supportsPlanMode: boolean;
   supportsGoalMode: boolean;
   supportsSkills: boolean;
+  /** Whether a run can grant access to folders outside its working directory. */
+  supportsAdditionalDirectories: boolean;
   /** Whether the provider's driver implements the plugin API (gates the Plugins page). */
   supportsPlugins: boolean;
   /** Global plugin UIs opened without an agent turn. */
@@ -122,6 +124,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsPlanMode: false,
     supportsGoalMode: false,
     supportsSkills: true,
+    supportsAdditionalDirectories: true,
     supportsPlugins: true,
     supportsMcpAppExtensions: false,
     planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
@@ -139,11 +142,12 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     effortDefault: "medium",
     thinkingCoupledToEffort: true,
     fastMode: { kind: "boolean", key: "fastMode" },
-    authLoginCommand: "gh auth login",
+    authLoginCommand: "copilot login",
     supportsUltracode: false,
     supportsPlanMode: false,
     supportsGoalMode: false,
     supportsSkills: false,
+    supportsAdditionalDirectories: false,
     supportsPlugins: false,
     supportsMcpAppExtensions: false,
     planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
@@ -166,6 +170,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsPlanMode: true,
     supportsGoalMode: true,
     supportsSkills: true,
+    supportsAdditionalDirectories: true,
     supportsPlugins: true,
     supportsMcpAppExtensions: true,
     planExit: { key: "planMode", planValue: true, nextValue: false },
@@ -188,6 +193,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsPlanMode: false,
     supportsGoalMode: false,
     supportsSkills: false,
+    supportsAdditionalDirectories: false,
     supportsPlugins: false,
     supportsMcpAppExtensions: false,
     planExit: { key: "mode", planValue: "plan", nextValue: "agent" },

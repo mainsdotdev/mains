@@ -91,6 +91,7 @@ describe("useRunOperations collection payload", () => {
         workspaceId: "/tmp/workspace",
       }),
     );
+    expect(mocks.execute.mock.calls[0][0]).not.toHaveProperty("additionalDirectories");
   });
 
   it("keeps collection membership for a Work run", async () => {

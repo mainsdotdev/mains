@@ -36,6 +36,7 @@ import type { Space } from "@/lib/redux/api/spaceApi";
 import type { Provider as AgentProvider } from "@/lib/redux/api/providersApi";
 import { ProviderAuthNotice } from "@/features/workspace/components/provider-auth-notice";
 import { ProviderCliSection } from "@/features/settings/components/provider-settings-shared";
+import { getProviderVariant } from "@/lib/provider-variants";
 
 vi.mock("@/features/workspace/components/terminal-section", () => ({
   TerminalSection: ({ pendingCommand }: { pendingCommand?: string }) =>
@@ -84,6 +85,8 @@ function createHarness(
     failSave?: boolean;
     saveGate?: Promise<void>;
     signedOut?: boolean;
+    copilot?: boolean;
+    copilotSignedOut?: boolean;
   } = {},
 ) {
   let settings = {
@@ -95,10 +98,12 @@ function createHarness(
   let detected: DetectedClis = {
     claude: !options.missing,
     codex: !options.missing,
-    copilot: false,
+    copilot: options.copilot ?? false,
+    copilotSource: options.copilot ? "bundled" : undefined,
     cursor: false,
   };
   let signedOut = options.signedOut ?? false;
+  let copilotSignedOut = options.copilotSignedOut ?? false;
   const spaces = [
     {
       id: "claude-space",
@@ -114,6 +119,10 @@ function createHarness(
       sortOrder: 1,
       isArchived: false,
     },
+    ...(options.copilot ? [{
+      id: "copilot-space", providerId: "copilot_cli", mode: "developer",
+      sortOrder: 2, isArchived: false,
+    }] : []),
   ];
   const invoke = vi.fn(async (channel: string, args: unknown[] = []) => {
     if (channel === CHANNELS.appSettings.get)
@@ -129,6 +138,16 @@ function createHarness(
       );
     if (channel === CHANNELS.providers.detectInstalled)
       return options.failDetection ? fail("Detection failed") : ok(detected);
+    if (channel === CHANNELS.providers.getAccountInfo && args[0] === "copilot_cli")
+      return ok({
+        account: copilotSignedOut ? null : { type: "copilot", login: "mains-user" },
+        requiresOpenaiAuth: false,
+        cli: {
+          version: "1.0.79", channel: null, outdated: false,
+          source: "bundled", updateMethod: "app",
+          authLoginCommand: "'/Applications/Mains.app/bundled/copilot' --no-auto-update login",
+        },
+      });
     if (channel === CHANNELS.providers.getAccountInfo)
       return ok({
         account: signedOut ? null : { type: "claude", email: "account@example.test", planType: "Pro" },
@@ -172,6 +191,9 @@ function createHarness(
     setSignedOut: (next: boolean) => {
       signedOut = next;
     },
+    setCopilotSignedOut: (next: boolean) => {
+      copilotSignedOut = next;
+    },
   };
 }
 
@@ -192,12 +214,13 @@ afterEach(() => {
 });
 
 describe("onboarding flow", () => {
-  function bundledOptions() {
+  function bundledOptions(variant: "claude" | "copilot" = "claude") {
+    const { providerId } = getProviderVariant(variant);
     return onboardingProviders(
-      [{ id: "claude_code", kind: "agent_runtime", isEnabled: true }] as AgentProvider[],
-      [{ id: "claude-space", providerId: "claude_code", mode: "developer", sortOrder: 0, isArchived: false }] as Space[],
-      { claude: true, claudeSource: "bundled", codex: false, copilot: false, cursor: false },
-      "claude-space",
+      [{ id: providerId, kind: "agent_runtime", isEnabled: true }] as AgentProvider[],
+      [{ id: `${variant}-space`, providerId, mode: "developer", sortOrder: 0, isArchived: false }] as Space[],
+      { claude: false, codex: false, copilot: false, cursor: false, [variant]: true, [`${variant}Source`]: "bundled" },
+      `${variant}-space`,
     );
   }
 
@@ -299,6 +322,83 @@ describe("onboarding flow", () => {
     }), { wrapper: harness.wrapper });
     expect(view.getByText("Included with Mains · Updates with the app")).toBeTruthy();
     expect(view.queryByRole("button", { name: "Update CLI" })).toBeNull();
+  });
+
+  it("offers bundled Copilot without requiring a separate installation", async () => {
+    const harness = createHarness({ copilot: true });
+    const view = render(createElement(AgentsStep, {
+      options: bundledOptions("copilot"), value: "copilot", onChange: vi.fn(),
+      isDetecting: false, hasError: false, onRecheck: vi.fn(),
+    }), { wrapper: harness.wrapper });
+    expect((view.getByRole("radio", { name: "Copilot" }) as HTMLInputElement).disabled).toBe(false);
+    await waitFor(() => expect(view.getByText("Included with Mains")).toBeTruthy());
+    expect(view.queryByRole("button", { name: "Set up Copilot" })).toBeNull();
+    expect(view.queryByRole("button", { name: "Sign in to Copilot" })).toBeNull();
+    expect(harness.invoke).toHaveBeenCalledWith(CHANNELS.providers.getAccountInfo, ["copilot_cli"]);
+  });
+
+  it("signs into the bundled Copilot and confirms login in the same setup panel", async () => {
+    const harness = createHarness({ copilot: true, copilotSignedOut: true });
+    const onChange = vi.fn();
+    const onRecheck = vi.fn();
+    const view = render(createElement(AgentsStep, {
+      options: bundledOptions("copilot"), value: "copilot", onChange,
+      isDetecting: false, hasError: false, onRecheck,
+    }), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.getByRole("button", { name: "Sign in to Copilot" })).toBeTruthy());
+    fireEvent.click(view.getByRole("button", { name: "Sign in to Copilot" }));
+    expect(view.getByText(/No separate installation is needed/)).toBeTruthy();
+    expect(view.queryByText("npm install -g @github/copilot")).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: "Sign in" }));
+    expect(harness.store.getState().workspace.providerAuthTerminal).toMatchObject({
+      providerId: "copilot_cli",
+      pendingCommand: "'/Applications/Mains.app/bundled/copilot' --no-auto-update login",
+    });
+
+    harness.setCopilotSignedOut(false);
+    fireEvent.click(view.getByRole("button", { name: "Recheck" }));
+    await waitFor(() => expect(view.getByRole("heading", { name: "Signed in to Copilot" })).toBeTruthy());
+    expect(view.getByText("Signed in as mains-user.")).toBeTruthy();
+    expect(view.queryByTestId("auth-terminal")).toBeNull();
+    expect(view.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(harness.store.getState().workspace.providerAuthTerminal).toBeNull();
+    expect(onRecheck).toHaveBeenCalledOnce();
+    fireEvent.click(view.getByRole("button", { name: "Use Copilot" }));
+    expect(onChange).toHaveBeenCalledWith("copilot");
+    await waitFor(() => expect(document.activeElement).toBe(view.getByRole("radio", { name: "Copilot" })));
+  });
+
+  it("keeps Copilot signed out when only the Claude account is connected", async () => {
+    const harness = createHarness({ copilot: true, copilotSignedOut: true });
+    const options = bundledOptions().map((option) => option.variant === "copilot"
+      ? bundledOptions("copilot").find((candidate) => candidate.variant === "copilot")!
+      : option);
+    const view = render(createElement(AgentsStep, {
+      options, value: "copilot", onChange: vi.fn(),
+      isDetecting: false, hasError: false, onRecheck: vi.fn(),
+    }), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.getByRole("button", { name: "Sign in to Copilot" })).toBeTruthy());
+    fireEvent.click(view.getByRole("button", { name: "Sign in to Copilot" }));
+    fireEvent.click(view.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(view.getByRole("button", { name: "Recheck" }));
+    await waitFor(() => expect((view.getByRole("button", { name: "Recheck" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(view.getByRole("heading", { name: "Sign in to Copilot" })).toBeTruthy();
+    expect(view.getByTestId("auth-terminal")).toBeTruthy();
+    expect(view.queryByRole("button", { name: "Use Copilot" })).toBeNull();
+  });
+
+  it("uses the bundled Copilot login command from the chat authentication notice", async () => {
+    const harness = createHarness({ copilot: true, copilotSignedOut: true });
+    const view = render(createElement(ProviderAuthNotice, {
+      variant: "copilot", title: "Sign in required",
+    }), { wrapper: harness.wrapper });
+    const signIn = view.getByRole("button", { name: "Sign in" }) as HTMLButtonElement;
+    await waitFor(() => expect(signIn.disabled).toBe(false));
+    fireEvent.click(signIn);
+    expect(harness.store.getState().workspace.providerAuthTerminal).toMatchObject({
+      providerId: "copilot_cli",
+      pendingCommand: "'/Applications/Mains.app/bundled/copilot' --no-auto-update login",
+    });
   });
 
   it("defaults worktrees off after settings load and lets a failed read be retried", async () => {
@@ -658,7 +758,7 @@ describe("onboarding flow", () => {
       wrapper: harness.wrapper,
     });
     fireEvent.click(view.getByRole("button", { name: "Let’s begin" }));
-    const trigger = await view.findByRole("button", { name: "Set up Copilot" });
+    const trigger = await view.findByRole("button", { name: "Set up Cursor" });
     fireEvent.click(trigger);
     expect(
       view.getByRole("button", { name: "Copy install command" }),
@@ -666,12 +766,12 @@ describe("onboarding flow", () => {
     expect(
       view.getByRole("button", { name: "Copy sign-in command" }),
     ).toBeTruthy();
-    fireEvent.keyDown(view.getByRole("heading", { name: "Set up Copilot" }), {
+    fireEvent.keyDown(view.getByRole("heading", { name: "Set up Cursor" }), {
       key: "Escape",
     });
     await waitFor(() =>
       expect(document.activeElement).toBe(
-        view.getByRole("button", { name: "Set up Copilot" }),
+        view.getByRole("button", { name: "Set up Cursor" }),
       ),
     );
   });

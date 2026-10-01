@@ -712,14 +712,97 @@ describe("runsService", () => {
       );
     });
 
-    it("scopes extra folder grants to one chat and replaces them on continuation", async () => {
+    it.each(["copilot_cli", "cursor"] as const)("starts and continues %s prompts with an empty directory list", async (providerId) => {
+      createProvider(db, { id: providerId });
+      createWorkspace(db, { id: "ws-no-folders" });
+      createSpace(db, { id: "sp-no-folders", providerId, mode: "developer" });
+      const configSnapshot = providerId === "cursor"
+        ? { mode: "ask" }
+        : { permissionMode: "default" };
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({
+        startRun,
+        continueRun,
+        canResumeSession: vi.fn().mockResolvedValue(true),
+      } as any);
+
+      const { runId } = await runsService.executeRun({
+        accountId: "default",
+        workspaceId: "ws-no-folders",
+        spaceId: "sp-no-folders",
+        providerId,
+        goal: "hi",
+        configSnapshot,
+        additionalDirectories: [],
+      });
+      await flushBackground();
+      expect(startRun.mock.calls[0][0].configSnapshot).toEqual(configSnapshot);
+      expect((await runsService.getRunById(runId))?.configSnapshot).toEqual(configSnapshot);
+
+      await runsService.continueRun({
+        runId,
+        accountId: "default",
+        message: "continue",
+        additionalDirectories: [],
+      });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0].configSnapshot).toEqual(configSnapshot);
+      expect((await runsService.getRunById(runId))?.configSnapshot).toEqual(configSnapshot);
+    });
+
+    it.each(["copilot_cli", "cursor"] as const)("continues a stored %s session with a legacy empty directory list", async (providerId) => {
+      createWorkspace(db, { id: "ws-legacy-folders" });
+      createRun(db, {
+        id: "legacy-folders",
+        providerId,
+        workspaceId: "ws-legacy-folders",
+        mode: "developer",
+        status: "succeeded",
+        configSnapshot: JSON.stringify({ additionalDirectories: [] }),
+      });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({
+        continueRun,
+        canResumeSession: vi.fn().mockResolvedValue(true),
+      } as any);
+
+      await runsService.continueRun({
+        runId: "legacy-folders",
+        accountId: "default",
+        message: "continue",
+      });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0].configSnapshot).toEqual({});
+      expect((await runsService.getRunById("legacy-folders"))?.configSnapshot).toEqual({});
+    });
+
+    it.each(["copilot_cli", "cursor"] as const)("rejects actual extra directory grants for %s", async (providerId) => {
+      createProvider(db, { id: providerId });
+      createWorkspace(db, { id: "ws-unsupported-folders" });
+      createSpace(db, { id: "sp-unsupported-folders", providerId, mode: "developer" });
+      const startRun = mockStartAdapter();
+
+      await expect(runsService.executeRun({
+        accountId: "default",
+        workspaceId: "ws-unsupported-folders",
+        spaceId: "sp-unsupported-folders",
+        providerId,
+        goal: "hi",
+        additionalDirectories: [tmpdir()],
+      })).rejects.toThrow("Additional directories are supported by Claude and Codex only");
+      expect(startRun).not.toHaveBeenCalled();
+    });
+
+    it.each(["claude_code", "codex"] as const)("scopes extra folder grants to one %s chat and replaces them on continuation", async (providerId) => {
       const first = mkdtempSync(join(tmpdir(), "mains-added-dir-"));
       const second = mkdtempSync(join(tmpdir(), "mains-added-dir-"));
       try {
+        createProvider(db, { id: providerId });
         createSpace(db, {
           id: "sp-folders",
           accountId: "default",
-          providerId: "claude_code",
+          providerId,
           mode: "work",
         });
         const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
@@ -733,7 +816,7 @@ describe("runsService", () => {
         const { runId } = await runsService.executeRun({
           accountId: "default",
           spaceId: "sp-folders",
-          providerId: "claude_code",
+          providerId,
           goal: "read the folder",
           additionalDirectories: [first, join(first, ".")],
         });

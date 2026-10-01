@@ -14,11 +14,12 @@ export interface ProviderCliInfo {
   authLoginCommand?: string;
 }
 
-/** Availability on the backend, including Mains' bundled Claude runtime. */
+/** Availability on the backend, including Mains' bundled runtimes. */
 export interface DetectedClis {
   claude: boolean;
   copilot: boolean;
   codex: boolean;
   cursor: boolean;
   claudeSource?: ProviderCliSource;
+  copilotSource?: ProviderCliSource;
 }

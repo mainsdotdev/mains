@@ -17,9 +17,12 @@
 
 import path from "node:path";
 import os from "node:os";
-import { spawn, execFile, execSync } from "node:child_process";
-import { promisify } from "node:util";
-import { findCopilotBinaryPath } from "../providers.utils";
+import { spawn } from "node:child_process";
+import {
+  copilotAuthLoginCommand,
+  copilotRuntimeArgs,
+  resolveCopilotRuntime,
+} from "../providers.utils";
 import type {
   AccountInfo,
   AcquiredSession,
@@ -420,6 +423,8 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   let clientInitPromise: Promise<void> | null = null;
   let initError: Error | null = null;
   let currentClientCwd: string | null = null;
+  let clientNeedsRestart = false;
+  let lastAccountIdentity: string | null | undefined;
 
   // Correlate tool events when toolName/input is missing in completion events.
   // Module-scoped: shared across runs (matches today's adapter behavior).
@@ -757,19 +762,25 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     clientInitPromise = null;
     initError = null;
     currentClientCwd = null;
+    clientNeedsRestart = false;
     // Both are per-runtime/per-account, so a fresh client must re-read them.
     modelsCache = null;
     commandsCache.clear();
 
     if (!current) return;
     logInfo(`Disposing Copilot client: ${reason}`);
+    await stopClient(current);
+  }
+
+  async function stopClient(current: CopilotClientInterface): Promise<void> {
     try {
       let timer: NodeJS.Timeout | undefined;
       const stopTimeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error("Stop timed out")), 5000);
       });
       try {
-        await Promise.race([current.stop(), stopTimeout]);
+        const errors = await Promise.race([current.stop(), stopTimeout]);
+        if (errors.length) throw errors[0];
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -782,6 +793,27 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         }
       }
     }
+  }
+
+  async function createClient(workspaceCwd?: string): Promise<CopilotClientInterface> {
+    // Current SDK releases expose both ESM and CJS entry points. The explicit
+    // native path also avoids launching Electron as Node in packaged builds.
+    const CopilotSDK = await import("@github/copilot-sdk");
+    const runtime = resolveCopilotRuntime(config.binary);
+    if (!config.cliUrl && !runtime) {
+      throw new Error("Copilot is included with Mains. Reinstall Mains to restore its runtime.");
+    }
+    const options: CopilotClientOptions = { logLevel: config.logLevel ?? "info" };
+    if (config.cliUrl) {
+      options.connection = CopilotSDK.RuntimeConnection.forUri(config.cliUrl);
+    } else {
+      const connection = { path: runtime!.path, args: copilotRuntimeArgs(runtime!) };
+      options.connection = config.useStdio === false && config.port
+        ? CopilotSDK.RuntimeConnection.forTcp({ ...connection, port: config.port })
+        : CopilotSDK.RuntimeConnection.forStdio(connection);
+    }
+    if (workspaceCwd) options.workingDirectory = workspaceCwd;
+    return new CopilotSDK.CopilotClient(options as any) as unknown as CopilotClientInterface;
   }
 
   /**
@@ -817,6 +849,9 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     // streaming on another workspace, and incidentally papered over a dead CLI
     // child by rebuilding it. Hence the explicit health check below.)
     // `currentClientCwd` is now just a record of what the client was built with.
+    if (client && clientNeedsRestart && onEventByRun.size === 0) {
+      await disposeClient("runtime configuration or account changed");
+    }
     if (client) {
       if (await isClientAlive(client)) {
         if (workspaceCwd && currentClientCwd !== workspaceCwd) {
@@ -844,65 +879,11 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
     clientInitPromise = (async () => {
       try {
-        // ESM-only SDK; dodge Vite's CJS rewrite of import().
-        const dynamicImport = new Function("specifier", "return import(specifier)");
-        const CopilotSDK = await dynamicImport("@github/copilot-sdk").catch(() => null);
-
-        if (!CopilotSDK) {
-          throw new Error(
-            "Copilot SDK (@github/copilot-sdk) is not installed. Please install it to use the Copilot provider.",
-          );
-        }
-
-        const CopilotClient = (CopilotSDK as any).CopilotClient;
-        if (!CopilotClient) {
-          throw new Error("Could not find CopilotClient in @github/copilot-sdk");
-        }
-
-        try {
-          execSync("gh auth status", { stdio: "pipe", timeout: 5000 });
-        } catch {
-          throw new Error(
-            "GitHub CLI is not authenticated. Please run `gh auth login` in your terminal to sign in.",
-          );
-        }
-
-        const { RuntimeConnection } = CopilotSDK as any;
-
-        // `start()` is called explicitly below; the SDK dropped the `autoStart`
-        // option (along with `autoRestart` / `isChildProcess` / `cliArgs` —
-        // extra CLI args now live on `RuntimeConnection.forStdio({ args })`).
-        const options: CopilotClientOptions = {
-          logLevel: config.logLevel ?? "info",
-        };
-
-        // The SDK resolves the CLI *only* from `connection`. With no explicit
-        // path it falls back to `getBundledCliPath()`, which returns
-        // `@github/copilot/index.js` and is spawned via `process.execPath`. In a
-        // packaged app that execPath is the Electron binary (runAsNode fuse
-        // disabled) and the .js lives inside app.asar, so the child exits 0
-        // immediately → "CLI server exited unexpectedly with code 0". Handing the
-        // SDK the unpacked native binary (`config.binary`) avoids all of that.
-        if (config.cliUrl) {
-          options.connection = RuntimeConnection.forUri(config.cliUrl);
-        } else if (config.useStdio === false && config.port) {
-          options.connection = RuntimeConnection.forTcp({
-            port: config.port,
-            ...(config.binary ? { path: config.binary } : {}),
-          });
-        } else {
-          options.connection = RuntimeConnection.forStdio(
-            config.binary ? { path: config.binary } : {},
-          );
-        }
-
+        client = await createClient(workspaceCwd);
         if (workspaceCwd) {
-          options.workingDirectory = workspaceCwd;
           currentClientCwd = workspaceCwd;
           logInfo(`Setting client cwd to: ${workspaceCwd}`);
         }
-
-        client = new CopilotClient(options) as CopilotClientInterface;
 
         try {
           await client.start();
@@ -910,7 +891,9 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           const errorMessage = error instanceof Error ? error.message : String(error);
           if (errorMessage.includes("ENOENT")) {
             throw new Error(
-              `Copilot CLI binary not found. Please ensure GitHub Copilot CLI is installed and the path is correct. Current path: ${config.binary || "bundled"}`,
+              config.binary
+                ? "Copilot runtime not found. Check the configured executable path."
+                : "Copilot is included with Mains. Reinstall Mains to restore its runtime.",
             );
           } else if (errorMessage.includes("ECONNREFUSED")) {
             throw new Error(
@@ -1707,7 +1690,15 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     },
 
     updateConfig(next) {
-      adoptConfig(config, next as CopilotAdapterConfig);
+      const updated = next as CopilotAdapterConfig;
+      if (["binary", "cliUrl", "useStdio", "port"].some((key) =>
+        config[key as keyof CopilotAdapterConfig] !== updated[key as keyof CopilotAdapterConfig],
+      )) {
+        clientNeedsRestart = true;
+        modelsCache = null;
+        commandsCache.clear();
+      }
+      adoptConfig(config, updated);
     },
 
     async shutdown(): Promise<void> {
@@ -1945,39 +1936,58 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       }
     },
 
-    // CLI health/version + self-update. The GitHub Copilot CLI is npm-distributed
-    // (`@github/copilot`) but ships its own `copilot update` subcommand and
-    // `--version`, so we drive it exactly like the other providers. We probe the
-    // user's on-PATH `copilot` first (what `update` actually mutates), falling
-    // back to the SDK's resolved binary, then a bare `copilot` on PATH.
     async getAccountInfo(): Promise<AccountInfo> {
-      const binaryPath = findCopilotBinaryPath() ?? config.binary ?? "copilot";
-      const version = await readCopilotCliVersion(binaryPath);
-      // Probe the runtime's auth state — `account: null` is what the renderer's
-      // preflight treats as "signed out", so it must reflect reality, not a
-      // hardcoded placeholder. A client that can't start (CLI missing/broken)
-      // also reads as signed out, which is the right banner for that state too.
+      const runtime = config.cliUrl ? null : resolveCopilotRuntime(config.binary);
+      const cli: NonNullable<AccountInfo["cli"]> = {
+        version: null, channel: null, outdated: false,
+        ...(runtime ? {
+          source: runtime.source,
+          updateMethod: runtime.source === "bundled" ? "app" : "cli",
+          authLoginCommand: copilotAuthLoginCommand(runtime),
+        } : {}),
+      };
+      // A short-lived control client reads credentials saved by a completed
+      // login, even if the run client was started while signed out. No model
+      // session or prompt is sent; an active run is never stopped by Recheck.
+      let probe: CopilotClientInterface | null = null;
       let account: AccountInfo["account"] = null;
       try {
-        const copilotClient = await ensureClient();
-        const status = await copilotClient.getAuthStatus();
+        probe = await createClient();
+        await probe.start();
+        cli.version = (await probe.getStatus()).version ?? null;
+        const status = await probe.getAuthStatus();
         if (status?.isAuthenticated) {
           account = { type: "copilot", login: status.login ?? null };
+        }
+        const identity = status?.isAuthenticated
+          ? `${status.host ?? ""}:${status.login ?? ""}:${status.authType ?? ""}`
+          : null;
+        if (identity !== lastAccountIdentity) {
+          lastAccountIdentity = identity;
+          clientNeedsRestart = !!client;
+          modelsCache = null;
+          commandsCache.clear();
         }
       } catch (error) {
         logWarn(
           `getAccountInfo: auth status read failed: ${error instanceof Error ? error.message : String(error)}`,
         );
+      } finally {
+        if (probe) await stopClient(probe);
       }
-      return {
-        account,
-        requiresOpenaiAuth: false,
-        cli: { version, channel: null, outdated: false },
-      };
+      return { account, requiresOpenaiAuth: false, cli };
     },
 
     async updateCli(): Promise<CliUpdateResult> {
-      const binaryPath = findCopilotBinaryPath() ?? config.binary ?? "copilot";
+      if (config.cliUrl) {
+        return { success: false, output: "Update Copilot on the computer hosting the connected CLI server." };
+      }
+      const runtime = resolveCopilotRuntime(config.binary);
+      if (!runtime) return { success: false, output: "Copilot runtime not found. Reinstall Mains to restore it." };
+      if (runtime.source === "bundled") {
+        return { success: false, output: "Copilot is included with Mains and updates with the app. Check for Mains updates in Settings." };
+      }
+      const binaryPath = runtime.path;
       const env: Record<string, string | undefined> = {
         ...process.env,
         HOME: os.homedir(),
@@ -2011,24 +2021,6 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       });
     },
   };
-}
-
-const execFileAsync = promisify(execFile);
-
-/**
- * Read the Copilot CLI version via `copilot --version` (output looks like
- * "GitHub Copilot CLI 1.0.61."). Returns the bare semver or null on any failure.
- */
-async function readCopilotCliVersion(binaryPath: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(binaryPath, ["--version"], {
-      timeout: 8000,
-    });
-    const match = String(stdout).match(/(\d+\.\d+\.\d+)/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
 }
 
 // ─────────────────────────────────────────────────────────────
