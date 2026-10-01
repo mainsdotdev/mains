@@ -22,7 +22,6 @@ import { toast } from "@/components/ui";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { runsApi, workspaceApi } from "@/lib/redux/api";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
-import { getProviderVariantById } from "@/lib/provider-variants";
 import type { Run } from "../types";
 import type { RunCache } from "../lib/run-cache";
 import { createRunStatusSyncPolicy } from "../lib/run-status-sync";
@@ -81,11 +80,8 @@ export function useRunSync({
       if (isAuthError) {
         // The transcript renders a Sign in notice for this run — the toast
         // just names the fix for anyone who dismisses it.
-        const loginCommand = getProviderVariantById(run.providerId)?.authLoginCommand;
         toast.error(
-          loginCommand
-            ? `Authentication expired — sign in from the session view or run \`${loginCommand}\``
-            : "Authentication expired — sign in from the session view",
+          "Authentication expired — sign in from the session view",
           { duration: 8000 },
         );
       } else {

@@ -1,4 +1,6 @@
 import { baseApi } from "./baseApi";
+import type { DetectedClis, ProviderCliInfo } from "@mains/contracts/provider-cli";
+export type { DetectedClis } from "@mains/contracts/provider-cli";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type {
   PluginAvailability,
@@ -268,26 +270,12 @@ export interface AccountInfo {
     planType: string;
   } | null;
   requiresOpenaiAuth: boolean;
-  cli?: {
-    version: string | null;
-    channel: string | null;
-    outdated: boolean;
-    compatibility?: "supported" | "newer" | "unsupported" | "unknown";
-    minimumVersion?: string;
-    testedProtocolVersion?: string;
-  };
+  cli?: ProviderCliInfo;
 }
 
 export interface CliUpdateResult {
   success: boolean;
   output: string;
-}
-
-export interface DetectedClis {
-  claude: boolean;
-  copilot: boolean;
-  codex: boolean;
-  cursor: boolean;
 }
 
 export const providersApi = baseApi.injectEndpoints({

@@ -5,6 +5,7 @@
 
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
 import type { ModeId } from "@mains/contracts/modes";
+import type { ProviderCliInfo } from "@mains/contracts/provider-cli";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { ModeToolPolicy } from "./mode-harness";
 import type {
@@ -1859,19 +1860,13 @@ export interface AccountInfo {
   } | null;
   requiresOpenaiAuth: boolean;
   /**
-   * Optional CLI health/version metadata (Cursor). `outdated` is true only when
+   * Metadata for the executable actually used by the provider. Bundled Claude
+   * updates with Mains and supplies its own login command. `outdated` is true when
    * the CLI is old enough that `agent about` / the parameterized model picker is
    * unsupported — drives an "update CLI" hint in Settings. We deliberately do
    * NOT gate on the `lab` channel: recent CLIs support effort controls without it.
    */
-  cli?: {
-    version: string | null;
-    channel: string | null;
-    outdated: boolean;
-    compatibility?: "supported" | "newer" | "unsupported" | "unknown";
-    minimumVersion?: string;
-    testedProtocolVersion?: string;
-  };
+  cli?: ProviderCliInfo;
 }
 
 /** Result of a provider CLI self-update (e.g. `agent update`). */

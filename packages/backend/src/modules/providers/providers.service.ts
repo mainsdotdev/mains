@@ -333,7 +333,9 @@ export const providersService = {
   },
 
   async detectInstalled(): Promise<DetectedClisResponse> {
-    return detectInstalledClis();
+    const claude = await providersRepo.findById(PROVIDER_IDS.claude);
+    const binary = claude?.config?.binary;
+    return detectInstalledClis(typeof binary === "string" ? binary : undefined);
   },
 };
 

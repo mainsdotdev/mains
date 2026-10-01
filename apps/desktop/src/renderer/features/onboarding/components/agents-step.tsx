@@ -6,11 +6,14 @@ import {
   type ProviderVariant,
 } from "@/lib/provider-variants";
 import type { OnboardingProvider } from "../lib/onboarding-state";
+import { useGetProviderAccountInfoQuery } from "@/lib/redux/api/providersApi";
+import { useProviderAuthTerminal } from "@/features/workspace/hooks/use-provider-auth-terminal";
+import { TerminalSection } from "@/features/workspace/components/terminal-section";
 
 const SETUP: Record<ProviderVariant, { command: string | null; docs: string }> =
   {
     claude: {
-      command: "npm install -g @anthropic-ai/claude-code",
+      command: null,
       docs: "https://docs.anthropic.com/en/docs/claude-code",
     },
     codex: {
@@ -45,18 +48,62 @@ export function AgentsStep({
   onRecheck,
 }: AgentsStepProps) {
   const [setup, setSetup] = useState<ProviderVariant | null>(null);
+  const claude = getProviderVariant("claude");
+  const claudeOption = options.find((option) => option.variant === claude.variant);
+  const {
+    data: claudeAccount,
+    refetch: refetchClaudeAccount,
+    isFetching: isCheckingAccount,
+  } = useGetProviderAccountInfoQuery(claude.providerId, {
+    skip: !claudeOption?.available,
+    refetchOnFocus: true,
+    refetchOnMountOrArgChange: true,
+  });
+  const claudeSignedIn = !!claudeOption?.available && !!claudeAccount?.account;
+  const authTerminal = useProviderAuthTerminal();
+  const closeAuthTerminal = authTerminal.close;
+  const authTerminalProviderId = authTerminal.session?.providerId;
+  useEffect(() => closeAuthTerminal, [closeAuthTerminal]);
+  const recheck = () => {
+    onRecheck();
+    if (claudeOption?.available) void refetchClaudeAccount();
+  };
   const setupHeading = useRef<HTMLHeadingElement>(null);
   const setupTriggers = useRef<
     Partial<Record<ProviderVariant, HTMLButtonElement | null>>
   >({});
+  const providerChoices = useRef<
+    Partial<Record<ProviderVariant, HTMLInputElement | null>>
+  >({});
   useEffect(() => {
     if (setup) setupHeading.current?.focus({ preventScroll: true });
   }, [setup]);
+  useEffect(() => {
+    if (
+      setup === claude.variant &&
+      claudeSignedIn &&
+      authTerminalProviderId === claude.providerId
+    ) {
+      closeAuthTerminal();
+      setupHeading.current?.focus({ preventScroll: true });
+    }
+  }, [
+    setup,
+    claude.variant,
+    claude.providerId,
+    claudeSignedIn,
+    authTerminalProviderId,
+    closeAuthTerminal,
+  ]);
   const closeSetup = () => {
     const previous = setup;
     setSetup(null);
+    authTerminal.close();
+    recheck();
     requestAnimationFrame(() => {
-      if (previous) setupTriggers.current[previous]?.focus();
+      if (previous) {
+        (setupTriggers.current[previous] ?? providerChoices.current[previous])?.focus();
+      }
     });
   };
 
@@ -64,6 +111,19 @@ export function AgentsStep({
     const provider = getProviderVariant(setup);
     const instructions = SETUP[setup];
     const Icon = provider.icon;
+    const option = options.find((option) => option.variant === setup);
+    const connectedAccount =
+      option?.available && provider.providerId === claude.providerId
+        ? claudeAccount?.account
+        : null;
+    const isSignedIn = !!connectedAccount;
+    const loginCommand =
+      provider.providerId === claude.providerId
+        ? claudeAccount?.cli?.authLoginCommand
+        : provider.authLoginCommand;
+    const activeTerminal = authTerminal.session?.providerId === provider.providerId
+      ? authTerminal.session
+      : null;
     return (
       <section
         className="onboarding-install"
@@ -86,9 +146,19 @@ export function AgentsStep({
           className={`onboarding-install-icon ${provider.accentClassName ?? ""}`}
         />
         <h2 ref={setupHeading} tabIndex={-1}>
-          Set up {provider.label}
+          {isSignedIn ? "Signed in to" : option?.available ? "Sign in to" : "Set up"} {provider.label}
         </h2>
-        <p>Install the CLI in your terminal, then sign in to your account.</p>
+        <p>
+          {isSignedIn
+            ? connectedAccount?.type === "claude"
+              ? `Signed in as ${connectedAccount.email}.`
+              : "Claude is ready to use."
+            : instructions.command
+              ? "Install the CLI in your terminal, then sign in to your account."
+              : option?.installed
+                ? "Sign in to connect your Claude account. No separate installation is needed."
+                : "Claude is included with Mains. Reinstall Mains to restore it, then recheck."}
+        </p>
         {instructions.command && (
           <div className="onboarding-command glass-outline">
             <code>{instructions.command}</code>
@@ -100,42 +170,81 @@ export function AgentsStep({
             />
           </div>
         )}
-        <span className="onboarding-command-label">Sign in</span>
-        <div className="onboarding-command glass-outline">
-          <code>{provider.authLoginCommand}</code>
-          <CopyButton
-            variant="icon"
-            tooltip="Copy sign-in command"
-            text={provider.authLoginCommand}
-            className="onboarding-copy-button"
-          />
-        </div>
+        {instructions.command && <span className="onboarding-command-label">Sign in</span>}
+        {instructions.command && (
+          <div className="onboarding-command glass-outline">
+            <code>{loginCommand ?? provider.authLoginCommand}</code>
+            <CopyButton
+              variant="icon"
+              tooltip="Copy sign-in command"
+              text={loginCommand ?? provider.authLoginCommand}
+              className="onboarding-copy-button"
+            />
+          </div>
+        )}
         <div className="onboarding-install-actions">
-          <Button
-            variant="subtle"
-            className="onboarding-text-button"
-            onClick={() =>
-              void window.api.shell.openExternal(instructions.docs)
-            }
-          >
-            Open setup guide <ChevronUp className="size-3.5 rotate-90" />
-          </Button>
+          <div className="onboarding-install-primary-actions">
+            {isSignedIn ? (
+              <Button
+                variant="primary"
+                onClick={() => {
+                  onChange(provider.variant);
+                  closeSetup();
+                }}
+              >
+                Use {provider.label}
+              </Button>
+            ) : option?.available && loginCommand && (
+              <Button
+                variant="primary"
+                onClick={() => authTerminal.open(provider.providerId, loginCommand)}
+              >
+                Sign in
+              </Button>
+            )}
+            {!isSignedIn && (
+              <Button
+                variant="subtle"
+                className="onboarding-text-button mt-2"
+                onClick={() =>
+                  void window.api.shell.openExternal(instructions.docs)
+                }
+              >
+                Open setup guide <ChevronUp className="size-3.5 rotate-90" />
+              </Button>
+            )}
+          </div>
           <Button
             variant="primary"
             className="onboarding-recheck"
-            onClick={onRecheck}
-            disabled={isDetecting}
+            onClick={recheck}
+            disabled={isDetecting || isCheckingAccount}
           >
             <Refresh className="size-3.5" />{" "}
-            {isDetecting ? "Checking…" : "Recheck"}
+            {isDetecting || isCheckingAccount ? "Checking…" : "Recheck"}
           </Button>
         </div>
+        {activeTerminal && !isSignedIn && (
+          <TerminalSection
+            id={`onboarding-auth-${provider.providerId}`}
+            isOpen
+            title={`Sign in to ${provider.label}`}
+            pendingCommand={activeTerminal.pendingCommand}
+            onPendingCommandSent={authTerminal.markCommandSent}
+            onClose={() => {
+              authTerminal.close();
+              recheck();
+            }}
+          />
+        )}
         <p className="onboarding-panel-note" role="status">
-          {options.find((option) => option.variant === setup)?.installed
-            ? options.find((option) => option.variant === setup)?.active
-              ? "CLI detected. Go back to choose your provider."
-              : "CLI detected. You can enable this provider in Settings after setup."
-            : "Mains checks for the CLI here. Account access is checked when you start an agent."}
+          {isSignedIn
+            ? "Your account is connected. You can continue setup."
+            : option?.installed
+              ? option.active
+                ? "Go back to choose your provider. You can also sign in from your first chat."
+                : "You can enable this provider in Settings after setup."
+              : "Mains checks for the CLI here. Account access is checked when you start an agent."}
         </p>
       </section>
     );
@@ -150,7 +259,7 @@ export function AgentsStep({
         <Button
           variant="subtle"
           className="onboarding-text-button"
-          onClick={onRecheck}
+          onClick={recheck}
           disabled={isDetecting}
         >
           <Refresh className="size-3.5" /> Recheck
@@ -161,6 +270,9 @@ export function AgentsStep({
         {options.map((option) => {
           const provider = getProviderVariant(option.variant);
           const Icon = provider.icon;
+          const needsSignIn = option.available &&
+            provider.providerId === claude.providerId &&
+            claudeAccount?.account === null;
           return (
             <div className="onboarding-provider-row" key={option.variant}>
               <label
@@ -169,6 +281,9 @@ export function AgentsStep({
               >
                 <Input
                   variant="bare"
+                  ref={(node) => {
+                    providerChoices.current[option.variant] = node;
+                  }}
                   type="radio"
                   className="sr-only"
                   name="starting-provider"
@@ -189,7 +304,11 @@ export function AgentsStep({
                       : option.installed === undefined
                         ? "Waiting for CLI detection"
                         : option.installed
-                          ? "CLI detected"
+                          ? needsSignIn
+                            ? "Sign in required"
+                            : option.source === "bundled"
+                              ? "Included with Mains"
+                              : "CLI detected"
                           : "CLI not found"}
                   </span>
                 </span>
@@ -199,7 +318,7 @@ export function AgentsStep({
                   />
                 </span>
               </label>
-              {!option.available && (
+              {(!option.available || needsSignIn) && (
                 <Button
                   variant="primary"
                   ref={(node) => {
@@ -207,9 +326,9 @@ export function AgentsStep({
                   }}
                   className="onboarding-setup-button"
                   onClick={() => setSetup(option.variant)}
-                  aria-label={`Set up ${provider.label}`}
+                  aria-label={`${needsSignIn ? "Sign in to" : "Set up"} ${provider.label}`}
                 >
-                  Set up
+                  {needsSignIn ? "Sign in" : "Set up"}
                 </Button>
               )}
             </div>
@@ -221,7 +340,7 @@ export function AgentsStep({
           ? "Couldn’t check your providers. Recheck, or set up later."
           : !isDetecting && !options.some((option) => option.available)
             ? "No active CLI found. Set one up, recheck, or continue with Set up later."
-            : "Pick the agent you’ll start with. Sign-in is checked on your first run."}
+            : "Pick the agent you’ll start with. You can sign in now or from your first chat."}
       </p>
     </div>
   );

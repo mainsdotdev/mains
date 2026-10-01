@@ -7,7 +7,10 @@ import {
   type ProviderVariant,
 } from "@/lib/provider-variants";
 import { useProviderAuthTerminal } from "@/features/workspace/hooks/use-provider-auth-terminal";
-import { useUpdateProviderCliMutation } from "@/lib/redux/api";
+import {
+  useGetProviderAccountInfoQuery,
+  useUpdateProviderCliMutation,
+} from "@/lib/redux/api";
 
 /**
  * The shell both notices share: the composer's own glass surface, so an app
@@ -80,7 +83,9 @@ export function ProviderAuthNotice({
   className,
 }: ProviderAuthNoticeProps) {
   const authTerminal = useProviderAuthTerminal();
-  const { providerId, authLoginCommand } = getProviderVariant(variant);
+  const { providerId, label, authLoginCommand: defaultLoginCommand } = getProviderVariant(variant);
+  const { data: accountInfo, isLoading: isLoadingAccount } = useGetProviderAccountInfoQuery(providerId);
+  const authLoginCommand = accountInfo?.cli?.authLoginCommand ?? defaultLoginCommand;
 
   return (
     <NoticeShell
@@ -97,8 +102,9 @@ export function ProviderAuthNotice({
           )}
           <Button
             variant="primary"
-            tooltip={`Runs \`${authLoginCommand}\` in the terminal`}
+            tooltip={`Sign in to ${label}`}
             tooltipPosition="top-left"
+            disabled={isLoadingAccount}
             onClick={() => authTerminal.open(providerId, authLoginCommand)}
           >
             Sign in

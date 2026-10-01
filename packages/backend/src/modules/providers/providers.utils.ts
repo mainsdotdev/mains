@@ -2,7 +2,9 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
+import type { DetectedClis, ProviderCliSource } from "@mains/contracts/provider-cli";
 
 // ─────────────────────────────────────────────────────────────
 // Logging
@@ -283,15 +285,12 @@ export function findPackagedClaudeSdkBinary(): string | null {
         nativePkg,
         binaryName,
       ),
-      path.join(
-        appPath,
-        ".vite",
-        "build",
-        "node_modules",
-        nativePkg,
-        binaryName,
-      ),
     ];
+    if (!appPath.endsWith(".asar")) {
+      candidates.push(path.join(
+        appPath, ".vite", "build", "node_modules", nativePkg, binaryName,
+      ));
+    }
 
     for (const candidate of candidates) {
       if (isExecutableFile(candidate)) {
@@ -308,6 +307,47 @@ export function findPackagedClaudeSdkBinary(): string | null {
   } catch {
     return null;
   }
+}
+
+export interface ClaudeRuntime {
+  path: string;
+  source: ProviderCliSource;
+}
+
+/**
+ * One executable for runs, discovery, account probes and login. An explicit
+ * override wins; otherwise use the SDK-matched binary, never an independently
+ * updated system installation. Invalid overrides retain the bundled fallback.
+ */
+export function resolveClaudeRuntime(configuredBinary?: string): ClaudeRuntime | null {
+  if (configuredBinary) {
+    const configured = resolveCandidate(path.resolve(configuredBinary));
+    if (configured) return { path: configured, source: "configured" };
+  }
+
+  if (getBackendRuntime().isPackaged()) {
+    const packaged = findPackagedClaudeSdkBinary();
+    return packaged ? { path: packaged, source: "bundled" } : null;
+  }
+
+  // The native optional dependency is also installed in development and in
+  // the standalone Node host. Resolve it exactly as the SDK does.
+  const nativePkg = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
+  const binaryName = process.platform === "win32" ? "claude.exe" : "claude";
+  try {
+    const hostRequire = createRequire(path.join(getBackendRuntime().getAppPath(), "package.json"));
+    const sdkRequire = createRequire(hostRequire.resolve("@anthropic-ai/claude-agent-sdk"));
+    const binary = resolveCandidate(sdkRequire.resolve(`${nativePkg}/${binaryName}`));
+    return binary ? { path: binary, source: "bundled" } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function claudeAuthLoginCommand(runtime: ClaudeRuntime): string {
+  // Login runs in a PTY shell. Paths can contain spaces, quotes or shell syntax.
+  const quoted = `'${runtime.path.replace(/'/g, `'\\''`)}'`;
+  return `${quoted} auth login`;
 }
 
 /**
@@ -637,20 +677,17 @@ export function findCursorBinaryPath(): string | null {
   return firstExecutable(candidates);
 }
 
-export interface DetectedClis {
-  claude: boolean;
-  copilot: boolean;
-  codex: boolean;
-  cursor: boolean;
-}
+export type { DetectedClis } from "@mains/contracts/provider-cli";
 
 /**
- * Detect which provider CLIs are installed on the user's machine.
+ * Detect provider runtimes available on this backend, including bundled ones.
  * Used by the onboarding flow to pre-select detected agents.
  */
-export function detectInstalledClis(): DetectedClis {
+export function detectInstalledClis(claudeBinary?: string): DetectedClis {
+  const claude = resolveClaudeRuntime(claudeBinary);
   return {
-    claude: findClaudeBinary() !== null,
+    claude: claude !== null,
+    ...(claude ? { claudeSource: claude.source } : {}),
     copilot: findCopilotBinaryPath() !== null,
     codex: findCodexBinaryPath() !== null,
     cursor: findCursorBinaryPath() !== null,

@@ -80,9 +80,4 @@ export interface ProviderListResponse {
 // ─────────────────────────────────────────────────────────────
 // CLI Detection
 // ─────────────────────────────────────────────────────────────
-export interface DetectedClisResponse {
-  claude: boolean;
-  copilot: boolean;
-  codex: boolean;
-  cursor: boolean;
-}
+export type { DetectedClis as DetectedClisResponse } from "@mains/contracts/provider-cli";

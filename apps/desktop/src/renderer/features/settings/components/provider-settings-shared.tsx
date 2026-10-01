@@ -148,17 +148,23 @@ export function ProviderCliSection({
               {updateResult}
             </Text>
           )}
-          <Button
-            variant={buttonVariant}
-            onClick={handleUpdateCli}
-            disabled={isUpdatingCli}
-            className="gap-1 flex items-center"
-          >
-            {isUpdatingCli ? (
-              <AsciiSpinner variant="null" kind="download" />
-            ) : null}
-            {isUpdatingCli ? "Updating…" : "Update CLI"}
-          </Button>
+          {cli?.updateMethod === "app" ? (
+            <Text as="span" size="xs" tone="subtle">
+              Included with Mains · Updates with the app
+            </Text>
+          ) : (
+            <Button
+              variant={buttonVariant}
+              onClick={handleUpdateCli}
+              disabled={isUpdatingCli}
+              className="gap-1 flex items-center"
+            >
+              {isUpdatingCli ? (
+                <AsciiSpinner variant="null" kind="download" />
+              ) : null}
+              {isUpdatingCli ? "Updating…" : "Update CLI"}
+            </Button>
+          )}
         </div>
       </SettingsRow>
       {children}

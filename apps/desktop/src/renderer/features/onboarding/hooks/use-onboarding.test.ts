@@ -30,6 +30,17 @@ import workspaceReducer from "@/lib/redux/slices/workspaceSlice";
 import backendsReducer from "@/lib/redux/slices/backendsSlice";
 import { OnboardingScreen } from "../components/onboarding-screen";
 import { useOnboarding } from "./use-onboarding";
+import { AgentsStep } from "../components/agents-step";
+import { onboardingProviders } from "../lib/onboarding-state";
+import type { Space } from "@/lib/redux/api/spaceApi";
+import type { Provider as AgentProvider } from "@/lib/redux/api/providersApi";
+import { ProviderAuthNotice } from "@/features/workspace/components/provider-auth-notice";
+import { ProviderCliSection } from "@/features/settings/components/provider-settings-shared";
+
+vi.mock("@/features/workspace/components/terminal-section", () => ({
+  TerminalSection: ({ pendingCommand }: { pendingCommand?: string }) =>
+    createElement("div", { "data-testid": "auth-terminal" }, pendingCommand),
+}));
 
 vi.hoisted(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -72,6 +83,7 @@ function createHarness(
     failSettings?: boolean;
     failSave?: boolean;
     saveGate?: Promise<void>;
+    signedOut?: boolean;
   } = {},
 ) {
   let settings = {
@@ -86,6 +98,7 @@ function createHarness(
     copilot: false,
     cursor: false,
   };
+  let signedOut = options.signedOut ?? false;
   const spaces = [
     {
       id: "claude-space",
@@ -116,6 +129,16 @@ function createHarness(
       );
     if (channel === CHANNELS.providers.detectInstalled)
       return options.failDetection ? fail("Detection failed") : ok(detected);
+    if (channel === CHANNELS.providers.getAccountInfo)
+      return ok({
+        account: signedOut ? null : { type: "claude", email: "account@example.test", planType: "Pro" },
+        requiresOpenaiAuth: false,
+        cli: {
+          version: "2.1.283", channel: null, outdated: false,
+          source: "bundled", updateMethod: "app",
+          authLoginCommand: "'/Applications/Mains.app/bundled/claude' auth login",
+        },
+      });
     if (channel === CHANNELS.appSettings.update) {
       await options.saveGate;
       if (options.failSave) return fail("Save failed");
@@ -146,6 +169,9 @@ function createHarness(
     setDetected: (next: DetectedClis) => {
       detected = next;
     },
+    setSignedOut: (next: boolean) => {
+      signedOut = next;
+    },
   };
 }
 
@@ -166,6 +192,115 @@ afterEach(() => {
 });
 
 describe("onboarding flow", () => {
+  function bundledOptions() {
+    return onboardingProviders(
+      [{ id: "claude_code", kind: "agent_runtime", isEnabled: true }] as AgentProvider[],
+      [{ id: "claude-space", providerId: "claude_code", mode: "developer", sortOrder: 0, isArchived: false }] as Space[],
+      { claude: true, claudeSource: "bundled", codex: false, copilot: false, cursor: false },
+      "claude-space",
+    );
+  }
+
+  it("offers bundled Claude without requiring a separate installation", async () => {
+    const harness = createHarness();
+    const view = render(createElement(AgentsStep, {
+      options: bundledOptions(), value: "claude", onChange: vi.fn(),
+      isDetecting: false, hasError: false, onRecheck: vi.fn(),
+    }), { wrapper: harness.wrapper });
+    expect((view.getByRole("radio", { name: "Claude" }) as HTMLInputElement).disabled).toBe(false);
+    await waitFor(() => expect(view.getByText("Included with Mains")).toBeTruthy());
+    expect(view.queryByRole("button", { name: "Set up Claude" })).toBeNull();
+    expect(view.queryByText("npm install -g @anthropic-ai/claude-code")).toBeNull();
+  });
+
+  it("opens a login terminal for the bundled executable when Claude is signed out", async () => {
+    const harness = createHarness({ signedOut: true });
+    const view = render(createElement(AgentsStep, {
+      options: bundledOptions(), value: "claude", onChange: vi.fn(),
+      isDetecting: false, hasError: false, onRecheck: vi.fn(),
+    }), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.getByRole("button", { name: "Sign in to Claude" })).toBeTruthy());
+    fireEvent.click(view.getByRole("button", { name: "Sign in to Claude" }));
+    fireEvent.click(view.getByRole("button", { name: "Sign in" }));
+    expect(harness.store.getState().workspace.providerAuthTerminal).toMatchObject({
+      providerId: "claude_code",
+      pendingCommand: "'/Applications/Mains.app/bundled/claude' auth login",
+    });
+    expect(view.getByTestId("auth-terminal").textContent).toContain("bundled/claude");
+    view.unmount();
+    expect(harness.store.getState().workspace.providerAuthTerminal).toBeNull();
+  });
+
+  it("confirms a completed login in the open setup panel after recheck", async () => {
+    const harness = createHarness({ signedOut: true });
+    const onChange = vi.fn();
+    const onRecheck = vi.fn();
+    const view = render(createElement(AgentsStep, {
+      options: bundledOptions(), value: "claude", onChange,
+      isDetecting: false, hasError: false, onRecheck,
+    }), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.getByRole("button", { name: "Sign in to Claude" })).toBeTruthy());
+    fireEvent.click(view.getByRole("button", { name: "Sign in to Claude" }));
+    fireEvent.click(view.getByRole("button", { name: "Sign in" }));
+    expect(view.getByTestId("auth-terminal")).toBeTruthy();
+
+    harness.setSignedOut(false);
+    fireEvent.click(view.getByRole("button", { name: "Recheck" }));
+    await waitFor(() => expect(view.getByRole("heading", { name: "Signed in to Claude" })).toBeTruthy());
+    expect(view.getByRole("region", { name: "Claude setup" })).toBeTruthy();
+    expect(view.getByText(/Signed in as account@example\.test/)).toBeTruthy();
+    expect(view.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(view.queryByTestId("auth-terminal")).toBeNull();
+    expect(harness.store.getState().workspace.providerAuthTerminal).toBeNull();
+    expect(onRecheck).toHaveBeenCalledOnce();
+
+    fireEvent.click(view.getByRole("button", { name: "Use Claude" }));
+    expect(onChange).toHaveBeenCalledWith("claude");
+    expect(view.getByRole("radio", { name: "Claude" })).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(view.getByRole("radio", { name: "Claude" })));
+  });
+
+  it("keeps the login terminal open when recheck still reports signed out", async () => {
+    const harness = createHarness({ signedOut: true });
+    const view = render(createElement(AgentsStep, {
+      options: bundledOptions(), value: "claude", onChange: vi.fn(),
+      isDetecting: false, hasError: false, onRecheck: vi.fn(),
+    }), { wrapper: harness.wrapper });
+    await waitFor(() => expect(view.getByRole("button", { name: "Sign in to Claude" })).toBeTruthy());
+    fireEvent.click(view.getByRole("button", { name: "Sign in to Claude" }));
+    fireEvent.click(view.getByRole("button", { name: "Sign in" }));
+    const checksBefore = harness.invoke.mock.calls.filter(([channel]) => channel === CHANNELS.providers.getAccountInfo).length;
+    fireEvent.click(view.getByRole("button", { name: "Recheck" }));
+    await waitFor(() => expect(harness.invoke.mock.calls.filter(([channel]) => channel === CHANNELS.providers.getAccountInfo)).toHaveLength(checksBefore + 1));
+    await waitFor(() => expect((view.getByRole("button", { name: "Recheck" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(view.getByRole("heading", { name: "Sign in to Claude" })).toBeTruthy();
+    expect(view.getByTestId("auth-terminal")).toBeTruthy();
+    expect(view.queryByRole("button", { name: "Use Claude" })).toBeNull();
+  });
+
+  it("uses the runtime login command from a chat authentication notice", async () => {
+    const harness = createHarness({ signedOut: true });
+    const view = render(createElement(ProviderAuthNotice, {
+      variant: "claude", title: "Sign in required",
+    }), { wrapper: harness.wrapper });
+    const signIn = view.getByRole("button", { name: "Sign in" }) as HTMLButtonElement;
+    await waitFor(() => expect(signIn.disabled).toBe(false));
+    fireEvent.click(signIn);
+    expect(harness.store.getState().workspace.providerAuthTerminal).toMatchObject({
+      pendingCommand: "'/Applications/Mains.app/bundled/claude' auth login",
+    });
+  });
+
+  it("offers app-managed updates for bundled Claude instead of a CLI self-update", () => {
+    const harness = createHarness();
+    const view = render(createElement(ProviderCliSection, {
+      providerId: "claude_code", cliName: "Claude Code CLI", shortName: "Claude",
+      cli: { version: "2.1.283", channel: null, outdated: false, source: "bundled", updateMethod: "app" },
+    }), { wrapper: harness.wrapper });
+    expect(view.getByText("Included with Mains · Updates with the app")).toBeTruthy();
+    expect(view.queryByRole("button", { name: "Update CLI" })).toBeNull();
+  });
+
   it("defaults worktrees off after settings load and lets a failed read be retried", async () => {
     const options = { failSettings: true };
     const harness = createHarness(options);

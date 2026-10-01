@@ -183,6 +183,10 @@ _Avoid_: re-introducing wholesale `vi.mock("simple-git")` tests for semantic met
 
 Vocabulary for the `providers/adapters/` subsystem, where one unified `WorkRunAdapter` interface fronts four agent SDKs (Claude, Copilot, Codex, Cursor).
 
+**Claude runtime**:
+The executable selected by `resolveClaudeRuntime` in `providers.utils.ts`: a valid explicit `config.binary` override, otherwise the Agent SDK's version-matched native dependency. Packaged Electron resolves the executable outside ASAR; development and the standalone Node host resolve it beside the SDK. Runs, model/command discovery, account/version probes, plugin commands, login and onboarding availability all use this selection. Login receives a shell-quoted command through CLI metadata. The bundled runtime updates with Mains, while an explicit external executable retains its own update action. Control queries use the run's authentication environment and release their processes after reading metadata; the version-free model list is only a discovery-failure fallback.
+_Avoid_: auto-selecting the system `claude` for discovery while runs use the SDK bundle; treating the absence of a system install as unavailable or signed out; self-updating the SDK-matched bundled executable.
+
 **Codex app-server client**:
 The deep process/transport module in `codex-app-server.client.ts`. It owns one `codex app-server` child process, JSON-object framing over stdio, typed request/response correlation and timeouts, notification/server-request routing, and deterministic pending-request cleanup on exit or shutdown. `codex.driver.ts` owns process initialization, the **Codex session acquisition module** owns thread/turn acquisition, and the **Codex run coordinator** owns live request routing and run completion. All reach the transport only through the client's small interface. The client itself does not know about runs or workspaces.
 _Avoid_: spawning `codex app-server`, parsing its stdout, tracking JSON-RPC request IDs, or managing pending RPC timers inside `codex.driver.ts`; moving run/thread semantics into the transport client.

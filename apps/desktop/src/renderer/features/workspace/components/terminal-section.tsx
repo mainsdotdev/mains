@@ -34,7 +34,7 @@ export function TerminalSection({
 
   return (
     <div
-      className="shrink-0 overflow-hidden transition-[height,padding-top] duration-300 ease-out"
+      className="w-full min-w-0 shrink-0 overflow-hidden transition-[height,padding-top] duration-300 ease-out"
       style={{
         height: isOpen ? BOTTOM_TERMINAL_HEIGHT : "0px",
         paddingTop: isOpen ? "0.3125rem" : "0px",
