@@ -181,6 +181,8 @@ interface ToolHeaderProps {
   /** Middle slot rendered between verb and chevron — provider-specific content
    *  (file path, pattern, stats, char count, etc.). */
   children?: ReactNode;
+  /** Optional detail shown immediately after the chevron. */
+  afterChevron?: ReactNode;
 }
 
 /**
@@ -200,6 +202,7 @@ export function ToolHeader({
   onToggle,
   isCompact = false,
   children,
+  afterChevron,
 }: ToolHeaderProps) {
   const status = useToolStatus();
   const isRunning = status === "running" || status === "queued";
@@ -228,11 +231,31 @@ export function ToolHeader({
       )}
       {children}
       {hasDetails && (
-        <ArrowUp
-          className={`size-4 shrink-0 opacity-100 transition-all duration-200 group-hover:opacity-100 ${ isExpanded ? "rotate-180" : "rotate-90" } ${TOOL_ROW_TEXT}`}
-        />
+        <>
+          <ArrowUp
+            className={`size-4 shrink-0 opacity-100 transition-all duration-200 group-hover:opacity-100 ${ isExpanded ? "rotate-180" : "rotate-90" } ${TOOL_ROW_TEXT}`}
+          />
+          {afterChevron}
+        </>
       )}
     </Button>
+  );
+}
+
+export function ToolDiffStats({
+  added,
+  removed,
+}: {
+  added: number;
+  removed: number;
+}) {
+  if (added === 0 && removed === 0) return null;
+
+  return (
+    <span className="inline-flex shrink-0 -ml-1 items-center gap-1 text-xs tabular-nums">
+      {added > 0 && <span className="text-success">+{added}</span>}
+      {removed > 0 && <span className="text-danger">-{removed}</span>}
+    </span>
   );
 }
 

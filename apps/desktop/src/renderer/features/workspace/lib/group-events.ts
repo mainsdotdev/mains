@@ -193,7 +193,7 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
 
       if (isImage) {
         // Merge consecutive image artifacts into one group so multiple
-        // generated images render side by side as a gallery row.
+        // generated images share a selectable gallery.
         const lastGroup = groups[groups.length - 1];
         const lastIsImageGroup =
           lastGroup?.type === "response" &&

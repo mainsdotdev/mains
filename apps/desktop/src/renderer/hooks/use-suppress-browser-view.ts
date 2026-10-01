@@ -17,14 +17,27 @@ function browserApi(): { setVisible?: (visible: boolean) => unknown } | null {
   return (window as any).api?.browser ?? null;
 }
 
+function setBrowserChatOverlayInteractive(interactive: boolean): void {
+  if (!new URLSearchParams(window.location.search).has("browserChatOverlay")) return;
+  // The ignored native child cannot discover pointer entry into a body-level
+  // modal outside the chat card, so keep its whole window hittable meanwhile.
+  void window.api?.browserChat?.setOverlayInteractive?.(interactive);
+}
+
 export function useSuppressBrowserView(active: boolean): void {
   useEffect(() => {
     if (!active) return;
     suppressors += 1;
-    if (suppressors === 1) browserApi()?.setVisible?.(false);
+    if (suppressors === 1) {
+      setBrowserChatOverlayInteractive(true);
+      browserApi()?.setVisible?.(false);
+    }
     return () => {
       suppressors -= 1;
-      if (suppressors === 0) browserApi()?.setVisible?.(true);
+      if (suppressors === 0) {
+        setBrowserChatOverlayInteractive(false);
+        browserApi()?.setVisible?.(true);
+      }
     };
   }, [active]);
 }

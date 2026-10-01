@@ -89,6 +89,12 @@ function formatFileLocation(fullPath: string, workspacePath?: string): string | 
 
 const WORKSPACE_SEARCH_DEBOUNCE_MS = 320;
 const MAX_WORKSPACE_FILE_MATCHES = 150;
+const ADD_DIRECTORY_COMMAND: CommandInfo = {
+  name: "add-dir",
+  description: "Give this chat access to another local folder",
+  argumentHint: "folder",
+  userFacing: true,
+};
 
 function bucketSkill(skill: SkillInfo): "plugins" | "mac_apps" | "skills" | null {
   if (skill.userInvokable === false) return null;
@@ -400,6 +406,12 @@ export function UnifiedContextDropdown({
 
   const filteredCommands = useMemo(() => {
     const userFacing = commands.filter((cmd) => cmd.userFacing !== false);
+    if (
+      (providerId === PROVIDER_IDS.claude || providerId === PROVIDER_IDS.codex) &&
+      !userFacing.some((cmd) => cmd.name === ADD_DIRECTORY_COMMAND.name)
+    ) {
+      userFacing.unshift(ADD_DIRECTORY_COMMAND);
+    }
     if (!filterText) return userFacing;
     const lower = filterText.toLowerCase();
     return userFacing.filter((cmd) => {
@@ -407,7 +419,7 @@ export function UnifiedContextDropdown({
       const descMatch = cmd.description?.toLowerCase().includes(lower);
       return nameMatch || descMatch;
     });
-  }, [commands, filterText]);
+  }, [commands, filterText, providerId]);
 
   const { pluginSkills, macSkills, regularSkills } = useMemo(() => {
     const plugins: SkillInfo[] = [];
@@ -767,7 +779,12 @@ export function UnifiedContextDropdown({
                     return (
                       <RowButton key={`cmd-${cmd.name}`} {...rowProps} className="text-xs">
                         <div className="flex flex-col gap-0.5">
-                          <Text as="div" size="inherit" tone="inherit" weight="medium">/{cmd.name}</Text>
+                          <div className="flex items-center justify-between gap-2">
+                            <Text as="div" size="inherit" tone="inherit" weight="medium">/{cmd.name}</Text>
+                            {cmd.argumentHint && (
+                              <Text as="span" size="xs" tone="subtle">{cmd.argumentHint}</Text>
+                            )}
+                          </div>
                           {cmd.description && (
                             <Text as="div" size="xs" tone="subtle" className="line-clamp-2">
                               {cmd.description}

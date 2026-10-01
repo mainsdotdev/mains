@@ -32,6 +32,14 @@ function replaceFiles(owner: string, next: UploadedFile[]): void {
   listeners.get(owner)?.forEach((listener) => listener());
 }
 
+export function setTransientUploadsForOwner(owner: string, files: UploadedFile[]): void {
+  replaceFiles(owner, files);
+}
+
+export function getTransientUploadsForOwner(owner: string): UploadedFile[] {
+  return getFiles(owner);
+}
+
 export function clearTransientUploads(owner: string): void {
   replaceFiles(owner, []);
 }

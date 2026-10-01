@@ -20,6 +20,8 @@ interface MainContentProps {
   hasRightPanel?: boolean;
   sidebarCollapsed?: boolean;
   browserOpen?: boolean;
+  /** Preserve header space while an expanded panel owns the workspace. */
+  headerHidden?: boolean;
 }
 
 export function getCollapsedHeaderPaddingLeft(
@@ -43,6 +45,7 @@ export function MainContent({
   hasRightPanel,
   sidebarCollapsed,
   browserOpen,
+  headerHidden,
 }: MainContentProps) {
   const { header, firstTabActive } = useMainHeader();
   const { windowChrome } = useCapabilities();
@@ -80,7 +83,12 @@ export function MainContent({
       {header && (
         <div
           className={`shrink-0 ${hasRightPanel ? "max-w-[calc(100%-150px)]" : browserOpen ? "max-w-[calc(100%-150px)]" : ""}`}
+          aria-hidden={headerHidden || undefined}
+          inert={headerHidden}
           style={{
+            // The browser's edge and the workspace margins move on separate
+            // clocks. Hide the covered tabs directly so no gap can expose them.
+            visibility: headerHidden ? "hidden" : undefined,
             paddingLeft: headerPaddingLeft,
             // On the same clock as the margin above, for the same reason: the
             // header's left edge is that margin *plus* this padding, and the

@@ -16,6 +16,7 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
+import { getMainWindow } from "../../windows/mainWindow";
 import { isRunOwnerKey, isWorkspaceDraftOwnerKey } from "../../../shared/ui-state-keys";
 import {
   buildInspectorScript,
@@ -594,6 +595,10 @@ export const browserService = {
   },
 
   _findHost(): BrowserWindow | null {
+    // The floating chat is a child BrowserWindow. Browser tabs always belong
+    // to the app shell even while that child has keyboard focus.
+    const main = getMainWindow();
+    if (main && !main.isDestroyed()) return main;
     return (
       BrowserWindow.getFocusedWindow() ||
       BrowserWindow.getAllWindows().find((window) => !window.isDestroyed()) ||
@@ -730,6 +735,13 @@ export const browserService = {
 
   _wireView(record: BrowserTabRecord, view: WebContentsView) {
     const contents = view.webContents;
+
+    contents.on("before-mouse-event", (_event, mouse) => {
+      if (mouse.type !== "mouseDown" || !this.visible || this.activeTabId !== record.id) return;
+      // The live page is a separate WebContentsView, so DOM click handlers in
+      // the app renderer cannot collapse its floating chat.
+      this._sendToRenderer(CHANNELS.browser.chatAction, { type: "pagePointerDown" });
+    });
 
     contents.setWindowOpenHandler(({ url }) => {
       if (isAllowedBrowserUrl(url)) {
@@ -1076,7 +1088,11 @@ export const browserService = {
   _syncRecord(record: BrowserTabRecord) {
     const contents = record.view?.webContents;
     if (!contents || contents.isDestroyed()) return;
+    const wasBlank = record.url === BLANK_URL;
     record.url = contents.getURL() || record.url || BLANK_URL;
+    if (wasBlank !== (record.url === BLANK_URL) && this.activeTabId === record.id) {
+      record.view?.setVisible(this.visible && record.url !== BLANK_URL);
+    }
     record.title =
       contents.getTitle() ||
       (record.url === BLANK_URL ? "New tab" : record.url);
@@ -1292,10 +1308,15 @@ export const browserService = {
       this.host.contentView.addChildView(view);
     }
     if (this.bounds) view.setBounds(this.bounds);
-    view.setVisible(true);
+    // The renderer owns the new-tab page, including its clickable history.
+    view.setVisible(record.url !== BLANK_URL);
     this._scheduleDeviceEmulation(record);
     void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
-    view.webContents.focus();
+    // A focused floating chat is a separate child window. Remounting a tab or
+    // restoring its visibility must not steal keyboard focus from its input.
+    if (record.url !== BLANK_URL && BrowserWindow.getFocusedWindow() === this.host) {
+      view.webContents.focus();
+    }
   },
 
   async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">, ownerKey: string) {
@@ -2064,11 +2085,16 @@ export const browserService = {
   setVisible(visible: boolean): null {
     const record = this._activeTab();
     const view = record.view;
-    if (view && !view.webContents.isDestroyed()) view.setVisible(visible);
+    if (view && !view.webContents.isDestroyed()) {
+      view.setVisible(visible && record.url !== BLANK_URL);
+    }
     if (!visible) record.deviceEmulationQueue.cancel();
     this.visible = visible;
     if (visible) {
       this._clearIdleTimer();
+      // The active owner may have changed while a renderer overlay hid the
+      // native view. Reattach (or create) that owner's view before browsing.
+      void this._mountActiveView();
       this._scheduleDeviceEmulation(record);
       if (view && !view.webContents.isDestroyed()) {
         void record.deviceEmulationQueue.readyAfterPaint(view.webContents);
@@ -2087,6 +2113,9 @@ export const browserService = {
       : resolveBrowserInput(rawInput);
     record.url = url;
     if (url === BLANK_URL) record.title = "New tab";
+    if (this.activeTabId === record.id) {
+      view.setVisible(this.visible && url !== BLANK_URL);
+    }
     record.deviceEmulationQueue.beginNavigation();
     try {
       await view.webContents.loadURL(url);

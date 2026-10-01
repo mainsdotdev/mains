@@ -1243,6 +1243,50 @@ describe("Codex event mapper", () => {
     expect(byPath.get(writtenThisRun)).toBeUndefined();
   });
 
+  it("keeps a Glob result scoped to this Codex thread, even when other images are new", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-image-glob-"));
+    tempDirs.push(home);
+    const homedir = vi.spyOn(os, "homedir").mockReturnValue(home);
+    try {
+      const generatedDir = path.join(home, ".codex", "generated_images");
+      const oldImage = path.join(generatedDir, "previous-run", "jupiter.png");
+      const staleSameThreadImage = path.join(generatedDir, "thread-parent", "old-earth.png");
+      const concurrentImage = path.join(generatedDir, "other-thread", "mars.png");
+      const newImage = path.join(generatedDir, "thread-parent", "earth.png");
+      fs.mkdirSync(path.dirname(oldImage), { recursive: true });
+      fs.mkdirSync(path.dirname(concurrentImage), { recursive: true });
+      fs.mkdirSync(path.dirname(newImage), { recursive: true });
+      fs.writeFileSync(oldImage, "fixture");
+      fs.writeFileSync(staleSameThreadImage, "fixture");
+      fs.writeFileSync(concurrentImage, "fixture");
+      fs.writeFileSync(newImage, "fixture");
+      const state = createRunState();
+      state.runStartedAt = Date.now() + 60_000;
+      fs.utimesSync(newImage, new Date(state.runStartedAt), new Date(state.runStartedAt));
+      fs.utimesSync(concurrentImage, new Date(state.runStartedAt), new Date(state.runStartedAt));
+      const { mapper } = createHarness(state);
+
+      const events = mapper.mapThreadItem(
+        {
+          id: "command-image-glob",
+          type: "commandExecution",
+          command: `find ${generatedDir} -type f -name '*.png' -mmin -10 -print`,
+          aggregatedOutput: `${newImage}\n${concurrentImage}\n${oldImage}\n${staleSameThreadImage}`,
+        },
+        "item/completed",
+        400,
+        "run-1",
+      );
+
+      const imagePaths = events
+        .filter((event) => event.type === "artifact" && event.kind === "image")
+        .map((event) => (event as Extract<WorkRunEvent, { type: "artifact" }>).metadata?.path);
+      expect(imagePaths).toEqual([newImage]);
+    } finally {
+      homedir.mockRestore();
+    }
+  });
+
   // The scan has to allow spaces — every managed run directory sits under
   // "Application Support" — which is what made a greedy match span two paths
   // and, since the span exists nowhere, drop both images.

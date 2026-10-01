@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import reducer, {
   setBrowserPanelOpen,
+  setBrowserPanelExpanded,
   setDocumentViewerDoc,
   setDocumentViewerOpen,
   setRightPaneContextKey,
+  transferRightPaneContext,
   setRightPanelOpen,
   setSessionPanelOpen,
   setWorkspaceGroupExpanded,
@@ -11,9 +13,11 @@ import reducer, {
   forgetWorkspaceRightPanes,
 } from "./appSettingsSlice";
 import { openNewRunTab, setActiveTab } from "./workspaceSlice";
-import { runOwnerKey } from "../../../../shared/ui-state-keys";
+import { runOwnerKey, workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 
 const open = () => reducer(undefined, setSessionPanelOpen(true));
+const context = (ownerKey: string, browserExpansionKey = ownerKey) =>
+  setRightPaneContextKey({ ownerKey, browserExpansionKey });
 
 // The session panel reads the run in the active tab. A new-run tab has no run,
 // so switching to one has to dismiss the panel rather than leave the previous
@@ -42,27 +46,95 @@ describe("appSettingsSlice — session panel vs the new-run tab", () => {
 });
 
 describe("appSettingsSlice — right pane per conversation", () => {
-  it("restores the browser or workspace panel when returning to a chat", () => {
-    let state = reducer(undefined, setRightPaneContextKey("chat-a"));
+  it("keeps the expanded browser when a draft becomes its first run", () => {
+    let state = reducer(undefined, context("draft"));
     state = reducer(state, setBrowserPanelOpen(true));
-    state = reducer(state, setRightPaneContextKey("chat-b"));
+    state = reducer(state, setBrowserPanelExpanded(true));
+    state = reducer(state, transferRightPaneContext({ fromKey: "draft", toKey: "run" }));
+    state = reducer(state, context("run"));
+    expect(state.browserPanelOpen).toBe(true);
+    expect(state.browserPanelExpanded).toBe(true);
+    expect(state.rightPaneByContext.run).toBe("browser");
+  });
+
+  it("remembers the expanded size for one chat without applying it to another", () => {
+    let state = reducer(undefined, setBrowserPanelExpanded(true));
+    expect(state.browserPanelExpanded).toBe(false);
+
+    state = reducer(state, context("chat-a"));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, setBrowserPanelExpanded(true));
+    expect(state.browserPanelExpanded).toBe(true);
+
+    state = reducer(state, context("chat-b"));
+    expect(state.browserPanelExpanded).toBe(false);
+    state = reducer(state, setBrowserPanelOpen(true));
+    expect(state.browserPanelExpanded).toBe(false);
+    state = reducer(state, context("chat-a"));
+    expect(state.browserPanelOpen).toBe(true);
+    expect(state.browserPanelExpanded).toBe(true);
+
+    state = reducer(state, setBrowserPanelOpen(false));
+    expect(state.browserPanelExpanded).toBe(false);
+    state = reducer(state, setBrowserPanelOpen(true));
+    expect(state.browserPanelExpanded).toBe(false);
+  });
+
+  it("shares expanded size across chats in one Code workspace, but not another workspace", () => {
+    const workspaceA = workspaceBrowserExpansionKey("local", "ws-a");
+    const workspaceB = workspaceBrowserExpansionKey("local", "ws-b");
+    let state = reducer(undefined, context("run-a", workspaceA));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, setBrowserPanelExpanded(true));
+
+    state = reducer(state, context("run-b", workspaceA));
+    state = reducer(state, setBrowserPanelOpen(true));
+    expect(state.browserPanelExpanded).toBe(true);
+
+    state = reducer(state, context("run-c", workspaceB));
+    state = reducer(state, setBrowserPanelOpen(true));
+    expect(state.browserPanelExpanded).toBe(false);
+
+    state = reducer(state, context("run-a", workspaceA));
+    expect(state.browserPanelExpanded).toBe(true);
+    state = reducer(state, setBrowserPanelExpanded(false));
+    state = reducer(state, context("run-b", workspaceA));
+    expect(state.browserPanelExpanded).toBe(false);
+  });
+
+  it("keeps the current pane open when only its expansion scope changes", () => {
+    let state = reducer(undefined, context("run-a"));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, setBrowserPanelExpanded(true));
+    state = reducer(state, setSessionPanelOpen(true));
+    state = reducer(state, context("run-a", workspaceBrowserExpansionKey("local", "ws-a")));
+
+    expect(state.browserPanelOpen).toBe(true);
+    expect(state.browserPanelExpanded).toBe(false);
+    expect(state.sessionPanelOpen).toBe(true);
+  });
+
+  it("restores the browser or workspace panel when returning to a chat", () => {
+    let state = reducer(undefined, context("chat-a"));
+    state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, context("chat-b"));
     expect(state.browserPanelOpen).toBe(false);
     state = reducer(state, setRightPanelOpen(true));
-    state = reducer(state, setRightPaneContextKey("chat-a"));
+    state = reducer(state, context("chat-a"));
     expect(state.browserPanelOpen).toBe(true);
     expect(state.rightPanelOpen).toBe(false);
-    state = reducer(state, setRightPaneContextKey("chat-b"));
+    state = reducer(state, context("chat-b"));
     expect(state.rightPanelOpen).toBe(true);
   });
 
   it("restores an open document when returning to its chat in the same session", () => {
     const doc = { path: "/tmp/report.pdf", fileName: "report.pdf", docType: "pdf" as const };
-    let state = reducer(undefined, setRightPaneContextKey("chat-a"));
+    let state = reducer(undefined, context("chat-a"));
     state = reducer(state, setDocumentViewerDoc(doc));
     state = reducer(state, setDocumentViewerOpen(true));
-    state = reducer(state, setRightPaneContextKey("chat-b"));
+    state = reducer(state, context("chat-b"));
     expect(state.documentViewerOpen).toBe(false);
-    state = reducer(state, setRightPaneContextKey("chat-a"));
+    state = reducer(state, context("chat-a"));
     expect(state.documentViewerDoc).toEqual(doc);
     expect(state.documentViewerOpen).toBe(true);
   });
@@ -70,28 +142,31 @@ describe("appSettingsSlice — right pane per conversation", () => {
   it("does not restore a deleted chat's pane", () => {
     const deleted = runOwnerKey("local", "run-a");
     const kept = runOwnerKey("local", "run-b");
-    let state = reducer(undefined, setRightPaneContextKey(deleted));
+    let state = reducer(undefined, context(deleted));
     state = reducer(state, setBrowserPanelOpen(true));
-    state = reducer(state, setRightPaneContextKey(kept));
+    state = reducer(state, context(kept));
     state = reducer(state, setRightPanelOpen(true));
     state = reducer(state, forgetRunRightPane({ backendId: "local", runId: "run-a" }));
     expect(state.rightPaneByContext[deleted]).toBeUndefined();
-    state = reducer(state, setRightPaneContextKey(deleted));
+    state = reducer(state, context(deleted));
     expect(state.browserPanelOpen).toBe(false);
   });
 
   it("removes only a deleted workspace's draft pane", () => {
     const draft = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);
+    const expansionKey = workspaceBrowserExpansionKey("local", "ws-a");
     const run = runOwnerKey("local", "run-a");
-    let state = reducer(undefined, setRightPaneContextKey(run));
+    let state = reducer(undefined, context(run));
     state = reducer(state, setRightPanelOpen(true));
-    state = reducer(state, setRightPaneContextKey(draft));
+    state = reducer(state, context(draft, expansionKey));
     state = reducer(state, setBrowserPanelOpen(true));
+    state = reducer(state, setBrowserPanelExpanded(true));
     state = reducer(state, forgetWorkspaceRightPanes({ backendId: "local", workspaceId: "ws-a" }));
     expect(state.activeRightPaneContextKey).toBe("default");
     expect(state.browserPanelOpen).toBe(false);
     expect(state.rightPaneByContext[draft]).toBeUndefined();
     expect(state.rightPaneByContext[run]).toBe("workspace");
+    expect(state.browserExpandedByContext[expansionKey]).toBeUndefined();
   });
 });
 

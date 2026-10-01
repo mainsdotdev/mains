@@ -89,7 +89,6 @@ import {
 import { registerStatsIpc, unregisterStatsIpc } from "@mains/backend/modules/stats";
 import {
   createMainWindow,
-  createSplashWindow,
   closeSplashWindow,
   openAboutWindow,
   registerWindowRequestIpc,
@@ -97,6 +96,8 @@ import {
   applySavedThemeSource,
   registerThemeSourceIpc,
   unregisterThemeSourceIpc,
+  registerOnboardingWindowIpc,
+  unregisterOnboardingWindowIpc,
   applySavedDockIcon,
   registerDockIconIpc,
   unregisterDockIconIpc,
@@ -148,6 +149,10 @@ import {
   unregisterBrowserIpc,
   browserService,
 } from "./modules/browser";
+import {
+  registerBrowserChatWindowIpc,
+  unregisterBrowserChatWindowIpc,
+} from "./modules/browser/browser-chat-window";
 import {
   registerAppshotsIpc,
   unregisterAppshotsIpc,
@@ -811,9 +816,6 @@ async function initializeApp() {
     // before anything boots. On a move the app quits and relaunches itself.
     if (await offerMoveToApplications()) return;
 
-    // Show splash screen immediately
-    createSplashWindow();
-
     // Initialize database
     await initializeDatabase({
       verbose: !app.isPackaged,
@@ -857,6 +859,7 @@ async function initializeApp() {
     registerGuardsIpc();
     registerPullRequestsIpc();
     registerBrowserIpc();
+    registerBrowserChatWindowIpc();
     registerAppshotsIpc();
     registerKeyboardShortcutsIpc();
     registerSshIpc();
@@ -1018,6 +1021,7 @@ async function initializeApp() {
     });
     registerWindowRequestIpc();
     registerThemeSourceIpc();
+    registerOnboardingWindowIpc();
     registerDockIconIpc();
 
     // Build custom application menu
@@ -1110,6 +1114,8 @@ async function initializeApp() {
     // Create main window (hidden until ready)
     createMainWindow({
       show: false,
+      // The renderer's early storage read permits this only for completed users.
+      showStartupSplash: true,
       onReadyToShow: (window) => {
         // Close splash and show main window
         closeSplashWindow();
@@ -1206,6 +1212,7 @@ async function cleanupApp() {
     await shutdownAllGuardAdapters();
     try { browserService.destroy(); } catch { /* ignore */ }
     unregisterBrowserIpc();
+    unregisterBrowserChatWindowIpc();
     appshotsService.stop();
     unregisterAppshotsIpc();
     unregisterKeyboardShortcutsIpc();
@@ -1227,6 +1234,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.app.quit);
     unregisterWindowRequestIpc();
     unregisterThemeSourceIpc();
+    unregisterOnboardingWindowIpc();
     unregisterDockIconIpc();
 
     // Close database

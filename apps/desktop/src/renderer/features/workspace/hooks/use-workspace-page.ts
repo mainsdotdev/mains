@@ -19,13 +19,17 @@ import { useComposerContext } from "./use-composer-context";
 import { useTransientUploads } from "./use-transient-uploads";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import { useActiveSpace } from "@/hooks/use-active-space";
-import { setRightPaneContextKey } from "@/lib/redux/slices/appSettingsSlice";
+import { setRightPaneContextKey, transferRightPaneContext } from "@/lib/redux/slices/appSettingsSlice";
 import { useWorkspaceData } from "./use-workspace-data";
 import { useWorkspaceRuns } from "./use-workspace-runs";
 import { useFileContentLoader } from "./use-file-content-loader";
 import { useTabHandlers } from "./use-tab-handlers";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
 import { collectionIdForVisibleRun } from "@/features/workspace/lib/run-collection-context";
+import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
+
+const EMPTY_DIRECTORIES: string[] = [];
+
 
 export function useWorkspacePage(providerId: string) {
   const dispatch = useAppDispatch();
@@ -129,7 +133,7 @@ export function useWorkspacePage(providerId: string) {
   const {
     runs,
     runsLoaded,
-    activeRun,
+    activeRunId: selectedRunId,
     currentEvents,
     isTranscriptLoading,
     currentTurns,
@@ -151,6 +155,12 @@ export function useWorkspacePage(providerId: string) {
     visibleRunId,
     switchableWorkspaceIds,
   );
+
+  // The tab is authoritative. The run hook can still retain the previous
+  // selection while a New Run tab is visible or a synced run is loading.
+  const activeRun = isRunTab(activeTab)
+    ? runs.find((run) => run.id === activeTab)
+    : undefined;
 
   // Resolve the conversation that owns the composer and browser. An editor
   // opened from a run stays with that run unless the target pill chooses new.
@@ -178,17 +188,29 @@ export function useWorkspacePage(providerId: string) {
     ? runs.find((r) => r.id === composeTargetRunId)
     : undefined;
   const ownerKey = composerOwnerKey(contextParts, composeTargetRunId);
+  const browserExpansionKey = mode === "developer" && workspaceId
+    ? workspaceBrowserExpansionKey(backendId, workspaceId)
+    : ownerKey;
   const goal = useAppSelector((state) => state.workspace.draftTextByKey[ownerKey] ?? "");
   const setGoal = useCallback((text: string) => {
     dispatch(setDraftText({ key: ownerKey, text }));
   }, [dispatch, ownerKey]);
   const [uploadedFiles, setUploadedFiles] = useTransientUploads(ownerKey);
+  const [directoryDrafts, setDirectoryDrafts] = useState<Record<string, string[]>>({});
+  const storedDirectories = composeTargetRun?.configSnapshot?.additionalDirectories;
+  const additionalDirectories = useMemo(() => directoryDrafts[ownerKey] ??
+    (Array.isArray(storedDirectories)
+      ? storedDirectories.filter((value): value is string => typeof value === "string")
+      : EMPTY_DIRECTORIES), [directoryDrafts, ownerKey, storedDirectories]);
+  const setAdditionalDirectories = useCallback((directories: string[]) => {
+    setDirectoryDrafts((current) => ({ ...current, [ownerKey]: directories }));
+  }, [ownerKey]);
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey) return;
     dispatch(setComposerContextKey(ownerKey));
-    dispatch(setRightPaneContextKey(ownerKey));
-  }, [activeViewKey, viewKey, ownerKey, dispatch]);
+    dispatch(setRightPaneContextKey({ ownerKey, browserExpansionKey }));
+  }, [activeViewKey, viewKey, ownerKey, browserExpansionKey, dispatch]);
 
   // Quick actions target the currently visible composer, even after it was
   // unmounted while visiting Settings.
@@ -220,8 +242,8 @@ export function useWorkspacePage(providerId: string) {
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey || !showTabs) return; // tab-less neutral state is the new-chat screen
-    if (isRunTab(activeTab) && runs.some((r) => r.id === activeTab)) {
-      if (activeRun?.id !== activeTab) selectTab(activeTab);
+    if (isRunTab(activeTab)) {
+      if (selectedRunId !== activeTab) selectTab(activeTab);
       return;
     }
     if (workspaceViewNeedsDefaultRun && runs.length > 0 && !selectedFile && activeTab === "editor") {
@@ -231,7 +253,7 @@ export function useWorkspacePage(providerId: string) {
       dispatch(setActiveTab(target.id));
       selectTab(target.id);
     }
-  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, activeRun?.id, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
+  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, selectedRunId, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
 
   // Tab-less modes use "editor" as the neutral placeholder for a new chat.
   useEffect(() => {
@@ -296,13 +318,23 @@ export function useWorkspacePage(providerId: string) {
     setGoal("");
     setUploadedFiles([]);
     clearContext();
-  }, [setGoal, setUploadedFiles, clearContext]);
+    if (!composeTargetRunId) {
+      setDirectoryDrafts((current) => {
+        const next = { ...current };
+        delete next[ownerKey];
+        return next;
+      });
+    }
+  }, [setGoal, setUploadedFiles, clearContext, composeTargetRunId, ownerKey]);
 
   const handleExecute = useCallback(async () => {
     if (mode === "developer" && !workspaceId) {
       toast.error("Select a workspace before sending a prompt.");
       return;
     }
+    // A selected run from the other window may still be joining the list.
+    // Sending during that fetch must not turn its conversation into a new run.
+    if (composeTargetRunId && !composeTargetRun) return;
     // A run still working can take no second prompt — and must not become a
     // new run either. The send button already reads Stop; Enter in the editor
     // reaches here all the same, so the submit itself has to say no.
@@ -336,8 +368,10 @@ export function useWorkspacePage(providerId: string) {
           selectedModel,
           attachments,
           contextItems,
+          additionalDirectories,
         )) ?? false;
       if (success) clearInputState();
+      return success ? composeTargetRunId : null;
     } else {
       const newRunId = await executeRun(
         goal,
@@ -347,12 +381,15 @@ export function useWorkspacePage(providerId: string) {
         attachments,
         contextItems,
         selectedCollectionId,
+        additionalDirectories,
       );
       if (newRunId) {
+        const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+        dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
         if (!composeTargetRunId) {
           await (window as any).api?.browser?.reassignTabs?.(
             ownerKey,
-            composerOwnerKey(contextParts, newRunId),
+            nextOwnerKey,
           );
         }
         clearInputState();
@@ -361,11 +398,13 @@ export function useWorkspacePage(providerId: string) {
           navigate(`/code/runs/${newRunId}`);
         }
       }
+      return newRunId;
     }
   }, [
     goal,
     uploadedFiles,
     contextItems,
+    additionalDirectories,
     mode,
     workspaceId,
     selectedWorkspace,
@@ -396,8 +435,9 @@ export function useWorkspacePage(providerId: string) {
       const run = async () => {
         if (activeRunId && canResume && activeRun && activeRun.status !== "running") {
           const success =
-            (await continueRun(activeRunId, goal, selectedModel)) ?? false;
-          if (success) clearInputState();
+      (await continueRun(activeRunId, goal, selectedModel, undefined, undefined,
+  additionalDirectories)) ?? false;
+            if (success) clearInputState();
         } else {
           const newRunId = await executeRun(
             goal,
@@ -407,11 +447,14 @@ export function useWorkspacePage(providerId: string) {
             undefined,
             undefined,
             selectedCollectionId,
+            additionalDirectories
           );
           if (newRunId) {
+            const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+            dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
             await (window as any).api?.browser?.reassignTabs?.(
               ownerKey,
-              composerOwnerKey(contextParts, newRunId),
+              nextOwnerKey,
             );
             clearInputState();
             dispatch(setActiveTab(newRunId));
@@ -421,7 +464,7 @@ export function useWorkspacePage(providerId: string) {
       };
       run();
     }
-  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
+  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, additionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
 
   const runLabel = (r: { title?: string; goal: string }) =>
     r.title?.trim() ? r.title : r.goal;
@@ -455,7 +498,7 @@ export function useWorkspacePage(providerId: string) {
   // The run the composer acts on — the retarget target on the editor tab,
   // otherwise the active tab's run. Drives the input's running/stop state and
   // context-usage ring.
-  const composerRun = isRetargetable ? composeTargetRun : activeRun;
+  const composerRun = composeTargetRun;
 
   const showNewRunTab = isNewRunTab(activeTab);
 
@@ -480,7 +523,10 @@ export function useWorkspacePage(providerId: string) {
     goal,
     setGoal,
     uploadedFiles,
+    contextItems,
     setUploadedFiles,
+    additionalDirectories,
+    setAdditionalDirectories,
     canResume,
     selectedModel,
     activeTab,

@@ -78,7 +78,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.157.1";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.159.2";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
@@ -416,7 +416,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   const mcpThreadResumePromises = new Map<string, Promise<void>>();
   // One-shot generation model (titles, commit messages, PR bodies): Codex's
   // "fast and affordable agentic coding model" tier, at medium effort.
-  const titleGenerationModel = "gpt-5.6-luna";
+  const titleGenerationModel = "gpt-6-luna";
   const runCoordinator = createCodexRunCoordinator({
     getDefaultModel: () => config.defaultModel,
     onReviewCompleted: persistCodexReviewFindings,

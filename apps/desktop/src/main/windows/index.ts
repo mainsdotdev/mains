@@ -17,6 +17,11 @@ export { openAboutWindow, getAboutWindow } from "./aboutWindow";
 export { watchChildProcesses } from "./crash-recovery";
 
 export {
+  registerOnboardingWindowIpc,
+  unregisterOnboardingWindowIpc,
+} from "./onboarding-window.ipc";
+
+export {
   applySavedThemeSource,
   registerThemeSourceIpc,
   unregisterThemeSourceIpc,

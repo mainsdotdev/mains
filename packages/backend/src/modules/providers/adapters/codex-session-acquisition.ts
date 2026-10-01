@@ -164,10 +164,12 @@ function resolveOutputSchema(
 
 function buildCodexConfigOverrides(
   networkAccess: boolean,
+  additionalDirectories: string[],
 ): CodexConfigOverrides {
   return {
     sandbox_workspace_write: {
       network_access: networkAccess,
+      writable_roots: additionalDirectories,
     },
   };
 }
@@ -443,11 +445,15 @@ export function createCodexSessionAcquisition(
       typeof overrides.sandboxMode === "string"
         ? (overrides.sandboxMode as CodexAdapterConfig["sandboxMode"])
         : config.sandboxMode;
+    const additionalDirectories = Array.isArray(overrides.additionalDirectories)
+      ? overrides.additionalDirectories as string[]
+      : config.additionalDirectories ?? [];
     return {
       approvalPolicy: config.approvalMode ?? "on-request",
       sandbox: mapSandboxMode(sandboxMode),
       config: buildCodexConfigOverrides(
         config.networkAccessEnabled !== false,
+        additionalDirectories,
       ),
     };
   }

@@ -82,6 +82,19 @@ export function isPointerHeadingToSubmenu(
   return !(hasNegative && hasPositive);
 }
 
+export function effortSubmenuLeft(
+  menu: Pick<Edges, "left" | "right">,
+  panelWidth: number,
+  viewportWidth: number,
+  preferLeft: boolean,
+): number {
+  const gap = 6;
+  if (preferLeft || menu.right + gap + panelWidth > viewportWidth - 8) {
+    return Math.max(8, menu.left - panelWidth - gap);
+  }
+  return menu.right + gap;
+}
+
 interface ModelSelectDropdownProps {
   model: string;
   models: string[];
@@ -98,6 +111,7 @@ interface ModelSelectDropdownProps {
   openUpward?: boolean;
   isLoading?: boolean;
   variant?: ProviderVariant;
+  iconOnly?: boolean;
 }
 
 export function ModelSelectDropdown({
@@ -116,6 +130,7 @@ export function ModelSelectDropdown({
   openUpward = false,
   isLoading = false,
   variant,
+  iconOnly = false,
 }: ModelSelectDropdownProps) {
   const modelList = selectableModelNames(models, variant);
   const noModels = !isLoading && modelList.length === 0;
@@ -149,6 +164,14 @@ export function ModelSelectDropdown({
     top: number;
     left: number;
   } | null>(null);
+  const [previousIsOpen, setPreviousIsOpen] = useState(isOpen);
+  if (previousIsOpen !== isOpen) {
+    setPreviousIsOpen(isOpen);
+    if (!isOpen) {
+      setHoveredModel(null);
+      setEffortMenuPosition(null);
+    }
+  }
   /**
    * Whether choosing this model opens the effort / thinking submenu.
    *
@@ -215,6 +238,19 @@ export function ModelSelectDropdown({
     setHoveredModel(null);
   };
 
+  useEffect(() => {
+    if (isOpen) return;
+    if (effortCloseTimerRef.current) {
+      clearTimeout(effortCloseTimerRef.current);
+      effortCloseTimerRef.current = null;
+    }
+    if (pendingRowRef.current) {
+      clearTimeout(pendingRowRef.current.timer);
+      pendingRowRef.current = null;
+    }
+    travelAnchorRef.current = null;
+  }, [isOpen]);
+
   const scheduleEffortMenuClose = () => {
     clearEffortCloseTimer();
     effortCloseTimerRef.current = setTimeout(() => {
@@ -237,10 +273,7 @@ export function ModelSelectDropdown({
     const menuRect = mainMenuRef.current?.getBoundingClientRect();
     if (!menuRect) return;
 
-    const panelWidth = 144;
-    const gap = 6;
-    const fitsOnRight =
-      menuRect.right + gap + panelWidth <= window.innerWidth - 8;
+    const panelWidth = iconOnly ? 160 : 144;
 
     setHoveredModel(hovered);
     setEffortMenuPosition({
@@ -251,9 +284,7 @@ export function ModelSelectDropdown({
       // and roughly horizontal.
       anchorTop: rowTop ?? menuRect.top,
       top: Math.max(8, rowTop ?? menuRect.top),
-      left: fitsOnRight
-        ? menuRect.right + gap
-        : Math.max(8, menuRect.left - panelWidth - gap),
+      left: effortSubmenuLeft(menuRect, panelWidth, window.innerWidth, iconOnly),
     });
   };
 
@@ -367,9 +398,13 @@ export function ModelSelectDropdown({
 
   return (
     <div className="relative" ref={dropdownRef}>
-      <div className="flex cursor-pointer items-center hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 transition-colors rounded-2xl">
+      <div className={`flex cursor-pointer items-center hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 transition-colors ${iconOnly ? "rounded-full" : "rounded-2xl"}`}>
         <Button
-          tooltip={noModels ? "No models available" : "Select model"}
+          tooltip={noModels
+            ? "No models available"
+            : iconOnly
+              ? `${displayModel}${selectedEffortLabel ? ` · ${selectedEffortLabel}` : ""}`
+              : "Select model"}
           tooltipPosition="top"
           type="button"
           onClick={
@@ -380,16 +415,19 @@ export function ModelSelectDropdown({
                   onToggle();
                 }
           }
-          className={`text-s  px-2 py-1.5 flex items-center gap-1.5 ${
+          className={`text-s flex items-center gap-1.5 ${iconOnly ? "size-9 justify-center rounded-full p-0" : "px-2 py-1.5"} ${
             noModels
               ? "text-primary-600 dark:text-primary-400 cursor-not-allowed"
               : "cursor-pointer text-primary-950 dark:text-primary"
           }`}
           aria-haspopup="menu"
           aria-expanded={isOpen}
+          aria-label={iconOnly ? "Model and effort" : undefined}
           disabled={noModels || (isLoading && !displayModel)}
         >
-          {isLoading && !displayModel ? (
+          {iconOnly ? (
+            <Brain className="size-4.5" />
+          ) : isLoading && !displayModel ? (
             <span className="inline-flex items-center gap-1.5">
               <Text as="span" tone="inherit" className="shine-text">
                 Loading models...
@@ -423,6 +461,7 @@ export function ModelSelectDropdown({
         aria-label="Model selection"
         openUpward={openUpward}
         minWidth="min-w-48"
+        position={iconOnly ? "right" : "left"}
         dropdownRef={mainMenuRef}
       >
         <div
@@ -491,7 +530,7 @@ export function ModelSelectDropdown({
               clearEffortCloseTimer();
             }}
             onMouseLeave={scheduleEffortMenuClose}
-            className="fixed z-(--z-dropdown-sub) min-w-36 overflow-hidden rounded-2xl glass-card animate-dropdown-in p-1"
+            className={`fixed z-(--z-dropdown-sub) overflow-hidden rounded-2xl glass-card animate-dropdown-in p-1 ${iconOnly ? "w-40" : "min-w-36"}`}
             style={{
               top: effortMenuPosition.top,
               left: effortMenuPosition.left,

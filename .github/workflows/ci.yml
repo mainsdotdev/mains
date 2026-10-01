@@ -124,7 +124,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        codex-version: ["0.153.0", "0.154.0", "latest"]
+        codex-version: ["0.153.0", "0.154.0", "0.159.2", "latest"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

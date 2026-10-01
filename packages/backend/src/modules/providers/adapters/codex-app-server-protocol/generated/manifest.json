@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.157.1",
+  "cliVersion": "0.159.2",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -107,7 +107,7 @@
     },
     {
       "path": "PlanType.ts",
-      "sha256": "cc466a3091b69a53c1fdbd1540611ac3629313a806ae975a8b776bfde47480e7"
+      "sha256": "6b2c8303cc89573d823fbbc8a53bcf33d635c9823bf11b611692889a46e3bdb5"
     },
     {
       "path": "ReasoningEffort.ts",
@@ -283,7 +283,7 @@
     },
     {
       "path": "v2/CodexErrorInfo.ts",
-      "sha256": "dfbd23d5c20965172e3f9057c66e8631665cef7de80ddae1ded39d230ece441a"
+      "sha256": "5fbe41b47418f8773c377e1a0c82c25fff69776a868ca36052f2758f33db9a5c"
     },
     {
       "path": "v2/CollabAgentState.ts",
@@ -427,7 +427,7 @@
     },
     {
       "path": "v2/ListMcpServerStatusParams.ts",
-      "sha256": "3a9c49be8082cefbe9e7b0839181c36e590499c4b4bd7f80d00d6edf63932530"
+      "sha256": "8f769ff4fc224f9ac29ea76d568500bb07b3d959ecc3cc67abf203e753ea616e"
     },
     {
       "path": "v2/ListMcpServerStatusResponse.ts",
@@ -602,20 +602,8 @@
       "sha256": "6ee9da97c290fe832d73b4b8b10b9b8227c245d84487c72e65256741e04b52e6"
     },
     {
-      "path": "v2/PluginEntrypoint.ts",
-      "sha256": "2a8ee5e9cfbd50c9fb334d5d6b10d891faa6d97698a74b1b730a913a6c865e0e"
-    },
-    {
-      "path": "v2/PluginExtensions.ts",
-      "sha256": "320376210d0552bad25effa0aa27d85311a2800808021868955004c5dde3ace1"
-    },
-    {
       "path": "v2/PluginHookSummary.ts",
       "sha256": "6401aa6cadd5ab3ed036486265a8010903b573d89096d21256021270499ff7e8"
-    },
-    {
-      "path": "v2/PluginIcon.ts",
-      "sha256": "9e00210e032719d5ec1d5de2d8f246b1cc241417eec1952fb853f6385515c775"
     },
     {
       "path": "v2/PluginInstallParams.ts",
@@ -662,32 +650,12 @@
       "sha256": "cbb70abc33d3c61debf945e5e816e1aee6e4eb6d2392928cd615952472711e16"
     },
     {
-      "path": "v2/PluginQuickAction.ts",
-      "sha256": "c0967d3dde5346fae5d53bda8e2090b7e61b91a411234da145f84e865c7bfad8"
-    },
-    {
-      "path": "v2/PluginQuickActionTarget.ts",
-      "sha256": "6ba28e935637c6075c6c46c660bc70032c485cc2bf474d41b3c9133519913e39"
-    },
-    {
       "path": "v2/PluginReadParams.ts",
       "sha256": "fb2061d0d9f32261ea289e8c0aad2e65594f24873b09303b0cdd6cd658a844c0"
     },
     {
       "path": "v2/PluginReadResponse.ts",
       "sha256": "8665089557cfcbf3379504f36e6a45bcbb78ef33819b83cd3e79bafc8d542633"
-    },
-    {
-      "path": "v2/PluginSearchProvider.ts",
-      "sha256": "6635e8e1b38bdbaa10db6eb0e10a7f487386165192765f2a3350db0c5fd77071"
-    },
-    {
-      "path": "v2/PluginSearchProviderCall.ts",
-      "sha256": "fc40ac12b7937ed4b5f183ca2d47e3a0ae8df0e76f9f021ba0c5d905d5888bc7"
-    },
-    {
-      "path": "v2/PluginSettings.ts",
-      "sha256": "7d82f8d26bde1287829deb42824677d017e4147f79df575610c60f05a8386a3f"
     },
     {
       "path": "v2/PluginShareContext.ts",
@@ -715,7 +683,7 @@
     },
     {
       "path": "v2/PluginSummary.ts",
-      "sha256": "1ed06aa862378977c0972975f86686547fb3d6406c8a90fb55ebd350bf63af71"
+      "sha256": "d5a603da2dc423601f26eeba5f46caeb8ad4e8e678a111d85b10dc3f07a751fe"
     },
     {
       "path": "v2/PluginUninstallParams.ts",
@@ -1007,7 +975,7 @@
     },
     {
       "path": "v2/Turn.ts",
-      "sha256": "5a0852e46a13446ccb3aa3f493c06a9151a43772d530521789ac741ed115da5f"
+      "sha256": "a304905165c888f74ea402b6083175a27d100eab164657dd62a38e0965e28536"
     },
     {
       "path": "v2/TurnEnvironmentParams.ts",

@@ -40,6 +40,7 @@ export default function Tooltip({
   const [shouldRender, setShouldRender] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0 });
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
 
   const updatePosition = () => {
@@ -109,7 +110,9 @@ export default function Tooltip({
       timeoutRef.current = null;
     }
     setIsVisible(false);
-    setTimeout(() => {
+    if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
+    hideTimeoutRef.current = setTimeout(() => {
+      hideTimeoutRef.current = null;
       setShouldRender(false);
     }, 100);
   };
@@ -118,6 +121,10 @@ export default function Tooltip({
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
+      }
+      // A hide still fading out must not set state after unmount.
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current);
       }
     };
   }, []);

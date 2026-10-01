@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { Button, Text } from "@/components/ui";
 import {
+  ArrowUp,
   Bug,
   FileIconComponent,
   Link,
@@ -358,7 +359,8 @@ export function SessionResourcesSection({
   /** Draw the divider only when this component actually renders. */
   separated?: boolean;
 }) {
-  const [sourcesExpanded, setSourcesExpanded] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [sourceListExpanded, setSourceListExpanded] = useState(false);
   const [deliverablesExpanded, setDeliverablesExpanded] = useState(false);
   const [preview, setPreview] = useState<{ name: string; src: string } | null>(
     null,
@@ -435,37 +437,69 @@ export function SessionResourcesSection({
       }
     >
       <section aria-labelledby="session-sources-heading">
-        <SectionHeading id="session-sources-heading" title="Sources" />
-        {loading && sourceCount === 0 ? (
-          <Text as="div" size="xs" tone="faint" className="px-2 py-3">
-            Loading sources…
-          </Text>
-        ) : sourceCount === 0 ? (
-          <Text
-            as="div"
-            size="xs"
-            tone="faint"
-            className="px-2 py-3 leading-relaxed"
+        <Text
+          id="session-sources-heading"
+          as="h2"
+          size="xs"
+          tone="subtle"
+          weight="medium"
+        >
+          <Button
+            onClick={() => setSourcesOpen((open) => !open)}
+            aria-expanded={sourcesOpen}
+            aria-controls="session-sources-content"
+            className="flex w-full items-center justify-between rounded-lg px-2 pb-1 pt-2 text-left hover:bg-primary-50 focus-visible:ring-2 focus-visible:ring-primary-400 dark:hover:bg-primary/5"
           >
-            Files, links, and references used in this chat appear here.
-          </Text>
-        ) : (
-          <>
-            {sourceRows.length > 0 && (
-              <ResourceList
-                resources={sourceRows}
-                expanded={sourcesExpanded}
-                onExpandedChange={setSourcesExpanded}
-                onPreview={setPreview}
-              />
-            )}
-            <SessionPlugins plugins={resources.plugins} />
-            <SessionSourceImages
-              resources={sourceImages}
-              onPreview={setPreview}
+            <span>Sources</span>
+            <ArrowUp
+              aria-hidden="true"
+              className={`size-3 text-primary-400 transition-transform duration-200 motion-reduce:transition-none ${
+                sourcesOpen ? "rotate-180" : "rotate-90"
+              }`}
             />
-          </>
-        )}
+          </Button>
+        </Text>
+        <div
+          id="session-sources-content"
+          aria-hidden={!sourcesOpen}
+          inert={!sourcesOpen}
+          className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none ${
+            sourcesOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+          }`}
+        >
+          <div className="min-h-0 overflow-hidden">
+            {loading && sourceCount === 0 ? (
+              <Text as="div" size="xs" tone="faint" className="px-2 py-3">
+                Loading sources…
+              </Text>
+            ) : sourceCount === 0 ? (
+              <Text
+                as="div"
+                size="xs"
+                tone="faint"
+                className="px-2 py-3 leading-relaxed"
+              >
+                Files, links, and references used in this chat appear here.
+              </Text>
+            ) : (
+              <>
+                {sourceRows.length > 0 && (
+                  <ResourceList
+                    resources={sourceRows}
+                    expanded={sourceListExpanded}
+                    onExpandedChange={setSourceListExpanded}
+                    onPreview={setPreview}
+                  />
+                )}
+                <SessionPlugins plugins={resources.plugins} />
+                <SessionSourceImages
+                  resources={sourceImages}
+                  onPreview={setPreview}
+                />
+              </>
+            )}
+          </div>
+        </div>
       </section>
 
       {showDeliverables && resources.deliverables.length > 0 && (

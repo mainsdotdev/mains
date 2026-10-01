@@ -89,6 +89,38 @@ beforeEach(() => {
 });
 
 describe("useWorkspaceRuns workspace switches", () => {
+  it("ignores a selected run fetch that finishes after leaving its workspace", async () => {
+    const external = { ...runA, id: "external-run" };
+    let resolveRun!: (value: { success: true; data: Run }) => void;
+    mocks.getByWorkspace.mockImplementation(async (workspaceId: string) => ({
+      success: true, data: workspaceId === "ws-a" ? [runA] : [runB],
+    }));
+    mocks.getById.mockImplementation(() => new Promise((resolve) => { resolveRun = resolve; }));
+    const view = renderHook(
+      ({ workspaceId }) => useWorkspaceRuns(workspaceId, "codex", "developer"),
+      { initialProps: { workspaceId: "ws-a" } },
+    );
+    await waitFor(() => expect(view.result.current.runsLoaded).toBe(true));
+    act(() => view.result.current.selectTab(external.id));
+    view.rerender({ workspaceId: "ws-b" });
+    await waitFor(() => expect(view.result.current.runs.map((run) => run.id)).toEqual([runB.id]));
+    await act(async () => resolveRun({ success: true, data: external }));
+    expect(view.result.current.runs.map((run) => run.id)).toEqual([runB.id]);
+  });
+
+  it("adds an externally created run once when both tab selection paths request it", async () => {
+    const external = { ...runA, id: "external-run" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [runA] });
+    mocks.getById.mockResolvedValue({ success: true, data: external });
+    const view = renderHook(() => useWorkspaceRuns("ws-a", "codex", "developer"));
+    await waitFor(() => expect(view.result.current.runsLoaded).toBe(true));
+    await act(async () => {
+      view.result.current.selectTab(external.id);
+      view.result.current.selectTab(external.id);
+    });
+    expect(view.result.current.runs.map((run) => run.id)).toEqual([external.id, runA.id]);
+  });
+
   it("loads a preloaded workspace's selected run transcript", async () => {
     let resolvePrefetchB!: (value: { success: true; data: Run[] }) => void;
     let resolveReloadB!: (value: { success: true; data: Run[] }) => void;

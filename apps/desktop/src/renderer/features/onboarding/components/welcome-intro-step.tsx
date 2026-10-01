@@ -1,26 +1,35 @@
-import { Body, Heading1, Text } from "@/components/ui";
-import { MainsColor } from "@/components/ui/icons";
+import { getProviderVariant } from "@/lib/provider-variants";
+import { ONBOARDING_AGENT_SLUGS } from "../onboarding-agents";
 
-/** Full-screen welcome hero shown as the first onboarding step. */
 export function WelcomeIntroStep() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center text-center">
-        <MainsColor className=" size-24 " />
-      <Text
-        as="span"
-        size="xs"
-        tone="secondary"
-        weight="medium"
-        className="mt-8 uppercase tracking-widest"
-      >
-        v{__APP_VERSION__ ?? "1.0"}
-      </Text>
-      <Heading1 className="my-3 font-mono tracking-tight">
-        Welcome to Mains
-      </Heading1>
-      <Body className=" max-w-md">
-        Your AI-powered workspace. Let&apos;s get you set up.
-      </Body>
+    <div className="onboarding-welcome" aria-hidden="true">
+      <div className="onboarding-welcome-orbit" />
+      <div className="onboarding-welcome-orbit onboarding-welcome-orbit-inner" />
+      <div className="onboarding-welcome-mark glass-outline">
+        <img
+          src={"./icon-no-bg.png"}
+          alt={"Mains"}
+          width={256}
+          height={256}
+          className="h-20 w-auto  object-cover"
+        />
+      </div>
+      <div className="onboarding-welcome-providers">
+        {ONBOARDING_AGENT_SLUGS.map((variant) => {
+          const provider = getProviderVariant(variant);
+          const Icon = provider.icon;
+          return (
+            <span key={variant} className="glass-outline">
+              <Icon className={`size-5 `} />
+            </span>
+          );
+        })}
+      </div>
+      <span className="onboarding-welcome-caption">
+        All your agents.
+        <br />A space of your own.
+      </span>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { Edit } from "@/components/ui/icons";
 import { normalizePatchForPatchDiff } from "../../lib/patch-utils";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { FileIconComponent } from "@/components/ui/icons";
-import { TOOL_ROW_TEXT, ToolCollapse, ToolDiffBody, ToolHeader } from "./_shared";
+import { TOOL_ROW_TEXT, ToolCollapse, ToolDiffBody, ToolDiffStats, ToolHeader } from "./_shared";
 
 export interface ApplyPatchParams {
   /** Copilot CLI's apply_patch passes the whole `*** Begin Patch …` envelope as a string. */
@@ -47,16 +47,27 @@ export function ApplyPatchDisplay({
     return dotIdx > 0 ? fileName.slice(dotIdx + 1) : undefined;
   })();
 
-  const unifiedDiff = useMemo(() => {
+  const { unifiedDiff, added, removed } = useMemo(() => {
     // Prefer the completed unified diff from output; fall back to the envelope
     // lines (e.g. while the call is still running and no output exists yet).
     const lines =
       extractOutputDiffLines(output) || parseEnvelopeLines(patch);
-    if (lines.length === 0) return "";
-    return normalizePatchForPatchDiff(
-      buildUnifiedDiff(lines, fileName || "file"),
-      filePath || undefined,
-    );
+    if (lines.length === 0) return { unifiedDiff: "", added: 0, removed: 0 };
+    let added = 0;
+    let removed = 0;
+    for (const line of lines) {
+      const count = line.text.split("\n").length;
+      if (line.type === "add") added += count;
+      if (line.type === "remove") removed += count;
+    }
+    return {
+      unifiedDiff: normalizePatchForPatchDiff(
+        buildUnifiedDiff(lines, fileName || "file"),
+        filePath || undefined,
+      ),
+      added,
+      removed,
+    };
   }, [output, patch, fileName, filePath]);
 
   const hasDiff = unifiedDiff.length > 0;
@@ -70,6 +81,7 @@ export function ApplyPatchDisplay({
         isExpanded={isExpanded}
         onToggle={() => setIsExpanded((v) => !v)}
         isCompact={isCompact}
+        afterChevron={<ToolDiffStats added={added} removed={removed} />}
       >
         <span
           role={filePath ? "link" : undefined}

@@ -28,7 +28,6 @@ import {
   OpenWith,
   Edit,
   Plus,
-  Branch,
   ProjectFolder,
   Pin,
 } from "@/components/ui/icons";
@@ -77,7 +76,6 @@ export default function WorkspaceItem({
   name,
   rootPath,
   branch,
-  baseBranch,
   pathExists = true,
   //updatedAt,
   isActive = false,
@@ -116,7 +114,6 @@ export default function WorkspaceItem({
 
   const insertions = latestDiff?.stats?.shortstat.match(/(\d+) insertion/)?.[1];
   const deletions = latestDiff?.stats?.shortstat.match(/(\d+) deletion/)?.[1];
-  const showBranchIcon = pathExists && !!branch && !!baseBranch && branch !== baseBranch;
 
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -240,14 +237,7 @@ export default function WorkspaceItem({
           )}
           <div className="flex flex-col min-w-0">
             <div className={`flex items-center gap-1.5 ${grouping === "project" ? "pl-0" : "pl-0"}`}>
-              {showBranchIcon ? (
-                <Branch
-                  aria-hidden="true"
-                  className="size-3 shrink-0 text-primary-700 dark:text-primary-300"
-                />
-              ) : grouping === "project" ? (
-                <span aria-hidden="true" className="size-3.5 shrink-0" />
-              ) : <span aria-hidden="true" className="size-3.5 shrink-0" />}
+              <span aria-hidden="true" className="size-3.5 shrink-0" />
               {!pathExists ? (
                 // Replaces the branch line rather than sitting next to it: with
                 // no folder there is no branch to show, and the reason the row

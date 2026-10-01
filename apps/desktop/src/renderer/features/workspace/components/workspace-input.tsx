@@ -2,6 +2,7 @@ import {
   useReducer,
   useRef,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useState,
   useMemo,
@@ -12,9 +13,12 @@ import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { ContextCodeSelection } from "@/features/workspace/lib/composer-context";
 import { useComposerContext } from "../hooks/use-composer-context";
 import {
+  AsciiSpinner,
   Button,
   DropdownWrapper,
   RichInputForm,
+  Tooltip,
+  toast,
   type UploadedFile,
   type RichInputFormHandle,
   type RichSkillChipData,
@@ -22,6 +26,7 @@ import {
   type RichCodeChipData,
 } from "@/components/ui";
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
+import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useIsMobile } from "@/lib/platform";
 import { useClickOutside } from "@/hooks/use-click-outside";
@@ -56,6 +61,11 @@ import {
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
+const EMPTY_DIRECTORIES: string[] = [];
+
+function directoryName(folderPath: string): string {
+  return folderPath.replace(/\/+$/, "").split("/").pop() || folderPath;
+}
 
 function looksLikeImageFile(file: File): boolean {
   if (file.type.startsWith("image/")) return true;
@@ -163,6 +173,8 @@ interface WorkspaceInputProps {
   projectId?: string;
   uploadedFiles?: UploadedFile[];
   onUploadedFilesChange?: (files: UploadedFile[]) => void;
+  additionalDirectories?: string[];
+  onAdditionalDirectoriesChange?: (directories: string[]) => void;
   onStop?: () => void;
   /** When true (e.g. new-run draft tab active), focus the prompt after layout. */
   isNewRunTabActive?: boolean;
@@ -171,7 +183,12 @@ interface WorkspaceInputProps {
   /** Project glyph rendered as part of the empty placeholder. */
   newChatProjectIcon?: React.ReactNode;
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
-  layout?: "default" | "centered";
+  layout?: "default" | "centered" | "floating";
+  floatingChatMode?: FloatingChatMode;
+  onFloatingFocus?: () => void;
+  floatingAutoFocus?: boolean;
+  /** Selected run activity shown in the compact floating composer while idle. */
+  floatingStatusPlaceholder?: string | null;
 }
 
 export function WorkspaceInput({
@@ -190,13 +207,24 @@ export function WorkspaceInput({
   projectId,
   uploadedFiles = EMPTY_UPLOADED_FILES,
   onUploadedFilesChange,
+  additionalDirectories = EMPTY_DIRECTORIES,
+  onAdditionalDirectoriesChange,
   onStop,
   isNewRunTabActive = false,
   newChatProjectName,
   newChatProjectIcon,
   layout = "default",
+  floatingChatMode,
+  onFloatingFocus,
+  floatingAutoFocus = false,
+  floatingStatusPlaceholder,
 }: WorkspaceInputProps) {
   const inputRef = useRef<RichInputFormHandle>(null);
+  useEffect(() => {
+    if (layout !== "floating" || !floatingAutoFocus) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [layout, floatingAutoFocus]);
   const unifiedContextDropdownRef = useRef<HTMLDivElement>(null);
   const pluginsButtonRef = useRef<HTMLButtonElement>(null);
   const {
@@ -252,7 +280,7 @@ export function WorkspaceInput({
     workspacePath,
   );
 
-  const contextUsage = useContextUsage(activeRun?.id ?? null);
+  const contextUsage = useContextUsage(layout === "floating" ? null : (activeRun?.id ?? null));
 
   // Preflight auth probe: catches "signed out entirely" before the first run
   // is even sent. Refresh-token failures can't be predicted from local state —
@@ -344,6 +372,10 @@ export function WorkspaceInput({
 
   // Detect @ / context menu when goal is set externally (e.g. quick actions)
   useEffect(() => {
+    if (/^\/add-dir\s+/.test(goal)) {
+      updateUnifiedMenu({ visible: false, filter: "" });
+      return;
+    }
     const slashMatch = goal.match(/(?:^|\s)\/(\S*)$/);
     if (slashMatch) {
       updateUnifiedMenu({ filter: slashMatch[1], visible: true, trigger: "/" });
@@ -367,6 +399,10 @@ export function WorkspaceInput({
   // Triggers fire based on the text BEFORE the caret, so users can insert mentions
   // mid-text — not just at the end of the prompt.
   const handleCaretContext = useCallback((before: string) => {
+    if (/^\/add-dir\s+/.test(before)) {
+      updateUnifiedMenu({ visible: false, filter: "" });
+      return;
+    }
     const match = before.match(/(?:^|\s)([/@#$])(\S*)$/);
     if (match) {
       updateUnifiedMenu({
@@ -380,8 +416,44 @@ export function WorkspaceInput({
     }
   }, []);
 
+  const addAdditionalDirectory = useCallback((folderPath: string) => {
+    const normalized = folderPath.trim();
+    if (!normalized.startsWith("/")) {
+      toast.error("Enter an absolute folder path on the Mac running Mains.");
+      return;
+    }
+    if (!additionalDirectories.includes(normalized)) {
+      onAdditionalDirectoriesChange?.([...additionalDirectories, normalized]);
+    }
+  }, [additionalDirectories, onAdditionalDirectoriesChange]);
+
+  const pickAdditionalDirectory = useCallback(async () => {
+    try {
+      const result = await window.api.workspace.selectDirectory();
+      if (!result.success) {
+        toast.error(result.error || "Could not open the folder picker. You can type /add-dir /absolute/path instead.");
+        return;
+      }
+      if (result.data) addAdditionalDirectory(result.data);
+    } catch {
+      toast.error("Could not open the folder picker. You can type /add-dir /absolute/path instead.");
+    }
+  }, [addAdditionalDirectory]);
+
   const handleSlashCommandSelect = useCallback(
     (command: CommandInfo) => {
+      if (command.name === "add-dir" &&
+        (activeProviderId === PROVIDER_IDS.claude || activeProviderId === PROVIDER_IDS.codex)) {
+      const t = unifiedMenu.trigger;
+      const ok = inputRef.current?.replaceTokenWithText(t, "") ?? false;
+      if (!ok) {
+        const next = replaceMentionInGoal(goal, t, unifiedMenu.filter, "");
+        if (next !== null) onGoalChange(next);
+      }
+      updateUnifiedMenu({ visible: false, filter: "" });
+      void pickAdditionalDirectory();
+      return;
+    }
       const replacement = `/${command.name} `;
       const t = unifiedMenu.trigger;
       const ok =
@@ -397,7 +469,7 @@ export function WorkspaceInput({
       }
       updateUnifiedMenu({ visible: false, filter: "" });
     },
-    [goal, onGoalChange, unifiedMenu.filter, unifiedMenu.trigger],
+    [activeProviderId, goal, onGoalChange, pickAdditionalDirectory,unifiedMenu.filter, unifiedMenu.trigger],
   );
 
   const handleSkillSelect = useCallback(
@@ -640,14 +712,35 @@ export function WorkspaceInput({
   );
 
   const handleSubmit = useCallback(() => {
+    if (activeProviderId === PROVIDER_IDS.claude || activeProviderId === PROVIDER_IDS.codex) {
+      const match = goal.trim().match(/^\/add-dir(?:\s+(.+))?$/);
+      if (match) {
+        if (match[1]) {
+          const folderPath = match[1].trim().replace(/^(["'])(.*)\1$/, "$2");
+          addAdditionalDirectory(folderPath);
+        } else {
+          void pickAdditionalDirectory();
+        }
+        onGoalChange("");
+        return;
+      }
+    }
     if (unifiedMenu.visible) return;
     onSubmit();
-  }, [unifiedMenu.visible, onSubmit]);
+  }, [unifiedMenu.visible, activeProviderId, goal, addAdditionalDirectory, pickAdditionalDirectory, onGoalChange, onSubmit]);
 
   const [isFileDragOver, setIsFileDragOver] = useState(false);
 
   const sendTargetDropdownRef = useRef<HTMLDivElement>(null);
   const [targetMenuOpen, setTargetMenuOpen] = useState(false);
+  const previousFloatingChatMode = useRef(floatingChatMode);
+  useLayoutEffect(() => {
+    const previousMode = previousFloatingChatMode.current;
+    previousFloatingChatMode.current = floatingChatMode;
+    if (layout !== "floating" || previousMode === floatingChatMode) return;
+    updateUnifiedMenu({ visible: false, filter: "" });
+    setTargetMenuOpen(false);
+  }, [floatingChatMode, layout]);
   useClickOutside(sendTargetDropdownRef, () => {
     if (targetMenuOpen) setTargetMenuOpen(false);
   });
@@ -777,6 +870,9 @@ export function WorkspaceInput({
     composerPlaceholder,
     newChatProjectName,
   ]);
+  const floatingRunStatus = layout === "floating" && !isFileDragOver
+    ? floatingStatusPlaceholder
+    : null;
 
   //Copilot related TODO:
   const authErrorMessage = (() => {
@@ -794,6 +890,46 @@ export function WorkspaceInput({
       return msg;
     return null;
   })();
+
+  const toolbar = (
+    <InputToolbar
+      floatingChatMode={floatingChatMode}
+      variant={providerVariant}
+      isLoading={isLoading}
+      onSubmit={handleSubmit}
+      onGoalChange={onGoalChange}
+      selectedModelDisplayName={selectedModelDisplayName}
+      modelDisplayNames={modelDisplayNames}
+      modelEffortLevelsByDisplayName={modelEffortLevelsByDisplayName}
+      onModelChange={handleModelChange}
+      isLoadingModels={isLoadingModels}
+      permissionMode={permissionMode}
+      onPermissionModeChange={handlePermissionModeChange}
+      planMode={planMode}
+      onPlanModeToggle={handlePlanModeToggle}
+      goalMode={goalMode}
+      onGoalModeToggle={handleGoalModeToggle}
+      pluginSkills={pluginSkills}
+      pluginsMenuOpen={pluginsMenuOpen}
+      onTogglePluginsMenu={handleTogglePluginsMenu}
+      pluginsButtonRef={pluginsButtonRef}
+      thinkingMode={thinkingMode}
+      onThinkingModeToggle={handleThinkingModeToggle}
+      fastMode={fastMode}
+      onFastModeToggle={handleFastModeToggle}
+      supportsFastMode={selectedModelInfo?.supportsFastMode ?? false}
+      effortLevel={effortLevel}
+      onEffortLevelChange={handleEffortLevelChange}
+      supportedEffortLevels={selectedModelInfo?.supportedEffortLevels}
+      supportsUltracode={supportsUltracode}
+      isRunning={activeRun?.status === "running"}
+      onStop={onStop}
+      uploadedFiles={uploadedFiles}
+      onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
+      disabled={!!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
+      layout={layout === "floating" ? "floating" : "default"}
+    />
+  );
 
   return (
     <>
@@ -827,16 +963,23 @@ export function WorkspaceInput({
       )}
 
       <div
-        className={`relative w-full max-w-210 mx-auto flex flex-col pb-2 rounded-[28px] glass-surface
-        cursor-pointer transition-all
+        className={`relative mx-auto flex w-full max-w-210 flex-col cursor-pointer transition-all
+        ${layout === "floating"
+          ? "rounded-[28px] text-primary-950 dark:text-primary-50"
+          : "rounded-[28px] glass-surface pb-2"}
         ${layout === "default" ? "mb-4" : ""}
-        ${isFileDragOver ? "ring-2 ring-primary/60 ring-offset-2 ring-offset-background" : ""}`}
+        ${isFileDragOver ? "ring dark:ring-primary/50 ring-primary-950/50 ring-offset-2 " : ""}`}
+        onFocusCapture={(event) => {
+          if (layout === "floating" && event.target instanceof HTMLElement && event.target.getAttribute("role") === "textbox") {
+            onFloatingFocus?.();
+          }
+        }}
         onDragEnter={handleWrapperDragEnter}
         onDragLeave={handleWrapperDragLeave}
         onDragOver={handleWrapperDragOver}
         onDrop={handleWrapperDrop}
       >
-        {contextUsage && (
+        {layout !== "floating" && contextUsage && (
           <div className="absolute left-full bottom-2.5 ml-3 z-10">
             <ContextUsageRing usage={contextUsage} />
           </div>
@@ -863,7 +1006,7 @@ export function WorkspaceInput({
                 isOpen={targetMenuOpen}
                 aria-label="Send message to"
                 openUpward
-                minWidth="min-w-60"
+                minWidth="min-w-20"
               >
                 <div className="max-h-80 overflow-auto noscrollbar py-1">
                   {sendTarget.options.map((option) => {
@@ -902,6 +1045,30 @@ export function WorkspaceInput({
           </div>
         )}
         <ContextChips />
+        {additionalDirectories.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-4 pt-3">
+            {additionalDirectories.map((folderPath) => (
+              <Tooltip
+                key={folderPath}
+                content={folderPath}
+                hideOnClick
+                className="max-w-xs whitespace-normal wrap-break-word"
+              >
+                <Button
+                  type="button"
+                  aria-label={`Remove access to ${folderPath}`}
+                  onClick={() => onAdditionalDirectoriesChange?.(
+                    additionalDirectories.filter((entry) => entry !== folderPath),
+                  )}
+                  className="min-w-0 max-w-64 flex items-center gap-1.5 rounded-full glass-button px-2.5 py-1 text-xs text-primary-700 dark:text-primary-300"
+                >
+                  <span className="min-w-0 truncate">{directoryName(folderPath)}</span>
+                  <span aria-hidden="true" className="shrink-0 text-primary-500">×</span>
+                </Button>
+              </Tooltip>
+            ))}
+          </div>
+        )}
         <ComposerAttachments
           files={uploadedFiles}
           onRemove={handleRemoveUploadedFile}
@@ -922,9 +1089,15 @@ export function WorkspaceInput({
             skillChipMap={skillChipMap}
             fileChipMap={fileChipMap}
             codeChipMap={codeChipMap}
-            placeholder={inputPlaceholder}
-            placeholderIcon={newChatProjectName ? newChatProjectIcon : undefined}
-            focusShortcutLabel={focusComposerShortcut}
+            placeholder={floatingRunStatus || inputPlaceholder}
+            placeholderIcon={floatingRunStatus
+              ? <AsciiSpinner
+                  variant={providerVariant}
+                  kind={activeRun?.status === "queued" ? "circle" : "square"}
+                />
+              : newChatProjectName ? newChatProjectIcon : undefined}
+            focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
+            compact={layout === "floating"}
           />
           <UnifiedContextDropdown
             isOpen={unifiedMenu.visible}
@@ -946,45 +1119,9 @@ export function WorkspaceInput({
             dropdownRef={unifiedContextDropdownRef}
             triggerRef={pluginsButtonRef}
           />
+          {layout === "floating" && toolbar}
         </div>
-        <InputToolbar
-          variant={providerVariant}
-          isLoading={isLoading}
-          onSubmit={handleSubmit}
-          onGoalChange={onGoalChange}
-          selectedModelDisplayName={selectedModelDisplayName}
-          modelDisplayNames={modelDisplayNames}
-          modelEffortLevelsByDisplayName={modelEffortLevelsByDisplayName}
-          onModelChange={handleModelChange}
-          isLoadingModels={isLoadingModels}
-          permissionMode={permissionMode}
-          onPermissionModeChange={handlePermissionModeChange}
-          planMode={planMode}
-          onPlanModeToggle={handlePlanModeToggle}
-          goalMode={goalMode}
-          onGoalModeToggle={handleGoalModeToggle}
-          pluginSkills={pluginSkills}
-          pluginsMenuOpen={pluginsMenuOpen}
-          onTogglePluginsMenu={handleTogglePluginsMenu}
-          pluginsButtonRef={pluginsButtonRef}
-          thinkingMode={thinkingMode}
-          onThinkingModeToggle={handleThinkingModeToggle}
-          fastMode={fastMode}
-          onFastModeToggle={handleFastModeToggle}
-          supportsFastMode={selectedModelInfo?.supportsFastMode ?? false}
-          effortLevel={effortLevel}
-          onEffortLevelChange={handleEffortLevelChange}
-          supportedEffortLevels={selectedModelInfo?.supportedEffortLevels}
-          supportsUltracode={supportsUltracode}
-          isRunning={activeRun?.status === "running"}
-          onStop={onStop}
-          uploadedFiles={uploadedFiles}
-          onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
-          disabled={
-            !!authErrorMessage ||
-            (!isLoadingModels && modelDisplayNames.length === 0)
-          }
-        />
+        {layout !== "floating" && toolbar}
       </div>
     </>
   );

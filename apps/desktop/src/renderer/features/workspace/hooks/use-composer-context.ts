@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
+import { store } from "@/lib/redux";
 import {
   addContextItem,
   clearContextItems,
@@ -38,6 +39,17 @@ function releaseOwnedCapture(item: ContextItem) {
   if (item.kind === "appshot") releaseAppshotCapture(item);
 }
 
+function syncBrowserChatContext() {
+  if (typeof window === "undefined" ||
+      !new URLSearchParams(window.location.search).has("browserChatOverlay")) return;
+  const state = store.getState().workspace;
+  void window.api.browserChat.postAction({
+    type: "contextItems",
+    ownerKey: state.composerContextKey,
+    items: state.contextItems,
+  });
+}
+
 /**
  * The composer's attached context: the flat list, the per-kind views the UI
  * renders from, its normal mutations, and the route-scoped reset.
@@ -60,6 +72,7 @@ export function useComposerContext() {
   const add = useCallback(
     (item: ContextItem) => {
       dispatch(addContextItem(item));
+      syncBrowserChatContext();
     },
     [dispatch],
   );
@@ -67,6 +80,7 @@ export function useComposerContext() {
   const remove = useCallback(
     (item: ContextItem) => {
       dispatch(removeContextItem({ kind: item.kind, key: contextItemKey(item) }));
+      syncBrowserChatContext();
       releaseOwnedCapture(item);
     },
     [dispatch],
@@ -74,6 +88,7 @@ export function useComposerContext() {
 
   const clear = useCallback(() => {
     dispatch(clearContextItems());
+    syncBrowserChatContext();
   }, [dispatch]);
 
   // Files, issues, and in-app selections belong to the route/workspace that
@@ -86,6 +101,7 @@ export function useComposerContext() {
       .forEach(releaseOwnedCapture);
     dispatch(clearContextItems());
     retained.forEach((item) => dispatch(addContextItem(item)));
+    syncBrowserChatContext();
   }, [dispatch]);
 
   return { items, ...grouped, add, remove, clear, resetForRoute };

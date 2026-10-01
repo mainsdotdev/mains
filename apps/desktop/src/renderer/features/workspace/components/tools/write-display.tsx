@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import {  Write } from "@/components/ui/icons";
+import { Write } from "@/components/ui/icons";
 import { normalizePatchForPatchDiff } from "../../lib/patch-utils";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { FileIconComponent } from "@/components/ui/icons";
-import { TOOL_ROW_TEXT, ToolCollapse, ToolDiffBody, ToolHeader } from "./_shared";
+import { TOOL_ROW_TEXT, ToolCollapse, ToolDiffBody, ToolDiffStats, ToolHeader } from "./_shared";
 
 export interface WriteParams {
   file_path?: string;
@@ -120,8 +120,8 @@ function countStructuredPatchChanges(hunks: StructuredHunk[]): {
   let removed = 0;
   for (const h of hunks) {
     for (const line of h.lines) {
-      if (line.startsWith("+")) added++;
-      else if (line.startsWith("-")) removed++;
+      if (line.startsWith("+")) added += expandStructuredHunkLine(line).length;
+      else if (line.startsWith("-")) removed += expandStructuredHunkLine(line).length;
     }
   }
   return { added, removed };
@@ -153,9 +153,8 @@ export function WriteDisplay({
 
   const {
     unifiedDiff,
-    // added,
-    // removed,
-    // lineCount,
+    added,
+    removed,
     hasDiff,
   } = useMemo(() => {
     if (parsedPatch) {
@@ -167,7 +166,6 @@ export function WriteDisplay({
         unifiedDiff: normalizePatchForPatchDiff(raw, filePath || undefined),
         added: a,
         removed: r,
-        lineCount: 0,
         hasDiff: true,
       };
     }
@@ -176,7 +174,6 @@ export function WriteDisplay({
         unifiedDiff: "",
         added: 0,
         removed: 0,
-        lineCount: 0,
         hasDiff: false,
       };
     }
@@ -196,7 +193,6 @@ export function WriteDisplay({
       unifiedDiff: normalizePatchForPatchDiff(raw, filePath || undefined),
       added: addedLines.length,
       removed: 0,
-      lineCount: addedLines.length,
       hasDiff: true,
     };
   }, [parsedPatch, content, fileName, filePath]);
@@ -209,6 +205,7 @@ export function WriteDisplay({
         hasDetails={hasDiff}
         isExpanded={isExpanded}
         onToggle={() => setIsExpanded((v) => !v)}
+        afterChevron={<ToolDiffStats added={added} removed={removed} />}
       >
         <span
           role={filePath ? "link" : undefined}
@@ -229,25 +226,6 @@ export function WriteDisplay({
           )}
           <span className="truncate">{fileName}</span>
         </span>
-        {/* {parsedPatch ? (
-          (added > 0 || removed > 0) && (
-            <span className={`text-xs shrink-0 ${TOOL_ROW_TEXT}`}>
-              {added > 0 && (
-                <Text as="span" size="inherit" tone="success">+{added}</Text>
-              )}
-              {added > 0 && removed > 0 && " "}
-              {removed > 0 && (
-                <Text as="span" size="inherit" tone="danger">-{removed}</Text>
-              )}
-            </span>
-          )
-        ) : (
-          lineCount > 0 && (
-            <Text as="span" size="xs" tone="success" className="shrink-0">
-              +{lineCount}
-            </Text>
-          )
-        )} */}
       </ToolHeader>
 
       {unifiedDiff && (

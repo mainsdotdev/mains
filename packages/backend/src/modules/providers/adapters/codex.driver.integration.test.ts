@@ -388,7 +388,7 @@ describe("codex.driver / app-server protocol", () => {
     );
   });
 
-  it("targets the selected MCP App account on Codex 0.157.1", async () => {
+  it("targets the selected MCP App account on the tested Codex protocol", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
@@ -931,6 +931,44 @@ describe("codex.driver / app-server protocol", () => {
     expect(threadStart?.params).toMatchObject({ sandbox: "read-only" });
     expect(threadStart?.params).not.toHaveProperty("personality");
     await driver.cleanup?.(acquired.session);
+  });
+
+  it("passes per-chat extra writable roots to the app server", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const extraRoot = path.join(tempDir, "extra");
+    fs.mkdirSync(extraRoot);
+
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 500 });
+    drivers.push(driver);
+    const acquired = await driver.createSession({
+      ...request("run-extra-root"),
+      configSnapshot: { additionalDirectories: [extraRoot] },
+    });
+    const threadStart = readProtocolLog(logPath).find(
+      (message) => message.method === "thread/start",
+    );
+    expect(threadStart?.params).toMatchObject({
+      config: { sandbox_workspace_write: { writable_roots: [extraRoot] } },
+    });
+    await driver.cleanup?.(acquired.session);
+    const resumed = await driver.resumeSession?.({
+      runId: "run-extra-root",
+      accountId: "account-1",
+      execution: { workspaceId: "workspace-1", cwd: process.cwd() },
+      message: "Continue without the extra folder",
+      configSnapshot: { additionalDirectories: [] },
+    });
+    expect(resumed).toBeDefined();
+    const threadResume = readProtocolLog(logPath).find(
+      (message) => message.method === "thread/resume",
+    );
+    expect(threadResume?.params).toMatchObject({
+      config: { sandbox_workspace_write: { writable_roots: [] } },
+    });
+    await driver.cleanup?.(resumed!.session);
   });
 
   it("ignores legacy personality settings when resuming a thread", async () => {

@@ -90,6 +90,7 @@ export function useRunOperations({
       uploads?: Attachments,
       context?: readonly ContextItem[],
       collectionId?: string | null,
+      additionalDirectories?: string[],
     ) => {
       if (
         !goal.trim() ||
@@ -117,6 +118,7 @@ export function useRunOperations({
           providerId: selectedProvider,
           goal: goal.trim(),
           model: model || undefined,
+          additionalDirectories,
           initialContext,
           ...contextPayload,
         });
@@ -137,6 +139,7 @@ export function useRunOperations({
     model?: string,
     uploads?: Attachments,
     context?: readonly ContextItem[],
+    additionalDirectories?: string[],
   ) => {
     if (!message.trim()) {
       setError("Please enter a message");
@@ -157,6 +160,7 @@ export function useRunOperations({
         accountId,
         message: message.trim(),
         model: model || undefined,
+        additionalDirectories,
         additionalContext: initialContext,
         ...contextPayload,
       });

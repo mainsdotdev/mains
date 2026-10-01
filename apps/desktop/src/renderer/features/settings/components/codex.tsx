@@ -230,6 +230,35 @@ export default function CodexSettings() {
         )}
       </ProviderCliSection>
 
+      {/* Rate limits */}
+      <ProviderUsageSection
+        isLoading={isLoadingRateLimits}
+        rows={usageRows}
+        readout="percentLeft"
+        summary={resetCreditSummary}
+        summaryAction={
+          (resetCredits?.availableCount ?? 0) > 0 ? (
+            <Button
+              variant="secondary"
+              onClick={openResetConfirmation}
+              disabled={!canUseResetCredit}
+              tooltip={
+                canUseResetCredit
+                  ? "Spend one earned reset credit"
+                  : "A five-hour or weekly limit can be reset at 10% remaining"
+              }
+            >
+              Use reset
+            </Button>
+          ) : undefined
+        }
+        notice={
+          rateLimits?.ordinaryUsageAllowed === false
+            ? "Advanced usage is temporarily unavailable for this account."
+            : undefined
+        }
+      />
+
       <SettingsSection title="Configuration">
         <SettingsRow
           title="Approval Policy"
@@ -330,34 +359,6 @@ export default function CodexSettings() {
           </div>
         </SettingsRow>
       </SettingsSection>
-      {/* Rate limits */}
-      <ProviderUsageSection
-        isLoading={isLoadingRateLimits}
-        rows={usageRows}
-        readout="percentLeft"
-        summary={resetCreditSummary}
-        summaryAction={
-          (resetCredits?.availableCount ?? 0) > 0 ? (
-            <Button
-              variant="secondary"
-              onClick={openResetConfirmation}
-              disabled={!canUseResetCredit}
-              tooltip={
-                canUseResetCredit
-                  ? "Spend one earned reset credit"
-                  : "A five-hour or weekly limit can be reset at 10% remaining"
-              }
-            >
-              Use reset
-            </Button>
-          ) : undefined
-        }
-        notice={
-          rateLimits?.ordinaryUsageAllowed === false
-            ? "Advanced usage is temporarily unavailable for this account."
-            : undefined
-        }
-      />
 
       <StructuredOutputsModal
         isOpen={isStructuredOutputsModalOpen}

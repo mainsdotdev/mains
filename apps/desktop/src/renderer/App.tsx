@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 import { HashRouter as Router, useLocation } from "react-router-dom";
 import Sidebar from "./components/layout/sidebar";
 import RightPanel from "./components/layout/right-panel";
@@ -50,6 +50,7 @@ import { CommandMenu } from "./features/command-menu/command-menu";
 import { useAppshots } from "./hooks/use-appshots";
 import { useWindowRequests } from "./hooks/use-window-requests";
 import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
+import { useOnboardingWindow } from "./features/onboarding/hooks/use-onboarding-window";
 import {
   KeyboardShortcutsProvider,
   useKeyboardShortcut,
@@ -139,6 +140,12 @@ function AppContent() {
   const onboardingCompleted = useAppSelector(
     (state) => state.appSettings.onboardingCompleted,
   );
+  // The onboarding screen announces its native mode only once its lazy chunk
+  // has mounted, so the first visible window already contains the welcome UI.
+  useOnboardingWindow(false, onboardingCompleted);
+  const [animateWorkspaceEntry] = useState(
+    () => !onboardingCompleted && !isWeb && typeof document.startViewTransition !== "function",
+  );
   const isMobile = useIsMobile();
 
   // Chat/work hide the right panel entirely; a persisted rightPanelOpen from a
@@ -209,7 +216,7 @@ function AppContent() {
   // The content column's live edges — the same values MainContent gets as
   // margins (plus the docked session box on the right). Published on `:root`
   // so viewport-fixed overlays (the Toaster) can center over the content
-  // instead of the window. Onboarding renders full-screen without the shell,
+  // instead of the window. Onboarding renders without the shell,
   // so the edges collapse to zero there.
   const contentLeft = isMobile
     ? EDGE_GUTTER
@@ -285,7 +292,7 @@ function AppContent() {
     <>
       <Toaster />
       <CommandMenu />
-      <MainLayout>
+      <MainLayout className={animateWorkspaceEntry ? "onboarding-workspace-enter" : undefined}>
         {/* Mobile drawer scrims — tap to dismiss. Each sits just below its panel
             (sidebar z-30, right panel z-50) and above the full-width content. */}
         {isMobile && !sidebarCollapsed && (
@@ -310,6 +317,7 @@ function AppContent() {
         ) && (
           <SidebarToggleButton
             isOpen={!sidebarCollapsed}
+            browserExpanded={browserPanel.isExpanded}
             onClick={() => dispatch(setSidebarCollapsed(!sidebarCollapsed))}
           />
         )}
@@ -323,6 +331,7 @@ function AppContent() {
             !hideRightPanel && !rightPanelVisible && !browserPanel.isOpen && !docViewer.isOpen
           }
           browserOpen={browserPanel.isOpen || docViewer.isOpen}
+          headerHidden={browserPanel.isExpanded}
           sidebarCollapsed={sidebarCollapsed}
         >
           <ErrorBoundary level="route">

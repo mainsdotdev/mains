@@ -10,7 +10,7 @@ export function registerWorkspaceDialogIpc(): void {
     const window = BrowserWindow.getFocusedWindow();
     const options: OpenDialogOptions = {
       properties: ["openDirectory"],
-      title: "Select Project Folder",
+      title: "Select Folder",
       buttonLabel: "Select",
     };
     const result = window
