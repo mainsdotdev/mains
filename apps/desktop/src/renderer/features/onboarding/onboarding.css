@@ -14,6 +14,8 @@
 .onboarding-root {
   /* Rebind glass paint at the draft theme boundary, independent of the saved
      appearance on <html>. The shared utilities still own the rim gradients. */
+  --glass-fill-surface: var(--color-primary-100);
+  --app-frame: var(--glass-fill-surface);
   --glass-rim: color-mix(in srgb, var(--onboarding-ink) 12%, transparent);
   --glass-outline-rim: var(--glass-rim);
   --glass-outline-rim-soft: color-mix(
@@ -66,6 +68,7 @@
   color-scheme: light;
 }
 .onboarding-root[data-appearance="dark"] {
+  --glass-fill-surface: var(--color-primary-900);
   color-scheme: dark;
 }
 .onboarding-scene {
@@ -851,7 +854,7 @@ label:has(:checked) > .onboarding-radio::after {
   gap: 6px;
   padding: 6px 6px;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--onboarding-ink) 3%, var(--onboarding-surface));
+  background: var(--glass-fill-surface);
   color: var(--onboarding-muted);
   font-size: 8px;
 }
