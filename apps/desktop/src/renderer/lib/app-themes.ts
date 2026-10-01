@@ -102,10 +102,10 @@ const STOCK_PALETTES: Record<ThemeAppearance, ThemePalette> = {
   },
 };
 
-/** The stock frame, opaque (index.css's `--app-frame` without its alpha). */
+/** The stock composer fill, which the frame shares through index.css. */
 const STOCK_FRAMES: Record<ThemeAppearance, string> = {
-  light: "#ffffff",
-  dark: "#000000",
+  light: "#f7f7f6",
+  dark: "#141414",
 };
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
@@ -134,8 +134,8 @@ export interface AppearanceChoice {
   readonly foreground?: string;
   readonly contrast?: number;
   /**
-   * Whether the frame lets the macOS vibrancy through. Unset follows the
-   * preset: stock is translucent, every palette theme opaque.
+   * Whether the frame lets the macOS vibrancy through. Unset is opaque so
+   * the frame matches the workspace composer fill in every theme.
    */
   readonly translucent?: boolean;
 }
@@ -386,8 +386,7 @@ export function resolveAppearance(
       choice.accent === "custom" && choice.accentColor
         ? choice.accentColor
         : null,
-    translucent:
-      choice.translucent ?? presetPalette(choice.theme, appearance) === null,
+    translucent: choice.translucent ?? false,
   };
 }
 
@@ -478,14 +477,7 @@ function accentForeground(
 }
 
 /**
- * The window frame (behind the sidebar and around the content) sits a step
- * below the background, the way editor themes do their sidebars.
- */
-const FRAME_LIGHTNESS_SHIFT = -0.025;
-
-/**
  * How much of a translucent themed frame is paint; the rest is vibrancy.
- * Stock keeps its own, lighter mix from index.css.
  */
 const TRANSLUCENT_FRAME_OPACITY = 80;
 
@@ -514,10 +506,6 @@ export function deriveThemeTokens(
       liftTextSteps(share, palette.contrast),
     );
   }
-  tokens["--app-frame"] = shiftLightness(
-    palette.background,
-    FRAME_LIGHTNESS_SHIFT,
-  );
   return { ...tokens, ...accentTokens(palette.accent, palette) };
 }
 
@@ -537,14 +525,9 @@ function appearanceTokens(
       accentTokens(accent, palette ?? STOCK_PALETTES[appearance]),
     );
   }
-  if (palette && translucent) {
+  if (translucent) {
     tokens["--app-frame"] =
-      `color-mix(in srgb, ${tokens["--app-frame"]} ${TRANSLUCENT_FRAME_OPACITY}%, transparent)`;
-  } else if (!palette && !translucent) {
-    tokens["--app-frame"] = shiftLightness(
-      STOCK_PALETTES[appearance].background,
-      FRAME_LIGHTNESS_SHIFT,
-    );
+      `color-mix(in srgb, var(--glass-fill-surface) ${TRANSLUCENT_FRAME_OPACITY}%, transparent)`;
   }
   return Object.keys(tokens).length > 0 ? tokens : null;
 }
@@ -555,7 +538,9 @@ export function themeFrameColor(
   appearance: ThemeAppearance,
 ): string {
   return palette
-    ? shiftLightness(palette.background, FRAME_LIGHTNESS_SHIFT)
+    ? deriveThemeTokens(palette, appearance)[
+        appearance === "light" ? "--color-primary-100" : "--color-primary-900"
+      ]
     : STOCK_FRAMES[appearance];
 }
 
