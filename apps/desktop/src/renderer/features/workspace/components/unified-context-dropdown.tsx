@@ -138,10 +138,10 @@ function SkillRowIcon({ skill }: { skill: SkillInfo }) {
   }
   return (
     <div
-      className="size-6 rounded-md shrink-0 flex items-center justify-center bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200"
+      className="size-5 rounded-md shrink-0 flex items-center justify-center bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200"
       style={skill.brandColor ? { backgroundColor: skill.brandColor, color: "#fff" } : undefined}
     >
-      <At className="size-4" />
+      <At className="size-3.5" />
     </div>
   );
 }

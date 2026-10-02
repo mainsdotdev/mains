@@ -2,7 +2,7 @@
 import { useEffect, type ReactNode } from "react";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
@@ -24,21 +24,27 @@ import { McpAppPanelProvider, useMcpAppPanel } from "./use-mcp-app-panel";
 import { McpAppWorkspace } from "@/features/workspace/components/mcp-app-workspace";
 import workspaceReducer, { setComposerContextKey, setSelectedCollectionId, setMcpAppRunId } from "@/lib/redux/slices/workspaceSlice";
 import settingsReducer from "@/lib/redux/slices/appSettingsSlice";
-import { setBrowserPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
+import { setBrowserPanelOpen, setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { composerOwnerKey, mcpAppConversationKey } from "@/features/workspace/lib/ui-context";
 import { buildRunContextPayload } from "@/features/workspace/lib/run-context-payload";
 const app: McpAppEntrypoint = { id: "magicpath/account-1", name: "MagicPath", server: "codex_apps", tool: "magicpath.open_canvas",
   resourceUri: "ui://magicpath/canvas", connectorId: "connector-1", linkId: "account-1", entrypoints: ["global"], preferredModelDisplayMode: "fullscreen" };
 const scope = () => ({ backendId: null, spaceId: mocks.spaceId, providerId: "codex", mode: mocks.mode,
   workspaceId: mocks.mode === "developer" ? mocks.workspaceId : undefined, collectionId: null as string | null });
-function harness() {
+function harness(initialPath = "/code/ws-1", previousPath?: string) {
   const state = configureStore({ reducer: { workspace: workspaceReducer, appSettings: settingsReducer,
     backends: () => ({ activeBackendId: null }) } });
   mocks.getState.mockImplementation(() => state.getState());
   mocks.subscribe.mockImplementation((listener: () => void) => state.subscribe(listener));
-  const hook = renderHook(() => useMcpAppPanel()!, { wrapper: ({ children }: { children: ReactNode }) =>
-    <Provider store={state}><MemoryRouter initialEntries={["/code/ws-1"]}><McpAppPanelProvider>{children}<McpAppWorkspace /></McpAppPanelProvider></MemoryRouter></Provider> });
-  return { ...hook, state };
+  let navigate!: ReturnType<typeof useNavigate>;
+  let pathname!: string;
+  const hook = renderHook(() => {
+    navigate = useNavigate();
+    pathname = useLocation().pathname;
+    return useMcpAppPanel()!;
+  }, { wrapper: ({ children }: { children: ReactNode }) =>
+    <Provider store={state}><MemoryRouter initialEntries={previousPath ? [previousPath, initialPath] : [initialPath]}><McpAppPanelProvider>{children}<McpAppWorkspace /></McpAppPanelProvider></MemoryRouter></Provider> });
+  return { ...hook, state, navigate: (path: string) => navigate(path), back: () => navigate(-1), get pathname() { return pathname; } };
 }
 async function openDraft(h: ReturnType<typeof harness>, collectionId: string | null = null) {
   const target = { ...scope(), collectionId };
@@ -62,9 +68,26 @@ describe("shared MCP App panel", () => {
   it("opens rail apps expanded with a normal draft and no model turn", async () => {
     const h = harness(); const { ownerKey } = await openDraft(h);
     expect(h.result.current.isExpanded).toBe(true);
+    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(true);
     expect(h.result.current.ownerKey).toBe(ownerKey);
     expect(h.state.getState().workspace.activeTab).toBe("new-run");
     expect(mocks.sends).not.toHaveBeenCalled();
+  });
+  it("keeps the sidebar closed while expanded and permits it again when docked or closed", async () => {
+    const h = harness(); await openDraft(h);
+    act(() => h.state.dispatch(setSidebarCollapsed(false)));
+    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(true);
+
+    act(() => h.result.current.toggleExpanded());
+    act(() => h.state.dispatch(setSidebarCollapsed(false)));
+    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(false);
+
+    act(() => h.result.current.toggleExpanded());
+    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(true);
+
+    act(() => h.result.current.close());
+    act(() => h.state.dispatch(setSidebarCollapsed(false)));
+    expect(h.state.getState().appSettings.sidebarCollapsed).toBe(false);
   });
   it("keeps the iframe and session through docking, expansion, close and reopening", async () => {
     const h = harness(); await openDraft(h);
@@ -200,6 +223,38 @@ describe("shared MCP App panel", () => {
     await act(async () => { finish({ success: true, data: { sessionId: "departing-session", app, output: { content: [] } } }); await opening; });
     expect(h.result.current.document).toBeNull();
     expect(mocks.closeExtension).toHaveBeenCalledWith({ sessionId: "departing-session" });
+  });
+  it("releases a late connection when the user leaves the app loading page", async () => {
+    const h = harness("/apps/magicpath"); let finish!: (result: unknown) => void;
+    mocks.openExtension.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    let opening!: Promise<void>; act(() => { opening = h.result.current.openGlobal(app); });
+    act(() => h.navigate("/plugins"));
+    await act(async () => { finish({ success: true, data: { sessionId: "abandoned-session", app, output: { content: [] } } }); await opening; });
+    expect(h.pathname).toBe("/plugins");
+    expect(h.result.current.document).toBeNull();
+    expect(h.result.current.opening).toBeNull();
+    expect(mocks.closeExtension).toHaveBeenCalledWith({ sessionId: "abandoned-session" });
+  });
+  it("replaces the loading route so Back does not reopen the app", async () => {
+    const h = harness("/apps/magicpath", "/plugins");
+    await act(async () => h.result.current.openGlobal(app));
+    expect(h.pathname).toBe("/code/ws-1");
+    act(() => h.back());
+    expect(h.pathname).toBe("/plugins");
+  });
+  it("does not start a connection after leaving during a remembered conversation lookup", async () => {
+    const h = harness("/apps/magicpath"); let finish!: (result: unknown) => void;
+    act(() => h.state.dispatch(setMcpAppRunId({ key: mcpAppConversationKey(scope(), app.id), runId: "old-run" })));
+    mocks.getById.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    let opening!: Promise<void>; act(() => { opening = h.result.current.openGlobal(app); });
+    act(() => h.navigate("/plugins"));
+    await act(async () => {
+      finish({ success: true, data: { id: "old-run", providerId: "codex", spaceId: "space-1", mode: "developer", workspaceId: "ws-1" } });
+      await opening;
+    });
+    expect(h.pathname).toBe("/plugins");
+    expect(h.result.current.document).toBeNull();
+    expect(mocks.openExtension).not.toHaveBeenCalled();
   });
   it("gives the right edge to the browser without disposing the app connection", async () => {
     const h = harness(); await openDraft(h);

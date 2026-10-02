@@ -205,6 +205,7 @@ function AppContent() {
     hasSubagents &&
     !!sessionRunId &&
     !hideRightPanel &&
+    !mcpAppPanel?.isOpen &&
     rightLaneWidth === EDGE_GUTTER;
   const subagentPanelDocked =
     subagentPanelShown && !isMobile && !subagentPanelCollapsed;
@@ -236,7 +237,7 @@ function AppContent() {
 
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
-  }, { enabled: isMobile || workspaceRoute, allowInEditable: true });
+  }, { enabled: !appExpanded && (isMobile || workspaceRoute), allowInEditable: true });
   useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
     enabled:
       showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
@@ -303,8 +304,13 @@ function AppContent() {
   const layoutControls = showLayoutControls ? (
     <ToggleButton
       showChatActions={isMobile}
-      sessionPanelRight={browserPanel.isOpen && !browserPanel.isExpanded && !isMobile
-        ? `calc(${BROWSER_PANEL_WIDTH} + 0.75rem)`
+      hideChatControls={appExpanded}
+      sessionPanelRight={!isMobile
+        ? mcpAppPanel?.isOpen && !appExpanded
+          ? `calc(var(${MCP_APP_PANEL_WIDTH_VAR}) + 0.75rem)`
+          : browserPanel.isOpen && !browserPanel.isExpanded
+            ? `calc(${BROWSER_PANEL_WIDTH} + 0.75rem)`
+            : undefined
         : undefined}
       isOpen={rightPanelVisible}
       onClick={() => {
@@ -357,7 +363,7 @@ function AppContent() {
             aria-hidden
           />
         )}
-        {(isMobile || workspaceRoute) && !(
+        {!appExpanded && (isMobile || workspaceRoute) && !(
           isMobile &&
           (rightPanelVisible || browserPanel.isOpen || docViewer.isOpen || mcpAppPanel?.isOpen)
         ) && (
@@ -403,8 +409,8 @@ function AppContent() {
           tabsInMainHeader={browserTabsInHeader}
           reserveLayoutControls={showLayoutControls}
         />
+        <McpAppPanel reserveLayoutControls={showLayoutControls} />
         {layoutControls}
-        <McpAppPanel />
         <DocumentViewerPanel />
       </MainLayout>
     </>

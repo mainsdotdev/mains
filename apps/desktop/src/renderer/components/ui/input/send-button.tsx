@@ -30,7 +30,7 @@ export function SendButton({
         className={`${sizing} glass-button rounded-full relative`}
         aria-label="Stop run"
       >
-        <Stop className="w-5 h-5 text-primary-800 dark:text-primary" />
+        <Stop className="size-4 text-primary-800 dark:text-primary" />
       </Button>
     );
   }
@@ -54,7 +54,7 @@ export function SendButton({
         </span>
       )}
       <ChevronUp
-        className={`size-4.5 text-primary-800 dark:text-primary transition-opacity ${
+        className={`size-4 text-primary-800 dark:text-primary transition-opacity ${
           loading ? "opacity-0" : "opacity-100"
         }`}
       />

@@ -3,7 +3,7 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { Provider, useDispatch, useSelector } from "react-redux";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ComponentProps, type ReactNode } from "react";
 import workspaceReducer, {
@@ -13,7 +13,7 @@ import workspaceReducer, {
   setContextItemsForKey,
   replaceMcpAppContext,
 } from "@/lib/redux/slices/workspaceSlice";
-import { workspaceViewKey } from "../lib/ui-context";
+import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import type { ContextMcpAppItem } from "../lib/composer-context";
 
 const mocks = vi.hoisted(() => ({
@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   continueRun: vi.fn(),
   checkCanResume: vi.fn(),
   appContext: vi.fn(),
+  moveUploads: vi.fn(),
   attachAppRun: vi.fn(),
   panel: false,
   mode: "work",
@@ -78,6 +79,7 @@ vi.mock("./use-composer-context", () => ({
 vi.mock("./use-transient-uploads", () => ({
   useTransientUploads: () => [[], vi.fn()],
   getTransientUploadsForOwner: () => [],
+  moveTransientUploadsToOwner: mocks.moveUploads,
 }));
 vi.mock("./use-file-content-loader", () => ({ useFileContentLoader: () => {} }));
 vi.mock("./use-run-operations", () => ({
@@ -165,8 +167,62 @@ function workspacePage(providerId = "claude_code") {
     { store } as ComponentProps<typeof Provider>,
     createElement(MemoryRouter, { initialEntries: ["/code/ws-1"] }, children),
   );
-  return { store, ...renderHook(() => useWorkspacePage(providerId), { wrapper }) };
+  return { store, ...renderHook(() => ({
+    ...useWorkspacePage(providerId),
+    pathname: useLocation().pathname,
+  }), { wrapper }) };
 }
+
+describe("new conversation context", () => {
+  it.each(["work", "chat"])("retargets a %s draft to a project without losing its text or context", async (mode) => {
+    mocks.mode = mode;
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showNewRunTab).toBe(true));
+    const previousOwner = page.result.current.ownerKey;
+    const context = { kind: "skill" as const, name: "trip-planning" };
+    act(() => {
+      page.result.current.setGoal("Plan a trip");
+      page.store.dispatch(setContextItemsForKey({ key: previousOwner, items: [context] }));
+    });
+    act(() => page.result.current.handleNewConversationContextChange({ collectionId: "trips" }));
+    expect(page.result.current.goal).toBe("Plan a trip");
+    expect(page.result.current.contextItems).toEqual([context]);
+    expect(page.store.getState().workspace.selectedCollectionId).toBe("trips");
+    expect(page.result.current.pathname).toBe("/code");
+    expect(page.result.current.showNewRunTab).toBe(true);
+    expect(mocks.moveUploads).toHaveBeenCalledWith(previousOwner, page.result.current.ownerKey);
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(mocks.executeRun.mock.calls[0][6]).toBe("trips");
+    act(() => page.result.current.handleNewConversationContextChange({ collectionId: null }));
+    expect(page.store.getState().workspace.selectedCollectionId).toBeNull();
+    expect(page.result.current.goal).toBe("Plan a trip");
+  });
+
+  it("opens a destination workspace's new-run draft instead of its saved run", async () => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [] });
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.showEmptyState).toBe(true));
+    const previousOwner = page.result.current.ownerKey;
+    const destination = { ...page.result.current.contextParts, workspaceId: "ws-2" };
+    act(() => {
+      page.result.current.setGoal("Fix the settings panel");
+      page.store.dispatch(activateWorkspaceView({ key: workspaceViewKey(destination), workspaceId: "ws-2", providerId: "codex" }));
+      page.store.dispatch(setActiveTab("saved-run"));
+      page.store.dispatch(activateWorkspaceView({ key: workspaceViewKey(page.result.current.contextParts), workspaceId: "ws-1", providerId: "codex" }));
+    });
+    mocks.workspaceId = "ws-2";
+    act(() => page.result.current.handleNewConversationContextChange({ workspaceId: "ws-2" }));
+    expect(page.result.current.pathname).toBe("/code/ws-2");
+    expect(page.result.current.showNewRunTab).toBe(true);
+    expect(page.result.current.goal).toBe("Fix the settings panel");
+    expect(page.result.current.ownerKey).toBe(composerOwnerKey(destination, null));
+    expect(mocks.moveUploads).toHaveBeenCalledWith(previousOwner, page.result.current.ownerKey);
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(mocks.executeRun.mock.calls[0][1]).toBe("ws-2");
+  });
+});
 
 describe("workspace additional directory payload", () => {
   it.each([

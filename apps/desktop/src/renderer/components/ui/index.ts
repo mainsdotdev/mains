@@ -92,6 +92,7 @@ export type { SliderProps } from "./slider";
 
 // Tooltip
 export { default as Tooltip } from "./tooltip";
+export { focusNextFrom } from "./focus-navigation";
 export type { TooltipProps, TooltipPosition } from "./tooltip";
 
 // Alert

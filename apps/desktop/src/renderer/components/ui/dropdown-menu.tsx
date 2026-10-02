@@ -129,6 +129,10 @@ interface DropdownMenuBaseProps {
   origin?: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "auto";
   /** Which enabled row receives focus when the menu opens. */
   initialFocus?: "first" | "selected";
+  /** A search field can receive focus before the selectable rows. */
+  initialFocusRef?: React.RefObject<HTMLElement | null>;
+  /** Prefer the space above the trigger even when the menu would fit below. */
+  openUpward?: boolean;
 }
 
 export type DropdownMenuProps = DropdownMenuBaseProps &
@@ -146,6 +150,8 @@ export function DropdownMenu({
   className = "",
   origin = "auto",
   initialFocus = "first",
+  initialFocusRef,
+  openUpward = false,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
 }: DropdownMenuProps) {
@@ -178,7 +184,7 @@ export function DropdownMenu({
       initialFocus === "selected"
         ? (selectedItem ?? enabledItems[0])
         : enabledItems[0];
-    itemToFocus?.focus();
+    (initialFocusRef?.current ?? itemToFocus)?.focus();
 
     return () => {
       const target = previouslyFocused.current;
@@ -194,7 +200,7 @@ export function DropdownMenu({
         if (target.isConnected) target.focus();
       });
     };
-  }, [initialFocus, isOpen]);
+  }, [initialFocus, initialFocusRef, isOpen]);
 
   useLayoutEffect(() => {
     if (!isOpen || !menuRef.current) return;
@@ -248,6 +254,9 @@ export function DropdownMenu({
   }, [isOpen, onClose]);
 
   const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Home/End move the caret in a menu's search input. Arrow keys still move
+    // from that input into the rows through the normal menu navigation.
+    if (event.target instanceof HTMLInputElement && (event.key === "Home" || event.key === "End")) return;
     if (moveMenuFocus(event, menuRef.current)) return;
 
     if (event.key === "Escape") {
@@ -275,7 +284,7 @@ export function DropdownMenu({
   const spaceBelow = window.innerHeight - viewportPadding - position.y;
   const upwardAnchor = position.anchorTop ?? position.y;
   const spaceAbove = upwardAnchor - viewportPadding;
-  const opensUpward = menuHeight > spaceBelow && spaceAbove > spaceBelow;
+  const opensUpward = openUpward || (menuHeight > spaceBelow && spaceAbove > spaceBelow);
   const desiredY = opensUpward ? upwardAnchor - menuHeight : position.y;
   const adjustedPosition = {
     x: Math.max(

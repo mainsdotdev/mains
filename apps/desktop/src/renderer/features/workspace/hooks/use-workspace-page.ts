@@ -17,8 +17,9 @@ import {
 import { isRunTab, isNewRunTab } from "@/features/workspace/lib/repo-utils";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useComposerContext } from "./use-composer-context";
-import { useTransientUploads, getTransientUploadsForOwner } from "./use-transient-uploads";
-import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
+import { useTransientUploads, getTransientUploadsForOwner, moveTransientUploadsToOwner } from "./use-transient-uploads";
+import { composerOwnerKey, workspaceViewKey, type NewConversationContext } from "../lib/ui-context";
+import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { setRightPaneContextKey, transferRightPaneContext } from "@/lib/redux/slices/appSettingsSlice";
@@ -218,6 +219,30 @@ export function useWorkspacePage(providerId: string) {
   const setAdditionalDirectories = useCallback((directories: string[]) => {
     setDirectoryDrafts((current) => ({ ...current, [ownerKey]: directories }));
   }, [ownerKey]);
+
+  const handleNewConversationContextChange = useCallback((selection: NewConversationContext) => {
+    if ((mode === "developer") !== ("workspaceId" in selection)) return;
+    const nextParts = { ...contextParts, ...selection };
+    const nextOwnerKey = composerOwnerKey(nextParts, null);
+    dispatch(setDraftText({ key: nextOwnerKey, text: goal }));
+    moveTransientUploadsToOwner(ownerKey, nextOwnerKey);
+    setDirectoryDrafts((current) => ({ ...current, [nextOwnerKey]: additionalDirectories }));
+    // Workspace navigation normally restores its selected run. Choosing here
+    // instead keeps the destination's new-run composer on screen.
+    dispatch(activateWorkspaceView({
+      key: workspaceViewKey(nextParts),
+      workspaceId: nextParts.workspaceId ?? null,
+      providerId,
+    }));
+    if ("collectionId" in selection) {
+      dispatch(setContextItemsForKey({ key: nextOwnerKey, items: contextItems }));
+      dispatch(setSelectedCollectionId(selection.collectionId));
+    }
+    dispatch(openNewRunTab());
+    navigate("workspaceId" in selection
+      ? `${WORKSPACE_BASE_PATH}/${selection.workspaceId}`
+      : WORKSPACE_BASE_PATH);
+  }, [mode, contextParts, dispatch, goal, ownerKey, additionalDirectories, contextItems, providerId, navigate]);
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey) return;
@@ -522,6 +547,7 @@ export function useWorkspacePage(providerId: string) {
     openSignalTabs,
     openNoteTabs,
     runs,
+    runsLoaded,
     activeRun,
     activeRunId,
     composerRun,
@@ -540,6 +566,7 @@ export function useWorkspacePage(providerId: string) {
     handleModelChange,
     handleExecute,
     handleSendTargetChange,
+    handleNewConversationContextChange,
     setAutoExecute,
     ...tabHandlers,
   };

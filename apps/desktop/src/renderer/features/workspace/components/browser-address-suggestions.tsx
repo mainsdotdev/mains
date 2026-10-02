@@ -211,7 +211,7 @@ export function BrowserAddressSuggestions({
       id="browser-address-suggestions"
       role="listbox"
       aria-label="Address suggestions"
-      className="mx-2 mb-1 mt-1 max-h-64 shrink-0 overflow-y-auto rounded-2xl p-1 glass-outline bg-primary-50/95 shadow-xl backdrop-blur-xl dark:bg-primary-950/95"
+      className="mb-1 mt-1 max-h-64 w-full max-w-3xl shrink-0 overflow-y-auto rounded-2xl p-1 glass-outline bg-primary-50/95 shadow-xl backdrop-blur-xl dark:bg-primary-950/95"
     >
       {rows.map((row, index) => {
         const isSelected = index === selectedIndex;

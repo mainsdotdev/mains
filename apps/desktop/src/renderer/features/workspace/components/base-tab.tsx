@@ -46,7 +46,19 @@ export function BaseTab({
 }: BaseTabProps) {
   const sidebarCollapsed = useAppSelector((state) => state.appSettings.sidebarCollapsed);
 
-  const tab = (
+  const title = (
+    <Text
+      as="span"
+      size="inherit"
+      className="relative min-w-0 flex-1 mb-0.5 truncate transition-colors duration-150"
+    >
+      {typeof label === "string" ? (
+        <Text as="span" size="xs" tone="inherit" weight="medium" className="tracking-tight">{label}</Text>
+      ) : label}
+    </Text>
+  );
+
+  return (
     <div
       role={role}
       aria-label={ariaLabel}
@@ -90,17 +102,16 @@ export function BaseTab({
       </span>
       {/* Active and idle resolved to the same colour, so the label just takes
           the default tone. */}
-      <Text
-        as="span"
-        size="inherit"
-        className="relative min-w-0 flex-1 mb-0.5 truncate transition-colors duration-150"
-      >
-        {typeof label === "string" ? (
-          <Text as="span" size="xs" tone="inherit" weight="medium" className="tracking-tight">{label}</Text>
-        ) : (
-          label
-        )}
-      </Text>
+      {tooltip ? (
+        <Tooltip
+          content={tooltip}
+          position="bottom"
+          delay={400}
+          className="max-w-xs whitespace-normal wrap-break-word"
+        >
+          {title}
+        </Tooltip>
+      ) : title}
       {trailingAction && (
         <div
           className="relative shrink-0"
@@ -114,19 +125,6 @@ export function BaseTab({
         <CloseOverlay isActive={isActive} onClose={onClose} closeIcon={closeIcon} closeLabel={closeLabel} closeShortcut={closeShortcut} />
       )}
     </div>
-  );
-
-  if (!tooltip) return tab;
-
-  return (
-    <Tooltip
-      content={tooltip}
-      position="bottom"
-      delay={400}
-      className="max-w-xs whitespace-normal wrap-break-word"
-    >
-      {tab}
-    </Tooltip>
   );
 }
 

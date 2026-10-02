@@ -50,7 +50,7 @@ export function MainContent({
   headerHidden,
   browserTabsInHeader,
 }: MainContentProps) {
-  const { header, firstTabActive, setBrowserTabsHost } = useMainHeader();
+  const { header, firstTabActive, pending, setBrowserTabsHost } = useMainHeader();
   const { windowChrome } = useCapabilities();
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
@@ -74,7 +74,7 @@ export function MainContent({
     // Tabs extend one corner radius over the sidebar; the content surface
     // keeps its own overflow clipped below the header.
     <main
-      className={`flex-1 min-w-0 ${header ? "overflow-visible" : "overflow-hidden"} mx-1.25 my-1.25 flex flex-col`}
+      className={`flex-1 min-w-0 ${header || browserTabsInHeader ? "overflow-visible" : "overflow-hidden"} mx-1.25 my-1.25 flex flex-col`}
       style={{
         marginLeft,
         marginRight,
@@ -87,7 +87,8 @@ export function MainContent({
         <div
           className={`shrink-0 ${browserTabsInHeader ? "flex h-(--shell-header-height) min-w-0 items-center" : hasRightPanel || browserOpen ? "max-w-[calc(100%-150px)]" : ""}`}
           aria-hidden={headerHidden || undefined}
-          inert={headerHidden}
+          aria-busy={pending || undefined}
+          inert={headerHidden || pending}
           style={{
             // The browser's edge and the workspace margins move on separate
             // clocks. Hide the covered tabs directly so no gap can expose them.
@@ -117,6 +118,7 @@ export function MainContent({
         <div className="hidden h-(--shell-header-height) shrink-0 md:block" aria-hidden="true" />
       )}
       <div
+        data-main-content-surface=""
         className={`flex-1 min-h-0 overflow-hidden ${contentRounding} ${transparentSurface ? "bg-transparent" : "bg-primary dark:bg-primary-950"}`}
       >
         <div

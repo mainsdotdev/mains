@@ -40,6 +40,14 @@ export function getTransientUploadsForOwner(owner: string): UploadedFile[] {
   return getFiles(owner);
 }
 
+/** Retarget an unsent draft without revoking the previews that move with it. */
+export function moveTransientUploadsToOwner(from: string, to: string): void {
+  if (from === to) return;
+  replaceFiles(to, getFiles(from));
+  filesByOwner.delete(from);
+  listeners.get(from)?.forEach((listener) => listener());
+}
+
 export function clearTransientUploads(owner: string): void {
   replaceFiles(owner, []);
 }

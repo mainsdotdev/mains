@@ -20,13 +20,18 @@ import {
   Trash,
 } from "@/components/ui/icons";
 import type { Collection, RecentRun } from "@/lib/redux/api";
+import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import { ProjectIcon } from "./project-icon";
+import { SidebarItemHoverCard } from "./sidebar-item-hover-card";
 
 /** What the row prints — title, else the goal's first line. */
 export function chatLabel(run: Pick<RecentRun, "title" | "goal">): string {
   const title = run.title?.trim();
   if (title) return title;
-  const goalLine = run.goal?.split("\n").find((line) => line.trim())?.trim();
+  const goalLine = run.goal
+    ?.split("\n")
+    .find((line) => line.trim())
+    ?.trim();
   if (goalLine) return goalLine;
   return "Untitled chat";
 }
@@ -71,6 +76,7 @@ export function ChatItem({
     anchorTop: 0,
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  useSuppressBrowserView(isMenuOpen);
   const [draft, setDraft] = useState<string | null>(null);
   // Escape leaves without saving, but it also blurs the input — this tells the
   // blur handler the edit was already abandoned.
@@ -111,13 +117,51 @@ export function ChatItem({
   };
 
   return (
-    <>
+    <SidebarItemHoverCard
+      title={label}
+      updatedAt={run.updatedAt}
+      description={
+        collections.find((collection) => collection.id === run.collectionId)
+          ?.name ?? "Chat"
+      }
+      disabled={isEditing || isMenuOpen}
+      actions={[
+        {
+          label: isPinned ? "Unpin chat" : "Pin chat",
+          icon: isPinned ? (
+            <PinFilled className="size-4" />
+          ) : (
+            <Pin className="size-4" />
+          ),
+          pressed: isPinned,
+          onSelect: onTogglePin,
+        },
+        {
+          label: "Rename chat",
+          icon: <Edit className="size-4" />,
+          onSelect: startRename,
+        },
+        {
+          label: "Archive chat",
+          icon: <Archive className="size-4" />,
+          onSelect: onArchive,
+        },
+        {
+          label: "Delete chat",
+          icon: <Trash className="size-4" />,
+          onSelect: onDelete,
+          variant: "danger",
+        },
+      ]}
+    >
       <div
         role="button"
         tabIndex={0}
+        aria-haspopup="dialog"
+        aria-keyshortcuts="ArrowRight"
         onClick={isEditing ? undefined : onSelect}
         onKeyDown={(e) => {
-          if (isEditing) return;
+          if (isEditing || e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onSelect();
@@ -300,6 +344,6 @@ export function ChatItem({
           <span>Delete</span>
         </DropdownMenuItem>
       </DropdownMenu>
-    </>
+    </SidebarItemHoverCard>
   );
 }

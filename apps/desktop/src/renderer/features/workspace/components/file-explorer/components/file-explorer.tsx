@@ -17,6 +17,7 @@ import {
   type TextSearchHit,
 } from "@/features/workspace/lib/text-search";
 import { FileTreeNode } from "./file-tree-node";
+import { compactDirectoryPath } from "@/features/workspace/lib/file-explorer-path";
 import { TextSearchRows } from "./text-search-rows";
 import { FileIconComponent } from "@/components/ui/icons";
 import { Button, Caption, Input, SegmentedTabs, Text } from "@/components/ui";
@@ -595,6 +596,7 @@ export const FileExplorer = memo(function FileExplorer({
                     key={entry.fullPath}
                     role="option"
                     aria-selected={isSelected}
+                    title={entry.fullPath}
                     data-search-active={isActive ? "true" : undefined}
                     onClick={() => handleSelect(dirEntryToFileNode(entry))}
                     onMouseEnter={() => setActiveIndex(index)}
@@ -616,10 +618,10 @@ export const FileExplorer = memo(function FileExplorer({
                       isDirectory={false}
                       className="w-4 h-4 shrink-0 mr-1.5"
                     />
-                    <span className="truncate shrink-0 max-w-[60%]">{entry.name}</span>
+                    <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                     {dir && (
-                      <Text as="span" size="xs" tone="subtle" className="truncate ml-2">
-                        {dir}
+                      <Text as="span" size="xs" tone="subtle" className="min-w-0 max-w-[30%] truncate ml-2" title={dir}>
+                        {compactDirectoryPath(dir)}
                       </Text>
                     )}
                     {onAddToContext && (

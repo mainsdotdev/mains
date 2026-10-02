@@ -15,7 +15,7 @@ import { ChatActionsMenu } from "@/features/workspace/components/chat-actions-me
 import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 import { setLayoutWidthVar } from "@/hooks/use-layout-width-vars";
-import { LAYOUT_TOGGLE_WIDTH_VAR } from "@/lib/layout";
+import { LAYOUT_TOGGLE_WIDTH_VAR, LAYOUT_FIXED_CONTROLS_WIDTH_VAR } from "@/lib/layout";
 import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
 
 interface ToggleButtonProps {
@@ -28,7 +28,9 @@ interface ToggleButtonProps {
   browserExpanded?: boolean;
   onBrowserExpandToggle?: () => void;
   showChatActions?: boolean;
-  /** Right edge of the chat header when the browser shares the workspace. */
+  /** Hide chat controls while an expanded app owns the workspace. */
+  hideChatControls?: boolean;
+  /** Right edge of the chat header when a preview shares the workspace. */
   sessionPanelRight?: string;
 }
 
@@ -42,47 +44,54 @@ export function ToggleButton({
   browserExpanded = false,
   onBrowserExpandToggle,
   showChatActions = true,
+  hideChatControls = false,
   sessionPanelRight,
 }: ToggleButtonProps) {
-  const chatControlsHidden = !!browserOpen && browserExpanded;
+  const chatControlsHidden = hideChatControls || (!!browserOpen && browserExpanded);
   const sessionPanelRelocated = !!sessionPanelRight;
   const [sessionTrigger, setSessionTrigger] = useState({
-    relocated: sessionPanelRelocated,
+    right: sessionPanelRight,
     ready: false,
   });
   // Reset during render so a fresh open cannot paint the previous open's
   // visible state before an effect runs.
-  if (sessionTrigger.relocated !== sessionPanelRelocated) {
-    setSessionTrigger({ relocated: sessionPanelRelocated, ready: false });
+  if (sessionTrigger.right !== sessionPanelRight) {
+    setSessionTrigger({ right: sessionPanelRight, ready: false });
   }
   useEffect(() => {
-    if (!sessionPanelRelocated) return;
+    if (!sessionPanelRight) return;
     // The preview waits 50ms, then slides for 300ms. Leave a short settling
     // gap so the trigger appears after the panel has reached its final edge.
     const timer = window.setTimeout(() => {
-      setSessionTrigger({ relocated: true, ready: true });
+      setSessionTrigger({ right: sessionPanelRight, ready: true });
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [sessionPanelRelocated]);
+  }, [sessionPanelRight]);
   const sessionTriggerHidden = sessionPanelRelocated &&
-    (!sessionTrigger.ready || sessionTrigger.relocated !== sessionPanelRelocated);
+    (!sessionTrigger.ready || sessionTrigger.right !== sessionPanelRight);
 
   const controlsRef = useRef<HTMLDivElement>(null);
+  const sessionSlotRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const node = controlsRef.current;
     if (!node) return;
-    const syncWidth = () => setLayoutWidthVar(
-      LAYOUT_TOGGLE_WIDTH_VAR,
-      node.getBoundingClientRect().width,
-    );
+    const syncWidth = () => {
+      const width = node.getBoundingClientRect().width;
+      const relocatedWidth = sessionPanelRelocated
+        ? sessionSlotRef.current?.getBoundingClientRect().width ?? 0
+        : 0;
+      setLayoutWidthVar(LAYOUT_TOGGLE_WIDTH_VAR, width);
+      setLayoutWidthVar(LAYOUT_FIXED_CONTROLS_WIDTH_VAR, width - relocatedWidth);
+    };
     syncWidth();
     const observer = new ResizeObserver(syncWidth);
     observer.observe(node);
     return () => {
       observer.disconnect();
       document.documentElement.style.removeProperty(LAYOUT_TOGGLE_WIDTH_VAR);
+      document.documentElement.style.removeProperty(LAYOUT_FIXED_CONTROLS_WIDTH_VAR);
     };
-  }, []);
+  }, [sessionPanelRelocated]);
 
   const activeWorkspaceId = useAppSelector(
     (state) => state.workspace.activeWorkspaceId,
@@ -101,11 +110,13 @@ export function ToggleButton({
   const terminalTooltip = `${terminalOpen ? "Close" : "Open"} terminal${
     terminalShortcut ? ` (${terminalShortcut})` : ""
   }`;
+  // The relocated session leaves a flow slot above the preview's controls.
+  // Only the actual children should receive clicks in that area.
   return (
     <div
       data-layout-toggle
       ref={controlsRef}
-      className="fixed z-(--z-panel-toggle) flex items-center"
+      className="pointer-events-none fixed z-(--z-panel-toggle) flex items-center [&>*]:pointer-events-auto"
       style={{
         top: "calc(0.4875rem + env(safe-area-inset-top))",
         right: "0.8125rem",
@@ -122,6 +133,7 @@ export function ToggleButton({
 
       {!chatControlsHidden && (showGitActions || showSources) && (
         <div
+          ref={sessionSlotRef}
           className={`flex items-center ${sessionPanelRight ? "order-first" : ""}`}
           inert={sessionTriggerHidden}
           style={{
@@ -171,7 +183,7 @@ export function ToggleButton({
             tooltip={browserTooltip}
             tooltipPosition="left"
             onClick={onBrowserToggle}
-            className={`p-1.5 transition-all duration-300 ease-out rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10 ${
+            className={`flex size-7 items-center justify-center p-1.5 transition-all duration-300 ease-out rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10 ${
               browserOpen
                 ? "text-primary-800 dark:text-primary-200"
                 : "text-primary-700 dark:text-primary-300"

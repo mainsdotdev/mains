@@ -6,11 +6,18 @@ import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { ChatActionsMenu } from "./chat-actions-menu";
 import { BaseTab } from "./base-tab";
 
-export function ChatHeader({ runId, variant }: { runId: string; variant: ProviderVariant }) {
+export function ChatHeader({ runId, variant, fallbackRun }: {
+  runId: string;
+  variant: ProviderVariant;
+  fallbackRun?: { id: string; title?: string | null; goal: string | null };
+}) {
   // currentData clears on a chat switch and follows title updates from either
   // the generated title or the chat's Rename action.
-  const { currentData: run } = useGetRunByIdQuery(runId);
-  const title = run ? chatLabel(run) : "";
+  const { currentData } = useGetRunByIdQuery(runId);
+  // Sidebar navigation already loaded this run. Use that title until its
+  // individual query is ready, without carrying over the previous chat's title.
+  const run = currentData ?? (fallbackRun?.id === runId ? fallbackRun : undefined);
+  const title = run ? chatLabel({ title: run.title ?? null, goal: run.goal }) : "";
   const { isOpen: browserOpen, isExpanded, toggleExpanded } = useBrowserPanel();
   const { icon: Icon, accentClassName } = getProviderVariant(variant);
 
@@ -29,7 +36,7 @@ export function ChatHeader({ runId, variant }: { runId: string; variant: Provide
         icon={<Icon className={cn("size-4", accentClassName)} />}
         label={title}
         tooltip={title}
-        trailingAction={<ChatActionsMenu aboveBrowser={browserOpen} />}
+        trailingAction={<ChatActionsMenu key={runId} aboveBrowser={browserOpen} />}
       />
     </div>
   );

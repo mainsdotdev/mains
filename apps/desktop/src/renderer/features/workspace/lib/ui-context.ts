@@ -10,6 +10,10 @@ export interface UiContextParts {
   collectionId?: string | null;
 }
 
+export type NewConversationContext =
+  | { workspaceId: string }
+  | { collectionId: string | null };
+
 /** Local UI state belongs to the backend as well as the visible space. */
 export function workspaceViewKey(parts: UiContextParts): string {
   return JSON.stringify([

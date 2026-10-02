@@ -126,14 +126,18 @@ html:not(.app-ready) *::after {
 
 }
 
-/* The fixed controls follow the browser's layer for its entire mounted
+/* The fixed controls follow a preview's layer for its entire visible
    lifetime, including the exit animation, without moving into the panel. */
-.app-root:has([data-browser-panel]) [data-layout-toggle] {
+.app-root:has([data-browser-panel], [data-mcp-app-panel-visible]) [data-layout-toggle] {
   z-index: var(--z-modal);
 }
 
-/* A first active browser tab at the panel edge joins the content surface. */
-[data-browser-flush-tab-active="true"] + [data-browser-content] {
+/* A first active browser tab at the panel edge joins the content surface.
+   Portaled Work/Chat tabs also square the underlying clipping layers in the
+   same frame, before the browser panel finishes expanding over them. */
+[data-browser-flush-tab-active="true"] + [data-browser-content],
+.app-root:has([data-browser-tabs-host] [data-browser-flush-tab-active="true"])
+  :is([data-browser-content], [data-main-content-surface], [data-workspace-route]) {
   border-top-left-radius: 0;
 }
 

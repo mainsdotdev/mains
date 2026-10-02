@@ -214,7 +214,7 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   // regardless of whether the chip carries an icon — keeps the caret height consistent.
   chip.className =
     "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none " +
-    "bg-primary dark:bg-primary-300/10 dark:text-primary-200 " +
+    " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
 
   // Icon slot is always present (even as an empty 14×14 spacer) so chip width/height stay stable.
@@ -278,8 +278,8 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = file.path;
   chip.className =
-    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none " +
-    "bg-primary dark:bg-primary-300/10 dark:text-primary-200 cursor-default";
+    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "  cursor-default";
 
   const iconSlot = document.createElement("span");
   iconSlot.className = "inline-flex items-center justify-center size-3.5 shrink-0";
@@ -301,8 +301,8 @@ function buildCodeChip(code: RichCodeChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = code.key;
   chip.className =
-    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none " +
-    "bg-primary dark:bg-primary-300/10 dark:text-primary-200 cursor-default";
+    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 text-accent hover:underline rounded-lg text-xs font-medium leading-none select-none " +
+    " text-accent hover:decoration-dotted hover:underline cursor-default";
 
   const iconSlot = document.createElement("span");
   iconSlot.className = "inline-flex items-center justify-center size-3.5 shrink-0";

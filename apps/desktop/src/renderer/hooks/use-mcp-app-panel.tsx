@@ -9,7 +9,7 @@ import { store } from "@/lib/redux";
 import { appApi } from "@/lib/transport";
 import { BROWSER_PANEL_WIDTH_DEFAULT, BROWSER_PANEL_WIDTH_MIN, BROWSER_PANEL_WIDTH_MAX, MCP_APP_PANEL_WIDTH_VAR, clamp, isWorkspaceRoute } from "@/lib/layout";
 import { setLayoutWidthVar } from "./use-layout-width-vars";
-import { setBrowserPanelOpen, setDocumentViewerOpen, setRightPanelOpen, setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
+import { setBrowserPanelOpen, setDocumentViewerOpen, setRightPanelOpen, setSessionPanelOpen, setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { openNewRunTab, replaceMcpAppContext, setMcpAppRunId, setPendingRunId, setSelectedCollectionId } from "@/lib/redux/slices/workspaceSlice";
 import { useActiveSpace } from "./use-active-space";
 import { useModeConfig } from "./use-mode-config";
@@ -95,6 +95,7 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   const contextItems = useAppSelector((s) => s.workspace.contextItems);
   const contextItemsByKey = useAppSelector((s) => s.workspace.contextItemsByKey);
   const anotherPanelOpen = useAppSelector((s) => s.appSettings.browserPanelOpen || s.appSettings.documentViewerOpen || s.appSettings.rightPanelOpen);
+  const sidebarCollapsed = useAppSelector((s) => s.appSettings.sidebarCollapsed);
   const { workspaceId } = useWorkspaceData(provider.providerId, mode);
   const { entries } = useMcpAppExtensions();
   const [state, setState] = useState<PanelState | null>(null);
@@ -105,7 +106,9 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   }, []);
   const activeContext = `${backendId}/${activeSpaceId}/${provider.providerId}/${mode}`;
   const activeContextRef = useRef(activeContext);
+  const pathnameRef = useRef(pathname);
   useLayoutEffect(() => { activeContextRef.current = activeContext; }, [activeContext]);
+  useLayoutEffect(() => { pathnameRef.current = pathname; }, [pathname]);
   const hostRef = useRef<McpAppConversationHost | null>(null);
   const openingRevision = useRef(0);
   const [opening, setOpening] = useState<string | null>(null);
@@ -133,10 +136,10 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     dispatch(setSessionPanelOpen(false));
   }, [dispatch]);
 
-  const showConversation = useCallback((scope: McpAppScope, runId?: string) => {
+  const showConversation = useCallback((scope: McpAppScope, runId?: string, replace = false) => {
     dispatch(setSelectedCollectionId(scope.collectionId ?? null));
     if (runId) dispatch(setPendingRunId(runId));
-    navigate(mcpAppConversationPath(scope, runId));
+    navigate(mcpAppConversationPath(scope, runId), { replace });
   }, [dispatch, navigate]);
 
   // Changing presentation never disposes a connection. Only replacing the
@@ -163,10 +166,14 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
     setChatVisible(true);
     setChatMode("input");
     const revision = ++openingRevision.current;
+    const openingPath = pathnameRef.current;
+    const replaceRoute = openingPath.startsWith("/apps/");
+    const isCurrentOpening = () => revision === openingRevision.current &&
+      activeContext === activeContextRef.current && openingPath === pathnameRef.current;
     if (current && mcpAppConversationKey(current.scope, current.document.app.id) === bucket && sameMcpApp(current.document.app, app)) {
       setOpening(null);
       commitState({ ...current, visible: true, expanded: true });
-      showConversation(current.scope, current.runId);
+      showConversation(current.scope, current.runId, replaceRoute);
       return;
     }
     setOpening(app.id);
@@ -180,19 +187,20 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
           throw new Error("This app's conversation is unavailable. Open the app from a conversation to start again.");
         else runScope = { ...scope, workspaceId: run.workspaceId ?? undefined, collectionId: run.collectionId ?? null };
       }
+      if (!isCurrentOpening()) return;
       const opened = await window.api.mcpApps.openExtension({ providerId: scope.providerId, entrypointId: app.id });
       if (!opened.success) throw new Error(opened.error);
       const session = opened.data as OpenMcpAppExtensionResponse;
-      if (revision !== openingRevision.current || activeContext !== activeContextRef.current) {
+      if (!isCurrentOpening()) {
         await window.api.mcpApps.closeExtension({ sessionId: session.sessionId });
         return;
       }
       commitState({ document: { id: crypto.randomUUID(), app: session.app, sessionId: session.sessionId, input: {}, output: session.output },
         scope: runScope, ownerKey: composerOwnerKey(runScope, runId ?? null), runId,
         visible: true, expanded: true, pendingNewChat: !runId });
-      showConversation(runScope, runId);
+      showConversation(runScope, runId, replaceRoute);
     } catch (reason) {
-      if (revision === openingRevision.current && activeContext === activeContextRef.current) {
+      if (isCurrentOpening()) {
         const message = reason instanceof Error ? reason.message : String(reason);
         setError(message);
         toast.error(message);
@@ -346,8 +354,12 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
   }, [commitState]);
 
   const visibleInWorkspace = isOpen && !anotherPanelOpen && isWorkspaceRoute(pathname);
+  const isExpanded = visibleInWorkspace && !!state?.expanded;
+  useLayoutEffect(() => {
+    if (isExpanded && !sidebarCollapsed) dispatch(setSidebarCollapsed(true));
+  }, [isExpanded, sidebarCollapsed, dispatch]);
   const value: McpAppPanelValue = { document: state?.document ?? null, scope: state?.scope ?? null,
-    ownerKey: state?.ownerKey ?? null, runId: state?.runId, isOpen: visibleInWorkspace, isExpanded: visibleInWorkspace && !!state?.expanded,
+    ownerKey: state?.ownerKey ?? null, runId: state?.runId, isOpen: visibleInWorkspace, isExpanded,
     width, setWidth, chatMode, setChatMode, chatVisible, setChatVisible, chatHost, setChatHost, opening, error,
     openGlobal, openTool, close, toggleExpanded, newChat, registerConversation, attachRun, sendMessage,
     updateModelContext, modelContext, appContext };

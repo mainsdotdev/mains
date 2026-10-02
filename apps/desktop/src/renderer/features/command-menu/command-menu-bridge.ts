@@ -3,6 +3,7 @@ export const COMMAND_MENU_QUICK_ACTION_EVENT =
   "mains:command-menu-quick-action";
 
 export type CommandMenuQuickAction =
+  | "open-add-project"
   | "add-project-from-local"
   | "clone-project-from-url"
   | "create-code-project"

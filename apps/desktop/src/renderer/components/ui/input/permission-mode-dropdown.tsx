@@ -190,12 +190,12 @@ export function PermissionModeDropdown({
         onClick={onToggle}
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        className={`flex items-center gap-1.5 rounded-full text-s transition-all cursor-pointer hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 text-primary-950 dark:text-primary ${iconOnly ? "size-9 justify-center p-0" : "px-2 py-1.5"}`}
+        className={`flex items-center gap-1 rounded-full text-s transition-all cursor-pointer hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 text-primary-950 dark:text-primary ${iconOnly ? "size-8 justify-center p-0" : "px-2 py-1.5"}`}
         aria-label={iconOnly ? "Permission mode" : undefined}
       >
         <PermissionModeIcon
           mode={permissionMode}
-          className={`${iconOnly ? "size-4.5" : "size-3.5"} ${triggerIconClass}`}
+          className={`${iconOnly ? "size-4" : "size-3.5"} ${triggerIconClass}`}
         />
         {!iconOnly && !isMobile && (
           <span className={isBypass ? BYPASS_TRIGGER.trigger : ""}>

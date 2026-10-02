@@ -178,10 +178,6 @@ interface WorkspaceInputProps {
   onStop?: () => void;
   /** When true (e.g. new-run draft tab active), focus the prompt after layout. */
   isNewRunTabActive?: boolean;
-  /** Work/Chat project that will own the new conversation. */
-  newChatProjectName?: string;
-  /** Project glyph rendered as part of the empty placeholder. */
-  newChatProjectIcon?: React.ReactNode;
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
   layout?: "default" | "centered" | "floating";
   floatingChatMode?: FloatingChatMode;
@@ -211,8 +207,6 @@ export function WorkspaceInput({
   onAdditionalDirectoriesChange,
   onStop,
   isNewRunTabActive = false,
-  newChatProjectName,
-  newChatProjectIcon,
   layout = "default",
   floatingChatMode,
   onFloatingFocus,
@@ -814,18 +808,6 @@ export function WorkspaceInput({
     if (isFileDragOver) {
       return "Drop images or documents here";
     }
-    const withProjectContext = (hint: string) => {
-      if (!newChatProjectName) return hint;
-      const dash = hint.indexOf(" — ");
-      if (dash >= 0) {
-        return `${hint.slice(0, dash)} in ${newChatProjectName}${hint.slice(dash)}`;
-      }
-      const comma = hint.indexOf(", ");
-      if (comma >= 0) {
-        return `${hint.slice(0, comma)} in ${newChatProjectName} — ${hint.slice(comma + 2)}`;
-      }
-      return `${hint} in ${newChatProjectName}`;
-    };
     // Short, calm placeholder on mobile — the long hint wraps to 2–3 lines on a phone.
     const baseHint = isMobile
       ? "Do anything"
@@ -841,26 +823,20 @@ export function WorkspaceInput({
     ).length;
 
     if (imageCount === 0 && documentCount === 0) {
-      return withProjectContext(baseHint);
+      return baseHint;
     }
 
     if (imageCount > 0 && documentCount > 0) {
-      return withProjectContext(
-        "Ask about your attachments — drop more images or documents here",
-      );
+      return "Ask about your attachments — drop more images or documents here";
     }
     if (imageCount > 0) {
-      return withProjectContext(
-        imageCount === 1
-          ? "Ask about this image — drop more files here anytime"
-          : "Ask about these images — drop more files here anytime",
-      );
+      return imageCount === 1
+        ? "Ask about this image — drop more files here anytime"
+        : "Ask about these images — drop more files here anytime";
     }
-    return withProjectContext(
-      documentCount === 1
-        ? "Ask about this document — drop more files here anytime"
-        : "Ask about these documents — drop more files here anytime",
-    );
+    return documentCount === 1
+      ? "Ask about this document — drop more files here anytime"
+      : "Ask about these documents — drop more files here anytime";
   }, [
     isFileDragOver,
     uploadedFiles,
@@ -868,7 +844,6 @@ export function WorkspaceInput({
     canResume,
     isMobile,
     composerPlaceholder,
-    newChatProjectName,
   ]);
   const floatingRunStatus = layout === "floating" && !isFileDragOver
     ? floatingStatusPlaceholder
@@ -1095,7 +1070,7 @@ export function WorkspaceInput({
                   variant={providerVariant}
                   kind={activeRun?.status === "queued" ? "circle" : "square"}
                 />
-              : newChatProjectName ? newChatProjectIcon : undefined}
+              : undefined}
             focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
             compact={layout === "floating"}
           />

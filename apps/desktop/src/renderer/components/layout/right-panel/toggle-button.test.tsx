@@ -26,7 +26,7 @@ vi.mock("@/features/workspace/components/chat-actions-menu", () => ({
 }));
 
 const onToggle = vi.fn();
-function controls(browserOpen: boolean, terminalOpen = false, browserExpanded = false) {
+function controls(browserOpen: boolean, terminalOpen = false, browserExpanded = false, appPanel?: { expanded: boolean }) {
   return createElement(StrictMode, null, createElement(ToggleButton, {
     isOpen: false,
     onClick: onToggle,
@@ -37,7 +37,10 @@ function controls(browserOpen: boolean, terminalOpen = false, browserExpanded = 
     onBrowserToggle: onToggle,
     onBrowserExpandToggle: onToggle,
     showChatActions: false,
-    sessionPanelRight: browserOpen && !browserExpanded ? "calc(38rem + 0.75rem)" : undefined,
+    hideChatControls: !!appPanel?.expanded,
+    sessionPanelRight: appPanel && !appPanel.expanded
+      ? "calc(var(--mcp-app-panel-width) + 0.75rem)"
+      : browserOpen && !browserExpanded ? "calc(38rem + 0.75rem)" : undefined,
   }));
 }
 
@@ -122,5 +125,35 @@ describe("session trigger during browser entry", () => {
     expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
     act(() => vi.advanceTimersByTime(450));
     expect(screen.getByRole("button", { name: "Session details" })).toBeTruthy();
+  });
+
+  it("hides session and terminal controls for an expanded app while retaining the fixed browser button", () => {
+    const view = render(controls(false, false, false, { expanded: false }));
+    act(() => vi.advanceTimersByTime(450));
+    const browser = screen.getByRole("button", { name: "Open browser" });
+
+    view.rerender(controls(false, false, false, { expanded: true }));
+    expect(screen.queryByText("Session details")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open terminal" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open browser" })).toBe(browser);
+
+    view.rerender(controls(false, false, false, { expanded: false }));
+    expect(screen.getByRole("button", { name: "Open terminal" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
+    act(() => vi.advanceTimersByTime(450));
+    expect(screen.getByRole("button", { name: "Session details" })).toBeTruthy();
+  });
+
+  it("waits for the new edge when changing from the browser to a docked app", () => {
+    const view = render(controls(true));
+    act(() => vi.advanceTimersByTime(450));
+    const session = screen.getByRole("button", { name: "Session details" });
+
+    view.rerender(controls(false, false, false, { expanded: false }));
+    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
+    act(() => vi.advanceTimersByTime(350));
+    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.getByRole("button", { name: "Session details" })).toBe(session);
   });
 });

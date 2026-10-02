@@ -117,10 +117,13 @@ export function BrowserTabStrip({
     return window.api.app.onFullscreenChange(setIsFullscreen);
   }, [windowChrome]);
   const reserveTrafficLights = isExpanded && !inMainHeader && sidebarCollapsed && windowChrome && !isFullscreen;
+  const firstTabFlush = !reserveTrafficLights &&
+    (!inMainHeader || (!header && !sidebarCollapsed)) &&
+    tabs[0]?.tabId === activeTabId;
 
   return (
     <div
-      data-browser-flush-tab-active={!inMainHeader && !reserveTrafficLights && tabs[0]?.tabId === activeTabId ? "true" : undefined}
+      data-browser-flush-tab-active={firstTabFlush ? "true" : undefined}
       className={`relative z-(--z-panel-toggle) flex h-(--shell-header-height) shrink-0 items-center pr-2 ${reserveTrafficLights ? "pl-20" : "pl-0"}`}
     >
       {/* Direct flex children let the tabs share the space left by the add button. */}

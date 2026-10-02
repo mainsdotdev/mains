@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -114,6 +121,22 @@ describe("WorkspaceItem branch rename", () => {
 });
 
 describe("WorkspaceItem project actions", () => {
+  it("keeps the native browser behind the workspace menu and restores it after an action", async () => {
+    const setVisible = vi.fn();
+    vi.stubGlobal("api", { browser: { setVisible } });
+    const user = userEvent.setup();
+    const onArchive = vi.fn();
+    render(createElement(WorkspaceItem, { id: "ws-1", name: "mains", onArchive }));
+    expect(setVisible).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Workspace options" }));
+    expect(setVisible).toHaveBeenCalledExactlyOnceWith(false);
+    await user.click(screen.getByRole("menuitem", { name: "Archive" }));
+    expect(onArchive).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu", { name: "Workspace actions" })).toBeNull();
+    expect(setVisible).toHaveBeenLastCalledWith(true);
+  });
+
   it("separates workspace, project, and lifecycle actions", async () => {
     const user = userEvent.setup();
     render(
@@ -145,11 +168,108 @@ describe("WorkspaceItem project actions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Workspace options" }));
-    await user.click(
-      screen.getByRole("menuitem", { name: "New worktree" }),
-    );
+    await user.click(screen.getByRole("menuitem", { name: "New worktree" }));
 
     expect(onCreateWorktree).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("menu", { name: "Workspace actions" })).toBeNull();
+    expect(
+      screen.queryByRole("menu", { name: "Workspace actions" }),
+    ).toBeNull();
+  });
+});
+
+describe("WorkspaceItem quick actions", () => {
+  it("requests deletion through the existing handler without selecting the workspace", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    const onClick = vi.fn();
+    render(
+      createElement(WorkspaceItem, {
+        id: "ws-1",
+        name: "mains",
+        onDelete,
+        onClick,
+      }),
+    );
+    const row = screen.getByRole("button", { name: "mains" });
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    act(flushFrames);
+    const card = screen.getByRole("dialog", { name: "mains" });
+    expect(
+      within(card).queryByRole("button", { name: "Open workspace" }),
+    ).toBeNull();
+    await user.click(
+      within(card).getByRole("button", { name: "Delete workspace" }),
+    );
+    act(flushFrames);
+    expect(onDelete).toHaveBeenCalledOnce();
+    expect(onClick).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("renames from the hover card without selecting or dragging the workspace", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    const onRenameBranch = vi.fn();
+    const onPointerDown = vi.fn();
+    render(
+      createElement(WorkspaceItem, {
+        id: "ws-1",
+        name: "mains",
+        branch: "feature/x",
+        rootPath: "/projects/mains",
+        updatedAt: new Date(Date.now() - 7 * 60_000),
+        onClick,
+        onRenameBranch,
+        sortHandle: {
+          ref: vi.fn(),
+          listeners: { onPointerDown },
+          consumeDragClick: () => false,
+        },
+      }),
+    );
+    const row = screen.getByRole("button", { name: "mains feature/x" });
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    act(flushFrames);
+    const card = screen.getByRole("dialog", { name: "mains" });
+    expect(within(card).queryByText("/projects/mains")).toBeNull();
+    expect(within(card).getByLabelText("Last updated 7m")).toBeTruthy();
+    await user.click(
+      within(card).getByRole("button", { name: "Rename branch" }),
+    );
+    act(flushFrames);
+    const input = screen.getByRole("textbox", { name: "Branch name" });
+    expect(document.activeElement).toBe(input);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.clear(input);
+    await user.type(input, "feature/quick-actions{Enter}");
+    expect(onRenameBranch).toHaveBeenCalledExactlyOnceWith(
+      "feature/quick-actions",
+    );
+    expect(onClick).not.toHaveBeenCalled();
+    expect(onPointerDown).not.toHaveBeenCalled();
+  });
+
+  it("offers the current pin state and runs its callback once", async () => {
+    const user = userEvent.setup();
+    const onTogglePin = vi.fn();
+    render(
+      createElement(WorkspaceItem, {
+        id: "ws-1",
+        name: "mains",
+        isPinned: true,
+        onTogglePin,
+      }),
+    );
+    const row = screen.getByRole("button", { name: "mains" });
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    act(flushFrames);
+    const button = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Unpin workspace",
+    });
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    await user.click(button);
+    act(flushFrames);
+    expect(onTogglePin).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

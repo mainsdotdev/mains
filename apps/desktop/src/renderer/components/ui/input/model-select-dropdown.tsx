@@ -415,7 +415,7 @@ export function ModelSelectDropdown({
                   onToggle();
                 }
           }
-          className={`text-s flex items-center gap-1.5 ${iconOnly ? "size-9 justify-center rounded-full p-0" : "px-2 py-1.5"} ${
+          className={`text-s flex items-center gap-1 ${iconOnly ? "size-8 justify-center rounded-full p-0" : "px-2 py-1.5"} ${
             noModels
               ? "text-primary-600 dark:text-primary-400 cursor-not-allowed"
               : "cursor-pointer text-primary-950 dark:text-primary"

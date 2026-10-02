@@ -1426,7 +1426,7 @@ export function BrowserPanel({
   return (
     <div
       data-browser-panel=""
-      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[width,transform,opacity] duration-300 ease-out"
+      className="fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden transition-[width,transform,opacity] duration-300 ease-out"
       style={{
         width: panelWidth,
         top: tabsInMainHeader ? "var(--shell-header-height)" : undefined,
@@ -1512,7 +1512,7 @@ export function BrowserPanel({
             </Button>
           </div>
 
-          <div className="min-w-0 flex-1 my-1">
+          <div className="relative mx-auto my-1 flex min-w-0 max-w-3xl flex-1">
             <Input
               ref={locationInputRef}
               type="text"
@@ -1593,9 +1593,45 @@ export function BrowserPanel({
               autoCapitalize="none"
               autoComplete="off"
               autoCorrect="off"
-              className="w-full rounded-full py-1.75 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:text-primary-100 dark:focus:bg-primary-800/60"
+              className="w-full max-w-3xl rounded-xl py-2 pr-9 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:[--glass-fill-input:var(--color-primary-900)] dark:text-primary-100 dark:focus:bg-primary-800/60"
               spellCheck={false}
             />
+            {urlInput && (
+              <Button
+                aria-label="Clear address"
+                tooltip="Clear address"
+                tooltipPosition="bottom"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setUrlInput("");
+                  if (!addressSuggestionsOpen) setAddressOverlayReady(false);
+                  setAddressSuggestionsOpen(true);
+                  setAddressSuggestionIndex(0);
+                  locationInputRef.current?.focus();
+                }}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-primary-500 hover:bg-primary-100/80 hover:text-primary-900 focus-visible:bg-primary-100/80 dark:text-primary-400 dark:hover:bg-primary-800/60 dark:hover:text-primary-100 dark:focus-visible:bg-primary-800/60"
+              >
+                <Close aria-hidden className="size-3.5" />
+              </Button>
+            )}
+            {addressSuggestionsVisible && (
+              <div className="absolute inset-x-0 top-full z-(--z-dropdown)">
+                <BrowserAddressSuggestions
+                  rows={addressRows}
+                  selectedIndex={selectedAddressSuggestionIndex}
+                  onHighlight={setAddressSuggestionIndex}
+                  onSelect={(row) => {
+                    if (row.kind === "input") {
+                      navigate(row.value);
+                      return;
+                    }
+                    setUrlInput(row.suggestion.url);
+                    navigate(row.suggestion.url);
+                  }}
+                  onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
+                />
+              </div>
+            )}
           </div>
 
           <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
@@ -1630,24 +1666,6 @@ export function BrowserPanel({
           </div>
         </div>
 
-        {addressSuggestionsVisible && (
-          <div className="absolute inset-x-0 top-full z-(--z-dropdown)">
-            <BrowserAddressSuggestions
-              rows={addressRows}
-              selectedIndex={selectedAddressSuggestionIndex}
-              onHighlight={setAddressSuggestionIndex}
-              onSelect={(row) => {
-                if (row.kind === "input") {
-                  navigate(row.value);
-                  return;
-                }
-                setUrlInput(row.suggestion.url);
-                navigate(row.suggestion.url);
-              }}
-              onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
-            />
-          </div>
-        )}
       </div>
 
       {activeTab?.deviceEmulation.enabled && (

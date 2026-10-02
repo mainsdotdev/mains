@@ -43,13 +43,13 @@ import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import { useMcpAppConversation } from "../hooks/use-mcp-app-conversation";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useModeConfig } from "@/hooks/use-mode-config";
-import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
 import {
   isExitPlanApproval,
   respondToExitPlanApproval,
 } from "@/features/workspace/lib/plan-approval";
 import { FloatingChatOverlay } from "./floating-chat-overlay";
 import { ChatHeader } from "./chat-header";
+import { NewConversationContextSelect } from "./new-conversation-context-select";
 import { floatingChatRunStatus } from "../lib/floating-chat-run-status";
 import { store } from "@/lib/redux";
 import { baseApi } from "@/lib/redux/api/baseApi";
@@ -440,15 +440,19 @@ export function WorkspaceProviderPage({
     () => modeConfig.showTabs
       ? tabBar
       : !ws.showEmptyState && !ws.isEmptyStatePending && ws.activeRunId
-        ? <ChatHeader key={ws.activeRunId} runId={ws.activeRunId} variant={variant} />
+        ? <ChatHeader runId={ws.activeRunId} fallbackRun={ws.activeRun} variant={variant} />
         : null,
-    [modeConfig.showTabs, tabBar, ws.showEmptyState, ws.isEmptyStatePending, ws.activeRunId, variant],
+    [modeConfig.showTabs, tabBar, ws.showEmptyState, ws.isEmptyStatePending, ws.activeRunId, ws.activeRun, variant],
   );
 
+  // Keep the full workspace strip until its run list is known, even when a
+  // saved file/new-run tab already makes the destination non-empty.
+  const headerPending = ws.isEmptyStatePending || (modeConfig.showTabs && !ws.runsLoaded);
   // An expanded browser owns the surface edge; workspace tabs must not square it.
   useSetMainHeader(
     mainHeader,
     !!mainHeader && !browserPanel.isExpanded && (!modeConfig.showTabs || isFirstTabActive),
+    headerPending,
   );
 
   const routeTopRounding = useWorkspaceRouteTopRounding();
@@ -536,10 +540,6 @@ export function WorkspaceProviderPage({
       onUploadedFilesChange={handleBrowserUploadsChange}
       onStop={handleStop}
       isNewRunTabActive={false}
-      newChatProjectName={newChatProject?.name}
-      newChatProjectIcon={newChatProject ? (
-        <ProjectIcon icon={newChatProject.icon} projectName={newChatProject.name} />
-      ) : undefined}
       layout="floating"
       floatingChatMode={floatingPanel.chatMode}
       floatingStatusPlaceholder={floatingPanel.chatMode === "input"
@@ -624,6 +624,7 @@ export function WorkspaceProviderPage({
         centers over this content column (not the whole window — the embedded
         browser panel is a native view layered above the renderer). */}
     <div
+      data-workspace-route=""
       className={`relative flex flex-col h-full ${routeTopRounding} overflow-hidden`}
     >
       {/* Separate painted panes leave the translucent shell visible between chat and terminal. */}
@@ -634,13 +635,21 @@ export function WorkspaceProviderPage({
       <div className="content-inset flex-1 overflow-hidden noscrollbar min-h-0">
         {floatingPanel.isExpanded ? null : useCenteredPromptLayout ? (
           <div
-            className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-8 overflow-y-auto py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
+            className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-4 overflow-y-auto py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
           >
             <WorkspaceEmptyState
               workspace={ws.currentWorkspace}
               presentation="headline"
             />
-            <div className="w-full flex flex-col items-center gap-3">
+            <div className="w-full flex flex-col items-center gap-2">
+              <div className="mx-auto w-full max-w-210 ">
+                <NewConversationContextSelect
+                  workspace={ws.currentWorkspace}
+                  project={newChatProject}
+                  onChange={ws.handleNewConversationContextChange}
+                  disabled={ws.isLoading}
+                />
+              </div>
               <WorkspaceInput
                 goal={ws.goal}
                 onGoalChange={ws.setGoal}
@@ -659,15 +668,6 @@ export function WorkspaceProviderPage({
                 onAdditionalDirectoriesChange={ws.setAdditionalDirectories}
                 onStop={handleStop}
                 isNewRunTabActive={ws.showNewRunTab}
-                newChatProjectName={newChatProject?.name}
-                newChatProjectIcon={
-                  newChatProject ? (
-                    <ProjectIcon
-                      icon={newChatProject.icon}
-                      projectName={newChatProject.name}
-                    />
-                  ) : undefined
-                }
                 layout="centered"
               />
             </div>

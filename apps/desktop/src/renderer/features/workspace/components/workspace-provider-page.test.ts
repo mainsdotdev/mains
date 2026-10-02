@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
 import { MemoryRouter } from "react-router-dom";
 import { WorkspaceProviderPage } from "./workspace-provider-page";
+import { WorkspaceTabs } from "./workspace-tabs";
 import appSettingsReducer, {
   setBrowserPanelExpanded,
   setBrowserPanelOpen,
@@ -17,6 +18,9 @@ import type { BrowserChatAction } from "../../../../shared/browser-chat-window";
 const page = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
   dispatch: vi.fn(),
+  mode: "developer" as "developer" | "work" | "chat",
+  runQueryReady: true,
+  realTabs: false,
 }));
 const browser = vi.hoisted(() => ({
   isExpanded: false,
@@ -47,7 +51,7 @@ vi.mock("@/hooks/use-active-space", () => ({
 }));
 
 vi.mock("@/features/workspace/hooks", () => ({
-  useWorkspacePage: () => page.state,
+  useWorkspacePage: () => ({ runsLoaded: true, ...page.state }),
   useToolApproval: () => ({ pendingApprovals: [], respond: vi.fn() }),
   useProviderAuthTerminal: () => ({ session: null }),
   PluginLogoProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -62,21 +66,26 @@ vi.mock("@/features/workspace/components", () => ({
       "data-status-placeholder": floatingStatusPlaceholder ?? "",
       onClick: onSubmit,
     }),
-  WorkspaceTabs: () => createElement("div", { "data-testid": "tabs" }),
+  WorkspaceTabs: (props: ComponentProps<typeof WorkspaceTabs>) =>
+    createElement("div", { "data-testid": "tabs" }, page.realTabs && createElement(WorkspaceTabs, props)),
   TerminalSection: () => null,
   GoalSummaryBar: () => null,
   TodoSummaryBar: () => null,
 }));
 
 vi.mock("@/lib/provider-variants", () => ({
+  PROVIDER_VARIANTS: { codex: { icon: () => createElement("span", null) } },
   getProviderVariant: () => ({
     planExit: null,
     enableForkRun: false,
     enableSuggestions: false,
     label: "Codex",
     supportsGoalMode: false,
+    icon: () => createElement("span", null),
   }),
 }));
+
+vi.mock("@/lib/platform", () => ({ useIsMobile: () => false }));
 
 vi.mock("@/lib/redux/api", () => ({
   useAbortRunMutation: () => [vi.fn()],
@@ -84,6 +93,14 @@ vi.mock("@/lib/redux/api", () => ({
   useGetCollectionQuery: () => ({}),
   useGetProviderByIdQuery: () => ({}),
   useUpdateProviderMutation: () => [vi.fn()],
+  useGetRunByIdQuery: (id: string) => ({
+    currentData: page.runQueryReady
+      ? (page.state.runs as { id: string; title: string; goal: string }[])?.find((run) => run.id === id)
+      : undefined,
+  }),
+}));
+vi.mock("./chat-actions-menu", () => ({
+  ChatActionsMenu: () => createElement("button", null, "Chat options"),
 }));
 
 vi.mock("@/lib/redux/hooks", () => ({
@@ -99,13 +116,24 @@ vi.mock("@/hooks/use-bottom-terminal", () => ({
   useBottomTerminal: () => ({ isOpen: false }),
 }));
 vi.mock("@/hooks/use-mode-config", () => ({
-  useModeConfig: () => ({ mode: "developer", showTabs: true, showTerminal: false }),
+  useModeConfig: () => ({ mode: page.mode, showTabs: page.mode === "developer", showTerminal: false }),
 }));
 vi.mock("@/hooks/use-workspace-route-top-rounding", () => ({
   useWorkspaceRouteTopRounding: () => "",
 }));
 vi.mock("@/components/layout/sidebar/project-icon", () => ({
   ProjectIcon: () => null,
+}));
+
+vi.mock("./new-conversation-context-select", () => ({
+  NewConversationContextSelect: ({ workspace, onChange }: {
+    workspace: { id: string } | null;
+    onChange: (selection: { workspaceId: string }) => void;
+  }) => createElement("button", {
+    "data-testid": "conversation-context",
+    "data-workspace": workspace?.id ?? "",
+    onClick: () => onChange({ workspaceId: "workspace-2" }),
+  }),
 }));
 
 function Header() {
@@ -141,10 +169,144 @@ afterEach(() => {
   browser.ownerKey = "draft";
   browser.setChatMode.mockClear();
   page.dispatch.mockReset();
+  page.mode = "developer";
+  page.runQueryReady = true;
+  page.realTabs = false;
   vi.unstubAllGlobals();
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
+  it.each(["editor", "new-run"])("keeps the actual run tabs mounted while loading a workspace with a saved %s tab", async (activeTab) => {
+    page.realTabs = true;
+    const run = { id: "run-1", title: "Existing run", goal: "Existing run", status: "succeeded" };
+    const selectRun = vi.fn();
+    page.state = {
+      runs: [run], runsLoaded: true, activeTab: run.id, activeRunId: run.id, activeRun: run,
+      selectedFile: null, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: { id: "workspace-1", rootPath: "/tmp/workspace-1" },
+      currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [],
+      handleSelectRunTab: selectRun,
+    };
+    const content = () => createElement(MemoryRouter, null, createElement(MainHeaderProvider, null,
+      createElement(Header), createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" })));
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(content()); });
+    const tabs = screen.getByTestId("tabs");
+    const tab = screen.getByText("Existing run").closest('[role="button"]');
+    expect(tab).toBeTruthy();
+
+    // The restored editor/new-run tab means this is not an empty-state candidate.
+    // Its run list still has to load before replacing the previous strip.
+    page.state = { ...page.state, runs: [], runsLoaded: false, activeTab, activeRunId: null,
+      activeRun: null, selectedFile: activeTab === "editor" ? { name: "settings.ts" } : null,
+      showNewRunTab: activeTab === "new-run", currentWorkspace: { id: "workspace-2", rootPath: "/tmp/workspace-2" } };
+    view.rerender(content());
+    expect(screen.getByTestId("tabs")).toBe(tabs);
+    expect(screen.getByText("Existing run").closest('[role="button"]')).toBe(tab);
+
+    const nextRun = { ...run, id: "run-2", title: "Next run" };
+    const nextSelectRun = vi.fn();
+    page.state = { ...page.state, runs: [nextRun], runsLoaded: true, handleSelectRunTab: nextSelectRun };
+    view.rerender(content());
+    expect(screen.getByTestId("tabs")).toBe(tabs);
+    expect(screen.queryByText("Existing run")).toBeNull();
+    const nextTab = screen.getByText("Next run").closest('[role="button"]')!;
+    fireEvent.click(nextTab);
+    expect(nextSelectRun).toHaveBeenCalledExactlyOnceWith(nextRun.id);
+    expect(selectRun).not.toHaveBeenCalled();
+
+    // Selecting a different tab in the loaded workspace must retain the run node.
+    page.state = { ...page.state, activeTab: nextRun.id, activeRunId: nextRun.id, activeRun: nextRun };
+    view.rerender(content());
+    expect(screen.getByText("Next run").closest('[role="button"]')).toBe(nextTab);
+  });
+
+  it.each(["work", "chat"] as const)("updates the %s chat tab in place on sidebar selection", async (mode) => {
+    page.mode = mode;
+    const firstRun = { id: "first-chat", title: "First chat", goal: "", status: "succeeded" };
+    page.state = {
+      runs: [firstRun], runsLoaded: true, activeTab: firstRun.id,
+      activeRunId: firstRun.id, activeRun: firstRun, composerRun: firstRun,
+      selectedFile: null, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: null, currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [],
+    };
+    const content = () => createElement(MemoryRouter, null, createElement(MainHeaderProvider, null,
+      createElement(Header), createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" })));
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(content()); });
+    const tab = screen.getByRole("tab", { name: "First chat" });
+    page.state = { ...page.state, runs: [], runsLoaded: false, activeRunId: null,
+      activeRun: null, composerRun: null, isEmptyStatePending: true };
+    view.rerender(content());
+    expect(screen.getByRole("tab", { name: "First chat" })).toBe(tab);
+
+    const nextRun = { ...firstRun, id: "second-chat", title: "Second chat" };
+    page.runQueryReady = false;
+    page.state = { ...page.state, runs: [nextRun], activeTab: nextRun.id,
+      activeRunId: nextRun.id, activeRun: nextRun, composerRun: nextRun,
+      runsLoaded: true, isEmptyStatePending: false };
+    view.rerender(content());
+    expect(screen.getByRole("tab", { name: "Second chat" })).toBe(tab);
+
+    page.runQueryReady = true;
+    page.state = { ...page.state, runs: [{ ...nextRun, title: "Renamed chat" }], activeRun: { ...nextRun } };
+    view.rerender(content());
+    expect(screen.getByRole("tab", { name: "Renamed chat" })).toBe(tab);
+
+    page.state = { ...page.state, activeTab: "new-run", activeRunId: null, activeRun: null,
+      showNewRunTab: true };
+    view.rerender(content());
+    expect(screen.queryByRole("tablist", { name: "Chat tabs" })).toBeNull();
+  });
+
+  it("keeps the workspace strip mounted while the next workspace loads, then clears it for a confirmed empty workspace", async () => {
+    page.state = {
+      runs: [{ id: "run-1", goal: "Existing run" }], runsLoaded: true,
+      activeTab: "run-1", activeRunId: "run-1", selectedFile: null,
+      openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: { id: "workspace-1", rootPath: "/tmp/workspace-1" },
+      currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [],
+    };
+    const content = () => createElement(MemoryRouter, null, createElement(MainHeaderProvider, null,
+      createElement(Header), createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" })));
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(content()); });
+    const tabs = screen.getByTestId("tabs");
+    page.state = { ...page.state, runs: [], runsLoaded: false, activeTab: "editor", activeRunId: null,
+      isEmptyStatePending: true, currentWorkspace: { id: "workspace-2", rootPath: "/tmp/workspace-2" } };
+    view.rerender(content());
+    expect(screen.getByTestId("tabs")).toBe(tabs);
+    page.state = { ...page.state, runs: [{ id: "run-2", goal: "Next run" }], runsLoaded: true,
+      isEmptyStatePending: false, activeTab: "run-2", activeRunId: "run-2" };
+    view.rerender(content());
+    expect(screen.getByTestId("tabs")).toBe(tabs);
+    page.state = { ...page.state, runs: [], showEmptyState: true, activeTab: "editor", activeRunId: null };
+    view.rerender(content());
+    expect(screen.queryByTestId("tabs")).toBeNull();
+  });
+
+  it.each(["empty", "new-run"])("shows the context selector above the %s composer", (screenType) => {
+    const changeContext = vi.fn();
+    page.state = {
+      runs: [], activeTab: "new-run", selectedFile: null,
+      openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: screenType === "empty", isEmptyStatePending: false,
+      showNewRunTab: screenType === "new-run",
+      currentWorkspace: { id: "workspace-1", rootPath: "/tmp/workspace-1" },
+      currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [],
+      handleNewConversationContextChange: changeContext,
+    };
+    renderPage();
+    const selector = screen.getByTestId("conversation-context");
+    expect(selector.getAttribute("data-workspace")).toBe("workspace-1");
+    expect(selector.compareDocumentPosition(screen.getByTestId("centered-input")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(selector);
+    expect(changeContext).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-2" });
+  });
+
   it.each([false, true])("opens a floating browser chat's app in the main panel (automatic=%s)", (automatic) => {
     page.state = { runs: [{ id: "run-1", goal: "Open a template", status: "succeeded" }], runsLoaded: true,
       activeTab: "run-1", selectedFile: null, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],

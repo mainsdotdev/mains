@@ -9,7 +9,7 @@ import {
   useReducedMotion,
 } from "motion/react";
 import { AsciiSpinner, Button } from "@/components/ui";
-import { Chat, MinimizeView, Minus } from "@/components/ui/icons";
+import { Chat, Minus } from "@/components/ui/icons";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 
 const CHAT_BAR_SIZE = 48;

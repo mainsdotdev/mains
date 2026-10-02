@@ -45,6 +45,8 @@ export const NAV_RAIL_WIDTH = "var(--nav-rail-width)";
 export const PANEL_WIDTH_VAR = "--panel-width";
 /** Live width of the fixed titlebar controls, reserved by the browser tabs. */
 export const LAYOUT_TOGGLE_WIDTH_VAR = "--layout-toggle-width";
+/** Right-edge controls without the session trigger's relocated flow slot. */
+export const LAYOUT_FIXED_CONTROLS_WIDTH_VAR = "--layout-fixed-controls-width";
 
 export const SIDEBAR_WIDTH_DEFAULT = 288; // 18rem
 export const SIDEBAR_WIDTH_MIN = 244;

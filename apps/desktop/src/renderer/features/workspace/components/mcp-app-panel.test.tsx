@@ -39,7 +39,36 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("MCP app panel interactions", () => {
-  it.each(["Expand MagicPath", "Close MagicPath", "Reload app"])("keeps the %s tooltip below the toolbar and away from the right edge", (label) => {
+  it.each(["hover", "focus"])("shows only the close tooltip on tab-button %s", (interaction) => {
+    render(<McpAppPanel />);
+    const close = screen.getByRole("button", { name: "Close MagicPath tab" });
+    if (interaction === "hover") fireEvent.mouseEnter(close);
+    else fireEvent.focus(close);
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent))
+      .toEqual(["Close MagicPath tab"]);
+  });
+
+  it("switches between title and close tooltips while moving within the tab", () => {
+    render(<McpAppPanel />);
+    const title = screen.getByText("MagicPath");
+    const close = screen.getByRole("button", { name: "Close MagicPath tab" });
+    fireEvent.mouseEnter(title);
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(["MagicPath"]);
+
+    fireEvent.mouseLeave(title, { relatedTarget: close });
+    fireEvent.mouseEnter(close, { relatedTarget: title });
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(["Close MagicPath tab"]);
+
+    fireEvent.mouseLeave(close, { relatedTarget: title });
+    fireEvent.mouseEnter(title, { relatedTarget: close });
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.getAllByRole("tooltip").map((tooltip) => tooltip.textContent)).toEqual(["MagicPath"]);
+  });
+
+  it.each(["Expand MagicPath", "Reload app"])("keeps the %s tooltip below the toolbar and away from the right edge", (label) => {
     render(<McpAppPanel />);
     const button = screen.getByRole("button", { name: label });
     vi.spyOn(button, "getBoundingClientRect").mockReturnValue({ top: 10, bottom: 34, left: 576, right: 600, width: 24, height: 24 } as DOMRect);
@@ -57,16 +86,20 @@ describe("MCP app panel interactions", () => {
     const { rerender } = render(<McpAppPanel />);
     act(() => vi.advanceTimersByTime(50));
     const frame = screen.getByTitle("App canvas");
+    expect(screen.getByRole("tab", { name: "MagicPath" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Expand MagicPath" }));
     expect(mocks.panel.toggleExpanded).toHaveBeenCalledOnce();
     mocks.panel.isExpanded = true;
     rerender(<McpAppPanel />);
+    expect(screen.queryByRole("tablist", { name: "App tabs" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "MagicPath" })).toBeNull();
     expect(screen.getByTitle("App canvas")).toBe(frame);
     fireEvent.click(screen.getByRole("button", { name: "Restore MagicPath panel" }));
     expect(mocks.panel.toggleExpanded).toHaveBeenCalledTimes(2);
     mocks.panel.isExpanded = false;
     rerender(<McpAppPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Close MagicPath" }));
+    expect(screen.getByRole("tab", { name: "MagicPath" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close MagicPath tab" }));
     expect(mocks.panel.close).toHaveBeenCalledOnce();
     mocks.panel.isOpen = false;
     rerender(<McpAppPanel />);
@@ -85,17 +118,15 @@ describe("MCP app panel interactions", () => {
     expect(mocks.panel.newChat).not.toHaveBeenCalled();
   });
 
-  it("exposes chat visibility and collapses details when clicking outside the floating chat", () => {
+  it("keeps the expanded toolbar limited to reload and restore while collapsing details outside the floating chat", () => {
     Object.assign(mocks.panel, { isExpanded: true, chatMode: "details" });
     render(<McpAppPanel />);
     fireEvent.pointerDown(screen.getByText("Floating chat"));
     expect(mocks.panel.setChatMode).not.toHaveBeenCalled();
     fireEvent.pointerDown(screen.getByRole("button", { name: "Reload app" }));
     expect(mocks.panel.setChatMode).toHaveBeenCalledWith("input");
-    const hideChat = screen.getByRole("button", { name: "Hide chat" });
-    expect(hideChat.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(hideChat);
-    expect(mocks.panel.setChatVisible).toHaveBeenCalledWith(false);
+    expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Reload app", "Restore MagicPath panel"]);
   });
 
   it("supports keyboard resizing and restoring the browser-sized default", () => {
