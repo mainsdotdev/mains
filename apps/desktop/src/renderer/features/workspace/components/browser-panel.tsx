@@ -3,10 +3,10 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { addContextItemForKey } from "@/lib/redux/slices/workspaceSlice";
 import type { ContextBrowserSelection } from "@/features/workspace/lib/composer-context";
 import {
@@ -35,6 +35,8 @@ import {
   View,
 } from "@/components/ui/icons";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
+import { useMainHeader } from "@/hooks/use-main-header";
+import { usePreviewPanelTransition } from "@/hooks/use-preview-panel-transition";
 import { isElectron } from "@/lib/platform";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setBrowserPanelWidth } from "@/lib/redux/slices/appSettingsSlice";
@@ -96,7 +98,6 @@ interface FindState {
   matches: number;
 }
 
-type AnimationState = "closed" | "opening" | "open" | "closing";
 /** A DOM overlay that needs the native page view out of its way. */
 type BrowserOverlayId = "device" | "scale" | "address";
 
@@ -138,7 +139,14 @@ function waitForPaint(): Promise<void> {
   });
 }
 
-export function BrowserPanel() {
+export function BrowserPanel({
+  tabsInMainHeader = false,
+  reserveLayoutControls = false,
+}: {
+  tabsInMainHeader?: boolean;
+  reserveLayoutControls?: boolean;
+}) {
+  const { browserTabsHost } = useMainHeader();
   const {
     isOpen,
     isExpanded,
@@ -227,10 +235,7 @@ export function BrowserPanel() {
     "browser.previousTab",
   );
 
-  const [animState, dispatchAnim] = useReducer(
-    (_: AnimationState, next: AnimationState) => next,
-    isOpen ? "open" : "closed",
-  );
+  const { isVisible, isAnimatedIn } = usePreviewPanelTransition(isOpen);
 
   const api = getBrowserApi();
   const browserPanelWidth = useAppSelector(
@@ -360,24 +365,6 @@ export function BrowserPanel() {
     [api],
   );
 
-  useEffect(() => {
-    dispatchAnim(isOpen ? "opening" : "closing");
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (animState === "opening") {
-      const timer = setTimeout(() => dispatchAnim("open"), 50);
-      return () => clearTimeout(timer);
-    }
-    if (animState === "closing") {
-      const timer = setTimeout(() => dispatchAnim("closed"), 300);
-      return () => clearTimeout(timer);
-    }
-    return undefined;
-  }, [animState]);
-
-  const isVisible = animState !== "closed";
-  const isAnimatedIn = animState === "open";
   // A native child window draws the chat above the live WebContentsView. The
   // old screenshot path remains only for the standalone web renderer.
   const chatOverlayActive = isOpen && isExpanded && chatVisible && !isElectron;
@@ -1392,10 +1379,10 @@ export function BrowserPanel() {
   }, []);
 
   if (!isVisible) return null;
+  // Keep the DOM surface and native viewport on the same content edge.
+  // Space for window controls belongs only to the tab strip above them.
   const panelWidth = isExpanded
-    ? sidebarCollapsed
-      ? "calc(100% - var(--content-left) - 4rem)"
-      : "calc(100% - var(--content-left) + 0.3rem)"
+    ? "calc(100% - var(--content-left) + 0.3rem)"
     : "var(--browser-panel-width)";
 
   if (!api) {
@@ -1418,6 +1405,23 @@ export function BrowserPanel() {
     (download) =>
       download.state === "progressing" || download.state === "paused",
   ).length;
+  const tabStrip = (
+    <BrowserTabStrip
+      tabs={browserState.tabs}
+      activeTabId={browserState.activeTabId}
+      onActivate={activateTab}
+      onClose={closeTab}
+      onCreate={createTab}
+      onClosePanel={() => void closePanel()}
+      isExpanded={isExpanded}
+      sidebarCollapsed={sidebarCollapsed}
+      onToggleExpanded={toggleExpanded}
+      reserveLayoutControls={reserveLayoutControls}
+      newTabShortcutLabel={keyboardShortcutLabel(newTabShortcut)}
+      closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}
+      inMainHeader={tabsInMainHeader}
+    />
+  );
 
   return (
     <div
@@ -1425,6 +1429,7 @@ export function BrowserPanel() {
       className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[width,transform,opacity] duration-300 ease-out"
       style={{
         width: panelWidth,
+        top: tabsInMainHeader ? "var(--shell-header-height)" : undefined,
         transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
         opacity: isAnimatedIn ? 1 : 0,
       }}
@@ -1455,25 +1460,12 @@ export function BrowserPanel() {
         />
       )}
 
-      {/* Both panel sizes retain the translucent frame gap. The painted surface
-          stays inset so native page content clears its rounded corners. */}
-      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950 -pl-20">
-      <BrowserTabStrip
-        tabs={browserState.tabs}
-        activeTabId={browserState.activeTabId}
-        onActivate={activateTab}
-        onClose={closeTab}
-        onCreate={createTab}
-        onClosePanel={() => void closePanel()}
-        isExpanded={isExpanded}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleExpanded={toggleExpanded}
-        chatVisible={chatVisible}
-        onToggleChat={() => setChatVisible(!chatVisible)}
-        newTabShortcutLabel={keyboardShortcutLabel(newTabShortcut)}
-        closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}
-      />
+      {/* The tab strip shares the shell header surface. Browser content starts
+          below it, inside the inset rounded panel. */}
+      <div className="absolute inset-1.25 flex min-h-0 flex-col">
+      {tabsInMainHeader && browserTabsHost ? createPortal(tabStrip, browserTabsHost) : tabStrip}
 
+      <div data-browser-content="" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
       <div className="relative">
         <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
           <div className="flex items-center gap-1 rounded-full p-0.5 ">
@@ -1520,7 +1512,7 @@ export function BrowserPanel() {
             </Button>
           </div>
 
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 my-1">
             <Input
               ref={locationInputRef}
               type="text"
@@ -1851,7 +1843,7 @@ export function BrowserPanel() {
         />
       )}
 
-      <div className={`relative flex min-h-0 flex-1 ${sidebarCollapsed && isExpanded ? "-ml-17" : ""}`}>
+      <div className="relative flex min-h-0 flex-1">
       <BrowserDeviceStage
         device={activeTab?.deviceEmulation ?? null}
         viewportRef={viewportRef}
@@ -1911,6 +1903,7 @@ export function BrowserPanel() {
           aria-label="Browser chat"
         />
       )}
+      </div>
       </div>
       </div>
     </div>

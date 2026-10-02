@@ -39,6 +39,8 @@ import { useSetMainHeader } from "@/hooks/use-main-header";
 import { useWorkspaceRouteTopRounding } from "@/hooks/use-workspace-route-top-rounding";
 import { useBottomTerminal } from "@/hooks/use-bottom-terminal";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
+import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
+import { useMcpAppConversation } from "../hooks/use-mcp-app-conversation";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { ProjectIcon } from "@/components/layout/sidebar/project-icon";
@@ -47,6 +49,7 @@ import {
   respondToExitPlanApproval,
 } from "@/features/workspace/lib/plan-approval";
 import { FloatingChatOverlay } from "./floating-chat-overlay";
+import { ChatHeader } from "./chat-header";
 import { floatingChatRunStatus } from "../lib/floating-chat-run-status";
 import { store } from "@/lib/redux";
 import { baseApi } from "@/lib/redux/api/baseApi";
@@ -104,6 +107,9 @@ export function WorkspaceProviderPage({
     selectedCollection,
   );
   const ws = useWorkspacePage(providerId);
+  const mcpPanel = useMcpAppPanel();
+  const openMcpAppTool = mcpPanel?.openTool;
+  useMcpAppConversation(ws);
   const { activeSpace } = useActiveSpace();
   const [abortRun] = useAbortRunMutation();
   const { data: providerData } = useGetProviderByIdQuery(providerId);
@@ -223,6 +229,11 @@ export function WorkspaceProviderPage({
           selectChatRunTab(action.runId);
           if (!modeConfig.showTabs) navigate(`/code/runs/${action.runId}`);
           break;
+        case "openMcpApp":
+          if (action.ownerKey === browserOwnerKey && action.result.runId === ws.composerRun?.id) {
+            openMcpAppTool?.(action.result, action.automatic);
+          }
+          break;
         case "contextItems":
           if (action.ownerKey === browserOwnerKey) {
             dispatch(setContextItemsForKey({ key: action.ownerKey, items: action.items as ContextItem[] }));
@@ -244,7 +255,7 @@ export function WorkspaceProviderPage({
     browserChatOnly, nativeOverlay, browserExpanded, browserChatMode,
     browserOwnerKey, setBrowserChatMode, modeConfig.showTabs,
     navigate, providerId, setChatDraft, changeChatModel, selectChatRunTab,
-    setChatUploads, dispatch,
+    setChatUploads, dispatch, openMcpAppTool, ws.composerRun?.id,
   ]);
   useLayoutEffect(() => {
     const enteringExpandedBrowser = browserExpanded && !wasBrowserExpandedRef.current;
@@ -358,8 +369,7 @@ export function WorkspaceProviderPage({
 
   const tabBar = useMemo(
     () =>
-      // Chat/work render a single conversation with no tab strip; a null
-      // header removes the whole header row (main-content degrades cleanly).
+      // Developer workspaces use their full strip; Work/Chat get one chat tab below.
       !modeConfig.showTabs || ws.showEmptyState || ws.isEmptyStatePending ? null : (
         <WorkspaceTabs
           variant={variant}
@@ -426,16 +436,30 @@ export function WorkspaceProviderPage({
     showNewRunTab: ws.showNewRunTab,
   });
 
-  useSetMainHeader(tabBar, !ws.showEmptyState && !ws.isEmptyStatePending && isFirstTabActive);
+  const mainHeader = useMemo(
+    () => modeConfig.showTabs
+      ? tabBar
+      : !ws.showEmptyState && !ws.isEmptyStatePending && ws.activeRunId
+        ? <ChatHeader key={ws.activeRunId} runId={ws.activeRunId} variant={variant} />
+        : null,
+    [modeConfig.showTabs, tabBar, ws.showEmptyState, ws.isEmptyStatePending, ws.activeRunId, variant],
+  );
+
+  // An expanded browser owns the surface edge; workspace tabs must not square it.
+  useSetMainHeader(
+    mainHeader,
+    !!mainHeader && !browserPanel.isExpanded && (!modeConfig.showTabs || isFirstTabActive),
+  );
 
   const routeTopRounding = useWorkspaceRouteTopRounding();
+  const floatingPanel = mcpPanel?.isExpanded ? { ...mcpPanel, nativeOverlay: false } : browserPanel;
   const browserSelectedRun = ws.activeRun?.id === ws.activeRunId
     ? ws.activeRun
     : null;
   const [browserStatusNowMs, setBrowserStatusNowMs] = useState(() => Date.now());
-  const browserStatusClockActive = browserPanel.isExpanded &&
-    (browserChatOnly || !browserPanel.nativeOverlay) &&
-    browserPanel.chatMode === "input" &&
+  const browserStatusClockActive = floatingPanel.isExpanded &&
+    (browserChatOnly || !floatingPanel.nativeOverlay) &&
+    floatingPanel.chatMode === "input" &&
     browserSelectedRun?.status === "running";
   useEffect(() => {
     if (!browserStatusClockActive) return;
@@ -494,7 +518,7 @@ export function WorkspaceProviderPage({
       void window.api.browserChat.postAction({ type: "composerHeight", height });
     }
   }, [browserChatOnly]);
-  const browserComposer = (browserChatOnly || !browserPanel.nativeOverlay) && onboardingCompleted && !ws.isEmptyStatePending ? (
+  const browserComposer = (browserChatOnly || !floatingPanel.nativeOverlay) && onboardingCompleted && !ws.isEmptyStatePending ? (
     <WorkspaceInput
       goal={ws.goal}
       onGoalChange={handleBrowserDraftChange}
@@ -517,26 +541,26 @@ export function WorkspaceProviderPage({
         <ProjectIcon icon={newChatProject.icon} projectName={newChatProject.name} />
       ) : undefined}
       layout="floating"
-      floatingChatMode={browserPanel.chatMode}
-      floatingStatusPlaceholder={browserPanel.chatMode === "input"
+      floatingChatMode={floatingPanel.chatMode}
+      floatingStatusPlaceholder={floatingPanel.chatMode === "input"
         ? floatingChatRunStatus(ws.currentEvents, browserSelectedRun, browserStatusNowMs)
         : null}
-      floatingAutoFocus={browserPanel.chatMode === "details"}
-      onFloatingFocus={() => browserPanel.setChatMode("details")}
+      floatingAutoFocus={floatingPanel.chatMode === "details"}
+      onFloatingFocus={() => floatingPanel.setChatMode("details")}
     />
   ) : null;
 
-  const browserChat = browserPanel.isExpanded && browserPanel.chatHost &&
-    (browserChatOnly || !browserPanel.nativeOverlay)
+  const browserChat = floatingPanel.isExpanded && floatingPanel.chatVisible && floatingPanel.chatHost &&
+    (browserChatOnly || !floatingPanel.nativeOverlay)
     ? createPortal(
         <FloatingChatOverlay
           title={browserSelectedRun?.title?.trim() || browserSelectedRun?.goal?.trim() || "New chat"}
           iconTooltip={browserSelectedRun?.title?.trim() || "New run"}
           activity={browserSelectedRun?.status === "running" || browserSelectedRun?.status === "queued"
             ? browserSelectedRun.status : null}
-          mode={browserPanel.chatMode}
-          onShowDetails={() => browserPanel.setChatMode("details")}
-          onMinimize={() => browserPanel.setChatMode("icon")}
+          mode={floatingPanel.chatMode}
+          onShowDetails={() => floatingPanel.setChatMode("details")}
+          onMinimize={() => floatingPanel.setChatMode("icon")}
           onComposerHeightChange={browserChatOnly ? handleBrowserComposerHeight : undefined}
           composer={browserComposer}
         >
@@ -585,7 +609,7 @@ export function WorkspaceProviderPage({
             </>
           )}
         </FloatingChatOverlay>,
-        browserPanel.chatHost,
+        floatingPanel.chatHost,
       )
     : null;
 
@@ -608,7 +632,7 @@ export function WorkspaceProviderPage({
           terminal below them: the session box only covers the top-right of the
           content, so the terminal keeps the full width. */}
       <div className="content-inset flex-1 overflow-hidden noscrollbar min-h-0">
-        {browserPanel.isExpanded ? null : useCenteredPromptLayout ? (
+        {floatingPanel.isExpanded ? null : useCenteredPromptLayout ? (
           <div
             className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-8 overflow-y-auto py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
           >
@@ -685,7 +709,7 @@ export function WorkspaceProviderPage({
           then hangs off the right edge while the left keeps its padding. */}
       <div className="content-inset">
       <div className={CONTENT_COLUMN_GUTTER}>
-      {!browserPanel.isExpanded && currentApproval &&
+      {!floatingPanel.isExpanded && currentApproval &&
         !currentPlanApproval &&
         !ws.showEmptyState &&
         !ws.showNewRunTab && (
@@ -703,7 +727,7 @@ export function WorkspaceProviderPage({
           Gated on the run's status (which stays "running" for the whole run)
           rather than `isLoading` (which only tracks the brief start/continue
           IPC call, making the bar flash and vanish mid-run). */}
-      {browserPanel.isExpanded || ws.showEmptyState || ws.showNewRunTab || ws.activeRun?.status !== "running" ? null : (
+      {floatingPanel.isExpanded || ws.showEmptyState || ws.showNewRunTab || ws.activeRun?.status !== "running" ? null : (
         <TodoSummaryBar
           events={ws.currentEvents}
           structuralPlan={currentStructuralPlan}
@@ -711,7 +735,7 @@ export function WorkspaceProviderPage({
         />
       )}
 
-      {!browserPanel.isExpanded && ws.currentWorkspace && !ws.showEmptyState && !ws.showNewRunTab && (
+      {!floatingPanel.isExpanded && ws.currentWorkspace && !ws.showEmptyState && !ws.showNewRunTab && (
         <GoalSummaryBar
           providerId={providerId}
           runId={ws.activeRun?.id}
@@ -721,7 +745,7 @@ export function WorkspaceProviderPage({
         />
       )}
 
-      {!browserPanel.isExpanded && onboardingCompleted && !ws.showEmptyState && !ws.showNewRunTab && !ws.isEmptyStatePending ? (
+      {!floatingPanel.isExpanded && onboardingCompleted && !ws.showEmptyState && !ws.showNewRunTab && !ws.isEmptyStatePending ? (
         <WorkspaceInput
           goal={ws.goal}
           onGoalChange={ws.setGoal}

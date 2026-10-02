@@ -22,6 +22,8 @@ interface MainContentProps {
   browserOpen?: boolean;
   /** Preserve header space while an expanded panel owns the workspace. */
   headerHidden?: boolean;
+  /** Expanded Work/Chat browsers share this row without owning its title. */
+  browserTabsInHeader?: boolean;
 }
 
 export function getCollapsedHeaderPaddingLeft(
@@ -46,8 +48,9 @@ export function MainContent({
   sidebarCollapsed,
   browserOpen,
   headerHidden,
+  browserTabsInHeader,
 }: MainContentProps) {
-  const { header, firstTabActive } = useMainHeader();
+  const { header, firstTabActive, setBrowserTabsHost } = useMainHeader();
   const { windowChrome } = useCapabilities();
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
@@ -80,9 +83,9 @@ export function MainContent({
         transition: `margin ${LAYOUT_PANEL_ANIM_MS}ms ease-out`,
       }}
     >
-      {header && (
+      {(header || browserTabsInHeader) && (
         <div
-          className={`shrink-0 ${hasRightPanel ? "max-w-[calc(100%-150px)]" : browserOpen ? "max-w-[calc(100%-150px)]" : ""}`}
+          className={`shrink-0 ${browserTabsInHeader ? "flex h-(--shell-header-height) min-w-0 items-center" : hasRightPanel || browserOpen ? "max-w-[calc(100%-150px)]" : ""}`}
           aria-hidden={headerHidden || undefined}
           inert={headerHidden}
           style={{
@@ -98,10 +101,19 @@ export function MainContent({
             transition: `padding ${LAYOUT_PANEL_ANIM_MS}ms ease-out, max-width ${LAYOUT_PANEL_ANIM_MS}ms ease-out`,
           }}
         >
-          {header}
+          {browserTabsInHeader ? (
+            <>
+              {header && (
+                <div className="flex min-w-0 max-w-[40%] items-end">
+                  {header}
+                </div>
+              )}
+              <div ref={setBrowserTabsHost} className="min-w-0 flex-1" data-browser-tabs-host="" />
+            </>
+          ) : header}
         </div>
       )}
-      {!header && (
+      {!header && !browserTabsInHeader && (
         <div className="hidden h-(--shell-header-height) shrink-0 md:block" aria-hidden="true" />
       )}
       <div

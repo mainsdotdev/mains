@@ -426,7 +426,7 @@ export function ModelSelectDropdown({
           disabled={noModels || (isLoading && !displayModel)}
         >
           {iconOnly ? (
-            <Brain className="size-4.5" />
+            <Brain className="size-4" />
           ) : isLoading && !displayModel ? (
             <span className="inline-flex items-center gap-1.5">
               <Text as="span" tone="inherit" className="shine-text">

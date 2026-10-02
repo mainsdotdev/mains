@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Branch, Maximize, MinimizeView, PullRequest } from "@/components/ui/icons";
+import { Branch, Maximize, Minimize, PullRequest } from "@/components/ui/icons";
 import {
   Input,
   Button,
@@ -382,7 +382,7 @@ export function PrSection({
       >
         <ModalHeader
           onClose={closeEditor}
-          closeIcon={<MinimizeView aria-hidden="true" className="size-4.5 text-primary-500" />}
+          closeIcon={<Minimize aria-hidden="true" className="size-4.5 text-primary-500" />}
           closeLabel="Minimize PR view"
         >
           <PullRequest aria-hidden="true" className="size-4 shrink-0 text-primary-600 dark:text-primary-400" />

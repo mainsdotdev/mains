@@ -10,10 +10,14 @@ import workspaceReducer, {
   activateWorkspaceView,
   setActiveTab,
   openNewRunTab,
+  setContextItemsForKey,
+  replaceMcpAppContext,
 } from "@/lib/redux/slices/workspaceSlice";
 import { workspaceViewKey } from "../lib/ui-context";
+import type { ContextMcpAppItem } from "../lib/composer-context";
 
 const mocks = vi.hoisted(() => ({
+  getState: vi.fn(),
   getById: vi.fn(),
   getArtifacts: vi.fn(),
   getToolCalls: vi.fn(),
@@ -22,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   executeRun: vi.fn(),
   continueRun: vi.fn(),
   checkCanResume: vi.fn(),
+  appContext: vi.fn(),
+  attachAppRun: vi.fn(),
+  panel: false,
   mode: "work",
   workspaceId: undefined as string | undefined,
 }));
@@ -30,6 +37,9 @@ vi.mock("@/lib/redux/hooks", () => ({
   useAppDispatch: useDispatch,
   useAppSelector: useSelector,
 }));
+vi.mock("@/lib/redux", () => ({ store: { getState: () => mocks.getState() } }));
+vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => mocks.panel
+  ? { appContext: mocks.appContext, attachRun: mocks.attachAppRun } : null }));
 vi.mock("@/lib/transport", () => ({
   appApi: {
     account: { get: () => Promise.resolve({ success: true, data: { id: "account-1" } }) },
@@ -63,10 +73,11 @@ vi.mock("./use-workspace-data", () => ({
   }),
 }));
 vi.mock("./use-composer-context", () => ({
-  useComposerContext: () => ({ items: [], clear: vi.fn() }),
+  useComposerContext: () => ({ items: useSelector((state: { workspace: { contextItems: unknown[] } }) => state.workspace.contextItems), clear: vi.fn() }),
 }));
 vi.mock("./use-transient-uploads", () => ({
   useTransientUploads: () => [[], vi.fn()],
+  getTransientUploadsForOwner: () => [],
 }));
 vi.mock("./use-file-content-loader", () => ({ useFileContentLoader: () => {} }));
 vi.mock("./use-run-operations", () => ({
@@ -120,6 +131,8 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) if (vi.isMockFunction(mock)) mock.mockReset();
   mocks.mode = "work";
   mocks.workspaceId = undefined;
+  mocks.panel = false;
+  mocks.appContext.mockReturnValue([]);
   mocks.executeRun.mockResolvedValue(null);
   mocks.continueRun.mockResolvedValue(true);
   mocks.checkCanResume.mockResolvedValue(false);
@@ -146,6 +159,7 @@ function workspacePage(providerId = "claude_code") {
       backends: () => ({ activeBackendId: null }),
     },
   });
+  mocks.getState.mockImplementation(() => store.getState());
   const wrapper = ({ children }: { children: ReactNode }) => createElement(
     Provider,
     { store } as ComponentProps<typeof Provider>,
@@ -231,6 +245,75 @@ describe("workspace additional directory payload", () => {
 });
 
 describe("workspace conversations across renderers", () => {
+  it("sends reviewed app text through the normal run and preserves newer selections and draft edits", async () => {
+    mocks.mode = "developer"; mocks.workspaceId = "ws-1"; mocks.panel = true;
+    const existing = { ...run, providerId: "codex", workspaceId: "ws-1", mode: "developer" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
+    mocks.getById.mockResolvedValue({ success: true, data: existing });
+    mocks.checkCanResume.mockResolvedValue(true);
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+    const ownerKey = page.result.current.ownerKey;
+    const selected: ContextMcpAppItem = { kind: "mcp-app", id: "selection", sessionId: "document-1", appName: "MagicPath",
+      updateId: "before", label: "Canvas selection", hidden: false, block: { type: "text", text: "Canvas A" } };
+    const activeApp: ContextMcpAppItem = { ...selected, id: "app", updateId: "app", hidden: true, label: "MagicPath" };
+    mocks.appContext.mockReturnValue([activeApp]);
+    act(() => { page.store.dispatch(setContextItemsForKey({ key: ownerKey, items: [selected] })); page.result.current.setGoal("My unfinished draft"); });
+    let finish!: (value: boolean) => void;
+    mocks.continueRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    let sending!: Promise<string | null | undefined>;
+    act(() => { sending = page.result.current.handleExecute("Edited app prompt"); });
+    await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    expect(mocks.continueRun).toHaveBeenCalledWith(existing.id, "Edited app prompt", "", undefined, [selected, activeApp], []);
+    const newer = { ...selected, updateId: "after" };
+    act(() => { page.store.dispatch(replaceMcpAppContext({ key: ownerKey, sessionId: "document-1", items: [newer] }));
+      page.result.current.setGoal("Newer draft edit"); });
+    await act(async () => { finish(true); expect(await sending).toBe(existing.id); });
+    expect(page.result.current.goal).toBe("Newer draft edit");
+    expect(page.result.current.contextItems).toEqual([newer]);
+    expect(mocks.attachAppRun).toHaveBeenCalledWith(ownerKey, existing.id, page.result.current.contextParts);
+    expect(mocks.executeRun).not.toHaveBeenCalled();
+  });
+
+  it("starts an app-requested new chat without moving the previous conversation's draft", async () => {
+    mocks.mode = "developer"; mocks.workspaceId = "ws-1";
+    const existing = { ...run, workspaceId: "ws-1", mode: "developer" };
+    const created = { ...existing, id: "new-app-run" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
+    mocks.getById.mockImplementation(async (id) => ({ success: true, data: id === created.id ? created : existing }));
+    mocks.executeRun.mockResolvedValue(created.id);
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(existing.id));
+    const previousOwner = page.result.current.ownerKey;
+    act(() => page.result.current.setGoal("Unfinished previous message"));
+    await act(async () => { expect(await page.result.current.handleExecute("New app chat", { target: "new" })).toBe(created.id); });
+    expect(mocks.continueRun).not.toHaveBeenCalled();
+    expect(page.store.getState().workspace.draftTextByKey[previousOwner]).toBe("Unfinished previous message");
+    expect(page.result.current.goal).toBe("");
+    expect(page.result.current.activeRun?.id).toBe(created.id);
+  });
+
+  it("does not switch back to an app conversation after the user selects another chat during send", async () => {
+    mocks.mode = "developer"; mocks.workspaceId = "ws-1";
+    const first = { ...run, id: "first", workspaceId: "ws-1", mode: "developer" };
+    const second = { ...first, id: "second" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [first, second] });
+    mocks.getById.mockImplementation(async (id) => ({ success: true, data: id === second.id ? second : first }));
+    mocks.checkCanResume.mockResolvedValue(true);
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+    let finish!: (value: boolean) => void;
+    mocks.continueRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    let sending!: Promise<string | null | undefined>;
+    act(() => { sending = page.result.current.handleExecute("Reviewed app message"); });
+    await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    act(() => page.result.current.handleSelectRunTab(second.id));
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(second.id));
+    await act(async () => { finish(true); expect(await sending).toBe(first.id); });
+    expect(page.result.current.activeTab).toBe(second.id);
+    expect(page.result.current.composerRun?.id).toBe(second.id);
+  });
+
   it("loads the parent's newly selected run in an already mounted floating chat", async () => {
     mocks.mode = "developer";
     mocks.workspaceId = "ws-1";
@@ -361,6 +444,7 @@ describe("useWorkspacePage after a space switch", () => {
       providerId: "claude_code",
     }));
 
+    mocks.getState.mockImplementation(() => store.getState());
     const wrapper = ({ children }: { children: ReactNode }) =>
       createElement(
         Provider,

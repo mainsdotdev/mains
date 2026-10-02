@@ -12,6 +12,7 @@ import appSettingsReducer, {
   setRightPaneContextKey,
 } from "@/lib/redux/slices/appSettingsSlice";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
+import type { BrowserChatAction } from "../../../../shared/browser-chat-window";
 
 const page = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
@@ -24,6 +25,8 @@ const browser = vi.hoisted(() => ({
   ownerKey: "draft",
   setChatMode: vi.fn(),
 }));
+const mcp = vi.hoisted(() => ({ panel: null as null | Record<string, unknown> }));
+vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => mcp.panel }));
 
 vi.mock("@/hooks/use-browser-panel", () => ({
   useBrowserPanel: () => ({
@@ -129,6 +132,8 @@ function renderPage(browserChatOnly = false) {
 
 afterEach(() => {
   cleanup();
+  (mcp.panel?.chatHost as HTMLElement | undefined)?.remove();
+  mcp.panel = null;
   browser.isExpanded = false;
   browser.nativeOverlay = false;
   browser.chatHost?.remove();
@@ -140,6 +145,58 @@ afterEach(() => {
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
+  it.each([false, true])("opens a floating browser chat's app in the main panel (automatic=%s)", (automatic) => {
+    page.state = { runs: [{ id: "run-1", goal: "Open a template", status: "succeeded" }], runsLoaded: true,
+      activeTab: "run-1", selectedFile: null, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: { id: "workspace-1", rootPath: "/tmp/workspace-1" }, currentEvents: [], currentTurns: [],
+      activeRunId: "run-1", activeRun: { id: "run-1", status: "succeeded" }, composerRun: { id: "run-1" }, goal: "", uploadedFiles: [] };
+    browser.isExpanded = true;
+    browser.nativeOverlay = true;
+    const openTool = vi.fn();
+    mcp.panel = { isExpanded: false, openTool };
+    let onAction: ((action: BrowserChatAction) => void) | undefined;
+    vi.stubGlobal("api", { browserChat: { publishContext: vi.fn(), onAction: (callback: typeof onAction) => {
+      onAction = callback; return vi.fn();
+    } } });
+    renderPage();
+    const result = { runId: "run-1", title: "MagicPath", input: { projectId: "project-1" }, output: { content: [] },
+      app: { server: "codex_apps", tool: "magicpath.open", resourceUri: "ui://magicpath", originCallId: "call-1" } };
+    act(() => onAction?.({ type: "openMcpApp", ownerKey: "draft", result, automatic }));
+    expect(openTool).toHaveBeenCalledWith(result, automatic);
+    expect(document.querySelector("iframe")).toBeNull();
+    act(() => onAction?.({ type: "openMcpApp", ownerKey: "another-owner", result, automatic }));
+    act(() => onAction?.({ type: "openMcpApp", ownerKey: "draft", result: { ...result, runId: "another-run" }, automatic }));
+    expect(openTool).toHaveBeenCalledOnce();
+  });
+
+  it("uses the normal conversation in an expanded MCP panel and restores it when docked", () => {
+    const send = vi.fn();
+    page.state = { runs: [{ id: "app-run", goal: "Existing app chat", status: "succeeded" }], runsLoaded: true,
+      activeTab: "app-run", selectedFile: null, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: { id: "workspace-1", rootPath: "/tmp/workspace-1" }, currentEvents: [], currentTurns: [],
+      activeRunId: "app-run", activeRun: { id: "app-run", goal: "Existing app chat", status: "succeeded" },
+      composerRun: { id: "app-run" }, goal: "Follow up", uploadedFiles: [], handleExecute: send };
+    const host = document.createElement("div"); document.body.appendChild(host);
+    mcp.panel = { isExpanded: true, chatVisible: true, chatHost: host, chatMode: "details", setChatMode: vi.fn() };
+    browser.nativeOverlay = true;
+    const publishContext = vi.fn();
+    vi.stubGlobal("api", { browserChat: { onAction: () => vi.fn(), publishContext } });
+    const view = renderPage();
+    expect(host.querySelector('[data-testid="events"]')).toBeTruthy();
+    expect(screen.queryByTestId("pinned-input")).toBeNull();
+    fireEvent.click(screen.getByTestId("browser-input"));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(publishContext).not.toHaveBeenCalled();
+    mcp.panel.isExpanded = false;
+    view.rerender(createElement(MemoryRouter, null, createElement(MainHeaderProvider, null,
+      createElement(Header), createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" }))));
+    expect(host.querySelector('[data-testid="events"]')).toBeNull();
+    expect(screen.getByTestId("pinned-input")).toBeTruthy();
+    expect(screen.getByTestId("events")).toBeTruthy();
+  });
+
   it("does not flash the tab strip and pinned input while the next empty space loads", () => {
     page.state = {
       runs: [],

@@ -431,6 +431,10 @@ export function mapCodexPluginList(
                     pluginInterface.logo as string | undefined,
                     pluginInterface.logoUrl as string | undefined,
                   ),
+                  logoDark: pluginAssetUrl(
+                    pluginInterface.logoDark as string | undefined,
+                    pluginInterface.logoUrlDark as string | undefined,
+                  ),
                   screenshots: [
                     ...((pluginInterface.screenshots as
                       | string[]
@@ -526,6 +530,10 @@ function mapPluginDetail(
             logo: pluginAssetUrl(
               pluginInterface.logo as string | undefined,
               pluginInterface.logoUrl as string | undefined,
+            ),
+            logoDark: pluginAssetUrl(
+              pluginInterface.logoDark as string | undefined,
+              pluginInterface.logoUrlDark as string | undefined,
             ),
             screenshots: [
               ...((pluginInterface.screenshots as string[]) ?? []),

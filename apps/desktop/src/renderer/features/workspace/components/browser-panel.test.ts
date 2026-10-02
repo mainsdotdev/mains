@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement } from "react";
+import { createElement, Fragment, useMemo, type ComponentProps } from "react";
 import {
   act,
   cleanup,
@@ -11,6 +11,9 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MainHeaderProvider, useSetMainHeader } from "@/hooks/use-main-header";
+import { MainContent } from "@/components/layout/main/main-content";
+import { ChatHeader } from "./chat-header";
 
 const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
@@ -44,7 +47,34 @@ vi.mock("@/lib/redux/hooks", () => ({
     selector({ appSettings: { browserPanelWidth: 520 } }),
 }));
 
+vi.mock("@/lib/redux/api", () => ({
+  useGetRunByIdQuery: (runId: string) => ({ currentData: { id: runId, title: runId, goal: null } }),
+}));
+vi.mock("./chat-actions-menu", () => ({
+  ChatActionsMenu: () => createElement("button", null, "Chat options"),
+}));
+
 import { BrowserPanel } from "./browser-panel";
+
+function ConversationBrowser({ title, enabled }: { title: string; enabled: boolean }) {
+  const header = useMemo(() => enabled
+    ? createElement(ChatHeader, { runId: title, variant: "codex" })
+    : createElement("div", null, "Code workspace tabs"), [title, enabled]);
+  useSetMainHeader(header, enabled && !mocks.expanded);
+  const browserTabsInHeader = enabled && mocks.expanded;
+  const mainProps: Omit<ComponentProps<typeof MainContent>, "children"> = {
+    marginLeft: "22rem",
+    marginRight: browserTabsInHeader ? "0.375rem" : "38rem",
+    browserOpen: true,
+    browserTabsInHeader,
+    headerHidden: mocks.expanded && !enabled,
+  };
+  return createElement(Fragment, null,
+    createElement(MainContent, mainProps as ComponentProps<typeof MainContent>,
+      createElement("div", null, "Chat transcript")),
+    createElement(BrowserPanel, { tabsInMainHeader: browserTabsInHeader }),
+  );
+}
 
 class ResizeObserverStub {
   observe() {}
@@ -128,7 +158,7 @@ describe("BrowserPanel browser menu", () => {
     });
 
     const { unmount } = render(createElement(BrowserPanel));
-    await screen.findByRole("button", { name: "Open New tab" });
+    await screen.findByRole("tab", { name: "New tab" });
     const expand = screen.getByRole("button", { name: "Expand browser" });
     const close = screen.getByRole("button", { name: "Close browser" });
     expect(expand.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -138,7 +168,7 @@ describe("BrowserPanel browser menu", () => {
     unmount();
     mocks.expanded = true;
     const { rerender } = render(createElement(BrowserPanel));
-    await screen.findByRole("button", { name: "Open New tab" });
+    await screen.findByRole("tab", { name: "New tab" });
     expect(screen.getByRole("complementary", { name: "Embedded browser" }).getAttribute("style"))
       .toContain("calc(100% - var(--content-left)");
     expect(screen.getByRole("button", { name: "Restore browser panel" })).toBeTruthy();
@@ -176,7 +206,7 @@ describe("BrowserPanel browser menu", () => {
     });
 
     render(createElement(BrowserPanel));
-    fireEvent.click(await screen.findByRole("button", { name: "Open Second tab" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "Second tab" }));
     const address = screen.getByRole("combobox", { name: "Search or enter address" });
     fireEvent.change(address, { target: { value: "https://mains.dev" } });
     fireEvent.keyDown(address, { key: "Enter" });
@@ -185,6 +215,62 @@ describe("BrowserPanel browser menu", () => {
     expect(api.activateTab).toHaveBeenCalledWith("second");
     expect(api.navigate).toHaveBeenCalledWith("https://mains.dev");
     expect(api.createTab).toHaveBeenCalled();
+    expect(mocks.setChatVisible).not.toHaveBeenCalled();
+  });
+
+  it("keeps one chat tab with its options beside the browser tabs while floating chat stays mounted", async () => {
+    mocks.expanded = true;
+    const api = createBrowserApi();
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { browser: api, app: { onFullscreenChange: () => () => {} } },
+    });
+    const content = (title: string, enabled = true) => createElement(
+      MainHeaderProvider,
+      null,
+      createElement(ConversationBrowser, { title, enabled }),
+    );
+    const view = render(content("First chat"));
+    const tabs = await screen.findByRole("tablist", { name: "Browser tabs" });
+    const chatStage = screen.getByLabelText("Browser chat");
+    for (const title of ["First chat", "Second chat"]) {
+      view.rerender(content(title));
+      const chatTab = screen.getByRole("tab", { name: title });
+      const actions = screen.getByRole("button", { name: "Chat options" });
+      const panel = screen.getByRole("complementary", { name: "Embedded browser" });
+      expect(chatTab.closest("main")).toBeTruthy();
+      expect(chatTab.getAttribute("aria-selected")).toBe("false");
+      expect(chatTab.contains(actions)).toBe(true);
+      expect(screen.getAllByRole("tablist", { name: "Chat tabs" })).toHaveLength(1);
+      expect(screen.getByRole("tab", { name: "New tab" }).getAttribute("aria-selected")).toBe("true");
+      expect(tabs.closest("main")).toBe(chatTab.closest("main"));
+      expect(panel.contains(chatTab)).toBe(false);
+      expect(panel.contains(tabs)).toBe(false);
+      expect(panel.style.top).toBe("var(--shell-header-height)");
+      expect(chatTab.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(actions.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getByLabelText("Browser chat")).toBe(chatStage);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Chat options" }));
+    expect(mocks.toggleExpanded).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("tab", { name: "Second chat" }));
+    expect(mocks.toggleExpanded).toHaveBeenCalledTimes(1);
+
+    // Code keeps its existing browser-only toolbar, including floating chat.
+    view.rerender(content("Second chat", false));
+    expect(screen.queryByRole("tab", { name: "Second chat" })).toBeNull();
+    expect(screen.getByRole("tablist", { name: "Browser tabs" }).closest("[data-browser-panel]")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Chat options" })).toBeNull();
+    expect(screen.getByLabelText("Browser chat")).toBe(chatStage);
+
+    // Docked panels leave the single conversation tab in the main header.
+    mocks.expanded = false;
+    view.rerender(content("Second chat"));
+    const restoredChatTab = screen.getByRole("tab", { name: "Second chat" });
+    expect(restoredChatTab.closest("main")).toBeTruthy();
+    expect(restoredChatTab.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tablist", { name: "Browser tabs" }).closest("[data-browser-panel]")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chat options" }).closest("main")).toBeTruthy();
     expect(mocks.setChatVisible).not.toHaveBeenCalled();
   });
 
@@ -211,7 +297,7 @@ describe("BrowserPanel browser menu", () => {
     });
 
     render(createElement(BrowserPanel));
-    await screen.findByRole("button", { name: "Open New tab" });
+    await screen.findByRole("tab", { name: "New tab" });
 
     fireEvent.click(screen.getByRole("button", { name: "Open browser menu" }));
 
@@ -279,7 +365,7 @@ describe("BrowserPanel browser menu", () => {
     const input = await screen.findByRole("combobox", {
       name: "Search or enter address",
     });
-    await screen.findByRole("button", { name: "Open New tab" });
+    await screen.findByRole("tab", { name: "New tab" });
     await waitFor(() => expect(api.getHistory).toHaveBeenCalled());
 
     await user.click(input);
@@ -407,7 +493,7 @@ describe("BrowserPanel browser menu", () => {
     });
 
     render(createElement(BrowserPanel));
-    await screen.findByRole("button", { name: "Open Mains" });
+    await screen.findByRole("tab", { name: "Mains" });
     await user.click(
       screen.getByRole("combobox", { name: "Search or enter address" }),
     );

@@ -84,8 +84,35 @@ describe("Codex app extension sessions", () => {
       home: { ...inventory[0].tools.home!, title: "Boards", icons: [{ src: "https://example.com/tool.svg", theme: "dark" }] },
     } } as unknown as McpServerStatus;
     expect(installedMcpAppEntrypoints(discoverMcpAppEntrypoints([status]), [{ ...source, connectorIds: [] }])[0]).toMatchObject({
-      name: "Boards", icons: [{ src: "https://example.com/tool.svg", theme: "dark" }],
+      name: "Boards", icons: [{ src: "https://example.com/tool.svg", theme: "dark" }, { src: "https://example.com/plugin.svg" }],
     });
+  });
+
+  it("preserves SVG logos and their themes alongside raster tool and composer icons", () => {
+    const source = {
+      plugin: { id: "plugin@marketplace", installed: true, enabled: true,
+        interface: { composerIcon: "https://example.com/composer.png", logo: "https://example.com/light.svg",
+          logoDark: "https://example.com/dark.svg" } } as PluginInfo,
+      connectorIds: ["tldraw"], mcpServers: [],
+    };
+    const entries = discoverMcpAppEntrypoints(inventory);
+    entries[0].icons = [{ src: "https://example.com/tool.png", mimeType: "image/png" }];
+    expect(installedMcpAppEntrypoints(entries, [source])[0].icons).toEqual([
+      { src: "https://example.com/tool.png", mimeType: "image/png" },
+      { src: "https://example.com/composer.png" },
+      { src: "https://example.com/light.svg", theme: "light" },
+      { src: "https://example.com/dark.svg", theme: "dark" },
+    ]);
+  });
+  it("keeps an opaque SVG URL's MIME type when the plugin repeats it as its logo", () => {
+    const entry = discoverMcpAppEntrypoints(inventory)[0];
+    entry.icons = [{ src: "https://example.com/asset/123", mimeType: "image/svg+xml" }];
+    const source = {
+      plugin: { id: "plugin@marketplace", installed: true, enabled: true,
+        interface: { logo: "https://example.com/asset/123" } } as PluginInfo,
+      connectorIds: ["tldraw"], mcpServers: [],
+    };
+    expect(installedMcpAppEntrypoints([entry], [source])[0].icons).toEqual(entry.icons);
   });
 
   it("opens isolated MCP threads without starting model turns and maps bare UI tool names", async () => {

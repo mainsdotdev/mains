@@ -3,6 +3,7 @@
 import { createElement } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { McpAppToolOpenerProvider } from "@/hooks/use-mcp-app-tool-opener";
 
 vi.mock("./mcp-app-display", () => ({
   McpAppDisplay: ({ app }: { app: { resourceUri: string } }) =>
@@ -21,9 +22,10 @@ const flightApp = {
 };
 
 describe("McpDisplay", () => {
-  it("shows a provider-authored MCP App without requiring the JSON details to expand", () => {
+  it("offers the app panel without embedding the provider UI or requiring JSON details to expand", () => {
+    const openTool = vi.fn();
     render(
-      createElement(McpDisplay, {
+      createElement(McpAppToolOpenerProvider, { openTool }, createElement(McpDisplay, {
         displayName: "Skyscanner flights search",
         icon: createElement("span", null, "icon"),
         params: { origin: "TYO", destination: "SEL" },
@@ -35,12 +37,14 @@ describe("McpDisplay", () => {
           resourceUri: "ui://widgets/flights.html",
           originCallId: "call-1",
         },
-      }),
+      })),
     );
 
-    expect(screen.getByTestId("mcp-app-host").textContent).toBe(
-      "ui://widgets/flights.html",
-    );
+    expect(screen.queryByTestId("mcp-app-host")).toBeNull();
+    expect(openTool).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Open Skyscanner flights search in app panel" }));
+    expect(openTool).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1",
+      app: expect.objectContaining({ resourceUri: "ui://widgets/flights.html", originCallId: "call-1" }) }));
   });
 
   it.each([
@@ -67,6 +71,7 @@ describe("McpDisplay", () => {
     }));
 
     expect(screen.queryByTestId("mcp-app-host")).toBeNull();
+    expect(screen.queryByRole("button", { name: /in app panel/ })).toBeNull();
     expect(screen.getByText("Turkish airlines searched flights")).toBeTruthy();
   });
 
@@ -85,6 +90,7 @@ describe("McpDisplay", () => {
     fireEvent.click(screen.getByRole("button", { name: /Turkish airlines searched flights/i }));
     expect(screen.getByText(/Unable to process your transaction/)).toBeTruthy();
     expect(screen.queryByTestId("mcp-app-host")).toBeNull();
+    expect(screen.queryByRole("button", { name: /in app panel/ })).toBeNull();
   });
 
   it("waits for a successful call to finish before opening its app", () => {
@@ -98,5 +104,6 @@ describe("McpDisplay", () => {
     }));
 
     expect(screen.queryByTestId("mcp-app-host")).toBeNull();
+    expect(screen.queryByRole("button", { name: /in app panel/ })).toBeNull();
   });
 });

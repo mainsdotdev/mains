@@ -16,6 +16,7 @@ import {
   type ContextCodeItem,
   type ContextItem,
 } from "./composer-context";
+import { mcpAppContextPayload } from "./mcp-app-context";
 
 export type Attachments = Array<{
   name: string;
@@ -237,14 +238,17 @@ export function buildRunContextPayload(
     browserSelections,
     appshots,
     codeSelections,
+    mcpApps,
   } = groupContextItems(items ?? []);
 
   const capturedWindows = appshotsToPayload(appshots);
   const browser = browserSelectionsToPayload(browserSelections);
+  const apps = mcpAppContextPayload(mcpApps);
   const initialContext = [
     ...capturedWindows.initialContext,
     ...browser.initialContext,
     ...codeSelectionsToContext(codeSelections),
+    ...apps.initialContext,
   ];
 
   return {
@@ -252,6 +256,7 @@ export function buildRunContextPayload(
       ...(uploads ?? []),
       ...capturedWindows.attachments,
       ...browser.attachments,
+      ...apps.attachments,
     ]),
     initialContext,
     contextIssues: orUndefined(

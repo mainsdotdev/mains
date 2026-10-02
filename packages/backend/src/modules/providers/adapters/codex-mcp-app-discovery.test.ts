@@ -3,10 +3,10 @@ import { createCodexCapabilities } from "./codex-capabilities";
 import { createCodexMcpApps } from "./codex-mcp-apps";
 import type { CodexAppServer } from "./codex-app-server.client";
 
-function fixture(marketplacePath: string | null = null) {
+function fixture(marketplacePath: string | null = null, iconUrls: { composerIconUrl?: string; logoUrl?: string; logoUrlDark?: string } = {}) {
   const plugin = { id: "canvas@remote", name: "canvas", remotePluginId: "remote-canvas",
     installed: true, enabled: true, source: { type: "remote" },
-    interface: { displayName: "Canvas", composerIconUrl: "https://example.com/canvas.svg" },
+    interface: { displayName: "Canvas", composerIconUrl: "https://example.com/canvas.svg", ...iconUrls },
   };
   let owner = "canvas-connector";
   const sendRequest = vi.fn(async (method: string, params?: any, _timeoutMs?: number) => {
@@ -101,6 +101,16 @@ describe("installed MCP App discovery", () => {
     const { capabilities, setOwner } = fixture();
     setOwner("other-connector");
     expect(await capabilities.listMcpAppEntrypoints()).toEqual([]);
+  });
+
+  it("carries remote SVG logo variants through installed-plugin discovery", async () => {
+    const { capabilities } = fixture(null, { composerIconUrl: "https://example.com/composer.png",
+      logoUrl: "https://example.com/light.svg", logoUrlDark: "https://example.com/dark.svg" });
+    expect(await capabilities.listMcpAppEntrypoints()).toMatchObject([{
+      icons: [{ src: "https://example.com/composer.png" },
+        { src: "https://example.com/light.svg", theme: "light" },
+        { src: "https://example.com/dark.svg", theme: "dark" }],
+    }]);
   });
 
   it("rediscovers ownership after enablement changes and finds plugins with unrelated display names", async () => {

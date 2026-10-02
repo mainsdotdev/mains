@@ -1,5 +1,6 @@
 import type { Space } from "./space";
 import type { FloatingChatMode } from "./floating-chat";
+import type { McpAppToolOpen } from "@mains/contracts/mcp-apps";
 
 export interface BrowserChatUpload {
   name: string;
@@ -43,6 +44,7 @@ export type BrowserChatAction =
   | { type: "draft"; ownerKey: string; draft: string }
   | { type: "model"; providerId: string; model: string }
   | { type: "selectRun"; ownerKey: string; runId: string }
+  | { type: "openMcpApp"; ownerKey: string; result: McpAppToolOpen; automatic: boolean }
   | { type: "providerChanged"; providerId: string }
   | { type: "uploads"; ownerKey: string; uploads: BrowserChatUpload[] }
   | { type: "contextItems"; ownerKey: string; items: unknown[] };

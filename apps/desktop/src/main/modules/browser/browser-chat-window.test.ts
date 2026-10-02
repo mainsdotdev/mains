@@ -127,6 +127,29 @@ describe("native browser chat window", () => {
     expect((post({ sender: harness.child!.webContents }, { type: "composerHeight", height: Number.NaN }) as { success: boolean }).success).toBe(false);
   });
 
+  it("relays MCP app results only from the floating chat and rejects malformed app requests", () => {
+    registerBrowserChatWindowIpc();
+    browserChatWindow.update({ visible: true,
+      bounds: { x: 0, y: 0, width: 800, height: 600 }, card: { x: 250, y: 300, width: 540, height: 280 } });
+    const post = harness.handlers.get(CHANNELS.browser.chatPostAction)!;
+    const result = { runId: "run-1", title: "MagicPath", input: { projectId: "project-1" }, output: { content: [] },
+      app: { server: "codex_apps", tool: "magicpath.open", resourceUri: "ui://magicpath", originCallId: "call-1",
+        connectorId: "magicpath", linkId: null } };
+    const action = { type: "openMcpApp", ownerKey: "run-owner", result, automatic: true };
+    expect((post({ sender: harness.parent.webContents }, action) as { success: boolean }).success).toBe(false);
+    expect((post({ sender: harness.child!.webContents }, action) as { success: boolean }).success).toBe(true);
+    expect(harness.parent.webContents.send).toHaveBeenCalledWith(CHANNELS.browser.chatAction, action);
+    for (const invalid of [
+      { ...action, automatic: "true" },
+      { ...action, result: { ...result, runId: "" } },
+      { ...action, result: { ...result, input: [] } },
+      { ...action, result: { ...result, app: { ...result.app, resourceUri: "https://example.com" } } },
+      { ...action, result: { ...result, app: { ...result.app, linkId: 123 } } },
+    ]) {
+      expect((post({ sender: harness.child!.webContents }, invalid) as { success: boolean }).success).toBe(false);
+    }
+  });
+
   it("accepts the selected Space in the parent context and rejects a provider mismatch", () => {
     registerBrowserChatWindowIpc();
     const publish = harness.handlers.get(CHANNELS.browser.chatPublishContext)!;

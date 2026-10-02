@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ErrorBoundary, Toaster } from "@/components/ui";
 import { ReduxProvider } from "@/providers/redux-provider";
 import { KeyboardShortcutsProvider } from "@/providers/keyboard-shortcuts-provider";
 import { BrowserChatWindowProvider, useBrowserPanel } from "@/hooks/use-browser-panel";
 import { ActiveSpaceOverrideProvider } from "@/hooks/use-active-space";
+import { McpAppToolOpenerProvider } from "@/hooks/use-mcp-app-tool-opener";
+import type { McpAppToolOpen } from "@mains/contracts/mcp-apps";
 import { WorkspaceProviderPage } from "@/features/workspace/components/workspace-provider-page";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -35,6 +37,9 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useAppDispatch();
+  const openTool = useCallback((result: McpAppToolOpen, automatic = false) => {
+    void window.api.browserChat.postAction({ type: "openMcpApp", ownerKey: context.ownerKey, result, automatic });
+  }, [context.ownerKey]);
 
   useLayoutEffect(() => {
     if (location.pathname !== context.route) navigate(context.route, { replace: true });
@@ -75,11 +80,11 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
   return (
     <BrowserChatWindowProvider context={context}>
       <ChatHost />
-      <Routes>
+      <McpAppToolOpenerProvider openTool={openTool}><Routes>
         <Route path="/code" element={<WorkspaceProviderPage providerId={context.providerId} variant={variant} browserChatOnly />} />
         <Route path="/code/runs/:runId" element={<WorkspaceProviderPage providerId={context.providerId} variant={variant} browserChatOnly />} />
         <Route path="/code/:workspaceId" element={<WorkspaceProviderPage providerId={context.providerId} variant={variant} browserChatOnly />} />
-      </Routes>
+      </Routes></McpAppToolOpenerProvider>
     </BrowserChatWindowProvider>
   );
 }

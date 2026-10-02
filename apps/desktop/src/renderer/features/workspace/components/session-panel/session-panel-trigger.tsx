@@ -49,13 +49,13 @@ export function SessionPanelTrigger({
       aria-label={isOpen ? "Close session details" : "Open session details"}
       tooltip={isOpen ? "Close session details" : "Open session details"}
       tooltipPosition="left"
-      className={`flex items-center rounded-full gap-1 p-1.5 cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-all duration-300 ease-out ${
+      className={`flex items-center rounded-full gap-1 p-1.5 cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-colors duration-300 ease-out ${
         isOpen
           ? "text-primary-900 dark:text-primary-100"
           : "text-primary-700 dark:text-primary-300"
       }`}
     >
-      <Menu className="size-3.75" />
+      <Menu className="size-4" />
     </Button>
   );
 }

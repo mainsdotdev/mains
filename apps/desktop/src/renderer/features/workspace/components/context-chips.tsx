@@ -1,5 +1,5 @@
 import { useComposerContext } from "@/features/workspace/hooks/use-composer-context";
-import { Close } from "@/components/ui/icons";
+import { Close, Plugin } from "@/components/ui/icons";
 import { ProviderIcon } from "./provider-icon";
 import { Button } from "@/components/ui";
 
@@ -13,12 +13,13 @@ import { Button } from "@/components/ui";
  * chips.
  */
 export function ContextChips() {
-  const { issues, signals, remove } = useComposerContext();
+  const { issues, signals, mcpApps, remove } = useComposerContext();
+  const visibleApps = mcpApps.filter((item) => !item.hidden);
 
   // Only what this row actually draws may open it. Skills are context too, but
   // they appear as chips *inside* the input (`skillChipMap` on RichInputForm),
   // so counting them here opened an empty padded band above the composer.
-  const hasContext = issues.length > 0 || signals.length > 0;
+  const hasContext = issues.length > 0 || signals.length > 0 || visibleApps.length > 0;
 
   return (
     <div
@@ -26,6 +27,15 @@ export function ContextChips() {
     >
       <div className="overflow-hidden min-h-0">
         <div className="flex flex-wrap gap-2 px-4 pt-3 pb-1">
+          {visibleApps.map((item) => (
+            <div key={item.id} className="flex items-center glass-outline glass-outline-soft gap-1.5 px-2 py-1.5 rounded-full text-xs dark:text-primary-300 text-primary-700">
+              <Plugin className="size-4" />
+              <span className="truncate max-w-37.5" title={item.appName}>{item.label}</span>
+              <Button type="button" onClick={() => remove(item)} aria-label={`Remove ${item.label}`} className="flex items-center justify-center rounded-full p-0.5">
+                <Close className="size-3" />
+              </Button>
+            </div>
+          ))}
           {issues.map((issue) => (
             <div
               key={issue.entityId}

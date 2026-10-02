@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent } from "react";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui";
+import { Button, CircleSpinner } from "@/components/ui";
 import {
   Home,
   Plugin,
@@ -21,6 +21,7 @@ import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provi
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 import SpaceSelector from "./space-selector";
 import { useMcpAppExtensions } from "@/hooks/use-mcp-app-extensions";
+import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import { mcpAppPath } from "@/lib/mcp-app-extensions";
 import { McpAppIcon } from "./mcp-app-icon";
 
@@ -61,6 +62,7 @@ export function NavigationRail({
   const homeActive = isWorkspaceRoute(pathname);
   const settingsActive = isSettingsRoute(pathname);
   const { entries: appExtensions } = useMcpAppExtensions();
+  const appPanel = useMcpAppPanel();
   const destinations: Array<{
     label: string; path: string; Icon: typeof Plugin; disabled?: boolean; app?: McpAppEntrypoint;
   }> = [
@@ -117,20 +119,23 @@ export function NavigationRail({
           <Search className="size-5" aria-hidden />
         </Button>
         {destinations.map(({ label, path, Icon, disabled, app }) => {
-          const active = pathname === path || pathname.startsWith(`${path}/`);
+          const active = app && appPanel ? appPanel.isOpen && appPanel.document?.app.id === app.id
+            : pathname === path || pathname.startsWith(`${path}/`);
+          const opening = !!app && appPanel?.opening === app.id;
           return (
             <Button
               key={path}
               variant="bare"
               className={buttonClass(active)}
-              tooltip={disabled ? "Not available for this agent yet." : label}
+              tooltip={disabled ? "Not available for this agent yet." : opening ? `Opening ${label}…` : label}
               tooltipPosition="right"
               aria-label={label}
               aria-current={active ? "page" : undefined}
-              disabled={disabled}
-              onClick={() => navigate(path)}
+              aria-busy={opening || undefined}
+              disabled={disabled || opening}
+              onClick={() => { if (app && appPanel) void appPanel.openGlobal(app); else navigate(path); }}
             >
-              {app ? <McpAppIcon icons={app.icons} isDarkMode={isDarkMode} /> : <Icon
+              {opening ? <CircleSpinner className="size-5" /> : app ? <McpAppIcon icons={app.icons} isDarkMode={isDarkMode} tool={app.tool} monochrome /> : <Icon
                 className={`size-5 ${label === "Plugins" ? "-rotate-45" : ""}`}
                 aria-hidden
               />}

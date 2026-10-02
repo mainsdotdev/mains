@@ -20,6 +20,7 @@ import {
 import { useAppSelector } from "@/lib/redux/hooks";
 import { useGetRunByIdQuery } from "@/lib/redux/api";
 import { useModeConfig } from "@/hooks/use-mode-config";
+import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import { isRunTab } from "../lib/repo-utils";
 import { useChatActions } from "../hooks/use-chat-actions";
 
@@ -50,14 +51,14 @@ function MenuSeparator() {
 }
 
 /**
- * Everything the open chat can have done to it, from the window's top-right —
- * the sidebar row's menu reachable without hunting for the row, and the only
- * one at all in Work and Chat, where there is no tab strip to hang it on.
+ * Everything the open chat can have done to it, from the window's top bar —
+ * the sidebar row's menu reachable without hunting for the row. Work and Chat
+ * place the trigger inside their single conversation tab.
  *
  * Renders nothing in Code: that mode's runs belong to a workspace, whose own
  * menus already own these verbs.
  */
-export function ChatActionsMenu() {
+export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boolean }) {
   const { mode } = useModeConfig();
   const titleId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -67,6 +68,7 @@ export function ChatActionsMenu() {
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  useSuppressBrowserView(aboveBrowser && isMenuOpen);
 
   // The open tab, with none of the session panel's fallback to the run a file
   // was opened from: this menu acts on the chat in front of the user, and an
@@ -131,12 +133,12 @@ export function ChatActionsMenu() {
       <Button
         ref={triggerRef}
         tooltip="Chat options"
-        tooltipPosition="left"
+        tooltipPosition="bottom"
         onClick={openMenu}
         aria-label="Chat options"
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
-        className="flex items-center rounded-full p-1.5 cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-all duration-300 ease-out"
+        className="relative z-(--z-panel-toggle) flex shrink-0 items-center rounded-full p-1.5 cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-all duration-300 ease-out"
       >
         <Option className="size-3.75" />
       </Button>
@@ -146,6 +148,7 @@ export function ChatActionsMenu() {
         position={menuPosition}
         minWidth={MENU_WIDTH}
         origin="top-right"
+        className={aboveBrowser ? "z-10000" : undefined}
         onClose={() => setIsMenuOpen(false)}
       >
         <DropdownMenuItem onClick={act(() => setRenameDraft(label))}>

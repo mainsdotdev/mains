@@ -1890,6 +1890,7 @@ export interface PluginInterface {
   brandColor?: string;
   composerIcon?: string;
   logo?: string;
+  logoDark?: string;
   screenshots: string[];
   privacyPolicyUrl?: string;
   termsOfServiceUrl?: string;

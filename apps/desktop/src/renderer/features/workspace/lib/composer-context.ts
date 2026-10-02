@@ -1,8 +1,8 @@
 /**
  * Everything the composer can attach to the next message, as one tagged union.
  *
- * The seven kinds — files, issues, signals, skills, browser selections,
- * Appshots, and code selections — are one concept ("what this message carries
+ * Files, issues, signals, skills, browser selections, Appshots, code selections,
+ * and MCP app context are one concept ("what this message carries
  * besides its text"), but they used to be separate state fields and props.
  * Nothing forced them to stay in step, so
  * they drifted: the browser-selection type existed in two copies and the second
@@ -18,6 +18,7 @@
 
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { AppshotCapture } from "../../../../shared/appshots";
+import type { McpAppContextBlock } from "./mcp-app-context";
 
 export interface ContextIssue {
   entityId: string;
@@ -94,6 +95,17 @@ export type ContextSkillItem = { kind: "skill" } & ContextSkill;
 export type ContextBrowserItem = { kind: "browser" } & ContextBrowserSelection;
 export type ContextAppshotItem = { kind: "appshot" } & AppshotCapture;
 export type ContextCodeItem = { kind: "code" } & ContextCodeSelection;
+export interface ContextMcpAppItem {
+  kind: "mcp-app";
+  id: string;
+  sessionId: string;
+  appName: string;
+  updateId: string;
+  label: string;
+  hidden: boolean;
+  block?: McpAppContextBlock;
+  structuredContent?: Record<string, unknown>;
+}
 
 export type ContextItem =
   | ContextFileItem
@@ -102,7 +114,8 @@ export type ContextItem =
   | ContextSkillItem
   | ContextBrowserItem
   | ContextAppshotItem
-  | ContextCodeItem;
+  | ContextCodeItem
+  | ContextMcpAppItem;
 
 export type ContextKind = ContextItem["kind"];
 
@@ -124,6 +137,7 @@ export function contextItemKey(item: ContextItem): string {
     case "browser":
     case "appshot":
     case "code":
+    case "mcp-app":
       return item.id;
   }
 }
@@ -155,6 +169,7 @@ export interface GroupedContext {
   readonly browserSelections: readonly ContextBrowserItem[];
   readonly appshots: readonly ContextAppshotItem[];
   readonly codeSelections: readonly ContextCodeItem[];
+  readonly mcpApps: readonly ContextMcpAppItem[];
 }
 
 type MutableGroupedContext = {
@@ -174,6 +189,7 @@ const EMPTY_GROUPED: GroupedContext = Object.freeze({
   browserSelections: [],
   appshots: [],
   codeSelections: [],
+  mcpApps: [],
 });
 
 /**
@@ -192,6 +208,7 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
     browserSelections: [],
     appshots: [],
     codeSelections: [],
+    mcpApps: [],
   };
   for (const item of items) {
     switch (item.kind) {
@@ -215,6 +232,9 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
         break;
       case "code":
         grouped.codeSelections.push(item);
+        break;
+      case "mcp-app":
+        grouped.mcpApps.push(item);
         break;
     }
   }

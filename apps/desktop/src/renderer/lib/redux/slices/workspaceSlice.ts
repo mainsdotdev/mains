@@ -92,6 +92,8 @@ export interface WorkspaceState {
   composerContextReady: boolean;
   contextItemsByKey: Record<string, ContextItem[]>;
   draftTextByKey: Record<string, string>;
+  /** The conversation opened from each plugin page, scoped to backend/space/app. */
+  mcpAppRunIdByKey: Record<string, string>;
   openIssueTabs: IssueWithEntity[];
   openSignalTabs: SignalWithEntity[];
   openNoteTabs: ReviewTab[];
@@ -143,6 +145,7 @@ const initialState: WorkspaceState = {
   composerContextReady: false,
   contextItemsByKey: {},
   draftTextByKey: {},
+  mcpAppRunIdByKey: {},
   openIssueTabs: [],
   openSignalTabs: [],
   openNoteTabs: [],
@@ -183,6 +186,9 @@ function restoreWorkspaceView(state: WorkspaceState, view?: WorkspaceViewSnapsho
 }
 
 function detachRunFromViews(state: WorkspaceState, backendId: string, runId: string): void {
+  for (const [key, id] of Object.entries(state.mcpAppRunIdByKey)) {
+    if (id === runId && viewKeyBelongsToBackend(key, backendId)) delete state.mcpAppRunIdByKey[key];
+  }
   for (const [key, view] of Object.entries(state.workspaceViews)) {
     if (!viewKeyBelongsToBackend(key, backendId)) continue;
     if (view.activeTab === runId) view.activeTab = "editor";
@@ -244,6 +250,10 @@ const workspaceSlice = createSlice({
     setDraftText: (state, action: PayloadAction<{ key: string; text: string }>) => {
       if (action.payload.text) state.draftTextByKey[action.payload.key] = action.payload.text;
       else delete state.draftTextByKey[action.payload.key];
+    },
+    setMcpAppRunId: (state, action: PayloadAction<{ key: string; runId: string | null }>) => {
+      if (action.payload.runId) state.mcpAppRunIdByKey[action.payload.key] = action.payload.runId;
+      else delete state.mcpAppRunIdByKey[action.payload.key];
     },
     detachArchivedRun: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
       detachRunFromViews(state, action.payload.backendId, action.payload.runId);
@@ -385,6 +395,18 @@ const workspaceSlice = createSlice({
       state.contextItemsByKey[key] = items;
       if (key === state.composerContextKey) state.contextItems = items;
     },
+    /** An app update replaces only the previous context from that app instance. */
+    replaceMcpAppContext: (
+      state,
+      action: PayloadAction<{ key: string; sessionId: string; items: ContextItem[] }>,
+    ) => {
+      const { key, sessionId, items } = action.payload;
+      const current = key === state.composerContextKey ? state.contextItems : state.contextItemsByKey[key] ?? [];
+      const next = [...current.filter((item) => item.kind !== "mcp-app" || item.sessionId !== sessionId),
+        ...items.filter((item) => item.kind === "mcp-app" && item.sessionId === sessionId)];
+      state.contextItemsByKey[key] = next;
+      if (key === state.composerContextKey) state.contextItems = next;
+    },
     /**
      * Detach by kind + key rather than by object identity: the caller usually
      * holds a copy from a render, not the instance in the store.
@@ -394,9 +416,17 @@ const workspaceSlice = createSlice({
       action: PayloadAction<{ kind: ContextKind; key: string }>,
     ) => {
       const { kind, key } = action.payload;
+      const removed = state.contextItems.find((item) => item.kind === kind && contextItemKey(item) === key);
       state.contextItems = state.contextItems.filter(
         (item) => item.kind !== kind || contextItemKey(item) !== key,
       );
+      if (removed?.kind === "mcp-app") {
+        for (const item of state.contextItems) {
+          if (item.kind === "mcp-app" && item.sessionId === removed.sessionId) {
+            item.updateId = `${removed.updateId}:removed:${removed.id}`;
+          }
+        }
+      }
       state.contextItemsByKey[state.composerContextKey] = state.contextItems;
     },
     clearContextItems: (state) => {
@@ -514,6 +544,8 @@ export const {
   activateWorkspaceView,
   setComposerContextKey,
   setDraftText,
+  setMcpAppRunId,
+  replaceMcpAppContext,
   forgetRunUiState,
   detachArchivedRun,
   forgetWorkspaceUiState,

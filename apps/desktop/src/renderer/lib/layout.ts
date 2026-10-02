@@ -43,6 +43,8 @@ export const LAYOUT_PANEL_ANIM_MS = 150;
 export const SIDEBAR_WIDTH_VAR = "--sidebar-width";
 export const NAV_RAIL_WIDTH = "var(--nav-rail-width)";
 export const PANEL_WIDTH_VAR = "--panel-width";
+/** Live width of the fixed titlebar controls, reserved by the browser tabs. */
+export const LAYOUT_TOGGLE_WIDTH_VAR = "--layout-toggle-width";
 
 export const SIDEBAR_WIDTH_DEFAULT = 288; // 18rem
 export const SIDEBAR_WIDTH_MIN = 244;
@@ -56,6 +58,8 @@ export const BROWSER_PANEL_WIDTH_VAR = "--browser-panel-width";
 export const BROWSER_PANEL_WIDTH_DEFAULT = 608; // 38rem
 export const BROWSER_PANEL_WIDTH_MIN = 420;
 export const BROWSER_PANEL_WIDTH_MAX = 1260;
+/** App previews use the browser's width range with an independent live width. */
+export const MCP_APP_PANEL_WIDTH_VAR = "--mcp-app-panel-width";
 
 /**
  * Gap left on either side of the session panel — between it and whatever panel

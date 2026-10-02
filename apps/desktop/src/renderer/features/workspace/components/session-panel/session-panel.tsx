@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
+import { useListProjectsQuery, useListWorkspacesQuery } from "@/lib/redux/api";
 import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { useIsMobile } from "@/lib/platform";
@@ -64,6 +65,11 @@ export function SessionPanel({
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   const { showGitActions, showSources, showDeliverables } = useModeConfig();
   const showEnvironment = showGitActions && !!activeWorkspaceId;
+  const { data: workspaces = [] } = useListWorkspacesQuery(undefined, { skip: !showEnvironment });
+  const { data: projects = [] } = useListProjectsQuery(undefined, { skip: !showEnvironment });
+  const workspace = workspaces.find((item) => item.id === activeWorkspaceId);
+  const project = projects.find((item) => item.id === workspace?.projectId);
+  const repositoryName = project?.name ?? workspace?.rootPath.split("/").filter(Boolean).at(-1) ?? "Repository";
   const showRunResources = showSources && !!runId;
   const hasContent = showEnvironment || showRunResources;
 
@@ -145,9 +151,10 @@ export function SessionPanel({
               size="xs"
               tone="subtle"
               weight="medium"
-              className="px-2 pb-1 pt-2"
+              className="truncate px-2 pb-1 pt-2"
+              title={repositoryName}
             >
-              Environment
+              {repositoryName}
             </Text>
             <GitActionsSection
               providerId={providerId}

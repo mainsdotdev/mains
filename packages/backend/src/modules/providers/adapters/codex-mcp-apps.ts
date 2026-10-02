@@ -87,8 +87,19 @@ export function installedMcpAppEntrypoints(
         ? entry.pluginId === plugin.id
         : entry.connectorId ? connectorIds.includes(entry.connectorId) : mcpServers.includes(entry.server)));
     if (!owner) return [];
-    const icon = owner.plugin.interface?.composerIcon ?? owner.plugin.interface?.logo;
-    return [{ ...entry, pluginId: owner.plugin.id, icons: entry.icons ?? (icon ? [{ src: icon }] : undefined) }];
+    const ui = owner.plugin.interface;
+    const pluginIcons: McpAppIcon[] = [
+      ...(ui?.composerIcon ? [{ src: ui.composerIcon }] : []),
+      ...(ui?.logo ? [{ src: ui.logo, ...(ui.logoDark ? { theme: "light" as const } : {}) }] : []),
+      ...(ui?.logoDark ? [{ src: ui.logoDark, theme: "dark" as const }] : []),
+    ];
+    // Retain alternatives so the renderer can prefer SVG and recover from a
+    // failed image without dropping an app's tool/server branding.
+    const candidates = [...(entry.icons ?? []), ...pluginIcons];
+    const availableIcons = candidates.filter((icon, index) => candidates.findIndex(
+      (candidate) => candidate.src === icon.src && candidate.theme === icon.theme,
+    ) === index);
+    return [{ ...entry, pluginId: owner.plugin.id, icons: availableIcons.length ? availableIcons : undefined }];
   });
 }
 

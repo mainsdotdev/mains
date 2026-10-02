@@ -45,7 +45,10 @@ export function useWorkspaceRuns(
   routeRunId?: string,
   /** Workspaces the user can switch to next; their run lists are fetched ahead. */
   prefetchWorkspaceIds: readonly string[] = NO_WORKSPACE_IDS,
+  /** Embedded app conversations own their selection without changing workspace tabs. */
+  options: { selection?: "workspace" | "local" } = {},
 ) {
+  const publishSelection = options.selection !== "local";
   const [runs, setRuns] = useState<Run[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [runEvents, setRunEvents] = useState<Record<string, RunEvent[]>>({});
@@ -58,7 +61,7 @@ export function useWorkspaceRuns(
   // Which run a jump asked for, held in a ref: the mount effect depends on
   // `loadWorkspaceRuns`, so reading this from state would re-clear the page
   // every time the request is set or consumed.
-  const pendingRunId = useAppSelector((s) => s.workspace.pendingRunId);
+  const pendingRunId = useAppSelector((s) => publishSelection ? s.workspace.pendingRunId : null);
   const pendingRunIdRef = useRef(pendingRunId);
   useEffect(() => {
     pendingRunIdRef.current = pendingRunId;
@@ -307,14 +310,14 @@ export function useWorkspaceRuns(
         setRuns([run]);
         setActiveRunId(run.id);
         if (pendingRunIdRef.current === run.id) dispatch(clearPendingRunId());
-        dispatch(setActiveTab(run.id));
+        if (publishSelection) dispatch(setActiveTab(run.id));
         await loadRunDetails(run.id);
       } catch (err) {
         console.error("Failed to load routed run:", err);
         if (isCurrent()) setLoadedKey(`run:${runId}`);
       }
     },
-    [providerId, mode, dispatch, loadRunDetails],
+    [providerId, mode, dispatch, loadRunDetails, publishSelection],
   );
 
   // The render-time swap above already put the remembered list on screen;

@@ -45,6 +45,7 @@ export const workspacePersistConfig = {
     "openNoteTabs",
     "composerContextKey",
     "draftTextByKey",
+    "mcpAppRunIdByKey",
     "selectedCollectionId",
   ],
 };

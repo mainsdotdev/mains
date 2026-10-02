@@ -19,6 +19,27 @@ export interface McpAppEntrypoint {
   preferredModelDisplayMode: "inline" | "fullscreen";
 }
 
+/** The completed tool call that owns an app resource and its UI result. */
+export interface McpAppToolMetadata {
+  server: string;
+  tool: string;
+  resourceUri: string;
+  originCallId?: string;
+  connectorId?: string;
+  linkId?: string | null;
+  appName?: string;
+  actionName?: string;
+  preferredModelDisplayMode?: "inline" | "fullscreen";
+}
+
+export interface McpAppToolOpen {
+  runId: string;
+  app: McpAppToolMetadata;
+  input?: Record<string, unknown> | null;
+  output: unknown;
+  title: string;
+}
+
 export interface OpenMcpAppExtensionPayload {
   providerId: string;
   entrypointId: string;

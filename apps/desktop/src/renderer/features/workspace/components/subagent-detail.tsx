@@ -5,7 +5,7 @@ import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import { agentMarkdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
-import { Check, Close, Minimize, Stop } from "@/components/ui/icons";
+import { Check, Close, MinimizeView, Stop } from "@/components/ui/icons";
 import { AgentGlyph, Button, Text } from "@/components/ui";
 import {
   useGetRunArtifactsQuery,
@@ -151,7 +151,7 @@ export function SubagentDetail({
           aria-label="Back to subagents"
           className="shrink-0 rounded-md p-0.5 text-primary-600 transition-colors hover:bg-primary-50 hover:text-primary-900 dark:text-primary-400 dark:hover:bg-primary/5 dark:hover:text-primary-100"
         >
-          <Minimize className="size-4 scale-x-[-1] text-primary-700 dark:text-primary-300 " />
+          <MinimizeView className="size-4 scale-x-[-1] text-primary-700 dark:text-primary-300 " />
         </Button>
       </div>
 

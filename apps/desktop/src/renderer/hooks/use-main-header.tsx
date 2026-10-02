@@ -9,18 +9,23 @@ const DEFAULT_STATE: MainHeaderState = { header: null, firstTabActive: false };
 
 interface MainHeaderContextType extends MainHeaderState {
   setMainHeader: (state: MainHeaderState) => void;
+  browserTabsHost: HTMLDivElement | null;
+  setBrowserTabsHost: (host: HTMLDivElement | null) => void;
 }
 
 const MainHeaderContext = createContext<MainHeaderContextType>({
   ...DEFAULT_STATE,
   setMainHeader: () => {},
+  browserTabsHost: null,
+  setBrowserTabsHost: () => {},
 });
 
 export function MainHeaderProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<MainHeaderState>(DEFAULT_STATE);
+  const [browserTabsHost, setBrowserTabsHost] = useState<HTMLDivElement | null>(null);
   const setMainHeader = useCallback((s: MainHeaderState) => setState(s), []);
   return (
-    <MainHeaderContext.Provider value={{ ...state, setMainHeader }}>
+    <MainHeaderContext.Provider value={{ ...state, setMainHeader, browserTabsHost, setBrowserTabsHost }}>
       {children}
     </MainHeaderContext.Provider>
   );

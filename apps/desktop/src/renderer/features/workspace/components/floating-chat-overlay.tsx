@@ -9,7 +9,7 @@ import {
   useReducedMotion,
 } from "motion/react";
 import { AsciiSpinner, Button } from "@/components/ui";
-import { Chat, Minimize } from "@/components/ui/icons";
+import { Chat, MinimizeView, Minus } from "@/components/ui/icons";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 
 const CHAT_BAR_SIZE = 48;
@@ -88,6 +88,7 @@ interface FloatingChatOverlayProps {
   onComposerHeightChange?: (height: number) => void;
   composer?: ReactNode;
   children?: ReactNode;
+  actions?: ReactNode;
 }
 
 /** Host supplies chat content and controls; this surface owns its layout and transitions. */
@@ -101,6 +102,7 @@ export function FloatingChatOverlay({
   onComposerHeightChange,
   composer,
   children,
+  actions,
 }: FloatingChatOverlayProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
@@ -293,18 +295,19 @@ export function FloatingChatOverlay({
               pointerEvents: mode === "details" ? "auto" : "none",
             }}
           >
-            <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-primary-200/60 px-3.5 dark:border-primary/5">
+            <div className="flex min-h-12 shrink-0 items-center gap-1 border-b border-primary-200/60 px-3.5 dark:border-primary/5">
               <Button
                 onClick={onMinimize}
                 aria-label="Minimize chat"
                 tooltip="Minimize chat"
                 className="flex size-7 shrink-0 items-center justify-center rounded-full text-primary-600 hover:bg-primary-200/60 hover:text-primary-950 dark:text-primary-300 dark:hover:bg-primary-800 dark:hover:text-primary-50"
               >
-                <Minimize className="size-4 rotate-y-180" />
+                <Minus className="size-3.5 " />
               </Button>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium" title={title}>
+              <span className="min-w-0 flex-1 truncate text-s font-medium" title={title}>
                 {title}
               </span>
+              {actions}
             </div>
             <m.div
               className="flex min-h-0 flex-1 flex-col"

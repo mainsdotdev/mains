@@ -113,6 +113,7 @@ html:not(.app-ready) *::after {
   --shell-header-height: 2.5rem;
   --panel-width: 22rem;
   --browser-panel-width: 38rem;
+  --mcp-app-panel-width: 38rem;
   --session-panel-width: 21rem;
   --drag-region-height: 1rem;
   --dropdown-min-width: 140px;
@@ -123,6 +124,17 @@ html:not(.app-ready) *::after {
   --shadow-inset-toggle: inset 0 0.5px 2px rgba(0, 0, 0, 0.1);
   --shadow-inset-toggle-dark: inset 0 0.5px 2px rgba(0, 0, 0, 0.3);
 
+}
+
+/* The fixed controls follow the browser's layer for its entire mounted
+   lifetime, including the exit animation, without moving into the panel. */
+.app-root:has([data-browser-panel]) [data-layout-toggle] {
+  z-index: var(--z-modal);
+}
+
+/* A first active browser tab at the panel edge joins the content surface. */
+[data-browser-flush-tab-active="true"] + [data-browser-content] {
+  border-top-left-radius: 0;
 }
 
 /* The themeable colours. App themes (lib/app-themes.ts) re-derive the neutral
@@ -214,7 +226,8 @@ body[data-resizing] {
 body[data-resizing] aside,
 body[data-resizing] main,
 body[data-resizing] [data-layout-toggle],
-body[data-resizing] [data-browser-panel] {
+body[data-resizing] [data-browser-panel],
+body[data-resizing] [data-mcp-app-panel] {
   transition: none !important;
 }
 body[data-resizing] iframe {
