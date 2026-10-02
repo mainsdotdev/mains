@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  RightPanelOpen,
-  RightPanelClose,
   Terminal,
   TerminalOpen,
   Web,
+  SidebarClose,
+  SidebarOpen,
 } from "@/components/ui/icons";
 import { Button, toast } from "@/components/ui";
 import { useAppSelector } from "@/lib/redux/hooks";
@@ -116,7 +116,7 @@ export function ToggleButton({
     <div
       data-layout-toggle
       ref={controlsRef}
-      className="pointer-events-none fixed z-(--z-panel-toggle) flex items-center [&>*]:pointer-events-auto"
+      className="pointer-events-none fixed z-(--z-panel-toggle) flex items-center *:pointer-events-auto"
       style={{
         top: "calc(0.4875rem + env(safe-area-inset-top))",
         right: "0.8125rem",
@@ -203,9 +203,9 @@ export function ToggleButton({
             aria-label={isOpen ? "Close right panel" : "Open right panel"}
           >
             {isOpen ? (
-              <RightPanelOpen className="size-4 text-primary-800 dark:text-primary-200" />
+              <SidebarOpen className="size-4 text-primary-800 dark:text-primary-200 rotate-180" />
             ) : (
-              <RightPanelClose className="size-4 text-primary-700 dark:text-primary-300" />
+              <SidebarClose className="size-4 text-primary-700 dark:text-primary-300 rotate-180" />
             )}
           </Button>
         )}

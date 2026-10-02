@@ -265,7 +265,7 @@ function SessionTimeBar({
             onClick={handleFork}
             className="flex items-center gap-1 ml-0.5 hover:text-primary-900 dark:hover:text-primary-100 transition-colors cursor-pointer"
           >
-            <Fork className="size-3.5" />
+            <Fork className="size-3.5 rotate-90" />
           </Button>
         </>
       )}

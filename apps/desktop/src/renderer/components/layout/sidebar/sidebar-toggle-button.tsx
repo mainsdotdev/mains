@@ -49,9 +49,9 @@ export function SidebarToggleButton({
           aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
         >
           {isOpen ? (
-            <SidebarOpen className="size-4 text-primary-800 dark:text-primary-200" />
+            <SidebarOpen className="size-4.5 text-primary-800 dark:text-primary-200" />
           ) : (
-            <SidebarClose className="size-4 text-primary-700 dark:text-primary-300" />
+            <SidebarClose className="size-4.5 text-primary-700 dark:text-primary-300" />
           )}
         </Button>
       </div>

@@ -43,8 +43,8 @@ export function TerminalSection({
       <div className="flex h-full flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
         <div className="flex items-center justify-between px-3 pt-3 pb-1">
           <div className="flex items-center gap-1">
-            <Bash className="size-3.5 text-primary-600 dark:text-primary-400" />
-            <Body size="s" tone="subtle" weight="normal">
+            <Bash className="size-4.5 text-primary-500" />
+            <Body size="s" tone="faint" weight="normal">
               {title}
             </Body>
           </div>
@@ -53,7 +53,7 @@ export function TerminalSection({
               tooltip="Close terminal"
               tooltipPosition="top-left"
               onClick={onClose}
-              className="rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 p-1 text-primary-900 dark:text-primary-100 transition-all duration-300 ease-out"
+              className="rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 p-1 text-primary-500 transition-all duration-300 ease-out"
             >
               <Close className="size-4" />
             </Button>

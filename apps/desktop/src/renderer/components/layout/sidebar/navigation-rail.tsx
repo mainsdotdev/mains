@@ -1,5 +1,5 @@
 import type { CSSProperties, MouseEvent } from "react";
-import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
+import { useSyncExternalStore } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import {
@@ -12,7 +12,11 @@ import {
   Task,
 } from "@/components/ui/icons";
 import { Clock } from "@/components/ui/icons/space";
-import { requestCommandMenu } from "@/features/command-menu/command-menu-bridge";
+import {
+  getCommandMenuOpen,
+  requestCommandMenu,
+  subscribeCommandMenuOpen,
+} from "@/features/command-menu/command-menu-bridge";
 import { useResolvedAppTheme } from "@/hooks/use-app-theme";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import type { Space } from "@/lib/redux/api";
@@ -61,10 +65,14 @@ export function NavigationRail({
   );
   const homeActive = isWorkspaceRoute(pathname);
   const settingsActive = isSettingsRoute(pathname);
+  const commandMenuOpen = useSyncExternalStore(
+    subscribeCommandMenuOpen,
+    getCommandMenuOpen,
+  );
   const { entries: appExtensions } = useMcpAppExtensions();
   const appPanel = useMcpAppPanel();
   const destinations: Array<{
-    label: string; path: string; Icon: typeof Plugin; disabled?: boolean; app?: McpAppEntrypoint;
+    label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
   }> = [
     {
       label: "Plugins",
@@ -73,7 +81,6 @@ export function NavigationRail({
       disabled: !pluginsAvailable,
     },
     ...(showTasks ? [{ label: "Tasks", path: "/tasks", Icon: Task }] : []),
-    ...appExtensions.map((app) => ({ label: app.name, path: mcpAppPath(app), Icon: Plugin, app })),
     { label: "Pulse", path: "/pulse", Icon: Clock },
     { label: "Connect", path: "/relay", Icon: Relay },
   ];
@@ -105,23 +112,23 @@ export function NavigationRail({
           aria-current={homeActive ? "page" : undefined}
           onClick={onHomeClick}
         >
-          <Home className="size-5" aria-hidden />
+          <Home className="size-5" filled={homeActive} aria-hidden />
         </Button>
         <Button
           variant="bare"
-          className={buttonClass(false)}
+          className={buttonClass(commandMenuOpen)}
           tooltip="Search Mains"
           tooltipShortcut={commandMenuShortcut}
           tooltipPosition="right"
           aria-label="Search Mains"
+          aria-haspopup="dialog"
+          aria-expanded={commandMenuOpen}
           onClick={requestCommandMenu}
         >
-          <Search className="size-5" aria-hidden />
+          <Search className="size-5" filled={commandMenuOpen} aria-hidden />
         </Button>
-        {destinations.map(({ label, path, Icon, disabled, app }) => {
-          const active = pathname === path || pathname.startsWith(`${path}/`) ||
-            !!app && !!appPanel?.isOpen && appPanel.document?.app.id === app.id;
-          const opening = !!app && appPanel?.opening === app.id;
+        {destinations.map(({ label, path, Icon, disabled }) => {
+          const active = pathname === path || pathname.startsWith(`${path}/`);
           return (
             <Button
               key={path}
@@ -131,14 +138,41 @@ export function NavigationRail({
               tooltipPosition="right"
               aria-label={label}
               aria-current={active ? "page" : undefined}
-              aria-busy={opening || undefined}
               disabled={disabled}
               onClick={() => navigate(path)}
             >
-              {app ? <McpAppIcon icons={app.icons} isDarkMode={isDarkMode} tool={app.tool} monochrome /> : <Icon
+              <Icon
                 className={`size-5 ${label === "Plugins" ? "-rotate-45" : ""}`}
+                filled={active}
                 aria-hidden
-              />}
+              />
+            </Button>
+          );
+        })}
+        {appExtensions.length > 0 && (
+          <div
+            className="w-8 shrink-0 border-b border-primary-300/50 dark:border-primary-800"
+            aria-hidden="true"
+          />
+        )}
+        {appExtensions.map((app) => {
+          const path = mcpAppPath(app);
+          const active = pathname === path || pathname.startsWith(`${path}/`) ||
+            !!appPanel?.isOpen && appPanel.document?.app.id === app.id;
+          const opening = appPanel?.opening === app.id;
+          return (
+            <Button
+              key={path}
+              variant="bare"
+              className={buttonClass(active)}
+              tooltip={app.name}
+              tooltipPosition="right"
+              aria-label={app.name}
+              aria-current={active ? "page" : undefined}
+              aria-busy={opening || undefined}
+              onClick={() => navigate(path)}
+            >
+              <McpAppIcon icons={app.icons} isDarkMode={isDarkMode} tool={app.tool} monochrome />
             </Button>
           );
         })}
@@ -181,7 +215,7 @@ export function NavigationRail({
           aria-current={settingsActive ? "page" : undefined}
           onClick={onSettingsClick}
         >
-          <Settings className="size-4.5" aria-hidden />
+          <Settings className="size-4.5" filled={settingsActive} aria-hidden />
         </Button>
       </div>
     </aside>

@@ -108,7 +108,7 @@ export function MarkdownLink({
           }
         }}
         title={href}
-        className="inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none bg-primary-50 dark:bg-primary-300/10 text-primary-800 dark:text-primary-200 cursor-pointer hover:bg-primary-200/60 dark:hover:bg-primary-300/20 transition-colors"
+        className="inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none  cursor-pointer text-accent hover:decoration-dotted hover:underline transition-colors"
       >
         <FileIconComponent
           extension={extension}
