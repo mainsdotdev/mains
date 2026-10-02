@@ -1,3 +1,5 @@
+import { insertRunInputArtifact } from "./run-input-artifact";
+import { CHANNELS } from "@mains/contracts/channels";
 import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -19,6 +21,9 @@ import type {
   ReadRunTextFilePayload,
   RunOutputFile,
   RunTextFile,
+  RunSteerPayload,
+  RunSteerResponse,
+  RunInputStatusPayload,
 } from "@mains/contracts/runs";
 import {
   composeConfigSnapshot,
@@ -27,6 +32,7 @@ import {
 } from "../../../shared/mode-harness";
 import {
   createWorkAdapter,
+  emitUserPromptArtifact,
   type WorkRunContextItem,
   type WorkRunAdapter,
   type WorkRunEvent,
@@ -555,6 +561,9 @@ async function syncCodexRunSession(
 // Single-item reads return null for absence; mutations on a missing
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
+// Claims cover async continuation preparation, before a live session exists.
+const continuingRuns = new Set<string>();
+
 export const runsService = {
   // ─── Run Operations ───
   async getAllRuns(limit?: number): Promise<RunResponse[]> {
@@ -1322,153 +1331,237 @@ export const runsService = {
    */
   async continueRun(payload: ContinueRunPayload): Promise<ContinueRunResponse> {
     const { runId, accountId, message, additionalContext } = payload;
-    // Outside the try: its failure path would mark this existing run failed.
-    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+    if (continuingRuns.has(runId)) throw new Error("This conversation is already starting a response.");
+    continuingRuns.add(runId);
     try {
-      const run = await runsRepo.findRunById(runId);
-      if (!run) throw new Error("Run not found");
-      if (run.accountId !== accountId) {
-        throw new Error("Run does not belong to this account");
+      // Preconditions must not mark someone else's live turn failed.
+      const existing = await runsRepo.findRunById(runId);
+      if (!existing) throw new Error("Run not found");
+      if (existing.accountId !== accountId) throw new Error("Run does not belong to this account");
+      if (existing.isArchived) throw new Error("Unarchive this conversation before sending a message.");
+      if (runSessionRegistry.get(runId) || existing.status === "running" || existing.status === "queued") {
+        throw new Error("This conversation already has an active response.");
       }
-
-      const provider = await providersService.getById(run.providerId);
-      if (!provider) {
-        throw new Error(`Provider "${run.providerId}" not found`);
-      }
-      if (!provider.isEnabled) {
-        throw new Error(`Provider "${provider.displayName}" is not enabled`);
-      }
-
-      const workspace = run.workspaceId
-        ? await workspaceService.get(run.workspaceId)
-        : null;
-      if (run.workspaceId && !workspace) {
-        throw new Error("Run workspace no longer exists");
-      }
-      if (workspace) {
-        assertWorkspacePathExists(workspace.rootPath, workspace.name);
-      }
-      const execution = resolveRunExecution({
-        runId,
-        mode: run.mode,
-        workspace,
-      });
-
-      const adapter = createWorkAdapter(provider);
-      if (!adapter.continueRun) {
-        throw new Error("Provider does not support session resumption");
-      }
-      if (adapter.canResumeSession) {
-        const canResume = await adapter.canResumeSession(runId);
-        if (!canResume) {
-          throw new Error("Session cannot be resumed (not found or expired)");
+      const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+      let continuationStarted = false;
+      try {
+        const run = await runsRepo.findRunById(runId);
+        if (!run) throw new Error("Run not found");
+        if (run.accountId !== accountId) {
+          throw new Error("Run does not belong to this account");
         }
-      }
 
-      const existingTurns = await runsRepo.findTurnsByRun(runId);
-      const seedTurnIndex = existingTurns.reduce(
-        (max, t) => Math.max(max, t.turnIndex),
-        -1,
-      );
-      const previousModel = latestKnownModel(existingTurns, run.model);
-
-      const toolPolicy = composeToolPolicy(
-        run.mode,
-        run.toolPolicySnapshot,
-      );
-      const configSnapshot = normalizeAdditionalDirectories(
-        composeConfigSnapshot(run.mode, run.providerId, {
-          ...(run.configSnapshot ?? {}),
-          ...(payload.additionalDirectories !== undefined
-            ? { additionalDirectories: payload.additionalDirectories }
-            : {}),
-        }),
-        run.providerId,
-      );
-
-      if (workspace) {
-        await workspaceService.update(workspace.id, { status: "in_progress" });
-      }
-
-      await runsRepo.updateRun(runId, {
-        status: "running",
-        startedAt: new Date(),
-        endedAt: null,
-        lastError: null,
-        configSnapshot: configSnapshot ?? undefined,
-        toolPolicySnapshot: toolPolicy ?? undefined,
-      });
-
-      const projectInstructions = await buildCollectionSourceInstructions({
-        runId,
-        accountId,
-        collectionId: run.collectionId,
-        cwd: execution.workspaceId ? null : execution.cwd,
-      });
-
-      if (additionalContext && additionalContext.length > 0) {
-        for (const ctx of additionalContext) {
-          await runsRepo.insertContext({
-            runId,
-            kind: ctx.kind as "file" | "selection" | "diff" | "note",
-            ref: ctx.ref,
-            content: ctx.content,
-            contentHash: ctx.content ? hashContent(ctx.content) : undefined,
-            metadata: ctx.metadata,
-          });
+        const provider = await providersService.getById(run.providerId);
+        if (!provider) {
+          throw new Error(`Provider "${run.providerId}" not found`);
         }
-      }
+        if (!provider.isEnabled) {
+          throw new Error(`Provider "${provider.displayName}" is not enabled`);
+        }
 
-      const session = createRunSession({
-        runId,
-        accountId,
-        providerId: run.providerId,
-        execution,
-        initialPromptContent: message,
-        seedTurnIndex,
-      });
+        const workspace = run.workspaceId
+          ? await workspaceService.get(run.workspaceId)
+          : null;
+        if (run.workspaceId && !workspace) {
+          throw new Error("Run workspace no longer exists");
+        }
+        if (workspace) {
+          assertWorkspacePathExists(workspace.rootPath, workspace.name);
+        }
+        const execution = resolveRunExecution({
+          runId,
+          mode: run.mode,
+          workspace,
+        });
 
-      // Re-derive the harness from the run row's mode snapshot — the space's
-      // current mode is irrelevant, but its system prompt is re-read live.
-      const space = await findSpaceForRun(run.spaceId);
+        const adapter = createWorkAdapter(provider);
+        if (!adapter.continueRun) {
+          throw new Error("Provider does not support session resumption");
+        }
+        if (adapter.canResumeSession) {
+          const canResume = await adapter.canResumeSession(runId);
+          if (!canResume) {
+            throw new Error("Session cannot be resumed (not found or expired)");
+          }
+        }
 
-      const runPromise = adapter.continueRun(
-        {
+        const existingTurns = await runsRepo.findTurnsByRun(runId);
+        const seedTurnIndex = existingTurns.reduce(
+          (max, t) => Math.max(max, t.turnIndex),
+          -1,
+        );
+        const previousModel = latestKnownModel(existingTurns, run.model);
+
+        const toolPolicy = composeToolPolicy(
+          run.mode,
+          run.toolPolicySnapshot,
+        );
+        const configSnapshot = normalizeAdditionalDirectories(
+          composeConfigSnapshot(run.mode, run.providerId, {
+            ...(run.configSnapshot ?? {}),
+            ...(payload.additionalDirectories !== undefined
+              ? { additionalDirectories: payload.additionalDirectories }
+              : {}),
+          }),
+          run.providerId,
+        );
+
+        if (workspace) {
+          await workspaceService.update(workspace.id, { status: "in_progress" });
+        }
+
+        await runsRepo.updateRun(runId, {
+          status: "running",
+          startedAt: new Date(),
+          endedAt: null,
+          lastError: null,
+          configSnapshot: configSnapshot ?? undefined,
+          toolPolicySnapshot: toolPolicy ?? undefined,
+        });
+
+        const projectInstructions = await buildCollectionSourceInstructions({
           runId,
           accountId,
+          collectionId: run.collectionId,
+          cwd: execution.workspaceId ? null : execution.cwd,
+        });
+
+        if (additionalContext && additionalContext.length > 0) {
+          for (const ctx of additionalContext) {
+            await runsRepo.insertContext({
+              runId,
+              kind: ctx.kind as "file" | "selection" | "diff" | "note",
+              ref: ctx.ref,
+              content: ctx.content,
+              contentHash: ctx.content ? hashContent(ctx.content) : undefined,
+              metadata: ctx.metadata,
+            });
+          }
+        }
+
+        const session = createRunSession({
+          runId,
+          accountId,
+          providerId: run.providerId,
           execution,
-          message,
-          // An omitted model means "as before". `runs.model` is the initial
-          // snapshot; a conversation may have switched since then.
-          model: payload.model ?? previousModel,
-          systemPrompt: run.systemPrompt,
-          mode: run.mode,
-          extraInstructions: withProjectResources(
-            composeExtraInstructions(run.mode, space?.systemPrompt),
-            projectInstructions,
-          ),
-          toolPolicy,
-          configSnapshot,
-          context: additionalContext as WorkRunContextItem[] | undefined,
-          attachments,
-          contextIssues: payload.contextIssues,
-          contextSignals: payload.contextSignals,
-          contextFiles: payload.contextFiles,
-          skills: payload.contextSkills,
-        },
-        (event: WorkRunEvent) =>
-          session.project(event).catch((err) =>
-            console.error(`[RunsService] project failed for ${runId}:`, err),
-          ),
-      );
+          initialPromptContent: message,
+          seedTurnIndex,
+        });
 
-      wireSessionCompletion(runPromise, session);
+        // Re-derive the harness from the run row's mode snapshot — the space's
+        // current mode is irrelevant, but its system prompt is re-read live.
+        const space = await findSpaceForRun(run.spaceId);
 
-      return { runId, resumed: true };
-    } catch (error) {
-      await handlePreSessionFailure(runId, error);
-      throw error;
+        let acceptInput: () => void = () => {};
+        const inputAccepted = new Promise<void>((resolve) => { acceptInput = resolve; });
+        const waitForInput = !!payload.clientUserMessageId && run.providerId === PROVIDER_IDS.codex;
+        const runPromise = adapter.continueRun(
+          {
+            runId,
+            accountId,
+            execution,
+            message,
+            ...(waitForInput ? {
+              clientUserMessageId: payload.clientUserMessageId,
+              onInputAccepted: async () => { acceptInput(); },
+            } : {}),
+            // An omitted model means "as before". `runs.model` is the initial
+            // snapshot; a conversation may have switched since then.
+            model: payload.model ?? previousModel,
+            systemPrompt: run.systemPrompt,
+            mode: run.mode,
+            extraInstructions: withProjectResources(
+              composeExtraInstructions(run.mode, space?.systemPrompt),
+              projectInstructions,
+            ),
+            toolPolicy,
+            configSnapshot,
+            context: additionalContext as WorkRunContextItem[] | undefined,
+            attachments,
+            contextIssues: payload.contextIssues,
+            contextSignals: payload.contextSignals,
+            contextFiles: payload.contextFiles,
+            skills: payload.contextSkills,
+          },
+          (event: WorkRunEvent) =>
+            waitForInput ? session.project(event) : session.project(event).catch((err) =>
+              console.error(`[RunsService] project failed for ${runId}:`, err),
+            ),
+        );
+
+        continuationStarted = true;
+        wireSessionCompletion(runPromise, session);
+        if (waitForInput) {
+          await Promise.race([
+            inputAccepted,
+            runPromise.then((result) => {
+              throw new Error(result.summary || "Codex did not accept the queued message.");
+            }),
+          ]);
+        }
+
+        return { runId, resumed: true };
+      } catch (error) {
+        if (!continuationStarted) await handlePreSessionFailure(runId, error);
+        throw error;
+      }
+    } finally {
+      continuingRuns.delete(runId);
     }
+  },
+
+  async steerRun(payload: RunSteerPayload): Promise<RunSteerResponse> {
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.accountId !== payload.accountId) throw new Error("Run does not belong to this account");
+    if (run.isArchived) throw new Error("Unarchive this conversation before sending a message.");
+    if (run.providerId !== PROVIDER_IDS.codex) throw new Error("This provider does not support steering.");
+    if (!runSessionRegistry.get(run.id) || run.status !== "running") {
+      throw new Error("There is no active Codex turn to steer. The message stays queued.");
+    }
+    if (!payload.clientUserMessageId || typeof payload.message !== "string") throw new Error("Invalid message.");
+    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+    const provider = await providersService.getById(run.providerId);
+    if (!provider?.isEnabled) throw new Error("Codex is not enabled.");
+    const adapter = createWorkAdapter(provider);
+    if (!adapter.steerRun) throw new Error("This provider does not support steering.");
+    const { turnId } = await adapter.steerRun({
+      runId: run.id, message: payload.message,
+      clientUserMessageId: payload.clientUserMessageId,
+      attachments, context: payload.additionalContext,
+      contextIssues: payload.contextIssues, contextFiles: payload.contextFiles,
+      contextSignals: payload.contextSignals, skills: payload.contextSkills,
+    });
+    return { runId: run.id, turnId };
+  },
+
+  async getInputStatus(payload: RunInputStatusPayload): Promise<{ accepted: boolean }> {
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.accountId !== payload.accountId) throw new Error("Run does not belong to this account");
+    const artifacts = await runsRepo.findArtifactsByRun(run.id);
+    if (artifacts.some((artifact) => artifact.metadata?.clientUserMessageId === payload.clientUserMessageId)) {
+      return { accepted: true };
+    }
+    const provider = await providersService.getById(run.providerId);
+    const adapter = provider ? createWorkAdapter(provider) : undefined;
+    const result = await adapter?.getInputStatus?.(run.id, payload.clientUserMessageId, run.sessionId ?? undefined) ?? { accepted: false };
+    if (result.accepted && payload.input) {
+      const input = payload.input;
+      const attachments = sanitizeRunAttachments(input.attachments, await browserCaptureDir());
+      await emitUserPromptArtifact(async (event) => {
+        if (event.type === "artifact" && await insertRunInputArtifact(run.id, event)) {
+          emit(CHANNELS.runs.eventPersisted, { runId: run.id });
+        }
+      }, input.message, {
+        runId: run.id, clientUserMessageId: payload.clientUserMessageId,
+        providerTurnId: result.turnId, ...(payload.delivery === "steer" ? { delivery: "steer" } : {}),
+        attachments, context: input.additionalContext,
+        contextIssues: input.contextIssues, contextSignals: input.contextSignals,
+        contextFiles: input.contextFiles, contextSkills: input.contextSkills,
+      });
+    }
+    return { accepted: result.accepted };
   },
 
   /**

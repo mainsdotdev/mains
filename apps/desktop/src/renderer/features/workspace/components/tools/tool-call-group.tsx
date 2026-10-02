@@ -14,7 +14,7 @@ import type { EventGroup } from "../../lib/group-events";
 import { Button } from "@/components/ui";
 
 const TOOL_GROUP_LABEL_TEXT =
-  "text-primary-600  dark:text-primary-600 group-hover:text-primary-600 group-hover:dark:text-primary-400";
+  "text-primary-600  dark:text-primary-400 group-hover:text-primary-600 group-hover:dark:text-primary-200";
 
 interface ToolCallGroupProps {
   group: EventGroup;

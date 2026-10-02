@@ -874,6 +874,18 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     forkSession: sessionAcquisition.forkSession,
     reviewSession: sessionAcquisition.reviewSession,
 
+    steerRun: (request) => runCoordinator.steerRun(appServer, request),
+
+    async getInputStatus(runId, clientUserMessageId, sessionId) {
+      const threadId = runCoordinator.getSessionThread(runId) ?? sessionId;
+      if (!threadId) return { accepted: false };
+      const server = await ensureServer();
+      const { thread } = await server.sendRequest("thread/read", { threadId, includeTurns: true });
+      const turn = thread.turns.find((turn) => turn.items.some((item) =>
+        item.type === "userMessage" && item.clientId === clientUserMessageId));
+      return { accepted: !!turn, ...(turn ? { turnId: turn.id } : {}) };
+    },
+
     async executePrompt(
       sessionParam,
       _prompt,

@@ -26,6 +26,8 @@ import { CHANNELS } from "@mains/contracts/channels";
 import type {
   ReadArtifactImagePayload,
   ReadRunTextFilePayload,
+  RunSteerPayload,
+  RunInputStatusPayload,
 } from "@mains/contracts/runs";
 
 // ─────────────────────────────────────────────────────────────
@@ -176,6 +178,9 @@ export function registerRunsIpc(): void {
     handle((payload: ForkRunPayload) => runsService.forkRun(payload)),
   );
 
+  ipcMain.handle(CHANNELS.runs.steer, handle((payload: RunSteerPayload) => runsService.steerRun(payload)));
+  ipcMain.handle(CHANNELS.runs.inputStatus, handle((payload: RunInputStatusPayload) => runsService.getInputStatus(payload)));
+
   ipcMain.handle(
     CHANNELS.runs.executeReview,
     handle((payload: ReviewRunPayload) => runsService.executeReview(payload)),
@@ -271,6 +276,8 @@ export function registerRunsIpc(): void {
 }
 
 export function unregisterRunsIpc(): void {
+  ipcMain.removeHandler(CHANNELS.runs.steer);
+  ipcMain.removeHandler(CHANNELS.runs.inputStatus);
   [
     CHANNELS.runs.getAll,
     CHANNELS.runs.listArchived,

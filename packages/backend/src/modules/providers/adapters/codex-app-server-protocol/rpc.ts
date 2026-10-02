@@ -63,6 +63,8 @@ import type { ThreadUnsubscribeParams } from "./generated/v2/ThreadUnsubscribePa
 import type { ThreadUnsubscribeResponse } from "./generated/v2/ThreadUnsubscribeResponse";
 import type { TurnInterruptParams } from "./generated/v2/TurnInterruptParams";
 import type { TurnInterruptResponse } from "./generated/v2/TurnInterruptResponse";
+import type { TurnSteerParams } from "./generated/v2/TurnSteerParams";
+import type { TurnSteerResponse } from "./generated/v2/TurnSteerResponse";
 import type { TurnStartParams } from "./generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/v2/TurnStartResponse";
 
@@ -144,6 +146,7 @@ export interface CodexAppServerRpc {
   >;
   "turn/interrupt": RpcMethod<TurnInterruptParams, TurnInterruptResponse>;
   "turn/start": RpcMethod<TurnStartParams, TurnStartResponse>;
+  "turn/steer": RpcMethod<TurnSteerParams, TurnSteerResponse>;
 }
 
 export type CodexAppServerMethod = keyof CodexAppServerRpc;

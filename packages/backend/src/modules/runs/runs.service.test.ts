@@ -67,9 +67,10 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../providers/adapters", () => ({
+vi.mock("../providers/adapters", async () => ({
   createWorkAdapter: vi.fn(),
   couldModifyFiles: vi.fn().mockReturnValue(false),
+  emitUserPromptArtifact: (await import("../providers/adapters/adapter.shared")).emitUserPromptArtifact,
 }));
 
 // gitService is throw-style: plain resolved values, rejects on failure.
@@ -2719,7 +2720,77 @@ describe("runsService", () => {
   // ─────────────────────────────────────────────────────────────
   // continueRun
   // ─────────────────────────────────────────────────────────────
+  describe("steer input delivery", () => {
+    it("forwards active input without model or directory overrides", async () => {
+      createProvider(db, { id: "codex" });
+      createRun(db, { id: "steer-run", providerId: "codex", accountId: "default", status: "running" });
+      runSessionRegistry.register("steer-run", { runId: "steer-run", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() });
+      const steerRun = vi.fn().mockResolvedValue({ turnId: "native-turn" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
+      try {
+        await expect(runsService.steerRun({ runId: "steer-run", accountId: "default", clientUserMessageId: "input", message: "change direction" })).resolves.toEqual({ runId: "steer-run", turnId: "native-turn" });
+        expect(steerRun).toHaveBeenCalledWith(expect.objectContaining({ runId: "steer-run", message: "change direction", clientUserMessageId: "input" }));
+        expect(steerRun.mock.calls[0][0]).not.toHaveProperty("model");
+        expect(steerRun.mock.calls[0][0]).not.toHaveProperty("execution");
+        expect(await runsRepo.findTurnsByRun("steer-run")).toEqual([]);
+      } finally { runSessionRegistry.unregister("steer-run"); }
+    });
+
+    it("recovers an accepted native message once across concurrent delivery checks", async () => {
+      createProvider(db, { id: "codex" });
+      createRun(db, { id: "uncertain-run", providerId: "codex", accountId: "default", status: "succeeded" });
+      const getInputStatus = vi.fn().mockResolvedValue({ accepted: true, turnId: "native-turn" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ getInputStatus } as any);
+      const payload = { runId: "uncertain-run", accountId: "default", clientUserMessageId: "input",
+        delivery: "steer" as const, input: { message: "accepted guidance", contextSkills: [{ name: "skill" }] } };
+      await expect(Promise.all([runsService.getInputStatus(payload), runsService.getInputStatus(payload)])).resolves.toEqual([{ accepted: true }, { accepted: true }]);
+      const artifacts = await runsRepo.findArtifactsByRun("uncertain-run");
+      expect(artifacts).toHaveLength(1);
+      expect(artifacts[0]).toMatchObject({ content: "accepted guidance", metadata: { clientUserMessageId: "input", providerTurnId: "native-turn", delivery: "steer", skills: [{ name: "skill" }] } });
+      expect(await runsRepo.findTurnsByRun("uncertain-run")).toEqual([]);
+      getInputStatus.mockClear();
+      await expect(runsService.getInputStatus(payload)).resolves.toEqual({ accepted: true });
+      expect(getInputStatus).not.toHaveBeenCalled();
+    });
+
+    it("retains unconfirmed input without inventing transcript rows", async () => {
+      createProvider(db, { id: "codex" });
+      createRun(db, { id: "uncertain-run", providerId: "codex", accountId: "default" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ getInputStatus: vi.fn().mockResolvedValue({ accepted: false }) } as any);
+      await expect(runsService.getInputStatus({ runId: "uncertain-run", accountId: "default", clientUserMessageId: "input", input: { message: "unconfirmed" } })).resolves.toEqual({ accepted: false });
+      expect(await runsRepo.findArtifactsByRun("uncertain-run")).toEqual([]);
+    });
+  });
+
   describe("continueRun", () => {
+    function createContinuableRun(overrides: Parameters<typeof createRun>[1]) {
+      return createRun(db, { status: "succeeded", ...overrides });
+    }
+
+    it("rejects concurrent continuation without failing the active run", async () => {
+      createContinuableRun({ id: "live-run", accountId: "default", status: "running" });
+      await expect(runsService.continueRun({ runId: "live-run", accountId: "default", message: "queued" })).rejects.toThrow("active response");
+      expect((await runsRepo.findRunById("live-run"))?.status).toBe("running");
+    });
+
+    it("returns a queued continuation only after native input acceptance", async () => {
+      createContinuableRun({ id: "queue-run", accountId: "default", providerId: "codex", mode: "work" });
+      let accept!: (turnId: string) => Promise<void>;
+      let finish!: (result: { status: "succeeded" }) => void;
+      const pending = new Promise<{ status: "succeeded" }>((resolve) => { finish = resolve; });
+      const adapter = setupContinueAdapter({ continueRun: vi.fn((request) => { accept = request.onInputAccepted; return pending; }) });
+      let returned = false;
+      const continuation = runsService.continueRun({ runId: "queue-run", accountId: "default", message: "next", clientUserMessageId: "client-id" });
+      void continuation.then(() => { returned = true; });
+      await vi.waitFor(() => expect(adapter.continueRun).toHaveBeenCalled());
+      expect(returned).toBe(false);
+      expect(adapter.continueRun.mock.calls[0][0]).toMatchObject({ clientUserMessageId: "client-id" });
+      await accept("native-turn");
+      await expect(continuation).resolves.toEqual({ runId: "queue-run", resumed: true });
+      finish({ status: "succeeded" });
+      await flushBackground();
+    });
+
     function setupContinueAdapter(overrides: Record<string, unknown> = {}) {
       const mockAdapter = {
         continueRun: vi.fn().mockResolvedValue({
@@ -2743,13 +2814,13 @@ describe("runsService", () => {
 
     it("returns error when run does not belong to account", async () => {
       createAccount(db, { id: "other" });
-      createRun(db, { id: "r1", accountId: "other" });
+      createContinuableRun({ id: "r1", accountId: "other" });
 
       await expect(runsService.continueRun({ runId: "r1", accountId: "default", message: "continue", })).rejects.toThrow("Run does not belong to this account");
     });
 
     it("returns error when provider not found", async () => {
-      createRun(db, { id: "r1", accountId: "default" });
+      createContinuableRun({ id: "r1", accountId: "default" });
       vi.spyOn(
         await import("../providers/providers.repo").then(m => m.providersRepo),
         "findById"
@@ -2760,14 +2831,14 @@ describe("runsService", () => {
 
     it("returns error when provider is disabled", async () => {
       createProvider(db, { id: "disabled_p", isEnabled: false, displayName: "Disabled" });
-      createRun(db, { id: "r1", accountId: "default", providerId: "disabled_p" });
+      createContinuableRun({ id: "r1", accountId: "default", providerId: "disabled_p" });
 
       await expect(runsService.continueRun({ runId: "r1", accountId: "default", message: "continue", })).rejects.toThrow("not enabled");
     });
 
     it("returns error when adapter has no continueRun", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       vi.mocked(createWorkAdapter).mockReturnValue({} as any);
 
       await expect(runsService.continueRun({ runId: "r1", accountId: "default", message: "continue", })).rejects.toThrow("Provider does not support session resumption");
@@ -2775,7 +2846,7 @@ describe("runsService", () => {
 
     it("returns error when canResumeSession returns false", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter({
         canResumeSession: vi.fn().mockResolvedValue(false),
       });
@@ -2785,7 +2856,7 @@ describe("runsService", () => {
 
     it("succeeds on happy path", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter();
 
       const result = await runsService.continueRun({
@@ -2800,7 +2871,7 @@ describe("runsService", () => {
 
     it("calls adapter.continueRun with correct args", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       const mockAdapter = setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2817,7 +2888,7 @@ describe("runsService", () => {
 
     it("continues with the latest turn model when the caller omits one", async () => {
       createWorkspace(db, { id: "ws-model" });
-      createRun(db, {
+      createContinuableRun({
         id: "run-model",
         accountId: "default",
         workspaceId: "ws-model",
@@ -2850,7 +2921,7 @@ describe("runsService", () => {
     });
 
     it("lets an explicit continue model override the latest turn model", async () => {
-      createRun(db, {
+      createContinuableRun({
         id: "run-explicit-model",
         accountId: "default",
         mode: "work",
@@ -2879,7 +2950,7 @@ describe("runsService", () => {
 
     it("updates run status to running", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1", status: "succeeded" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1", status: "succeeded" });
       setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2895,7 +2966,7 @@ describe("runsService", () => {
 
     it("background .then() updates to succeeded", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2911,7 +2982,7 @@ describe("runsService", () => {
 
     it("background .catch() marks run as failed", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter({
         continueRun: vi.fn().mockRejectedValue(new Error("continue crashed")),
       });
@@ -2930,7 +3001,7 @@ describe("runsService", () => {
 
     it("persists additional context when provided", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2948,7 +3019,7 @@ describe("runsService", () => {
     });
 
     it("works when no workspace attached to run", async () => {
-      createRun(db, { id: "r1", accountId: "default", mode: "work" });
+      createContinuableRun({ id: "r1", accountId: "default", mode: "work" });
       setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2961,7 +3032,7 @@ describe("runsService", () => {
 
     it("skips canResumeSession check when adapter lacks it", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter({ canResumeSession: undefined });
 
       await runsService.continueRun({
@@ -2973,7 +3044,7 @@ describe("runsService", () => {
     });
 
     it("returns error on outer catch", async () => {
-      createRun(db, { id: "r1", accountId: "default", mode: "work" });
+      createContinuableRun({ id: "r1", accountId: "default", mode: "work" });
       setupContinueAdapter();
       // Make updateRun throw during the "set running" step
       const originalUpdateRun = runsRepo.updateRun.bind(runsRepo);

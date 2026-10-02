@@ -413,6 +413,7 @@ export interface StartRunResponse {
 
 /** Payload for continuing an existing run (resume session) */
 export interface ContinueRunPayload {
+  clientUserMessageId?: string;
   runId: string;
   accountId: string;
   /** The follow-up message to send */

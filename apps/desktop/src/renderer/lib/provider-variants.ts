@@ -93,6 +93,7 @@ export interface ProviderVariantDescriptor {
   supportsPlugins: boolean;
   /** Global plugin UIs opened without an agent turn. */
   supportsMcpAppExtensions: boolean;
+  supportsTurnSteer: boolean;
 
   // ── /code page wiring (was per-route props before the agent routes unified) ──
   planExit: PlanExitConfig;
@@ -127,6 +128,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsAdditionalDirectories: true,
     supportsPlugins: true,
     supportsMcpAppExtensions: false,
+    supportsTurnSteer: false,
     planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
     enableForkRun: true,
     enableSuggestions: true,
@@ -150,6 +152,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsAdditionalDirectories: false,
     supportsPlugins: false,
     supportsMcpAppExtensions: false,
+    supportsTurnSteer: false,
     planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
     enableForkRun: false,
     enableSuggestions: false,
@@ -173,6 +176,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsAdditionalDirectories: true,
     supportsPlugins: true,
     supportsMcpAppExtensions: true,
+    supportsTurnSteer: true,
     planExit: { key: "planMode", planValue: true, nextValue: false },
     enableForkRun: true,
     enableSuggestions: true,
@@ -196,6 +200,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsAdditionalDirectories: false,
     supportsPlugins: false,
     supportsMcpAppExtensions: false,
+    supportsTurnSteer: false,
     planExit: { key: "mode", planValue: "plan", nextValue: "agent" },
     enableForkRun: true,
     enableSuggestions: true,

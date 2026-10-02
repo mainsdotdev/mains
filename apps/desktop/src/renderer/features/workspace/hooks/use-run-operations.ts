@@ -1,3 +1,4 @@
+import { hasComposerMessage } from "../lib/composer-message";
 /**
  * The five ways a run gets started or extended — execute, continue, fork,
  * review, and the resume probe that gates continue.
@@ -93,7 +94,7 @@ export function useRunOperations({
       additionalDirectories?: string[],
     ) => {
       if (
-        !goal.trim() ||
+        !hasComposerMessage(goal, uploads?.length ?? 0, context ?? []) ||
         !selectedProvider ||
         (activeSpace?.mode === "developer" && !selectedWorkspace)
       ) {
@@ -141,7 +142,7 @@ export function useRunOperations({
     context?: readonly ContextItem[],
     additionalDirectories?: string[],
   ) => {
-    if (!message.trim()) {
+    if (!hasComposerMessage(message, uploads?.length ?? 0, context ?? [])) {
       setError("Please enter a message");
       return false;
     }

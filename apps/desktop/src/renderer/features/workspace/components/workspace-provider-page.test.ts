@@ -176,6 +176,35 @@ afterEach(() => {
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
+  it("keeps floating queue submissions separate from the parent's current draft", () => {
+    const submitSnapshot = vi.fn();
+    const setDraft = vi.fn();
+    const steer = vi.fn();
+    const reorder = vi.fn();
+    page.state = {
+      runs: [], activeTab: "run-1", activeRunId: "run-1", composerRun: { id: "run-1", status: "running" },
+      activeRun: { id: "run-1", status: "running" }, currentEvents: [], currentTurns: [],
+      goal: "newer typing", contextItems: [], uploadedFiles: [], currentWorkspace: null,
+      openIssueTabs: [], openSignalTabs: [], openNoteTabs: [], showEmptyState: false, showInput: true,
+      handleQueueSnapshot: submitSnapshot, setGoal: setDraft, runQueue: { onSteer: steer, onReorder: reorder },
+    };
+    browser.isExpanded = true; browser.nativeOverlay = true;
+    let onAction: ((action: BrowserChatAction) => void) | undefined;
+    vi.stubGlobal("api", { browserChat: { publishContext: vi.fn(), onAction: (callback: typeof onAction) => { onAction = callback; return vi.fn(); } } });
+    renderPage();
+    act(() => onAction?.({ type: "queueSubmit", ownerKey: "draft", draft: "frozen input", items: [], uploads: [], model: "snapshot-model", additionalDirectories: ["/snapshot"] }));
+    expect(submitSnapshot).toHaveBeenCalledExactlyOnceWith({ text: "frozen input", contextItems: [], files: [], model: "snapshot-model", additionalDirectories: ["/snapshot"], editingId: undefined });
+    expect(setDraft).not.toHaveBeenCalled();
+    act(() => onAction?.({ type: "queueAction", ownerKey: "draft", action: "steer", id: "input" }));
+    expect(steer).toHaveBeenCalledExactlyOnceWith("input");
+    act(() => onAction?.({ type: "queueAction", ownerKey: "other-owner", action: "steer", id: "other" }));
+    expect(steer).toHaveBeenCalledOnce();
+    act(() => onAction?.({ type: "queueReorder", ownerKey: "draft", orderedIds: ["second", "first"] }));
+    expect(reorder).toHaveBeenCalledExactlyOnceWith(["second", "first"]);
+    act(() => onAction?.({ type: "queueReorder", ownerKey: "other-owner", orderedIds: ["first", "second"] }));
+    expect(reorder).toHaveBeenCalledOnce();
+  });
+
   it.each(["editor", "new-run"])("keeps the actual run tabs mounted while loading a workspace with a saved %s tab", async (activeTab) => {
     page.realTabs = true;
     const run = { id: "run-1", title: "Existing run", goal: "Existing run", status: "succeeded" };

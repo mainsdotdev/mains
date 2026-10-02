@@ -33,6 +33,11 @@ export function collectUiContextCandidates(
 
   for (const key of Object.keys(state.workspace.draftTextByKey)) addOwner(key);
   for (const key of Object.keys(state.workspace.contextItemsByKey)) addOwner(key);
+  for (const queue of Object.values(state.runQueue?.byOwner ?? {})) {
+    if (queue.backendId !== backendId) continue;
+    runs.add(queue.runId);
+    if (queue.workspaceId) workspaces.add(queue.workspaceId);
+  }
   addOwner(state.workspace.composerContextKey);
   for (const key of Object.keys(state.appSettings.rightPaneByContext)) addOwner(key);
   for (const key of Object.keys(state.appSettings.documentViewerDocByContext)) addOwner(key);
@@ -87,7 +92,7 @@ export async function reconcilePersistedUiState(
       try {
         const result = await transport.invoke(channel, [target.id]);
         if (result.success && result.data === null && stillConnected()) {
-          forgetDeletedUiContext(dispatch, target);
+          forgetDeletedUiContext(dispatch, target, getState().runQueue?.byOwner);
         }
       } catch {
         // Retry on a later connection rather than guessing that it was deleted.

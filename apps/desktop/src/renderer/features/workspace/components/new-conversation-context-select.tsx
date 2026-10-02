@@ -86,7 +86,7 @@ export function NewConversationContextSelect({
         aria-label={`${isDeveloper ? "Workspace" : "Project"}: ${label}`}
         aria-haspopup="menu"
         aria-expanded={position !== null}
-        className="flex max-w-full items-center gap-1.5 rounded-2xl px-2.5 py-1 text-s glass-card"
+        className="flex max-w-full items-center gap-1.5 rounded-2xl px-2.5 py-1 text-xs glass-card"
         onMouseDown={(event) => event.stopPropagation()}
         onClick={() => position ? setPosition(null) : open()}
         onKeyDown={(event) => {
@@ -96,8 +96,8 @@ export function NewConversationContextSelect({
           }
         }}
       >
-        <span className="shrink-0" aria-hidden="true">
-          {selectedProject ? <ProjectIcon icon={selectedProject.icon} projectName={selectedProject.name} /> : <ProjectFolder className="size-4" />}
+        <span className="shrink-0 text-primary-500" aria-hidden="true">
+          {selectedProject ? <ProjectIcon icon={selectedProject.icon} projectName={selectedProject.name} /> : <ProjectFolder className="size-3.5 " />}
         </span>
         <span className="min-w-0 truncate">{label}</span>
         <ArrowUp aria-hidden="true" className="size-3.5 shrink-0 text-primary-500 rotate-180" />
@@ -152,7 +152,7 @@ export function NewConversationContextSelect({
           ) : (
             <>
               {showNoProject && <DropdownMenuItem selected={!project} indicator="none" className="px-2.5 py-1.5 gap-2" onClick={() => select({ collectionId: null })}>
-                <ProjectFolder aria-hidden="true" className="size-4 shrink-0" />
+                <ProjectFolder aria-hidden="true" className="size-4 shrink-0 " />
                 No project
               </DropdownMenuItem>}
               {projectChoices.map((item) => (

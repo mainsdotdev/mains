@@ -129,6 +129,28 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("steers the parent with typed input and projects a single prompt before a delayed ACK/completion", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-steer-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const acquired = await driver.createSession({ ...request("steer-run"), goal: "timeout turn" });
+    const events: Array<Record<string, unknown>> = [];
+    const execution = driver.executePrompt(acquired.session, acquired.prompt, async (event) => { events.push(event as unknown as Record<string, unknown>); }, new AbortController().signal);
+    await waitForDriverEvent(events, (event) => event.type === "context_usage", "live parent turn");
+    const result = await driver.steerRun!({ runId: "steer-run", clientUserMessageId: "input-1", message: "change direction", skills: [{ name: "skill", path: "/tmp/skill/SKILL.md" }] });
+    expect(await execution).toMatchObject({ status: "succeeded" });
+    const requests = readProtocolLog(logPath);
+    const steer = requests.find((message) => message.method === "turn/steer");
+    expect(steer?.params).toMatchObject({ threadId: acquired.sessionId, expectedTurnId: `turn-${acquired.sessionId}`, clientUserMessageId: "input-1",
+      input: [{ type: "text", text: "change direction", text_elements: [] }, { type: "skill", name: "skill", path: "/tmp/skill/SKILL.md" }] });
+    expect(result.turnId).toBe(`turn-${acquired.sessionId}`);
+    expect(requests.filter((message) => message.method === "turn/start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(1);
+  });
+
   // First test in the file pays the cold start (fixture process spawn + first
   // handshake), which can exceed the default 5s when the full suite saturates
   // the CPU — it passes alone. Explicit timeout like the app-server exit test.

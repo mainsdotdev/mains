@@ -1,3 +1,4 @@
+import runQueueReducer from "@/lib/redux/slices/runQueueSlice";
 // @vitest-environment jsdom
 
 import { configureStore } from "@reduxjs/toolkit";
@@ -81,6 +82,7 @@ vi.mock("./use-transient-uploads", () => ({
   getTransientUploadsForOwner: () => [],
   moveTransientUploadsToOwner: mocks.moveUploads,
 }));
+vi.mock("../lib/run-message-queue", () => ({ runMessageQueue: { send: vi.fn(), remove: vi.fn(), resume: vi.fn() } }));
 vi.mock("./use-file-content-loader", () => ({ useFileContentLoader: () => {} }));
 vi.mock("./use-run-operations", () => ({
   useRunOperations: ({ registerNewRun }: { registerNewRun: (id: string) => Promise<string | null> }) => ({
@@ -157,6 +159,7 @@ function workspacePage(providerId = "claude_code") {
   const store = configureStore({
     reducer: {
       workspace: workspaceReducer,
+      runQueue: runQueueReducer,
       appSettings: () => ({ onboardingCompleted: true }),
       backends: () => ({ activeBackendId: null }),
     },
@@ -521,6 +524,7 @@ describe("useWorkspacePage after a space switch", () => {
     const store = configureStore({
       reducer: {
         workspace: workspaceReducer,
+      runQueue: runQueueReducer,
         appSettings: () => ({ onboardingCompleted: true }),
         backends: () => ({ activeBackendId: null }),
       },
@@ -558,5 +562,28 @@ describe("useWorkspacePage after a space switch", () => {
       expect(page.result.current.currentEvents[0]?.content).toBe(run.goal);
     });
     expect(mocks.getById).toHaveBeenCalledWith(run.id);
+  });
+});
+
+
+describe("Codex running composer", () => {
+  it("queues several sends locally and clears the submitted draft", async () => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    const live = { ...run, id: "live-codex", providerId: "codex", workspaceId: "ws-1", mode: "developer", status: "running" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [live] });
+    mocks.getById.mockResolvedValue({ success: true, data: live });
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(live.id));
+    act(() => page.result.current.setGoal("first"));
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(page.result.current.goal).toBe("");
+    act(() => page.result.current.setGoal("second"));
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(page.result.current.runQueue?.queue?.mode).toBe("queue");
+    expect(page.result.current.runQueue?.queue?.messages.map((message) => message.text)).toEqual(["first", "second"]);
+    expect(mocks.continueRun).not.toHaveBeenCalled();
+    expect(mocks.executeRun).not.toHaveBeenCalled();
+    page.unmount();
   });
 });

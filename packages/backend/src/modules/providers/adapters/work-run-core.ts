@@ -120,7 +120,7 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
       runState.set(runId, { session: acquired.session, controller });
       await persistSessionId(runId, acquired.sessionId);
 
-      if (userPromptReq) {
+      if (userPromptReq && !("clientUserMessageId" in userPromptReq && userPromptReq.clientUserMessageId && driver.steerRun)) {
         // The three UserPromptRequest variants all carry these fields, but TS
         // can't see it through the discriminated union — access generically.
         const r = userPromptReq as WorkRunRequest;
@@ -210,8 +210,25 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
 
   if (driver.resumeSession) {
     const resume = driver.resumeSession.bind(driver);
-    adapter.continueRun = (request, onEvent) =>
-      runLifecycle(request.runId, () => resume(request), request, onEvent);
+    adapter.continueRun = (request, onEvent) => {
+      let resolvedModel: string | undefined;
+      let projection: Promise<void> | undefined;
+      const input = request.clientUserMessageId && driver.steerRun ? {
+        ...request,
+        onInputAccepted: (turnId: string) => projection ??= (async () => {
+          await emitUserPromptArtifact(onEvent, request.message, {
+            ...request, contextSkills: request.skills,
+            model: resolvedModel, providerTurnId: turnId,
+          });
+          await request.onInputAccepted?.(turnId);
+        })(),
+      } : request;
+      return runLifecycle(request.runId, async () => {
+        const acquired = await resume(input);
+        resolvedModel = acquired.model;
+        return acquired;
+      }, request, onEvent);
+    };
   }
 
   if (driver.forkSession) {
@@ -225,6 +242,9 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.reviewRun = (request: WorkRunReviewRequest, onEvent) =>
       runLifecycle(request.runId, () => review(request), null, onEvent);
   }
+
+  if (driver.steerRun) adapter.steerRun = driver.steerRun.bind(driver);
+  if (driver.getInputStatus) adapter.getInputStatus = driver.getInputStatus.bind(driver);
 
   // 1:1 delegation for optional pass-through methods
   if (driver.updateConfig)

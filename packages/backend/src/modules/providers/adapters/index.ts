@@ -117,6 +117,7 @@ export {
 // Shared helpers
 export {
   couldModifyFiles,
+  emitUserPromptArtifact,
   FILE_MODIFYING_TOOLS,
   toolWrites,
   type ToolWrites,

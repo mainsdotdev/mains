@@ -140,6 +140,23 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   // Construction
   // ─────────────────────────────────────────────────────────────
+  it("persists steer input inside the current turn without a new Git boundary", async () => {
+    const session = makeSession({ initialPromptContent: "original" });
+    await flushBackground();
+    const before = await runsRepo.findTurnsByRun("r1");
+    const snapshots = vi.mocked(gitService.snapshotWorkingTree).mock.calls.length;
+    await session.project({ type: "artifact", kind: "user-prompt", content: "new guidance",
+      metadata: { kind: "user-prompt", delivery: "steer", clientUserMessageId: "input-id", providerTurnId: "native-turn" } });
+    await session.project({ type: "artifact", kind: "user-prompt", content: "new guidance",
+      metadata: { kind: "user-prompt", delivery: "steer", clientUserMessageId: "input-id", providerTurnId: "native-turn" } });
+    const after = await runsRepo.findTurnsByRun("r1");
+    expect(after.map((turn) => turn.id)).toEqual(before.map((turn) => turn.id));
+    expect(after[0]?.promptContent).toBe("original");
+    expect(vi.mocked(gitService.snapshotWorkingTree).mock.calls).toHaveLength(snapshots);
+    expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({ content: "new guidance", metadata: expect.objectContaining({ delivery: "steer" }) })]);
+    await session.finalize({ status: "succeeded" });
+  });
+
   describe("construction", () => {
     it("registers itself in the registry", () => {
       const session = makeSession();

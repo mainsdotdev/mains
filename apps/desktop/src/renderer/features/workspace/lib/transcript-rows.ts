@@ -89,7 +89,8 @@ export function matchTurnsToGroups(
       for (let i = lastGroupIdx + 1; i < groups.length; i++) {
         const isUserPrompt =
           groups[i].type === "info" &&
-          groups[i].events[0]?.metadata?.kind === "user-prompt";
+          groups[i].events[0]?.metadata?.kind === "user-prompt" &&
+          groups[i].events[0]?.metadata?.delivery !== "steer";
         if (isUserPrompt) {
           bestIdx = i - 1;
           break;
@@ -140,9 +141,7 @@ function computeSessionTimesFromEvents(
 
   for (let i = 0; i < groups.length; i++) {
     const group = groups[i];
-    const isUserPrompt =
-      group.type === "info" &&
-      group.events[0]?.metadata?.kind === "user-prompt";
+    const isUserPrompt = isTurnStartingPromptGroup(group);
     const isStatus =
       group.type === "info" && group.events[0]?.type === "status";
 
@@ -191,6 +190,10 @@ function computeSessionTimesFromEvents(
   return result;
 }
 
+function isTurnStartingPromptGroup(g: EventGroup): boolean {
+  return isUserPromptGroup(g) && g.events[0]?.metadata?.delivery !== "steer";
+}
+
 export function isUserPromptGroup(g: EventGroup): boolean {
   return g.type === "info" && g.events[0]?.metadata?.kind === "user-prompt";
 }
@@ -211,7 +214,7 @@ export function matchModelChangesToPromptGroups(
 ): Map<number, ModelChangeMarker> {
   const result = new Map<number, ModelChangeMarker>();
   const promptGroupIndices = groups.reduce<number[]>((indices, group, index) => {
-    if (isUserPromptGroup(group)) indices.push(index);
+    if (isTurnStartingPromptGroup(group)) indices.push(index);
     return indices;
   }, []);
   const orderedTurns = [...turns].sort((a, b) => a.turnIndex - b.turnIndex);

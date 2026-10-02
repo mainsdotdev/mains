@@ -378,6 +378,27 @@ describe("createWorkRunAdapter", () => {
   });
 
   describe("optional verbs", () => {
+    it("publishes queued Codex input after acceptance once with its resolved model and client id", async () => {
+      const fake = createFakeDriver({ model: "canonical-model", outcome: { status: "succeeded" } });
+      fake.enable("resumeSession");
+      fake.driver.steerRun = vi.fn().mockResolvedValue({ turnId: "native-turn" });
+      const accepted = vi.fn();
+      const events: WorkRunEvent[] = [];
+      const execute = fake.driver.executePrompt;
+      fake.driver.executePrompt = async (...args) => {
+        expect(events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(0);
+        const request = fake.calls.resumeSession[0];
+        await Promise.all([request.onInputAccepted!("native-turn"), request.onInputAccepted!("native-turn")]);
+        expect(accepted).toHaveBeenCalledOnce();
+        return execute(...args);
+      };
+      const adapter = createWorkRunAdapter(fake.driver);
+      await adapter.continueRun!(makeContinueReq({ clientUserMessageId: "queued-input", onInputAccepted: accepted }), (event) => { events.push(event); });
+      expect(events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toEqual([
+        expect.objectContaining({ content: "follow-up", metadata: expect.objectContaining({ model: "canonical-model", clientUserMessageId: "queued-input", providerTurnId: "native-turn" }) }),
+      ]);
+    });
+
     it("continueRun is undefined when driver lacks resumeSession", () => {
       const fake = createFakeDriver();
       const adapter = createWorkRunAdapter(fake.driver);

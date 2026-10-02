@@ -195,6 +195,7 @@ try {
     '"method": "initialize"',
     '"method": "thread/start"',
     '"method": "turn/start"',
+    '"method": "turn/steer"',
     '"method": "skills/list"',
     '"method": "account/rateLimits/read"',
     '"method": "plugin/list"',
@@ -213,7 +214,15 @@ try {
   assertContains("v2/DynamicToolSpec.ts", ['"type": "function"']);
   assertContains("v2/TurnStartParams.ts", [
     "collaborationMode?: CollaborationMode",
+    "clientUserMessageId?: string | null",
   ]);
+  assertContains("v2/TurnSteerParams.ts", [
+    "threadId: string",
+    "expectedTurnId: string",
+    "clientUserMessageId?: string | null",
+    "input: Array<UserInput>",
+  ]);
+  assertContains("v2/TurnSteerResponse.ts", ["turnId: string"]);
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",
     "originCallId?: string | null",

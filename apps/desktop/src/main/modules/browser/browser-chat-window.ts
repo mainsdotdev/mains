@@ -49,11 +49,22 @@ function validAction(value: unknown): value is BrowserChatAction {
   if (!value || typeof value !== "object") return false;
   const action = value as Record<string, unknown>;
   switch (action.type) {
+    case "queueReorder": return typeof action.ownerKey === "string" && Array.isArray(action.orderedIds) &&
+      action.orderedIds.every((id) => typeof id === "string" && id.length > 0) && new Set(action.orderedIds).size === action.orderedIds.length;
+    case "queueSubmit": return typeof action.ownerKey === "string" && typeof action.draft === "string" &&
+      Array.isArray(action.items) && Array.isArray(action.uploads) &&
+      (action.model === undefined || typeof action.model === "string") &&
+      (action.editingId === undefined || typeof action.editingId === "string") &&
+      (action.additionalDirectories === undefined || Array.isArray(action.additionalDirectories) && action.additionalDirectories.every((dir) => typeof dir === "string"));
+    case "queueAction": return typeof action.ownerKey === "string" &&
+      ["steer", "edit", "remove", "cancelEdit", "resume", "queueMode", "steerMode", "stop"].includes(String(action.action)) &&
+      (action.id === undefined || typeof action.id === "string");
     case "mode": return action.mode === "details" || action.mode === "input" || action.mode === "icon";
     case "pagePointerDown": return true;
     case "composerHeight": return typeof action.height === "number" && Number.isFinite(action.height) && action.height >= 48 && action.height <= 1024;
     case "draft": return typeof action.ownerKey === "string" && typeof action.draft === "string";
     case "model": return typeof action.providerId === "string" && typeof action.model === "string";
+    case "directories": return typeof action.ownerKey === "string" && Array.isArray(action.directories) && action.directories.every((dir) => typeof dir === "string");
     case "selectRun": return typeof action.ownerKey === "string" && typeof action.runId === "string" && action.runId.length > 0;
     case "openMcpApp": {
       const result = action.result as Record<string, unknown> | null;

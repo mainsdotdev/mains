@@ -168,6 +168,12 @@ export { default as Maximize} from "./maximize"
 export { default as MinimizeView } from "./minimize-view";
 export { default as Merge} from "./merge"
 export { default as At} from "./at"
+export { default as Steer} from "./steer"
+export { default as Queue} from "./queue"
+export { default as Drag} from "./drag"
+
+
+
 
 
 

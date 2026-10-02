@@ -569,6 +569,24 @@ input.on("line", (line) => {
       respond(id, {});
       break;
 
+    case "turn/steer": {
+      const turnId = `turn-${params.threadId}`;
+      if (params.expectedTurnId !== turnId) {
+        respondError(id, -32600, "expectedTurnId mismatch");
+        break;
+      }
+      notify("item/completed", {
+        threadId: params.threadId, turnId,
+        item: { type: "userMessage", id: `steer-${params.clientUserMessageId}`, clientId: params.clientUserMessageId, content: params.input },
+      });
+      notify("turn/completed", {
+        threadId: params.threadId,
+        turn: { id: turnId, items: [], status: "completed", error: null },
+      });
+      setTimeout(() => respond(id, { turnId }), 30);
+      break;
+    }
+
     case "review/start": {
       const reviewThreadId =
         params.delivery === "detached"

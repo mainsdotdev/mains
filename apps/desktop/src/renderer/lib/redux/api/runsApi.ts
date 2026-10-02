@@ -1,3 +1,5 @@
+import { pauseRunQueue } from "../slices/runQueueSlice";
+import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { ModeId } from "../../../../shared/modes";
@@ -419,10 +421,12 @@ export const runsApi = baseApi.injectEndpoints({
     }),
 
     abortRun: builder.mutation<void, string>({
-      query: (runId) => ({
-        handler: CHANNELS.runs.abort,
-        args: [runId],
-      }),
+      async queryFn(runId, { dispatch, getState }, _extra, baseQuery) {
+        const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
+        dispatch(pauseRunQueue({ ownerKey: runOwnerKey(backendId, runId), reason: "Run stopped. Queued messages are paused." }));
+        const result = await baseQuery({ handler: CHANNELS.runs.abort, args: [runId] });
+        return result.error ? { error: result.error } : { data: undefined };
+      },
       invalidatesTags: (_result, _error, runId) => ["Runs", { type: "Runs", id: runId }],
     }),
 
@@ -431,7 +435,7 @@ export const runsApi = baseApi.injectEndpoints({
         const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
         const result = await baseQuery({ handler: CHANNELS.runs.delete, args: [id] });
         if (result.error) return { error: result.error };
-        forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "run", id });
+        forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "run", id }, (getState() as RootState).runQueue?.byOwner);
         return { data: undefined };
       },
       invalidatesTags: ["Runs"],
@@ -442,6 +446,7 @@ export const runsApi = baseApi.injectEndpoints({
         const backendId = (getState() as RootState).backends.activeBackendId ?? "local";
         const result = await baseQuery({ handler: CHANNELS.runs.archive, args: [id] });
         if (result.error) return { error: result.error };
+        dispatch(pauseRunQueue({ ownerKey: runOwnerKey(backendId, id), reason: "This conversation is archived." }));
         dispatch(detachArchivedRun({ backendId, runId: id }));
         return { data: result.data as Run };
       },

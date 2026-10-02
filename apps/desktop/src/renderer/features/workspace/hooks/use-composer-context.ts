@@ -36,6 +36,12 @@ function releaseAppshotCapture(appshot: ContextAppshotItem) {
 }
 
 function releaseOwnedCapture(item: ContextItem) {
+  // An editor can detach a capture while the original queued input or saved
+  // draft still owns it. Keep those pixels until that ownership is released.
+  const queues = store.getState().runQueue?.byOwner ?? {};
+  const key = contextItemKey(item);
+  if (Object.values(queues).some((queue) => [...queue.messages.flatMap((message) => message.contextItems),
+    ...(queue.draftBackup?.contextItems ?? [])].some((saved) => saved.kind === item.kind && contextItemKey(saved) === key))) return;
   if (item.kind === "browser") releaseBrowserCaptures(item);
   if (item.kind === "appshot") releaseAppshotCapture(item);
 }

@@ -407,6 +407,10 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
  * Request to continue an existing run (resume session)
  */
 export interface WorkRunContinueRequest {
+  /** Correlates a locally queued input with Codex's accepted userMessage. */
+  clientUserMessageId?: string;
+  /** Backend-only callback; never serialized onto the wire. */
+  onInputAccepted?: (turnId: string) => Promise<void>;
   runId: string;
   accountId: string;
   execution: RunExecutionContext;
@@ -460,6 +464,11 @@ export interface WorkRunContinueRequest {
    */
   agents?: AgentsConfig;
 }
+
+/** Input added to the existing active turn; no turn-level overrides. */
+export type WorkRunSteerRequest = Pick<WorkRunContinueRequest,
+  "runId" | "message" | "context" | "attachments" | "contextIssues" |
+  "contextSignals" | "contextFiles" | "skills"> & { clientUserMessageId: string };
 
 /**
  * Request to fork an existing run's session into a new run.
@@ -584,6 +593,8 @@ export interface WorkRunAdapter {
    * @returns Promise resolving to the final result when the continuation completes
    */
   continueRun?(request: WorkRunContinueRequest, onEvent: WorkRunEventHandler): Promise<WorkRunResult>;
+  steerRun?(request: WorkRunSteerRequest): Promise<{ turnId: string }>;
+  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string }>;
 
   /**
    * Fork an existing run's session into a new run.
@@ -838,6 +849,8 @@ export interface ProviderDriver {
 
   /** Resume an existing session by id and build the follow-up prompt. */
   resumeSession?(request: WorkRunContinueRequest): Promise<AcquiredSession>;
+  steerRun?(request: WorkRunSteerRequest): Promise<{ turnId: string }>;
+  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string }>;
 
   /** Fork an existing session into a new run and build the prompt. */
   forkSession?(request: WorkRunForkRequest): Promise<AcquiredSession>;

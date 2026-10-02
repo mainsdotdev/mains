@@ -228,7 +228,7 @@ Core tables:
 - `adapter.factory.ts` — creates the correct driver by provider id
 - `claude.driver.ts` — Claude Code via `@anthropic-ai/claude-agent-sdk`
 - `copilot.driver.ts` — GitHub Copilot CLI via `@github/copilot-sdk`
-- `codex.driver.ts` — OpenAI Codex CLI, decomposed into `codex-app-server.client.ts` (process/transport), `codex-session-acquisition.ts` (create/resume/fork/review), `codex-run-coordinator.ts` (live run state, routing, finalization), `codex-capabilities.ts` (models/accounts/skills/plugins), `codex-event-mapper.ts` (notification → event projection), `codex-request-broker.ts` (server-request policy), plus the generated `codex-app-server-protocol/`
+- `codex.driver.ts` — OpenAI Codex CLI, decomposed into `codex-app-server.client.ts` (process/transport), `codex-session-acquisition.ts` (create/resume/fork/review), `codex-turn-input.ts` (shared native turn input), `codex-run-coordinator.ts` (live run state, steering, routing, finalization), `codex-capabilities.ts` (models/accounts/skills/plugins), `codex-event-mapper.ts` (notification → event projection), `codex-request-broker.ts` (server-request policy), plus the generated `codex-app-server-protocol/`
 - `cursor.driver.ts` — Cursor agent via `@cursor/sdk`
 - `fake.driver.ts` — in-memory driver used by tests
 - `work-run-core.ts` — shared run loop / event plumbing used by every driver
@@ -391,6 +391,8 @@ Everything the composer attaches to the next message — files, issues, signals,
 - `features/workspace/hooks/use-composer-context.ts` — the read path (`items`, the grouped views, `add` / `remove` / `update` / `clear` / route reset). Updates use the existing keyed context replacement. Route reset preserves global Lens captures and drops workspace-scoped context. Components read it directly; never pass context lists or `onRemoveContextX` down as props. A component that only attaches dispatches `addContextItem` instead of subscribing.
 - `features/workspace/lib/run-context-payload.ts` — `buildRunContextPayload(items, uploads)` shapes context for `runs:execute` / `runs:continue`. `executeRun` / `continueRun` take one `ContextItem[]`, never per-kind parameters.
 - Store side: a single `workspace.contextItems` array behind `addContextItem` / `removeContextItem` / `clearContextItems`.
+- Codex queues use the unpersisted `runQueueSlice` plus `features/workspace/lib/run-queue-controller.ts`; `use-run-message-queue-controller.ts` mounts one consumer at app scope. Queue snapshots use the shared context payload builder. Files stay in `use-transient-uploads`, outside Redux.
+- `use-composer-run-queue.ts` owns enqueue/edit/cancel/remove/reorder controls; `composer-run-queue.tsx` presents the rows above every composer with the shared `SortableList`. Reordering preserves message/file identities and is locked during editing, sending or uncertain delivery. `run-queue-preview.ts` selects one representative attachment and mirrors a small cached thumbnail to the native floating renderer, which relays actions and never starts a second queue consumer. Stop/failure/disconnection pause delivery, and uncertain acceptance is checked by client message id before input is removed.
 
 ### Lens (macOS desktop; internal name `appshots`)
 

@@ -127,6 +127,28 @@ describe("native browser chat window", () => {
     expect((post({ sender: harness.child!.webContents }, { type: "composerHeight", height: Number.NaN }) as { success: boolean }).success).toBe(false);
   });
 
+  it("relays queue actions and frozen input to the parent without starting a second consumer", () => {
+    registerBrowserChatWindowIpc();
+    browserChatWindow.update({ visible: true, bounds: { x: 0, y: 0, width: 800, height: 600 }, card: { x: 250, y: 300, width: 540, height: 280 } });
+    const post = harness.handlers.get(CHANNELS.browser.chatPostAction)!;
+    for (const action of [
+      { type: "queueSubmit", ownerKey: "run", draft: "next", items: [], uploads: [], model: "gpt", additionalDirectories: ["/folder"] },
+      { type: "queueAction", ownerKey: "run", action: "steer", id: "input" },
+      { type: "queueAction", ownerKey: "run", action: "edit", id: "input" },
+      { type: "queueAction", ownerKey: "run", action: "remove", id: "input" },
+      { type: "queueReorder", ownerKey: "run", orderedIds: ["second", "first"] },
+      { type: "directories", ownerKey: "run", directories: ["/folder"] },
+    ]) {
+      expect((post({ sender: harness.child!.webContents }, action) as { success: boolean }).success).toBe(true);
+      expect(harness.parent.webContents.send).toHaveBeenCalledWith(CHANNELS.browser.chatAction, action);
+    }
+    expect((post({ sender: harness.child!.webContents }, { type: "queueAction", ownerKey: "run", action: "invalid" }) as { success: boolean }).success).toBe(false);
+    expect((post({ sender: harness.child!.webContents }, { type: "queueSubmit", ownerKey: "run", draft: "next", items: [], uploads: [], additionalDirectories: [123] }) as { success: boolean }).success).toBe(false);
+    for (const orderedIds of [[123], ["duplicate", "duplicate"], [""]]) {
+      expect((post({ sender: harness.child!.webContents }, { type: "queueReorder", ownerKey: "run", orderedIds }) as { success: boolean }).success).toBe(false);
+    }
+  });
+
   it("relays MCP app results only from the floating chat and rejects malformed app requests", () => {
     registerBrowserChatWindowIpc();
     browserChatWindow.update({ visible: true,

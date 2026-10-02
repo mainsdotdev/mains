@@ -11,6 +11,7 @@ import { baseApi } from "./api/baseApi";
 import appSettingsReducer from "./slices/appSettingsSlice";
 import workspaceReducer from "./slices/workspaceSlice";
 import backendsReducer from "./slices/backendsSlice";
+import runQueueReducer from "./slices/runQueueSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
 import { onTransportChange } from "../transport";
 import { parseAppThemeSettings } from "../app-themes";
@@ -106,6 +107,8 @@ export const store = configureStore({
     appSettings: persistedAppSettingsReducer,
     workspace: persistedWorkspaceReducer,
     backends: persistedBackendsReducer,
+    // Unsent messages and their delivery mode live only in this renderer.
+    runQueue: runQueueReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

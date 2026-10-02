@@ -88,6 +88,8 @@ const roots = [
   "v2/TurnInterruptResponse.ts",
   "v2/TurnStartParams.ts",
   "v2/TurnStartResponse.ts",
+  "v2/TurnSteerParams.ts",
+  "v2/TurnSteerResponse.ts",
 ];
 
 function normalizeVersion(rawVersion) {

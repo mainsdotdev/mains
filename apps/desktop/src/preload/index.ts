@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 import type { ModeId } from "../shared/modes";
@@ -725,6 +726,7 @@ const api = {
       ipcRenderer.invoke(CHANNELS.runToolCalls.getByRun, runId, sinceUpdatedAt),
     // Session resume methods
     continue: (payload: {
+      clientUserMessageId?: string;
       runId: string;
       accountId: string;
       message: string;
@@ -742,6 +744,8 @@ const api = {
       contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
       contextSkills?: Array<{ name: string; path?: string; mentionPath?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
+    steer: (payload: RunSteerPayload) => ipcRenderer.invoke(CHANNELS.runs.steer, payload),
+    inputStatus: (payload: RunInputStatusPayload) => ipcRenderer.invoke(CHANNELS.runs.inputStatus, payload),
     canResume: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.canResume, runId),
     fork: (payload: {
       sourceRunId: string;

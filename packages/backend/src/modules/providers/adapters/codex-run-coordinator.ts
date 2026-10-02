@@ -2,6 +2,7 @@ import type {
   DriverOutcome,
   WorkRunEvent,
   WorkRunEventHandler,
+  WorkRunSteerRequest,
 } from "../../../../shared/adapter.types";
 import {
   cancelPendingRequest,
@@ -10,6 +11,7 @@ import {
 import {
   createLogger,
   extractArtifactsFromToolOutput,
+  emitUserPromptArtifact,
   type AdapterLogger,
 } from "./adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
@@ -21,6 +23,15 @@ import {
 } from "./codex-event-mapper";
 import type { MainsToolContext } from "./mains-tools.core";
 import { createCodexRequestBroker } from "./codex-request-broker";
+import { buildCodexTurnInput } from "./codex-turn-input";
+
+interface TrackedInput {
+  accept: (turnId: string) => Promise<void>;
+  finish: () => void;
+  settled: Promise<void>;
+  accepted: boolean;
+  turnId?: string;
+}
 
 export interface CodexRunSession {
   runId: string;
@@ -61,6 +72,8 @@ interface TurnCompletion {
 }
 
 interface CodexRunSink {
+  onEvent: WorkRunEventHandler;
+  inputs: Map<string, TrackedInput>;
   handleNotification: (
     method: string,
     params: unknown,
@@ -91,6 +104,83 @@ export function createCodexRunCoordinator(
   const runSinks = new Map<string, CodexRunSink>();
   const serverRequestOwners = new Map<string, string>();
   const turnOwners = new Map<string, string>();
+
+  function trackInput(
+    runId: string,
+    clientId: string,
+    onAccepted: (turnId: string) => Promise<void>,
+  ): TrackedInput {
+    const sink = runSinks.get(runId);
+    if (!sink) throw new Error("There is no active Codex turn to steer.");
+    const existing = sink.inputs.get(clientId);
+    if (existing) return existing;
+    let projection: Promise<void> | undefined;
+    let finish!: () => void;
+    const settled = new Promise<void>((resolve) => { finish = resolve; });
+    const tracked: TrackedInput = {
+      accepted: false,
+      settled,
+      finish,
+      accept(turnId) {
+        tracked.accepted = true;
+        tracked.turnId ??= turnId;
+        // ACK and native userMessage echo share one projection, including
+        // when completion arrives before the steer response.
+        return projection ??= Promise.resolve().then(() => onAccepted(turnId));
+      },
+    };
+    sink.inputs.set(clientId, tracked);
+    return tracked;
+  }
+
+  async function steerRun(
+    server: CodexAppServer | null,
+    request: WorkRunSteerRequest,
+  ): Promise<{ turnId: string }> {
+    const state = activeRuns.get(request.runId);
+    const sink = runSinks.get(request.runId);
+    // Capture parent ownership before preparing files; never retarget a late
+    // request onto a subsequent turn or a subagent.
+    if (!server?.isRunning || !state?.threadId || !state.turnId || state.aborted || !sink) {
+      throw new Error("There is no active Codex turn to steer. The message stays queued.");
+    }
+    const threadId = state.threadId;
+    const turnId = state.turnId;
+    if (sink.inputs.has(request.clientUserMessageId)) {
+      throw new Error("This message is already being sent.");
+    }
+    const tracked = trackInput(request.runId, request.clientUserMessageId, (providerTurnId) =>
+      emitUserPromptArtifact(sink.onEvent, request.message, {
+        ...request,
+        contextSkills: request.skills,
+        providerTurnId,
+        delivery: "steer",
+      }),
+    );
+    try {
+      const input = buildCodexTurnInput(request.message, request);
+      const response = await server.sendRequest("turn/steer", {
+        threadId,
+        expectedTurnId: turnId,
+        clientUserMessageId: request.clientUserMessageId,
+        input,
+      });
+      await tracked.accept(response.turnId);
+      return response;
+    } catch (error) {
+      // A native echo proves acceptance even if its RPC response was lost.
+      if (tracked.accepted) {
+        await tracked.accept(tracked.turnId!);
+        return { turnId: tracked.turnId! };
+      }
+      if (!/timeout|exited|stopping|connection/i.test(error instanceof Error ? error.message : String(error))) {
+        sink.inputs.delete(request.clientUserMessageId);
+      }
+      throw error;
+    } finally {
+      tracked.finish();
+    }
+  }
   // Child threads outlive an individual turn/run execution. Keep their
   // identity and original spawn anchor while the parent Codex session is
   // resumable so Continue can re-arm the same panel row.
@@ -532,6 +622,13 @@ export function createCodexRunCoordinator(
       ) => {
         const state = activeRuns.get(runId);
 
+        if (method === "item/started" || method === "item/completed") {
+          const payload = params as { threadId?: string; turnId?: string; item?: { type?: string; clientId?: string } };
+          if (payload.threadId === state?.threadId && payload.item?.type === "userMessage" && payload.item.clientId && payload.turnId) {
+            await sink.inputs.get(payload.item.clientId)?.accept(payload.turnId);
+          }
+        }
+
         if (state && state.pendingFlush.length > 0) {
           const flushed = state.pendingFlush.splice(0);
           for (const event of flushed) {
@@ -585,6 +682,10 @@ export function createCodexRunCoordinator(
           ) {
             return;
           }
+
+          // A steer accepted immediately before completion must be persisted
+          // before the enclosing RunSession closes its turn and Git snapshot.
+          await Promise.all([...sink.inputs.values()].map((input) => input.settled));
 
           const turn = completionParams?.turn as
             | Record<string, unknown>
@@ -652,6 +753,8 @@ export function createCodexRunCoordinator(
         });
 
       const sink: CodexRunSink = {
+        onEvent,
+        inputs: new Map(),
         handleNotification,
         handleServerRequest,
         notificationQueue: Promise.resolve(),
@@ -819,6 +922,8 @@ export function createCodexRunCoordinator(
     handleServerClose,
     installDispatcher,
     registerRun,
+    steerRun,
+    trackInput,
     shutdown,
   };
 }

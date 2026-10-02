@@ -5,6 +5,7 @@ import * as path from "path";
 import { describe, it, expect, vi } from "vitest";
 import {
   saveAttachments,
+  attachmentUploadDir,
   adoptConfig,
   createLogger,
   safeJson,
@@ -507,5 +508,21 @@ describe("toolWrites", () => {
     expect(toolWrites("Read", { file_path: "a.ts" })).toEqual(none);
     expect(toolWrites("Grep", { pattern: "x" })).toEqual(none);
     expect(toolWrites("str_replace_editor", { command: "view", path: "a.ts" })).toEqual(none);
+  });
+});
+
+
+describe("queued input attachment ownership", () => {
+  it("keeps equal filenames in distinct message directories without changing display names", () => {
+    const runId = `queue-attachments-${Date.now()}`;
+    try {
+      const attachment = { name: "image.png", type: "image" as const, data: Buffer.from("first").toString("base64"), mimeType: "image/png" };
+      const first = saveAttachments([attachment], runId, "first-input").savedPaths[0];
+      const second = saveAttachments([{ ...attachment, data: Buffer.from("second").toString("base64") }], runId, "second-input").savedPaths[0];
+      expect(first).not.toBe(second);
+      expect(path.basename(first)).toBe("image.png");
+      expect(fs.readFileSync(first, "utf8")).toBe("first");
+      expect(fs.readFileSync(second, "utf8")).toBe("second");
+    } finally { fs.rmSync(attachmentUploadDir(runId), { recursive: true, force: true }); }
   });
 });

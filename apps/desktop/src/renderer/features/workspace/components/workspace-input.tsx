@@ -38,6 +38,9 @@ import {
 } from "@/features/workspace/components/unified-context-dropdown";
 import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
 import { ContextChips } from "./context-chips";
+import { ComposerQueueCard } from "./composer-run-queue";
+import type { ComposerRunQueue } from "../hooks/use-composer-run-queue";
+import { hasComposerMessage } from "../lib/composer-message";
 import { ComposerAttachments } from "./composer-attachments";
 import { InputToolbar } from "./input-toolbar";
 import { ContextUsageRing } from "./context-usage-meter";
@@ -157,6 +160,7 @@ export interface ComposerSendTarget {
 }
 
 interface WorkspaceInputProps {
+  runQueue?: ComposerRunQueue;
   goal: string;
   onGoalChange: (value: string) => void;
   onSubmit: () => void;
@@ -188,6 +192,7 @@ interface WorkspaceInputProps {
 }
 
 export function WorkspaceInput({
+  runQueue,
   goal,
   onGoalChange,
   onSubmit,
@@ -223,6 +228,7 @@ export function WorkspaceInput({
   const pluginsButtonRef = useRef<HTMLButtonElement>(null);
   const {
     files: contextFiles,
+    items: contextItems,
     skills: contextSkills,
     codeSelections: contextCodeSelections,
     browserSelections: contextBrowserSelections,
@@ -868,6 +874,12 @@ export function WorkspaceInput({
     return null;
   })();
 
+  const hasMessage = hasComposerMessage(goal, uploadedFiles.length, contextItems);
+  const isRunning = activeRun?.status === "running" || activeRun?.status === "queued";
+  const canSendDuringRun = activeDescriptor.supportsTurnSteer && !!runQueue;
+  const showStop = isRunning && !runQueue?.editing && (!canSendDuringRun || !hasMessage);
+  const steerPending = runQueue?.queue?.mode === "steer" && runQueue.queue.messages.some((message) => message.status === "sending");
+  const submitDisabled = isLoading || !!steerPending || !hasMessage || (isRunning && !canSendDuringRun);
   const toolbar = (
     <InputToolbar
       floatingChatMode={floatingChatMode}
@@ -899,11 +911,14 @@ export function WorkspaceInput({
       onEffortLevelChange={handleEffortLevelChange}
       supportedEffortLevels={selectedModelInfo?.supportedEffortLevels}
       supportsUltracode={supportsUltracode}
-      isRunning={activeRun?.status === "running"}
+      isRunning={isRunning}
+      showStop={showStop}
+      sendLabel={runQueue?.editing ? "Save queued message" : isRunning && canSendDuringRun
+        ? runQueue?.queue?.mode === "steer" ? "Steer current turn" : "Queue message" : "Send prompt"}
       onStop={onStop}
       uploadedFiles={uploadedFiles}
       onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
-      disabled={!!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
+      disabled={submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
       layout={layout === "floating" ? "floating" : "default"}
     />
   );
@@ -939,6 +954,7 @@ export function WorkspaceInput({
         )
       )}
 
+      {runQueue && <ComposerQueueCard controls={runQueue} isRunning={isRunning} />}
       <div
         className={`@container/composer relative mx-auto flex min-w-0 w-full max-w-210 flex-col cursor-pointer transition-all
         ${layout === "floating"
@@ -1021,6 +1037,10 @@ export function WorkspaceInput({
             </div>
           </div>
         )}
+        {runQueue?.editing && <div className="flex items-center justify-between gap-2 px-4 pt-3 text-xs text-primary-500">
+          <span>Editing queued message</span>
+          <Button onClick={runQueue.onCancelEdit} className="rounded-lg px-2 py-1 text-primary-800 hover:bg-primary-200/50 dark:text-primary-200 dark:hover:bg-primary/5">Cancel edit</Button>
+        </div>}
         <ContextChips />
         {additionalDirectories.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-4 pt-3">
@@ -1056,8 +1076,7 @@ export function WorkspaceInput({
             query={goal}
             onQueryChange={handleGoalChange}
             onSubmit={handleSubmit}
-            // Mirrors the toolbar: while the agent works, Enter waits too.
-            submitDisabled={activeRun?.status === "running" || activeRun?.status === "queued"}
+            submitDisabled={submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
             onSkillChipsChange={handleSkillChipsChange}
             onFileChipsChange={handleFileChipsChange}
             onCodeChipsChange={handleCodeChipsChange}

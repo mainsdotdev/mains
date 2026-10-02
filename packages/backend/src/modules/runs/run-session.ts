@@ -1,3 +1,4 @@
+import { insertRunInputArtifact } from "./run-input-artifact";
 import {
   couldModifyFiles,
   toolWrites,
@@ -26,7 +27,7 @@ import { createWorkAdapter } from "../providers/adapters";
 import { runSessionRegistry } from "./run-session-registry";
 import { showRunFinishedNotification } from "./run-notification-sink";
 import { emit } from "../../ipc-kit";
-import type { RunArtifactKind, TurnFileChange } from "./runs.dto";
+import type { TurnFileChange } from "./runs.dto";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 // ─────────────────────────────────────────────────────────────
@@ -762,18 +763,11 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       return false;
     }
 
-    await runsRepo.insertArtifact({
-      runId,
-      kind: event.kind as RunArtifactKind,
-      path: event.path,
-      content: event.content,
-      contentHash: event.content ? hashContent(event.content) : undefined,
-      metadata: event.metadata,
-    });
+    if (!await insertRunInputArtifact(runId, event)) return false;
 
     // Turn boundary side-effects
     const artifactKind = (event.metadata as Record<string, unknown> | undefined)?.kind;
-    if (artifactKind === "user-prompt") {
+    if (artifactKind === "user-prompt" && event.metadata?.delivery !== "steer") {
       await startNextTurn(event.content);
     }
     if (event.kind === "user-prompt") {

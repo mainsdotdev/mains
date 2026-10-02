@@ -46,6 +46,8 @@ export const appApi = {
     ),
     execute: method<typeof window.api.runs.execute>(CHANNELS.runs.execute),
     continue: method<typeof window.api.runs.continue>(CHANNELS.runs.continue),
+    steer: method<typeof window.api.runs.steer>(CHANNELS.runs.steer),
+    inputStatus: method<typeof window.api.runs.inputStatus>(CHANNELS.runs.inputStatus),
     canResume: method<typeof window.api.runs.canResume>(CHANNELS.runs.canResume),
     fork: method<typeof window.api.runs.fork>(CHANNELS.runs.fork),
     executeReview: method<typeof window.api.runs.executeReview>(

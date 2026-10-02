@@ -27,6 +27,7 @@ export interface BrowserChatContext {
   mode: FloatingChatMode;
   draft: string;
   selectedModel: string;
+  additionalDirectories?: string[];
   selectedCollectionId: string | null;
   /** Matches the parent renderer's theme without a second persistent writer. */
   dark: boolean;
@@ -35,14 +36,21 @@ export interface BrowserChatContext {
   contextItems: unknown[];
   uploadsVersion: number;
   uploads: BrowserChatUpload[];
+  /** Mirrored display state; the parent alone owns queue execution and files. */
+  runQueue?: unknown;
+  draftRevision?: number;
 }
 
 export type BrowserChatAction =
+  | { type: "queueReorder"; ownerKey: string; orderedIds: string[] }
+  | { type: "queueSubmit"; ownerKey: string; draft: string; items: unknown[]; uploads: BrowserChatUpload[]; model?: string; additionalDirectories?: string[]; editingId?: string }
+  | { type: "queueAction"; ownerKey: string; action: "steer" | "edit" | "remove" | "cancelEdit" | "resume" | "queueMode" | "steerMode" | "stop"; id?: string }
   | { type: "mode"; mode: FloatingChatMode }
   | { type: "pagePointerDown" }
   | { type: "composerHeight"; height: number }
   | { type: "draft"; ownerKey: string; draft: string }
   | { type: "model"; providerId: string; model: string }
+  | { type: "directories"; ownerKey: string; directories: string[] }
   | { type: "selectRun"; ownerKey: string; runId: string }
   | { type: "openMcpApp"; ownerKey: string; result: McpAppToolOpen; automatic: boolean }
   | { type: "providerChanged"; providerId: string }

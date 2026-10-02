@@ -36,6 +36,19 @@ function savedState(): RootState {
 }
 
 describe("persisted UI reconciliation", () => {
+  it("checks and clears a queued conversation even after its tab was closed", async () => {
+    const state = savedState();
+    const ownerKey = runOwnerKey("local", "closed-run");
+    state.runQueue = { byOwner: { [ownerKey]: { backendId: "local", runId: "closed-run", runStatus: "running", mode: "queue", messages: [] } } };
+    const invoke = vi.fn(async (_channel: string, args?: unknown[]) => ({ success: true as const, data: args?.[0] === "closed-run" ? null : { id: args?.[0] } }));
+    const transport = { invoke, status: () => "connected" } as unknown as Transport;
+    harness.transport = transport;
+    const dispatch = vi.fn() as unknown as AppDispatch;
+    await reconcilePersistedUiState(dispatch, () => state, transport, "local");
+    expect(invoke).toHaveBeenCalledWith(CHANNELS.runs.getById, ["closed-run"]);
+    expect(dispatch).toHaveBeenCalledWith({ type: "runQueue/forgetRunQueue", payload: ownerKey });
+  });
+
   it("checks only saved IDs for the connected backend", () => {
     const candidates = collectUiContextCandidates(
       savedState(),

@@ -120,7 +120,7 @@ const composerMarkdownComponents: Components = {
     <span
       data-markdown-image-src={typeof src === "string" ? src : ""}
       data-markdown-image-alt={alt ?? ""}
-      className="inline-flex rounded-lg bg-primary-200/40 px-2 py-1 text-xs text-primary-600 dark:bg-primary/10 dark:text-primary-400"
+      className="inline-flex rounded-lg bg-primary-200/40 px-2 py-1 text-s text-primary-600 dark:bg-primary/10 dark:text-primary-400"
     >
       {alt?.trim() || "Image"}
     </span>
@@ -213,7 +213,7 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   // Fixed height + leading-none + align-middle so the line box height stays constant
   // regardless of whether the chip carries an icon — keeps the caret height consistent.
   chip.className =
-    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none " +
+    "inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
 
@@ -278,7 +278,7 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = file.path;
   chip.className =
-    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "inline-flex align-middle items-center gap-1 h-6 mx-0.5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
     "  cursor-default";
 
   const iconSlot = document.createElement("span");
@@ -301,7 +301,7 @@ function buildCodeChip(code: RichCodeChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = code.key;
   chip.className =
-    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 text-accent hover:underline rounded-lg text-xs font-medium leading-none select-none " +
+    "inline-flex align-middle items-center gap-1  mb-0.5 h-6 mx-0.5 text-accent hover:underline rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline cursor-default";
 
   const iconSlot = document.createElement("span");
@@ -953,6 +953,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
           if (!submitDisabled) onSubmit();

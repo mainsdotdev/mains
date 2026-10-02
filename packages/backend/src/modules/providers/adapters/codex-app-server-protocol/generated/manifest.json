@@ -1010,6 +1010,14 @@
       "sha256": "c69049363f97e97844e9fc851f0cd4122da057ba1371de003a28c00ab7a6ef1a"
     },
     {
+      "path": "v2/TurnSteerParams.ts",
+      "sha256": "df6283cc3dbc264b40a372806a2e3e0ec2d834b6584c1a8a4576116064f04e4e"
+    },
+    {
+      "path": "v2/TurnSteerResponse.ts",
+      "sha256": "b77bae04f63621580d71aecab4c19c9dcd8d9147be1c4b07fe809dcaf584212b"
+    },
+    {
       "path": "v2/TurnToolOutput.ts",
       "sha256": "6cd2705dfb62b22df331f044ab73530cc37fe82c7c6f43ec5379208563b1343e"
     },

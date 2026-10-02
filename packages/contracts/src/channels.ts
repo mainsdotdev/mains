@@ -352,6 +352,8 @@ export const CHANNELS = {
     complete: "runs:complete",
     contextUsage: "runs:contextUsage",
     continue: "runs:continue",
+    steer: "runs:steer",
+    inputStatus: "runs:inputStatus",
     create: "runs:create",
     delete: "runs:delete",
     deleteSession: "runs:deleteSession",

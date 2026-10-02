@@ -1,3 +1,6 @@
+import { useComposerRunQueue, type QueueMessageSnapshot } from "./use-composer-run-queue";
+import { hasComposerMessage } from "../lib/composer-message";
+import { runMessageQueue } from "../lib/run-message-queue";
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { toast } from "@/components/ui";
 import { useNavigate, useParams } from "react-router-dom";
@@ -221,6 +224,19 @@ export function useWorkspacePage(providerId: string) {
     setDirectoryDrafts((current) => ({ ...current, [ownerKey]: directories }));
   }, [ownerKey]);
 
+  const supportsTurnSteer = getProviderVariantById(providerId)?.supportsTurnSteer ?? false;
+  const runQueue = useComposerRunQueue({
+    enabled: supportsTurnSteer, ownerKey, backendId, run: composeTargetRun,
+    selectedModel, additionalDirectories, setModel: handleModelChange, setDirectories: setAdditionalDirectories,
+  });
+  const handleQueueSnapshot = (snapshot: QueueMessageSnapshot) => {
+    const text = snapshot.text.trim() || browserAnnotationPrompt(snapshot.contextItems);
+    if (!hasComposerMessage(text, snapshot.files.length, snapshot.contextItems)) return false;
+    return runQueue.submitSnapshot({ ...snapshot, text,
+      contextItems: [...snapshot.contextItems, ...(snapshot.editingId ? [] : appContext?.(ownerKey) ?? [])],
+    });
+  };
+
   const handleNewConversationContextChange = useCallback((selection: NewConversationContext) => {
     if ((mode === "developer") !== ("workspaceId" in selection)) return;
     const nextParts = { ...contextParts, ...selection };
@@ -367,8 +383,12 @@ export function useWorkspacePage(providerId: string) {
   }, [setGoal, setUploadedFiles, clearContext, composeTargetRunId, ownerKey]);
 
   const handleExecute = useCallback(async (message?: string, options: McpAppMessageOptions = {}) => {
-    const text = (message ?? goal).trim() || (message === undefined ? browserAnnotationPrompt(contextItems) : "");
-    if (!text) return null;
+    const currentState = store.getState().workspace;
+    const draft = currentState.draftTextByKey[ownerKey] ?? goal;
+    const files = getTransientUploadsForOwner(ownerKey);
+    const items = currentState.composerContextKey === ownerKey ? currentState.contextItems : currentState.contextItemsByKey[ownerKey] ?? contextItems;
+    const text = (message ?? draft).trim() || (message === undefined ? browserAnnotationPrompt(items) : "");
+    if (!hasComposerMessage(text, files.length, items)) return null;
     if (mode === "developer" && !workspaceId) {
       toast.error("Select a workspace before sending a prompt.");
       return null;
@@ -376,7 +396,23 @@ export function useWorkspacePage(providerId: string) {
     const targetRunId = options.target === "new" ? null : composeTargetRunId;
     const targetRun = targetRunId ? composeTargetRun : undefined;
     if (targetRunId && !targetRun) return null;
-    if (sendingRef.current || (targetRun && (targetRun.status === "running" || targetRun.status === "queued"))) {
+    if (message === undefined && runQueue.controls?.editing) {
+      runQueue.saveEdit(text, [...items]);
+      return targetRunId;
+    }
+    const live = targetRun?.status === "running" || targetRun?.status === "queued";
+    const queued = store.getState().runQueue?.byOwner[ownerKey];
+    if (targetRunId && supportsTurnSteer && (live || !!queued?.messages.length)) {
+      const id = runQueue.enqueue(text, [...items, ...(appContext?.(ownerKey) ?? [])], files);
+      if (!id) return null;
+      if (message === undefined) {
+        dispatch(setDraftText({ key: ownerKey, text: "" }));
+      }
+      dispatch(setContextItemsForKey({ key: ownerKey, items: [] }));
+      if (queued?.mode === "steer" && live) void runMessageQueue.send(ownerKey, id, "steer");
+      return targetRunId;
+    }
+    if (sendingRef.current || live) {
       if (message !== undefined) throw new Error("Wait for the current response or stop it before sending another message");
       return null;
     }
@@ -384,9 +420,9 @@ export function useWorkspacePage(providerId: string) {
       throw new Error("This conversation cannot be resumed. Start a new chat.");
     }
     sendingRef.current = true;
-    const submitted = [...contextItems];
+    const submitted = [...items];
     try {
-      const attachments = uploadedFiles.length > 0 ? await serializeAttachments(uploadedFiles) : undefined;
+      const attachments = files.length > 0 ? await serializeAttachments(files) : undefined;
       const runContext = [...submitted, ...(appContext?.(ownerKey) ?? [])];
       const continuing = !!targetRunId && canResume && !!targetRun;
       let nextRunId: string | null;
@@ -418,7 +454,7 @@ export function useWorkspacePage(providerId: string) {
         dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
         await (window as any).api?.browser?.reassignTabs?.(ownerKey, nextOwnerKey);
       }
-      if (getTransientUploadsForOwner(ownerKey) === uploadedFiles) setUploadedFiles([]);
+      if (getTransientUploadsForOwner(ownerKey) === files) setUploadedFiles([]);
       attachAppRun?.(ownerKey, nextRunId, contextParts);
       const visible = store.getState().workspace;
       if (visible.workspaceViewKey !== viewKey ||
@@ -428,9 +464,9 @@ export function useWorkspacePage(providerId: string) {
       if (mode !== "developer") navigate(`/code/runs/${nextRunId}`);
       return nextRunId;
     } finally { sendingRef.current = false; }
-  }, [goal, uploadedFiles, contextItems, runAdditionalDirectories, mode, workspaceId, selectedWorkspace,
+  }, [goal, contextItems, runAdditionalDirectories, mode, workspaceId, selectedWorkspace,
     selectedModel, executeRun, continueRun, composeTargetRunId, composeTargetRun, selectTab, canResume,
-    setUploadedFiles, dispatch, providerId, selectedCollectionId, navigate, ownerKey, contextParts, appContext, attachAppRun, viewKey]);
+    setUploadedFiles, dispatch, providerId, selectedCollectionId, navigate, ownerKey, contextParts, appContext, attachAppRun, viewKey, supportsTurnSteer, runQueue]);
 
   // Auto-execute when pendingAutoExecute was set (e.g. "Review Changes" button, suggestion chips)
   useEffect(() => {
@@ -532,6 +568,7 @@ export function useWorkspacePage(providerId: string) {
 
   return {
     // State
+    runQueue: runQueue.controls,
     ownerKey,
     contextParts,
     goal,
@@ -567,6 +604,7 @@ export function useWorkspacePage(providerId: string) {
     // Handlers
     handleModelChange,
     handleExecute,
+    handleQueueSnapshot,
     handleSendTargetChange,
     handleNewConversationContextChange,
     setAutoExecute,

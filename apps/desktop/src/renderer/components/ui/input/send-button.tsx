@@ -7,6 +7,8 @@ interface SendButtonProps {
   onStop?: () => void;
   disabled?: boolean;
   compact?: boolean;
+  showStop?: boolean;
+  label?: string;
 }
 
 export function SendButton({
@@ -15,13 +17,15 @@ export function SendButton({
   onStop,
   disabled = false,
   compact = false,
+  showStop = loading && !!onStop,
+  label = "Send prompt",
 }: SendButtonProps) {
   const isDisabled = loading || disabled;
   const sizing = compact
     ? "flex size-8 items-center justify-center px-0"
     : "p-1.5";
 
-  if (loading && onStop) {
+  if (showStop && onStop) {
     return (
       <Button
         type="button"
@@ -38,14 +42,14 @@ export function SendButton({
   return (
     <Button
       type="button"
-      tooltip="Send"
+      tooltip={label}
       onClick={() => {
         if (!isDisabled) onSubmit();
       }}
       className={`${sizing} glass-button rounded-full relative ${
         isDisabled ? "opacity-70 cursor-not-allowed" : ""
       }`}
-      aria-label={loading ? "Submitting..." : "Send prompt"}
+      aria-label={loading ? "Submitting..." : label}
       disabled={isDisabled}
     >
       {loading && (

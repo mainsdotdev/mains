@@ -411,3 +411,24 @@ describe("matchModelChangesToPromptGroups", () => {
     expect(changes.size).toBe(0);
   });
 });
+
+
+describe("steer transcript boundaries", () => {
+  it("keeps a steer inside the running turn for session timing and model markers", () => {
+    const groups = groupEvents([
+      ev({ id: "u1", timestamp: new Date(1000), content: "initial", metadata: { kind: "user-prompt" } }),
+      ev({ id: "a1", timestamp: new Date(3000), content: "working", metadata: { kind: "report" } }),
+      ev({ id: "steer", timestamp: new Date(5000), content: "guidance", metadata: { kind: "user-prompt", delivery: "steer" } }),
+      ev({ id: "a2", timestamp: new Date(8000), content: "updated answer", metadata: { kind: "report" } }),
+      ev({ id: "u2", timestamp: new Date(10000), content: "next turn", metadata: { kind: "user-prompt" } }),
+      ev({ id: "a3", timestamp: new Date(13000), content: "done", metadata: { kind: "report" } }),
+    ]);
+    const at = (id: string) => groups.findIndex((group) => group.events.some((event) => event.id === id));
+    const sessions = matchTurnsToGroups(groups, [], undefined, true);
+    expect(sessions.size).toBe(2);
+    expect(sessions.get(at("a2"))?.elapsed).toBe(7000);
+    expect(sessions.has(at("a1"))).toBe(false);
+    const markers = matchModelChangesToPromptGroups(groups, [turn(0, "first-model"), turn(1, "second-model")]);
+    expect([...markers.keys()]).toEqual([at("u2")]);
+  });
+});

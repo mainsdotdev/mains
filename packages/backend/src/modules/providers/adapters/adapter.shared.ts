@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import type {
   WorkRunEvent,
@@ -259,15 +260,18 @@ export function safeJson(value: unknown): string {
 // ─────────────────────────────────────────────────────────────
 
 /** Where a run's attachments are written: `<tmp>/mains-uploads/<runId>`. */
-export function attachmentUploadDir(runId: string): string {
-  return path.join(os.tmpdir(), "mains-uploads", runId);
+export function attachmentUploadDir(runId: string, clientUserMessageId?: string): string {
+  const root = path.join(os.tmpdir(), "mains-uploads", runId);
+  // Two queued/steered images with the same name must keep independent bytes.
+  return clientUserMessageId ? path.join(root, createHash("sha256").update(clientUserMessageId).digest("hex").slice(0, 24)) : root;
 }
 
 export function saveAttachments(
   attachments: FileAttachment[],
   runId: string,
+  clientUserMessageId?: string,
 ): { savedPaths: string[]; inlineTexts: string[] } {
-  const uploadDir = attachmentUploadDir(runId);
+  const uploadDir = attachmentUploadDir(runId, clientUserMessageId);
   fs.mkdirSync(uploadDir, { recursive: true });
 
   const savedPaths: string[] = [];
@@ -599,6 +603,9 @@ export async function emitUserPromptArtifact(
     }>;
     /** The run the attachments were saved under — locates their on-disk copies. */
     runId?: string;
+    clientUserMessageId?: string;
+    providerTurnId?: string;
+    delivery?: "steer";
     /** Resolved model for the turn this prompt starts. */
     model?: string;
   },
@@ -629,6 +636,9 @@ export async function emitUserPromptArtifact(
     content,
     metadata: {
       source: "user",
+      ...(options?.clientUserMessageId ? { clientUserMessageId: options.clientUserMessageId } : {}),
+      ...(options?.providerTurnId ? { providerTurnId: options.providerTurnId } : {}),
+      ...(options?.delivery ? { delivery: options.delivery } : {}),
       ...(browserAnnotations.length ? { browserAnnotations } : {}),
       attachments: options?.attachments?.map((a) => {
         const captureName =
@@ -641,7 +651,7 @@ export async function emitUserPromptArtifact(
         const uploadedPath =
           options?.runId &&
           (a.type === "image" || (a.type === "document" && path.extname(a.name).toLowerCase() !== ".txt"))
-            ? path.join(attachmentUploadDir(options.runId), path.basename(a.name))
+            ? path.join(attachmentUploadDir(options.runId, options.clientUserMessageId), path.basename(a.name))
             : undefined;
         return {
           name: a.name,

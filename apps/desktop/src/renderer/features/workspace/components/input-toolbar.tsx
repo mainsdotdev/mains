@@ -68,6 +68,8 @@ interface InputToolbarProps {
   supportsUltracode?: boolean;
   // Stop run (active run is running)
   isRunning: boolean;
+  showStop?: boolean;
+  sendLabel?: string;
   onStop?: () => void;
   // File uploads
   uploadedFiles: UploadedFile[];
@@ -108,6 +110,8 @@ export function InputToolbar({
   supportedEffortLevels,
   supportsUltracode,
   isRunning,
+  showStop = isRunning,
+  sendLabel,
   onStop,
   uploadedFiles,
   onUploadedFilesChange,
@@ -242,7 +246,9 @@ export function InputToolbar({
             iconOnly
           />
           <SendButton
-            loading={isLoading || isRunning}
+            loading={isLoading}
+            showStop={showStop}
+            label={sendLabel}
             onSubmit={onSubmit}
             onStop={isRunning ? onStop : undefined}
             disabled={disabled}
@@ -353,7 +359,9 @@ export function InputToolbar({
         </div>
         <div className="flex shrink-0 items-center pb-0.5">
           <SendButton
-            loading={isLoading || isRunning}
+            loading={isLoading}
+            showStop={showStop}
+            label={sendLabel}
             onSubmit={onSubmit}
             onStop={isRunning ? onStop : undefined}
             disabled={disabled}

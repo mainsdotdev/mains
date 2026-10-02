@@ -11,6 +11,7 @@ import { WorkspaceProviderPage } from "@/features/workspace/components/workspace
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { persistor } from "@/lib/redux";
+import { mirrorRunQueue, type ConversationQueue } from "@/lib/redux/slices/runQueueSlice";
 import {
   setActiveTab,
   setDraftText,
@@ -51,10 +52,11 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
     dispatch(setWorkspaceModel({ providerId: context.providerId, model: context.selectedModel }));
     dispatch(setSelectedCollectionId(context.selectedCollectionId));
     dispatch(setContextItemsForKey({ key: context.ownerKey, items: context.contextItems as ContextItem[] }));
+    dispatch(mirrorRunQueue({ ownerKey: context.ownerKey, queue: context.runQueue as ConversationQueue | undefined }));
   }, [
     context.activeTab, context.contextItems, context.ownerKey, context.providerId,
     context.route, context.selectedCollectionId, context.selectedModel,
-    dispatch, location.pathname,
+    dispatch, location.pathname, context.runQueue,
   ]);
 
   // The child owns live typing. Parent context messages echo the previous
@@ -63,7 +65,7 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
   useLayoutEffect(() => {
     dispatch(setDraftText({ key: context.ownerKey, text: context.draft }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context.ownerKey, dispatch]);
+  }, [context.ownerKey, context.draftRevision, dispatch]);
 
   useLayoutEffect(() => {
     setTransientUploadsForOwner(
