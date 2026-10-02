@@ -185,20 +185,20 @@ export function PermissionModeDropdown({
   return (
     <div className={iconOnly ? "relative" : "relative mx-0.5"} ref={dropdownRef}>
       <Button
-        tooltip={iconOnly ? `Permission: ${modeLabels[permissionMode] ?? permissionMode}` : "Permission Mode"}
+        tooltip={`Permission: ${modeLabels[permissionMode] ?? permissionMode}`}
         type="button"
         onClick={onToggle}
         aria-haspopup="menu"
         aria-expanded={isOpen}
         className={`flex items-center gap-1 rounded-full text-s transition-all cursor-pointer hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 text-primary-950 dark:text-primary ${iconOnly ? "size-8 justify-center p-0" : "px-2 py-1.5"}`}
-        aria-label={iconOnly ? "Permission mode" : undefined}
+        aria-label="Permission mode"
       >
         <PermissionModeIcon
           mode={permissionMode}
           className={`${iconOnly ? "size-4" : "size-3.5"} ${triggerIconClass}`}
         />
         {!iconOnly && !isMobile && (
-          <span className={isBypass ? BYPASS_TRIGGER.trigger : ""}>
+          <span className={`@max-[480px]/composer:hidden ${isBypass ? BYPASS_TRIGGER.trigger : ""}`}>
             {modeLabels[permissionMode] ?? permissionMode}
             {showPlanSuffix ? " + Plan" : ""}
           </span>

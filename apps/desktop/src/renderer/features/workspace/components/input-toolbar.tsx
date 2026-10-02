@@ -254,13 +254,10 @@ export function InputToolbar({
   }
 
   return (
-    <div className="flex items-start space-x-2 px-3 pt-6">
-      <div className="flex items-center justify-between w-full">
-        <div
-          className={`relative ml-1 flex min-w-0 flex-1 items-center gap-0.5 pr-2 ${
-            isMobile ? "flex-wrap gap-y-1.5" : ""
-          }`}
-        >
+    <div className="min-w-0 px-3 pt-6">
+      <div className="flex min-w-0 w-full items-end justify-between">
+        {/* Wrap within the chat pane, leaving send/stop its own fixed space. */}
+        <div className="relative ml-1 flex min-w-0 flex-1 flex-wrap items-center gap-0.5 gap-y-1.5 pr-2 *:max-w-full *:shrink-0">
           <FileUploadDropdown
               isOpen={showFileDropdown}
               onToggle={() => setShowFileDropdown(!showFileDropdown)}
@@ -354,7 +351,7 @@ export function InputToolbar({
               />
             )}
         </div>
-        <div className="flex items-center ">
+        <div className="flex shrink-0 items-center pb-0.5">
           <SendButton
             loading={isLoading || isRunning}
             onSubmit={onSubmit}

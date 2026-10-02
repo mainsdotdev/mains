@@ -1015,13 +1015,13 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           onPaste={handlePaste}
           className={`w-full text-sm outline-none whitespace-pre-wrap wrap-break-word [&>p]:my-2 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 overflow-y-auto noscrollbar dark:text-primary-300 text-primary-700 ${compact
             ? "min-h-12 max-h-40 rounded-[28px] py-3 pl-12 pr-28"
-            : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1"}`}
+            : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1 @max-[480px]/composer:pr-5"}`}
         />
         {isEmpty && placeholder && (
           <Text
             as="div"
             tone="faint"
-            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-36 top-3.5" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}`}
+            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-36 top-3.5" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20 @max-[480px]/composer:pr-0" : "right-5"}`}`}
           >
             {placeholderIcon ? (
               <span
@@ -1031,7 +1031,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
                 {placeholderIcon}
               </span>
             ) : null}
-            <span className={compact ? "min-w-0 truncate" : undefined}>{placeholder}</span>
+            <span className={compact ? "min-w-0 truncate" : "min-w-0 @max-[480px]/composer:line-clamp-2"}>{placeholder}</span>
           </Text>
         )}
         {showFocusHint && focusShortcutLabel && (
@@ -1039,7 +1039,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
             as="kbd"
             size="t"
             tone="faint"
-            className="absolute cursor-default right-2 top-3.5 px-1.5 py-0.5 opacity-80 font-sans"
+            className="absolute cursor-default right-2 top-3.5 px-1.5 py-0.5 opacity-80 font-sans @max-[480px]/composer:hidden"
           >
             {focusShortcutLabel} to focus
           </Text>

@@ -84,21 +84,21 @@ export function CompactComposerControls({
     thinkingMode && effortLevel ? formatEffortLevel(effortLevel) : "";
 
   return (
-    <div className="relative animate-blur-reveal" ref={containerRef}>
+    <div className="relative min-w-0 max-w-full animate-blur-reveal" ref={containerRef}>
       <Button
         type="button"
         tooltip="Model & thinking"
         onClick={() => setIsOpen((o) => !o)}
-        className="flex items-center gap-1 px-2 py-1 rounded-full text-sm cursor-pointer text-primary-950 dark:text-primary hover:bg-primary-200/30 dark:hover:bg-primary-800 transition-colors"
+        className="flex min-w-0 max-w-full items-center gap-1 px-2 py-1 rounded-full text-sm cursor-pointer text-primary-950 dark:text-primary hover:bg-primary-200/30 dark:hover:bg-primary-800 transition-colors"
         aria-haspopup="menu"
         aria-expanded={isOpen}
       >
-        {getModelIcon(displayModel, variant)}
-        <span className="max-w-36 truncate">
+        <span className="inline-flex shrink-0">{getModelIcon(displayModel, variant)}</span>
+        <span className="min-w-0 max-w-36 truncate @max-[360px]/composer:max-w-20">
           {isLoadingModels && !displayModel ? "…" : displayModel}
           {selectedEffortLabel && (
             <span
-              className={`capitalize ${
+              className={`capitalize @max-[480px]/composer:hidden ${
                 effortLevel === "ultracode"
                   ? `font-medium ${ULTRACODE_GRADIENT_TEXT}`
                   : "font-normal text-primary-600 dark:text-primary-400"
@@ -109,7 +109,7 @@ export function CompactComposerControls({
             </span>
           )}
         </span>
-        <ArrowUp className="size-3.5 rotate-180" />
+        <ArrowUp className="size-3.5 shrink-0 rotate-180" />
       </Button>
 
       <DropdownWrapper

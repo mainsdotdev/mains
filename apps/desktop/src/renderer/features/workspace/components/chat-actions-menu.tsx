@@ -33,8 +33,7 @@ function chatTitle(run: { title: string | null; goal: string | null }): string {
 }
 
 /**
- * Fixed so the menu can be right-aligned under its trigger: `position.x` is the
- * menu's left edge, and the width is only measured after the first paint.
+ * Fixed so the menu's placement can be chosen before its width is measured.
  * Comfortably wider than the longest row ("Copy recent message"), so the
  * measured width matches and the alignment does not drift.
  */
@@ -64,6 +63,7 @@ export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boole
   const triggerRef = useRef<HTMLButtonElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const [menuOrigin, setMenuOrigin] = useState<"top-left" | "top-right">("top-left");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
@@ -99,7 +99,12 @@ export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boole
 
   const openMenu = (event: MouseEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    setMenuPosition({ x: rect.right - MENU_WIDTH, y: rect.bottom + 4 });
+    const opensLeft = rect.right + MENU_WIDTH > window.innerWidth - 8;
+    setMenuOrigin(opensLeft ? "top-right" : "top-left");
+    setMenuPosition({
+      x: opensLeft ? rect.right - MENU_WIDTH : rect.left,
+      y: rect.bottom + 4,
+    });
     setIsMenuOpen(true);
   };
 
@@ -147,7 +152,7 @@ export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boole
         aria-label="Chat actions"
         position={menuPosition}
         minWidth={MENU_WIDTH}
-        origin="top-right"
+        origin={menuOrigin}
         className={aboveBrowser ? "z-10000" : undefined}
         onClose={() => setIsMenuOpen(false)}
       >

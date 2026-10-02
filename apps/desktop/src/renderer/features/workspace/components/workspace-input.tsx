@@ -938,7 +938,7 @@ export function WorkspaceInput({
       )}
 
       <div
-        className={`relative mx-auto flex w-full max-w-210 flex-col cursor-pointer transition-all
+        className={`@container/composer relative mx-auto flex min-w-0 w-full max-w-210 flex-col cursor-pointer transition-all
         ${layout === "floating"
           ? "rounded-[28px] text-primary-950 dark:text-primary-50"
           : "rounded-[28px] glass-surface pb-2"}
@@ -961,11 +961,11 @@ export function WorkspaceInput({
         )}
         {sendTarget && (
           <div className="flex px-4 pt-3 -mb-1">
-            <div className="relative" ref={sendTargetDropdownRef}>
+            <div className="relative min-w-0 max-w-full" ref={sendTargetDropdownRef}>
               <Button
                 type="button"
                 onClick={() => setTargetMenuOpen((open) => !open)}
-                className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 rounded-full glass-button text-xs dark:text-primary-300 text-primary-700 cursor-pointer"
+                className="flex max-w-full items-center gap-1.5 pl-2 pr-1.5 py-1 rounded-full glass-button text-xs dark:text-primary-300 text-primary-700 cursor-pointer"
                 title="Choose which chat this message is sent to"
                 aria-haspopup="menu"
                 aria-expanded={targetMenuOpen}
