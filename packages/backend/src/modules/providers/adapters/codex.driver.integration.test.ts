@@ -13,6 +13,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const approvalHarness = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
+  formAnswer: undefined as string | undefined,
 }));
 
 vi.mock("../../runs/user-input-broker", () => ({
@@ -23,7 +24,7 @@ vi.mock("../../runs/user-input-broker", () => ({
     return {
       requestId: request.requestId,
       approved: true,
-      answer: "Yes",
+      answer: request.kind === "elicitation" ? approvalHarness.formAnswer ?? "Yes" : "Yes",
     };
   }),
 }));
@@ -114,6 +115,7 @@ async function waitForDriverEvent(
 afterEach(async () => {
   vi.restoreAllMocks();
   approvalHarness.requests.length = 0;
+  approvalHarness.formAnswer = undefined;
   delete process.env.MAINS_CODEX_FIXTURE_LOG;
   delete process.env.MAINS_CODEX_FIXTURE_VERSION;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE;
@@ -177,6 +179,7 @@ describe("codex.driver / app-server protocol", () => {
         title: "Mains Desktop",
         version: "0.4.2",
       },
+      capabilities: { mcpServerOpenaiFormElicitation: true, extensions: { "openai/form": {} } },
     });
   }, 15_000);
 
@@ -2062,11 +2065,16 @@ describe("codex.driver / app-server protocol", () => {
     expect(response?.result).not.toHaveProperty("decision");
   });
 
-  it("safely declines MCP forms whose required values cannot be collected", async () => {
+  it.each([
+    [undefined, "decline", null],
+    ['{"calendarId":"work"}', "accept", { calendarId: "work" }],
+    ["cancel", "cancel", null],
+  ])("responds to a native MCP form with %s as %s", async (answer, action, content) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    approvalHarness.formAnswer = answer;
 
     const driver = createCodexDriver({
       binary: fixtureBinary,
@@ -2091,11 +2099,16 @@ describe("codex.driver / app-server protocol", () => {
     );
     expect(response).toMatchObject({
       result: {
-        action: "decline",
-        content: null,
+        action,
+        content,
         _meta: null,
       },
     });
+    expect(approvalHarness.requests).toContainEqual(expect.objectContaining({
+      kind: "elicitation", serverName: "calendar", elicitationMode: "form",
+      question: "Choose a calendar.",
+      requestedSchema: expect.objectContaining({ required: ["calendarId"] }),
+    }));
   });
 
   it("answers currentTime/read with epoch seconds", async () => {

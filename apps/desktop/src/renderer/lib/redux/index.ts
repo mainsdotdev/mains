@@ -15,6 +15,7 @@ import runQueueReducer from "./slices/runQueueSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
 import { onTransportChange } from "../transport";
 import { parseAppThemeSettings } from "../app-themes";
+import { migrateMcpAppPinSettings } from "./app-settings-persistence";
 
 // Renderer-persisted UI state lives in these slices and nowhere else: the
 // whitelists here and in workspace-persistence.ts list what survives a restart.
@@ -40,12 +41,13 @@ const appSettingsMigrations = {
     ...state,
     workspaceListGrouping: "project",
   },
+  4: migrateMcpAppPinSettings,
 };
 
 const appSettingsPersistConfig = {
   key: "appSettings",
   storage,
-  version: 3,
+  version: 4,
   migrate: createMigrate(appSettingsMigrations),
   whitelist: [
     "sidebarCollapsed",
@@ -76,6 +78,7 @@ const appSettingsPersistConfig = {
     "subagentPanelCollapsed",
     "workspaceListGrouping",
     "workspaceGroupExpanded",
+    "pinnedMcpAppKeysByProvider",
     "onboardingCliAutoSelectApplied",
   ],
 };

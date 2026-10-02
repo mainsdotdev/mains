@@ -18,6 +18,8 @@ import { useMcpAppExtensions } from "./use-mcp-app-extensions";
 import { useWorkspaceData } from "@/features/workspace/hooks/use-workspace-data";
 import { composerOwnerKey, mcpAppConversationKey } from "@/features/workspace/lib/ui-context";
 import { sameMcpApp, sameMcpAppScope, mcpAppConversationPath, type McpAppScope } from "@/features/workspace/lib/mcp-app-panel";
+import { McpAppCompatibilityNotice } from "@/features/workspace/components/mcp-app-compatibility-notice";
+import { mcpAppCompatibility, mcpAppPath } from "@/lib/mcp-app-extensions";
 import { mcpAppContextItems, mcpAppContextState, mcpAppMessageText, normalizeMcpAppContext,
   type McpAppMessageOptions, type McpAppModelContextState } from "@/features/workspace/lib/mcp-app-context";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
@@ -355,15 +357,20 @@ export function McpAppPanelProvider({ children }: { children: ReactNode }) {
 
   const visibleInWorkspace = isOpen && !anotherPanelOpen && isWorkspaceRoute(pathname);
   const isExpanded = visibleInWorkspace && !!state?.expanded;
+  const compatibilityApp = entries.find((app) => mcpAppPath(app) === pathname) ??
+    (visibleInWorkspace ? state?.document.app : undefined);
+  const canShowFloatingChat = !mcpAppCompatibility(state?.document.app).notice;
   useLayoutEffect(() => {
     if (isExpanded && !sidebarCollapsed) dispatch(setSidebarCollapsed(true));
   }, [isExpanded, sidebarCollapsed, dispatch]);
   const value: McpAppPanelValue = { document: state?.document ?? null, scope: state?.scope ?? null,
     ownerKey: state?.ownerKey ?? null, runId: state?.runId, isOpen: visibleInWorkspace, isExpanded,
-    width, setWidth, chatMode, setChatMode, chatVisible, setChatVisible, chatHost, setChatHost, opening, error,
+    width, setWidth, chatMode, setChatMode, chatVisible: chatVisible && canShowFloatingChat,
+    setChatVisible, chatHost, setChatHost, opening, error,
     openGlobal, openTool, close, toggleExpanded, newChat, registerConversation, attachRun, sendMessage,
     updateModelContext, modelContext, appContext };
   return <Context.Provider value={value}>
+    <McpAppCompatibilityNotice key={activeContext} app={compatibilityApp} />
     <McpAppToolOpenerProvider openTool={openTool}>{children}</McpAppToolOpenerProvider>
   </Context.Provider>;
 }

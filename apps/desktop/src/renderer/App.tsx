@@ -300,9 +300,9 @@ function AppContent() {
     );
   }
 
-  // Keep this row mounted outside animated panels so its buttons retain their
-  // position, focus and hover state throughout browser opening and closing.
-  const showLayoutControls = !hideRightPanel && !(isMobile && !sidebarCollapsed);
+  // App previews use their own reload and expand/collapse controls. Keep the
+  // workspace controls outside animated panels when no app preview is open.
+  const showLayoutControls = !mcpAppPanel?.isOpen && !hideRightPanel && !(isMobile && !sidebarCollapsed);
   const layoutControls = showLayoutControls ? (
     <ToggleButton
       showChatActions={isMobile}

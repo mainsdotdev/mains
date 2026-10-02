@@ -26,8 +26,7 @@ import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 import SpaceSelector from "./space-selector";
 import { useMcpAppExtensions } from "@/hooks/use-mcp-app-extensions";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
-import { mcpAppPath } from "@/lib/mcp-app-extensions";
-import { McpAppIcon } from "./mcp-app-icon";
+import { McpAppRail } from "./mcp-app-rail";
 
 interface NavigationRailProps {
   showTasks: boolean;
@@ -63,14 +62,14 @@ export function NavigationRail({
   const commandMenuShortcut = keyboardShortcutLabel(
     useKeyboardShortcutBinding("app.commandMenu"),
   );
-  const homeActive = isWorkspaceRoute(pathname);
+  const appPanel = useMcpAppPanel();
+  const homeActive = isWorkspaceRoute(pathname) && !appPanel?.isOpen;
   const settingsActive = isSettingsRoute(pathname);
   const commandMenuOpen = useSyncExternalStore(
     subscribeCommandMenuOpen,
     getCommandMenuOpen,
   );
   const { entries: appExtensions } = useMcpAppExtensions();
-  const appPanel = useMcpAppPanel();
   const destinations: Array<{
     label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
   }> = [
@@ -110,7 +109,10 @@ export function NavigationRail({
           tooltipPosition="right"
           aria-label="Home"
           aria-current={homeActive ? "page" : undefined}
-          onClick={onHomeClick}
+          onClick={() => {
+            appPanel?.close();
+            onHomeClick();
+          }}
         >
           <Home className="size-5" filled={homeActive} aria-hidden />
         </Button>
@@ -149,33 +151,7 @@ export function NavigationRail({
             </Button>
           );
         })}
-        {appExtensions.length > 0 && (
-          <div
-            className="w-8 shrink-0 border-b border-primary-300/50 dark:border-primary-800"
-            aria-hidden="true"
-          />
-        )}
-        {appExtensions.map((app) => {
-          const path = mcpAppPath(app);
-          const active = pathname === path || pathname.startsWith(`${path}/`) ||
-            !!appPanel?.isOpen && appPanel.document?.app.id === app.id;
-          const opening = appPanel?.opening === app.id;
-          return (
-            <Button
-              key={path}
-              variant="bare"
-              className={buttonClass(active)}
-              tooltip={app.name}
-              tooltipPosition="right"
-              aria-label={app.name}
-              aria-current={active ? "page" : undefined}
-              aria-busy={opening || undefined}
-              onClick={() => navigate(path)}
-            >
-              <McpAppIcon icons={app.icons} isDarkMode={isDarkMode} tool={app.tool} monochrome />
-            </Button>
-          );
-        })}
+        {appExtensions.length > 0 && <McpAppRail entries={appExtensions} buttonClass={buttonClass} />}
       </nav>
 
       <div className="mt-auto flex min-h-0 flex-col items-center gap-1">

@@ -90,6 +90,7 @@ function createToast(
     icon: options.icon,
     action: options.action,
     dismissible: options.dismissible ?? true,
+    dismissing: false,
     createdAt: Date.now(),
     onDismiss: options.onDismiss,
   };
@@ -158,8 +159,9 @@ toast.promise = <T>(
   return promise;
 };
 
-toast.dismiss = (id: string): void => {
-  toastStore.dismiss(id);
+toast.dismiss = (id: string, options?: { animate?: boolean }): void => {
+  if (options?.animate) toastStore.update(id, { dismissing: true });
+  else toastStore.dismiss(id);
 };
 
 toast.dismissAll = (): void => {

@@ -33,9 +33,17 @@ describe("MCP App deep links", () => {
     mocks.error = "Connection failed";
     page.rerender(tree("canvas"));
     expect(screen.getByRole("alert").textContent).toBe("Connection failed");
+    expect(screen.queryByRole("note", { name: "App compatibility" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(mocks.openGlobal).toHaveBeenCalledTimes(2);
     expect(mocks.openGlobal).toHaveBeenLastCalledWith(mocks.entries[0]);
+  });
+  it("leaves compatibility notifications to the shared host, including when opening fails", () => {
+    mocks.entries = [{ ...entry("figma"), tool: "figma.open_canvas", name: "Figma" }];
+    mocks.error = "Connection could not be validated";
+    render(tree("figma"));
+    expect(screen.queryByRole("note", { name: "App compatibility" })).toBeNull();
+    expect(screen.getByRole("alert").textContent).toBe("Connection could not be validated");
   });
   it("keeps the launch across inventory metadata refreshes", async () => {
     const page = render(tree("canvas"));

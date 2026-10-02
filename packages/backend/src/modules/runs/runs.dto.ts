@@ -567,7 +567,8 @@ export interface ToolApprovalResponse {
   /**
    * Free-form answer. For a "form" elicitation this carries the collected
    * fields as a JSON object string, so the existing broker/IPC contract does
-   * not need a second payload shape.
+   * not need a second payload shape. With approved: false, "cancel" marks an
+   * explicit cancellation rather than a decline.
    */
   answer?: string;
 }

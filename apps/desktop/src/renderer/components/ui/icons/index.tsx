@@ -19,6 +19,7 @@ export { default as ChevronUp } from "./chevron-up";
 export { default as CollapseAll } from "./collapse-all";
 export { default as Clipboard } from "./clipboard";
 export { default as Edit } from "./edit";
+export { default as Ellipsis } from "./ellipsis";
 export { default as Close } from "./close";
 export { default as Toggle } from "./toggle";
 export { default as RightPanelOpen } from "./right-panel-open";

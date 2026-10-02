@@ -4,9 +4,10 @@ import { Body, Button, Caption, Checkbox, Input, Text } from "@/components/ui";
 import {
   ElicitationForm,
   buildElicitationContent,
-  parseElicitationFields,
+  getElicitationDefaultValues,
   type ElicitationValues,
 } from "./elicitation-form";
+import { parseElicitationSchema } from "@mains/backend/shared/mcp-elicitation";
 import type { ToolApprovalRequest } from "../../hooks";
 import { ToolInputPreview } from "./tool-input-preview";
 import { resolveTool } from "../../lib/resolve-tool";
@@ -24,6 +25,8 @@ interface ToolApprovalDialogProps {
   request: ToolApprovalRequest;
   onRespond: (requestId: string, approved: boolean, answer?: string) => void;
   variant?: "copilot" | "claude" | "codex" | "cursor";
+  /** Forms keep their actions visible within this height while fields scroll. */
+  maxHeight?: string;
 }
 
 // Fields that are either rendered elsewhere (title, browser-open URL) or are
@@ -230,10 +233,15 @@ function ParamRow({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export function ToolApprovalDialog({
+export function ToolApprovalDialog(props: ToolApprovalDialogProps) {
+  return <ToolApprovalDialogContents key={props.request.requestId} {...props} />;
+}
+
+function ToolApprovalDialogContents({
   request,
   onRespond,
   variant,
+  maxHeight = "55dvh",
 }: ToolApprovalDialogProps) {
   const isCursor = variant === "cursor";
   const isCodex = variant === "codex";
@@ -242,20 +250,20 @@ export function ToolApprovalDialog({
   const [freeText, setFreeText] = useState("");
   const [allowForSession, setAllowForSession] = useState(false);
   const [showAllParams, setShowAllParams] = useState(false);
-  const [elicitValues, setElicitValues] = useState<ElicitationValues>({});
-  const [elicitMissing, setElicitMissing] = useState<string[]>([]);
-
-  const elicitFields = useMemo(
+  const elicitSchema = useMemo(
     () =>
       request.kind === "elicitation" && request.elicitationMode !== "url"
-        ? parseElicitationFields(request.requestedSchema)
-        : [],
+        ? parseElicitationSchema(request.requestedSchema)
+        : { fields: [], unsupported: [] },
     [request.kind, request.elicitationMode, request.requestedSchema],
   );
+  const elicitFields = elicitSchema.fields;
+  const [elicitValues, setElicitValues] = useState<ElicitationValues>(() => getElicitationDefaultValues(elicitFields));
+  const [elicitErrors, setElicitErrors] = useState<Record<string, string>>({});
 
-  const handleElicitChange = useCallback((name: string, value: string | boolean) => {
+  const handleElicitChange = useCallback((name: string, value: string | boolean | string[]) => {
     setElicitValues((prev) => ({ ...prev, [name]: value }));
-    setElicitMissing([]);
+    setElicitErrors({});
   }, []);
 
   /**
@@ -269,15 +277,16 @@ export function ToolApprovalDialog({
   }, [request.url, request.requestId, onRespond]);
 
   const handleElicitSubmit = useCallback(() => {
+    if (elicitSchema.unsupported.length > 0) return;
     const result = buildElicitationContent(elicitFields, elicitValues);
     if (!result.ok) {
-      setElicitMissing(result.missing);
+      setElicitErrors(result.errors);
       return;
     }
     // The broker carries a single free-form `answer`; the driver parses it back
     // into the MCP `content` object.
     onRespond(request.requestId, true, JSON.stringify(result.content));
-  }, [elicitFields, elicitValues, request.requestId, onRespond]);
+  }, [elicitFields, elicitSchema.unsupported, elicitValues, request.requestId, onRespond]);
 
   const handleAllow = useCallback(() => {
     onRespond(
@@ -324,64 +333,69 @@ export function ToolApprovalDialog({
   if (request.kind === "elicitation") {
     const isUrlMode = request.elicitationMode === "url" && !!request.url;
     return (
-      <div className="mx-auto mb-1 max-w-210">
-        <div className="overflow-hidden rounded-2xl glass-surface">
-          <div className="flex gap-3 px-3.5 pb-2 pt-3.5 sm:px-4 sm:pt-4">
-            <Question className="mt-0.5 size-4 shrink-0 text-primary-600 dark:text-primary-400" />
-            <div className="min-w-0 flex-1 space-y-2">
-              <Eyebrow>
-                {request.header || `${request.serverName ?? "MCP"} needs input`}
-              </Eyebrow>
-              <Body weight="medium" className="leading-snug">
-                {request.question || "An MCP server is requesting input."}
-              </Body>
-              {request.description && (
-                <Caption tone="faint" className="block">
-                  {request.description}
-                </Caption>
-              )}
-              {isUrlMode && (
-                <Caption tone="faint" className="block truncate font-mono">
-                  {request.url}
-                </Caption>
-              )}
-            </div>
+      <div
+        className="mx-auto mb-1 flex max-w-210 flex-col overflow-hidden rounded-2xl glass-surface"
+        style={{ maxHeight }}
+      >
+        <div className="flex shrink-0 gap-3 px-3.5 pb-2 pt-3.5 sm:px-4 sm:pt-4">
+          <Question className="mt-0.5 size-4 shrink-0 text-primary-600 dark:text-primary-400" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Eyebrow>
+              {request.header || `${request.serverName ?? "MCP"} needs input`}
+            </Eyebrow>
+            <Body weight="medium" className="leading-snug">
+              {request.question || "An MCP server is requesting input."}
+            </Body>
+            {request.description && (
+              <Caption tone="faint" className="block">
+                {request.description}
+              </Caption>
+            )}
+            {isUrlMode && (
+              <Caption tone="faint" className="block truncate font-mono">
+                {request.url}
+              </Caption>
+            )}
           </div>
+        </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain noscrollbar">
           {!isUrlMode && (
             <ElicitationForm
               fields={elicitFields}
               values={elicitValues}
               onChange={handleElicitChange}
+              errors={elicitErrors}
             />
           )}
 
-          {elicitMissing.length > 0 && (
-            <Caption tone="danger" className="block px-3.5 pb-2 sm:px-4">
-              Required: {elicitMissing.join(", ")}
+          {elicitSchema.unsupported.length > 0 && (
+            <Caption role="alert" tone="danger" className="block px-3.5 pb-2 sm:px-4">
+              This form contains unsupported fields: {elicitSchema.unsupported.join(", ")}.
             </Caption>
           )}
+        </div>
 
-          <div className="border-t border-primary-200/40 px-3.5 py-3 dark:border-primary-700/25 sm:px-4">
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                variant="primary"
-                className="min-w-18 text-primary-700 hover:bg-primary-200/40 dark:text-primary-300 dark:hover:bg-primary-800/50"
-                onClick={handleDeny}
-              >
-                Decline
-              </Button>
-              <Button
-                variant="submit"
-                className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
-                onClick={isUrlMode ? handleElicitAcceptUrl : handleElicitSubmit}
-                // A schema with no renderable fields still accepts — some
-                // elicitations are a bare confirmation.
-                disabled={false}
-              >
-                {isUrlMode ? "Open & continue" : "Submit"}
-              </Button>
-            </div>
+        <div className="shrink-0 border-t border-primary-200/40 px-3.5 py-3 dark:border-primary-700/25 sm:px-4">
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="ghost" onClick={() => onRespond(request.requestId, false, "cancel")}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              className="min-w-18 text-primary-700 hover:bg-primary-200/40 dark:text-primary-300 dark:hover:bg-primary-800/50"
+              onClick={handleDeny}
+            >
+              Decline
+            </Button>
+            <Button
+              variant="submit"
+              className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
+              onClick={isUrlMode ? handleElicitAcceptUrl : handleElicitSubmit}
+              disabled={!isUrlMode && elicitSchema.unsupported.length > 0}
+            >
+              {isUrlMode ? "Open & continue" : "Submit"}
+            </Button>
           </div>
         </div>
       </div>
@@ -390,7 +404,7 @@ export function ToolApprovalDialog({
 
   if (request.kind === "ask_user") {
     return (
-      <div className="mx-auto mb-1 max-w-210 ">
+      <div className="mx-auto mb-1 max-w-210 overflow-y-auto noscrollbar" style={{ maxHeight }}>
         <div className="overflow-hidden rounded-3xl  glass-surface">
           <div className="flex gap-3 px-3.5 pb-2 pt-3.5 sm:px-4 sm:pt-4">
             <Question className="mt-0.5 size-4 shrink-0 text-primary-600 dark:text-primary-400" />
@@ -556,7 +570,7 @@ export function ToolApprovalDialog({
   const hasBody = showRichPreview || paramEntries.length > 0;
 
   return (
-    <div className="mr-auto mb-1 max-w-210">
+    <div className="mr-auto mb-1 max-w-210 overflow-y-auto noscrollbar" style={{ maxHeight }}>
       <div className="overflow-hidden rounded-2xl glass-surface">
         <div className="flex items-center gap-2 px-4 pb-1 pt-3.5">
           <Text as="span" size="inherit" tone="subtle">

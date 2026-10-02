@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import { Button, DropdownWrapper } from "@/components/ui";
-import { Chat } from "@/components/ui/icons";
+import { Asterisk } from "@/components/ui/icons";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { BrowserAnnotationComment, BrowserAnnotationElements } from "../browser-annotation-details";
 
@@ -31,14 +31,14 @@ export function PromptBrowserAnnotations({ annotations }: { annotations: Browser
       <Button
         ref={trigger}
         type="button"
-        className=" flex max-w-full glass-card items-center gap-2 rounded-xl px-2.5 py-1.5 text-xs text-primary-800 dark:text-primary-200"
+        className=" flex max-w-full glass-card items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs text-primary-800 dark:text-primary-200"
         aria-label={summary}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         onClick={() => setOpen(!open)}
       >
-        <Chat className="size-3.5 shrink-0 text-primary-500" />{summary}
+        <Asterisk className="size-3.5 shrink-0 text-primary-500" />{summary}
       </Button>
       <DropdownWrapper
         id={id}

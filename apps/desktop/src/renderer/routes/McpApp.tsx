@@ -22,8 +22,8 @@ export default function McpAppPage() {
   if (!available) return <Navigate to="/" replace />;
   const error = panel?.error ?? (!isLoading && !app ? "This plugin app is no longer available." : null);
   return <PageShell className="flex min-h-0 flex-col">
-    <Heading3>{app?.name ?? "Plugin app"}</Heading3>
     <div className="flex flex-1 flex-col items-center justify-center gap-4 pb-16">
+      <Heading3 className="text-center">{app?.name ?? "Plugin app"}</Heading3>
       <div role={error ? "alert" : "status"} className="flex items-center gap-2 text-primary-500">
         {!error && <CircleSpinner className="size-4" />}
         <Muted>{error ?? (app ? `Opening ${app.name}…` : "Loading plugin apps…")}</Muted>

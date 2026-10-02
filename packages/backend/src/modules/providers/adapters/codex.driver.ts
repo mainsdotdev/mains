@@ -706,6 +706,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,
+        mcpServerOpenaiFormElicitation: true,
+        extensions: { "openai/form": {} },
       },
     });
     if (

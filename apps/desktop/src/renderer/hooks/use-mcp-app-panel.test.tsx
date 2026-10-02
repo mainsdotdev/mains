@@ -15,7 +15,11 @@ vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ mode: mocks.
 vi.mock("@/hooks/use-space-provider-variant", () => ({ useSpaceProviderVariant: () => ({ providerId: "codex" }) }));
 vi.mock("@/hooks/use-mcp-app-extensions", () => ({ useMcpAppExtensions: () => ({ entries: [app] }) }));
 vi.mock("@/features/workspace/hooks/use-workspace-data", () => ({ useWorkspaceData: () => ({ workspaceId: mocks.workspaceId }) }));
-vi.mock("@/components/ui", () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/components/ui", async () => {
+  const { toast, toastStore } = await import("@/components/ui/toast/toast");
+  const { Toaster } = await import("@/components/ui/toast/Toaster");
+  return { toast, toastStore, Toaster };
+});
 vi.mock("@/features/workspace/components/tools/mcp-app-display", () => ({ McpAppDisplay: () => {
   useEffect(() => { mocks.mounts++; }, []);
   return <iframe title="test canvas" />;
@@ -27,6 +31,8 @@ import settingsReducer from "@/lib/redux/slices/appSettingsSlice";
 import { setBrowserPanelOpen, setSidebarCollapsed } from "@/lib/redux/slices/appSettingsSlice";
 import { composerOwnerKey, mcpAppConversationKey } from "@/features/workspace/lib/ui-context";
 import { buildRunContextPayload } from "@/features/workspace/lib/run-context-payload";
+import { toastStore, Toaster } from "@/components/ui";
+import { mcpAppPath } from "@/lib/mcp-app-extensions";
 const app: McpAppEntrypoint = { id: "magicpath/account-1", name: "MagicPath", server: "codex_apps", tool: "magicpath.open_canvas",
   resourceUri: "ui://magicpath/canvas", connectorId: "connector-1", linkId: "account-1", entrypoints: ["global"], preferredModelDisplayMode: "fullscreen" };
 const scope = () => ({ backendId: null, spaceId: mocks.spaceId, providerId: "codex", mode: mocks.mode,
@@ -43,7 +49,7 @@ function harness(initialPath = "/code/ws-1", previousPath?: string) {
     pathname = useLocation().pathname;
     return useMcpAppPanel()!;
   }, { wrapper: ({ children }: { children: ReactNode }) =>
-    <Provider store={state}><MemoryRouter initialEntries={previousPath ? [previousPath, initialPath] : [initialPath]}><McpAppPanelProvider>{children}<McpAppWorkspace /></McpAppPanelProvider></MemoryRouter></Provider> });
+    <Provider store={state}><MemoryRouter initialEntries={previousPath ? [previousPath, initialPath] : [initialPath]}><McpAppPanelProvider>{children}<McpAppWorkspace /></McpAppPanelProvider><Toaster /></MemoryRouter></Provider> });
   return { ...hook, state, navigate: (path: string) => navigate(path), back: () => navigate(-1), get pathname() { return pathname; } };
 }
 async function openDraft(h: ReturnType<typeof harness>, collectionId: string | null = null) {
@@ -58,12 +64,13 @@ async function openDraft(h: ReturnType<typeof harness>, collectionId: string | n
   return { target, ownerKey };
 }
 beforeEach(() => {
+  vi.useFakeTimers();
   vi.clearAllMocks(); mocks.workspaceId = "ws-1"; mocks.mode = "developer"; mocks.spaceId = "space-1"; mocks.mounts = 0;
   mocks.openExtension.mockResolvedValue({ success: true, data: { sessionId: "session-1", app, output: { content: [], _meta: { grant: "fixture-secret" } } } });
   mocks.closeExtension.mockResolvedValue({ success: true }); mocks.sends.mockResolvedValue("run-1");
   Object.defineProperty(window, "api", { configurable: true, value: { mcpApps: mocks } });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); toastStore.dismissAll(); vi.useRealTimers(); });
 describe("shared MCP App panel", () => {
   it("opens rail apps expanded with a normal draft and no model turn", async () => {
     const h = harness(); const { ownerKey } = await openDraft(h);
@@ -72,6 +79,46 @@ describe("shared MCP App panel", () => {
     expect(h.result.current.ownerKey).toBe(ownerKey);
     expect(h.state.getState().workspace.activeTab).toBe("new-run");
     expect(mocks.sends).not.toHaveBeenCalled();
+  });
+  it.each(["figma.open_canvas", "tldraw.open_canvas"])("hides floating chat for %s without disabling the normal conversation", async (tool) => {
+    const unsupported = { ...app, id: tool, tool };
+    mocks.openExtension.mockResolvedValue({ success: true, data: { sessionId: "session-1", app: unsupported, output: { content: [] } } });
+    const h = harness();
+    await act(async () => h.result.current.openGlobal(unsupported));
+    const target = scope(); const ownerKey = composerOwnerKey(target, null);
+    act(() => {
+      h.state.dispatch(setComposerContextKey(ownerKey));
+      h.result.current.registerConversation({ scope: target, ownerKey, send: mocks.sends });
+    });
+    expect(h.result.current.isExpanded).toBe(true);
+    expect(h.result.current.chatVisible).toBe(false);
+    expect(toastStore.toasts).toHaveLength(0);
+    act(() => vi.advanceTimersByTime(800));
+    expect(toastStore.toasts).toHaveLength(1);
+    expect(toastStore.toasts[0].duration).toBe(Infinity);
+    act(() => { h.result.current.setChatVisible(true); h.result.current.newChat(); });
+    expect(h.result.current.chatVisible).toBe(false);
+    expect(mocks.sends).not.toHaveBeenCalled();
+    act(() => toastStore.dismiss(toastStore.toasts[0].id));
+    expect(toastStore.toasts).toHaveLength(0);
+    act(() => h.result.current.toggleExpanded());
+    expect(h.result.current.isOpen).toBe(true);
+    expect(h.result.current.chatVisible).toBe(false);
+    expect(toastStore.toasts).toHaveLength(0);
+  });
+  it("cleans up a loading compatibility toast when its route is left", () => {
+    // The inventory fixture uses the same full identity for both presentations.
+    const oldTool = app.tool;
+    app.tool = "figma.open_canvas";
+    try {
+      const h = harness(mcpAppPath(app));
+      act(() => vi.advanceTimersByTime(800));
+      expect(toastStore.toasts).toHaveLength(1);
+      act(() => h.navigate("/plugins"));
+      expect(toastStore.toasts[0].dismissing).toBe(true);
+      act(() => vi.advanceTimersByTime(200));
+      expect(toastStore.toasts).toHaveLength(0);
+    } finally { app.tool = oldTool; }
   });
   it("keeps the sidebar closed while expanded and permits it again when docked or closed", async () => {
     const h = harness(); await openDraft(h);

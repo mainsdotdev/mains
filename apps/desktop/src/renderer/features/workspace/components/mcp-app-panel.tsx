@@ -1,4 +1,4 @@
-import { useReducer } from "react";
+import { useReducer, useState } from "react";
 import { Button } from "@/components/ui";
 import { Refresh } from "@/components/ui/icons";
 import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
@@ -9,8 +9,8 @@ import { usePreviewPanelTransition } from "@/hooks/use-preview-panel-transition"
 import { setLayoutWidthVar } from "@/hooks/use-layout-width-vars";
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
-import { mcpAppCompatibility } from "@/lib/mcp-app-extensions";
 import { BROWSER_PANEL_WIDTH_DEFAULT, BROWSER_PANEL_WIDTH_MIN, BROWSER_PANEL_WIDTH_MAX, MCP_APP_PANEL_WIDTH_VAR, LAYOUT_FIXED_CONTROLS_WIDTH_VAR } from "@/lib/layout";
+import { mcpAppCompatibility } from "@/lib/mcp-app-extensions";
 import { BaseTab } from "./base-tab";
 import { McpAppWorkspace } from "./mcp-app-workspace";
 
@@ -19,11 +19,18 @@ export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutCo
   const setChatHost = panel?.setChatHost;
   const { isVisible, isAnimatedIn } = usePreviewPanelTransition(!!panel?.isOpen);
   const [reloadKey, reload] = useReducer((value: number) => value + 1, 0);
+  const [startedDocumentId, setStartedDocumentId] = useState<string | null>(null);
+  const documentId = panel?.document?.id;
+  // A rail launch changes the conversation owner before the panel can be
+  // shown. Latch its first visible render, then keep the canvas mounted.
+  if (documentId && panel?.isOpen && isVisible && startedDocumentId !== documentId) {
+    setStartedDocumentId(documentId);
+  }
   useSuppressBrowserView(isVisible && !!panel?.document);
   const isDarkMode = useIsDarkMode();
   if (!panel?.document) return null;
   const app = panel.document.app;
-  const compatibility = mcpAppCompatibility(app);
+  const interfaceUnsupported = !!mcpAppCompatibility(app).notice;
 
   return (
     <div
@@ -44,7 +51,7 @@ export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutCo
         opacity: isAnimatedIn ? 1 : 0,
       }}
       onPointerDownCapture={(event) => {
-        if (!panel.isExpanded || panel.chatMode !== "details") return;
+        if (interfaceUnsupported || !panel.isExpanded || panel.chatMode !== "details") return;
         if ((event.target as Element).closest("[data-floating-chat-surface]")) return;
         panel.setChatMode("input");
       }}
@@ -94,26 +101,21 @@ export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutCo
             >
               <Refresh aria-hidden className="size-4 rotate-180 transition-transform duration-200 group-active:rotate-90" />
             </Button>
-            <PreviewPanelControls
+            {(!interfaceUnsupported || !panel.isExpanded) && <PreviewPanelControls
               label={app.name}
               isExpanded={panel.isExpanded}
               onToggleExpanded={panel.toggleExpanded}
               buttonClassName="mx-0 flex size-7 items-center justify-center p-1.5"
-            />
+            />}
           </div>
           {reserveLayoutControls && (
             <div aria-hidden="true" className="shrink-0" style={{ width: `var(${LAYOUT_FIXED_CONTROLS_WIDTH_VAR}, 0px)` }} />
           )}
         </header>
         <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl ${panel.isExpanded ? "" : "rounded-tl-none"} bg-primary dark:bg-primary-950`}>
-          {compatibility.notice && (
-            <div role="note" className="shrink-0 border-b border-primary-200/60 px-3 py-2 text-xs text-primary-500 dark:border-primary-800/50">
-              {compatibility.notice}
-            </div>
-          )}
           <div className="relative min-h-0 flex-1 isolate">
-            <McpAppWorkspace key={reloadKey} />
-            <div ref={setChatHost} className="pointer-events-none absolute inset-0 z-10" />
+            {startedDocumentId === documentId && <McpAppWorkspace key={reloadKey} />}
+            {!interfaceUnsupported && <div ref={setChatHost} className="pointer-events-none absolute inset-0 z-10" />}
           </div>
         </div>
       </div>

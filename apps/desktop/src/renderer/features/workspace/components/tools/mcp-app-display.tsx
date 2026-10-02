@@ -343,10 +343,13 @@ export function McpAppDisplay({
 
   useEffect(() => {
     const iframe = iframeRef.current;
-    if (!resource || isCollapsed || !iframe?.contentWindow) return;
+    if (!resource || isCollapsed || !iframe) return;
 
     let disposed = false;
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let frameReadyTimer: ReturnType<typeof setTimeout> | null = null;
+    let connectionStarted = false;
+    const frameReadyDeadline = Date.now() + 10_000;
     initializedRef.current = false;
     if (!hasContextHost) latestContextRef.current = null;
     lastSentResultRef.current = null;
@@ -605,8 +608,35 @@ export function McpAppDisplay({
       );
     };
 
+    const connectFrame = () => {
+      if (disposed || connectionStarted) return;
+      if (frameReadyTimer) { clearTimeout(frameReadyTimer); frameReadyTimer = null; }
+      const target = iframe.contentWindow;
+      if (!target) {
+        if (Date.now() >= frameReadyDeadline) {
+          setLoadState({ key: resourceKey, error: "The app frame could not start. Reload the app to try again." });
+          return;
+        }
+        frameReadyTimer = setTimeout(connectFrame, 50);
+        return;
+      }
+      connectionStarted = true;
+      const transport = new PostMessageTransport(target, target);
+      void bridge.connect(transport).then(
+        () => { if (!disposed) iframe.src = resource.url; },
+        (reason: unknown) => {
+          if (!disposed) setLoadState({ key: resourceKey,
+            error: reason instanceof Error ? reason.message : String(reason) });
+        },
+      );
+    };
+
     const onLoad = () => {
+      connectFrame();
+      // Ignore the placeholder document's load; only bootstrap the actual app.
+      if (iframe.getAttribute("src") !== resource.url) return;
       postGlobals();
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       fallbackTimer = setTimeout(() => {
         if (disposed || initializedRef.current) return;
         const target = iframe.contentWindow;
@@ -633,25 +663,13 @@ export function McpAppDisplay({
 
     window.addEventListener("message", onCompatibilityMessage);
     iframe.addEventListener("load", onLoad);
-    const transport = new PostMessageTransport(iframe.contentWindow, iframe.contentWindow);
-    void bridge.connect(transport).then(
-      () => {
-        if (!disposed) iframe.src = resource.url;
-      },
-      (reason: unknown) => {
-        if (!disposed) {
-          setLoadState({
-            key: resourceKey,
-            error: reason instanceof Error ? reason.message : String(reason),
-          });
-        }
-      },
-    );
+    connectFrame();
 
     return () => {
       disposed = true;
       cancelMessage();
       if (fallbackTimer) clearTimeout(fallbackTimer);
+      if (frameReadyTimer) clearTimeout(frameReadyTimer);
       window.removeEventListener("message", onCompatibilityMessage);
       iframe.removeEventListener("load", onLoad);
       bridgeRef.current = null;

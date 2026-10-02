@@ -1245,6 +1245,7 @@ export function createClaudeElicitationHandler({
       cancelApproval(requestId);
       return { action: "cancel" };
     }
+    if (response.answer === "cancel") return { action: "cancel" };
     if (!response.approved) return { action: "decline" };
 
     if (mode === "url") return { action: "accept" };

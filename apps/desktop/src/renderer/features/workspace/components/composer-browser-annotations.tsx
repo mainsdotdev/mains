@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Button, DropdownWrapper, Textarea } from "@/components/ui";
-import { Chat, Check, Close, Edit, Trash } from "@/components/ui/icons";
+import { Asterisk, Check, Close, Edit, Trash } from "@/components/ui/icons";
 import { useComposerContext } from "../hooks/use-composer-context";
 import { ImagePreviewModal } from "./image-preview-modal";
 import { BrowserAnnotationElements, BrowserAnnotationComment } from "./browser-annotation-details";
@@ -65,7 +65,7 @@ export function ComposerBrowserAnnotations() {
           onClick={() => { setOpen(!open); setEditing(null); }}
           className="flex min-w-0 items-center gap-2 rounded-xl py-1.5 pl-3 pr-1.5 text-xs text-primary-800 transition-colors dark:text-primary-200"
         >
-          <Chat className="size-3.5 shrink-0 text-primary-500" />
+          <Asterisk className="size-3.5 shrink-0 text-primary-500" />
           <span className="truncate">{summary}</span>
         </Button>
         <Button

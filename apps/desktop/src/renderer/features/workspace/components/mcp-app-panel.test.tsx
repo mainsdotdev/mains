@@ -34,11 +34,55 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   mocks.mounts = 0;
+  Object.assign(mocks.panel.document.app, { name: "MagicPath", tool: "magicpath.open_canvas" });
   Object.assign(mocks.panel, { isOpen: true, isExpanded: false, chatVisible: true, chatMode: "input", width: 608 });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("MCP app panel interactions", () => {
+  it("waits for the panel to become visible before mounting a new app, then retains it while hidden", () => {
+    mocks.panel.isOpen = false;
+    const view = render(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(300));
+    expect(mocks.mounts).toBe(0);
+    expect(document.querySelector("iframe")).toBeNull();
+    mocks.panel.isOpen = true;
+    view.rerender(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(50));
+    const frame = screen.getByTitle("App canvas");
+    expect(frame.closest("[data-mcp-app-panel]")?.getAttribute("data-mcp-app-panel-visible")).toBe("");
+    expect(mocks.mounts).toBe(1);
+    mocks.panel.isOpen = false;
+    view.rerender(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(300));
+    expect(document.querySelector("iframe")).toBe(frame);
+    expect(mocks.mounts).toBe(1);
+  });
+
+  it.each(["figma.open_canvas", "tldraw.open_canvas"])("keeps %s free of banners and floating chat, with only Reload when expanded", (tool) => {
+    mocks.panel.document.app.tool = tool;
+    const view = render(<McpAppPanel />);
+    expect(screen.queryByRole("note", { name: "App compatibility" })).toBeNull();
+    expect(mocks.panel.setChatHost).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Expand MagicPath" })).toBeTruthy();
+    const frame = screen.getByTitle("App canvas");
+    mocks.panel.isExpanded = true;
+    view.rerender(<McpAppPanel />);
+    expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Reload app"]);
+    expect(mocks.panel.setChatHost).not.toHaveBeenCalled();
+    expect(screen.getByTitle("App canvas")).toBe(frame);
+    fireEvent.click(screen.getByRole("button", { name: "Reload app" }));
+    expect(screen.getByTitle("App canvas")).not.toBe(frame);
+    expect(mocks.panel.newChat).not.toHaveBeenCalled();
+  });
+
+  it("does not show an unsupported notice for other apps", () => {
+    render(<McpAppPanel />);
+    expect(screen.queryByRole("note", { name: "App compatibility" })).toBeNull();
+    expect(mocks.panel.setChatHost).toHaveBeenCalledWith(expect.any(HTMLDivElement));
+  });
+
   it.each(["hover", "focus"])("shows only the close tooltip on tab-button %s", (interaction) => {
     render(<McpAppPanel />);
     const close = screen.getByRole("button", { name: "Close MagicPath tab" });

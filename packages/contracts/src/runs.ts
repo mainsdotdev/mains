@@ -425,6 +425,8 @@ export interface ToolApprovalRequest {
   autoResolutionMs?: number;
   serverName?: string;
   elicitationMode?: "form" | "url";
+  /** Flat JSON Schema for a form elicitation. */
+  requestedSchema?: Record<string, unknown>;
   url?: string;
   description?: string;
   timestamp: number;
@@ -443,7 +445,7 @@ export interface ToolApprovalResolvedEvent {
  * Body of `runs:toolApprovalResponse`. `answer` formats mirror the desktop's
  * dialog: chosen option labels joined with ", " or free text for a question;
  * "acceptForSession" to allow a tool for the rest of the run; a JSON object
- * string for an elicitation form.
+ * string for an elicitation form; "cancel" with approved: false to cancel it.
  */
 export interface ToolApprovalResponse {
   requestId: string;

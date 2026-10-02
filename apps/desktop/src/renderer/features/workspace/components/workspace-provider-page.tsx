@@ -696,11 +696,12 @@ export function WorkspaceProviderPage({
                 />
               </div>
               {currentApproval && !currentPlanApproval && (
-                <div className="max-h-[40vh] shrink-0 overflow-y-auto px-3">
+                <div className="shrink-0 px-3">
                   <ToolApprovalDialog
                     request={currentApproval}
                     onRespond={respondToolApproval}
                     variant={variant}
+                    maxHeight="40dvh"
                   />
                 </div>
               )}
@@ -823,7 +824,7 @@ export function WorkspaceProviderPage({
         !currentPlanApproval &&
         !ws.showEmptyState &&
         !ws.showNewRunTab && (
-        <div className="w-full max-w-210 mx-auto max-h-[55vh] overflow-y-auto noscrollbar">
+        <div className="w-full max-w-210 mx-auto">
           <ToolApprovalDialog
             request={currentApproval}
             onRespond={respondToolApproval}

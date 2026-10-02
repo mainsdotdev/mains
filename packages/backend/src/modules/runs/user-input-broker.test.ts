@@ -154,6 +154,22 @@ describe("listPendingApprovals", () => {
 });
 
 describe("user-input-broker", () => {
+  it.each(["request", "run", "timeout", "shutdown"])("settles elicitation %s cancellation without treating it as a decline", async (reason) => {
+    vi.useFakeTimers();
+    const schema = { type: "object", properties: { calendar: { type: "string" } } };
+    const response = requestToolApproval({
+      requestId: "form", runId: "run-1", toolName: "Calendar", kind: "elicitation",
+      requestedSchema: schema, elicitationMode: "form", timestamp: Date.now(), autoResolutionMs: 500,
+    });
+    expect(listPendingApprovals()[0]?.requestedSchema).toEqual(schema);
+    if (reason === "request") cancelPendingRequest("form");
+    else if (reason === "run") cancelPendingRequests("run-1");
+    else if (reason === "timeout") vi.advanceTimersByTime(500);
+    else clearAllPendingRequests();
+    await expect(response).resolves.toEqual({ requestId: "form", approved: false, answer: "cancel" });
+    expect(listPendingApprovals()).toEqual([]);
+  });
+
   it("resolves and dismisses one provider-owned approval request", async () => {
     const send = vi.fn();
     const sink: EventSink = { kind: "test", send };

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     onmessage?: (request: { content: unknown; _meta?: Record<string, unknown> }, extra?: { signal: AbortSignal }) => Promise<unknown>;
     onupdatemodelcontext?: (context: unknown) => Promise<unknown>;
     close: ReturnType<typeof vi.fn>;
+    connect: ReturnType<typeof vi.fn>;
     capabilities: Record<string, unknown>;
     getAppCapabilities: ReturnType<typeof vi.fn>;
     setHostContext: ReturnType<typeof vi.fn>;
@@ -109,6 +110,52 @@ afterEach(() => {
 });
 
 describe("MCP App display modes", () => {
+  it("starts the bridge when an initially unavailable iframe browsing context becomes ready", async () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentWindow")!.get!;
+    let ready = false;
+    const getter = vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockImplementation(function (this: HTMLIFrameElement) {
+      return ready ? original.call(this) : null;
+    });
+    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["inline", "fullscreen"] } } });
+    const props = { sessionId: "app-session", presentation: "page" as const, panelDisplayMode: "fullscreen" as const,
+      app, input: {}, title: "MagicPath", isActive: false };
+    const view = render(createElement(McpAppDisplay, props));
+    try {
+      await waitFor(() => expect(screen.queryByText("Loading app…")).toBeNull());
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect(mocks.bridges).toHaveLength(1);
+      expect(mocks.bridges[0].connect).not.toHaveBeenCalled();
+      ready = true;
+      view.rerender(createElement(McpAppDisplay, { ...props, isActive: true }));
+      fireEvent.load(screen.getByTitle("MagicPath interactive app"));
+      await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+      await waitFor(() => expect(mocks.bridges[0].connect).toHaveBeenCalledOnce());
+      await waitFor(() => expect(screen.getByTitle("MagicPath interactive app").getAttribute("src")).toBe("about:blank"));
+      view.rerender(createElement(McpAppDisplay, { ...props, isActive: false }));
+      view.rerender(createElement(McpAppDisplay, { ...props, isActive: true }));
+      expect(mocks.bridges).toHaveLength(1);
+      expect(mocks.bridges[0].close).not.toHaveBeenCalled();
+    } finally { getter.mockRestore(); }
+  });
+
+  it.each(["timeout", "unmount"])("ends iframe readiness waiting on %s", async (end) => {
+    vi.useFakeTimers();
+    const getter = vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(null);
+    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
+    const view = render(createElement(McpAppDisplay, { sessionId: "app-session", presentation: "page", app, input: {}, title: "MagicPath" }));
+    try {
+      await act(async () => { await Promise.resolve(); });
+      expect(mocks.bridges).toHaveLength(1);
+      expect(mocks.bridges[0].connect).not.toHaveBeenCalled();
+      if (end === "unmount") view.unmount();
+      act(() => vi.advanceTimersByTime(10_000));
+      if (end === "timeout") expect(screen.getByText(/The app frame could not start/)).toBeTruthy();
+      else expect(mocks.bridges[0].close).toHaveBeenCalledOnce();
+      expect(mocks.bridges[0].connect).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { view.unmount(); getter.mockRestore(); vi.useRealTimers(); }
+  });
+
   it("keeps a tool-opened canvas connected through panel changes and resolves its bare UI tools", async () => {
     mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["inline", "fullscreen"] } } });
     mocks.callTool.mockResolvedValue({ success: true, data: { content: [] } });

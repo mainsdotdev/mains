@@ -2037,6 +2037,14 @@ describe("claude.driver / elicitation handler", () => {
   });
 
   // A URL elicitation is a browser round-trip; there is no content to send back.
+  it("returns cancel for explicit form cancellation", async () => {
+    const handler = createClaudeElicitationHandler({
+      runId: "run-1",
+      requestApproval: vi.fn().mockResolvedValue({ requestId: "x", approved: false, answer: "cancel" }),
+    });
+    await expect(handler(FORM_REQUEST, opts())).resolves.toEqual({ action: "cancel" });
+  });
+
   it("accepts a url elicitation without content", async () => {
     const handler = createClaudeElicitationHandler({
       runId: "run-1",
