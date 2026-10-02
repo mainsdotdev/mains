@@ -93,6 +93,7 @@ export const CHANNELS = {
     setDeviceEmulation: "browser:setDeviceEmulation",
     setSelectMode: "browser:setSelectMode",
     setVisible: "browser:setVisible",
+    setSuppressed: "browser:setSuppressed",
     chatUpdateWindow: "browser:chatUpdateWindow",
     chatPublishContext: "browser:chatPublishContext",
     chatGetContext: "browser:chatGetContext",

@@ -405,9 +405,10 @@ describe("emitUserPromptArtifact", () => {
       const [pdf, txt, img] = onEvent.mock.calls[0][0].metadata.attachments;
       expect(savedPaths).toContain(pdf.path);
       expect(fs.existsSync(pdf.path)).toBe(true);
-      // .txt is inlined into the prompt, never written; images carry a data URL.
+      // .txt is inlined; image previews also retain the durable uploaded copy.
       expect(txt.path).toBeUndefined();
-      expect(img.path).toBeUndefined();
+      expect(savedPaths).toContain(img.path);
+      expect(fs.existsSync(img.path)).toBe(true);
     } finally {
       fs.rmSync(path.join(os.tmpdir(), "mains-uploads", runId), { recursive: true, force: true });
     }
@@ -419,6 +420,32 @@ describe("emitUserPromptArtifact", () => {
       attachments: [{ name: "a.pdf", type: "document", data: "", mimeType: "application/pdf" }],
     });
     expect(onEvent.mock.calls[0][0].metadata.attachments[0].path).toBeUndefined();
+  });
+
+  it("persists per-prompt browser annotation groups without unrelated context or DOM styling", async () => {
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    await emitUserPromptArtifact(onEvent, "deneme", {
+      context: [
+        { kind: "selection", metadata: { source: "browser", id: "first", url: "https://mains.dev", comment: "Bunlar nedir", elements: [
+          { tagName: "section", selector: "#intro", text: "Introduction", styles: { color: "red" } },
+          { tagName: "a", selector: "#link", componentName: "Link" },
+        ] } },
+        { kind: "selection", metadata: { source: "editor", elements: [{ tagName: "div", selector: "main" }] } },
+        { kind: "selection", metadata: { source: "browser", tagName: "body", selector: "body" } },
+        { kind: "selection", metadata: { source: "browser", id: "second", url: "https://docs.mains.dev", comment: "İkinci yorum", elements: [
+          { tagName: "div", selector: "#card", text: "Card" },
+        ] } },
+      ],
+    });
+    const event = onEvent.mock.calls[0][0];
+    expect(event.content).toBe("deneme");
+    expect(event.metadata.browserAnnotations).toEqual([
+      { id: "first", url: "https://mains.dev", comment: "Bunlar nedir", elements: [
+        { tagName: "section", selector: "#intro", text: "Introduction" },
+        { tagName: "a", selector: "#link", componentName: "Link" },
+      ] },
+      { id: "second", url: "https://docs.mains.dev", comment: "İkinci yorum", elements: [{ tagName: "div", selector: "#card", text: "Card" }] },
+    ]);
   });
 
   it("includes issues and files metadata", async () => {

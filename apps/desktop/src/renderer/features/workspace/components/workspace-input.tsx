@@ -803,7 +803,9 @@ export function WorkspaceInput({
   );
 
   const isMobile = useIsMobile();
-  const contextBrowserSelectionCount = contextBrowserSelections.length;
+  const contextBrowserSelectionCount = contextBrowserSelections.filter(
+    (selection) => !selection.elements?.length,
+  ).length;
   const inputPlaceholder = useMemo(() => {
     if (isFileDragOver) {
       return "Drop images or documents here";

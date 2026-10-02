@@ -1,0 +1,91 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
+import type { EventGroup } from "../../lib/group-events";
+
+vi.hoisted(() => {
+  Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => ({
+    matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  })) });
+});
+
+vi.mock("../prompt-markdown", () => ({
+  PromptMarkdown: ({ children }: { children: string }) => <div>{children}</div>,
+  promptMessageMentionsFile: () => false,
+}));
+vi.mock("@/hooks/use-local-image-url", () => ({
+  useLocalImageUrl: (src: string | undefined) => src?.startsWith("/") ? `mains-localimg://signed?path=${encodeURIComponent(src)}` : src,
+}));
+vi.mock("../image-preview-modal", () => ({
+  ImagePreviewModal: ({ name, src }: { name: string; src: string }) => <div role="dialog" aria-label={name}>{src}</div>,
+}));
+vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => ({ openDocument: vi.fn() }) }));
+vi.mock("@/lib/redux/api", () => ({ useLazyGetAppsForFileQuery: () => [vi.fn(), {}] }));
+vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView: vi.fn() }));
+import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
+import { InfoGroup } from "./info-group";
+
+const annotations: BrowserAnnotation[] = [
+  { id: "one", url: "https://mains.dev", comment: "Bunları güncelle", elements: [
+    { tagName: "section", selector: "#intro", text: "Introduction" },
+    { tagName: "a", selector: "#link", text: "Workspaces" },
+  ] },
+  { id: "two", url: "https://docs.mains.dev", comment: "İkinci yorum", elements: [{ tagName: "div", selector: "#card", text: "Quickstart" }] },
+];
+function prompt(metadata: Record<string, unknown> = {}): EventGroup {
+  return { id: "prompt", type: "info", startTime: new Date(), endTime: new Date(), events: [{
+    id: "message", type: "artifact", content: "deneme", timestamp: new Date(),
+    metadata: { kind: "user-prompt", browserAnnotations: annotations, attachments: [
+      { name: "annotation-one.png", type: "image", mimeType: "image/png", captureName: "annotation-one.png" },
+      { name: "annotation-two.png", type: "image", mimeType: "image/png", dataUrl: "data:image/png;base64,eA==" },
+    ], ...metadata },
+  }] };
+}
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+describe("prompt browser annotations", () => {
+  it("shows screenshots, one annotation chip and the message, with read-only grouped details", async () => {
+    render(<InfoGroup group={prompt()} />);
+    const chip = screen.getByRole("button", { name: "2 annotations" });
+    expect(screen.getAllByRole("img")).toHaveLength(2);
+    const image = screen.getAllByRole("img")[1];
+    expect(image.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chip.compareDocumentPosition(screen.getByText("deneme")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(chip);
+    await screen.findByRole("dialog", { name: "Browser annotations" });
+    for (const text of ["section", "div", "Introduction", "Workspaces", "Quickstart", "Bunları güncelle", "İkinci yorum"]) {
+      expect(screen.getByText(text)).toBeTruthy();
+    }
+    expect(screen.queryByRole("button", { name: /Edit annotation|Delete annotation/ })).toBeNull();
+    expect(useSuppressBrowserView).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Browser annotations" })).toBeNull();
+    expect(document.activeElement).toBe(chip);
+    fireEvent.click(chip);
+    await screen.findByRole("dialog");
+    fireEvent.mouseDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps each historical prompt independent of the current composer and other turns", async () => {
+    render(<><InfoGroup group={prompt({ browserAnnotations: [annotations[0]] })} /><InfoGroup group={prompt({ browserAnnotations: [annotations[1]] })} /></>);
+    const chips = screen.getAllByRole("button", { name: "1 annotation" });
+    fireEvent.click(chips[1]);
+    await screen.findByText("İkinci yorum");
+    expect(screen.queryByText("Bunları güncelle")).toBeNull();
+  });
+
+  it("previews the durable image copy after the transient capture has expired", () => {
+    render(<InfoGroup group={prompt({ attachments: [{ name: "annotation.png", type: "image", mimeType: "image/png", path: "/uploads/run/annotation.png", captureName: "expired.png" }] })} />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview annotation.png" }));
+    expect(screen.getByRole("dialog", { name: "annotation.png" }).textContent).toBe("mains-localimg://signed?path=%2Fuploads%2Frun%2Fannotation.png");
+  });
+
+  it("leaves older prompts and ordinary screenshots without an annotation chip", () => {
+    render(<InfoGroup group={prompt({ browserAnnotations: undefined })} />);
+    expect(screen.queryByRole("button", { name: /annotation(s)?$/ })).toBeNull();
+    expect(screen.getAllByRole("img")).toHaveLength(2);
+    expect(screen.getByText("deneme")).toBeTruthy();
+  });
+});

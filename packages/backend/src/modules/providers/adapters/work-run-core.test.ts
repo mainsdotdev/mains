@@ -217,6 +217,25 @@ describe("createWorkRunAdapter", () => {
       expect(userPrompt.content).toBe("ship it");
     });
 
+    it.each(["start", "continue"])("preserves annotation context on the %s prompt artifact", async (operation) => {
+      const fake = createFakeDriver({ outcome: { status: "succeeded" } });
+      fake.enable("resumeSession");
+      const adapter = createWorkRunAdapter(fake.driver);
+      const context = [{ kind: "selection" as const, metadata: {
+        source: "browser", id: "annotation", url: "https://mains.dev", comment: "Review this",
+        elements: [{ tagName: "section", selector: "#intro", text: "Introduction" }],
+      } }];
+      const events: WorkRunEvent[] = [];
+      const onEvent = (event: WorkRunEvent) => { events.push(event); };
+      if (operation === "start") await adapter.startRun(makeStartReq({ context }), onEvent);
+      else await adapter.continueRun!(makeContinueReq({ context }), onEvent);
+      const prompt = events.find((event) => event.type === "artifact" && event.kind === "user-prompt");
+      expect(prompt?.type === "artifact" && prompt.metadata?.browserAnnotations).toEqual([{
+        id: "annotation", url: "https://mains.dev", comment: "Review this",
+        elements: [{ tagName: "section", selector: "#intro", text: "Introduction" }],
+      }]);
+    });
+
     it("adds the provider-resolved model to the user-prompt artifact", async () => {
       const fake = createFakeDriver({
         model: "gpt-5.6-terra",

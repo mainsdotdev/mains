@@ -15,6 +15,7 @@ import type {
   ContextBrowserSelection,
 } from "@/features/workspace/lib/composer-context";
 import { ImagePreviewModal } from "./image-preview-modal";
+import { ComposerBrowserAnnotations } from "./composer-browser-annotations";
 
 /**
  * A draft attachment has no file on disk yet, so the viewer reads it through a
@@ -202,7 +203,7 @@ export function ComposerAttachments({
               );
             })}
 
-            {browserSelections.map((selection) => {
+            {browserSelections.filter((selection) => !selection.elements?.length).map((selection) => {
               const src = selection.screenshotCaptureName
                 ? `mains-capture://cap/${selection.screenshotCaptureName}`
                 : undefined;
@@ -324,6 +325,7 @@ export function ComposerAttachments({
                 </div>
               );
             })}
+            <ComposerBrowserAnnotations />
           </div>
         </div>
       </div>

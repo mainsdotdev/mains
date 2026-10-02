@@ -14,7 +14,7 @@ import workspaceReducer, {
   replaceMcpAppContext,
 } from "@/lib/redux/slices/workspaceSlice";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
-import type { ContextMcpAppItem } from "../lib/composer-context";
+import type { ContextBrowserItem, ContextMcpAppItem } from "../lib/composer-context";
 
 const mocks = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -221,6 +221,48 @@ describe("new conversation context", () => {
     expect(mocks.moveUploads).toHaveBeenCalledWith(previousOwner, page.result.current.ownerKey);
     await act(async () => { await page.result.current.handleExecute(); });
     expect(mocks.executeRun.mock.calls[0][1]).toBe("ws-2");
+  });
+});
+
+describe("browser annotation submission", () => {
+  const element = {
+    selector: "h1", tagName: "h1", text: "Introduction", styles: {},
+    rect: { x: 0, y: 0, width: 100, height: 30 }, pageRect: { x: 0, y: 0, width: 100, height: 30 },
+    scroll: { x: 0, y: 0 }, viewport: { width: 1000, height: 800 }, devicePixelRatio: 1,
+  };
+  const annotation: ContextBrowserItem = {
+    ...element, kind: "browser", id: "annotation-1", url: "https://example.com", title: "Docs",
+    elements: [element], comment: "Explain this heading", timestamp: "2026-10-02T11:00:00Z", screenshotMimeType: "image/png",
+  };
+
+  it("sends an annotation's comment when the main prompt is empty", async () => {
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showNewRunTab).toBe(true));
+    act(() => page.store.dispatch(setContextItemsForKey({ key: page.result.current.ownerKey, items: [annotation] })));
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(mocks.executeRun.mock.calls[0][0]).toBe("Explain this heading");
+    expect(mocks.executeRun.mock.calls[0][5]).toEqual([annotation]);
+  });
+
+  it("keeps an annotation edited while the previous comment is being sent", async () => {
+    mocks.mode = "developer"; mocks.workspaceId = "ws-1";
+    const existing = { ...run, workspaceId: "ws-1", mode: "developer" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
+    mocks.getById.mockResolvedValue({ success: true, data: existing });
+    mocks.checkCanResume.mockResolvedValue(true);
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+    const key = page.result.current.ownerKey;
+    act(() => page.store.dispatch(setContextItemsForKey({ key, items: [annotation] })));
+    let finish!: (success: boolean) => void;
+    mocks.continueRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    let sending!: Promise<string | null | undefined>;
+    act(() => { sending = page.result.current.handleExecute(); });
+    await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    const edited = { ...annotation, comment: "Make this heading smaller" };
+    act(() => page.store.dispatch(setContextItemsForKey({ key, items: [edited] })));
+    await act(async () => { finish(true); await sending; });
+    expect(page.result.current.contextItems).toEqual([edited]);
   });
 });
 

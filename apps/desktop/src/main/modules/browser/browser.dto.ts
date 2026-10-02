@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 export type { ServiceResponse } from "@mains/contracts/service-response";
+import type { BrowserSelectionElement } from "../../../shared/browser-annotation";
 
 export interface BrowserBounds {
   x: number;
@@ -119,28 +120,20 @@ export interface BrowserPrintResult {
   failureReason?: string;
 }
 
-export interface BrowserSelectionPayload {
+export interface BrowserSelectionPayload extends BrowserSelectionElement {
   id: string;
   type: "browser_selection";
   url: string;
   title: string;
-  selector: string;
-  tagName: string;
-  text: string;
-  styles: Record<string, string>;
-  rect: { x: number; y: number; width: number; height: number };
-  pageRect: { x: number; y: number; width: number; height: number };
-  scroll: { x: number; y: number };
-  viewport: { width: number; height: number };
-  devicePixelRatio: number;
-  componentName?: string;
-  sourceFile?: string;
   timestamp: string;
+  /** Present for an annotation; ordinary page screenshots have no elements. */
+  elements?: BrowserSelectionElement[];
+  comment?: string;
 }
 
 export interface BrowserSelectionResult extends BrowserSelectionPayload {
   ownerKey: string;
-  /** Absolute path of the element screenshot on disk. */
+  /** Absolute path of the element or highlighted annotation viewport PNG. */
   screenshotPath?: string;
   /** Basename used to resolve the capture via the `mains-capture://` scheme in the renderer. */
   screenshotCaptureName?: string;

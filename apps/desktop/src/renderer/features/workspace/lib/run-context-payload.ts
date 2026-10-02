@@ -17,6 +17,7 @@ import {
   type ContextItem,
 } from "./composer-context";
 import { mcpAppContextPayload } from "./mcp-app-context";
+import type { BrowserSelectionElement } from "../../../../shared/browser-annotation";
 
 export type Attachments = Array<{
   name: string;
@@ -149,10 +150,17 @@ function codeSelectionsToContext(
   });
 }
 
-/**
- * Build attachments + initialContext from browser selections. Screenshots go as
- * image attachments; structural data goes as "selection" context items.
- */
+/** Preserve each selected element's own component and source identity. */
+function describeBrowserElement(element: BrowserSelectionElement): string {
+  return [
+    `Element: ${element.componentName ? `<${element.componentName}>` : element.tagName}`,
+    `Selector: ${element.selector}`,
+    element.sourceFile ? `Source file: ${element.sourceFile}` : null,
+    element.text ? `Visible text: ${element.text}` : null,
+  ].filter(Boolean).join("\n");
+}
+
+/** Screenshots are attachments; comments and DOM details are selection context. */
 function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): {
   attachments: Attachments;
   initialContext: InitialContextItem[];
@@ -161,6 +169,7 @@ function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): 
   const initialContext: InitialContextItem[] = [];
 
   for (const sel of selections) {
+    const isAnnotation = !!sel.elements?.length;
     const host = (() => {
       try {
         return new URL(sel.url).hostname;
@@ -168,7 +177,7 @@ function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): 
         return "page";
       }
     })();
-    const slug = (sel.componentName || sel.tagName || "element")
+    const slug = (isAnnotation ? "annotation" : sel.componentName || sel.tagName || "element")
       .replace(/[^a-z0-9_-]+/gi, "-")
       .toLowerCase();
 
@@ -181,12 +190,16 @@ function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): 
       });
     }
     const content = [
-      `Browser selection: ${sel.componentName ? `<${sel.componentName}>` : sel.tagName}`,
+      isAnnotation
+        ? `Browser annotation: ${sel.elements!.length} selected item${sel.elements!.length === 1 ? "" : "s"}`
+        : `Browser selection: ${sel.componentName ? `<${sel.componentName}>` : sel.tagName}`,
       `URL: ${sel.url}`,
       sel.title ? `Page title: ${sel.title}` : null,
-      `Selector: ${sel.selector}`,
-      sel.sourceFile ? `Source file: ${sel.sourceFile}` : null,
-      sel.text ? `Visible text: ${sel.text}` : null,
+      sel.comment ? `User comment: ${sel.comment}` : null,
+      isAnnotation
+        ? sel.elements!.map((element, index) =>
+          `\nSelected item ${index + 1}\n${describeBrowserElement(element)}`).join("\n")
+        : describeBrowserElement(sel),
     ]
       .filter(Boolean)
       .join("\n");
@@ -208,6 +221,7 @@ function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): 
         componentName: sel.componentName,
         sourceFile: sel.sourceFile,
         timestamp: sel.timestamp,
+        ...(isAnnotation ? { elements: sel.elements, comment: sel.comment } : {}),
       },
     });
   }

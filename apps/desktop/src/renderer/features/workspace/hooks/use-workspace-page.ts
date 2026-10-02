@@ -32,6 +32,7 @@ import { collectionIdForVisibleRun } from "@/features/workspace/lib/run-collecti
 import { store } from "@/lib/redux";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import { contextItemKey } from "../lib/composer-context";
+import { browserAnnotationPrompt } from "../lib/browser-annotation";
 import type { McpAppMessageOptions } from "../lib/mcp-app-context";
 import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 
@@ -366,7 +367,7 @@ export function useWorkspacePage(providerId: string) {
   }, [setGoal, setUploadedFiles, clearContext, composeTargetRunId, ownerKey]);
 
   const handleExecute = useCallback(async (message?: string, options: McpAppMessageOptions = {}) => {
-    const text = (message ?? goal).trim();
+    const text = (message ?? goal).trim() || (message === undefined ? browserAnnotationPrompt(contextItems) : "");
     if (!text) return null;
     if (mode === "developer" && !workspaceId) {
       toast.error("Select a workspace before sending a prompt.");
@@ -403,7 +404,8 @@ export function useWorkspacePage(providerId: string) {
       const current = state.composerContextKey === ownerKey ? state.contextItems : state.contextItemsByKey[ownerKey] ?? [];
       const remaining = current.filter((item) => !submitted.some((sent) =>
         item.kind === sent.kind && contextItemKey(item) === contextItemKey(sent) &&
-        (item.kind !== "mcp-app" || sent.kind !== "mcp-app" || item.updateId === sent.updateId)));
+        (item.kind !== "mcp-app" || sent.kind !== "mcp-app" || item.updateId === sent.updateId) &&
+        (item.kind !== "browser" || sent.kind !== "browser" || item.comment === sent.comment)));
       const draft = state.draftTextByKey[ownerKey] ?? "";
       const remainingDraft = message === undefined && draft.trim() === text ? "" : draft;
       dispatch(setContextItemsForKey({ key: ownerKey, items: remaining }));

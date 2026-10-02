@@ -20,8 +20,10 @@ import { getMainWindow } from "../../windows/mainWindow";
 import { isRunOwnerKey, isWorkspaceDraftOwnerKey } from "../../../shared/ui-state-keys";
 import {
   buildInspectorScript,
+  buildInspectorCaptureCompleteScript,
   INSPECTOR_SENTINEL,
 } from "./inspector.script";
+import type { BrowserAnnotationTheme } from "../../../shared/browser-annotation";
 import {
   BLANK_URL,
   isAllowedBrowserUrl,
@@ -343,7 +345,9 @@ export const browserService = {
   activeTabIdsByOwner: {} as Record<string, string>,
   host: null as BrowserWindow | null,
   bounds: null as BrowserBounds | null,
+  attached: false,
   visible: false,
+  suppressionLeases: new Set<string>(),
   selectMode: false,
   restored: false,
   sessionConfigured: false,
@@ -946,6 +950,11 @@ export const browserService = {
       "did-start-navigation",
       (_event, _url, _isSameDocument, isMainFrame) => {
         if (!isMainFrame) return;
+        if (record.id === this.activeTabId && this.selectMode) {
+          this.selectMode = false;
+          this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled: false });
+          void contents.executeJavaScript(buildInspectorScript(false)).catch(() => {});
+        }
         record.faviconUrl = null;
         record.deviceEmulationQueue.beginNavigation();
       },
@@ -1001,6 +1010,7 @@ export const browserService = {
     contents.on("console-message", (event) => {
       const message = event.message;
       if (!message.startsWith(INSPECTOR_SENTINEL)) return;
+      if (record.id !== this.activeTabId || !this.selectMode) return;
       const raw = message.slice(INSPECTOR_SENTINEL.length);
       try {
         const parsed = JSON.parse(raw);
@@ -1011,10 +1021,16 @@ export const browserService = {
           });
           return;
         }
-        void this._handleSelection(
-          parsed as Omit<BrowserSelectionPayload, "id">,
-          record.ownerKey,
-        );
+        if (parsed?.type !== "browser_selection") return;
+        void this._handleSelection(parsed as Omit<BrowserSelectionPayload, "id">, record)
+          .catch(async (error) => {
+            console.warn("[browser] failed to capture annotation:", error);
+            if (!contents.isDestroyed()) {
+              await contents.executeJavaScript(buildInspectorCaptureCompleteScript(
+                "Could not capture this selection. Try adding it again.",
+              )).catch(() => {});
+            }
+          });
       } catch (error) {
         console.warn("[browser] failed to parse selection payload:", error);
       }
@@ -1091,7 +1107,7 @@ export const browserService = {
     const wasBlank = record.url === BLANK_URL;
     record.url = contents.getURL() || record.url || BLANK_URL;
     if (wasBlank !== (record.url === BLANK_URL) && this.activeTabId === record.id) {
-      record.view?.setVisible(this.visible && record.url !== BLANK_URL);
+      record.view?.setVisible(this._canShowView() && record.url !== BLANK_URL);
     }
     record.title =
       contents.getTitle() ||
@@ -1290,13 +1306,13 @@ export const browserService = {
   },
 
   async _mountActiveView() {
-    if (!this.visible || !this.host || this.host.isDestroyed()) return;
+    if (!this._canShowView() || !this.host || this.host.isDestroyed()) return;
     const expectedTabId = this._activeTab().id;
     const record = this.tabs.get(expectedTabId);
     if (!record) return;
     const view = await this._ensureTabView(record);
     if (
-      !this.visible ||
+      !this._canShowView() ||
       !this.host ||
       this.host.isDestroyed() ||
       this.activeTabId !== expectedTabId
@@ -1319,19 +1335,28 @@ export const browserService = {
     }
   },
 
-  async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">, ownerKey: string) {
+  async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">, record: BrowserTabRecord) {
     const id = randomUUID();
-    const record = this._activeTab();
-    if (!record.view || record.view.webContents.isDestroyed()) return;
+    const contents = record.view?.webContents;
+    if (!contents || contents.isDestroyed()) return;
+    const isAnnotation = Array.isArray(payload.elements) && payload.elements.length > 0;
+    if (isAnnotation && payload.elements!.length > 30) throw new Error("Too many selected elements");
 
     const elementRect = this._clampRect(payload.rect, payload.viewport);
 
-    const element = await this._capture(elementRect, `element-${id}`);
+    // The viewport includes every visible selected outline, including nested
+    // selections. Capture the emitting tab even if the active tab changes.
+    const element = await this._capture(
+      isAnnotation ? undefined : elementRect,
+      `${isAnnotation ? "annotation" : "element"}-${id}`,
+      contents,
+    );
+    if (isAnnotation && !element) throw new Error("Could not capture the annotation");
     pruneCaptureCache();
 
     const result: BrowserSelectionResult = {
       id,
-      ownerKey,
+      ownerKey: record.ownerKey,
       type: "browser_selection",
       url: payload.url,
       title: payload.title,
@@ -1347,13 +1372,23 @@ export const browserService = {
       componentName: payload.componentName,
       sourceFile: payload.sourceFile,
       timestamp: payload.timestamp,
+      ...(isAnnotation ? {
+        elements: payload.elements,
+        comment: typeof payload.comment === "string" ? payload.comment.slice(0, 4000) : "",
+      } : {}),
       screenshotPath: element?.filePath,
       screenshotCaptureName: captureBasename(element?.filePath),
       screenshotMimeType: "image/png",
     };
 
-    this.selectMode = false;
-    this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled: false });
+    if (isAnnotation) {
+      if (!contents.isDestroyed()) {
+        await contents.executeJavaScript(buildInspectorCaptureCompleteScript()).catch(() => {});
+      }
+    } else {
+      this.selectMode = false;
+      this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled: false });
+    }
     this._sendToRenderer(CHANNELS.browser.selection, result);
   },
 
@@ -1375,13 +1410,14 @@ export const browserService = {
   },
 
   async _capture(
-    rect: Rectangle,
+    rect: Rectangle | undefined,
     prefix: string,
+    contents?: WebContents,
   ): Promise<{ filePath: string } | undefined> {
-    const view = this._activeTab().view;
-    if (!view || view.webContents.isDestroyed()) return undefined;
+    const captureContents = contents ?? this._activeTab().view?.webContents;
+    if (!captureContents || captureContents.isDestroyed()) return undefined;
     try {
-      const image = await view.webContents.capturePage(rect);
+      const image = await captureContents.capturePage(rect);
       if (image.isEmpty()) return undefined;
       const filePath = path.join(cacheDir(), `${prefix}-${Date.now()}.png`);
       fs.writeFileSync(filePath, image.toPNG());
@@ -1524,6 +1560,7 @@ export const browserService = {
       height: Math.max(1, Math.floor(bounds.height)),
     };
     this.visible = true;
+    this.attached = true;
     this._clearIdleTimer();
     this._loadPersistedTabs();
     await this._mountActiveView();
@@ -1532,11 +1569,14 @@ export const browserService = {
   },
 
   detach(): null {
+    // A late overlay cleanup cannot reattach a panel that has since closed.
+    this.attached = false;
     const activeRecord = this.activeTabId
       ? this.tabs.get(this.activeTabId)
       : null;
     const activeView = activeRecord?.view;
     activeRecord?.deviceEmulationQueue.cancel();
+    activeView?.setVisible(false);
     if (activeView && this.host && !this.host.isDestroyed()) {
       try {
         this.host.contentView.removeChildView(activeView);
@@ -1587,7 +1627,9 @@ export const browserService = {
     this.activeTabIdsByOwner = {};
     this.host = null;
     this.bounds = null;
+    this.attached = false;
     this.visible = false;
+    this.suppressionLeases.clear();
     this.selectMode = false;
     this.restored = false;
     this.historyLoaded = false;
@@ -2083,13 +2125,14 @@ export const browserService = {
   },
 
   setVisible(visible: boolean): null {
+    if (!this.attached) return null;
+    this.visible = visible;
     const record = this._activeTab();
     const view = record.view;
     if (view && !view.webContents.isDestroyed()) {
-      view.setVisible(visible && record.url !== BLANK_URL);
+      view.setVisible(this._canShowView() && record.url !== BLANK_URL);
     }
     if (!visible) record.deviceEmulationQueue.cancel();
-    this.visible = visible;
     if (visible) {
       this._clearIdleTimer();
       // The active owner may have changed while a renderer overlay hid the
@@ -2105,6 +2148,22 @@ export const browserService = {
     return null;
   },
 
+  _canShowView(): boolean {
+    return this.attached && this.visible && this.suppressionLeases.size === 0;
+  },
+
+  /** Overlays release only their own lease; panel visibility remains its owner's choice. */
+  setSuppressed(lease: string, suppressed: boolean): null {
+    if (suppressed) this.suppressionLeases.add(lease);
+    else this.suppressionLeases.delete(lease);
+    if (this._canShowView()) {
+      void this._mountActiveView();
+    } else {
+      for (const record of this.tabs.values()) record.view?.setVisible(false);
+    }
+    return null;
+  },
+
   async navigate(rawInput: string): Promise<null> {
     const record = this._activeTab();
     const view = await this._ensureTabView(record);
@@ -2114,7 +2173,7 @@ export const browserService = {
     record.url = url;
     if (url === BLANK_URL) record.title = "New tab";
     if (this.activeTabId === record.id) {
-      view.setVisible(this.visible && url !== BLANK_URL);
+      view.setVisible(this._canShowView() && url !== BLANK_URL);
     }
     record.deviceEmulationQueue.beginNavigation();
     try {
@@ -2303,15 +2362,16 @@ export const browserService = {
     return null;
   },
 
-  async setSelectMode(enabled: boolean): Promise<{ enabled: boolean }> {
+  async setSelectMode(enabled: boolean, theme?: BrowserAnnotationTheme): Promise<{ enabled: boolean }> {
     const contents = this._activeTab().view?.webContents;
     if (!contents || contents.isDestroyed()) {
       this.selectMode = false;
       throw new Error("No browser tab");
     }
-    await contents.executeJavaScript(buildInspectorScript(enabled), true);
+    await contents.executeJavaScript(buildInspectorScript(enabled, theme), true);
     this.selectMode = enabled;
     this._sendToRenderer(CHANNELS.browser.selectModeChanged, { enabled });
+    if (enabled) contents.focus();
     return { enabled };
   },
 

@@ -129,8 +129,9 @@ function createBrowserApi() {
       error: "No browser tab",
     }),
     deleteCapture: vi.fn().mockResolvedValue({ success: true, data: null }),
+    setSelectMode: vi.fn().mockResolvedValue({ success: true, data: { enabled: false } }),
     onStateChanged: vi.fn((_listener: (state: { activeTabId: string; tabs: typeof blankTab[] }) => void) => unsubscribe),
-    onSelectModeChanged: vi.fn(() => unsubscribe),
+    onSelectModeChanged: vi.fn((_listener: (state: { enabled: boolean }) => void) => unsubscribe),
     onSelection: vi.fn(() => unsubscribe),
     onFindResult: vi.fn(() => unsubscribe),
     onShortcut: vi.fn(() => unsubscribe),
@@ -153,6 +154,26 @@ describe("BrowserPanel browser menu", () => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
     delete (window as unknown as { api?: unknown }).api;
+  });
+
+  it("exits annotation mode with Escape while the toolbar is focused and no items are selected", async () => {
+    const api = createBrowserApi();
+    const loadedTab = { ...blankTab, url: "https://mains.dev/", title: "Mains" };
+    const state = { success: true, data: { activeTabId: loadedTab.tabId, tabs: [loadedTab] } };
+    api.getState.mockResolvedValue(state);
+    api.attach.mockResolvedValue(state);
+    Object.defineProperty(window, "api", { configurable: true, value: { browser: api } });
+    render(createElement(BrowserPanel));
+    await screen.findByRole("tab", { name: "Mains" });
+    const modeChanged = api.onSelectModeChanged.mock.calls[0][0];
+    act(() => modeChanged({ enabled: true }));
+    const annotate = screen.getByRole("button", { name: "Exit annotation mode" });
+    annotate.focus();
+    fireEvent.keyDown(annotate, { key: "Escape" });
+    expect(api.setSelectMode).toHaveBeenCalledExactlyOnceWith(false);
+    act(() => modeChanged({ enabled: false }));
+    fireEvent.keyDown(annotate, { key: "Escape" });
+    expect(api.setSelectMode).toHaveBeenCalledOnce();
   });
 
   it("places expand beside close and fills the workspace on expansion", async () => {

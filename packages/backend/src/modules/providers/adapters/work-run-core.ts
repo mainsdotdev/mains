@@ -126,6 +126,7 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
         const r = userPromptReq as WorkRunRequest;
         await emitUserPromptArtifact(wrapped, getUserPromptContent(userPromptReq), {
           attachments: r.attachments,
+          context: r.context,
           contextIssues: r.contextIssues,
           contextSignals: r.contextSignals,
           contextFiles: r.contextFiles,

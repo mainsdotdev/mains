@@ -76,6 +76,7 @@ import {
   type BrowserClearDataOptionsViewModel,
 } from "./browser-clear-data-panel";
 import { browserPanelBounds } from "../lib/browser-panel-bounds";
+import { browserAnnotationTheme } from "../lib/browser-annotation";
 import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import {
   keyboardShortcutLabel,
@@ -577,7 +578,9 @@ export function BrowserPanel({
         key: selectionOwnerKey || ownerKey,
         item: { kind: "browser", ...contextSelection },
       }));
-      toast.success("Added browser selection to chat context");
+      toast.success(contextSelection.elements?.length
+        ? "Added annotation to chat"
+        : "Added browser selection to chat context");
     });
     const offFind = api.onFindResult((result) => {
       if (result.tabId !== activeTabIdRef.current) return;
@@ -1220,6 +1223,11 @@ export function BrowserPanel({
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      if (event.key === "Escape" && selectMode) {
+        event.preventDefault();
+        void api?.setSelectMode(false);
+        return;
+      }
       if (matchesKeyboardShortcut(event, focusLocationShortcut)) {
         event.preventDefault();
         locationInputRef.current?.focus();
@@ -1289,6 +1297,7 @@ export function BrowserPanel({
     printShortcut,
     printPage,
     resetZoomShortcut,
+    selectMode,
     setZoom,
     backShortcut,
     forwardShortcut,
@@ -1311,7 +1320,7 @@ export function BrowserPanel({
 
   const toggleSelect = useCallback(async () => {
     if (!api) return;
-    const response = await api.setSelectMode(!selectMode);
+    const response = await api.setSelectMode(!selectMode, browserAnnotationTheme());
     if (response?.success === false) {
       toast.error(response.error || "Failed to start browser selection");
     }
@@ -1636,7 +1645,7 @@ export function BrowserPanel({
 
           <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
             <Button
-              tooltip={selectMode ? "Exit select mode" : "Select in browser"}
+              tooltip={selectMode ? "Exit annotation mode" : "Annotate browser"}
               tooltipShortcut="Esc"
               tooltipPosition="top-left"
               onClick={() => void toggleSelect()}
@@ -1645,7 +1654,7 @@ export function BrowserPanel({
                   ? "bg-primary-500/20 text-primary-800 dark:text-primary-200"
                   : "text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
               }`}
-              aria-label={selectMode ? "Exit select mode" : "Select in browser"}
+              aria-label={selectMode ? "Exit annotation mode" : "Annotate browser"}
               aria-pressed={selectMode}
             >
               <Crop className="size-4" />
@@ -1899,7 +1908,7 @@ export function BrowserPanel({
         )}
         {selectMode && (
           <div className="absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-full bg-primary-500/90 px-2 py-0.5 text-t font-medium text-primary-100 shadow pointer-events-none">
-            Click an element to capture · Esc to cancel
+            Click elements to annotate · Esc to exit
           </div>
         )}
       </BrowserDeviceStage>

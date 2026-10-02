@@ -18,6 +18,7 @@
 
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { AppshotCapture } from "../../../../shared/appshots";
+import type { BrowserSelectionElement } from "../../../../shared/browser-annotation";
 import type { McpAppContextBlock } from "./mcp-app-context";
 
 export interface ContextIssue {
@@ -65,22 +66,14 @@ export interface ContextCodeSelection {
   text: string;
 }
 
-export interface ContextBrowserSelection {
+export interface ContextBrowserSelection extends BrowserSelectionElement {
   id: string;
   url: string;
   title: string;
-  selector: string;
-  tagName: string;
-  text: string;
-  styles: Record<string, string>;
-  rect: { x: number; y: number; width: number; height: number };
-  pageRect: { x: number; y: number; width: number; height: number };
-  scroll: { x: number; y: number };
-  viewport: { width: number; height: number };
-  devicePixelRatio: number;
-  componentName?: string;
-  sourceFile?: string;
   timestamp: string;
+  /** One annotation groups its selected elements under a shared comment. */
+  elements?: BrowserSelectionElement[];
+  comment?: string;
   /** Absolute path to the PNG on disk (main-process userData/browser-captures). */
   screenshotPath?: string;
   /** Basename used for `mains-capture://<name>` in `<img src>`. */

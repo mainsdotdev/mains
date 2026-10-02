@@ -13,6 +13,7 @@ import type {
 import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
+import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
 import type {
   BrowserChatAction,
   BrowserChatContext,
@@ -1149,13 +1150,15 @@ const api = {
       ipcRenderer.invoke(CHANNELS.browser.setBounds, bounds),
     setVisible: (visible: boolean) =>
       ipcRenderer.invoke(CHANNELS.browser.setVisible, visible),
+    setSuppressed: (lease: string, suppressed: boolean) =>
+      ipcRenderer.invoke(CHANNELS.browser.setSuppressed, lease, suppressed),
     navigate: (url: string) => ipcRenderer.invoke(CHANNELS.browser.navigate, url),
     back: () => ipcRenderer.invoke(CHANNELS.browser.back),
     forward: () => ipcRenderer.invoke(CHANNELS.browser.forward),
     reload: () => ipcRenderer.invoke(CHANNELS.browser.reload),
     stop: () => ipcRenderer.invoke(CHANNELS.browser.stop),
-    setSelectMode: (enabled: boolean) =>
-      ipcRenderer.invoke(CHANNELS.browser.setSelectMode, enabled),
+    setSelectMode: (enabled: boolean, theme?: BrowserAnnotationTheme) =>
+      ipcRenderer.invoke(CHANNELS.browser.setSelectMode, enabled, theme),
     getNavState: () => ipcRenderer.invoke(CHANNELS.browser.getNavState),
     getState: () => ipcRenderer.invoke(CHANNELS.browser.getState),
     getDownloads: () => ipcRenderer.invoke(CHANNELS.browser.getDownloads),

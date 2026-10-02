@@ -20,6 +20,7 @@ import {
   BROWSER_DEVICE_WIDTH_MIN,
 } from "./browser-device";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { BrowserAnnotationTheme } from "../../../shared/browser-annotation";
 
 function requireBounds(input: unknown): BrowserBounds {
   if (!input || typeof input !== "object") throw new Error("Invalid bounds");
@@ -296,6 +297,15 @@ export function registerBrowserIpc(): void {
     handle((visible: unknown) => browserService.setVisible(Boolean(visible))),
   );
   ipcMain.handle(
+    CHANNELS.browser.setSuppressed,
+    handle((lease: unknown, suppressed: unknown) => {
+      if (typeof lease !== "string" || !lease || typeof suppressed !== "boolean") {
+        throw new Error("Invalid browser suppression lease");
+      }
+      return browserService.setSuppressed(lease, suppressed);
+    }),
+  );
+  ipcMain.handle(
     CHANNELS.browser.navigate,
     handle((url: unknown) => {
       if (typeof url !== "string") throw new Error("url must be a string");
@@ -320,8 +330,8 @@ export function registerBrowserIpc(): void {
   );
   ipcMain.handle(
     CHANNELS.browser.setSelectMode,
-    handle((enabled: unknown) =>
-      browserService.setSelectMode(Boolean(enabled)),
+    handle((enabled: unknown, theme?: BrowserAnnotationTheme) =>
+      browserService.setSelectMode(Boolean(enabled), theme),
     ),
   );
   ipcMain.handle(
@@ -450,6 +460,7 @@ export function unregisterBrowserIpc(): void {
     CHANNELS.browser.destroy,
     CHANNELS.browser.setBounds,
     CHANNELS.browser.setVisible,
+    CHANNELS.browser.setSuppressed,
     CHANNELS.browser.navigate,
     CHANNELS.browser.back,
     CHANNELS.browser.forward,

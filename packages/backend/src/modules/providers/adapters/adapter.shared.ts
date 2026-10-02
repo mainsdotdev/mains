@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import type {
   WorkRunEvent,
   WorkRunEventHandler,
@@ -567,6 +568,7 @@ export async function emitUserPromptArtifact(
   content: string,
   options?: {
     attachments?: FileAttachment[];
+    context?: WorkRunContextItem[];
     contextIssues?: Array<{
       provider: string;
       number?: number | null;
@@ -601,24 +603,44 @@ export async function emitUserPromptArtifact(
     model?: string;
   },
 ): Promise<void> {
+  const browserAnnotations: BrowserAnnotation[] = (options?.context ?? []).flatMap(({ metadata, ref }, index) => {
+    if (metadata?.source !== "browser" || !Array.isArray(metadata.elements)) return [];
+    const elements = metadata.elements.flatMap((element) => {
+      if (!element || typeof element.tagName !== "string" || typeof element.selector !== "string") return [];
+      return [{
+        tagName: element.tagName as string,
+        selector: element.selector as string,
+        ...(typeof element.text === "string" ? { text: element.text } : {}),
+        ...(typeof element.componentName === "string" ? { componentName: element.componentName } : {}),
+      }];
+    });
+    if (!elements.length) return [];
+    return [{
+      id: typeof metadata.id === "string" ? metadata.id : `browser-${index}`,
+      url: typeof metadata.url === "string" ? metadata.url : ref ?? "",
+      ...(typeof metadata.title === "string" ? { title: metadata.title } : {}),
+      ...(typeof metadata.comment === "string" ? { comment: metadata.comment } : {}),
+      elements,
+    }];
+  });
   await onEvent({
     type: "artifact",
     kind: "user-prompt",
     content,
     metadata: {
       source: "user",
+      ...(browserAnnotations.length ? { browserAnnotations } : {}),
       attachments: options?.attachments?.map((a) => {
         const captureName =
           a.sourcePath && a.sourcePath.replace(/\\/g, "/").includes("/browser-captures/")
             ? path.basename(a.sourcePath)
             : undefined;
-        // Documents land in the run's upload dir (see `saveAttachments`) — except
-        // .txt, which is inlined into the prompt and never written — so the
-        // transcript can open the copy the agent read.
+        // Images and documents land in the run's upload dir (see `saveAttachments`),
+        // except inline .txt files. Historical previews use the copy the agent
+        // read rather than relying on the bounded browser capture cache.
         const uploadedPath =
           options?.runId &&
-          a.type === "document" &&
-          path.extname(a.name).toLowerCase() !== ".txt"
+          (a.type === "image" || (a.type === "document" && path.extname(a.name).toLowerCase() !== ".txt"))
             ? path.join(attachmentUploadDir(options.runId), path.basename(a.name))
             : undefined;
         return {

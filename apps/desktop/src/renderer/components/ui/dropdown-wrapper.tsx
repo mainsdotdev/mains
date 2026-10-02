@@ -136,7 +136,7 @@ export default function DropdownWrapper({
               left: position === "right" ? "auto" : `${coords.left}px`,
               right:
                 position === "right"
-                  ? `${window.innerWidth - coords.left - coords.width}px`
+                  ? `${window.innerWidth - coords.left}px`
                   : "auto",
               ...(matchTriggerWidth ? { width: coords.width } : {}),
             }

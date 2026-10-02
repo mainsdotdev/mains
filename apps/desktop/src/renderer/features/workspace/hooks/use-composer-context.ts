@@ -5,6 +5,7 @@ import {
   addContextItem,
   clearContextItems,
   removeContextItem,
+  setContextItemsForKey,
 } from "@/lib/redux/slices/workspaceSlice";
 import {
   contextItemKey,
@@ -86,6 +87,17 @@ export function useComposerContext() {
     [dispatch],
   );
 
+  const update = useCallback((item: ContextItem) => {
+    const state = store.getState().workspace;
+    const key = contextItemKey(item);
+    dispatch(setContextItemsForKey({
+      key: state.composerContextKey,
+      items: state.contextItems.map((current) =>
+        current.kind === item.kind && contextItemKey(current) === key ? item : current),
+    }));
+    syncBrowserChatContext();
+  }, [dispatch]);
+
   const clear = useCallback(() => {
     dispatch(clearContextItems());
     syncBrowserChatContext();
@@ -104,5 +116,5 @@ export function useComposerContext() {
     syncBrowserChatContext();
   }, [dispatch]);
 
-  return { items, ...grouped, add, remove, clear, resetForRoute };
+  return { items, ...grouped, add, remove, update, clear, resetForRoute };
 }

@@ -287,7 +287,8 @@ Core tables:
 
 **Browser Module** (`src/main/modules/browser/`)
 - Drives an embedded `WebContentsView` panel inside the Electron window — attach/detach, set bounds, navigate, capture screenshots
-- `inspector.script.ts` is injected into the guest page for select-mode (DOM element picking); `browser:navState` streams nav state changes to the renderer
+- Panel attachment and requested visibility are separate from overlay suppression. `useSuppressBrowserView` acquires a unique `browser:setSuppressed` lease; releasing it cannot reopen a detached panel or override another overlay. Annotation dropdowns leave the live page visible.
+- `inspector.script.ts` injects a theme-aware shadow-root editor for multi-element annotations. Clicks toggle selections; Add captures one highlighted viewport with a shared comment and leaves annotation mode active. `browser:navState` streams nav state changes to the renderer
 
 **Automations Module** (`../../packages/backend/src/modules/automations/`)
 - User-defined scheduled / triggered automations (cron-style routines that fan out into runs) plus their run records
@@ -387,7 +388,7 @@ iconutil -c icns icon.iconset -o icon.icns
 Everything the composer attaches to the next message — files, issues, signals, skills, browser selections, Lens captures, code selections — is one tagged union, not parallel lists. See CONTEXT.md for the vocabulary.
 
 - `features/workspace/lib/composer-context.ts` — the `ContextItem` union plus its identity rules (`contextItemKey` for removal, `isSameContextItem` for dedupe) and `groupContextItems` for the per-kind views. The only home for these types.
-- `features/workspace/hooks/use-composer-context.ts` — the read path (`items`, the grouped views, `add` / `remove` / `clear` / route reset). Route reset preserves global Lens captures and drops workspace-scoped context. Components read it directly; never pass context lists or `onRemoveContextX` down as props. A component that only attaches dispatches `addContextItem` instead of subscribing.
+- `features/workspace/hooks/use-composer-context.ts` — the read path (`items`, the grouped views, `add` / `remove` / `update` / `clear` / route reset). Updates use the existing keyed context replacement. Route reset preserves global Lens captures and drops workspace-scoped context. Components read it directly; never pass context lists or `onRemoveContextX` down as props. A component that only attaches dispatches `addContextItem` instead of subscribing.
 - `features/workspace/lib/run-context-payload.ts` — `buildRunContextPayload(items, uploads)` shapes context for `runs:execute` / `runs:continue`. `executeRun` / `continueRun` take one `ContextItem[]`, never per-kind parameters.
 - Store side: a single `workspace.contextItems` array behind `addContextItem` / `removeContextItem` / `clearContextItems`.
 
