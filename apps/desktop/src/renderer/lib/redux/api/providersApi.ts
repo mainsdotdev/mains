@@ -1,4 +1,5 @@
 import { baseApi } from "./baseApi";
+import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { DetectedClis, ProviderCliInfo } from "@mains/contracts/provider-cli";
 export type { DetectedClis } from "@mains/contracts/provider-cli";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
@@ -107,14 +108,7 @@ export interface ModelInfo {
   contextWindow?: number;
   supportsFastMode?: boolean;
   supportsEffort?: boolean;
-  supportedEffortLevels?: (
-    | 'minimal'
-    | 'low'
-    | 'medium'
-    | 'high'
-    | 'max'
-    | 'xhigh'
-  )[];
+  supportedEffortLevels?: EffortLevel[];
   /**
    * Provider-specific service tiers (e.g. Codex: priority/flex/default).
    * Mirrors the field on the main-process `ModelInfo`; populated from

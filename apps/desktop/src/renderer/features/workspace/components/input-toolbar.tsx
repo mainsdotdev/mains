@@ -22,8 +22,7 @@ import {
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
-
-type EffortLevel = "minimal" | "low" | "medium" | "high" | "max" | "xhigh";
+import type { EffortLevel } from "@mains/contracts/effort-levels";
 
 interface InputToolbarProps {
   variant: "claude" | "copilot" | "codex" | "cursor";

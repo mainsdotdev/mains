@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
+import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
 import type { ProviderCliInfo } from "@mains/contracts/provider-cli";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
@@ -1053,8 +1054,8 @@ export interface CodexAdapterConfig {
   approvalMode?: "untrusted" | "on-request" | "never";
   /** Sandbox mode for file/network isolation */
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
-  /** Model reasoning effort level */
-  modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  /** App-server effort identifier, advertised per model by model/list. */
+  modelReasoningEffort?: EffortLevel;
   /**
    * Service tier id passed to `turn/start` (e.g. "priority", "flex", "default").
    * Discovered via `model/list` per-model `serviceTiers`. When set on the adapter
@@ -1301,7 +1302,7 @@ export interface ModelInfo {
   /** Whether this model supports effort levels */
   supportsEffort?: boolean;
   /** Available effort levels for this model */
-  supportedEffortLevels?: ('minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh')[];
+  supportedEffortLevels?: EffortLevel[];
   /**
    * Provider-specific service tiers (e.g. Codex: `priority`, `flex`, `default`).
    * When set, the UI exposes a tier picker so users can trade quality/cost

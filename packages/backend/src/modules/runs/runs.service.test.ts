@@ -153,6 +153,39 @@ describe("runsService", () => {
   // ─────────────────────────────────────────────────────────────
   describe("conversation settings", () => {
     afterEach(() => { vi.mocked(gitService.getHeadSha).mockClear(); });
+    it.each(["ultra", "FutureEffort"])("preserves Codex effort %j through saved settings, queued continuation, and fork", async (effort) => {
+      createProvider(db, { id: "codex" });
+      createWorkspace(db, { id: "codex-settings-workspace" });
+      createSpace(db, { id: "codex-settings-space", providerId: "codex", mode: "developer" });
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const forkRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun, continueRun, forkRun,
+        canResumeSession: vi.fn().mockResolvedValue(true) } as never);
+      const settings = { model: "server-model", config: { modelReasoningEffort: effort, thinkingMode: true } };
+      const created = await runsService.executeRun({
+        accountId: "default", providerId: "codex", spaceId: "codex-settings-space",
+        workspaceId: "codex-settings-workspace", goal: "hello", conversationSettings: settings,
+      });
+      await flushBackground();
+      expect(startRun.mock.calls[0][0]).toMatchObject({ model: settings.model, configSnapshot: settings.config });
+      expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(settings);
+
+      const next = { ...settings, config: { ...settings.config, modelReasoningEffort: effort === "ultra" ? "FutureEffort" : "ultra" } };
+      await runsService.updateRun(created.runId, { conversationSettings: next });
+      await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Queued", conversationSettings: settings });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ configSnapshot: settings.config });
+      expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(next);
+      await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Use saved settings" });
+      await flushBackground();
+      expect(continueRun.mock.calls[1][0]).toMatchObject({ configSnapshot: next.config });
+      const fork = await runsService.forkRun({ sourceRunId: created.runId, accountId: "default", message: "Fork" });
+      await flushBackground();
+      expect(forkRun.mock.calls[0][0]).toMatchObject({ configSnapshot: next.config });
+      expect((await runsService.getRunById(fork.runId))?.configSnapshot?.conversationSettings).toMatchObject(next);
+    });
+
     it("keeps two chats isolated through provider changes, continuation, and fork", async () => {
       createWorkspace(db, { id: "settings-workspace" });
       createSpace(db, { id: "settings-space", providerId: "copilot_cli", mode: "developer" });

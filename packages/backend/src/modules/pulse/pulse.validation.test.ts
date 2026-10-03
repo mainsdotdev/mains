@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateCreate } from "./pulse.validation";
+import { validateCreate, validateUpdate } from "./pulse.validation";
 import type { CreatePulseInput } from "./pulse.dto";
 
 function base(overrides: Partial<CreatePulseInput> = {}): CreatePulseInput {
@@ -46,5 +46,28 @@ describe("pulse.validation — mode/target shape", () => {
     expect(validateCreate(base({ mode: "gaming" as never }))).toContain(
       "Invalid mode",
     );
+  });
+});
+
+describe("pulse effort validation", () => {
+  it.each(["ultra", "future-effort", "FutureEffort", ""])(
+    "accepts Codex's app-server effort %j on creation and update",
+    (effortLevel) => {
+      expect(validateCreate(base({ providerId: "codex", effortLevel }))).toBeNull();
+      expect(validateUpdate({ providerId: "codex", effortLevel })).toBeNull();
+    },
+  );
+
+  it.each(["claude_code", "copilot_cli", "cursor"])(
+    "keeps the known effort validation for %s",
+    (providerId) => {
+      expect(validateCreate(base({ providerId, effortLevel: "ultra" }))).toContain("Invalid effortLevel");
+      expect(validateUpdate({ providerId, effortLevel: "ultra" })).toContain("Invalid effortLevel");
+    },
+  );
+
+  it.each([123, true, [], {}].map((effortLevel) => ({ effortLevel })))("rejects a non-string Codex effort $effortLevel", ({ effortLevel }) => {
+    expect(validateCreate(base({ providerId: "codex", effortLevel: effortLevel as never }))).toContain("Invalid effortLevel");
+    expect(validateUpdate({ providerId: "codex", effortLevel: effortLevel as never })).toContain("Invalid effortLevel");
   });
 });

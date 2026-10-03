@@ -16,8 +16,7 @@ import type { ProviderVariant } from "@/lib/provider-variants";
 import { formatEffortLevel } from "@/lib/format";
 import { ArrowUp, Brain, Check } from "../icons";
 import { ULTRACODE_GRADIENT_TEXT } from "./ultracode-styles";
-
-type EffortLevel = "minimal" | "low" | "medium" | "high" | "max" | "xhigh";
+import type { EffortLevel } from "@mains/contracts/effort-levels";
 
 // ─────────────────────────────────────────────────────────────
 // Submenu travel ("safe triangle")

@@ -21,7 +21,7 @@ vi.mock("@/lib/transport", () => ({
 vi.mock("@/lib/redux/api/providersApi", () => ({
   useGetProviderByIdQuery: () => ({ data: mocks.provider }),
   useGetProviderModelsQuery: () => ({ data: [
-    { id: "model-a", displayName: "Model A", supportedEffortLevels: ["low", "medium", "high"] },
+    { id: "model-a", displayName: "Model A", supportedEffortLevels: ["low", "medium", "high", "ultra", "FutureEffort"] },
     { id: "model-b", displayName: "Model B", supportedEffortLevels: ["low", "medium", "high"] },
   ] }),
   useGetProviderCommandsQuery: () => ({ data: [] }),
@@ -49,6 +49,32 @@ beforeEach(() => {
 });
 
 describe("conversation composer settings", () => {
+  it.each(["ultra", "FutureEffort"])("saves and restores advertised effort %j and clamps only on an unsupported model", async (effort) => {
+    const selected = run("dynamic-effort", "model-a", "read-only", "medium");
+    const useControls = () => {
+      const conversation = useConversationSettings({ providerId: "codex", ownerKey: runOwnerKey(null, selected.id), runId: selected.id, run: selected, loadingRun: false });
+      const models = useProviderModels("codex", "codex", conversation.settings.model, conversation.changeModel,
+        undefined, conversation.settings.config, conversation.changeConfig);
+      return { conversation, models };
+    };
+    const { wrapper } = setup();
+    const first = renderHook(useControls, { wrapper });
+    expect(first.result.current.models.selectedModelInfo?.supportedEffortLevels).toContain(effort);
+    await act(async () => { await first.result.current.models.handleEffortLevelChange(effort); });
+    const saved = first.result.current.conversation.settings;
+    expect(saved.config.modelReasoningEffort).toBe(effort);
+    expect(mocks.invoke).toHaveBeenLastCalledWith("runs:update", [selected.id, { conversationSettings: saved }]);
+    first.unmount();
+
+    selected.configSnapshot = { conversationSettings: saved };
+    const fresh = setup();
+    const restored = renderHook(useControls, { wrapper: fresh.wrapper });
+    expect(restored.result.current.models.effortLevel).toBe(effort);
+    await act(async () => { restored.result.current.models.handleModelChange("model-b"); });
+    expect(restored.result.current.models).toMatchObject({ selectedModel: "model-b", effortLevel: "high" });
+    expect(restored.result.current.conversation.settings.config.modelReasoningEffort).toBe("high");
+  });
+
   it("restores each chat's controls and keeps changes out of another chat and the provider defaults", async () => {
     const { wrapper } = setup();
     const a = run("a", "model-a", "read-only", "high");

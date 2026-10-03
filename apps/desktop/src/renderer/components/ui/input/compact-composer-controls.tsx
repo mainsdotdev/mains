@@ -10,8 +10,7 @@ import { getModelIcon } from "@/lib/model-icons";
 import { formatModelDisplayName, selectableModelNames } from "@/lib/model-display";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import { ULTRACODE_GRADIENT_TEXT } from "./ultracode-styles";
-
-type EffortLevel = "minimal" | "low" | "medium" | "high" | "max" | "xhigh";
+import type { EffortLevel } from "@mains/contracts/effort-levels";
 
 interface CompactComposerControlsProps {
   variant: ProviderVariant;

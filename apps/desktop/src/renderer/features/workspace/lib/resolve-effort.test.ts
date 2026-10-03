@@ -20,6 +20,11 @@ describe("resolveEffortSelection", () => {
     expect(resolveEffortSelection(input())).toBeNull();
   });
 
+  it.each(["ultra", "FutureEffort"])("keeps effort %j when advertised by the selected model", (effortLevel) => {
+    expect(resolveEffortSelection(input({ effortLevel, supportedEffortLevels: [...LEVELS, effortLevel] }))).toBeNull();
+    expect(resolveEffortSelection(input({ effortLevel }))).toEqual({ effortLevel: "high" });
+  });
+
   it("seeds the default when nothing is stored", () => {
     expect(resolveEffortSelection(input({ effortLevel: "" }))).toEqual({
       effortLevel: "medium",

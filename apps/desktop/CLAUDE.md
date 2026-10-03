@@ -372,7 +372,7 @@ iconutil -c icns icon.iconset -o icon.icns
 
 - Shared toolbar across all four variants (`claude | copilot | codex | cursor`), feature-gated through the variant descriptor rather than inline branching
 - **Permission modes**: `default`, `acceptEdits`, `plan`, `bypassPermissions`, `dontAsk`, `auto` — each has a distinct icon and color (`bypassPermissions` uses yellow); rendered by `permission-mode-dropdown.tsx`
-- **Effort levels**: `minimal`, `low`, `medium`, `high`, `max`, `xhigh` — display `xhigh` as "Extra High" in UI; per-model availability comes from `modelEffortLevelsByDisplayName`
+- **Effort levels**: per-model identifiers come from `modelEffortLevelsByDisplayName`; display `xhigh` as "Extra High". Codex accepts the app-server's `model/list` values (including `ultra` and future identifiers) unchanged through conversation settings, paired-device settings and Pulse; validate their type, not a static allowlist. `EFFORT_LEVELS` only ranks known defaults and validates other providers.
 - **Fast mode**: gradient-styled button (orange→yellow) with animated Bolt icon; boolean for most providers, `serviceTier` for Codex
 - **Ultracode**: Claude only — bottom entry of the effort dropdown
 - **Thinking mode**: orange-themed toggle with Brain icon plus effort dropdown

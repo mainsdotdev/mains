@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View } from "@/components/ui/icons";
+import { ViewFile } from "@/components/ui/icons";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { FileIconComponent } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
@@ -25,7 +25,7 @@ export function ViewDisplay({ params, output, isCompact = false }: { params: Vie
   return (
     <div>
       <ToolHeader
-        icon={<View className="size-4" />}
+        icon={<ViewFile className="size-4" />}
         verb="Viewed"
         hasDetails={hasContent}
         isExpanded={isExpanded}

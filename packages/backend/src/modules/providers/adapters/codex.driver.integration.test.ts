@@ -117,6 +117,7 @@ afterEach(async () => {
   approvalHarness.requests.length = 0;
   approvalHarness.formAnswer = undefined;
   delete process.env.MAINS_CODEX_FIXTURE_LOG;
+  delete process.env.MAINS_CODEX_FIXTURE_EFFORTS;
   delete process.env.MAINS_CODEX_FIXTURE_VERSION;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE;
   delete process.env.MAINS_CODEX_FIXTURE_PLUGINS_ENABLED;
@@ -1295,6 +1296,47 @@ describe("codex.driver / app-server protocol", () => {
     expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
       .toMatchObject({ effort: "low", serviceTier: null });
   });
+
+  it.each(["ultra", "FutureEffort"])(
+    "discovers and forwards app-server effort %j on start, resume, and fork",
+    async (effort) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-effort-"));
+      tempDirs.push(tempDir);
+      const logPath = path.join(tempDir, "protocol.jsonl");
+      process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+      const levels = ["medium", "ultra", "FutureEffort"];
+      process.env.MAINS_CODEX_FIXTURE_EFFORTS = JSON.stringify(levels);
+      const driver = createCodexDriver({ binary: fixtureBinary, timeout: 500, modelReasoningEffort: effort });
+      drivers.push(driver);
+      await expect(driver.listModels!()).resolves.toEqual([
+        expect.objectContaining({ supportedEffortLevels: levels }),
+      ]);
+
+      const created = await driver.createSession({ ...request("effort-source"), configSnapshot: { planMode: false } });
+      await driver.executePrompt(created.session, created.prompt, async () => undefined, new AbortController().signal);
+      const configSnapshot = { modelReasoningEffort: effort, planMode: true };
+      const resumed = await driver.resumeSession!({
+        runId: "effort-source", accountId: "account-1", execution: request("effort-source").execution,
+        message: "Continue", configSnapshot,
+      });
+      await driver.executePrompt(resumed.session, resumed.prompt, async () => undefined, new AbortController().signal);
+      const forked = await driver.forkSession!({
+        runId: "effort-fork", sourceRunId: "effort-source", accountId: "account-1",
+        execution: request("effort-fork").execution, message: "Fork", configSnapshot,
+      });
+      await driver.executePrompt(forked.session, forked.prompt, async () => undefined, new AbortController().signal);
+
+      const turns = readProtocolLog(logPath).filter((entry) => entry.method === "turn/start");
+      expect(turns).toHaveLength(3);
+      expect(turns[0].params).toMatchObject({ effort });
+      for (const turn of turns.slice(1)) {
+        expect(turn.params).toMatchObject({
+          effort,
+          collaborationMode: { mode: "plan", settings: { reasoning_effort: effort } },
+        });
+      }
+    },
+  );
 
   it("keeps a forked run out of plan mode when its snapshot says so", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));

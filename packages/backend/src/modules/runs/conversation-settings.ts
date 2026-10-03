@@ -3,7 +3,8 @@ import {
   permissionConfigKeyFor, permissionModeIdsFor, RUN_SETTING_CONFIG_KEYS,
   type ConversationSettings,
 } from "@mains/contracts/run-settings";
-import { EFFORT_LEVELS } from "@mains/contracts/effort-levels";
+import { isEffortLevel } from "@mains/contracts/effort-levels";
+import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 
 export function validateConversationSettings(providerId: string, value: ConversationSettings): ConversationSettings {
   if (!value || typeof value.model !== "string" || value.model.length > 512 ||
@@ -22,9 +23,13 @@ export function validateConversationSettings(providerId: string, value: Conversa
   if (permission !== undefined && !permissionModeIdsFor(providerId).includes(String(permission))) {
     throw new Error(`Unknown permission mode "${permission}" for ${providerId}`);
   }
-  for (const level of [value.config.effortLevel, value.config.modelReasoningEffort]) {
-    if (level && !(EFFORT_LEVELS as readonly string[]).includes(level)) {
-      throw new Error(`Unknown effort level "${level}"`);
+  // Codex validates its model/effort pair in the app-server; its model catalog
+  // can advertise identifiers that this app does not know yet.
+  if (providerId !== PROVIDER_IDS.codex) {
+    for (const level of [value.config.effortLevel, value.config.modelReasoningEffort]) {
+      if (level && !isEffortLevel(level)) {
+        throw new Error(`Unknown effort level "${level}"`);
+      }
     }
   }
   return { model: value.model.trim(), config: pickRunSettingConfig(value.config as Record<string, unknown>) };

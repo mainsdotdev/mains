@@ -858,7 +858,7 @@ export function createCodexCapabilities(
         .map((model): ModelInfo => {
           const effortLevels = model.supportedReasoningEfforts.map(
             (effort) => effort.reasoningEffort,
-          ) as ("low" | "medium" | "high" | "xhigh")[];
+          );
           const serviceTiers =
             model.serviceTiers.length > 0
               ? model.serviceTiers.map((tier) => ({

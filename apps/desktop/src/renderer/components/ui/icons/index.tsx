@@ -52,6 +52,7 @@ export { default as Mcp } from "./mcp";
 export { default as Gpt } from "./gpt";
 export { default as DeepSeek } from "./deep-seek";
 export { default as Meta } from "./meta";
+export { default as Muse } from "./muse";
 export { default as Layers } from "./layers";
 export { default as CopilotStatic } from "./copilot";
 export { default as Success } from "./success";
@@ -172,6 +173,7 @@ export { default as At} from "./at"
 export { default as Steer} from "./steer"
 export { default as Queue} from "./queue"
 export { default as Drag} from "./drag"
+export { default as ViewFile} from "./view-file"
 
 
 

@@ -3,7 +3,6 @@ import {
   Bash,
   BrowserCursor,
   Check,
-  Document,
   Edit,
   EnterPlan,
   ExitPlan,
@@ -22,6 +21,7 @@ import {
   Task,
   Trash,
   View,
+  ViewFile,
   Web,
   Workflow,
   Write,
@@ -86,7 +86,7 @@ export interface ToolPhrase {
 export const DEFAULT_VERBS: Record<string, VerbInfo> = {
   list: { label: "listed", icon: <Search className="size-3.5" /> },
   get: { label: "got", icon: <View className="size-4" /> },
-  view: { label: "viewed", icon: <View className="size-4" /> },
+  view: { label: "viewed", icon: <ViewFile className="size-4" /> },
   fetch: { label: "fetched", icon: <View className="size-4" /> },
   read: { label: "read", icon: <Read className="size-4" /> },
   search: { label: "searched", icon: <Search className="size-3.5" /> },
@@ -319,7 +319,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     displayName: "View",
     groupKey: "view",
     category: "File",
-    icon: <Document className="size-4" />,
+    icon: <ViewFile className="size-4" />,
     aliases: ["view"],
   },
   {

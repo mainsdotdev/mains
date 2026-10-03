@@ -744,10 +744,12 @@ input.on("line", (line) => {
           displayName: "GPT Fixture Codex",
           description: "Fixture model for capability integration tests.",
           hidden: false,
-          supportedReasoningEfforts: [{
-            reasoningEffort: "medium",
-            description: "Balanced fixture reasoning.",
-          }],
+          supportedReasoningEfforts: JSON.parse(
+            process.env.MAINS_CODEX_FIXTURE_EFFORTS ?? '["medium"]',
+          ).map((reasoningEffort) => ({
+            reasoningEffort,
+            description: `Fixture ${reasoningEffort} reasoning.`,
+          })),
           defaultReasoningEffort: "medium",
           inputModalities: ["text", "image"],
           supportsPersonality: true,

@@ -138,8 +138,15 @@ export const providersService = {
     const config: Record<string, unknown> = { ...(provider.config ?? {}) };
 
     if (patch.effortLevel !== undefined) {
-      const level = String(patch.effortLevel).trim().toLowerCase();
-      if (level && !isEffortLevel(level)) {
+      if (typeof patch.effortLevel !== "string") {
+        throw new Error("Invalid effort level: expected a string");
+      }
+      // App-server effort identifiers are opaque; preserve them on this path
+      // just as the conversation settings and model catalog do.
+      const level = id === PROVIDER_IDS.codex
+        ? patch.effortLevel
+        : patch.effortLevel.trim().toLowerCase();
+      if (id !== PROVIDER_IDS.codex && level && !isEffortLevel(level)) {
         throw new Error(`Unknown effort level "${patch.effortLevel}"`);
       }
       if (id === PROVIDER_IDS.codex || id === PROVIDER_IDS.copilot) {
