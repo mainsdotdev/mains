@@ -20,6 +20,7 @@ export interface Run {
   goal: string;
   title?: string;
   providerId: string;
+  model?: string | null;
   configSnapshot?: Record<string, unknown> | null;
   startedAt?: Date;
   endedAt?: Date;

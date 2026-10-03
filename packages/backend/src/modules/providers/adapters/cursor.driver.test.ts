@@ -459,6 +459,12 @@ describe("cursor.driver / resolveCursorSelection", () => {
     });
   });
 
+  it("keeps explicit Off selections from falling back to another chat's provider defaults", () => {
+    expect(resolveCursorSelection({ effortLevel: "", thinkingMode: false, fastMode: false },
+      { effortLevel: "high", thinking: true, fastMode: true }))
+      .toEqual({ effort: undefined, thinking: false, fastMode: false });
+  });
+
   it("returns all-undefined when nothing is set", () => {
     expect(resolveCursorSelection({}, {})).toEqual({
       effort: undefined,

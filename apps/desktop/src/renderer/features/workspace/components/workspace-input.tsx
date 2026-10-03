@@ -62,6 +62,7 @@ import {
   useKeyboardShortcutBinding,
 } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
+import type { RunSettingConfig } from "@mains/contracts/run-settings";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 const EMPTY_DIRECTORIES: string[] = [];
@@ -170,6 +171,9 @@ interface WorkspaceInputProps {
   providerId?: string;
   selectedModel?: string;
   onModelChange?: (model: string) => void;
+  settingsConfig?: RunSettingConfig;
+  onSettingsConfigChange?: (patch: RunSettingConfig) => unknown;
+  settingsReady?: boolean;
   /** When set, shows the send-target pill (editor tab): which chat the next send continues. */
   sendTarget?: ComposerSendTarget | null;
   onSendTargetChange?: (runId: string | null) => void;
@@ -202,6 +206,9 @@ export function WorkspaceInput({
   providerId,
   selectedModel: externalSelectedModel,
   onModelChange: externalOnModelChange,
+  settingsConfig,
+  onSettingsConfigChange,
+  settingsReady = true,
   sendTarget = null,
   onSendTargetChange,
   workspacePath,
@@ -278,6 +285,9 @@ export function WorkspaceInput({
     externalSelectedModel,
     externalOnModelChange,
     workspacePath,
+    settingsConfig,
+    onSettingsConfigChange,
+    settingsReady,
   );
 
   const contextUsage = useContextUsage(layout === "floating" ? null : (activeRun?.id ?? null));
@@ -918,7 +928,7 @@ export function WorkspaceInput({
       onStop={onStop}
       uploadedFiles={uploadedFiles}
       onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
-      disabled={submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
+      disabled={!settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
       layout={layout === "floating" ? "floating" : "default"}
     />
   );
@@ -1076,7 +1086,7 @@ export function WorkspaceInput({
             query={goal}
             onQueryChange={handleGoalChange}
             onSubmit={handleSubmit}
-            submitDisabled={submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
+            submitDisabled={!settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
             onSkillChipsChange={handleSkillChipsChange}
             onFileChipsChange={handleFileChipsChange}
             onCodeChipsChange={handleCodeChipsChange}

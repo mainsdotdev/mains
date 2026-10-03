@@ -1266,6 +1266,36 @@ describe("codex.driver / app-server protocol", () => {
     expect(log.some((message) => message.method === "thread/goal/set")).toBe(false);
   });
 
+  it("uses chat-specific effort, sandbox, and fast mode on start, resume, and fork", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-settings-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 500,
+      sandboxMode: "danger-full-access", modelReasoningEffort: "high", serviceTier: "fast" });
+    drivers.push(driver);
+    const configSnapshot = { sandboxMode: "read-only", modelReasoningEffort: "low", serviceTier: "" };
+    const created = await driver.createSession({ ...request("settings-source"), configSnapshot });
+    await driver.executePrompt(created.session, created.prompt, async () => undefined, new AbortController().signal);
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/start")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
+      .toMatchObject({ effort: "low", serviceTier: null });
+
+    const resumed = await driver.resumeSession!({ runId: "settings-source", accountId: "account-1",
+      execution: request("settings-source").execution, message: "Reasoning off", configSnapshot: { ...configSnapshot, modelReasoningEffort: "" } });
+    await driver.executePrompt(resumed.session, resumed.prompt, async () => undefined, new AbortController().signal);
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/resume")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
+      .toMatchObject({ effort: null, serviceTier: null, collaborationMode: { settings: { reasoning_effort: null } } });
+
+    const forked = await driver.forkSession!({ runId: "settings-fork", sourceRunId: "settings-source", accountId: "account-1",
+      execution: request("settings-fork").execution, message: "Fork", configSnapshot });
+    await driver.executePrompt(forked.session, forked.prompt, async () => undefined, new AbortController().signal);
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/fork")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
+      .toMatchObject({ effort: "low", serviceTier: null });
+  });
+
   it("keeps a forked run out of plan mode when its snapshot says so", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);

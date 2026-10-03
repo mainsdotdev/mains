@@ -50,6 +50,7 @@ import {
   syncCollectionSourceDirectory,
 } from "./run-collection-sources";
 import { sanitizeRunAttachments } from "./run-attachments";
+import { resolveConversationSettings, validateConversationSettings } from "./conversation-settings";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
 import { withImageContentHashes } from "./run-image-content-hashes";
@@ -798,7 +799,13 @@ export const runsService = {
   },
 
   async updateRun(id: string, payload: UpdateRunPayload): Promise<RunResponse> {
-    const updated = await runsRepo.updateRun(id, payload);
+    const patch = { ...payload };
+    if (payload.conversationSettings !== undefined) {
+      const run = await runsRepo.findRunById(id);
+      if (!run) throw new Error("Run not found");
+      patch.conversationSettings = validateConversationSettings(run.providerId, payload.conversationSettings);
+    }
+    const updated = await runsRepo.updateRun(id, patch);
     if (!updated) throw new Error("Run not found");
     return updated;
   },
@@ -1102,10 +1109,17 @@ export const runsService = {
         typeof provider.config?.outputStyle === "string"
           ? { outputStyle: provider.config.outputStyle }
           : {};
+      const conversationSettings = resolveConversationSettings(
+        payload.providerId, provider.config,
+        composeConfigSnapshot(mode, payload.providerId, payload.configSnapshot),
+        payload.model, payload.conversationSettings,
+      );
       const configSnapshot = normalizeAdditionalDirectories(
         composeConfigSnapshot(mode, payload.providerId, {
           ...providerOutputStyle,
           ...(payload.configSnapshot ?? {}),
+          ...conversationSettings.config,
+          conversationSettings,
           ...(payload.additionalDirectories !== undefined
             ? { additionalDirectories: payload.additionalDirectories }
             : {}),
@@ -1126,7 +1140,7 @@ export const runsService = {
         spaceId: resolvedSpaceId,
         providerId: payload.providerId,
         mode,
-        model: payload.model,
+        model: conversationSettings.model || undefined,
         goal: payload.goal,
         status: "running",
         systemPrompt: payload.systemPrompt,
@@ -1175,7 +1189,7 @@ export const runsService = {
           accountId: payload.accountId,
           execution,
           goal: payload.goal,
-          model: payload.model,
+          model: conversationSettings.model || undefined,
           systemPrompt: payload.systemPrompt,
           mode,
           extraInstructions,
@@ -1251,6 +1265,13 @@ export const runsService = {
               : "code changes"
       }`;
 
+      const conversationSettings = resolveConversationSettings(
+        payload.providerId, provider.config, payload.configSnapshot, payload.model, payload.conversationSettings,
+      );
+      const configSnapshot = composeConfigSnapshot(mode, payload.providerId, {
+        ...payload.configSnapshot, ...conversationSettings.config, conversationSettings,
+      });
+
       await runsRepo.insertRun({
         id: runId,
         accountId: payload.accountId,
@@ -1258,16 +1279,14 @@ export const runsService = {
         spaceId: resolvedSpaceId,
         providerId: payload.providerId,
         mode,
-        model: payload.model,
+        model: conversationSettings.model || undefined,
         goal: goalDescription,
         status: "running",
         systemPrompt: payload.systemPrompt,
         // Composed, not raw: developer's harness adds nothing, but the caller's
         // snapshots still get validated and normalized here rather than sitting
         // on the row until continueRun's compose rejects them mid-resume.
-        configSnapshot:
-          composeConfigSnapshot(mode, payload.providerId, payload.configSnapshot) ??
-          undefined,
+        configSnapshot: configSnapshot ?? undefined,
         toolPolicySnapshot:
           composeToolPolicy(mode, payload.toolPolicySnapshot) ?? undefined,
       });
@@ -1296,7 +1315,8 @@ export const runsService = {
             accountId: payload.accountId,
             execution: { cwd: workspace.rootPath, workspaceId: workspace.id },
             target: payload.target,
-            model: payload.model,
+            model: conversationSettings.model || undefined,
+            configSnapshot,
           },
           eventCallback,
         );
@@ -1308,7 +1328,8 @@ export const runsService = {
             accountId: payload.accountId,
             execution: { cwd: workspace.rootPath, workspaceId: workspace.id },
             goal: "review code changes in this workspace",
-            model: payload.model,
+            model: conversationSettings.model || undefined,
+            configSnapshot,
             systemPrompt: payload.systemPrompt,
           },
           eventCallback,
@@ -1391,6 +1412,14 @@ export const runsService = {
           -1,
         );
         const previousModel = latestKnownModel(existingTurns, run.model);
+        const conversationSettings = resolveConversationSettings(
+          run.providerId, provider.config, run.configSnapshot,
+          payload.model ?? previousModel,
+          payload.conversationSettings ?? (payload.model ? {
+            model: payload.model,
+            config: resolveConversationSettings(run.providerId, provider.config, run.configSnapshot, previousModel).config,
+          } : undefined),
+        );
 
         const toolPolicy = composeToolPolicy(
           run.mode,
@@ -1399,6 +1428,8 @@ export const runsService = {
         const configSnapshot = normalizeAdditionalDirectories(
           composeConfigSnapshot(run.mode, run.providerId, {
             ...(run.configSnapshot ?? {}),
+            ...conversationSettings.config,
+            conversationSettings,
             ...(payload.additionalDirectories !== undefined
               ? { additionalDirectories: payload.additionalDirectories }
               : {}),
@@ -1417,7 +1448,7 @@ export const runsService = {
           lastError: null,
           configSnapshot: configSnapshot ?? undefined,
           toolPolicySnapshot: toolPolicy ?? undefined,
-        });
+        }, { preserveConversationSettings: !!payload.conversationSettings });
 
         const projectInstructions = await buildCollectionSourceInstructions({
           runId,
@@ -1467,7 +1498,7 @@ export const runsService = {
             } : {}),
             // An omitted model means "as before". `runs.model` is the initial
             // snapshot; a conversation may have switched since then.
-            model: payload.model ?? previousModel,
+            model: conversationSettings.model || undefined,
             systemPrompt: run.systemPrompt,
             mode: run.mode,
             extraInstructions: withProjectResources(
@@ -1611,7 +1642,11 @@ export const runsService = {
       }
 
       const sourceTurns = await runsRepo.findTurnsByRun(sourceRunId);
-      const sourceModel = latestKnownModel(sourceTurns, sourceRun.model);
+      const conversationSettings = resolveConversationSettings(
+        sourceRun.providerId, provider.config, sourceRun.configSnapshot,
+        latestKnownModel(sourceTurns, sourceRun.model),
+      );
+      const sourceModel = conversationSettings.model || undefined;
 
       if (workspace) {
         await workspaceService.update(workspace.id, { status: "in_progress" });
@@ -1624,7 +1659,7 @@ export const runsService = {
       const configSnapshot = composeConfigSnapshot(
         sourceRun.mode,
         sourceRun.providerId,
-        sourceRun.configSnapshot,
+        { ...sourceRun.configSnapshot, ...conversationSettings.config, conversationSettings },
       );
 
       await runsRepo.insertRun({

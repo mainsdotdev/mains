@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { UploadedFile } from "@/components/ui";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { store } from "@/lib/redux";
@@ -32,6 +33,7 @@ export interface QueueMessageSnapshot {
   contextItems: ContextItem[];
   files: UploadedFile[];
   model?: string;
+  conversationSettings?: ConversationSettings;
   additionalDirectories?: string[];
   editingId?: string;
 }
@@ -39,11 +41,14 @@ export interface QueueMessageSnapshot {
 interface Options {
   enabled: boolean; ownerKey: string; backendId: string | null; run?: Run;
   selectedModel: string; additionalDirectories: string[];
+  conversationSettings?: ConversationSettings;
+  setSettings?: (settings: ConversationSettings) => unknown;
   setModel: (model: string) => void; setDirectories: (directories: string[]) => void;
 }
 
 export function useComposerRunQueue(options: Options) {
-  const { ownerKey, backendId, run, selectedModel, additionalDirectories, setModel, setDirectories } = options;
+  const { ownerKey, backendId, run, selectedModel, additionalDirectories, setModel, setDirectories,
+    conversationSettings, setSettings, enabled } = options;
   const dispatch = useAppDispatch();
   const queue = useAppSelector((state) => state.runQueue?.byOwner[ownerKey]);
   const getQueue = useCallback(() => store.getState().runQueue?.byOwner[ownerKey], [ownerKey]);
@@ -53,7 +58,7 @@ export function useComposerRunQueue(options: Options) {
   }, [dispatch, ownerKey]);
 
   const enqueue = useCallback((text: string, items: ContextItem[], files: UploadedFile[], snapshot?: QueueMessageSnapshot) => {
-    if (!run || !options.enabled) return null;
+    if (!run || !enabled) return null;
     const id = crypto.randomUUID();
     const uploadOwnerKey = `${ownerKey}:queue:${id}`;
     if (snapshot) setTransientUploadsForOwner(uploadOwnerKey, files);
@@ -64,10 +69,11 @@ export function useComposerRunQueue(options: Options) {
       preserveDraft: !!snapshot,
       message: { id, text, contextItems: items, uploadOwnerKey, attachmentNames: files.map((file) => file.file.name),
         model: (snapshot?.model ?? selectedModel) || undefined,
+        conversationSettings: snapshot?.conversationSettings ?? conversationSettings,
         additionalDirectories: [...(snapshot?.additionalDirectories ?? additionalDirectories)], status: "queued" },
     }));
     return id;
-  }, [run, options.enabled, ownerKey, backendId, dispatch, selectedModel, additionalDirectories]);
+  }, [run, enabled, conversationSettings, ownerKey, backendId, dispatch, selectedModel, additionalDirectories]);
 
   const onEdit = useCallback((id: string) => {
     const current = getQueue();
@@ -80,6 +86,7 @@ export function useComposerRunQueue(options: Options) {
     dispatch(beginRunMessageEdit({ ownerKey, id, backup: {
       text: workspace.draftTextByKey[ownerKey] ?? "", contextItems: [...items], uploadOwnerKey: backupOwner,
       model: selectedModel, additionalDirectories: [...additionalDirectories],
+      conversationSettings,
     } }));
     // Keep originals untouched for Cancel. Only previews are cloned; File
     // bytes remain shared and never enter Redux.
@@ -88,9 +95,10 @@ export function useComposerRunQueue(options: Options) {
     }));
     setTransientUploadsForOwner(ownerKey, files);
     setDraft(message.text, message.contextItems);
-    if (message.model) setModel(message.model);
+    if (message.conversationSettings && setSettings) setSettings(message.conversationSettings);
+    else if (message.model) setModel(message.model);
     setDirectories(message.additionalDirectories ?? []);
-  }, [getQueue, ownerKey, dispatch, selectedModel, additionalDirectories, setDraft, setModel, setDirectories]);
+  }, [getQueue, ownerKey, dispatch, selectedModel, additionalDirectories, setDraft, setModel, setDirectories, conversationSettings, setSettings]);
 
   const finishEdit = useCallback((save: boolean, text?: string, items?: ContextItem[], snapshot?: QueueMessageSnapshot) => {
     const current = getQueue();
@@ -102,6 +110,7 @@ export function useComposerRunQueue(options: Options) {
       const files = snapshot?.files ?? getTransientUploadsForOwner(ownerKey);
       updated = { ...message, text: text ?? "", contextItems: items ?? [], attachmentNames: files.map((file) => file.file.name),
         model: (snapshot?.model ?? selectedModel) || undefined,
+        conversationSettings: snapshot?.conversationSettings ?? conversationSettings,
         additionalDirectories: [...(snapshot?.additionalDirectories ?? additionalDirectories)], status: "queued" };
       if (snapshot) {
         setTransientUploadsForOwner(message.uploadOwnerKey, files);
@@ -110,11 +119,12 @@ export function useComposerRunQueue(options: Options) {
     } else clearTransientUploads(ownerKey);
     moveTransientUploadsToOwner(backup.uploadOwnerKey, ownerKey);
     setDraft(backup.text, backup.contextItems);
-    setModel(backup.model);
+    if (backup.conversationSettings && setSettings) setSettings(backup.conversationSettings);
+    else setModel(backup.model);
     setDirectories(backup.additionalDirectories);
     dispatch(finishRunMessageEdit({ ownerKey, message: updated }));
     return true;
-  }, [getQueue, ownerKey, selectedModel, additionalDirectories, dispatch, setDraft, setModel, setDirectories]);
+  }, [getQueue, ownerKey, selectedModel, additionalDirectories, dispatch, setDraft, setModel, setDirectories, conversationSettings, setSettings]);
 
   const controls: ComposerRunQueue = {
     queue, editing: !!queue?.editingId,
@@ -130,7 +140,7 @@ export function useComposerRunQueue(options: Options) {
     onReorder: (orderedIds) => dispatch(reorderRunMessages({ ownerKey, orderedIds })),
   };
   return {
-    controls: options.enabled ? controls : undefined,
+    controls: enabled ? controls : undefined,
     enqueue,
     saveEdit: (text: string, items: ContextItem[]) => finishEdit(true, text, items),
     submitSnapshot: (snapshot: QueueMessageSnapshot) => {

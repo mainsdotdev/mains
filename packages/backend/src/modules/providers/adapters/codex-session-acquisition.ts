@@ -190,7 +190,7 @@ export function buildCollaborationMode(
     settings: {
       model,
       reasoning_effort:
-        effort ?? (planEnabled ? "medium" : null),
+        effort || (planEnabled ? "medium" : null),
       developer_instructions: null,
     },
   };
@@ -364,6 +364,14 @@ export function createCodexSessionAcquisition(
     };
   }
 
+  function turnSettingsFor(overrides: Record<string, unknown> = {}) {
+    return {
+      effort: typeof overrides.modelReasoningEffort === "string" ? overrides.modelReasoningEffort :
+        typeof overrides.effortLevel === "string" ? overrides.effortLevel : config.modelReasoningEffort,
+      serviceTier: typeof overrides.serviceTier === "string" ? overrides.serviceTier : config.serviceTier,
+    };
+  }
+
   function makeSession(
     runId: string,
     model: string | undefined,
@@ -388,18 +396,6 @@ export function createCodexSessionAcquisition(
     const overrides = (
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
-    const overrideEffort =
-      typeof overrides.modelReasoningEffort === "string"
-        ? overrides.modelReasoningEffort
-        : typeof overrides.effortLevel === "string" &&
-            overrides.effortLevel
-          ? overrides.effortLevel
-          : undefined;
-    const overrideServiceTier =
-      typeof overrides.serviceTier === "string" &&
-      overrides.serviceTier
-        ? overrides.serviceTier
-        : undefined;
     const toggles = runTogglesFor(overrides);
     const settings = threadSettingsFor(overrides);
     const threadStartParams: CodexThreadStartParams = {
@@ -437,10 +433,7 @@ export function createCodexSessionAcquisition(
       mainsCtx: mainsContext(runId, request.execution),
     });
 
-    const effort =
-      overrideEffort ?? config.modelReasoningEffort;
-    const serviceTier =
-      overrideServiceTier ?? config.serviceTier;
+    const { effort, serviceTier } = turnSettingsFor(overrides);
     const collaborationMode = buildCollaborationMode(
       toggles.planMode,
       model,
@@ -451,8 +444,8 @@ export function createCodexSessionAcquisition(
       threadId: threadId ?? "",
       input: buildCodexTurnInput(request.goal, request),
       ...(model ? { model } : {}),
-      ...(effort ? { effort } : {}),
-      ...(serviceTier ? { serviceTier } : {}),
+      ...(effort !== undefined ? { effort: effort || null } : {}),
+      ...(serviceTier !== undefined ? { serviceTier: serviceTier || null } : {}),
       ...(outputSchema ? { outputSchema } : {}),
       ...(collaborationMode ? { collaborationMode } : {}),
     };
@@ -559,10 +552,11 @@ export function createCodexSessionAcquisition(
       false,
     );
 
+    const { effort, serviceTier } = turnSettingsFor(resumeOverrides);
     const collaborationMode = buildCollaborationMode(
       resumeToggles.planMode,
       model,
-      config.modelReasoningEffort,
+      effort,
       true,
     );
     const outputSchema = resolveOutputSchema(config);
@@ -575,12 +569,8 @@ export function createCodexSessionAcquisition(
       ),
       ...(request.clientUserMessageId ? { clientUserMessageId: request.clientUserMessageId } : {}),
       ...(model ? { model } : {}),
-      ...(config.modelReasoningEffort
-        ? { effort: config.modelReasoningEffort }
-        : {}),
-      ...(config.serviceTier
-        ? { serviceTier: config.serviceTier }
-        : {}),
+      ...(effort !== undefined ? { effort: effort || null } : {}),
+      ...(serviceTier !== undefined ? { serviceTier: serviceTier || null } : {}),
       ...(outputSchema ? { outputSchema } : {}),
       ...(collaborationMode ? { collaborationMode } : {}),
     };
@@ -657,10 +647,11 @@ export function createCodexSessionAcquisition(
       mainsCtx: mainsContext(runId, request.execution),
     });
 
+    const { effort, serviceTier } = turnSettingsFor(forkOverrides);
     const collaborationMode = buildCollaborationMode(
       forkToggles.planMode,
       model,
-      config.modelReasoningEffort,
+      effort,
       true,
     );
     const outputSchema = resolveOutputSchema(config);
@@ -668,12 +659,8 @@ export function createCodexSessionAcquisition(
       threadId: forkedThreadId,
       input: buildCodexTurnInput(message, request),
       ...(model ? { model } : {}),
-      ...(config.modelReasoningEffort
-        ? { effort: config.modelReasoningEffort }
-        : {}),
-      ...(config.serviceTier
-        ? { serviceTier: config.serviceTier }
-        : {}),
+      ...(effort !== undefined ? { effort: effort || null } : {}),
+      ...(serviceTier !== undefined ? { serviceTier: serviceTier || null } : {}),
       ...(outputSchema ? { outputSchema } : {}),
       ...(collaborationMode ? { collaborationMode } : {}),
     };
@@ -695,7 +682,7 @@ export function createCodexSessionAcquisition(
     const target = buildCodexReviewTarget(request.target);
     let model = await effectiveModel(request.model);
     const server = await ensureServer();
-    const settings = threadSettingsFor();
+    const settings = threadSettingsFor(request.configSnapshot ?? {});
     const threadStartParams: CodexThreadStartParams = {
       cwd: request.execution.cwd,
       ...settings,

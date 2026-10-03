@@ -30,7 +30,6 @@ import {
   useGetAccountQuery,
   useGetCollectionQuery,
   useGetProviderByIdQuery,
-  useUpdateProviderMutation,
 } from "@/lib/redux/api";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setContextItemsForKey } from "@/lib/redux/slices/workspaceSlice";
@@ -62,6 +61,7 @@ import { getTransientUploadsForOwner } from "@/features/workspace/hooks/use-tran
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import type { ConversationQueue } from "@/lib/redux/slices/runQueueSlice";
 import { queueForBrowserChat } from "../lib/run-queue-preview";
+import type { RunSettingConfig } from "@mains/contracts/run-settings";
 
 interface WorkspaceProviderPageProps {
   providerId: string;
@@ -109,7 +109,8 @@ export function WorkspaceProviderPage({
     selectedCollectionId,
     selectedCollection,
   );
-  const ws = useWorkspacePage(providerId);
+  const ws = useWorkspacePage(providerId, browserChatOnly);
+  const changeConversationSettings = ws.setConversationSettings;
   const mcpPanel = useMcpAppPanel();
   const openMcpAppTool = mcpPanel?.openTool;
   useMcpAppConversation(ws);
@@ -121,7 +122,6 @@ export function WorkspaceProviderPage({
       void window.api.browserChat.postAction({ type: "providerChanged", providerId });
     }
   }, [browserChatOnly, providerData, providerId]);
-  const [updateProvider] = useUpdateProviderMutation();
   const bottomTerminal = useBottomTerminal();
   const browserPanel = useBrowserPanel();
   const setChatDirectories = ws.setAdditionalDirectories;
@@ -203,6 +203,7 @@ export function WorkspaceProviderPage({
         mode: browserChatMode,
         draft: chatDraft,
         selectedModel: chatSelectedModel,
+        conversationSettings: ws.conversationSettingsReady ? ws.conversationSettings : undefined,
         additionalDirectories: ws.additionalDirectories,
         selectedCollectionId,
         contextItems: chatContextItems,
@@ -224,7 +225,7 @@ export function WorkspaceProviderPage({
     browserChatOnly, nativeOverlay, browserExpanded,
     browserOwnerKey, browserChatMode, location.pathname,
     chatActiveTab, chatDraft, chatSelectedModel, chatContextItems,
-    activeSpace, providerId, selectedCollectionId, uploadSnapshot, composerQueue, queueSnapshot, ws.additionalDirectories,
+    activeSpace, providerId, selectedCollectionId, uploadSnapshot, composerQueue, queueSnapshot, ws.additionalDirectories, ws.conversationSettings, ws.conversationSettingsReady,
   ]);
 
   useEffect(() => {
@@ -243,6 +244,7 @@ export function WorkspaceProviderPage({
             submitChatSnapshot({
               text: action.draft, contextItems: action.items as ContextItem[],
               files: deserializeBrowserChatUploads(action.uploads), model: action.model,
+              conversationSettings: action.conversationSettings,
               additionalDirectories: action.additionalDirectories, editingId: action.editingId,
             });
           }
@@ -268,7 +270,10 @@ export function WorkspaceProviderPage({
           if (action.ownerKey === browserOwnerKey) setChatDraft(action.draft);
           break;
         case "model":
-          if (action.providerId === providerId) changeChatModel(action.model);
+          if (action.providerId === providerId && (!action.ownerKey || action.ownerKey === browserOwnerKey)) void changeChatModel(action.model);
+          break;
+        case "conversationSettings":
+          if (action.ownerKey === browserOwnerKey) void changeConversationSettings(action.settings);
           break;
         case "directories":
           if (action.ownerKey === browserOwnerKey) setChatDirectories(action.directories);
@@ -308,7 +313,7 @@ export function WorkspaceProviderPage({
     browserChatOnly, nativeOverlay, browserExpanded, browserChatMode,
     browserOwnerKey, setBrowserChatMode, modeConfig.showTabs,
     navigate, providerId, setChatDraft, changeChatModel, selectChatRunTab,
-    setChatUploads, dispatch, openMcpAppTool, chatComposerRunId, chatRunQueue, submitChatSnapshot, setChatDirectories, abortRun,
+    setChatUploads, dispatch, openMcpAppTool, chatComposerRunId, chatRunQueue, submitChatSnapshot, setChatDirectories, abortRun, changeConversationSettings,
   ]);
   useLayoutEffect(() => {
     const enteringExpandedBrowser = browserExpanded && !wasBrowserExpandedRef.current;
@@ -369,21 +374,13 @@ export function WorkspaceProviderPage({
   );
 
   const handleApplyPlan = useCallback(async () => {
-    if (providerData && planExitConfig) {
-      const currentConfig = providerData.config ?? {};
+    if (planExitConfig) {
+      const currentConfig = ws.conversationSettings.config;
       if (
         (currentConfig as Record<string, unknown>)[planExitConfig.key] ===
         planExitConfig.planValue
       ) {
-        await updateProvider({
-          id: providerId,
-          payload: {
-            config: {
-              ...currentConfig,
-              [planExitConfig.key]: planExitConfig.nextValue,
-            },
-          },
-        });
+        if (!await ws.handleSettingsConfigChange({ [planExitConfig.key]: planExitConfig.nextValue })) return;
       }
     }
 
@@ -408,10 +405,7 @@ export function WorkspaceProviderPage({
     ws.setAutoExecute(true);
   }, [
     ws,
-    providerData,
     planExitConfig,
-    providerId,
-    updateProvider,
     currentPlanApproval,
     respondToolApproval,
   ]);
@@ -536,11 +530,23 @@ export function WorkspaceProviderPage({
     }
   }, [browserChatOnly, browserOwnerKey, setChatDraft]);
   const handleBrowserModelChange = useCallback((model: string) => {
+    if (!ws.conversationSettingsReady) return;
     changeChatModel(model);
     if (browserChatOnly) {
-      void window.api.browserChat.postAction({ type: "model", providerId, model });
+      void window.api.browserChat.postAction({ type: "model", providerId, ownerKey: browserOwnerKey, model });
     }
-  }, [browserChatOnly, providerId, changeChatModel]);
+  }, [browserChatOnly, browserOwnerKey, providerId, changeChatModel, ws.conversationSettingsReady]);
+  const handleBrowserSettingsChange = useCallback((patch: RunSettingConfig) => {
+    if (!ws.conversationSettingsReady) return false;
+    const current = store.getState().workspace.conversationSettingsByKey[browserOwnerKey] ?? ws.conversationSettings;
+    const next = { ...current, config: { ...current.config, ...patch } };
+    if (browserChatOnly) {
+      void ws.setConversationSettings(next);
+      void window.api.browserChat.postAction({ type: "conversationSettings", ownerKey: browserOwnerKey, settings: next });
+      return;
+    }
+    return ws.handleSettingsConfigChange(patch);
+  }, [browserChatOnly, browserOwnerKey, ws]);
   const handleBrowserUploadsChange = useCallback((files: UploadedFile[]) => {
     setChatUploads(files);
     if (!browserChatOnly) return;
@@ -572,6 +578,7 @@ export function WorkspaceProviderPage({
         const result = await window.api.browserChat.postAction({
           type: "queueSubmit", ownerKey: browserOwnerKey, draft, items, uploads, editingId,
           model: chatSelectedModel, additionalDirectories: ws.additionalDirectories,
+          conversationSettings: ws.conversationSettings,
         });
         if (result.success && !editingId) {
           // Parent enqueues the frozen snapshot without replacing newer typing.
@@ -612,7 +619,7 @@ export function WorkspaceProviderPage({
       });
     }
   }, [browserChatOnly, browserOwnerKey, executeChat, ws.runQueue, ws.composerRun?.status,
-    ws.additionalDirectories, chatSelectedModel, handleBrowserDraftChange, handleBrowserUploadsChange, dispatch]);
+    ws.additionalDirectories, ws.conversationSettings, chatSelectedModel, handleBrowserDraftChange, handleBrowserUploadsChange, dispatch]);
   const handleBrowserComposerHeight = useCallback((height: number) => {
     if (browserChatOnly) {
       void window.api.browserChat.postAction({ type: "composerHeight", height });
@@ -640,6 +647,9 @@ export function WorkspaceProviderPage({
       providerId={providerId}
       selectedModel={ws.selectedModel}
       onModelChange={handleBrowserModelChange}
+      settingsConfig={ws.conversationSettings.config}
+      settingsReady={ws.conversationSettingsReady}
+      onSettingsConfigChange={handleBrowserSettingsChange}
       sendTarget={null}
       workspacePath={ws.currentWorkspace?.rootPath}
       projectId={ws.currentWorkspace?.projectId ?? undefined}
@@ -771,6 +781,9 @@ export function WorkspaceProviderPage({
                 providerId={providerId}
                 selectedModel={ws.selectedModel}
                 onModelChange={ws.handleModelChange}
+                settingsConfig={ws.conversationSettings.config}
+                settingsReady={ws.conversationSettingsReady}
+                onSettingsConfigChange={ws.handleSettingsConfigChange}
                 workspacePath={ws.currentWorkspace?.rootPath}
                 projectId={ws.currentWorkspace?.projectId ?? undefined}
                 uploadedFiles={ws.uploadedFiles}
@@ -868,6 +881,9 @@ export function WorkspaceProviderPage({
           providerId={providerId}
           selectedModel={ws.selectedModel}
           onModelChange={ws.handleModelChange}
+          settingsConfig={ws.conversationSettings.config}
+          settingsReady={ws.conversationSettingsReady}
+          onSettingsConfigChange={ws.handleSettingsConfigChange}
           sendTarget={ws.sendTarget}
           onSendTargetChange={ws.handleSendTargetChange}
           workspacePath={ws.currentWorkspace?.rootPath}

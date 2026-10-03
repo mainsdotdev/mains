@@ -151,6 +151,63 @@ describe("runsService", () => {
   // ─────────────────────────────────────────────────────────────
   // Run Operations
   // ─────────────────────────────────────────────────────────────
+  describe("conversation settings", () => {
+    afterEach(() => { vi.mocked(gitService.getHeadSha).mockClear(); });
+    it("keeps two chats isolated through provider changes, continuation, and fork", async () => {
+      createWorkspace(db, { id: "settings-workspace" });
+      createSpace(db, { id: "settings-space", providerId: "copilot_cli", mode: "developer" });
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const forkRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun, continueRun, forkRun,
+        canResumeSession: vi.fn().mockResolvedValue(true) } as any);
+      const a = { model: "model-a", config: { permissionMode: "default", modelReasoningEffort: "low", thinkingMode: true } };
+      const b = { model: "model-b", config: { permissionMode: "bypassPermissions", modelReasoningEffort: "high" } };
+      const payload = { accountId: "default", providerId: "copilot_cli", spaceId: "settings-space", workspaceId: "settings-workspace", goal: "hello" };
+      const first = await runsService.executeRun({ ...payload, conversationSettings: a });
+      await flushBackground();
+      const second = await runsService.executeRun({ ...payload, conversationSettings: b });
+      await flushBackground();
+      expect(startRun.mock.calls[1][0].configSnapshot.thinkingMode).toBe(true);
+      await db.update(providers).set({ config: JSON.stringify({ permissionMode: "plan", modelReasoningEffort: "medium" }) }).where(eq(providers.id, "copilot_cli"));
+      await runsService.continueRun({ runId: first.runId, accountId: "default", message: "continue" });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ model: "model-a", configSnapshot: a.config });
+      expect((await runsService.getRunById(second.runId))?.configSnapshot?.conversationSettings).toMatchObject(b);
+      await runsService.continueRun({ runId: first.runId, accountId: "default", message: "queued snapshot", conversationSettings: b });
+      await flushBackground();
+      expect(continueRun.mock.calls[1][0]).toMatchObject({ model: "model-b", configSnapshot: b.config });
+      expect((await runsService.getRunById(first.runId))?.configSnapshot?.conversationSettings).toMatchObject(a);
+      await runsService.updateRun(first.runId, { conversationSettings: { model: "model-c", config: { ...a.config, modelReasoningEffort: "", thinkingMode: false } } });
+      const restored = await runsService.getRunById(first.runId);
+      expect(restored?.model).toBe("model-a");
+      expect(restored?.configSnapshot?.conversationSettings).toMatchObject({ model: "model-c", config: { modelReasoningEffort: "", thinkingMode: false } });
+      await runsService.continueRun({ runId: first.runId, accountId: "default", message: "reasoning off" });
+      await flushBackground();
+      expect(continueRun.mock.calls[2][0]).toMatchObject({ model: "model-c", configSnapshot: { permissionMode: "default", modelReasoningEffort: "", thinkingMode: false } });
+      const fork = await runsService.forkRun({ sourceRunId: first.runId, accountId: "default", message: "fork" });
+      await flushBackground();
+      expect(forkRun.mock.calls[0][0]).toMatchObject({ model: "model-c", configSnapshot: { modelReasoningEffort: "", thinkingMode: false } });
+      expect((await runsService.getRunById(fork.runId))?.configSnapshot?.conversationSettings).toMatchObject({ model: "model-c" });
+    });
+
+    it("changes the next-message preferences without changing an active turn or its snapshot", async () => {
+      createRun(db, { id: "settings-live", model: "original", status: "running", configSnapshot: JSON.stringify({ permissionMode: "default", outputStyle: "Concise", additionalDirectories: ["/tmp"] }) });
+      const updated = await runsService.updateRun("settings-live", { conversationSettings: { model: "next", config: { permissionMode: "plan", modelReasoningEffort: "high" } } });
+      expect(updated).toMatchObject({ status: "running", model: "original", configSnapshot: {
+        permissionMode: "default", outputStyle: "Concise", additionalDirectories: ["/tmp"],
+        conversationSettings: { model: "next", config: { permissionMode: "plan", modelReasoningEffort: "high" } },
+      } });
+    });
+
+    it("rejects invalid modes, effort, and non-run configuration", async () => {
+      createRun(db, { id: "settings-validate" });
+      for (const config of [{ permissionMode: "workspace-write" }, { modelReasoningEffort: "expensive" }, { apiKey: "secret" }]) {
+        await expect(runsService.updateRun("settings-validate", { conversationSettings: { model: "test", config } as any })).rejects.toThrow();
+      }
+      expect((await runsService.getRunById("settings-validate"))?.configSnapshot).toBeNull();
+    });
+  });
   describe("getAllRuns", () => {
     it("returns empty array when no runs", async () => {
       const result = await runsService.getAllRuns();
@@ -738,8 +795,8 @@ describe("runsService", () => {
         additionalDirectories: [],
       });
       await flushBackground();
-      expect(startRun.mock.calls[0][0].configSnapshot).toEqual(configSnapshot);
-      expect((await runsService.getRunById(runId))?.configSnapshot).toEqual(configSnapshot);
+      expect(startRun.mock.calls[0][0].configSnapshot).toMatchObject(configSnapshot);
+      expect((await runsService.getRunById(runId))?.configSnapshot).toMatchObject(configSnapshot);
 
       await runsService.continueRun({
         runId,
@@ -748,8 +805,8 @@ describe("runsService", () => {
         additionalDirectories: [],
       });
       await flushBackground();
-      expect(continueRun.mock.calls[0][0].configSnapshot).toEqual(configSnapshot);
-      expect((await runsService.getRunById(runId))?.configSnapshot).toEqual(configSnapshot);
+      expect(continueRun.mock.calls[0][0].configSnapshot).toMatchObject(configSnapshot);
+      expect((await runsService.getRunById(runId))?.configSnapshot).toMatchObject(configSnapshot);
     });
 
     it.each(["copilot_cli", "cursor"] as const)("continues a stored %s session with a legacy empty directory list", async (providerId) => {
@@ -774,8 +831,8 @@ describe("runsService", () => {
         message: "continue",
       });
       await flushBackground();
-      expect(continueRun.mock.calls[0][0].configSnapshot).toEqual({});
-      expect((await runsService.getRunById("legacy-folders"))?.configSnapshot).toEqual({});
+      expect(continueRun.mock.calls[0][0].configSnapshot).not.toHaveProperty("additionalDirectories");
+      expect((await runsService.getRunById("legacy-folders"))?.configSnapshot).not.toHaveProperty("additionalDirectories");
     });
 
     it.each(["copilot_cli", "cursor"] as const)("rejects actual extra directory grants for %s", async (providerId) => {
@@ -888,13 +945,13 @@ describe("runsService", () => {
       await flushBackground();
 
       const request = startRun.mock.calls[0][0];
-      expect(request.configSnapshot).toEqual({
+      expect(request.configSnapshot).toMatchObject({
         sandboxMode: "read-only",
         planMode: false,
         goalMode: false,
       });
       const run = await runsService.getRunById(runId);
-      expect(run?.configSnapshot).toEqual({
+      expect(run?.configSnapshot).toMatchObject({
         sandboxMode: "read-only",
         planMode: false,
         goalMode: false,
@@ -1141,7 +1198,7 @@ describe("runsService", () => {
       await flushBackground();
 
       const request = continueRun.mock.calls[0][0];
-      expect(request.configSnapshot).toEqual({
+      expect(request.configSnapshot).toMatchObject({
         sandboxMode: "read-only",
         planMode: false,
         goalMode: false,

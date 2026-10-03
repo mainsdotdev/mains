@@ -1,3 +1,4 @@
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import { contextBridge, ipcRenderer } from "electron";
 import type { RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
 import os from "node:os";
@@ -705,6 +706,7 @@ const api = {
       providerId: string;
       goal: string;
       model?: string;
+      conversationSettings?: ConversationSettings;
       systemPrompt?: string;
       initialContext?: Array<{
         kind: "file" | "diff" | "selection" | "note";
@@ -731,6 +733,7 @@ const api = {
       accountId: string;
       message: string;
       model?: string;
+      conversationSettings?: ConversationSettings;
       additionalDirectories?: string[];
       additionalContext?: Array<{
         kind: "file" | "diff" | "selection" | "note";
@@ -772,6 +775,7 @@ const api = {
         instructions?: string;
       };
       model?: string;
+      conversationSettings?: ConversationSettings;
       systemPrompt?: string;
       configSnapshot?: Record<string, unknown>;
       toolPolicySnapshot?: Record<string, unknown>;

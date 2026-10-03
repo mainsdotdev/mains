@@ -9,6 +9,7 @@ import {
 } from "@/lib/redux/slices/runQueueSlice";
 import type { UnknownAction } from "@reduxjs/toolkit";
 import { buildRunContextPayload, type Attachments } from "./run-context-payload";
+import { waitForConversationSettings } from "./conversation-settings-writer";
 
 interface QueueControllerDeps {
   getState: () => { runQueue: RunQueueState; backends: { activeBackendId: string | null } };
@@ -86,12 +87,13 @@ export function createRunQueueController(deps: QueueControllerDeps) {
       if (!isCurrent(queue.backendId, transport)) throw new Error("Backend connection changed before sending.");
       const account = await invoke<{ id: string } | null>(transport, CHANNELS.account.get, []);
       if (!account) throw new Error("No account found.");
+      if (delivery === "queue") await waitForConversationSettings(transport, queue.runId);
       if (!isCurrent(queue.backendId, transport)) throw new Error("Backend connection changed before sending.");
       invoked = true;
       await invoke(transport, delivery === "steer" ? CHANNELS.runs.steer : CHANNELS.runs.continue, [{
         runId: queue.runId, accountId: account.id, message: message.text,
         clientUserMessageId: message.id, additionalContext: initialContext, ...context,
-        ...(delivery === "queue" ? { model: message.model, additionalDirectories: message.additionalDirectories } : {}),
+        ...(delivery === "queue" ? { model: message.model, conversationSettings: message.conversationSettings, additionalDirectories: message.additionalDirectories } : {}),
       }]);
       remove(ownerKey, message, true);
       accepted = true;

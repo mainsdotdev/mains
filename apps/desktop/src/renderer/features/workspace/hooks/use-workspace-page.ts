@@ -6,7 +6,7 @@ import { toast } from "@/components/ui";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAppSelector, useAppDispatch } from "@/lib/redux/hooks";
 import {
-  setWorkspaceModel,
+  transferConversationSettings,
   setActiveTab,
   activateWorkspaceView,
   setComposerContextKey,
@@ -38,11 +38,12 @@ import { contextItemKey } from "../lib/composer-context";
 import { browserAnnotationPrompt } from "../lib/browser-annotation";
 import type { McpAppMessageOptions } from "../lib/mcp-app-context";
 import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
+import { useConversationSettings } from "./use-conversation-settings";
 
 const EMPTY_DIRECTORIES: string[] = [];
 
 
-export function useWorkspacePage(providerId: string) {
+export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   const dispatch = useAppDispatch();
   const mcpPanel = useMcpAppPanel();
   const attachAppRun = mcpPanel?.attachRun;
@@ -51,10 +52,6 @@ export function useWorkspacePage(providerId: string) {
   const navigate = useNavigate();
   const { runId: routeRunId } = useParams<{ runId?: string }>();
 
-  const selectedModel = useAppSelector(
-    (state) =>
-      state.workspace.selectedModelByProvider[providerId] || "",
-  );
   const activeTab = useAppSelector(
     (state) => state.workspace.activeTab,
   );
@@ -105,13 +102,6 @@ export function useWorkspacePage(providerId: string) {
     value: string | "new";
   } | null>(null);
 
-  const handleModelChange = useCallback(
-    (model: string) => {
-      dispatch(setWorkspaceModel({ providerId, model }));
-    },
-    [dispatch, providerId],
-  );
-
   const { workspaceId, selectedWorkspace, currentWorkspace, workspaces } =
     useWorkspaceData(providerId, mode);
   const switchableWorkspaceIds = useMemo(
@@ -152,6 +142,9 @@ export function useWorkspacePage(providerId: string) {
     currentEvents,
     isTranscriptLoading,
     currentTurns,
+    runTurns,
+    isRunDetailsLoaded,
+    loadRunDetails,
     isLoading,
     eventsEndRef,
     setActiveRunId,
@@ -203,6 +196,19 @@ export function useWorkspacePage(providerId: string) {
     ? runs.find((r) => r.id === composeTargetRunId)
     : undefined;
   const ownerKey = composerOwnerKey(contextParts, composeTargetRunId);
+  const conversation = useConversationSettings({
+    providerId, ownerKey, runId: composeTargetRunId, run: composeTargetRun, mirrorOnly,
+    latestModel: composeTargetRunId
+      ? runTurns[composeTargetRunId]?.slice().reverse().find((turn) => turn.model)?.model : undefined,
+    loadingRun: !!composeTargetRunId && !isRunDetailsLoaded(composeTargetRunId),
+  });
+  useEffect(() => {
+    if (composeTargetRunId && composeTargetRun && !conversation.ready) void loadRunDetails(composeTargetRunId);
+  }, [composeTargetRunId, composeTargetRun, conversation.ready, loadRunDetails]);
+  const conversationSettings = conversation.settings;
+  const saveDraftSettingsToRun = conversation.saveDraftSettingsToRun;
+  const selectedModel = conversationSettings.model;
+  const handleModelChange = conversation.changeModel;
   const browserExpansionKey = mode === "developer" && workspaceId
     ? workspaceBrowserExpansionKey(backendId, workspaceId)
     : ownerKey;
@@ -228,6 +234,7 @@ export function useWorkspacePage(providerId: string) {
   const runQueue = useComposerRunQueue({
     enabled: supportsTurnSteer, ownerKey, backendId, run: composeTargetRun,
     selectedModel, additionalDirectories, setModel: handleModelChange, setDirectories: setAdditionalDirectories,
+    conversationSettings, setSettings: conversation.changeSettings,
   });
   const handleQueueSnapshot = (snapshot: QueueMessageSnapshot) => {
     const text = snapshot.text.trim() || browserAnnotationPrompt(snapshot.contextItems);
@@ -241,6 +248,7 @@ export function useWorkspacePage(providerId: string) {
     if ((mode === "developer") !== ("workspaceId" in selection)) return;
     const nextParts = { ...contextParts, ...selection };
     const nextOwnerKey = composerOwnerKey(nextParts, null);
+    dispatch(transferConversationSettings({ fromKey: ownerKey, toKey: nextOwnerKey }));
     dispatch(setDraftText({ key: nextOwnerKey, text: goal }));
     moveTransientUploadsToOwner(ownerKey, nextOwnerKey);
     setDirectoryDrafts((current) => ({ ...current, [nextOwnerKey]: additionalDirectories }));
@@ -283,17 +291,17 @@ export function useWorkspacePage(providerId: string) {
   // Handle pending review target (native code review) — developer-only UI,
   // gated defensively so a stale target can't hijack the tab-less view.
   useEffect(() => {
-    if (activeViewKey !== viewKey || !showTabs || !pendingReviewTarget || !workspaceId || !selectedWorkspace) return;
+    if (activeViewKey !== viewKey || !showTabs || !pendingReviewTarget || !workspaceId || !selectedWorkspace || !conversation.ready) return;
     dispatch(clearPendingReviewTarget());
 
     const run = async () => {
-      const newRunId = await executeReview(selectedWorkspace, providerId, pendingReviewTarget, selectedModel);
+      const newRunId = await executeReview(selectedWorkspace, providerId, pendingReviewTarget, selectedModel, conversationSettings);
       if (newRunId) {
         dispatch(setActiveTab(newRunId));
       }
     };
     run();
-  }, [activeViewKey, viewKey, showTabs, pendingReviewTarget, workspaceId, selectedWorkspace, providerId, selectedModel, executeReview, dispatch]);
+  }, [activeViewKey, viewKey, showTabs, pendingReviewTarget, workspaceId, selectedWorkspace, providerId, selectedModel, conversationSettings, conversation.ready, executeReview, dispatch]);
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey || !showTabs) return; // tab-less neutral state is the new-chat screen
@@ -383,6 +391,7 @@ export function useWorkspacePage(providerId: string) {
   }, [setGoal, setUploadedFiles, clearContext, composeTargetRunId, ownerKey]);
 
   const handleExecute = useCallback(async (message?: string, options: McpAppMessageOptions = {}) => {
+    if (!conversation.ready) return null;
     const currentState = store.getState().workspace;
     const draft = currentState.draftTextByKey[ownerKey] ?? goal;
     const files = getTransientUploadsForOwner(ownerKey);
@@ -427,11 +436,11 @@ export function useWorkspacePage(providerId: string) {
       const continuing = !!targetRunId && canResume && !!targetRun;
       let nextRunId: string | null;
       if (continuing) {
-        const success = await continueRun(targetRunId!, text, selectedModel, attachments, runContext, runAdditionalDirectories);
+        const success = await continueRun(targetRunId!, text, selectedModel, attachments, runContext, runAdditionalDirectories, conversationSettings);
         nextRunId = success ? targetRunId : null;
       } else {
         nextRunId = await executeRun(text, selectedWorkspace, providerId, selectedModel, attachments,
-          runContext, selectedCollectionId, runAdditionalDirectories);
+          runContext, selectedCollectionId, runAdditionalDirectories, conversationSettings);
       }
       if (!nextRunId) return null;
 
@@ -447,6 +456,8 @@ export function useWorkspacePage(providerId: string) {
       dispatch(setContextItemsForKey({ key: ownerKey, items: remaining }));
       dispatch(setDraftText({ key: ownerKey, text: remainingDraft }));
       if (!composeTargetRunId) {
+        void saveDraftSettingsToRun(nextRunId, conversationSettings);
+        dispatch(transferConversationSettings({ fromKey: ownerKey, toKey: nextOwnerKey }));
         dispatch(setContextItemsForKey({ key: ownerKey, items: [] }));
         dispatch(setContextItemsForKey({ key: nextOwnerKey, items: remaining }));
         dispatch(setDraftText({ key: ownerKey, text: "" }));
@@ -465,12 +476,12 @@ export function useWorkspacePage(providerId: string) {
       return nextRunId;
     } finally { sendingRef.current = false; }
   }, [goal, contextItems, runAdditionalDirectories, mode, workspaceId, selectedWorkspace,
-    selectedModel, executeRun, continueRun, composeTargetRunId, composeTargetRun, selectTab, canResume,
+    selectedModel, conversationSettings, conversation.ready, saveDraftSettingsToRun, executeRun, continueRun, composeTargetRunId, composeTargetRun, selectTab, canResume,
     setUploadedFiles, dispatch, providerId, selectedCollectionId, navigate, ownerKey, contextParts, appContext, attachAppRun, viewKey, supportsTurnSteer, runQueue]);
 
   // Auto-execute when pendingAutoExecute was set (e.g. "Review Changes" button, suggestion chips)
   useEffect(() => {
-    if (autoExecute && goal) {
+    if (autoExecute && goal && conversation.ready) {
       queueMicrotask(() => setAutoExecute(false));
       if (mode === "developer" && !workspaceId) return;
       // Same rule as handleExecute: a live run is not a place to start another.
@@ -484,6 +495,7 @@ export function useWorkspacePage(providerId: string) {
             undefined,
             undefined,
             runAdditionalDirectories,
+            conversationSettings,
           )) ?? false;
           if (success) clearInputState();
         } else {
@@ -496,9 +508,12 @@ export function useWorkspacePage(providerId: string) {
             undefined,
             selectedCollectionId,
             runAdditionalDirectories,
+            conversationSettings,
           );
           if (newRunId) {
             const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+            void saveDraftSettingsToRun(newRunId, conversationSettings);
+            dispatch(transferConversationSettings({ fromKey: ownerKey, toKey: nextOwnerKey }));
             dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
             await (window as any).api?.browser?.reassignTabs?.(
               ownerKey,
@@ -512,7 +527,7 @@ export function useWorkspacePage(providerId: string) {
       };
       run();
     }
-  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, runAdditionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
+  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, conversationSettings, conversation.ready, saveDraftSettingsToRun, selectedCollectionId, runAdditionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
 
   const runLabel = (r: { title?: string; goal: string }) =>
     r.title?.trim() ? r.title : r.goal;
@@ -580,6 +595,10 @@ export function useWorkspacePage(providerId: string) {
     setAdditionalDirectories,
     canResume,
     selectedModel,
+    conversationSettings,
+    conversationSettingsReady: conversation.ready,
+    setConversationSettings: conversation.changeSettings,
+    handleSettingsConfigChange: conversation.changeConfig,
     activeTab,
     selectedFile,
     openIssueTabs,

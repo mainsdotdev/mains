@@ -2,6 +2,7 @@ import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
 import type { RunStatus } from "../api/runsApi";
 import type { QueuedMessagePreview } from "@/features/workspace/lib/run-queue-preview";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 
 export interface QueuedRunMessage {
   id: string;
@@ -10,6 +11,7 @@ export interface QueuedRunMessage {
   uploadOwnerKey: string;
   attachmentNames: string[];
   model?: string;
+  conversationSettings?: ConversationSettings;
   additionalDirectories?: string[];
   status: "queued" | "editing" | "sending" | "unknown" | "error";
   error?: string;
@@ -23,6 +25,7 @@ export interface QueueDraftBackup {
   contextItems: ContextItem[];
   uploadOwnerKey: string;
   model: string;
+  conversationSettings?: ConversationSettings;
   additionalDirectories: string[];
 }
 

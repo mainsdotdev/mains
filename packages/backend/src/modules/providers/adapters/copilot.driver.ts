@@ -1577,7 +1577,8 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       const resumeModel = request.model || config.defaultModel;
       if (resumeModel) resumeConfig.model = resumeModel;
 
-      const resumeReasoningEffort = (config as any).modelReasoningEffort as
+      const resumeReasoningEffort = (typeof resumeOverrides.modelReasoningEffort === "string"
+        ? resumeOverrides.modelReasoningEffort : (config as any).modelReasoningEffort) as
         | ReasoningEffort
         | undefined;
       if (resumeReasoningEffort) resumeConfig.reasoningEffort = resumeReasoningEffort;

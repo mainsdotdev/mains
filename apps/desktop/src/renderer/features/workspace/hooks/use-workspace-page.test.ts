@@ -19,6 +19,7 @@ import type { ContextBrowserItem, ContextMcpAppItem } from "../lib/composer-cont
 
 const mocks = vi.hoisted(() => ({
   getState: vi.fn(),
+  writeSettings: vi.fn(),
   getById: vi.fn(),
   getArtifacts: vi.fn(),
   getToolCalls: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock("@/lib/redux", () => ({ store: { getState: () => mocks.getState() } }));
 vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => mocks.panel
   ? { appContext: mocks.appContext, attachRun: mocks.attachAppRun } : null }));
 vi.mock("@/lib/transport", () => ({
+  getTransport: () => ({ invoke: mocks.writeSettings }),
   appApi: {
     account: { get: () => Promise.resolve({ success: true, data: { id: "account-1" } }) },
     runs: {
@@ -53,6 +55,9 @@ vi.mock("@/lib/transport", () => ({
     runArtifacts: { getByRun: mocks.getArtifacts },
     runTurns: { getByRun: mocks.getTurns },
   },
+}));
+vi.mock("@/lib/redux/api/providersApi", () => ({
+  useGetProviderByIdQuery: () => ({ data: { config: {} } }),
 }));
 vi.mock("@/lib/redux/api", () => ({
   workspaceApi: { util: { invalidateTags: () => ({ type: "test/invalidateWorkspaces" }) } },
@@ -138,6 +143,7 @@ beforeEach(() => {
   mocks.panel = false;
   mocks.appContext.mockReturnValue([]);
   mocks.executeRun.mockResolvedValue(null);
+  mocks.writeSettings.mockResolvedValue({ success: true });
   mocks.continueRun.mockResolvedValue(true);
   mocks.checkCanResume.mockResolvedValue(false);
   mocks.getById.mockResolvedValue({ success: true, data: run });
@@ -365,7 +371,7 @@ describe("workspace conversations across renderers", () => {
     let sending!: Promise<string | null | undefined>;
     act(() => { sending = page.result.current.handleExecute("Edited app prompt"); });
     await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
-    expect(mocks.continueRun).toHaveBeenCalledWith(existing.id, "Edited app prompt", "", undefined, [selected, activeApp], []);
+    expect(mocks.continueRun).toHaveBeenCalledWith(existing.id, "Edited app prompt", "", undefined, [selected, activeApp], [], page.result.current.conversationSettings);
     const newer = { ...selected, updateId: "after" };
     act(() => { page.store.dispatch(replaceMcpAppContext({ key: ownerKey, sessionId: "document-1", items: [newer] }));
       page.result.current.setGoal("Newer draft edit"); });
@@ -481,7 +487,7 @@ describe("workspace conversations across renderers", () => {
     await act(async () => resolveRun({ success: true, data: synced }));
     await waitFor(() => expect(page.result.current.canResume).toBe(true));
     await act(async () => { expect(await page.result.current.handleExecute()).toBe(synced.id); });
-    expect(mocks.continueRun).toHaveBeenCalledWith(synced.id, "Continue this conversation", "", undefined, [], []);
+    expect(mocks.continueRun).toHaveBeenCalledWith(synced.id, "Continue this conversation", "", undefined, [], [], page.result.current.conversationSettings);
     expect(mocks.executeRun).not.toHaveBeenCalled();
   });
 

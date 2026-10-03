@@ -652,10 +652,8 @@ export function resolveCursorSelection(
   config: Pick<CursorAdapterConfig, "effortLevel" | "fastMode" | "thinking">,
 ): CursorSelection {
   const effort =
-    (typeof overrides.effortLevel === "string" && overrides.effortLevel) ||
-    (typeof overrides.reasoning === "string" && overrides.reasoning) ||
-    config.effortLevel ||
-    undefined;
+    typeof overrides.effortLevel === "string" ? overrides.effortLevel || undefined :
+      (typeof overrides.reasoning === "string" && overrides.reasoning) || config.effortLevel || undefined;
   const fastMode =
     typeof overrides.fastMode === "boolean"
       ? overrides.fastMode

@@ -17,6 +17,7 @@ import {
   setDraftText,
   setSelectedCollectionId,
   setWorkspaceModel,
+  setConversationSettings,
   setContextItemsForKey,
 } from "@/lib/redux/slices/workspaceSlice";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
@@ -50,12 +51,14 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
     if (location.pathname !== context.route) return;
     dispatch(setActiveTab(context.activeTab));
     dispatch(setWorkspaceModel({ providerId: context.providerId, model: context.selectedModel }));
+    if (context.conversationSettings) dispatch(setConversationSettings({ key: context.ownerKey, settings: context.conversationSettings }));
     dispatch(setSelectedCollectionId(context.selectedCollectionId));
     dispatch(setContextItemsForKey({ key: context.ownerKey, items: context.contextItems as ContextItem[] }));
     dispatch(mirrorRunQueue({ ownerKey: context.ownerKey, queue: context.runQueue as ConversationQueue | undefined }));
   }, [
     context.activeTab, context.contextItems, context.ownerKey, context.providerId,
     context.route, context.selectedCollectionId, context.selectedModel,
+    context.conversationSettings,
     dispatch, location.pathname, context.runQueue,
   ]);
 

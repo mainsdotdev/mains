@@ -1,3 +1,4 @@
+import { pickRunSettingConfig } from "@mains/contracts/run-settings";
 // ─────────────────────────────────────────────────────────────
 // Claude ProviderDriver
 //
@@ -2852,6 +2853,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     /** Per-run tool policy from the mode harness. */
     toolPolicy?: WorkRunToolPolicy | null;
     additionalDirectories?: string[];
+    configSnapshot?: Record<string, unknown> | null;
   }): Promise<SDKOptions> {
     const {
       model,
@@ -2874,9 +2876,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       additionalDirectories,
     } = args;
 
+    const runConfig = { ...config, ...pickRunSettingConfig(args.configSnapshot ?? {}) } as ClaudeCodeAdapterConfig;
     const processOptions = buildProcessOptions();
     const permissionMode =
-      runPermissionMode ?? config.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
+      runPermissionMode ?? runConfig.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
     const settingSources = processOptions.settingSources!;
     // The bridge auto-allows this set, so it must see the *effective* list —
     // handing it the global default would auto-approve tools the run's policy
@@ -2930,7 +2933,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     }
 
     if (workspacePath) options.cwd = workspacePath;
-    const grantedDirectories = additionalDirectories ?? config.additionalDirectories;
+    const grantedDirectories = additionalDirectories ?? runConfig.additionalDirectories;
     if (grantedDirectories?.length) options.additionalDirectories = grantedDirectories;
 
     if (resumeSessionId) {
@@ -2943,18 +2946,18 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       buildClaudeSessionIdOptions({ newSessionId, resumeSessionId, forkSession }),
     );
 
-    const mergedAgents = mergeAgentsConfig(config.agents, runAgents);
+    const mergedAgents = mergeAgentsConfig(runConfig.agents, runAgents);
     if (mergedAgents && Object.keys(mergedAgents).length > 0) {
       options.agents = convertAgentsConfig(mergedAgents);
     }
 
-    const mergedHooks = mergeHooksConfig(config.hooks, runHooks);
+    const mergedHooks = mergeHooksConfig(runConfig.hooks, runHooks);
     if (mergedHooks && Object.keys(mergedHooks).length > 0) {
       options.hooks = convertHooksConfig(mergedHooks);
     }
 
-    if (config.structuredOutputsSelectedId && config.structuredOutputs) {
-      const entry = config.structuredOutputs[config.structuredOutputsSelectedId];
+    if (runConfig.structuredOutputsSelectedId && runConfig.structuredOutputs) {
+      const entry = runConfig.structuredOutputs[runConfig.structuredOutputsSelectedId];
       if (entry?.schema) {
         options.outputFormat = { type: "json_schema", schema: entry.schema };
       }
@@ -2964,18 +2967,18 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     // thinking is disabled ("effort 'xhigh' is not supported when thinking is
     // disabled on this model"). A stale `thinkingMode: false` alongside
     // `ultracode: true` must therefore not reach the CLI — ultracode wins.
-    const thinkingEnabled = !!config.thinkingMode || !!config.ultracode;
+    const thinkingEnabled = !!runConfig.thinkingMode || !!runConfig.ultracode;
     if (thinkingEnabled) {
       // A fixed token budget takes precedence over adaptive thinking. Useful on
       // models without adaptive support, or to cap cost/latency.
       options.thinking =
-        typeof config.thinkingBudgetTokens === "number" && config.thinkingBudgetTokens > 0
-          ? { type: "enabled", budgetTokens: config.thinkingBudgetTokens }
+        typeof runConfig.thinkingBudgetTokens === "number" && runConfig.thinkingBudgetTokens > 0
+          ? { type: "enabled", budgetTokens: runConfig.thinkingBudgetTokens }
           : { type: "adaptive" };
     } else {
       options.thinking = { type: "disabled" };
     }
-    if (config.ultracode) {
+    if (runConfig.ultracode) {
       // ultracode = xhigh effort + automatic dynamic-workflow orchestration.
       // The CLI applies xhigh itself, so we must NOT also send a conflicting
       // options.effort ("ultracode" is not a valid EffortLevel). Delivered via
@@ -2984,14 +2987,17 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         ...((options.settings as Record<string, unknown>) || {}),
         ultracode: true,
       };
-    } else if (thinkingEnabled && config.effortLevel) {
-      options.effort = config.effortLevel;
+    } else if (thinkingEnabled && runConfig.effortLevel) {
+      options.effort = runConfig.effortLevel;
+    }
+    if (runConfig.ultracode === false) {
+      options.settings = { ...((options.settings as Record<string, unknown>) || {}), ultracode: false };
     }
 
-    if (config.fastMode) {
+    if (runConfig.fastMode !== undefined) {
       options.settings = {
         ...((options.settings as Record<string, unknown>) || {}),
-        fastMode: true,
+        fastMode: runConfig.fastMode,
       };
     }
 
@@ -3141,6 +3147,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     abortController: AbortController,
     isInitial: boolean,
     permissionMode: ClaudePermissionModeRef,
+    fastModeRequested = !!config.fastMode,
   ): ClaudeSession {
     return {
       runId,
@@ -3149,7 +3156,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       permissionMode,
       runtimeSettingsPath:
         typeof options.settings === "string" ? options.settings : undefined,
-      fastModeRequested: !!config.fastMode,
+      fastModeRequested,
       isInitial,
       state: { hasAssistantContent: false },
       toolCallIndex: new Map(),
@@ -3476,9 +3483,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         mode: request.mode,
         toolPolicy: request.toolPolicy,
         additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, true, permissionModeRef);
+      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
       return { session, prompt: buildStartPrompt(request), sessionId };
@@ -3519,9 +3528,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         mode: request.mode,
         toolPolicy: request.toolPolicy,
         additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, false, permissionModeRef);
+      const session = newSession(request.runId, options, abortController, false, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       // Prime sessionId so executePrompt's "first session_id" persistence is a no-op for resume;
       // the SDK keeps the same id when resuming.
       session.state.sessionId = sessionId;
@@ -3568,9 +3579,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         mode: request.mode,
         toolPolicy: request.toolPolicy,
         additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, true, permissionModeRef);
+      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
       return { session, prompt: buildForkPrompt(request), sessionId };

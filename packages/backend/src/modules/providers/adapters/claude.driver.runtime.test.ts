@@ -143,6 +143,32 @@ esac
     expect(cliCalls()).toContain("auth login");
   });
 
+  it("uses each chat's settings instead of the provider's effort and fast mode", async () => {
+    const driver = createClaudeDriver({ settingSources: [], thinkingMode: true, effortLevel: "high", fastMode: true, ultracode: true });
+    const request = { runId: "settings-a", accountId: "account-1", model: "sonnet",
+      execution: { workspaceId: null, cwd: fixture }, goal: "hello" };
+    const first = await driver.createSession({ ...request, configSnapshot: {
+      permissionMode: "plan", thinkingMode: false, effortLevel: "", fastMode: false, ultracode: false,
+    } });
+    const options = (first.session as { options: Record<string, unknown> }).options;
+    expect(options).toMatchObject({ model: "sonnet", permissionMode: "plan", thinking: { type: "disabled" } });
+    expect(options).not.toHaveProperty("effort");
+    expect(JSON.parse(fs.readFileSync(options.settings as string, "utf8")))
+      .toMatchObject({ fastMode: false, ultracode: false });
+    const resumed = await driver.resumeSession!({ ...request, message: "continue", configSnapshot: {
+      permissionMode: "acceptEdits", thinkingMode: true, effortLevel: "low", fastMode: false, ultracode: false,
+    } });
+    expect((resumed.session as { options: Record<string, unknown> }).options)
+      .toMatchObject({ permissionMode: "acceptEdits", thinking: { type: "adaptive" }, effort: "low" });
+    const second = await driver.createSession({ ...request, runId: "settings-b", configSnapshot: {
+      permissionMode: "default", thinkingMode: true, effortLevel: "medium", fastMode: true, ultracode: false,
+    } });
+    const secondOptions = (second.session as { options: Record<string, unknown> }).options;
+    expect(secondOptions).toMatchObject({ permissionMode: "default", effort: "medium" });
+    expect(JSON.parse(fs.readFileSync(secondOptions.settings as string, "utf8"))).toMatchObject({ fastMode: true });
+    await Promise.all([first, resumed, second].map((acquired) => driver.cleanup?.(acquired.session)));
+  });
+
   it("uses the bundled process for legacy account queries and closes it", async () => {
     fs.writeFileSync(statusFile, '{}');
     const info = await createClaudeDriver({}).getAccountInfo!();

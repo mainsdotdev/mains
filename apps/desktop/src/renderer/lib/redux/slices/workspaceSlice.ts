@@ -9,6 +9,7 @@ import {
   type ContextKind,
 } from "@/features/workspace/lib/composer-context";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import {
   isWorkspaceDraftOwnerKey,
   isWorkspaceViewKey,
@@ -59,6 +60,7 @@ export interface WorkspaceState {
   workspaceViewNeedsDefaultRun: boolean;
   activeWorkspaceIdByProvider: Record<string, string>;
   selectedModelByProvider: Record<string, string>;
+  conversationSettingsByKey: Record<string, ConversationSettings>;
   selectedProviderId: string;
   thinkingEnabled: boolean;
   selectedFile: FileNode | null;
@@ -129,6 +131,7 @@ const initialState: WorkspaceState = {
   workspaceViewNeedsDefaultRun: false,
   activeWorkspaceIdByProvider: {},
   selectedModelByProvider: {},
+  conversationSettingsByKey: {},
   selectedProviderId: PROVIDER_IDS.claude,
   thinkingEnabled: false,
   selectedFile: null,
@@ -263,6 +266,7 @@ const workspaceSlice = createSlice({
       const ownerKey = runOwnerKey(backendId, runId);
       delete state.draftTextByKey[ownerKey];
       delete state.contextItemsByKey[ownerKey];
+      delete state.conversationSettingsByKey[ownerKey];
       if (state.composerContextKey === ownerKey) {
         state.contextItems = [];
         state.composerContextKey = "default";
@@ -281,6 +285,9 @@ const workspaceSlice = createSlice({
       }
       for (const key of Object.keys(state.contextItemsByKey)) {
         if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.contextItemsByKey[key];
+      }
+      for (const key of Object.keys(state.conversationSettingsByKey)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.conversationSettingsByKey[key];
       }
       if (isWorkspaceDraftOwnerKey(state.composerContextKey, backendId, workspaceId)) {
         state.contextItems = [];
@@ -302,6 +309,15 @@ const workspaceSlice = createSlice({
     },
     setWorkspaceModel: (state, action: PayloadAction<{ providerId: string; model: string }>) => {
       state.selectedModelByProvider[action.payload.providerId] = action.payload.model;
+    },
+    setConversationSettings: (state, action: PayloadAction<{ key: string; settings: ConversationSettings }>) => {
+      state.conversationSettingsByKey[action.payload.key] = action.payload.settings;
+    },
+    transferConversationSettings: (state, action: PayloadAction<{ fromKey: string; toKey: string }>) => {
+      if (action.payload.fromKey === action.payload.toKey) return;
+      const settings = state.conversationSettingsByKey[action.payload.fromKey];
+      if (settings) state.conversationSettingsByKey[action.payload.toKey] = settings;
+      delete state.conversationSettingsByKey[action.payload.fromKey];
     },
     setWorkspaceThinkingEnabled: (state, action: PayloadAction<boolean>) => {
       state.thinkingEnabled = action.payload;
@@ -551,6 +567,8 @@ export const {
   forgetWorkspaceUiState,
   setWorkspaceSidebarTab,
   setWorkspaceModel,
+  setConversationSettings,
+  transferConversationSettings,
   setWorkspaceThinkingEnabled,
   setSelectedFile,
   revealInEditor,

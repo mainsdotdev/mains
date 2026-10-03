@@ -51,7 +51,9 @@ vi.mock("@/hooks/use-active-space", () => ({
 }));
 
 vi.mock("@/features/workspace/hooks", () => ({
-  useWorkspacePage: () => ({ runsLoaded: true, ...page.state }),
+  useWorkspacePage: () => ({ runsLoaded: true,
+    conversationSettings: { model: "", config: {} }, conversationSettingsReady: true,
+    setConversationSettings: vi.fn(), handleSettingsConfigChange: vi.fn(), ...page.state }),
   useToolApproval: () => ({ pendingApprovals: [], respond: vi.fn() }),
   useProviderAuthTerminal: () => ({ session: null }),
   PluginLogoProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -193,7 +195,7 @@ describe("WorkspaceProviderPage while changing spaces", () => {
     vi.stubGlobal("api", { browserChat: { publishContext: vi.fn(), onAction: (callback: typeof onAction) => { onAction = callback; return vi.fn(); } } });
     renderPage();
     act(() => onAction?.({ type: "queueSubmit", ownerKey: "draft", draft: "frozen input", items: [], uploads: [], model: "snapshot-model", additionalDirectories: ["/snapshot"] }));
-    expect(submitSnapshot).toHaveBeenCalledExactlyOnceWith({ text: "frozen input", contextItems: [], files: [], model: "snapshot-model", additionalDirectories: ["/snapshot"], editingId: undefined });
+    expect(submitSnapshot).toHaveBeenCalledExactlyOnceWith({ text: "frozen input", contextItems: [], files: [], model: "snapshot-model", additionalDirectories: ["/snapshot"], conversationSettings: undefined, editingId: undefined });
     expect(setDraft).not.toHaveBeenCalled();
     act(() => onAction?.({ type: "queueAction", ownerKey: "draft", action: "steer", id: "input" }));
     expect(steer).toHaveBeenCalledExactlyOnceWith("input");

@@ -3,6 +3,7 @@ import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { ModeId } from "../../../../shared/modes";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { RunOutputFile } from "@mains/contracts/runs";
 import type { AppDispatch, RootState } from "../index";
 import { forgetDeletedUiContext } from "../ui-state-cleanup";
@@ -116,6 +117,7 @@ export interface CreateRunPayload {
 }
 
 export interface UpdateRunPayload {
+  conversationSettings?: ConversationSettings;
   title?: string;
   goal?: string;
   status?: RunStatus;
@@ -541,6 +543,7 @@ export const runsApi = baseApi.injectEndpoints({
           instructions?: string;
         };
         model?: string;
+        conversationSettings?: ConversationSettings;
         systemPrompt?: string;
         configSnapshot?: Record<string, unknown>;
         toolPolicySnapshot?: Record<string, unknown>;

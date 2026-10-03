@@ -527,6 +527,7 @@ export interface WorkRunReviewRequest {
   execution: RunExecutionContext;
   target: WorkRunReviewTarget;
   model?: string | null;
+  configSnapshot?: Record<string, unknown> | null;
 }
 
 export interface McpAppReadResourceRequest {

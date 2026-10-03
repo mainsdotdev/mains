@@ -1,6 +1,17 @@
 import { createMigrate, createTransform, type PersistedState } from "redux-persist";
 import storage from "redux-persist/lib/storage";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
+
+// Run preferences are canonical backend data. Only unsent drafts need local persistence.
+function draftSettingsOnly(settings: Record<string, ConversationSettings>) {
+  return Object.fromEntries(Object.entries(settings).filter(([key]) => {
+    try { return JSON.parse(key)?.[1] === "draft"; } catch { return false; }
+  }));
+}
+const conversationSettingsTransform = createTransform(
+  draftSettingsOnly, draftSettingsOnly, { whitelist: ["conversationSettingsByKey"] },
+);
 
 // Generated diffs have no file to reload: their content only lives in the
 // current renderer. Apply on both save and restore for states saved before this
@@ -27,9 +38,10 @@ export const workspacePersistConfig = {
   storage,
   version: 0,
   migrate: createMigrate(workspaceMigrations),
-  transforms: [selectedFileTransform],
+  transforms: [selectedFileTransform, conversationSettingsTransform],
   whitelist: [
     "selectedModelByProvider",
+    "conversationSettingsByKey",
     "selectedProviderId",
     "thinkingEnabled",
     "activeWorkspaceIdByProvider",
