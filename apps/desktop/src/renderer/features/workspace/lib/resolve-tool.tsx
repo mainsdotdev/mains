@@ -42,6 +42,10 @@ export interface ResolvedTool {
  * `"toolName: {json}"` or just `"toolName"`.
  */
 function extractToolName(content: string): string {
+  // Permission names contain their own colon; only a colon after the closing
+  // bracket separates the name from JSON arguments.
+  const permission = /^\[permission:[^\]]+\]/.exec(content.trim());
+  if (permission) return permission[0];
   const colonIdx = content.indexOf(":");
   return (colonIdx > 0 ? content.substring(0, colonIdx) : content).trim();
 }

@@ -18,6 +18,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { z } from "zod";
+import type { Tool as CopilotTool } from "@github/copilot-sdk";
 import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
 import type { JsonValue } from "./codex-app-server-protocol/generated/serde_json/JsonValue";
 import type { DynamicToolSpec } from "./codex-app-server-protocol/generated/v2/DynamicToolSpec";
@@ -181,22 +182,15 @@ export function toClaudeTools(
 }
 
 /** Copilot custom tool: prefixed name, JSON Schema params, string result. */
-export interface CopilotToolSpec {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  handler: (args: any) => Promise<string>;
-}
-
 export function toCopilotTools(
   ctx: MainsToolContext,
   mode: ModeId = DEFAULT_MODE_ID,
-): CopilotToolSpec[] {
+): CopilotTool[] {
   return forProvider(PROVIDER_IDS.copilot, mode).map((t) => ({
     name: `mcp__mains__${t.name}`,
     description: t.description,
     parameters: toJsonSchema(t.schema),
-    handler: async (args: any) => {
+    handler: async (args) => {
       const result = await t.handler(args, ctx);
       return result.content[0]?.text ?? "";
     },

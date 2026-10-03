@@ -278,7 +278,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     groupKey: "webfetch",
     category: "Search",
     icon: <Web className="size-4" />,
-    aliases: ["webfetch", "web_fetch"],
+    aliases: ["webfetch", "web_fetch", "[permission:url]"],
   },
   {
     displayName: "WebSearch",
@@ -306,7 +306,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     groupKey: "read",
     category: "File",
     icon: <Read className="size-4" />,
-    aliases: ["read", "read_file"],
+    aliases: ["read", "read_file", "[permission:read]"],
   },
   {
     displayName: "ImageView",
@@ -327,7 +327,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     groupKey: "edit",
     category: "File",
     icon: <Edit className="size-3.5" />,
-    aliases: ["edit", "replace", "edit_file"],
+    aliases: ["edit", "replace", "edit_file", "[permission:write]"],
   },
   {
     displayName: "Write",
@@ -369,7 +369,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     groupKey: "bash",
     category: "Shell",
     icon: <Bash className="size-4" />,
-    aliases: ["bash", "terminal"],
+    aliases: ["bash", "terminal", "[permission:shell]"],
   },
   {
     displayName: "Shell",

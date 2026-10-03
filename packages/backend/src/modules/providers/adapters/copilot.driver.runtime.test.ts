@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installTestBackendRuntime } from "../../../../test/backend-runtime";
 import { copilotAuthLoginCommand, detectInstalledClis, resolveCopilotRuntime } from "../providers.utils";
 import { createCopilotDriver } from "./copilot.driver";
+import type { CopilotAdapterConfig } from "../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
   authenticated: true,
@@ -31,7 +32,7 @@ vi.mock("@github/copilot-sdk", () => ({
     });
     stop = vi.fn().mockResolvedValue([]);
     forceStop = vi.fn().mockResolvedValue(undefined);
-    getStatus = vi.fn().mockResolvedValue({ version: "1.0.79", protocolVersion: 3 });
+    getStatus = vi.fn().mockResolvedValue({ version: "1.0.90", protocolVersion: 3 });
     ping = vi.fn().mockResolvedValue({ message: "ok" });
     createSession = vi.fn();
     rpc = { models: { list: vi.fn().mockResolvedValue({
@@ -47,13 +48,18 @@ describe("Copilot runtime without a system CLI", () => {
   let fixture: string;
   let appPath: string;
   let bundled: string;
+  let loginCli: string;
   let configured: string;
   let callsFile: string;
   let restoreRuntime: () => void;
   const drivers: ReturnType<typeof createCopilotDriver>[] = [];
 
   function driver(binary?: string) {
-    const result = createCopilotDriver(binary ? { binary } : {});
+    return configuredDriver(binary ? { binary } : {});
+  }
+
+  function configuredDriver(config: CopilotAdapterConfig) {
+    const result = createCopilotDriver(config);
     drivers.push(result);
     return result;
   }
@@ -71,6 +77,11 @@ describe("Copilot runtime without a system CLI", () => {
     appPath = path.join(fixture, "Okan's Mains.app", "app.asar");
     bundled = path.join(
       appPath + ".unpacked", ".vite", "build", "node_modules",
+      `@github/copilot-sdk-${process.platform}-${process.arch}`,
+      "prebuilds", `${process.platform}-${process.arch}`, "copilot-runtime",
+    );
+    loginCli = path.join(
+      appPath + ".unpacked", ".vite", "build", "node_modules",
       `@github/copilot-${process.platform}-${process.arch}`, "copilot",
     );
     configured = path.join(fixture, "custom", "copilot");
@@ -79,10 +90,11 @@ describe("Copilot runtime without a system CLI", () => {
 printf '%s\\n' "$*" >> '${callsFile}'
 printf 'ok\\n'
 `;
-    for (const binary of [bundled, configured]) {
+    for (const binary of [bundled, loginCli, configured]) {
       fs.mkdirSync(path.dirname(binary), { recursive: true });
       fs.writeFileSync(binary, script, { mode: 0o755 });
     }
+    fs.writeFileSync(path.join(path.dirname(bundled), "runtime.node"), "native runtime fixture");
     restoreRuntime = installTestBackendRuntime({
       isPackaged: () => true, getAppPath: () => appPath, getPath: () => fixture,
     });
@@ -93,6 +105,8 @@ printf 'ok\\n'
     for (const current of drivers.splice(0)) await current.shutdown?.();
     restoreRuntime();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     fs.rmSync(fixture, { recursive: true, force: true });
   });
 
@@ -100,12 +114,73 @@ printf 'ok\\n'
     expect(detectInstalledClis()).toMatchObject({ copilot: true, copilotSource: "bundled" });
     const info = await driver().getAccountInfo!();
     expect(info.account).toEqual({ type: "copilot", login: "mains-user" });
-    expect(info.cli).toMatchObject({ version: "1.0.79", source: "bundled", updateMethod: "app" });
+    expect(info.cli).toMatchObject({ version: "1.0.90", source: "bundled", updateMethod: "app" });
     expect(sdk.clients[0].options.connection).toEqual({
       kind: "stdio", path: bundled, args: ["--no-auto-update"],
     });
     expect(sdk.clients[0].createSession).not.toHaveBeenCalled();
     expect(sdk.clients[0].stop).toHaveBeenCalledOnce();
+    expect(sdk.clients[0].options).not.toHaveProperty("gitHubToken");
+    expect(sdk.clients[0].options).not.toHaveProperty("useLoggedInUser");
+  });
+
+  it.each([undefined, false, true])("forwards the provider token and preserves explicit login choice (%s)", async (useLoggedInUser) => {
+    await configuredDriver({ githubToken: "test-provider-token", useLoggedInUser }).getAccountInfo!();
+    expect(sdk.clients[0].options.gitHubToken).toBe("test-provider-token");
+    expect(sdk.clients[0].options).not.toHaveProperty("githubToken");
+    if (useLoggedInUser === undefined) expect(sdk.clients[0].options).not.toHaveProperty("useLoggedInUser");
+    else expect(sdk.clients[0].options.useLoggedInUser).toBe(useLoggedInUser);
+  });
+
+  it("forwards a disabled saved-account login without requiring a token", async () => {
+    await configuredDriver({ useLoggedInUser: false }).getAccountInfo!();
+    expect(sdk.clients[0].options).toMatchObject({ useLoggedInUser: false });
+    expect(sdk.clients[0].options).not.toHaveProperty("gitHubToken");
+  });
+
+  it("renews the run client and live catalogue after token rotation or token removal", async () => {
+    const current = configuredDriver({ githubToken: "test-old-token" });
+    await current.listModels!();
+    const oldClient = sdk.clients[0];
+    current.updateConfig!({ githubToken: "test-new-token", useLoggedInUser: false });
+    await current.listModels!();
+    expect(oldClient.stop).toHaveBeenCalledOnce();
+    expect(sdk.clients[1].options).toMatchObject({ gitHubToken: "test-new-token", useLoggedInUser: false });
+    expect(sdk.clients[1].rpc.models.list).toHaveBeenCalledOnce();
+    current.updateConfig!({});
+    await current.listModels!();
+    expect(sdk.clients[1].stop).toHaveBeenCalledOnce();
+    expect(sdk.clients[2].options).not.toHaveProperty("gitHubToken");
+    expect(sdk.clients[2].options).not.toHaveProperty("useLoggedInUser");
+  });
+
+  it("renews the run client when only saved-account login changes", async () => {
+    const current = configuredDriver({ useLoggedInUser: true });
+    await current.listModels!();
+    current.updateConfig!({ useLoggedInUser: false });
+    await current.listModels!();
+    expect(sdk.clients[0].stop).toHaveBeenCalledOnce();
+    expect(sdk.clients[1].options.useLoggedInUser).toBe(false);
+  });
+
+  it("uses fresh auth settings for account probes while leaving the old run client alive", async () => {
+    const current = configuredDriver({ githubToken: "test-old-token" });
+    await current.listModels!();
+    current.updateConfig!({ githubToken: "test-new-token", useLoggedInUser: false });
+    await current.getAccountInfo!();
+    expect(sdk.clients[1].options).toMatchObject({ gitHubToken: "test-new-token", useLoggedInUser: false });
+    expect(sdk.clients[0].stop).not.toHaveBeenCalled();
+    expect(sdk.clients[1].stop).toHaveBeenCalledOnce();
+  });
+
+  it("passes auth to spawned TCP runtimes and leaves an external server's auth to its host", async () => {
+    await configuredDriver({ useStdio: false, port: 9234, githubToken: "test-tcp-token", useLoggedInUser: false }).getAccountInfo!();
+    expect(sdk.clients[0].options).toMatchObject({ gitHubToken: "test-tcp-token", useLoggedInUser: false,
+      connection: { kind: "tcp", port: 9234 } });
+    await configuredDriver({ cliUrl: "localhost:9234", githubToken: "test-local-token", useLoggedInUser: false }).getAccountInfo!();
+    expect(sdk.clients[1].options.connection).toEqual({ kind: "uri", url: "localhost:9234" });
+    expect(sdk.clients[1].options).not.toHaveProperty("gitHubToken");
+    expect(sdk.clients[1].options).not.toHaveProperty("useLoggedInUser");
   });
 
   it("reads newly saved login state while preserving the run client's lifetime", async () => {
@@ -126,10 +201,37 @@ printf 'ok\\n'
     expect(sdk.clients[3].options.connection.path).toBe(bundled);
   });
 
-  it("runs the shell-quoted login command through the bundled executable", () => {
+  it("runs shell-quoted login through the full CLI rather than the headless runtime", () => {
     const command = copilotAuthLoginCommand(resolveCopilotRuntime()!);
-    execFileSync("/bin/sh", ["-c", command]);
+    expect(command).toContain(`@github/copilot-${process.platform}-${process.arch}`);
+    fs.unlinkSync(bundled);
+    execFileSync("/bin/sh", ["-c", command!]);
     expect(cliCalls()).toBe("--no-auto-update login\n");
+  });
+
+  it("keeps runtime availability when the login CLI is missing and omits its command", async () => {
+    fs.unlinkSync(loginCli);
+    expect(detectInstalledClis()).toMatchObject({ copilot: true });
+    expect((await driver().getAccountInfo!()).cli?.authLoginCommand).toBeUndefined();
+    expect(sdk.clients[0].options.connection.path).toBe(bundled);
+  });
+
+  it("uses the same SDK runtime over TCP", async () => {
+    const current = createCopilotDriver({ useStdio: false, port: 9234 });
+    drivers.push(current);
+    await current.getAccountInfo!();
+    expect(sdk.clients[0].options.connection).toEqual({
+      kind: "tcp", path: bundled, args: ["--no-auto-update"], port: 9234,
+    });
+  });
+
+  it("preserves external server connections when the local runtime is missing", async () => {
+    fs.unlinkSync(bundled);
+    const current = createCopilotDriver({ cliUrl: "localhost:9234" });
+    drivers.push(current);
+    const info = await current.getAccountInfo!();
+    expect(sdk.clients[0].options.connection).toEqual({ kind: "uri", url: "localhost:9234" });
+    expect(info.cli?.authLoginCommand).toBeUndefined();
   });
 
   it("declines self-updates for the bundled runtime without executing an update", async () => {
@@ -172,6 +274,39 @@ printf 'ok\\n'
     expect(info.account).toBeNull();
     expect(info.cli?.authLoginCommand).toBeUndefined();
     expect(sdk.clients).toHaveLength(0);
+  });
+
+  it.each(["missing", "empty", "directory"])("rejects a %s runtime.node library", (state) => {
+    const library = path.join(path.dirname(bundled), "runtime.node");
+    fs.unlinkSync(library);
+    if (state === "empty") fs.writeFileSync(library, "");
+    if (state === "directory") fs.mkdirSync(library);
+    expect(resolveCopilotRuntime()).toBeNull();
+    expect(detectInstalledClis()).toMatchObject({ copilot: false });
+  });
+
+  it("resolves a packaged directory without ASAR", () => {
+    const directory = path.join(fixture, "app");
+    fs.renameSync(appPath + ".unpacked", directory);
+    bundled = bundled.replace(appPath + ".unpacked", directory);
+    appPath = directory;
+    expect(resolveCopilotRuntime()).toEqual({ path: bundled, source: "bundled" });
+  });
+
+  it.each([
+    ["linux", { glibcVersionRuntime: "2.39" }],
+    ["linuxmusl", {}],
+  ])("selects the %s runtime on Linux", (platform, header) => {
+    const linuxBinary = path.join(
+      appPath + ".unpacked", ".vite", "build", "node_modules",
+      `@github/copilot-sdk-${platform}-${process.arch}`,
+      "prebuilds", `${platform}-${process.arch}`, "copilot-runtime",
+    );
+    fs.mkdirSync(path.dirname(linuxBinary), { recursive: true });
+    fs.copyFileSync(bundled, linuxBinary);
+    fs.writeFileSync(path.join(path.dirname(linuxBinary), "runtime.node"), "native runtime fixture");
+    vi.stubGlobal("process", { ...process, platform: "linux", report: { getReport: () => ({ header }) } });
+    expect(resolveCopilotRuntime()).toEqual({ path: linuxBinary, source: "bundled" });
   });
 
   it("releases the metadata client when its runtime cannot start", async () => {

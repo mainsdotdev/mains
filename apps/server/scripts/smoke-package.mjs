@@ -165,7 +165,11 @@ function probeInstalledDependencies() {
   );
   fs.writeFileSync(
     probePath,
-    `const pty = require("node-pty");
+    String.raw`const fs = require("node:fs");
+const path = require("node:path");
+const { createRequire } = require("node:module");
+const { spawnSync } = require("node:child_process");
+const pty = require("node-pty");
 if (typeof pty.spawn !== "function") throw new Error("node-pty did not load");
 (async () => {
   const claude = await import("@anthropic-ai/claude-agent-sdk");
@@ -173,10 +177,38 @@ if (typeof pty.spawn !== "function") throw new Error("node-pty did not load");
   const dynamicImport = new Function("specifier", "return import(specifier)");
   const copilot = await dynamicImport("@github/copilot-sdk");
   if (typeof copilot.CopilotClient !== "function") throw new Error("Copilot SDK did not load");
-  // Construction resolves the bundled platform CLI. A plain import is not
-  // enough: incompatible @github/copilot versions can install successfully
-  // while omitting the /sdk export CopilotClient expects.
-  new copilot.CopilotClient({ logLevel: "error" });
+  // Runtime discovery is deferred until start(). Check the native wrapper,
+  // adjacent library and support assets via real RPC without a model session.
+  const sdkRequire = createRequire(require.resolve("@github/copilot-sdk"));
+  const sdkManifest = JSON.parse(fs.readFileSync(path.resolve(path.dirname(require.resolve("@github/copilot-sdk")), "../../package.json"), "utf8"));
+  const client = new copilot.CopilotClient({ logLevel: "error" });
+  const deadline = setTimeout(() => {
+    void client.forceStop();
+    console.error("Packaged Copilot runtime probe timed out");
+    process.exit(1);
+  }, 20000);
+  try {
+    await client.start();
+    const status = await client.getStatus();
+    const pong = await client.ping("package-smoke");
+    if (status.version !== sdkManifest.copilotCliVersion || pong.protocolVersion !== status.protocolVersion) {
+      throw new Error("Packaged Copilot runtime does not match its SDK");
+    }
+    if (typeof (await client.getAuthStatus()).isAuthenticated !== "boolean") {
+      throw new Error("Packaged Copilot runtime auth probe failed");
+    }
+    // Device login uses the full CLI, pinned to the SDK runtime's version.
+    const platform = process.platform === "linux" && !process.report?.getReport().header?.glibcVersionRuntime ? "linuxmusl" : process.platform;
+    const loginCli = sdkRequire.resolve("@github/copilot-" + platform + "-" + process.arch);
+    const version = spawnSync(loginCli, ["--no-auto-update", "--version"], { encoding: "utf8", timeout: 10000 });
+    if (version.status !== 0 || version.stdout.match(/\b\d+\.\d+\.\d+\b/)?.[0] !== sdkManifest.copilotCliVersion) {
+      throw new Error("Packaged Copilot login CLI does not match its runtime");
+    }
+    console.log("Packaged Copilot runtime and login CLI: " + status.version);
+  } finally {
+    await client.forceStop();
+    clearTimeout(deadline);
+  }
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
@@ -186,6 +218,7 @@ if (typeof pty.spawn !== "function") throw new Error("node-pty did not load");
   const probe = spawnSync(process.execPath, [probePath], {
     cwd: temporaryRoot,
     stdio: "inherit",
+    timeout: 30000,
   });
   if (probe.status !== 0) {
     throw new Error(`Installed dependency probe failed (exit ${probe.status})`);

@@ -407,8 +407,12 @@ export function useWorkspaceRuns(
     const dbEvents = activeRunId ? runEvents[activeRunId] || [] : [];
     if (streamingEvents.length === 0) return dbEvents;
 
-    // Check if DB already has the streamed content (turn completed, artifact persisted)
-    // If so, skip streaming events to avoid duplicates
+    // Prefer a native stream identity when the provider persists one. The final
+    // text can differ from the last delta, or repeat a previous turn's text.
+    const dbArtifactStreamIds = new Set(
+      dbEvents.filter((e) => e.type === "artifact").map((e) => e.metadata?.streamId),
+    );
+    // Providers without a persisted stream identity still reconcile by content.
     const dbArtifactContents = new Set(
       dbEvents
         .filter((e) => e.type === "artifact" && e.metadata?.kind === "report")
@@ -416,7 +420,8 @@ export function useWorkspaceRuns(
     );
 
     const activeStreams = streamingEvents.filter(
-      (se) => !dbArtifactContents.has(se.content.trim()),
+      (se) => !dbArtifactStreamIds.has(se.streamId) &&
+        (se.metadata?.streamId === se.streamId || !dbArtifactContents.has(se.content.trim())),
     );
 
     if (activeStreams.length === 0) return dbEvents;
@@ -427,6 +432,7 @@ export function useWorkspaceRuns(
       // agent-message bubble.
       const kind =
         se.kind === "image_generation" ? "image_generation"
+          : se.kind === "thinking" ? "thinking"
           : se.streamId.startsWith("cursor-think-") ? "thinking"
           : se.streamId.startsWith("codex-cmd-") ? "thinking"
           : se.streamId.startsWith("claude-think-") ? "thinking"

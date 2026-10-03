@@ -546,13 +546,14 @@ function ToolApprovalDialogContents({
     ? request.toolInput._meta
     : null;
   const subtitle =
-    typeof meta?.subtitle === "string" ? meta.subtitle : undefined;
+    typeof meta?.subtitle === "string" ? meta.subtitle : request.description;
   const riskLevel =
     typeof meta?.riskLevel === "string"
       ? meta.riskLevel.toLowerCase()
       : undefined;
   const message =
-    (request.toolInput?.message as string | undefined) ??
+    request.question ??
+    (typeof request.toolInput?.message === "string" ? request.toolInput.message : undefined) ??
     `Allow ${header.label}?`;
   // apply_patch / rg aren't in the builtin registry but ToolInputPreview knows
   // how to render them (a diff / a grep-style query), so route them through the
@@ -567,123 +568,121 @@ function ToolApprovalDialogContents({
   const hiddenCount = Math.max(0, paramEntries.length - VISIBLE_PARAMS_INITIAL);
   const initialParamEntries = paramEntries.slice(0, VISIBLE_PARAMS_INITIAL);
   const extraParamEntries = paramEntries.slice(VISIBLE_PARAMS_INITIAL);
-  const hasBody = showRichPreview || paramEntries.length > 0;
+  const hasBody = showRichPreview || paramEntries.length > 0 || !!subtitle;
 
   return (
-    <div className="mr-auto mb-1 max-w-210 overflow-y-auto noscrollbar" style={{ maxHeight }}>
-      <div className="overflow-hidden rounded-2xl glass-surface">
-        <div className="flex items-center gap-2 px-4 pb-1 pt-3.5">
-          <Text as="span" size="inherit" tone="subtle">
-            {headerIcon}
-          </Text>
-          <Text as="span" tone="muted" weight="medium">
-            {header.label}
-          </Text>
-          {riskLevel && RISK_LEVEL_STYLES[riskLevel] && (
-            <span
-              className={`ml-auto rounded-full px-2 py-0.5 text-xxs font-medium capitalize ${RISK_LEVEL_STYLES[riskLevel]}`}
-            >
-              {riskLevel} risk
-            </span>
-          )}
-        </div>
+    <div className="mr-auto mb-1 flex max-w-210 flex-col overflow-hidden rounded-2xl glass-surface" style={{ maxHeight }}>
+      <div className="flex shrink-0 items-center gap-2 px-4 pb-1 pt-3.5">
+        <Text as="span" size="inherit" tone="subtle">
+          {headerIcon}
+        </Text>
+        <Text as="span" tone="muted" weight="medium">
+          {request.header || header.label}
+        </Text>
+        {riskLevel && RISK_LEVEL_STYLES[riskLevel] && (
+          <span
+            className={`ml-auto rounded-full px-2 py-0.5 text-xxs font-medium capitalize ${RISK_LEVEL_STYLES[riskLevel]}`}
+          >
+            {riskLevel} risk
+          </span>
+        )}
+      </div>
 
-        <div className="px-4 pb-3 pt-0.5">
-          <Body weight="medium" className="leading-snug">
-            {message}
-          </Body>
+      <div className="shrink-0 px-4 pb-3 pt-0.5">
+        <Body weight="medium" className="leading-snug">
+          {message}
+        </Body>
+      </div>
+
+      {hasBody && (
+        <div className="min-h-0 overflow-y-auto overscroll-contain noscrollbar px-4 pb-3">
           {subtitle && (
-            <Caption className="mt-1.5">
+            <Caption className="mb-2 block whitespace-pre-wrap wrap-break-word">
               {subtitle}
             </Caption>
           )}
-        </div>
-
-        {hasBody && (
-          <div className="px-4 pb-3">
-            {showRichPreview ? (
-              <ToolInputPreview
-                toolName={request.toolName}
-                toolInput={request.toolInput}
-              />
-            ) : (
-              <Text as="div" size="xs" tone="inherit" className="space-y-1.5">
-                {initialParamEntries.map((entry, idx) => (
-                  <ParamRow
-                    key={`${entry.label}-${idx}`}
-                    label={entry.label}
-                    value={formatParamValue(entry.value)}
-                  />
-                ))}
-                {extraParamEntries.length > 0 && (
-                  <div
-                    className="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none"
-                    style={{
-                      gridTemplateRows: showAllParams ? "1fr" : "0fr",
-                    }}
-                  >
-                    <div className="min-h-0 overflow-hidden">
-                      <div className="space-y-1.5 pt-0">
-                        {extraParamEntries.map((entry, idx) => (
-                          <ParamRow
-                            key={`${entry.label}-${idx + VISIBLE_PARAMS_INITIAL}`}
-                            label={entry.label}
-                            value={formatParamValue(entry.value)}
-                          />
-                        ))}
-                      </div>
+          {showRichPreview ? (
+            <ToolInputPreview
+              toolName={request.toolName}
+              toolInput={request.toolInput}
+            />
+          ) : (
+            <Text as="div" size="xs" tone="inherit" className="space-y-1.5">
+              {initialParamEntries.map((entry, idx) => (
+                <ParamRow
+                  key={`${entry.label}-${idx}`}
+                  label={entry.label}
+                  value={formatParamValue(entry.value)}
+                />
+              ))}
+              {extraParamEntries.length > 0 && (
+                <div
+                  className="grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none"
+                  style={{
+                    gridTemplateRows: showAllParams ? "1fr" : "0fr",
+                  }}
+                >
+                  <div className="min-h-0 overflow-hidden">
+                    <div className="space-y-1.5 pt-0">
+                      {extraParamEntries.map((entry, idx) => (
+                        <ParamRow
+                          key={`${entry.label}-${idx + VISIBLE_PARAMS_INITIAL}`}
+                          label={entry.label}
+                          value={formatParamValue(entry.value)}
+                        />
+                      ))}
                     </div>
                   </div>
-                )}
-                {hiddenCount > 0 && (
-                  <Button
-                    aria-expanded={showAllParams}
-                    onClick={() => setShowAllParams((v) => !v)}
-                    className="mt-1 inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
-                  >
-                    <span>
-                      {showAllParams
-                        ? "Show fewer"
-                        : `Show ${hiddenCount} more item${hiddenCount === 1 ? "" : "s"}`}
-                    </span>
-                    <ArrowUp
-                      className={`size-3.5 shrink-0 transition-transform duration-300 ease-out motion-reduce:transition-none ${
-                        showAllParams ? "rotate-180" : "rotate-90"
-                      }`}
-                      aria-hidden
-                    />
-                  </Button>
-                )}
-              </Text>
-            )}
-          </div>
-        )}
-
-        <div className="flex items-center justify-between gap-3 px-4 py-2">
-          {isCodex ? (
-            <Text
-              as="label"
-              size="xs"
-              tone="subtle"
-              className="flex cursor-pointer select-none items-center gap-2 mb-2"
-            >
-              <Checkbox
-                checked={allowForSession}
-                onChange={() => setAllowForSession((v) => !v)}
-              />
-              Allow for this run
+                </div>
+              )}
+              {hiddenCount > 0 && (
+                <Button
+                  aria-expanded={showAllParams}
+                  onClick={() => setShowAllParams((v) => !v)}
+                  className="mt-1 inline-flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                >
+                  <span>
+                    {showAllParams
+                      ? "Show fewer"
+                      : `Show ${hiddenCount} more item${hiddenCount === 1 ? "" : "s"}`}
+                  </span>
+                  <ArrowUp
+                    className={`size-3.5 shrink-0 transition-transform duration-300 ease-out motion-reduce:transition-none ${
+                      showAllParams ? "rotate-180" : "rotate-90"
+                    }`}
+                    aria-hidden
+                  />
+                </Button>
+              )}
             </Text>
-          ) : (
-            <span />
           )}
-          <div className="flex items-center gap-2 mb-2">
-            <Button variant="secondary" onClick={handleDeny}>
-              Cancel
-            </Button>
-            <Button variant="submit" onClick={handleAllow}>
-              Allow
-            </Button>
-          </div>
+        </div>
+      )}
+
+      <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-2">
+        {isCodex ? (
+          <Text
+            as="label"
+            size="xs"
+            tone="subtle"
+            className="flex cursor-pointer select-none items-center gap-2 mb-2"
+          >
+            <Checkbox
+              checked={allowForSession}
+              onChange={() => setAllowForSession((v) => !v)}
+            />
+            Allow for this run
+          </Text>
+        ) : (
+          <span />
+        )}
+        <div className="flex items-center gap-2 mb-2">
+          <Button variant="secondary" onClick={handleDeny}>
+            Cancel
+          </Button>
+          <Button variant="submit" onClick={handleAllow}>
+            Allow
+          </Button>
         </div>
       </div>
     </div>

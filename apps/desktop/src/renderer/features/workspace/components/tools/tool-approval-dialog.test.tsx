@@ -7,6 +7,9 @@ import type { ToolApprovalRequest } from "../../hooks/use-tool-approval";
 vi.mock("../../hooks", () => ({
   usePluginLogoMap: () => new Map(), renderPluginIcon: () => null, normalizeSlug: (value: string) => value,
 }));
+vi.mock("./_shared", () => ({
+  ToolDiffBody: ({ patch }: { patch: string }) => <pre data-testid="approval-diff">{patch}</pre>,
+}));
 import { ToolApprovalDialog } from "./tool-approval-dialog";
 
 const schema = {
@@ -28,6 +31,92 @@ function request(requestedSchema: Record<string, unknown> = schema, requestId = 
 }
 
 afterEach(cleanup);
+
+describe("Copilot tool approval presentation", () => {
+  function toolRequest(overrides: Partial<ToolApprovalRequest> = {}): ToolApprovalRequest {
+    return { requestId: "tool-1", runId: "run-1", kind: "tool_approval", toolName: "Edit", timestamp: 1, ...overrides };
+  }
+
+  it("renders a native file permission as a file and diff with a clear question and intention", () => {
+    render(<ToolApprovalDialog request={toolRequest({ question: "Allow editing this file?", description: "Update file",
+      toolInput: { file_path: "/workspace/components/hero-section.tsx", diff: "--- a/hero-section.tsx\n+++ b/hero-section.tsx\n@@ -1,1 +1,1 @@\n-old\n+new" } })}
+      onRespond={vi.fn()} variant="copilot" />);
+    expect(screen.getByText("Edit")).toBeTruthy();
+    expect(screen.getByText("Allow editing this file?")).toBeTruthy();
+    expect(screen.getByText("Update file")).toBeTruthy();
+    expect(screen.getByText("hero-section.tsx")).toBeTruthy();
+    expect(screen.getByTestId("approval-diff").textContent).toContain("-old\n+new");
+    expect(screen.queryByText("Kind")).toBeNull();
+    expect(screen.queryByText("Tool Call Id")).toBeNull();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
+  });
+
+  it("recognizes a legacy bracketed permission name without cutting it at the colon", () => {
+    render(<ToolApprovalDialog request={toolRequest({ toolName: "[permission:write]", toolInput: { kind: "write", toolCallId: "internal",
+      intention: "Update file", fileName: "/workspace/hero-section.tsx", diff: "@@ -1,1 +1,1 @@\n-old\n+new" } })} onRespond={vi.fn()} variant="copilot" />);
+    expect(screen.getByText("Edit")).toBeTruthy();
+    expect(screen.getByText("Allow Edit?")).toBeTruthy();
+    expect(screen.getByTestId("approval-diff")).toBeTruthy();
+    expect(screen.queryByText("internal")).toBeNull();
+    expect(screen.queryByText("Tool Call Id")).toBeNull();
+  });
+
+  it("shows a skill name directly without a JSON dump and preserves the approval decision", async () => {
+    const onRespond = vi.fn();
+    render(<ToolApprovalDialog request={toolRequest({ toolName: "skill", toolInput: { skill: "frontend-design" } })} onRespond={onRespond} variant="copilot" />);
+    expect(screen.getByText("frontend-design")).toBeTruthy();
+    expect(screen.queryByText(/"skill"/)).toBeNull();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Allow" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("tool-1", true, undefined);
+  });
+
+  it.each(["websearch", "web_search", "WebSearch"])("shows the query for %s without a JSON dump", (toolName) => {
+    const query = "Cursor TypeScript SDK official agent SDK cursor-agent ACP TypeScript SDK npm 2026";
+    render(<ToolApprovalDialog request={toolRequest({ toolName, toolInput: { args: JSON.stringify({ query }) } })}
+      onRespond={vi.fn()} variant="copilot" />);
+    expect(screen.getByText("Search query")).toBeTruthy();
+    expect(screen.getByText(query)).toBeTruthy();
+    expect(screen.queryByText(/"query"/)).toBeNull();
+  });
+
+  it("keeps the complete search query and site filters readable", () => {
+    const query = `${"official agent SDK documentation ".repeat(12)}permissions and streaming`;
+    render(<ToolApprovalDialog request={toolRequest({ toolName: "WebSearch", toolInput: {
+      query, allowed_domains: ["docs.github.com", "github.com"], blocked_domains: ["example.com"],
+    } })} onRespond={vi.fn()} variant="claude" />);
+    expect(screen.getByText(query)).toBeTruthy();
+    expect(screen.getByText("Only these sites")).toBeTruthy();
+    expect(screen.getByText("docs.github.com")).toBeTruthy();
+    expect(screen.getByText("github.com")).toBeTruthy();
+    expect(screen.getByText("Excluded sites")).toBeTruthy();
+    expect(screen.getByText("example.com")).toBeTruthy();
+  });
+
+  it("renders the complete command with its directory and keeps warnings visible", () => {
+    render(<ToolApprovalDialog request={toolRequest({ toolName: "Bash", question: "Allow running this command?",
+      description: "Needs network access", toolInput: { command: "cd src && npm test > results.txt", cwd: "/workspace" } })} onRespond={vi.fn()} variant="copilot" />);
+    expect(screen.getByText("cd src && npm test > results.txt")).toBeTruthy();
+    expect(screen.getByText("/workspace")).toBeTruthy();
+    expect(screen.getByText("Needs network access")).toBeTruthy();
+  });
+
+  it("shows an actual MCP action title, owning server and input values", () => {
+    render(<ToolApprovalDialog request={toolRequest({ toolName: "mcp__calendar__create_event", header: "Create calendar event",
+      question: "Allow Create calendar event?", description: "MCP server: calendar", toolInput: { title: "Team sync" } })} onRespond={vi.fn()} variant="copilot" />);
+    expect(screen.getByText("Create calendar event")).toBeTruthy();
+    expect(screen.getByText("MCP server: calendar")).toBeTruthy();
+    expect(screen.getByText("Team sync")).toBeTruthy();
+  });
+
+  it("shows MCP message and URL inputs without confusing them with the approval question", () => {
+    render(<ToolApprovalDialog request={toolRequest({ toolName: "mcp__calendar__send_invite", question: "Allow sending this invite?",
+      toolInput: { _meta: { tool_params_display: [{ display_name: "Message", value: "Meeting invite" },
+        { display_name: "Url", value: "https://calendar.test" }] } } })} onRespond={vi.fn()} variant="copilot" />);
+    expect(screen.getByText("Allow sending this invite?")).toBeTruthy();
+    expect(screen.getByText("Meeting invite")).toBeTruthy();
+    expect(screen.getByText("https://calendar.test")).toBeTruthy();
+  });
+});
 
 describe("MCP form approval dialog", () => {
   it("fills defaults, shows titled choices and sends typed values with a multiple selection", async () => {

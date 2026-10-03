@@ -500,36 +500,70 @@ export interface CopilotRuntime {
   source: ProviderCliSource;
 }
 
-/** The same native executable for runs, discovery, account checks and login. */
-export function resolveCopilotRuntime(configuredBinary?: string): CopilotRuntime | null {
-  if (configuredBinary) {
-    const configured = path.resolve(configuredBinary);
-    if (isExecutableFile(configured)) return { path: configured, source: "configured" };
+function copilotRuntimePlatform(): string {
+  if (process.platform === "linux") {
+    const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined;
+    return `${report?.header?.glibcVersionRuntime === undefined ? "linuxmusl" : "linux"}-${process.arch}`;
   }
+  return `${process.platform}-${process.arch}`;
+}
 
+function resolveBundledCopilotBinary(
+  nativePkg: string,
+  entrypoint: string,
+  validate: (binary: string) => boolean = isExecutableFile,
+): CopilotRuntime | null {
   const runtime = getBackendRuntime();
-  const nativePkg = `@github/copilot-${process.platform}-${process.arch}`;
-  const binaryName = process.platform === "win32" ? "copilot.exe" : "copilot";
   if (runtime.isPackaged()) {
     const appPath = runtime.getAppPath();
     const candidates = [
-      path.join(appPath + ".unpacked", ".vite", "build", "node_modules", nativePkg, binaryName),
+      path.join(appPath + ".unpacked", ".vite", "build", "node_modules", nativePkg, entrypoint),
     ];
     if (!appPath.endsWith(".asar")) {
-      candidates.push(path.join(appPath, ".vite", "build", "node_modules", nativePkg, binaryName));
+      candidates.push(path.join(appPath, ".vite", "build", "node_modules", nativePkg, entrypoint));
     }
-    const binary = candidates.find(isExecutableFile);
+    const binary = candidates.find(validate);
     return binary ? { path: binary, source: "bundled" } : null;
   }
 
   try {
     const hostRequire = createRequire(path.join(runtime.getAppPath(), "package.json"));
     const sdkRequire = createRequire(hostRequire.resolve("@github/copilot-sdk"));
-    const binary = sdkRequire.resolve(nativePkg);
-    return isExecutableFile(binary) ? { path: binary, source: "bundled" } : null;
+    // SDK platform packages contain assets rather than a JS entry point.
+    // Resolve their directory through the host SDK's module search paths.
+    const packageRoot = (sdkRequire.resolve.paths(nativePkg) ?? [])
+      .map((base) => path.join(base, nativePkg))
+      .find((root) => fs.existsSync(path.join(root, "package.json")));
+    if (!packageRoot) return null;
+    const binary = path.join(packageRoot, entrypoint);
+    return validate(binary) ? { path: binary, source: "bundled" } : null;
   } catch {
     return null;
   }
+}
+
+/** Runs, discovery and account checks use the SDK's version-matched runtime. */
+export function resolveCopilotRuntime(configuredBinary?: string): CopilotRuntime | null {
+  if (configuredBinary) {
+    const configured = path.resolve(configuredBinary);
+    if (isExecutableFile(configured)) return { path: configured, source: "configured" };
+  }
+
+  const platform = copilotRuntimePlatform();
+  const binaryName = process.platform === "win32" ? "copilot-runtime.exe" : "copilot-runtime";
+  return resolveBundledCopilotBinary(
+    `@github/copilot-sdk-${platform}`,
+    path.join("prebuilds", platform, binaryName),
+    (binary) => {
+      if (!isExecutableFile(binary)) return false;
+      try {
+        const library = fs.statSync(path.join(path.dirname(binary), "runtime.node"));
+        return library.isFile() && library.size > 0;
+      } catch {
+        return false;
+      }
+    },
+  );
 }
 
 /** Prevent the bundled launcher from switching to a separately updated cache. */
@@ -537,9 +571,16 @@ export function copilotRuntimeArgs(runtime: CopilotRuntime): string[] {
   return runtime.source === "bundled" ? ["--no-auto-update"] : [];
 }
 
-export function copilotAuthLoginCommand(runtime: CopilotRuntime): string {
-  const quoted = `'${runtime.path.replace(/'/g, `'\\''`)}'`;
-  return [quoted, ...copilotRuntimeArgs(runtime), "login"].join(" ");
+export function copilotAuthLoginCommand(runtime: CopilotRuntime): string | undefined {
+  // The SDK runtime is headless and has no login command. Ship the matching
+  // full CLI for device login; both read Copilot's saved credentials.
+  const cli = runtime.source === "configured" ? runtime : resolveBundledCopilotBinary(
+    `@github/copilot-${copilotRuntimePlatform()}`,
+    process.platform === "win32" ? "copilot.exe" : "copilot",
+  );
+  if (!cli) return undefined;
+  const quoted = `'${cli.path.replace(/'/g, `'\\''`)}'`;
+  return [quoted, ...copilotRuntimeArgs(cli), "login"].join(" ");
 }
 
 // ─────────────────────────────────────────────────────────────

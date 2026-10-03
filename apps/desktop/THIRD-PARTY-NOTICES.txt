@@ -12,7 +12,7 @@ open-source software. They are redistributed, unmodified, as part of this
 application under the redistribution terms of their respective licenses,
 which are reproduced in their sections below.
 
-Packages: 459
+Packages: 461
 Bundled assets: 1 (Inter@4.001)
 
 ========================================================================
@@ -270,7 +270,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ========================================================================
-@github/copilot-darwin-arm64@1.0.79
+@github/copilot-darwin-arm64@1.0.90
 License: SEE LICENSE IN LICENSE.md
 Repository: git+https://github.com/github/copilot-cli.git
 ========================================================================
@@ -312,7 +312,7 @@ GitHub Copilot CLI License
    Use of the Software may require access to GitHub services and is subject to the applicable GitHub Terms of Service and GitHub Copilot terms. This License governs only rights related to the Software and does not grant any rights to access or use GitHub services.
 
 ========================================================================
-@github/copilot-sdk@1.0.11
+@github/copilot-sdk-darwin-arm64@1.0.16
 License: MIT
 Repository: https://github.com/github/copilot-sdk.git
 ========================================================================
@@ -320,7 +320,15 @@ Repository: https://github.com/github/copilot-sdk.git
 (No license file shipped in the package; see the repository above for the full MIT text.)
 
 ========================================================================
-@github/copilot@1.0.79
+@github/copilot-sdk@1.0.16
+License: MIT
+Repository: https://github.com/github/copilot-sdk.git
+========================================================================
+
+(No license file shipped in the package; see the repository above for the full MIT text.)
+
+========================================================================
+@github/copilot@1.0.90
 License: SEE LICENSE IN LICENSE.md
 Repository: git+https://github.com/github/copilot-cli.git
 ========================================================================
@@ -406,7 +414,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@koromix/koffi-darwin-arm64@3.1.2
+@koromix/koffi-darwin-arm64@3.2.1
 License: MIT
 Repository: https://github.com/Koromix/koffi
 ========================================================================
@@ -9137,7 +9145,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-koffi@3.1.2
+koffi@3.2.1
 License: MIT
 Repository: https://github.com/Koromix/koffi
 ========================================================================
@@ -15495,6 +15503,34 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+========================================================================
+zod@4.3.6
+License: MIT
+Repository: git+https://github.com/colinhacks/zod.git
+========================================================================
+
+MIT License
+
+Copyright (c) 2025 Colin McDonnell
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ========================================================================
 zod@4.5.4

@@ -81,7 +81,7 @@ export interface WorkRunRequest {
    * cached provider config when present (e.g. Pulse forces specific
    * permission/sandbox/mode regardless of the user's current provider settings).
    * Recognised keys: permissionMode, sandboxMode, mode, thinkingMode, effortLevel,
-   * modelReasoningEffort, outputStyle.
+   * modelReasoningEffort, outputStyle, fastMode.
    */
   configSnapshot?: Record<string, unknown> | null;
   /** File attachments (images/documents) to include in the prompt */
@@ -1109,6 +1109,10 @@ export interface CopilotAdapterConfig {
   logLevel?: "debug" | "info" | "warning" | "error" | "none" | "all";
   /** Default model to use */
   defaultModel?: string;
+  /** Request the latency-oriented Auto routing preset; applies only to model "auto". */
+  fastMode?: boolean;
+  /** Default reasoning effort for Copilot models that support it. */
+  modelReasoningEffort?: "low" | "medium" | "high" | "xhigh";
   /** Timeout in milliseconds for operations */
   timeout?: number;
   /** Whether to start the CLI process automatically */

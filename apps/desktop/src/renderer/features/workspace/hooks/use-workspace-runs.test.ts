@@ -3,6 +3,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Run } from "../types";
+import type { StreamingEvent } from "./use-streaming-events";
+
+const streaming = vi.hoisted(() => ({ events: [] as StreamingEvent[] }));
 
 const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
@@ -49,7 +52,7 @@ vi.mock("./use-run-sync", () => ({
   useRunSync: () => ({ finalizeRun: vi.fn() }),
 }));
 vi.mock("./use-streaming-events", () => ({
-  useStreamingEvents: () => ({ streamingEvents: [], clearAllStreams: vi.fn() }),
+  useStreamingEvents: () => ({ streamingEvents: streaming.events, clearAllStreams: vi.fn() }),
 }));
 
 import { useWorkspaceRuns } from "./use-workspace-runs";
@@ -73,6 +76,7 @@ const runB: Run = {
 const prefetchWorkspaceIds = ["ws-a", "ws-b"];
 
 beforeEach(() => {
+  streaming.events = [];
   for (const mock of Object.values(mocks)) mock.mockReset();
   mocks.getArtifacts.mockImplementation(async (runId: string) => ({
     success: true,
@@ -86,6 +90,51 @@ beforeEach(() => {
   }));
   mocks.getToolCalls.mockResolvedValue({ success: true, data: [] });
   mocks.getTurns.mockResolvedValue({ success: true, data: [] });
+});
+
+describe("useWorkspaceRuns streaming transcript", () => {
+  async function transcript(artifacts: unknown[]) {
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [{ ...runA, providerId: "copilot_cli", status: "running" }] });
+    mocks.getArtifacts.mockResolvedValue({ success: true, data: artifacts });
+    const view = renderHook(() => useWorkspaceRuns("ws-a", "copilot_cli", "developer"));
+    await waitFor(() => expect(view.result.current.runsLoaded).toBe(true));
+    await waitFor(() => expect(view.result.current.isTranscriptLoading).toBe(false));
+    return view;
+  }
+
+  function preview(content: string, kind = "report", correlated = true): StreamingEvent {
+    const streamId = `copilot-${kind === "report" ? "msg" : "think"}-run-a-m`;
+    return { id: `stream-${streamId}`, type: "artifact", kind, content, streamId,
+      metadata: correlated ? { streamId } : undefined, timestamp: Date.now() };
+  }
+
+  it("replaces a live preview by message identity when the final text differs", async () => {
+    streaming.events = [preview("partial answer")];
+    const view = await transcript([{ id: 2, kind: "report", content: "Corrected final answer",
+      metadata: { streamId: streaming.events[0].streamId } }]);
+    expect(view.result.current.currentEvents.map((event) => event.content)).toEqual(["Corrected final answer"]);
+  });
+
+  it("keeps a new message visible when its text repeats an older message", async () => {
+    streaming.events = [preview("Hello")];
+    const view = await transcript([{ id: 2, kind: "report", content: "Hello",
+      metadata: { streamId: "copilot-msg-run-a-older-message" } }]);
+    expect(view.result.current.currentEvents).toHaveLength(2);
+    expect(view.result.current.currentEvents[1].metadata).toMatchObject({ streaming: true });
+  });
+
+  it("routes a thinking snapshot to the thinking lane", async () => {
+    streaming.events = [preview("Checking files", "thinking")];
+    const view = await transcript([]);
+    expect(view.result.current.currentEvents[0].metadata).toMatchObject({ kind: "thinking", streaming: true });
+  });
+
+  it("retains content-based reconciliation for providers without a persisted stream identity", async () => {
+    streaming.events = [{ ...preview("Hello", "report", false), streamId: "claude-msg-run-a-0" }];
+    const view = await transcript([{ id: 2, kind: "report", content: "Hello" }]);
+    expect(view.result.current.currentEvents).toHaveLength(1);
+    expect(view.result.current.currentEvents[0].metadata?.streaming).toBeUndefined();
+  });
 });
 
 describe("useWorkspaceRuns workspace switches", () => {

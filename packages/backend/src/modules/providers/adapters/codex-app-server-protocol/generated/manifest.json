@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.159.2",
+  "cliVersion": "0.160.0",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",

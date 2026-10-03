@@ -18,6 +18,20 @@
 import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
+import type {
+  CopilotClient as CopilotClientInterface,
+  CopilotClientOptions,
+  CopilotSession as CopilotSdkSession,
+  ExitPlanModeHandler,
+  ExitPlanModeResult,
+  MessageOptions,
+  PermissionHandler,
+  ResumeSessionConfig,
+  SessionConfig,
+  SessionEvent,
+  SessionHooks,
+  Tool as CopilotTool,
+} from "@github/copilot-sdk";
 import {
   copilotAuthLoginCommand,
   copilotRuntimeArgs,
@@ -59,239 +73,17 @@ import {
 import type { MainsToolContext } from "./mains-tools.core";
 import { toCopilotTools } from "./mains-tools.registry";
 import { guardsService } from "../../guards/guards.service";
+import { copilotApprovalInput, mapCopilotPermissionApproval } from "./copilot-approval";
 
 // ─────────────────────────────────────────────────────────────
-// SDK type sketches (the SDK is loaded via dynamic import to keep the
-// adapter compilable without the package installed)
+// SDK types are compile-time imports; the runtime stays dynamically loaded.
 // ─────────────────────────────────────────────────────────────
 
-interface CopilotClientOptions {
-  /** How the SDK reaches the CLI — the only field it reads to resolve the CLI
-   *  binary. Built via `RuntimeConnection.forStdio/forTcp/forUri`. */
-  connection?: unknown;
-  /** Working directory for the spawned CLI. Note this does *not* set the
-   *  working directory of sessions — see `SessionConfig.workingDirectory`. */
-  workingDirectory?: string;
-  logLevel?: "none" | "error" | "warning" | "info" | "debug" | "all";
-  env?: Record<string, string | undefined>;
-  gitHubToken?: string;
-  useLoggedInUser?: boolean;
-  onListModels?: () => Promise<unknown[]> | unknown[];
-  telemetry?: {
-    otlpEndpoint?: string;
-    filePath?: string;
-    exporterType?: string;
-    sourceName?: string;
-    captureContent?: boolean;
-  };
-  onGetTraceContext?: () => { traceparent?: string; tracestate?: string } | Promise<{ traceparent?: string; tracestate?: string }>;
-}
-
-interface CopilotTool {
-  name: string;
-  description?: string;
-  parameters?: Record<string, unknown>;
-  handler: (args: any, invocation: { sessionId: string; toolCallId: string; toolName: string; arguments: unknown }) => Promise<unknown> | unknown;
-  overridesBuiltInTool?: boolean;
-  skipPermission?: boolean;
-}
-
-type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
-
-/** The UI mode the agent runs in for a given turn (passed to `send`/`sendAndWait`). */
-type AgentMode = "interactive" | "plan" | "autopilot" | "shell";
-
-interface MCPServerConfig {
-  type?: "local" | "stdio" | "http" | "sse";
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  workingDirectory?: string;
-  url?: string;
-  headers?: Record<string, string>;
-  tools?: string[];
-  timeout?: number;
-}
-
-interface SessionConfig {
-  sessionId?: string;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
-  systemMessage?: { content: string } | { mode: "append"; content?: string } | { mode: "replace"; content: string };
-  streaming?: boolean;
-  /**
-   * The directory the agent treats as its workspace. This is the *only* field
-   * the SDK forwards to the runtime — an older `cwd` key is silently dropped,
-   * which leaves the session running in the client process's own cwd. Always
-   * set this explicitly rather than relying on the client's `workingDirectory`.
-   */
-  workingDirectory?: string;
-  tools?: CopilotTool[];
-  mcpServers?: Record<string, MCPServerConfig>;
-  customAgents?: unknown[];
-  agent?: string;
-  skillDirectories?: string[];
-  disabledSkills?: string[];
-  infiniteSessions?: { enabled?: boolean; backgroundCompactionThreshold?: number; bufferExhaustionThreshold?: number };
-  availableTools?: string[];
-  excludedTools?: string[];
-  onPermissionRequest: (
-    request: { kind: string; toolCallId?: string; [key: string]: any },
-    invocation: { sessionId: string },
-  ) => Promise<{ kind: string; rules?: unknown[] }> | { kind: string; rules?: unknown[] };
-  onUserInputRequest?: (
-    request: { question: string; choices?: string[]; allowFreeform?: boolean },
-    invocation: { sessionId: string },
-  ) => Promise<{ answer: string; wasFreeform: boolean }> | { answer: string; wasFreeform: boolean };
-  /**
-   * Invoked when the agent finishes planning (in plan mode) and asks to exit
-   * plan mode. We resolve it with `exit_only` so the agent stops without
-   * implementing — the plan is surfaced in the timeline with an "Apply Plan"
-   * button that runs it as a follow-up turn (mirrors the Claude plan-mode UX).
-   */
-  onExitPlanModeRequest?: (
-    request: { summary?: string; planContent?: string; actions?: string[]; recommendedAction?: string },
-    invocation: { sessionId: string },
-  ) =>
-    | Promise<{ approved: boolean; selectedAction?: string; feedback?: string }>
-    | { approved: boolean; selectedAction?: string; feedback?: string };
-  hooks?: {
-    onPreToolUse?: (
-      input: { toolName: string; toolArgs: unknown; timestamp: number; cwd: string },
-      invocation: { sessionId: string },
-    ) => Promise<{ permissionDecision?: "allow" | "deny" | "ask"; permissionDecisionReason?: string; modifiedArgs?: unknown } | void> | { permissionDecision?: "allow" | "deny" | "ask"; permissionDecisionReason?: string; modifiedArgs?: unknown } | void;
-  };
-}
-
-interface SessionEvent {
-  type: string;
-  content?: string;
-  deltaContent?: string;
-  toolName?: string;
-  toolInput?: Record<string, unknown>;
-  toolOutput?: unknown;
-  error?: string;
-  data?: unknown;
-  ephemeral?: boolean;
-  id?: string;
-  timestamp?: string;
-  [key: string]: any;
-}
-
-interface CopilotSdkSession {
-  send(options: { prompt: string; agentMode?: AgentMode }): Promise<string>;
-  sendAndWait(options: { prompt: string; agentMode?: AgentMode }, timeout?: number): Promise<SessionEvent | undefined>;
-  on(handler: (event: SessionEvent) => void): () => void;
-  abort(): Promise<void>;
-  disconnect(): Promise<void>;
-  setModel(model: string, options?: { reasoningEffort?: ReasoningEffort }): Promise<void>;
-  /**
-   * Lazily-created typed RPC surface for low-level session APIs. `mode.set` is
-   * the authoritative way to put the session into "plan"/"autopilot" — the
-   * per-message `agentMode` on `send` only annotates the turn and defaults to
-   * the session's current mode, so it does not switch the mode on its own.
-   */
-  rpc?: {
-    mode?: {
-      set?: (params: { mode: AgentMode }) => Promise<void>;
-      get?: () => Promise<string>;
-    };
-    plan?: {
-      // We only render a flat checklist, so `readSqlTodos` is enough.
-      // `readSqlTodosWithDependencies` additionally returns the dependency edges
-      // between todos, if the UI ever grows a structured progress view.
-      readSqlTodos?: () => Promise<{
-        rows?: Array<{ id?: string; title?: string; description?: string; status?: string }>;
-      }>;
-    };
-    commands?: {
-      list?: (params?: Record<string, unknown>) => Promise<{
-        commands?: Array<{
-          name: string;
-          description?: string;
-          input?: { hint?: string; required?: boolean };
-          experimental?: boolean;
-          allowDuringAgentExecution?: boolean;
-        }>;
-      }>;
-    };
-  };
-}
-
-interface CopilotModelInfo {
-  id: string;
-  name?: string;
-  capabilities?: {
-    supports?: { vision?: boolean; reasoningEffort?: boolean };
-    limits?: { max_prompt_tokens?: number; max_context_window_tokens?: number };
-  };
-  policy?: { state?: string };
-  billing?: { multiplier?: number };
-  supportedReasoningEfforts?: ReasoningEffort[];
-  defaultReasoningEffort?: ReasoningEffort;
-}
-
-interface SessionMetadata {
-  sessionId: string;
-  startTime: Date;
-  modifiedTime: Date;
-  summary?: string;
-  isRemote: boolean;
-  context?: { cwd: string; gitRoot?: string; repository?: string; branch?: string };
-}
-
-interface CopilotClientInterface {
-  start(): Promise<void>;
-  stop(): Promise<Error[]>;
-  forceStop(): Promise<void>;
-  createSession(config: SessionConfig): Promise<CopilotSdkSession>;
-  resumeSession(sessionId: string, config: Omit<SessionConfig, "sessionId">): Promise<CopilotSdkSession>;
-  listSessions(filter?: {
-    workingDirectory?: string;
-    gitRoot?: string;
-    repository?: string;
-    branch?: string;
-  }): Promise<SessionMetadata[]>;
-  deleteSession(sessionId: string): Promise<void>;
-  ping(message?: string): Promise<{ message: string; timestamp: number; protocolVersion?: number }>;
-  /**
-   * Memoizes for the client's entire lifetime — the cache is only cleared by
-   * `stop()`/`forceStop()`. Prefer `rpc.models.list`, which hits the runtime
-   * every call; see the driver's `listModels`.
-   */
-  listModels(): Promise<CopilotModelInfo[]>;
-  getStatus(): Promise<{ version?: string; protocolVersion?: number }>;
-  getAuthStatus(): Promise<{
-    isAuthenticated: boolean;
-    authType?: string;
-    host?: string;
-    login?: string;
-    statusMessage?: string;
-  }>;
-  getLastSessionId(): Promise<string | undefined>;
-  /** Client-scoped typed RPC surface (account quota, uncached model listing). */
-  rpc?: {
-    account?: {
-      getQuota?: (params?: { gitHubToken?: string }) => Promise<{
-        quotaSnapshots?: Record<string, CopilotQuotaSnapshot | undefined>;
-      }>;
-    };
-    models?: {
-      list?: (params?: { gitHubToken?: string }) => Promise<{ models?: CopilotModelInfo[] }>;
-    };
-  };
-}
-
-interface CopilotQuotaSnapshot {
-  isUnlimitedEntitlement?: boolean;
-  /** False when the plan carries no allowance for this quota at all. */
-  hasQuota?: boolean;
-  entitlementRequests?: number;
-  usedRequests?: number;
-  remainingPercentage?: number;
-  overage?: number;
-  resetDate?: string;
-}
+type ReasoningEffort = NonNullable<SessionConfig["reasoningEffort"]>;
+type AgentMode = NonNullable<MessageOptions["agentMode"]>;
+type CopilotQuotaSnapshot = Partial<NonNullable<
+  Awaited<ReturnType<CopilotClientInterface["rpc"]["account"]["getQuota"]>>["quotaSnapshots"]
+>[string]> & { hasQuota?: boolean }; // Older runtimes can omit fields or report hasQuota.
 
 // ─────────────────────────────────────────────────────────────
 // Per-run session state (handed back to Core as opaque `session`)
@@ -339,8 +131,9 @@ function isCopilotToolAllowed(toolName: string): boolean {
 
 /**
  * Events that must be handled even though the SDK flags them `ephemeral`.
- * Ephemeral normally means "don't persist", and everything so marked is dropped
- * on arrival — but usage accounting and failures still have to get through.
+ * Most ephemeral events are dropped on arrival, but usage accounting and
+ * failures still have to get through. Streaming deltas are handled separately
+ * in wireSessionListener before this filter.
  * `model.call_failure` in particular is *always* ephemeral, so without this it
  * could never reach its case in mapSessionEvent.
  */
@@ -349,6 +142,7 @@ const EPHEMERAL_EXEMPT_EVENTS = new Set([
   "assistant.turn_end",
   "session.usage_info",
   "session.error",
+  "session.auto_tier_switch_failed",
   "model.call_failure",
 ]);
 
@@ -546,40 +340,42 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
   // system"). Primary bypass approval flows through the PreToolUse hook's
   // `permissionDecision: "allow"`; this is the fallback for permission requests
   // the CLI raises outside the hook.
-  function approveAllPermissions(): { kind: string } {
+  const approveAllPermissions: PermissionHandler = (request, invocation) => {
+    // Background discovery/generation sessions have no user approval surface.
+    // Defer required managed approvals rather than manufacturing consent.
+    if (request.managedApprovalRequired || invocation.managedSettingsEnabled) return { kind: "no-result" };
     return { kind: "approve-once" };
-  }
+  };
 
-  function buildPermissionHandler(runId: string) {
-    return async (
-      request: { kind: string; toolCallId?: string; [key: string]: any },
-    ): Promise<{ kind: string; rules?: unknown[] }> => {
+  function buildPermissionHandler(runId: string, permissionMode: string): PermissionHandler {
+    return async (request) => {
       // Valid kinds are: shell, write, read, mcp, url, memory, custom-tool,
       // hook, extension-management, extension-permission-access. `read`/`shell`
       // map to the pre-approved Read/Bash tools (see COPILOT_EXTRA_ALLOWED), so
       // they are granted here too; everything else falls through to the user.
       // (The former `task` / `ask_user` branches were dead — neither is a
       // permission kind. `ask_user` is routed to onUserInputRequest instead.)
-      if (request.kind === "read" || request.kind === "shell") {
-        return { kind: "approved" };
-      }
-
-      if (request.kind === "custom-tool" && typeof request.toolName === "string" && request.toolName.startsWith("mcp__mains__")) {
-        return { kind: "approved" };
+      // Managed approval takes precedence over bypass and trusted-tool grants.
+      if (!request.managedApprovalRequired && (
+        permissionMode === "bypassPermissions" || permissionMode === "allow" ||
+        request.kind === "read" || request.kind === "shell" ||
+        (request.kind === "custom-tool" && request.toolName.startsWith("mcp__mains__"))
+      )) {
+        return { kind: "approve-once" };
       }
 
       const req: ToolApprovalRequest = {
         requestId: `perm-${runId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         runId,
-        toolName: `[permission:${request.kind}]`,
-        toolInput: request as Record<string, unknown>,
+        ...mapCopilotPermissionApproval(request),
         kind: "tool_approval",
-        question: `Copilot requests "${request.kind}" permission`,
         timestamp: Date.now(),
       };
 
       const response = await requestToolApproval(req);
-      return { kind: response.approved ? "approved" : "denied-interactively-by-user" };
+      return response.approved
+        ? { kind: "approve-once", approvedInteractively: true }
+        : { kind: "reject" };
     };
   }
 
@@ -587,7 +383,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     runId: string,
     permissionMode: string,
     toolPolicy?: WorkRunToolPolicy | null,
-  ) {
+  ): NonNullable<SessionHooks["onPreToolUse"]> {
     const bypass = permissionMode === "bypassPermissions" || permissionMode === "allow";
     // Copilot names its built-in tools in lowercase ("bash", "read"), the
     // policy uses the canonical names ("Bash") — compare case-insensitively.
@@ -597,9 +393,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     const allowedOverride = toolPolicy?.allowedTools
       ? new Set(toolPolicy.allowedTools.map((t) => t.toLowerCase()))
       : null;
-    return async (
-      input: { toolName: string; toolArgs: unknown; timestamp: number; cwd: string },
-    ): Promise<{ permissionDecision?: "allow" | "deny" | "ask"; permissionDecisionReason?: string; modifiedArgs?: unknown } | void> => {
+    return async (input) => {
       // A policy-denied tool is denied outright — before bypass, which grants
       // permission but must not resurrect a tool the mode removed.
       if (disallowed.has(input.toolName.toLowerCase())) {
@@ -620,7 +414,10 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
       const guardHook = await guardsService.buildCopilotGuardHook();
       if (guardHook) {
-        const guardResult = await guardHook(input);
+        const guardResult = await guardHook({
+          toolName: input.toolName, toolArgs: input.toolArgs,
+          timestamp: input.timestamp.getTime(), cwd: input.workingDirectory,
+        });
         if (guardResult?.permissionDecision === "deny") {
           return guardResult;
         }
@@ -650,9 +447,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         requestId: `tool-${runId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         runId,
         toolName: input.toolName,
-        toolInput: (typeof input.toolArgs === "object" && input.toolArgs !== null
-          ? input.toolArgs
-          : { args: input.toolArgs }) as Record<string, unknown>,
+        toolInput: copilotApprovalInput(input.toolArgs, input.toolName),
         kind: "tool_approval",
         timestamp: Date.now(),
       };
@@ -665,10 +460,8 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     };
   }
 
-  function buildUserInputHandler(runId: string) {
-    return async (
-      request: { question: string; choices?: string[]; allowFreeform?: boolean },
-    ): Promise<{ answer: string; wasFreeform: boolean }> => {
+  function buildUserInputHandler(runId: string): NonNullable<SessionConfig["onUserInputRequest"]> {
+    return async (request) => {
       const options = request.choices?.map((c) => ({ label: c }));
       const req: ToolApprovalRequest = {
         requestId: `ask-${runId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -698,13 +491,8 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
    * dropped by the run-session projector, and onEvent is consumed fire-and-forget
    * upstream, so we must await the start's persistence before emitting complete.
    */
-  function buildExitPlanModeHandler(runId: string) {
-    return async (request: {
-      summary?: string;
-      planContent?: string;
-      actions?: string[];
-      recommendedAction?: string;
-    }): Promise<{ approved: boolean; selectedAction?: string }> => {
+  function buildExitPlanModeHandler(runId: string): ExitPlanModeHandler {
+    return async (request) => {
       const planContent = String(request.planContent ?? request.summary ?? "").trim();
       const onEvent = onEventByRun.get(runId);
 
@@ -811,9 +599,13 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       options.connection = config.useStdio === false && config.port
         ? CopilotSDK.RuntimeConnection.forTcp({ ...connection, port: config.port })
         : CopilotSDK.RuntimeConnection.forStdio(connection);
+      // forUri rejects these options: external runtimes own their auth. Let
+      // the SDK select its normal login default when the fields are omitted.
+      if (config.githubToken !== undefined) options.gitHubToken = config.githubToken;
+      if (config.useLoggedInUser !== undefined) options.useLoggedInUser = config.useLoggedInUser;
     }
     if (workspaceCwd) options.workingDirectory = workspaceCwd;
-    return new CopilotSDK.CopilotClient(options as any) as unknown as CopilotClientInterface;
+    return new CopilotSDK.CopilotClient(options);
   }
 
   /**
@@ -934,17 +726,14 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     permissionMode: string,
     mode?: ModeId,
     toolPolicy?: WorkRunToolPolicy | null,
-  ): Omit<SessionConfig, "sessionId"> {
-    const base: Omit<SessionConfig, "sessionId"> = {
+  ): ResumeSessionConfig {
+    const base: ResumeSessionConfig = {
       streaming: true,
       // Authoritative for this session — see SessionConfig.workingDirectory.
       // The client's own working directory is whatever the first caller
       // happened to supply (often none), so it can't be relied on here.
       workingDirectory: execution.cwd,
-      onPermissionRequest:
-        permissionMode === "bypassPermissions" || permissionMode === "allow"
-          ? approveAllPermissions
-          : buildPermissionHandler(runId),
+      onPermissionRequest: buildPermissionHandler(runId, permissionMode),
       tools: buildMainsTools(execution.workspaceId, execution.cwd, runId, mode),
       skillDirectories: [
         path.join(os.homedir(), ".claude", "skills"),
@@ -970,16 +759,71 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     return base;
   }
 
+  function resolveFastMode(overrides: Record<string, unknown>): boolean | undefined {
+    return typeof overrides.fastMode === "boolean" ? overrides.fastMode : config.fastMode;
+  }
+
+  async function applyAcquiredFastMode(
+    sdkSession: CopilotSdkSession,
+    model: string | undefined,
+    fastMode: boolean | undefined,
+    resuming: boolean,
+  ): Promise<void> {
+    if (fastMode === undefined || (model && model !== "auto")) return;
+    // An explicit Auto + fast selection was already sent in capi.autoTier.
+    // New sessions with Fast off use the provider's normal default routing.
+    if (model === "auto" && (fastMode || !resuming)) return;
+
+    try {
+      // A continuation without a model override inherits the native session's
+      // model. Never attach an Auto preference to a fixed model.
+      if (!sdkSession.rpc?.model) throw new Error("Copilot runtime cannot read the session model for Fast Mode");
+      const current = await sdkSession.rpc.model.getCurrent();
+      if (current.modelId !== "auto") return;
+      // Leave ordinary Auto routing untouched when Fast was never enabled.
+      // This also avoids requiring Auto V2 tier support just to run with Fast off.
+      const hasFastPreference = [current.autoTier, current.pendingAutoTier, current.activatingAutoTier].includes("fast");
+      if (!fastMode && !hasFastPreference) return;
+      // Omitting capi.autoTier on resume preserves its persisted value. Reset
+      // explicitly when Fast is turned off, including after a cold resume.
+      await sdkSession.setAutoTier(fastMode ? "fast" : null);
+    } catch (error) {
+      await sdkSession.disconnect().catch((err) => logWarn("Error releasing session after Fast Mode failure:", err));
+      throw error;
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Event mapping: Copilot SDK events → WorkRunEvent
   // ─────────────────────────────────────────────────────────────
 
-  function getPayload(event: SessionEvent): any {
-    return (event as any)?.data ?? event;
+  function getPayload(event: SessionEvent): Record<string, unknown> {
+    // Current SDK events carry data; explicit external runtimes can still send
+    // legacy fields on the envelope. Normalize that compatibility boundary once.
+    return { ...event, ...event.data };
+  }
+
+  function toToolInput(input: unknown): Record<string, unknown> | undefined {
+    if (input === undefined) return undefined;
+    return input !== null && typeof input === "object" && !Array.isArray(input)
+      ? input as Record<string, unknown>
+      : { args: input };
   }
 
   function isEphemeral(event: SessionEvent): boolean {
-    return Boolean((event as any)?.ephemeral === true);
+    return event.ephemeral === true;
+  }
+
+  function assistantStreamId(
+    payload: Record<string, unknown>,
+    runId: string,
+    kind: "report" | "thinking",
+  ): string | undefined {
+    // A subagent's output must not enter the main agent's live transcript.
+    if (payload.agentId || payload.parentToolCallId) return undefined;
+    const id = payload[kind === "report" ? "messageId" : "reasoningId"];
+    if (typeof id !== "string" || !id) return undefined;
+    return `copilot-${kind === "report" ? "msg" : "think"}-${runId}-${id}`;
   }
 
   function mapSessionEvent(event: SessionEvent, runId: string): WorkRunEvent | null {
@@ -989,7 +833,17 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
     const payload = getPayload(event);
 
-    switch (event.type) {
+    const eventType: string = event.type;
+    switch (eventType) {
+      case "session.auto_tier_switch_failed": {
+        const reason = typeof payload.reason === "string" ? ` (${payload.reason})` : "";
+        return {
+          type: "log",
+          message: `Copilot could not change the Auto speed setting${reason}; the previous setting remains active.`,
+          level: "warn",
+          ts,
+        };
+      }
       case "pending_messages.modified":
       case "assistant.turn_start":
       case "exit_plan_mode.requested":
@@ -1012,7 +866,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // case and were dropped, so a failed model call or a session error left the
       // timeline silent with no indication anything had gone wrong.
       case "session.error": {
-        const p = payload as Record<string, unknown>;
+        const p = payload;
         const message = typeof p.message === "string" ? p.message : "Session error";
         const code = typeof p.errorCode === "string" ? p.errorCode : undefined;
         const status = typeof p.statusCode === "number" ? p.statusCode : undefined;
@@ -1026,7 +880,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       }
 
       case "model.call_failure": {
-        const p = payload as Record<string, unknown>;
+        const p = payload;
         const message =
           typeof p.errorMessage === "string" ? p.errorMessage : "Model call failed";
         const model = typeof p.model === "string" ? p.model : undefined;
@@ -1049,7 +903,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         };
 
       case "session.compaction_complete": {
-        const p = payload as Record<string, unknown>;
+        const p = payload;
         if (p.success === false) {
           const err = typeof p.error === "string" ? p.error : "unknown error";
           return { type: "log", message: `Compaction failed: ${err}`, level: "warn", ts };
@@ -1067,7 +921,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
       case "assistant.usage": {
         if (payload && typeof payload === "object") {
-          accumulateUsage(runId, payload as Record<string, unknown>);
+          accumulateUsage(runId, payload);
         }
         return null;
       }
@@ -1075,7 +929,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // Live context-window snapshot (ephemeral, renderer-only) for the
       // ContextUsageRing above the input.
       case "session.usage_info": {
-        const p = payload as Record<string, unknown>;
+        const p = payload;
         const currentTokens = typeof p.currentTokens === "number" ? p.currentTokens : 0;
         const tokenLimit = typeof p.tokenLimit === "number" ? p.tokenLimit : 0;
         if (tokenLimit <= 0 || currentTokens <= 0) return null;
@@ -1092,41 +946,40 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       }
 
       case "assistant.message": {
-        const content = String((payload as any)?.content ?? event.content ?? "").trim();
+        const content = String(payload.content ?? "").trim();
         if (!content) return null;
+        const streamId = assistantStreamId(payload, runId, "report");
         return {
           type: "artifact",
           kind: "report",
           content,
-          metadata: { source: "assistant.message" },
+          metadata: { source: "assistant.message", ...(streamId ? { streamId } : {}) },
         };
       }
 
       case "assistant.message_delta":
       case "assistant.reasoning_delta":
+        // Accumulated and emitted ephemerally by wireSessionListener.
         return null;
 
       case "assistant.reasoning":
         return {
           type: "log",
-          message: `[reasoning] ${String((payload as any)?.content ?? event.content ?? "")}`,
+          message: `[reasoning] ${String(payload.content ?? "")}`,
           level: "info",
           ts,
         };
 
       case "tool.execution_start": {
-        const toolCallId = String((payload as any)?.toolCallId ?? (event as any)?.id ?? "");
+        const toolCallId = String(payload.toolCallId ?? event.id ?? "");
         const toolName = String(
-          (payload as any)?.toolName ?? (payload as any)?.name ?? event.toolName ?? "unknown",
+          payload.toolName ?? payload.name ?? "unknown",
         );
         const input =
-          (payload as any)?.toolInput ??
-          (payload as any)?.input ??
-          (payload as any)?.toolArgs ??
-          (payload as any)?.arguments ??
-          event.toolInput ??
-          (event as any).toolArgs ??
-          (event as any).arguments;
+          payload.toolInput ??
+          payload.input ??
+          payload.toolArgs ??
+          payload.arguments;
 
         if (toolCallId) {
           toolCallIndex.set(toolCallId, { toolName, input, startedAt: ts });
@@ -1139,7 +992,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         return {
           type: "tool_call",
           toolName,
-          input,
+          input: toToolInput(input),
           startedAt: ts,
           metadata: {
             phase: "start",
@@ -1154,31 +1007,27 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // the driver at an older CLI than the one bundled with the app.
       case "tool.execution_end":
       case "tool.execution_complete": {
-        const toolCallId = String((payload as any)?.toolCallId ?? (event as any)?.id ?? "");
+        const toolCallId = String(payload.toolCallId ?? event.id ?? "");
         const prev = toolCallId ? toolCallIndex.get(toolCallId) : undefined;
 
         const toolName = String(
-          (payload as any)?.toolName ?? prev?.toolName ?? event.toolName ?? "unknown",
+          payload.toolName ?? prev?.toolName ?? "unknown",
         );
         const input =
-          (payload as any)?.toolInput ??
-          (payload as any)?.input ??
-          (payload as any)?.toolArgs ??
-          (payload as any)?.arguments ??
-          prev?.input ??
-          event.toolInput ??
-          (event as any).toolArgs ??
-          (event as any).arguments;
+          payload.toolInput ??
+          payload.input ??
+          payload.toolArgs ??
+          payload.arguments ??
+          prev?.input;
 
-        const success = (payload as any)?.success;
+        const success = payload.success;
         const result =
-          (payload as any)?.result ??
-          (payload as any)?.toolOutput ??
-          (payload as any)?.output ??
-          event.toolOutput;
+          payload.result ??
+          payload.toolOutput ??
+          payload.output;
 
         const error =
-          formatToolError((payload as any)?.error ?? event.error) ??
+          formatToolError(payload.error) ??
           (success === false ? "tool_failed" : undefined);
 
         if (toolCallId) toolCallIndex.delete(toolCallId);
@@ -1188,7 +1037,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         return {
           type: "tool_call",
           toolName,
-          input,
+          input: toToolInput(input),
           output: result,
           error,
           endedAt: ts,
@@ -1196,7 +1045,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
             phase: event.type === "tool.execution_complete" ? "complete" : "end",
             toolCallId: toolCallId || undefined,
             success: typeof success === "boolean" ? success : undefined,
-            toolTelemetry: (payload as any)?.toolTelemetry,
+            toolTelemetry: payload.toolTelemetry,
             rawType: event.type,
           },
         };
@@ -1274,7 +1123,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     runId: string,
     onEvent: WorkRunEventHandler,
   ): Promise<void> {
-    let result: { rows?: Array<{ id?: string; title?: string; description?: string; status?: string }> } | undefined;
+    let result: Awaited<ReturnType<CopilotSdkSession["rpc"]["plan"]["readSqlTodos"]>> | undefined;
     try {
       result = await sdkSession.rpc?.plan?.readSqlTodos?.();
     } catch (err) {
@@ -1326,8 +1175,49 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     onEvent: WorkRunEventHandler,
     signal: AbortSignal,
   ): () => void {
-    return sdkSession.on((event: SessionEvent) => {
+    // Buffers belong to this turn, including on resume; native message and
+    // reasoning ids keep interleaved output blocks separate.
+    const streams = new Map<string, { kind: "report" | "thinking"; content: string }>();
+    const emit = (event: WorkRunEvent) => {
+      void Promise.resolve(onEvent(event)).catch((err) => logError("onEvent threw:", err));
+    };
+    const emitStream = (streamId: string, kind: "report" | "thinking", content: string) => {
+      emit({
+        type: "artifact",
+        kind,
+        content,
+        ephemeral: true,
+        streamId,
+        // Retained in the final artifact for identity-based reconciliation.
+        metadata: { source: kind === "report" ? "assistant.message_delta" : "assistant.reasoning_delta", streamId },
+      });
+    };
+    const unsubscribe = sdkSession.on((event: SessionEvent) => {
       if (signal.aborted) return;
+
+      const eventType: string = event.type;
+      if (eventType === "assistant.message_delta" || eventType === "assistant.reasoning_delta") {
+        const payload = getPayload(event);
+        const kind = eventType === "assistant.message_delta" ? "report" : "thinking";
+        const streamId = assistantStreamId(payload, runId, kind);
+        const delta = payload.deltaContent;
+        if (!streamId || typeof delta !== "string" || !delta) return;
+        const content = (streams.get(streamId)?.content ?? "") + delta;
+        streams.set(streamId, { kind, content });
+        emitStream(streamId, kind, content);
+        return;
+      }
+
+      if (eventType === "assistant.message" || eventType === "assistant.reasoning") {
+        const payload = getPayload(event);
+        const kind = eventType === "assistant.message" ? "report" : "thinking";
+        const streamId = assistantStreamId(payload, runId, kind);
+        if (streamId && streams.delete(streamId)) {
+          // Keep the authoritative message visible until its DB row arrives.
+          // Thinking has no matching report row, so clear its live preview.
+          emitStream(streamId, kind, kind === "report" ? String(payload.content ?? "").trim() : "");
+        }
+      }
 
       // Todos changed (ephemeral signal): read the session SQL todos and emit a
       // fresh UpdateTodos snapshot. Handled before the ephemeral early-return.
@@ -1339,12 +1229,12 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       // Capture a completing tool's name before mapSessionEvent clears the
       // index (used for the sql → todos refresh below).
       const completedToolName =
-        event.type === "tool.execution_end" || event.type === "tool.execution_complete"
+        eventType === "tool.execution_end" || event.type === "tool.execution_complete"
           ? (() => {
               const p = getPayload(event);
-              const tcId = String((p as any)?.toolCallId ?? (event as any)?.id ?? "");
+              const tcId = String(p.toolCallId ?? event.id ?? "");
               return String(
-                (p as any)?.toolName ?? (tcId ? toolCallIndex.get(tcId)?.toolName : "") ?? "",
+                p.toolName ?? (tcId ? toolCallIndex.get(tcId)?.toolName : "") ?? "",
               );
             })()
           : "";
@@ -1361,21 +1251,18 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       const mapped = mapSessionEvent(event, runId);
       if (!mapped) return;
 
-      void Promise.resolve(onEvent(mapped)).catch((err) =>
-        logError("onEvent threw:", err),
-      );
+      emit(mapped);
 
       // Tool-completion events also yield artifact events for written files / patches
-      if (event.type === "tool.execution_end" || event.type === "tool.execution_complete") {
+      if (eventType === "tool.execution_end" || event.type === "tool.execution_complete") {
         const payload = getPayload(event);
-        const toolCallId = String((payload as any)?.toolCallId ?? "");
+        const toolCallId = String(payload.toolCallId ?? "");
         const prev = toolCallId ? toolCallIndex.get(toolCallId) : undefined;
-        const toolName = String((payload as any)?.toolName ?? prev?.toolName ?? "unknown");
+        const toolName = String(payload.toolName ?? prev?.toolName ?? "unknown");
         const toolOutput =
-          (payload as any)?.result ??
-          (payload as any)?.toolOutput ??
-          (payload as any)?.output ??
-          (event as any)?.toolOutput;
+          payload.result ??
+          payload.toolOutput ??
+          payload.output;
 
         if (toolOutput) {
           for (const artEvent of extractArtifactsFromToolOutput(toolName, toolOutput)) {
@@ -1386,6 +1273,12 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         }
       }
     });
+    return () => {
+      unsubscribe();
+      // Abort, timeout or an incomplete response must not leave a stale preview.
+      for (const [streamId, stream] of streams) emitStream(streamId, stream.kind, "");
+      streams.clear();
+    };
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1396,15 +1289,11 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
     result: SessionEvent | undefined,
     runId: string,
   ): DriverOutcome {
-    const finalText =
-      (result as any)?.content ??
-      (result as any)?.output ??
-      (result as any)?.data?.content ??
-      (result as any)?.data?.output ??
-      "";
+    const payload = result ? getPayload(result) : {};
+    const finalText = payload.content ?? payload.output;
     return {
       status: "succeeded",
-      summary: finalText || "Completed successfully",
+      summary: typeof finalText === "string" && finalText ? finalText : "Completed successfully",
       usage: flushUsage(runId),
     };
   }
@@ -1455,7 +1344,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       await onEvent({
         type: "tool_call",
         toolName: toolInfo.toolName,
-        input: toolInfo.input as Record<string, unknown> | undefined,
+        input: toToolInput(toolInfo.input),
         error: "Interrupted",
         endedAt: ts,
         metadata: { phase: "complete", toolCallId, interrupted: true },
@@ -1490,7 +1379,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
       const copilotClient = await ensureClient(request.execution.cwd);
 
-      const overrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
+      const overrides = request.configSnapshot ?? {};
       const permissionMode =
         (typeof overrides.permissionMode === "string" && overrides.permissionMode) ||
         config.permissionMode ||
@@ -1510,6 +1399,8 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       if (model || config.defaultModel) {
         sessionConfig.model = model || config.defaultModel;
       }
+      const fastMode = resolveFastMode(overrides);
+      if (sessionConfig.model === "auto" && fastMode) sessionConfig.capi = { autoTier: "fast" };
 
       const overrideEffort =
         typeof overrides.modelReasoningEffort === "string"
@@ -1517,7 +1408,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           : typeof overrides.effortLevel === "string" && overrides.effortLevel
             ? overrides.effortLevel
             : undefined;
-      const reasoningEffort = (overrideEffort ?? (config as any).modelReasoningEffort) as
+      const reasoningEffort = (overrideEffort ?? config.modelReasoningEffort) as
         | ReasoningEffort
         | undefined;
       if (reasoningEffort) {
@@ -1531,6 +1422,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       );
 
       const sdkSession = await copilotClient.createSession(sessionConfig);
+      await applyAcquiredFastMode(sdkSession, sessionConfig.model, fastMode, false);
       const agentMode = agentModeForPermission(permissionMode);
       logInfo(
         `Created Copilot session for run ${runId} (model: ${sessionConfig.model || "default"}, permissionMode: ${permissionMode}, agentMode: ${agentMode ?? "(default)"})`,
@@ -1550,13 +1442,13 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       const copilotClient = await ensureClient(request.execution.cwd);
       // Same precedence as createSession: run snapshot beats provider config,
       // so a resumed run keeps the permission mode it started with.
-      const resumeOverrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
+      const resumeOverrides = request.configSnapshot ?? {};
       const permissionMode =
         (typeof resumeOverrides.permissionMode === "string" && resumeOverrides.permissionMode) ||
         config.permissionMode ||
         "default";
 
-      const resumeConfig: Omit<SessionConfig, "sessionId"> = {
+      const resumeConfig: ResumeSessionConfig = {
         ...buildBaseSessionConfig(
           runId,
           request.execution,
@@ -1576,14 +1468,17 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
       const resumeModel = request.model || config.defaultModel;
       if (resumeModel) resumeConfig.model = resumeModel;
+      const fastMode = resolveFastMode(resumeOverrides);
+      if (resumeConfig.model === "auto" && fastMode) resumeConfig.capi = { autoTier: "fast" };
 
       const resumeReasoningEffort = (typeof resumeOverrides.modelReasoningEffort === "string"
-        ? resumeOverrides.modelReasoningEffort : (config as any).modelReasoningEffort) as
+        ? resumeOverrides.modelReasoningEffort : config.modelReasoningEffort) as
         | ReasoningEffort
         | undefined;
       if (resumeReasoningEffort) resumeConfig.reasoningEffort = resumeReasoningEffort;
 
       const sdkSession = await copilotClient.resumeSession(runId, resumeConfig);
+      await applyAcquiredFastMode(sdkSession, resumeConfig.model, fastMode, true);
       logInfo(`Resumed Copilot session for run ${runId}`);
 
       const session: CopilotSession = {
@@ -1692,7 +1587,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
 
     updateConfig(next) {
       const updated = next as CopilotAdapterConfig;
-      if (["binary", "cliUrl", "useStdio", "port"].some((key) =>
+      if (["binary", "cliUrl", "useStdio", "port", "githubToken", "useLoggedInUser"].some((key) =>
         config[key as keyof CopilotAdapterConfig] !== updated[key as keyof CopilotAdapterConfig],
       )) {
         clientNeedsRestart = true;
@@ -1754,7 +1649,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         const result = await session.sendAndWait({ prompt: titlePrompt }, 15000);
 
         const titleText = String(
-          (result as any)?.content ?? (result as any)?.data?.content ?? "",
+          result ? getPayload(result).content ?? "" : "",
         );
 
         const title = titleText
@@ -1797,7 +1692,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       try {
         const result = await session.sendAndWait({ prompt }, 30000);
         const text = String(
-          (result as any)?.content ?? (result as any)?.data?.content ?? "",
+          result ? getPayload(result).content ?? "" : "",
         );
         return text.trim();
       } finally {
@@ -1911,6 +1806,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
             capabilities: { vision: model.capabilities?.supports?.vision },
             contextWindow: model.capabilities?.limits?.max_context_window_tokens,
             supportsEffort: model.capabilities?.supports?.reasoningEffort ?? false,
+            supportsFastMode: model.id === "auto",
             supportedEffortLevels: model.supportedReasoningEfforts,
           }),
         );
@@ -2044,7 +1940,7 @@ export function agentModeForPermission(
  * without auto-implementing (`exit_only`): the plan is rendered with an "Apply
  * Plan" button that runs it as a follow-up turn. Pure, exposed for tests.
  */
-export function resolveExitPlanDecision(): { approved: boolean; selectedAction: string } {
+export function resolveExitPlanDecision(): ExitPlanModeResult {
   return { approved: true, selectedAction: "exit_only" };
 }
 
