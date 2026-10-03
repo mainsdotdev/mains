@@ -8,14 +8,13 @@
 //   Cursor ACP  ──spawns──▶  temp MCP script (stdin/stdout)
 //                                 │ Unix socket IPC
 //                                 ▼
-//                         Bridge (main Electron process)
+//                         Bridge (backend process)
 //                                 │
 //                                 ▼
 //                         mains-tools.core.ts handlers
 //
-// The server writes a `.cursor/mcp.json` config in the workspace
-// directory so Cursor discovers the tools automatically. It also
-// returns a config for session/new as a fallback.
+// Each run passes its bridge through ACP session/new or session/load.
+// Project and user MCP settings remain owned by Cursor and the user.
 // ─────────────────────────────────────────────────────────────
 
 import net from "node:net";
@@ -235,10 +234,7 @@ export class MainsMcpStdioServer {
   private socketPath: string;
   private scriptPath: string;
   private nodeInfo: NodeBinaryInfo;
-  private workspacePath: string | null;
   private onEvent: WorkRunEventHandler | null = null;
-  /** Tracks original content for each .cursor/mcp.json we modified */
-  private mcpJsonBackups = new Map<string, string | null>();
 
   constructor(
     private ctx: MainsToolContext,
@@ -249,7 +245,6 @@ export class MainsMcpStdioServer {
     this.socketPath = path.join(tmpDir, `mains-mcp-${id}.sock`);
     this.scriptPath = path.join(tmpDir, `mains-mcp-${id}.cjs`);
     this.nodeInfo = findNodeBinary();
-    this.workspacePath = ctx.rootPath;
   }
 
   async start(): Promise<void> {
@@ -327,18 +322,9 @@ export class MainsMcpStdioServer {
       this.socketServer!.on("error", reject);
     });
 
-    // 3. Write .cursor/mcp.json so Cursor discovers the tools
-    //    Write to BOTH workspace-level and user-level configs
-    if (this.workspacePath) {
-      this.writeCursorMcpConfig(path.join(this.workspacePath, ".cursor"));
-    }
-    this.writeCursorMcpConfig(path.join(os.homedir(), ".cursor"));
   }
 
   async stop(): Promise<void> {
-    // Restore original .cursor/mcp.json files
-    this.restoreCursorMcpConfig();
-
     if (this.socketServer) {
       await new Promise<void>((resolve) => {
         this.socketServer!.close(() => resolve());
@@ -355,7 +341,7 @@ export class MainsMcpStdioServer {
     return this.socketServer !== null && this.socketServer.listening;
   }
 
-  setEventHandler(handler: WorkRunEventHandler): void {
+  setEventHandler(handler: WorkRunEventHandler | null): void {
     this.onEvent = handler;
   }
 
@@ -382,74 +368,4 @@ export class MainsMcpStdioServer {
     };
   }
 
-  /**
-   * Write mcp.json in the given .cursor directory.
-   * Preserves existing entries and backs up for restore on stop.
-   */
-  private writeCursorMcpConfig(cursorDir: string): void {
-    const mcpJsonPath = path.join(cursorDir, "mcp.json");
-
-    // Back up original content (only once per path)
-    if (!this.mcpJsonBackups.has(mcpJsonPath)) {
-      try {
-        this.mcpJsonBackups.set(mcpJsonPath, fs.readFileSync(mcpJsonPath, "utf8"));
-      } catch {
-        this.mcpJsonBackups.set(mcpJsonPath, null);
-      }
-    }
-
-    // Parse existing or start fresh
-    let config: Record<string, any> = {};
-    const original = this.mcpJsonBackups.get(mcpJsonPath);
-    if (original) {
-      try { config = JSON.parse(original); } catch { config = {}; }
-    }
-
-    // Add mains MCP server entry
-    if (!config.mcpServers) config.mcpServers = {};
-    config.mcpServers["mains"] = {
-      command: this.nodeInfo.command,
-      args: [this.scriptPath],
-      env: {
-        MAINS_IPC_SOCKET: this.socketPath,
-        ...this.nodeInfo.extraEnv,
-      },
-    };
-
-    try {
-      fs.mkdirSync(cursorDir, { recursive: true });
-      fs.writeFileSync(mcpJsonPath, JSON.stringify(config, null, 2), "utf8");
-    } catch (err) {
-      console.error(`[MainsMcpServer] Failed to write ${mcpJsonPath}:`, err);
-    }
-  }
-
-  /**
-   * Restore all modified .cursor/mcp.json files on shutdown.
-   */
-  private restoreCursorMcpConfig(): void {
-    for (const [mcpJsonPath, original] of this.mcpJsonBackups) {
-      try {
-        if (original !== null) {
-          fs.writeFileSync(mcpJsonPath, original, "utf8");
-        } else {
-          // We created this file — remove our entry
-          try {
-            const current = JSON.parse(fs.readFileSync(mcpJsonPath, "utf8"));
-            if (current.mcpServers) {
-              delete current.mcpServers["mains"];
-              if (Object.keys(current.mcpServers).length === 0 && Object.keys(current).length === 1) {
-                fs.unlinkSync(mcpJsonPath);
-              } else {
-                fs.writeFileSync(mcpJsonPath, JSON.stringify(current, null, 2), "utf8");
-              }
-            }
-          } catch {
-            try { fs.unlinkSync(mcpJsonPath); } catch { /* ok */ }
-          }
-        }
-      } catch { /* restoration failed, not critical */ }
-    }
-    this.mcpJsonBackups.clear();
-  }
 }

@@ -7,7 +7,7 @@
 //
 // What this file owns:
 //   - The ACP subprocess (CursorAcpServer) — single shared server.
-//   - MainsMcpStdioServer bridge — single shared server.
+//   - Per-run MainsMcpStdioServer bridges.
 //   - Per-run streaming buffers (on the Session object).
 //   - ACP session/update → WorkRunEvent mapping (mapNotification, normalizeToolCall).
 //   - Server-request handlers for permission approval & cursor extensions.
@@ -23,6 +23,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { CHANNELS } from "@mains/contracts/channels";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { emit } from "../../../ipc-kit";
@@ -42,6 +43,7 @@ import type {
   WorkRunEvent,
   WorkRunEventHandler,
   WorkRunForkRequest,
+  WorkRunPlanStep,
   WorkRunRequest,
 } from "../../../../shared/adapter.types";
 import { requestToolApproval } from "../../runs/user-input-broker";
@@ -55,6 +57,7 @@ import {
   resolveCatalogDefaultId,
 } from "./adapter.shared";
 import { MainsMcpStdioServer } from "./mains-mcp-server";
+import { CursorMessageStream } from "./cursor-message-stream";
 import type { ModeId } from "@mains/contracts/modes";
 import type { MainsToolContext } from "./mains-tools.core";
 
@@ -101,7 +104,10 @@ function isResponse(msg: unknown): msg is JsonRpcResponse {
 interface CursorSession {
   runId: string;
   sessionId: string;
-  agentMessageBuffer: string;
+  agentMessage: CursorMessageStream;
+  agentMessageIndex: number;
+  agentMessageStreamId: string;
+  mcpServer: MainsMcpStdioServer;
   /** Streamed ephemerally, never persisted. */
   agentThoughtBuffer: string;
   /**
@@ -197,7 +203,13 @@ class CursorAcpServer {
 
     this.child.on("error", (err) => {
       logError("ACP process error:", err.message);
+      for (const pending of this.pendingRequests.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(err);
+      }
+      this.pendingRequests.clear();
       this.cleanup();
+      this.onClose?.();
     });
   }
 
@@ -699,7 +711,12 @@ export async function applyCursorSessionMode(
 
 export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver {
   let acpServer: CursorAcpServer | null = null;
-  let mcpServer: MainsMcpStdioServer | null = null;
+  let serverStarting: Promise<CursorAcpServer> | undefined;
+  const mcpServers = new Map<string, MainsMcpStdioServer>();
+  const activePrompts = new Map<string, {
+    onNotification: (method: string, params: unknown) => void;
+    onRequest: (id: number | string, method: string, params: unknown) => void;
+  }>();
 
   // Cross-run memos
   const sessionIdMap = new Map<string, string>(); // runId → cursor sessionId
@@ -729,22 +746,29 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
   }
 
   /**
-   * Set up the MCP server (bridge + config file).
-   * ACP does not need to be restarted: `session/new` carries the mcpServers
-   * config per-session, and the .cursor/mcp.json file is only needed for
-   * the user-runs-cursor-manually auto-discovery path.
+   * Each run owns a bridge passed directly in ACP's mcpServers configuration.
+   * Starting another run must not replace a live run's tool dispatch context.
    */
-  async function ensureMcpServer(
+  async function acquireCursorSession(
     ctx: MainsToolContext,
-    mode?: ModeId,
-  ): Promise<typeof mcpServer> {
-    if (mcpServer?.isRunning) {
-      await mcpServer.stop();
+    mode: ModeId | undefined,
+    acquire: (server: MainsMcpStdioServer) => Promise<AcquiredSession>,
+  ): Promise<AcquiredSession> {
+    const runId = ctx.runId;
+    if (!runId) throw new Error("Cursor MCP bridge requires a run id");
+    await mcpServers.get(runId)?.stop();
+    mcpServers.delete(runId);
+    const server = new MainsMcpStdioServer(ctx, mode);
+    try {
+      await server.start();
+      mcpServers.set(runId, server);
+      logInfo(`Mains MCP stdio bridge started`);
+      return await acquire(server);
+    } catch (err) {
+      await server.stop().catch(() => {});
+      if (mcpServers.get(runId) === server) mcpServers.delete(runId);
+      throw err;
     }
-    mcpServer = new MainsMcpStdioServer(ctx, mode);
-    await mcpServer.start();
-    logInfo(`Mains MCP stdio bridge started`);
-    return mcpServer;
   }
 
   function buildAcpEnv(binaryPath: string): Record<string, string> {
@@ -776,52 +800,72 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
   async function startInitializedServer(): Promise<CursorAcpServer> {
     const binaryPath = findCursorBinary();
     const server = new CursorAcpServer();
-    await server.start(binaryPath, buildAcpEnv(binaryPath));
+    try {
+      await server.start(binaryPath, buildAcpEnv(binaryPath));
 
-    // ACP handshake
-    const initResult = (await server.sendRequest("initialize", {
-      protocolVersion: 1,
-      clientInfo: { name: "mains", title: "Mains Desktop", version: "1.0.0" },
-      clientCapabilities: {
-        // Opt into the parameterized model picker so `session/new` and
-        // `session/set_config_option` return a `configOptions` array (model +
-        // reasoning effort + fast/thinking tunables). Drives effort discovery
-        // in listModels and effort application in configureSession.
-        _meta: { parameterizedModelPicker: true },
-        cursorExtensions: {
-          askQuestion: true,
-          createPlan: true,
-          updateTodos: true,
-          task: true,
-          generateImage: true,
+      // ACP handshake
+      const initResult = (await server.sendRequest("initialize", {
+        protocolVersion: 1,
+        clientInfo: { name: "mains", title: "Mains Desktop", version: "1.0.0" },
+        clientCapabilities: {
+          // Opt into the parameterized model picker so `session/new` and
+          // `session/set_config_option` return a `configOptions` array (model +
+          // reasoning effort + fast/thinking tunables). Drives effort discovery
+          // in listModels and effort application in configureSession.
+          _meta: { parameterizedModelPicker: true },
+          cursorExtensions: {
+            askQuestion: true,
+            createPlan: true,
+            updateTodos: true,
+            task: true,
+            generateImage: true,
+          },
         },
-      },
-    })) as Record<string, unknown>;
-    server.sendNotification("initialized");
+      })) as Record<string, unknown>;
+      server.sendNotification("initialized");
 
-    const authMethods = initResult?.authMethods as Array<{ id: string }> | undefined;
-    if (authMethods && authMethods.length > 0) {
-      const methodId = authMethods[0].id;
-      await server.sendRequest("authenticate", { methodId });
+      const authMethods = initResult?.authMethods as Array<{ id: string }> | undefined;
+      if (authMethods && authMethods.length > 0) {
+        const methodId = authMethods[0].id;
+        await server.sendRequest("authenticate", { methodId });
+      }
+      return server;
+    } catch (err) {
+      await server.stop();
+      throw err;
     }
-    return server;
   }
 
   async function ensureServer(): Promise<CursorAcpServer> {
     if (acpServer?.isRunning) return acpServer;
+    if (serverStarting) return serverStarting;
+    serverStarting = (async () => {
+      logInfo("Starting ACP server: agent acp");
+      const server = await startInitializedServer();
+      acpServer = server;
+      const ownerFor = (params: unknown) => {
+        const sessionId = (params as { sessionId?: unknown } | null)?.sessionId;
+        if (typeof sessionId === "string") return activePrompts.get(sessionId);
+        // Some Cursor extension payloads omit sessionId. Never guess between
+        // concurrent prompts; only an unambiguous active owner can receive them.
+        return activePrompts.size === 1 ? activePrompts.values().next().value : undefined;
+      };
+      server.setNotificationHandler((method, params) => ownerFor(params)?.onNotification(method, params));
+      server.setServerRequestHandler((id, method, params) => {
+        const owner = ownerFor(params);
+        if (owner) owner.onRequest(id, method, params);
+        else server.respondToRequestError(id, -32000, "No active Cursor session for this request");
+      });
 
-    logInfo("Starting ACP server: agent acp");
-    const server = await startInitializedServer();
-    acpServer = server;
+      server.setOnClose(() => {
+        if (acpServer === server) acpServer = null;
+      });
 
-    server.setOnClose(() => {
-      if (acpServer === server) {
-        acpServer = null;
-      }
-    });
-
-    logInfo("ACP server initialized and authenticated");
-    return server;
+      logInfo("ACP server initialized and authenticated");
+      return server;
+    })();
+    try { return await serverStarting; }
+    finally { serverStarting = undefined; }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -954,6 +998,10 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
    *   - update_todos: surfaced via cursor/update_todos notification.
    *   - mcp_tool_call / mains-*: in-process MCP bridge tracks these itself.
    */
+  function isMainsToolTitle(title: string | undefined): boolean {
+    return /(?:^|[\s:/])(?:mcp__)?mains[-_:/.]/i.test(title ?? "");
+  }
+
   function shouldSkipToolCall(kind: string | undefined, title: string | undefined): boolean {
     if (kind === "create_plan" || kind === "plan" || /create\s*plan/i.test(title ?? "")) {
       return true;
@@ -961,15 +1009,9 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     if (kind === "update_todos" || /^update\s*todos?$/i.test(title ?? "")) {
       return true;
     }
-    if (
-      kind === "mcp_tool_call" ||
-      /mcp/i.test(kind ?? "") ||
-      /mcp/i.test(title ?? "") ||
-      /^mains[-_]/i.test(title ?? "")
-    ) {
-      return true;
-    }
-    return false;
+    // Only Mains calls are already projected by our bridge. Other MCP servers
+    // have no second event source and must remain visible in the transcript.
+    return isMainsToolTitle(title);
   }
 
   function normalizeToolCall(
@@ -981,34 +1023,34 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     const input: Record<string, unknown> = { ...rawInput };
     const firstPath = locations?.[0]?.path;
 
-    if (title) input._title = title;
-
     switch (kind) {
       case "read": {
-        if (firstPath) input.file_path = firstPath;
+        const path = firstPath ?? input.file_path ?? input.path;
+        if (path) { input.file_path = path; delete input.path; }
         if (!input.file_path && title) {
-          const m = title.match(/(?:Read(?:ing)?(?:\s+File)?)\s+(.+)/i);
-          if (m) input.file_path = m[1].trim();
+          const m = title.match(/^Read(?:ing)?(?:\s+File)?\s+(.+)/i);
+          if (m && !/^file$/i.test(m[1].trim())) input.file_path = m[1].trim();
         }
         return { toolName: "Read", input };
       }
       case "edit": {
-        if (firstPath) input.file_path = firstPath;
+        const path = firstPath ?? input.file_path ?? input.path;
+        if (path) { input.file_path = path; delete input.path; }
         if (!input.file_path && title) {
-          const m = title.match(/(?:Edit(?:ing)?(?:\s+File)?)\s+(.+)/i);
-          if (m) input.file_path = m[1].trim();
+          const m = title.match(/^Edit(?:ing)?(?:\s+File)?\s+(.+)/i);
+          if (m && !/^file$/i.test(m[1].trim())) input.file_path = m[1].trim();
         }
         return { toolName: "Edit", input };
       }
       case "delete": {
-        if (firstPath) input.file_path = firstPath;
+        const path = firstPath ?? input.file_path ?? input.path;
+        if (path) { input.file_path = path; delete input.path; }
         return { toolName: "Delete", input };
       }
       case "execute": {
-        if (!input.command && title) {
-          const m = title.match(/(?:Execut(?:e|ing)|Running?)[:\s]+(.+)/i);
+        if (!input.command && title && !/^Run(?:ning)?(?: Shell)? Command$|^Shell$|^Execute$/i.test(title)) {
+          const m = title.match(/^(?:Execut(?:e|ing)|Run(?:ning)?)[:\s]+(.+)/i);
           if (m) input.command = m[1].trim();
-          else input.command = title;
         }
         return { toolName: "Bash", input };
       }
@@ -1030,14 +1072,17 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       case "think": {
         return { toolName: title ?? "Think", input };
       }
+      case "switch_mode": {
+        return { toolName: "SwitchMode", input };
+      }
       default: {
         if (firstPath) input.file_path = firstPath;
         let name = title ?? kind ?? "Tool";
         const mcpMatch = name.match(/^mains[-_](\w+)(?::\s*\w+)?$/i);
         if (mcpMatch) {
           name = mcpMatch[1];
-          delete input._title;
         }
+        if (name === "MCP: tool") name = "MCP";
         return { toolName: name, input };
       }
     }
@@ -1169,14 +1214,14 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const content = update.content as Record<string, unknown> | undefined;
         const text = content?.text as string | undefined;
         if (text) {
-          cs.agentMessageBuffer += text;
+          cs.agentMessage.push(text);
           events.push({
             type: "artifact",
             kind: "report",
-            content: cs.agentMessageBuffer,
+            content: cs.agentMessage.content,
             metadata: { source: "agent_message_streaming" },
             ephemeral: true,
-            streamId: `cursor-msg-${cs.runId}`,
+            streamId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}`,
           });
         }
         break;
@@ -1201,15 +1246,17 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
       case "tool_call": {
         // Flush agent message buffer before tool events (preserves interleaved order)
-        if (cs.agentMessageBuffer.trim()) {
+        const message = cs.agentMessage.finish(false);
+        if (message.content) {
           events.push({
             type: "artifact",
             kind: "report",
-            content: cs.agentMessageBuffer.trim(),
-            metadata: { source: "agent_message" },
+            content: message.content,
+            metadata: { source: "agent_message", streamId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}` },
           });
-          cs.agentMessageBuffer = "";
         }
+        cs.agentMessage = new CursorMessageStream();
+        cs.agentMessageIndex++;
 
         const toolCallId = update.toolCallId as string | undefined;
         const title = update.title as string | undefined;
@@ -1318,8 +1365,12 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           let outputText: unknown;
           if (content && content.length > 0) {
             const textParts = content
-              .filter((c) => c.type === "text")
-              .map((c) => c.text as string);
+              .flatMap((c) => {
+                // ACP wraps ContentBlock in { type: "content", content };
+                // older Cursor builds also sent bare text blocks.
+                const block = c.type === "content" ? c.content as Record<string, unknown> | undefined : c;
+                return block?.type === "text" && typeof block.text === "string" ? [block.text] : [];
+              });
             outputText = textParts.length > 0 ? textParts.join("\n") : diffBlock ? "" : undefined;
           }
           if (outputText === undefined) {
@@ -1330,15 +1381,23 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             }
           }
 
+          // Current Cursor sends status:"completed" even for an error result.
+          // Tool failure is separate from turn failure: the agent may recover.
+          const result = rawOutput && typeof rawOutput === "object"
+            ? rawOutput as Record<string, unknown> : undefined;
+          const error = typeof result?.error === "string" && result.error.trim() ? result.error
+            : typeof result?.exitCode === "number" && result.exitCode !== 0
+              ? (typeof result.stderr === "string" && result.stderr.trim() ? result.stderr : `Command exited with code ${result.exitCode}`)
+              : status === "failed"
+                ? (typeof outputText === "string" && outputText.trim() ? outputText : "Tool call failed")
+                : undefined;
+
           events.push({
             type: "tool_call",
             toolName: finalToolName,
             input: finalInput,
             output: outputText,
-            error:
-              status === "failed"
-                ? (title ?? cached?.toolName ?? "Tool call failed")
-                : undefined,
+            error,
             endedAt: ts,
             metadata: {
               phase: "complete",
@@ -1354,41 +1413,22 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       }
 
       case "plan": {
-        const planContent = update.content as Array<Record<string, unknown>> | undefined;
-        if (planContent) {
-          const planText = planContent
-            .filter((c) => c.type === "text")
-            .map((c) => c.text as string)
-            .join("\n");
-          if (planText) {
-            events.push({
-              type: "tool_call",
-              toolName: "Plan",
-              input: { plan: planText },
-              output: { planStatus: "pending" },
-              startedAt: ts,
-              endedAt: ts,
-              metadata: { phase: "complete" },
-            });
-          }
+        // ACP v1 plans contain entries, not content blocks. This is execution
+        // progress; cursor/create_plan separately supplies a plan proposal.
+        if (Array.isArray(update.entries)) {
+          const steps = update.entries.flatMap((entry: unknown) => {
+            const e = entry as { content?: unknown; status?: unknown } | null;
+            if (typeof e?.content !== "string") return [];
+            const status: WorkRunPlanStep["status"] = e.status === "completed" || e.status === "in_progress" ? e.status : "pending";
+            return [{ step: e.content, status }];
+          });
+          events.push({ type: "plan_update", providerTurnId: cs.agentMessageStreamId, steps, ts });
         }
         break;
       }
 
       case "session_info_update": {
-        const title = update.title as string | undefined;
-        if (title) {
-          events.push({
-            type: "log",
-            message: title,
-            level: "sdk-user",
-            ts,
-            metadata: { sessionTitle: title },
-          });
-          runsRepo.updateRun(cs.runId, { title }).catch((err) =>
-            logError("Failed to update run title:", err),
-          );
-        }
+        // Session metadata is persisted by executePrompt's ordered queue.
         break;
       }
 
@@ -1436,7 +1476,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           const acpTitle = toolCall?.title as string | undefined;
           const acpLocations = toolCall?.locations as Array<{ path?: string }> | undefined;
 
-          if (acpTitle && /^mains[-_]/i.test(acpTitle)) {
+          if (isMainsToolTitle(acpTitle)) {
             server.respondToRequest(id, {
               outcome: { outcome: "selected", optionId: allowAlwaysId },
             });
@@ -1446,7 +1486,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           const { toolName: approvalToolName, input: approvalInput } = normalizeToolCall(
             acpKind,
             acpTitle,
-            undefined,
+            toolCall?.rawInput as Record<string, unknown> | undefined,
             acpLocations,
           );
 
@@ -1925,49 +1965,53 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         rootPath: request.execution.cwd,
         runId,
       };
-      const mainsMcp = await ensureMcpServer(mainsCtx, request.mode);
-      const server = await ensureServer();
+      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp) => {
+        const server = await ensureServer();
 
-      logInfo(
-        `Creating session (model: ${resolvedModel || "default"}, cwd: ${request.execution.cwd})`,
-      );
-      const sessionResult = (await server.sendRequest("session/new", {
-        cwd: request.execution.cwd,
-        mcpServers: mainsMcp ? [mainsMcp.mcpConfig] : [],
-      })) as Record<string, unknown>;
-      const sessionId = sessionResult?.sessionId as string | undefined;
+        logInfo(
+          `Creating session (model: ${resolvedModel || "default"}, cwd: ${request.execution.cwd})`,
+        );
+        const sessionResult = (await server.sendRequest("session/new", {
+          cwd: request.execution.cwd,
+          mcpServers: mainsMcp ? [mainsMcp.mcpConfig] : [],
+        })) as Record<string, unknown>;
+        const sessionId = sessionResult?.sessionId as string | undefined;
 
-      if (!sessionId) {
-        throw new Error("Cursor did not return a sessionId from session/new");
-      }
-      sessionIdMap.set(runId, sessionId);
+        if (!sessionId) {
+          throw new Error("Cursor did not return a sessionId from session/new");
+        }
+        sessionIdMap.set(runId, sessionId);
 
-      const sessionConfigOptions = sessionResult?.configOptions as
-        | CursorConfigOption[]
-        | undefined;
-      await configureSession(
-        server,
-        sessionId,
-        resolvedModel,
-        effectiveMode,
-        sessionConfigOptions,
-        selection,
-      );
+        const sessionConfigOptions = sessionResult?.configOptions as
+          | CursorConfigOption[]
+          | undefined;
+        await configureSession(
+          server,
+          sessionId,
+          resolvedModel,
+          effectiveMode,
+          sessionConfigOptions,
+          selection,
+        );
 
-      const session: CursorSession = {
-        runId,
-        sessionId,
-        agentMessageBuffer: "",
-        agentThoughtBuffer: "",
-        toolCallCache: new Map(),
-        skippedToolCallIds: new Set(),
-      };
+        const session: CursorSession = {
+          runId,
+          sessionId,
+          agentMessage: new CursorMessageStream(),
+          agentMessageIndex: 0,
+          agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
+          mcpServer: mainsMcp,
+          agentThoughtBuffer: "",
+          toolCallCache: new Map(),
+          skippedToolCallIds: new Set(),
+        };
 
-      return {
-        session,
-        prompt: buildStartPrompt(request),
-        sessionId,
-      };
+        return {
+          session,
+          prompt: buildStartPrompt(request),
+          sessionId,
+        };
+      });
     },
 
     async resumeSession(request: WorkRunContinueRequest): Promise<AcquiredSession> {
@@ -1979,83 +2023,87 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         rootPath: request.execution.cwd,
         runId,
       };
-      const mainsMcp = await ensureMcpServer(mainsCtx, request.mode);
-      const mcpServersConfig = mainsMcp ? [mainsMcp.mcpConfig] : [];
-      const server = await ensureServer();
+      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp) => {
+        const mcpServersConfig = mainsMcp ? [mainsMcp.mcpConfig] : [];
+        const server = await ensureServer();
 
-      let sessionId = sessionIdMap.get(runId);
-      if (!sessionId) {
-        const run = await runsRepo.findRunById(runId);
-        if (run?.sessionId) {
-          sessionId = run.sessionId;
-          sessionIdMap.set(runId, sessionId);
-        }
-      }
-      if (!sessionId) {
-        throw new Error(`No session found for run ${runId}. Cannot resume.`);
-      }
-
-      let loadResult: Record<string, unknown> | undefined;
-      try {
-        loadResult = (await server.sendRequest(
-          "session/load",
-          {
-            sessionId,
-            cwd: request.execution.cwd,
-            mcpServers: mcpServersConfig,
-          },
-          30000,
-        )) as Record<string, unknown>;
-      } catch (loadErr) {
-        const errMsg = loadErr instanceof Error ? loadErr.message : String(loadErr);
-        if (/not found|unknown|does not exist/i.test(errMsg)) {
-          logWarn(`Session load failed (${errMsg}), creating new session`);
-          const newResult = (await server.sendRequest("session/new", {
-            cwd: request.execution.cwd,
-            mcpServers: mcpServersConfig,
-          })) as Record<string, unknown>;
-          loadResult = newResult;
-          const newId = newResult?.sessionId as string | undefined;
-          if (newId) {
-            sessionId = newId;
-            sessionIdMap.set(runId, newId);
+        let sessionId = sessionIdMap.get(runId);
+        if (!sessionId) {
+          const run = await runsRepo.findRunById(runId);
+          if (run?.sessionId) {
+            sessionId = run.sessionId;
+            sessionIdMap.set(runId, sessionId);
           }
-        } else {
-          throw loadErr;
         }
-      }
+        if (!sessionId) {
+          throw new Error(`No session found for run ${runId}. Cannot resume.`);
+        }
 
-      // Same precedence as createSession: the run's config snapshot beats the
-      // provider config, so a resumed chat run stays in "ask" mode.
-      const resumeOverrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
-      const resumeMode =
-        (typeof resumeOverrides.mode === "string" && resumeOverrides.mode) || config.mode;
-      const sessionConfigOptions = loadResult?.configOptions as
-        | CursorConfigOption[]
-        | undefined;
-      await configureSession(
-        server,
-        sessionId,
-        resolvedModel,
-        resumeMode,
-        sessionConfigOptions,
-        resolveCursorSelection(resumeOverrides, config),
-      );
+        let loadResult: Record<string, unknown> | undefined;
+        try {
+          loadResult = (await server.sendRequest(
+            "session/load",
+            {
+              sessionId,
+              cwd: request.execution.cwd,
+              mcpServers: mcpServersConfig,
+            },
+            30000,
+          )) as Record<string, unknown>;
+        } catch (loadErr) {
+          const errMsg = loadErr instanceof Error ? loadErr.message : String(loadErr);
+          if (/not found|unknown|does not exist/i.test(errMsg)) {
+            logWarn(`Session load failed (${errMsg}), creating new session`);
+            const newResult = (await server.sendRequest("session/new", {
+              cwd: request.execution.cwd,
+              mcpServers: mcpServersConfig,
+            })) as Record<string, unknown>;
+            loadResult = newResult;
+            const newId = newResult?.sessionId as string | undefined;
+            if (newId) {
+              sessionId = newId;
+              sessionIdMap.set(runId, newId);
+            }
+          } else {
+            throw loadErr;
+          }
+        }
 
-      const session: CursorSession = {
-        runId,
-        sessionId,
-        agentMessageBuffer: "",
-        agentThoughtBuffer: "",
-        toolCallCache: new Map(),
-        skippedToolCallIds: new Set(),
-      };
+        // Same precedence as createSession: the run's config snapshot beats the
+        // provider config, so a resumed chat run stays in "ask" mode.
+        const resumeOverrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
+        const resumeMode =
+          (typeof resumeOverrides.mode === "string" && resumeOverrides.mode) || config.mode;
+        const sessionConfigOptions = loadResult?.configOptions as
+          | CursorConfigOption[]
+          | undefined;
+        await configureSession(
+          server,
+          sessionId,
+          resolvedModel,
+          resumeMode,
+          sessionConfigOptions,
+          resolveCursorSelection(resumeOverrides, config),
+        );
 
-      return {
-        session,
-        prompt: buildContinuePrompt(request),
-        sessionId,
-      };
+        const session: CursorSession = {
+          runId,
+          sessionId,
+          agentMessage: new CursorMessageStream(),
+          agentMessageIndex: 0,
+          agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
+          mcpServer: mainsMcp,
+          agentThoughtBuffer: "",
+          toolCallCache: new Map(),
+          skippedToolCallIds: new Set(),
+        };
+
+        return {
+          session,
+          prompt: buildContinuePrompt(request),
+          sessionId,
+        };
+      });
     },
 
     async forkSession(request: WorkRunForkRequest): Promise<AcquiredSession> {
@@ -2074,49 +2122,53 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         rootPath: request.execution.cwd,
         runId,
       };
-      const mainsMcp = await ensureMcpServer(mainsCtx, request.mode);
-      const server = await ensureServer();
+      return acquireCursorSession(mainsCtx, request.mode, async (mainsMcp) => {
+        const server = await ensureServer();
 
-      const sessionResult = (await server.sendRequest("session/new", {
-        cwd: request.execution.cwd,
-        mcpServers: mainsMcp ? [mainsMcp.mcpConfig] : [],
-      })) as Record<string, unknown>;
-      const sessionId = sessionResult?.sessionId as string | undefined;
-      if (!sessionId) {
-        throw new Error("Cursor did not return a sessionId from session/new");
-      }
-      sessionIdMap.set(runId, sessionId);
+        const sessionResult = (await server.sendRequest("session/new", {
+          cwd: request.execution.cwd,
+          mcpServers: mainsMcp ? [mainsMcp.mcpConfig] : [],
+        })) as Record<string, unknown>;
+        const sessionId = sessionResult?.sessionId as string | undefined;
+        if (!sessionId) {
+          throw new Error("Cursor did not return a sessionId from session/new");
+        }
+        sessionIdMap.set(runId, sessionId);
 
-      // The fork inherits the source run's harness snapshot.
-      const forkOverrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
-      const forkMode =
-        (typeof forkOverrides.mode === "string" && forkOverrides.mode) || config.mode;
-      const sessionConfigOptions = sessionResult?.configOptions as
-        | CursorConfigOption[]
-        | undefined;
-      await configureSession(
-        server,
-        sessionId,
-        resolvedModel,
-        forkMode,
-        sessionConfigOptions,
-        resolveCursorSelection(forkOverrides, config),
-      );
+        // The fork inherits the source run's harness snapshot.
+        const forkOverrides = (request.configSnapshot ?? {}) as Record<string, unknown>;
+        const forkMode =
+          (typeof forkOverrides.mode === "string" && forkOverrides.mode) || config.mode;
+        const sessionConfigOptions = sessionResult?.configOptions as
+          | CursorConfigOption[]
+          | undefined;
+        await configureSession(
+          server,
+          sessionId,
+          resolvedModel,
+          forkMode,
+          sessionConfigOptions,
+          resolveCursorSelection(forkOverrides, config),
+        );
 
-      const session: CursorSession = {
-        runId,
-        sessionId,
-        agentMessageBuffer: "",
-        agentThoughtBuffer: "",
-        toolCallCache: new Map(),
-        skippedToolCallIds: new Set(),
-      };
+        const session: CursorSession = {
+          runId,
+          sessionId,
+          agentMessage: new CursorMessageStream(),
+          agentMessageIndex: 0,
+          agentMessageStreamId: `cursor-msg-${runId}-${randomUUID()}`,
+          mcpServer: mainsMcp,
+          agentThoughtBuffer: "",
+          toolCallCache: new Map(),
+          skippedToolCallIds: new Set(),
+        };
 
-      return {
-        session,
-        prompt: await buildForkPrompt(request),
-        sessionId,
-      };
+        return {
+          session,
+          prompt: await buildForkPrompt(request),
+          sessionId,
+        };
+      });
     },
 
     async executePrompt(
@@ -2127,6 +2179,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     ): Promise<DriverOutcome> {
       const cs = session as CursorSession;
       const timeout = config.timeout ?? 3_600_000;
+      if (signal.aborted) return { status: "canceled" };
 
       const server = acpServer;
       if (!server || !server.isRunning) {
@@ -2145,64 +2198,101 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       };
       signal.addEventListener("abort", onAbort, { once: true });
 
-      // Wire streaming notification + server-request handlers
-      server.setNotificationHandler((method, params) => {
-        const events = mapNotification(method, params, cs);
-        for (const event of events) {
-          // Best-effort: events emitted from notifications are async-fired; await would
-          // require restructuring drainJsonBuffer. Track promise chain rejections.
-          void Promise.resolve(onEvent(event)).catch((err) =>
-            logError("onEvent threw:", err),
-          );
-        }
+      if (activePrompts.has(cs.sessionId)) {
+        signal.removeEventListener("abort", onAbort);
+        return { status: "failed", summary: "Cursor session already has an active prompt" };
+      }
+      let eventQueue = Promise.resolve();
+      let eventError: unknown;
+      const enqueue = (task: () => Promise<void>) => {
+        eventQueue = eventQueue.then(task).catch((err) => {
+          eventError ??= err;
+          logError("Failed to project Cursor event:", err);
+        });
+      };
+      const emitQueued: WorkRunEventHandler = (event) => {
+        enqueue(async () => { await onEvent(event); });
+        return eventQueue;
+      };
+      activePrompts.set(cs.sessionId, {
+        onNotification(method, params) {
+          const p = params as { update?: { sessionUpdate?: string; title?: unknown } } | undefined;
+          if (method === "session/update" && p?.update?.sessionUpdate === "session_info_update") {
+            const title = typeof p.update.title === "string"
+              ? p.update.title.replace(/(?:<\|eos\|>)+\s*$/, "").trim() : "";
+            if (title) {
+              enqueue(async () => { await runsRepo.updateRun(cs.runId, { title }); });
+            }
+            return;
+          }
+          for (const event of mapNotification(method, params, cs)) {
+            void emitQueued(event);
+          }
+        },
+        onRequest: buildServerRequestHandler(server, cs, emitQueued),
       });
-      server.setServerRequestHandler(buildServerRequestHandler(server, cs, onEvent));
 
       // Wire MCP bridge events
-      mcpServer?.setEventHandler(onEvent);
+      cs.mcpServer.setEventHandler(emitQueued);
 
       try {
-        const promptResult = (await server.sendRequest(
-          "session/prompt",
-          {
-            sessionId: cs.sessionId,
-            prompt: [{ type: "text", text: prompt }],
-          },
-          timeout,
-        )) as Record<string, unknown>;
-
-        const stopReason = promptResult?.stopReason as string | undefined;
+        let outcome: DriverOutcome;
+        try {
+          const promptResult = (await server.sendRequest(
+            "session/prompt",
+            { sessionId: cs.sessionId, prompt: [{ type: "text", text: prompt }] },
+            timeout,
+          )) as Record<string, unknown>;
+          const stopReason = promptResult?.stopReason as string | undefined;
+          outcome = { ...mapStopReasonToOutcome(stopReason), stopReason };
+        } catch (err) {
+          outcome = signal.aborted ? { status: "canceled" } : {
+            status: "failed", summary: err instanceof Error ? err.message : String(err),
+          };
+          // A timed-out prompt may still be executing in Cursor.
+          if (server.isRunning) onAbort();
+        }
+        activePrompts.delete(cs.sessionId);
+        await eventQueue;
+        cs.mcpServer.setEventHandler(null);
+        if (eventError) throw eventError;
 
         // Flush remaining agent message buffer
-        if (cs.agentMessageBuffer.trim()) {
+        const message = cs.agentMessage.finish();
+        if (message.content) {
           await onEvent({
             type: "artifact",
             kind: "report",
-            content: cs.agentMessageBuffer.trim(),
-            metadata: { source: "agent_message" },
+            content: message.content,
+            metadata: { source: "agent_message", streamId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}` },
           });
-          cs.agentMessageBuffer = "";
         }
-        cs.agentThoughtBuffer = "";
-        await onEvent({
-          type: "artifact",
-          kind: "report",
-          content: "",
-          metadata: { source: "agent_thought_streaming" },
-          ephemeral: true,
-          streamId: `cursor-think-${cs.runId}`,
-        });
-
-        const { status, summary } = mapStopReasonToOutcome(stopReason);
-        return { status, summary, stopReason };
+        if (message.failure && outcome.status !== "canceled") {
+          outcome = { ...outcome, status: "failed", summary: message.failure };
+        }
+        return outcome;
       } finally {
+        activePrompts.delete(cs.sessionId);
         signal.removeEventListener("abort", onAbort);
+        await eventQueue;
+        cs.mcpServer.setEventHandler(null);
+        cs.agentMessage = new CursorMessageStream();
+        cs.agentThoughtBuffer = "";
+        for (const [source, streamId] of [
+          ["agent_message_streaming", `${cs.agentMessageStreamId}-${cs.agentMessageIndex}`],
+          ["agent_thought_streaming", `cursor-think-${cs.runId}`],
+        ]) {
+          await onEvent({ type: "artifact", kind: "report", content: "", metadata: { source }, ephemeral: true, streamId });
+        }
+        cs.agentMessageIndex++;
       }
     },
 
-    async cleanup(_session): Promise<void> {
-      // Per-run state lives on the Session object Core is about to drop.
-      // Long-lived sessionIdMap memos survive (deleteSession clears them explicitly).
+    async cleanup(session): Promise<void> {
+      const cs = session as CursorSession;
+      await cs.mcpServer.stop();
+      if (mcpServers.get(cs.runId) === cs.mcpServer) mcpServers.delete(cs.runId);
+      // Session identity survives so session/load can resume with a fresh bridge.
     },
 
     async canResumeSession(runId: string): Promise<boolean> {
@@ -2228,10 +2318,8 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     async shutdown(): Promise<void> {
       sessionIdMap.clear();
 
-      if (mcpServer) {
-        await mcpServer.stop().catch(() => {});
-        mcpServer = null;
-      }
+      await Promise.all([...mcpServers.values()].map((server) => server.stop().catch(() => {})));
+      mcpServers.clear();
 
       if (acpServer) {
         await acpServer.stop();

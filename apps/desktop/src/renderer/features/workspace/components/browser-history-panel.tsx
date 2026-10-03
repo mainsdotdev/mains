@@ -3,9 +3,9 @@ import { Button, Input, Text } from "@/components/ui";
 import {
   ChevronLeft,
   Clock,
-  Close,
   External,
   Search,
+  Trash,
 } from "@/components/ui/icons";
 import { BrowserFavicon } from "./browser-favicon";
 
@@ -264,7 +264,7 @@ export function BrowserHistoryPanel({
                       aria-label={`Remove ${entry.title || entry.url} from history`}
                       className="rounded-lg p-1.5 text-primary-500 hover:bg-primary-200/60 hover:text-danger dark:text-primary-400 dark:hover:bg-primary-800/70 dark:hover:text-danger"
                     >
-                      <Close className="size-3.5" />
+                      <Trash className="size-3.5" />
                     </Button>
                   </div>
                 </div>
