@@ -149,8 +149,8 @@ export function ProviderCliSection({
             </Text>
           )}
           {cli?.updateMethod === "app" ? (
-            <Text as="span" size="xs" tone="subtle">
-              Included with Mains · Updates with the app
+            <Text as="span" size="s" tone="subtle">
+              Updates with Mains
             </Text>
           ) : (
             <Button

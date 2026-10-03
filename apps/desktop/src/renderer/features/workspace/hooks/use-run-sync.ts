@@ -1,12 +1,12 @@
 /**
- * Keeping a live run in step with the main process: the two push subscriptions,
- * the polling fallback behind them, and the once-per-run finalization they all
- * funnel into.
+ * Keeping runs and workspace diffs in step with the main process: the push
+ * subscriptions, polling fallback, and once-per-run finalization.
  *
- * Three listeners with three different scopes, which is the reason they read as
- * one subject rather than three effects scattered through the run hook:
+ * Each subscription follows the scope of the state it refreshes:
  *  - transcript pushes are scoped to the *selected running tab* (debounced,
  *    since a burst of events shouldn't mean a fetch each);
+ *  - workspace diff pushes apply regardless of the selected tab or run status,
+ *    since a completed turn's undo and a background run also change the tree;
  *  - status pushes are scoped to *any* open pending run, so a backgrounded tab
  *    cannot miss its terminal event;
  *  - the 10s poll is the fallback for a dropped push, a stalled adapter, or a
@@ -97,7 +97,7 @@ export function useRunSync({
     dispatch(workspaceApi.util.invalidateTags(["ReviewFindings"]));
   }, [cache, dispatch]);
 
-  // Transcript and live-diff pushes are scoped to the selected running tab.
+  // Transcript pushes are scoped to the selected running tab.
   // Debounce transcript refetches to coalesce event bursts.
   useEffect(() => {
     if (!activeRunId || activeRunStatus !== "running") return;
@@ -115,23 +115,22 @@ export function useRunSync({
       if (runId === activeRunId) scheduleRefetch();
     });
 
-    // Live workspace diff: invalidate cached diff queries on each
-    // incremental recomputation so the UI re-renders with fresh changes.
-    const offDiff = appEvents.runs.onDiffUpdated(({ runId, workspaceId }) => {
-      if (runId !== activeRunId) return;
-      dispatch(
-        workspaceApi.util.invalidateTags([
-          { type: "WorkspaceDiffs", id: workspaceId },
-        ]),
-      );
-    });
-
     return () => {
       offEvent();
-      offDiff();
       if (refetchTimer !== null) window.clearTimeout(refetchTimer);
     };
-  }, [activeRunId, activeRunStatus, loadRunDetails, dispatch]);
+  }, [activeRunId, activeRunStatus, loadRunDetails]);
+
+  // The backend recomputes and broadcasts the workspace diff after undo too.
+  // Keep this listener alive when the selected run is finished, and refresh
+  // the affected workspace even if another run or the editor is selected.
+  useEffect(() => appEvents.runs.onDiffUpdated(({ workspaceId }) => {
+    dispatch(
+      workspaceApi.util.invalidateTags([
+        { type: "WorkspaceDiffs", id: workspaceId },
+      ]),
+    );
+  }), [dispatch]);
 
   // Run status is workspace-scoped, not tab-scoped. Keep listening while any
   // run is open, so an inactive tab cannot miss its terminal event and a
