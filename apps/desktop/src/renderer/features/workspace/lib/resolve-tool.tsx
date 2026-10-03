@@ -1,4 +1,4 @@
-import { Mcp } from "@/components/ui/icons";
+import { GenericTool } from "@/components/ui/icons";
 import {
   BUILTIN_TOOLS,
   DEFAULT_VERBS,
@@ -200,7 +200,7 @@ function resolveUnknownMcp(lower: string): ResolvedTool {
   const rawVerb = ueIdx > 0 ? verbAndEntity.slice(0, ueIdx) : verbAndEntity;
   const rawEntity = ueIdx > 0 ? verbAndEntity.slice(ueIdx + 1) : "";
   const verbInfo = DEFAULT_VERBS[rawVerb];
-  const icon = <Mcp className="size-4" />;
+  const icon = <GenericTool className="size-4" />;
 
   if (verbInfo) {
     const entity = snakeToWords(rawEntity);
@@ -289,7 +289,7 @@ function resolveToolImpl(toolName: string): ResolvedTool {
     groupKey: lower || "unknown",
     groupLabel: label,
     category: "Tool",
-    icon: <Mcp className="size-4" />,
+    icon: <GenericTool className="size-4" />,
     isBuiltin: false,
   };
 }

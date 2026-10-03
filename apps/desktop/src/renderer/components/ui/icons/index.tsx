@@ -174,6 +174,8 @@ export { default as Steer} from "./steer"
 export { default as Queue} from "./queue"
 export { default as Drag} from "./drag"
 export { default as ViewFile} from "./view-file"
+export { default as GenericTool} from "./generic-tool"
+export { default as Sql} from "./sql"
 
 
 
