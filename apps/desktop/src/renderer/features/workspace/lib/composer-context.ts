@@ -16,6 +16,7 @@
  * hook all read the same identity rules from here.
  */
 
+import type { ReviewComment } from "@mains/contracts/review-comments";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { AppshotCapture } from "../../../../shared/appshots";
 import type { BrowserSelectionElement } from "../../../../shared/browser-annotation";
@@ -87,6 +88,7 @@ export type ContextSignalItem = { kind: "signal" } & ContextSignal;
 export type ContextSkillItem = { kind: "skill" } & ContextSkill;
 export type ContextBrowserItem = { kind: "browser" } & ContextBrowserSelection;
 export type ContextAppshotItem = { kind: "appshot" } & AppshotCapture;
+export type ContextReviewItem = { kind: "review" } & ReviewComment;
 export type ContextCodeItem = { kind: "code" } & ContextCodeSelection;
 export interface ContextMcpAppItem {
   kind: "mcp-app";
@@ -108,6 +110,7 @@ export type ContextItem =
   | ContextBrowserItem
   | ContextAppshotItem
   | ContextCodeItem
+  | ContextReviewItem
   | ContextMcpAppItem;
 
 export type ContextKind = ContextItem["kind"];
@@ -130,6 +133,7 @@ export function contextItemKey(item: ContextItem): string {
     case "browser":
     case "appshot":
     case "code":
+    case "review":
     case "mcp-app":
       return item.id;
   }
@@ -162,6 +166,7 @@ export interface GroupedContext {
   readonly browserSelections: readonly ContextBrowserItem[];
   readonly appshots: readonly ContextAppshotItem[];
   readonly codeSelections: readonly ContextCodeItem[];
+  readonly reviewComments: readonly ContextReviewItem[];
   readonly mcpApps: readonly ContextMcpAppItem[];
 }
 
@@ -182,6 +187,7 @@ const EMPTY_GROUPED: GroupedContext = Object.freeze({
   browserSelections: [],
   appshots: [],
   codeSelections: [],
+  reviewComments: [],
   mcpApps: [],
 });
 
@@ -201,7 +207,8 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
     browserSelections: [],
     appshots: [],
     codeSelections: [],
-    mcpApps: [],
+    reviewComments: [],
+  mcpApps: [],
   };
   for (const item of items) {
     switch (item.kind) {
@@ -225,6 +232,9 @@ export function groupContextItems(items: readonly ContextItem[]): GroupedContext
         break;
       case "code":
         grouped.codeSelections.push(item);
+        break;
+      case "review":
+        grouped.reviewComments.push(item);
         break;
       case "mcp-app":
         grouped.mcpApps.push(item);

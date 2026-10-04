@@ -15,7 +15,6 @@ import { useComposerContext } from "../hooks/use-composer-context";
 import {
   AsciiSpinner,
   Button,
-  DropdownWrapper,
   RichInputForm,
   Tooltip,
   toast,
@@ -31,8 +30,6 @@ import { useModeConfig } from "@/hooks/use-mode-config";
 import { isElectron, useIsMobile } from "@/lib/platform";
 import { appApi } from "@/lib/transport";
 import { useRealtimeVoice } from "../hooks/use-realtime-voice";
-import { useClickOutside } from "@/hooks/use-click-outside";
-import { Chat, Check, Plus } from "@/components/ui/icons";
 import {
   UnifiedContextDropdown,
   type UnifiedContextBucket,
@@ -66,6 +63,8 @@ import {
 } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 import type { RunSettingConfig } from "@mains/contracts/run-settings";
+import type { ComposerSendTarget } from "../lib/composer-send-target";
+import { ComposerSendTargetSelect } from "./composer-send-target-select";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 const EMPTY_DIRECTORIES: string[] = [];
@@ -156,12 +155,7 @@ interface UnifiedMenuState {
   bucket: UnifiedContextBucket | null;
 }
 
-export interface ComposerSendTarget {
-  /** Run the next send continues, or null for a new chat. */
-  runId: string | null;
-  label: string;
-  options: Array<{ runId: string | null; label: string }>;
-}
+export type { ComposerSendTarget } from "../lib/composer-send-target";
 
 interface WorkspaceInputProps {
   runQueue?: ComposerRunQueue;
@@ -749,19 +743,14 @@ export function WorkspaceInput({
 
   const [isFileDragOver, setIsFileDragOver] = useState(false);
 
-  const sendTargetDropdownRef = useRef<HTMLDivElement>(null);
-  const [targetMenuOpen, setTargetMenuOpen] = useState(false);
   const previousFloatingChatMode = useRef(floatingChatMode);
   useLayoutEffect(() => {
     const previousMode = previousFloatingChatMode.current;
     previousFloatingChatMode.current = floatingChatMode;
     if (layout !== "floating" || previousMode === floatingChatMode) return;
     updateUnifiedMenu({ visible: false, filter: "" });
-    setTargetMenuOpen(false);
   }, [floatingChatMode, layout]);
-  useClickOutside(sendTargetDropdownRef, () => {
-    if (targetMenuOpen) setTargetMenuOpen(false);
-  });
+
 
   const handleWrapperDragEnter = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -1035,62 +1024,7 @@ export function WorkspaceInput({
         )}
         {sendTarget && (
           <div className="flex px-4 pt-3 -mb-1">
-            <div className="relative min-w-0 max-w-full" ref={sendTargetDropdownRef}>
-              <Button
-                type="button"
-                onClick={() => setTargetMenuOpen((open) => !open)}
-                className="flex max-w-full items-center gap-1.5 pl-2 pr-1.5 py-1 rounded-full glass-button text-xs dark:text-primary-300 text-primary-700 cursor-pointer"
-                title="Choose which chat this message is sent to"
-                aria-haspopup="menu"
-                aria-expanded={targetMenuOpen}
-              >
-                {sendTarget.runId ? (
-                  <Chat className="size-3 shrink-0" />
-                ) : (
-                  <Plus className="size-3 shrink-0" />
-                )}
-                <span className="truncate max-w-60">{sendTarget.label}</span>
-              </Button>
-              <DropdownWrapper
-                isOpen={targetMenuOpen}
-                aria-label="Send message to"
-                openUpward
-                minWidth="min-w-20"
-              >
-                <div className="max-h-80 overflow-auto noscrollbar py-1">
-                  {sendTarget.options.map((option) => {
-                    const isSelected = option.runId === sendTarget.runId;
-                    return (
-                      <Button
-                        key={option.runId ?? "new"}
-                        type="button"
-                        onClick={() => {
-                          setTargetMenuOpen(false);
-                          onSendTargetChange?.(option.runId);
-                        }}
-                        className={`w-full text-left px-3 py-2 cursor-pointer text-sm transition-colors flex items-center gap-2 ${
-                          isSelected
-                            ? "bg-primary-200/60 dark:bg-primary-200/10 text-primary-950 dark:text-primary"
-                            : "hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300"
-                        }`}
-                        role="menuitemradio"
-                        aria-checked={isSelected}
-                      >
-                        {option.runId ? (
-                          <Chat className="size-3.5 shrink-0" />
-                        ) : (
-                          <Plus className="size-3.5 shrink-0" />
-                        )}
-                        <span className="min-w-0 flex-1 truncate">
-                          {option.label}
-                        </span>
-                        {isSelected && <Check className="size-3.5 shrink-0" />}
-                      </Button>
-                    );
-                  })}
-                </div>
-              </DropdownWrapper>
-            </div>
+            <ComposerSendTargetSelect target={sendTarget} onChange={onSendTargetChange} />
           </div>
         )}
         {runQueue?.editing && <div className="flex items-center justify-between gap-2 px-4 pt-3 text-xs text-primary-500">

@@ -9,7 +9,7 @@ const SvgComponent = (props: SVGProps<SVGSVGElement>) => (
     stroke="currentColor"
     strokeLinecap="round"
     strokeLinejoin="round"
-    strokeWidth={1.5}
+    strokeWidth={2}
     color="currentColor"
     {...props}
     viewBox="0 0 24 24"

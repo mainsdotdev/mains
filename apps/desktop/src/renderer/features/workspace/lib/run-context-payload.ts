@@ -252,6 +252,7 @@ export function buildRunContextPayload(
     browserSelections,
     appshots,
     codeSelections,
+    reviewComments,
     mcpApps,
   } = groupContextItems(items ?? []);
 
@@ -262,6 +263,16 @@ export function buildRunContextPayload(
     ...capturedWindows.initialContext,
     ...browser.initialContext,
     ...codeSelectionsToContext(codeSelections),
+    ...reviewComments.map(({ kind: _kind, ...comment }) => ({
+      kind: "selection" as const,
+      ref: `${comment.absolutePath}#${comment.side === "deletions" ? "L" : "R"}${comment.lineNumber}`,
+      content: [
+        `Review comment on ${comment.filePath} (${comment.side === "deletions" ? "old" : "new"} version, line ${comment.lineNumber}):`,
+        `Code: ${comment.lineText}`,
+        `User comment: ${comment.comment}`,
+      ].join("\n"),
+      metadata: { source: "review", ...comment },
+    })),
     ...apps.initialContext,
   ];
 

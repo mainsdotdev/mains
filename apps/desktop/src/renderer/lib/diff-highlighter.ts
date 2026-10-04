@@ -7,7 +7,8 @@ import { preloadHighlighter } from "@pierre/diffs";
  * The shiki highlighter behind them loads async, and a surface mounted before it
  * lands paints *nothing*: `DiffHunksRenderer.renderDiff` returns undefined while
  * the renderer holds no highlighter, and `FileDiff.render` bails on that with no
- * repaint of its own unless a worker pool is attached — the app attaches none.
+ * repaint of its own unless a worker pool is attached. Review uses a pool;
+ * other surfaces need this gate.
  * What the user sees is a blank pane that only fills in once something else
  * re-renders it: clicking a second file, switching a tab.
  *

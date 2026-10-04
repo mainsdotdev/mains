@@ -80,6 +80,7 @@ export function floatingChatSize(
 interface FloatingChatOverlayProps {
   /** The host owns chat/run selection; this surface only displays its title and activity. */
   title?: string;
+  titleControl?: ReactNode;
   iconTooltip?: string;
   activity?: "running" | "queued" | null;
   mode: FloatingChatMode;
@@ -94,6 +95,7 @@ interface FloatingChatOverlayProps {
 /** Host supplies chat content and controls; this surface owns its layout and transitions. */
 export function FloatingChatOverlay({
   title = "New chat",
+  titleControl,
   iconTooltip,
   activity = null,
   mode,
@@ -304,9 +306,9 @@ export function FloatingChatOverlay({
               >
                 <Minus className="size-3.5 " />
               </Button>
-              <span className="min-w-0 flex-1 truncate text-s font-medium" title={title}>
+              {titleControl ?? <span className="min-w-0 flex-1 truncate text-s font-medium" title={title}>
                 {title}
-              </span>
+              </span>}
               {actions}
             </div>
             <m.div

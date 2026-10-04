@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import reducer, {
   activateWorkspaceView,
+  openReviewTab,
+  closeReviewTab,
+  setReviewRunId,
   addContextItem,
   addContextItemForKey,
   clearContextItems,
@@ -254,5 +257,28 @@ describe("workspaceSlice — deleted UI owners", () => {
     expect(state.draftTextByKey[draftA]).toBeUndefined();
     expect(state.draftTextByKey[runA]).toBe("run draft");
     expect(state.activeWorkspaceIdByProvider.codex).toBe("ws-b");
+  });
+});
+
+
+describe("workspace review tab", () => {
+  it("keeps one tab with its conversation target and restores it per workspace", () => {
+    let state = reducer(undefined, activateWorkspaceView({ key: "view-a", workspaceId: "ws-a", providerId: "codex" }));
+    state = reducer(state, setActiveTab("run-a"));
+    state = reducer(state, openReviewTab());
+    state = reducer(state, openReviewTab());
+    expect(state.activeTab).toBe("review");
+    expect(state.reviewRunId).toBe("run-a");
+    expect(state.reviewTabOpen).toBe(true);
+    state = reducer(state, setReviewRunId("review-conversation"));
+    state = reducer(state, activateWorkspaceView({ key: "view-b", workspaceId: "ws-b", providerId: "codex" }));
+    expect(state.reviewTabOpen).toBe(false);
+    expect(state.reviewRunId).toBeNull();
+    state = reducer(state, activateWorkspaceView({ key: "view-a", workspaceId: "ws-a", providerId: "codex" }));
+    expect(state.activeTab).toBe("review");
+    expect(state.reviewRunId).toBe("review-conversation");
+    state = reducer(state, closeReviewTab());
+    expect(state.reviewTabOpen).toBe(false);
+    expect(state.activeTab).toBe("editor");
   });
 });

@@ -1,3 +1,4 @@
+import { readReviewComments } from "@mains/contracts/review-comments";
 // ─────────────────────────────────────────────────────────────
 // Shared utilities for work run adapters (Claude & Copilot)
 // Pure functions with no SDK-specific dependencies.
@@ -610,6 +611,7 @@ export async function emitUserPromptArtifact(
     model?: string;
   },
 ): Promise<void> {
+  const reviewComments = readReviewComments((options?.context ?? []).flatMap(({ metadata }) => metadata?.source === "review" ? [metadata] : []));
   const browserAnnotations: BrowserAnnotation[] = (options?.context ?? []).flatMap(({ metadata, ref }, index) => {
     if (metadata?.source !== "browser" || !Array.isArray(metadata.elements)) return [];
     const elements = metadata.elements.flatMap((element) => {
@@ -643,6 +645,7 @@ export async function emitUserPromptArtifact(
       ...(options?.providerTurnId ? { providerTurnId: options.providerTurnId } : {}),
       ...(options?.delivery ? { delivery: options.delivery } : {}),
       ...(browserAnnotations.length ? { browserAnnotations } : {}),
+      ...(reviewComments.length ? { reviewComments } : {}),
       attachments: options?.attachments?.map((a) => {
         const captureName =
           a.sourcePath && a.sourcePath.replace(/\\/g, "/").includes("/browser-captures/")

@@ -2,7 +2,7 @@ import type { IssueWithEntity, SignalWithEntity } from "@/lib/redux/api";
 import type { ReviewTab } from "@/lib/redux/slices/workspaceSlice";
 import type { Run } from "../types";
 
-/** Matches tab strip order in `WorkspaceTabs`: editor → issues → signals → notes → runs → new-run. */
+/** Matches tab strip order in `WorkspaceTabs`: editor → issues → signals → notes → review → runs → new-run. */
 export function isFirstWorkspaceTabActive(params: {
   selectedFile: unknown | null | undefined;
   activeTab: "editor" | string;
@@ -11,6 +11,7 @@ export function isFirstWorkspaceTabActive(params: {
   openNoteTabs: ReviewTab[];
   runs: Run[];
   showNewRunTab?: boolean;
+  reviewTabOpen?: boolean;
 }): boolean {
   const {
     selectedFile,
@@ -20,6 +21,7 @@ export function isFirstWorkspaceTabActive(params: {
     openNoteTabs,
     runs,
     showNewRunTab,
+    reviewTabOpen,
   } = params;
 
   if (selectedFile) {
@@ -34,6 +36,7 @@ export function isFirstWorkspaceTabActive(params: {
   if (openNoteTabs.length > 0) {
     return activeTab === `note:${openNoteTabs[0].id}`;
   }
+  if (reviewTabOpen) return activeTab === "review";
   if (runs.length > 0) {
     return activeTab === runs[0].id;
   }

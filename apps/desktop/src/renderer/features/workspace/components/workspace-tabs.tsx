@@ -1,4 +1,4 @@
-import { Plus, Note, Document, Picture } from "@/components/ui/icons";
+import { Plus, Note, Document, Picture, Review } from "@/components/ui/icons";
 import { RunTab, getTabTitle } from "./run-tab";
 import { EditorTab } from "./editor-tab";
 import { IssueTab } from "./issue-tab";
@@ -20,6 +20,9 @@ const EMPTY_NOTE_TABS: ReviewTabType[] = [];
 
 interface WorkspaceTabsProps {
   runs: Run[];
+  reviewTabOpen?: boolean;
+  onSelectReviewTab?: () => void;
+  onCloseReviewTab?: (event: React.MouseEvent) => void;
   activeTab: "editor" | string;
   hasSelectedFile?: boolean;
   fileName?: string;
@@ -46,6 +49,9 @@ interface WorkspaceTabsProps {
 
 export function WorkspaceTabs({
   runs,
+  reviewTabOpen = false,
+  onSelectReviewTab,
+  onCloseReviewTab,
   activeTab,
   hasSelectedFile,
   fileName,
@@ -124,6 +130,8 @@ export function WorkspaceTabs({
         onClose: (e) => onCloseNoteTab?.(n.id, e),
       });
     });
+    if (reviewTabOpen) mobileTabs.push({ id: "review", label: "Review", icon: <Review className="size-4" />, group: "Review",
+      onSelect: () => onSelectReviewTab?.(), onClose: onCloseReviewTab });
     runs.forEach((r) => {
       mobileTabs.push({
         id: r.id,
@@ -210,13 +218,18 @@ export function WorkspaceTabs({
           );
         })}
 
+        {reviewTabOpen && <BaseTab isActive={activeTab === "review"}
+          isFirst={!hasSelectedFile && !issueTabs.length && !signalTabs.length && !noteTabs.length}
+          role="tab" ariaLabel="Review" label="Review" icon={<Review className="size-4" />}
+          onClick={() => onSelectReviewTab?.()} onClose={onCloseReviewTab} closeLabel="Close Review tab" />}
+
         {runs.map((run, i) => (
           <RunTab
             variant={variant}
             key={run.id}
             run={run}
             isActive={run.id === activeTab}
-            isFirst={!hasSelectedFile && issueTabs.length === 0 && signalTabs.length === 0 && noteTabs.length === 0 && i === 0}
+            isFirst={!hasSelectedFile && issueTabs.length === 0 && signalTabs.length === 0 && noteTabs.length === 0 && !reviewTabOpen && i === 0}
             onClick={() => onSelectRunTab(run.id)}
             onClose={() => onCloseTab(run.id)}
             onRename={(newTitle) => onRenameRun(run.id, newTitle)}
@@ -228,7 +241,7 @@ export function WorkspaceTabs({
             <NewRunTab
               variant={variant!}
               isActive={activeTab === "new-run"}
-              isFirst={!hasSelectedFile && issueTabs.length === 0 && signalTabs.length === 0 && noteTabs.length === 0 && runs.length === 0}
+              isFirst={!hasSelectedFile && issueTabs.length === 0 && signalTabs.length === 0 && noteTabs.length === 0 && !reviewTabOpen && runs.length === 0}
               onClick={() => onSelectNewRunTab?.()}
               onClose={(e) => onCloseNewRunTab?.(e)}
             />

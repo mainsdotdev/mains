@@ -55,7 +55,7 @@ export function SessionPanelTrigger({
           : "text-primary-700 dark:text-primary-300"
       }`}
     >
-      <Menu className="size-4" />
+      <Menu className="size-4" fill={isOpen ? "currentColor" : "none"} />
     </Button>
   );
 }

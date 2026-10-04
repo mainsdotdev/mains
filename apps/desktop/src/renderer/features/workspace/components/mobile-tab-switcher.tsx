@@ -8,7 +8,7 @@ export interface MobileTab {
   id: string;
   label: string;
   icon: ReactNode;
-  group: "Editor" | "Issues" | "Signals" | "Notes" | "Runs";
+  group: "Editor" | "Issues" | "Signals" | "Notes" | "Review" | "Runs";
   onSelect: () => void;
   onClose?: (e: React.MouseEvent) => void;
 }
@@ -18,6 +18,7 @@ const GROUP_ORDER: MobileTab["group"][] = [
   "Issues",
   "Signals",
   "Notes",
+  "Review",
   "Runs",
 ];
 

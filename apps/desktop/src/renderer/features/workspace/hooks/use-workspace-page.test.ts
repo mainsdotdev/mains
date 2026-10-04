@@ -11,11 +11,13 @@ import workspaceReducer, {
   activateWorkspaceView,
   setActiveTab,
   openNewRunTab,
+  openReviewTab,
+  addContextItem,
   setContextItemsForKey,
   replaceMcpAppContext,
 } from "@/lib/redux/slices/workspaceSlice";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
-import type { ContextBrowserItem, ContextMcpAppItem } from "../lib/composer-context";
+import type { ContextBrowserItem, ContextMcpAppItem, ContextReviewItem } from "../lib/composer-context";
 
 const mocks = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => mocks.panel
   ? { appContext: mocks.appContext, attachRun: mocks.attachAppRun } : null }));
 vi.mock("@/lib/transport", () => ({
   getTransport: () => ({ invoke: mocks.writeSettings }),
+  appEvents: { runs: { onUpdated: () => () => {} } },
   appApi: {
     account: { get: () => Promise.resolve({ success: true, data: { id: "account-1" } }) },
     runs: {
@@ -674,5 +677,57 @@ describe("Codex running composer", () => {
     expect(mocks.continueRun).not.toHaveBeenCalled();
     expect(mocks.executeRun).not.toHaveBeenCalled();
     page.unmount();
+  });
+});
+
+
+describe("review conversation", () => {
+  const reviewComment: ContextReviewItem = {
+    kind: "review", id: "comment-1", workspaceId: "ws-1", filePath: "a.ts", absolutePath: "/repo/a.ts",
+    side: "additions", lineNumber: 3, lineText: "newValue", patchId: "patch", comment: "Handle empty input.",
+  };
+  it("opens review without runs, sends comment-only input, and keeps review selected for the reply", async () => {
+    mocks.mode = "developer"; mocks.workspaceId = "ws-1";
+    const created = { ...run, id: "review-chat", workspaceId: "ws-1", mode: "developer", status: "running" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [] });
+    mocks.getById.mockResolvedValue({ success: true, data: created });
+    mocks.executeRun.mockResolvedValue(created.id);
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showEmptyState).toBe(true));
+    act(() => { page.store.dispatch(openReviewTab()); page.store.dispatch(addContextItem(reviewComment)); });
+    expect(page.result.current.showEmptyState).toBe(false);
+    expect(page.result.current.activeTab).toBe("review");
+    await act(async () => { expect(await page.result.current.handleExecute()).toBe(created.id); });
+    expect(mocks.executeRun.mock.calls[0][0]).toBe("Address the attached review comments.");
+    expect(mocks.executeRun.mock.calls[0][5]).toEqual([reviewComment]);
+    expect(page.result.current.activeTab).toBe("review");
+    expect(page.result.current.composerRun?.id).toBe(created.id);
+    expect(page.result.current.activeRunId).toBe(created.id);
+    expect(page.result.current.contextItems).toEqual([]);
+  });
+
+  it("continues the selected conversation and preserves a comment edited while sending", async () => {
+    mocks.mode = "developer"; mocks.workspaceId = "ws-1";
+    const existing = { ...run, workspaceId: "ws-1", mode: "developer" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
+    mocks.getById.mockResolvedValue({ success: true, data: existing });
+    mocks.checkCanResume.mockResolvedValue(true);
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+    act(() => { page.store.dispatch(openReviewTab()); page.store.dispatch(addContextItem(reviewComment)); });
+    expect(page.result.current.composerRun?.id).toBe(existing.id);
+    let finish!: (value: boolean) => void;
+    mocks.continueRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    let sending!: Promise<string | null | undefined>;
+    act(() => { sending = page.result.current.handleExecute(); });
+    await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    const edited = { ...reviewComment, comment: "Updated while sending" };
+    act(() => page.store.dispatch(setContextItemsForKey({ key: page.result.current.ownerKey, items: [edited] })));
+    await act(async () => { finish(true); await sending; });
+    expect(page.result.current.activeTab).toBe("review");
+    expect(page.result.current.contextItems).toEqual([edited]);
+    act(() => page.result.current.handleSendTargetChange(null));
+    expect(page.result.current.composerRun).toBeUndefined();
+    expect(page.result.current.sendTarget?.label).toBe("New chat");
   });
 });

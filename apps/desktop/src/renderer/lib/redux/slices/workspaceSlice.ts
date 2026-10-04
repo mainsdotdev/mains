@@ -8,6 +8,7 @@ import {
   type ContextItem,
   type ContextKind,
 } from "@/features/workspace/lib/composer-context";
+import { isRunTab } from "@/features/workspace/lib/repo-utils";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import {
@@ -49,6 +50,8 @@ interface WorkspaceViewSnapshot {
   openSignalTabs: SignalWithEntity[];
   openNoteTabs: ReviewTab[];
   sidebarTab: WorkspaceSidebarTab;
+  reviewTabOpen?: boolean;
+  reviewRunId?: string | null;
 }
 
 export interface WorkspaceState {
@@ -99,6 +102,8 @@ export interface WorkspaceState {
   openIssueTabs: IssueWithEntity[];
   openSignalTabs: SignalWithEntity[];
   openNoteTabs: ReviewTab[];
+  reviewTabOpen: boolean;
+  reviewRunId: string | null;
   pendingGoal: string | null;
   pendingAutoExecute: boolean;
   /**
@@ -152,6 +157,8 @@ const initialState: WorkspaceState = {
   openIssueTabs: [],
   openSignalTabs: [],
   openNoteTabs: [],
+  reviewTabOpen: false,
+  reviewRunId: null,
   pendingGoal: null,
   pendingAutoExecute: false,
   providerAuthTerminal: null,
@@ -170,6 +177,8 @@ function snapshotWorkspaceView(state: WorkspaceState): WorkspaceViewSnapshot {
     openSignalTabs: state.openSignalTabs,
     openNoteTabs: state.openNoteTabs,
     sidebarTab: state.sidebarTab,
+    reviewTabOpen: state.reviewTabOpen,
+    reviewRunId: state.reviewRunId,
   };
 }
 
@@ -186,6 +195,8 @@ function restoreWorkspaceView(state: WorkspaceState, view?: WorkspaceViewSnapsho
   state.openIssueTabs = view?.openIssueTabs ?? [];
   state.openSignalTabs = view?.openSignalTabs ?? [];
   state.openNoteTabs = view?.openNoteTabs ?? [];
+  state.reviewTabOpen = view?.reviewTabOpen ?? false;
+  state.reviewRunId = view?.reviewRunId ?? null;
 }
 
 function detachRunFromViews(state: WorkspaceState, backendId: string, runId: string): void {
@@ -195,6 +206,7 @@ function detachRunFromViews(state: WorkspaceState, backendId: string, runId: str
   for (const [key, view] of Object.entries(state.workspaceViews)) {
     if (!viewKeyBelongsToBackend(key, backendId)) continue;
     if (view.activeTab === runId) view.activeTab = "editor";
+    if (view.reviewRunId === runId) view.reviewRunId = null;
     if (view.previousNonEditorTab === runId) view.previousNonEditorTab = null;
   }
   if (state.workspaceViewKey && viewKeyBelongsToBackend(state.workspaceViewKey, backendId)) {
@@ -203,6 +215,7 @@ function detachRunFromViews(state: WorkspaceState, backendId: string, runId: str
       // A stale list may still contain this run until its query refreshes.
       state.workspaceViewNeedsDefaultRun = false;
     }
+    if (state.reviewRunId === runId) state.reviewRunId = null;
     if (state.previousNonEditorTab === runId) state.previousNonEditorTab = null;
   }
   if (state.pendingRunId === runId) state.pendingRunId = null;
@@ -380,6 +393,22 @@ const workspaceSlice = createSlice({
         state.previousNonEditorTab = state.activeTab;
       }
       state.activeTab = action.payload;
+    },
+    openReviewTab: (state) => {
+      if (!state.reviewTabOpen) {
+        const target = isRunTab(state.activeTab) ? state.activeTab : state.previousNonEditorTab;
+        state.reviewRunId = target && isRunTab(target) ? target : null;
+      }
+      state.reviewTabOpen = true;
+      state.workspaceViewNeedsDefaultRun = false;
+      state.activeTab = "review";
+    },
+    closeReviewTab: (state) => {
+      state.reviewTabOpen = false;
+      if (state.activeTab === "review") state.activeTab = "editor";
+    },
+    setReviewRunId: (state, action: PayloadAction<string | null>) => {
+      state.reviewRunId = action.payload;
     },
     /** Attach an item, unless the same one is already attached. */
     addContextItem: (state, action: PayloadAction<ContextItem>) => {
@@ -581,6 +610,9 @@ export const {
   expandExplorerPaths,
   collapseAllExplorerPaths,
   setActiveTab,
+  openReviewTab,
+  closeReviewTab,
+  setReviewRunId,
   addContextItem,
   addContextItemForKey,
   setContextItemsForKey,

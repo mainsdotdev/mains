@@ -103,7 +103,7 @@ export function SessionPanel({
       className={`fixed z-(--z-panel-toggle) w-(--session-panel-width) max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl glass-outline dark:bg-primary-950 bg-primary will-change-transform ${
         // Lying on top of the transcript, it needs the lift to read as a
         // separate surface; sharing the layout, it doesn't overlap anything.
-        floating ? "shadow-2xl" : ""
+        floating ? "shadow-sm" : ""
       }`}
       style={{
         // Tucked under the top-right toolbar, aligned to the same edge — inside

@@ -1,5 +1,5 @@
 import { useComposerRunQueue, type QueueMessageSnapshot } from "./use-composer-run-queue";
-import { hasComposerMessage } from "../lib/composer-message";
+import { composerAnnotationPrompt, hasComposerMessage } from "../lib/composer-message";
 import { runMessageQueue } from "../lib/run-message-queue";
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { toast } from "@/components/ui";
@@ -8,6 +8,7 @@ import { useAppSelector, useAppDispatch } from "@/lib/redux/hooks";
 import {
   transferConversationSettings,
   setActiveTab,
+  setReviewRunId,
   activateWorkspaceView,
   setComposerContextKey,
   setDraftText,
@@ -17,7 +18,7 @@ import {
   openNewRunTab,
   setSelectedCollectionId,
 } from "@/lib/redux/slices/workspaceSlice";
-import { isRunTab, isNewRunTab } from "@/features/workspace/lib/repo-utils";
+import { isRunTab, isNewRunTab, isReviewTab } from "@/features/workspace/lib/repo-utils";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useComposerContext } from "./use-composer-context";
 import { useTransientUploads, getTransientUploadsForOwner, moveTransientUploadsToOwner } from "./use-transient-uploads";
@@ -35,7 +36,6 @@ import { collectionIdForVisibleRun } from "@/features/workspace/lib/run-collecti
 import { store } from "@/lib/redux";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import { contextItemKey } from "../lib/composer-context";
-import { browserAnnotationPrompt } from "../lib/browser-annotation";
 import type { McpAppMessageOptions } from "../lib/mcp-app-context";
 import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 import { useConversationSettings } from "./use-conversation-settings";
@@ -60,6 +60,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   const selectedFile = useAppSelector(
     (state) => state.workspace.selectedFile,
   );
+  const { reviewTabOpen, reviewRunId } = useAppSelector((state) => state.workspace);
   const activeViewKey = useAppSelector((state) => state.workspace.workspaceViewKey);
   const workspaceViewNeedsDefaultRun = useAppSelector(
     (state) => state.workspace.workspaceViewNeedsDefaultRun,
@@ -181,7 +182,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     composeTargetOverride.workspace === workspaceId
       ? composeTargetOverride.value
       : null;
-  const isRetargetable = activeTab === "editor" && runs.length > 0;
+  const isRetargetable = (activeTab === "editor" || isReviewTab(activeTab)) && runs.length > 0;
   const fallbackTargetRunId =
     previousNonEditorTab &&
     isRunTab(previousNonEditorTab) &&
@@ -190,6 +191,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       : null;
   const composeTargetRunId = isRunTab(activeTab)
     ? activeTab
+    : isReviewTab(activeTab)
+      ? runs.some((run) => run.id === reviewRunId) ? reviewRunId : null
     : !isRetargetable || overrideValue === "new"
       ? null
       : overrideValue && runs.some((r) => r.id === overrideValue)
@@ -240,7 +243,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     conversationSettings, setSettings: conversation.changeSettings,
   });
   const handleQueueSnapshot = (snapshot: QueueMessageSnapshot) => {
-    const text = snapshot.text.trim() || browserAnnotationPrompt(snapshot.contextItems);
+    const text = snapshot.text.trim() || composerAnnotationPrompt(snapshot.contextItems);
     if (!hasComposerMessage(text, snapshot.files.length, snapshot.contextItems)) return false;
     return runQueue.submitSnapshot({ ...snapshot, text,
       contextItems: [...snapshot.contextItems, ...(snapshot.editingId ? [] : appContext?.(ownerKey) ?? [])],
@@ -308,6 +311,10 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey || !showTabs) return; // tab-less neutral state is the new-chat screen
+    if (isReviewTab(activeTab)) {
+      if (composeTargetRunId && selectedRunId !== composeTargetRunId) selectTab(composeTargetRunId);
+      return;
+    }
     if (isRunTab(activeTab)) {
       if (selectedRunId !== activeTab) selectTab(activeTab);
       return;
@@ -319,7 +326,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       dispatch(setActiveTab(target.id));
       selectTab(target.id);
     }
-  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, selectedRunId, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
+  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, composeTargetRunId, selectedRunId, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
 
   // Tab-less modes use "editor" as the neutral placeholder for a new chat.
   useEffect(() => {
@@ -352,7 +359,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     setRuns,
   });
 
-  const activeRunId = isRunTab(activeTab) ? activeTab : null;
+  const activeRunId = isReviewTab(activeTab) ? composeTargetRunId : isRunTab(activeTab) ? activeTab : null;
 
   // ── Composer send target ──
   // On the editor tab the composer has no run context of its own, so every
@@ -435,7 +442,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     const draft = currentState.draftTextByKey[ownerKey] ?? goal;
     const files = getTransientUploadsForOwner(ownerKey);
     const items = currentState.composerContextKey === ownerKey ? currentState.contextItems : currentState.contextItemsByKey[ownerKey] ?? contextItems;
-    const text = (message ?? draft).trim() || (message === undefined ? browserAnnotationPrompt(items) : "");
+    const text = (message ?? draft).trim() || (message === undefined ? composerAnnotationPrompt(items) : "");
     if (!hasComposerMessage(text, files.length, items)) return null;
     if (mode === "developer" && !workspaceId) {
       toast.error("Select a workspace before sending a prompt.");
@@ -489,7 +496,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       const remaining = current.filter((item) => !submitted.some((sent) =>
         item.kind === sent.kind && contextItemKey(item) === contextItemKey(sent) &&
         (item.kind !== "mcp-app" || sent.kind !== "mcp-app" || item.updateId === sent.updateId) &&
-        (item.kind !== "browser" || sent.kind !== "browser" || item.comment === sent.comment)));
+        (item.kind !== "browser" || sent.kind !== "browser" || item.comment === sent.comment) &&
+        (item.kind !== "review" || sent.kind !== "review" || item.comment === sent.comment)));
       const draft = state.draftTextByKey[ownerKey] ?? "";
       const remainingDraft = message === undefined && draft.trim() === text ? "" : draft;
       dispatch(setContextItemsForKey({ key: ownerKey, items: remaining }));
@@ -509,8 +517,13 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       const visible = store.getState().workspace;
       if (visible.workspaceViewKey !== viewKey ||
           (visible.composerContextKey !== ownerKey && visible.composerContextKey !== nextOwnerKey)) return nextRunId;
-      dispatch(setActiveTab(nextRunId));
-      if (continuing) selectTab(nextRunId);
+      if (isReviewTab(visible.activeTab)) {
+        dispatch(setReviewRunId(nextRunId));
+        selectTab(nextRunId);
+      } else {
+        dispatch(setActiveTab(nextRunId));
+        if (continuing) selectTab(nextRunId);
+      }
       if (mode !== "developer") navigate(`/code/runs/${nextRunId}`);
       return nextRunId;
     } finally { sendingRef.current = false; }
@@ -588,13 +601,14 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
 
   const handleSendTargetChange = useCallback(
     (runId: string | null) => {
+      if (isReviewTab(activeTab)) { dispatch(setReviewRunId(runId)); return; }
       setComposeTargetOverride({
         tab: activeTab,
         workspace: workspaceId,
         value: runId ?? "new",
       });
     },
-    [activeTab, workspaceId],
+    [activeTab, workspaceId, dispatch],
   );
 
   // The run the composer acts on — the retarget target on the editor tab,
@@ -613,7 +627,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     openIssueTabs.length === 0 &&
     openSignalTabs.length === 0 &&
     openNoteTabs.length === 0 &&
-    !showNewRunTab;
+    !showNewRunTab && !reviewTabOpen;
   const showEmptyState = runsLoaded && isEmptyViewCandidate;
   const isEmptyStatePending = !runsLoaded && isEmptyViewCandidate;
 
@@ -643,6 +657,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     openIssueTabs,
     openSignalTabs,
     openNoteTabs,
+    reviewTabOpen,
     runs,
     runsLoaded,
     activeRun,

@@ -48,7 +48,11 @@ import {
   isExitPlanApproval,
   respondToExitPlanApproval,
 } from "@/features/workspace/lib/plan-approval";
+import { WorkspaceReview } from "./workspace-review";
+import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
+import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import { FloatingChatOverlay } from "./floating-chat-overlay";
+import { ComposerSendTargetSelect } from "./composer-send-target-select";
 import { ChatHeader } from "./chat-header";
 import { NewConversationContextSelect } from "./new-conversation-context-select";
 import { floatingChatRunStatus } from "../lib/floating-chat-run-status";
@@ -125,6 +129,24 @@ export function WorkspaceProviderPage({
   }, [browserChatOnly, providerData, providerId]);
   const bottomTerminal = useBottomTerminal();
   const browserPanel = useBrowserPanel();
+  const reviewActive = ws.activeTab === "review" && !!ws.currentWorkspace && modeConfig.showChangesTab;
+  const reviewVisible = reviewActive && !browserPanel.isExpanded && !mcpPanel?.isExpanded;
+  const [expandedReviewWorkspace, setExpandedReviewWorkspace] = useState<string | null>(null);
+  const reviewExpanded = reviewVisible && expandedReviewWorkspace === ws.currentWorkspace?.id;
+  const [reviewChatVisible, setReviewChatVisible] = useState(true);
+  const [reviewChatMode, setReviewChatMode] = useState<FloatingChatMode>("input");
+  const [reviewChatHost, setReviewChatHost] = useState<HTMLDivElement | null>(null);
+  useSuppressBrowserView(reviewActive && reviewExpanded);
+  const wasReviewActive = useRef(false);
+  useEffect(() => {
+    const entering = reviewActive && !wasReviewActive.current;
+    wasReviewActive.current = reviewActive;
+    if (!entering) return;
+    // Review needs the main surface when an existing preview was expanded.
+    if (reviewActive && browserPanel.isExpanded) browserPanel.toggleExpanded();
+    if (reviewActive && mcpPanel?.isExpanded) mcpPanel.toggleExpanded();
+  }, [reviewActive, browserPanel, mcpPanel]);
+  const showReviewChat = useCallback(() => { setReviewChatVisible(true); setReviewChatMode("input"); }, []);
   const setChatDirectories = ws.setAdditionalDirectories;
   const submitChatSnapshot = ws.handleQueueSnapshot;
   const chatRunQueue = ws.runQueue;
@@ -398,7 +420,7 @@ export function WorkspaceProviderPage({
     // A plan tool-call start can render a frame before its approval request
     // reaches renderer state. Never launch a second turn during that gap (or
     // while another tool approval is pending); the active run owns the plan.
-    if (ws.activeRun?.status === "running" || ws.activeRun?.status === "queued") {
+    if (ws.composerRun?.status === "running" || ws.composerRun?.status === "queued") {
       return;
     }
 
@@ -432,6 +454,9 @@ export function WorkspaceProviderPage({
           issueTabs={ws.openIssueTabs}
           signalTabs={ws.openSignalTabs}
           noteTabs={ws.openNoteTabs}
+          reviewTabOpen={ws.reviewTabOpen}
+          onSelectReviewTab={ws.handleSelectReviewTab}
+          onCloseReviewTab={ws.handleCloseReviewTab}
           onSelectEditorTab={ws.handleSelectEditorTab}
           onSelectRunTab={ws.handleSelectRunTab}
           onCloseTab={ws.handleCloseTab}
@@ -460,6 +485,9 @@ export function WorkspaceProviderPage({
       ws.openIssueTabs,
       ws.openSignalTabs,
       ws.openNoteTabs,
+      ws.reviewTabOpen,
+      ws.handleSelectReviewTab,
+      ws.handleCloseReviewTab,
       ws.handleSelectEditorTab,
       ws.handleSelectRunTab,
       ws.handleCloseTab,
@@ -484,6 +512,7 @@ export function WorkspaceProviderPage({
     openIssueTabs: ws.openIssueTabs,
     openSignalTabs: ws.openSignalTabs,
     openNoteTabs: ws.openNoteTabs,
+    reviewTabOpen: ws.reviewTabOpen,
     runs: ws.runs,
     showNewRunTab: ws.showNewRunTab,
   });
@@ -503,16 +532,19 @@ export function WorkspaceProviderPage({
   // An expanded browser owns the surface edge; workspace tabs must not square it.
   useSetMainHeader(
     mainHeader,
-    !!mainHeader && !browserPanel.isExpanded && (!modeConfig.showTabs || isFirstTabActive),
+    !!mainHeader && !reviewExpanded && !browserPanel.isExpanded && (!modeConfig.showTabs || isFirstTabActive),
     headerPending,
   );
 
   const routeTopRounding = useWorkspaceRouteTopRounding();
-  const floatingPanel = mcpPanel?.isExpanded ? { ...mcpPanel, nativeOverlay: false } : browserPanel;
+  const floatingPanel = reviewVisible ? {
+    isExpanded: true, chatVisible: reviewChatVisible, chatMode: reviewChatMode,
+    chatHost: reviewChatHost, setChatMode: setReviewChatMode, nativeOverlay: false,
+  } : mcpPanel?.isExpanded ? { ...mcpPanel, nativeOverlay: false } : browserPanel;
   useVoiceChatPresence(!browserChatOnly && !floatingPanel.isExpanded && !useCenteredPromptLayout
     && !ws.showEmptyState && !ws.isEmptyStatePending
     ? ws.activeRun?.id ?? null : null);
-  const browserSelectedRun = ws.activeRun?.id === ws.activeRunId
+  const browserSelectedRun = reviewActive ? ws.composerRun ?? null : ws.activeRun?.id === ws.activeRunId
     ? ws.activeRun
     : null;
   const [browserStatusNowMs, setBrowserStatusNowMs] = useState(() => Date.now());
@@ -654,7 +686,6 @@ export function WorkspaceProviderPage({
       settingsConfig={ws.conversationSettings.config}
       settingsReady={ws.conversationSettingsReady}
       onSettingsConfigChange={handleBrowserSettingsChange}
-      sendTarget={null}
       workspacePath={ws.currentWorkspace?.rootPath}
       projectId={ws.currentWorkspace?.projectId ?? undefined}
       uploadedFiles={ws.uploadedFiles}
@@ -678,6 +709,9 @@ export function WorkspaceProviderPage({
     ? createPortal(
         <FloatingChatOverlay
           title={browserSelectedRun?.title?.trim() || browserSelectedRun?.goal?.trim() || "New chat"}
+          titleControl={reviewActive && ws.sendTarget
+            ? <ComposerSendTargetSelect key={floatingPanel.chatMode} target={ws.sendTarget} onChange={ws.handleSendTargetChange} variant="title" />
+            : undefined}
           iconTooltip={browserSelectedRun?.title?.trim() || "New run"}
           activity={browserSelectedRun?.status === "running" || browserSelectedRun?.status === "queued"
             ? browserSelectedRun.status : null}
@@ -692,7 +726,7 @@ export function WorkspaceProviderPage({
               <div className="min-h-0 flex-1 overflow-hidden">
                 <WorkspaceEvents
                   runs={ws.runs}
-                  activeTab={ws.activeTab}
+                  activeTab={reviewActive ? browserSelectedRun.id : ws.activeTab}
                   currentEvents={ws.currentEvents}
                   currentWorkspace={ws.currentWorkspace}
                   eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
@@ -722,8 +756,8 @@ export function WorkspaceProviderPage({
                 <div className="shrink-0 px-3">
                   <GoalSummaryBar
                     providerId={providerId}
-                    runId={ws.activeRun?.id}
-                    isRunning={ws.activeRun?.status === "running"}
+                    runId={browserSelectedRun?.id}
+                    isRunning={browserSelectedRun?.status === "running"}
                     enabled={getProviderVariant(variant).supportsGoalMode}
                     rootPath={ws.currentWorkspace.rootPath}
                   />
@@ -756,7 +790,12 @@ export function WorkspaceProviderPage({
           terminal below them: the session box only covers the top-right of the
           content, so the terminal keeps the full width. */}
       <div className="content-inset flex-1 overflow-hidden noscrollbar min-h-0">
-        {floatingPanel.isExpanded ? null : useCenteredPromptLayout ? (
+        {reviewVisible && ws.currentWorkspace ? <WorkspaceReview key={ws.currentWorkspace.id}
+          workspaceId={ws.currentWorkspace.id} rootPath={ws.currentWorkspace.rootPath}
+          isExpanded={reviewExpanded} onToggleExpanded={() => setExpandedReviewWorkspace(reviewExpanded ? null : ws.currentWorkspace!.id)}
+          chatVisible={reviewChatVisible} onToggleChat={() => setReviewChatVisible(!reviewChatVisible)}
+          setChatHost={setReviewChatHost} onCommentAdded={showReviewChat} />
+          : floatingPanel.isExpanded ? null : useCenteredPromptLayout ? (
           <div
             className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-4 overflow-y-auto py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
           >

@@ -55,6 +55,8 @@ export const workspacePersistConfig = {
     "openIssueTabs",
     "openSignalTabs",
     "openNoteTabs",
+    "reviewTabOpen",
+    "reviewRunId",
     "composerContextKey",
     "draftTextByKey",
     "mcpAppRunIdByKey",

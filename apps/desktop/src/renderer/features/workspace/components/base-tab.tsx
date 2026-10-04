@@ -128,7 +128,7 @@ export function BaseTab({
   );
 }
 
-function InvertedCorner({ side, visible }: { side: "left" | "right"; visible: boolean }) {
+export function InvertedCorner({ side, visible }: { side: "left" | "right"; visible: boolean }) {
   const isLeft = side === "left";
 
   return (

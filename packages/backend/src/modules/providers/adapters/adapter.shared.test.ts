@@ -449,6 +449,18 @@ describe("emitUserPromptArtifact", () => {
     ]);
   });
 
+  it("persists review comments with both diff side and original code, excluding malformed context", async () => {
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    const comment = { id: "comment", workspaceId: "ws", filePath: "a.ts", absolutePath: "/repo/a.ts", side: "deletions",
+      lineNumber: 7, lineText: "oldCode", patchId: "patch", comment: "Keep this behavior" };
+    await emitUserPromptArtifact(onEvent, "Address comments", { context: [
+      { kind: "selection", metadata: { source: "review", ...comment } },
+      { kind: "selection", metadata: { source: "review", ...comment, lineNumber: -1 } },
+      { kind: "selection", metadata: { source: "editor", ...comment } },
+    ] });
+    expect(onEvent.mock.calls[0][0].metadata.reviewComments).toEqual([comment]);
+  });
+
   it("includes issues and files metadata", async () => {
     const onEvent = vi.fn().mockResolvedValue(undefined);
     await emitUserPromptArtifact(onEvent, "content", {

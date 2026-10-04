@@ -442,6 +442,44 @@ body[data-resizing] iframe {
   pointer-events: none;
 }
 
+/* Vertical menus reveal from one edge without widening or scaling their text. */
+.dropdown-vertical {
+  --dropdown-reveal-from: inset(0 0 100% 0);
+  --dropdown-offset: -6px;
+  will-change: clip-path, transform, opacity;
+  contain: layout style paint;
+  backface-visibility: hidden;
+}
+
+.dropdown-vertical[data-animation-direction="up"] {
+  --dropdown-reveal-from: inset(100% 0 0 0);
+  --dropdown-offset: 6px;
+}
+
+@keyframes dropdown-vertical-in {
+  from {
+    opacity: 0;
+    clip-path: var(--dropdown-reveal-from);
+    transform: translateY(var(--dropdown-offset));
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0);
+    transform: translateY(0);
+  }
+}
+
+.animate-dropdown-vertical-in {
+  animation: dropdown-vertical-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dropdown-prewarm-vertical {
+  opacity: 0;
+  clip-path: var(--dropdown-reveal-from);
+  transform: translateY(var(--dropdown-offset));
+  pointer-events: none;
+}
+
 @keyframes modal-in {
   0% {
     opacity: 0;
@@ -1276,6 +1314,7 @@ html.mains-web.dark #root {
   /* Gentler, not zero: entrances keep a quick fade (state indication) but drop
      movement. Spinners stay — they convey loading state. Decorative loops stop. */
   .animate-dropdown-in,
+  .animate-dropdown-vertical-in,
   .animate-dropdown-sub-in,
   .animate-modal-in,
   .animate-slide-in,

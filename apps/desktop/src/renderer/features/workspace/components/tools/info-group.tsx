@@ -37,6 +37,8 @@ import {
   type PromptMarkdownSkill,
 } from "../prompt-markdown";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
+import { readReviewComments } from "@mains/contracts/review-comments";
+import { ReviewCommentsAttachment } from "../review-comments-attachment";
 import { PromptBrowserAnnotations } from "./prompt-browser-annotations";
 import { VoiceTaskCard } from "../voice-task-card";
 import type { VoiceTaskLink } from "@mains/contracts/realtime";
@@ -158,6 +160,7 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
     const attachments = (event.metadata?.attachments ?? []) as PromptAttachment[];
     const annotations = ((event.metadata?.browserAnnotations ?? []) as BrowserAnnotation[])
       .filter((annotation) => Array.isArray(annotation.elements) && annotation.elements.length > 0);
+    const reviewComments = readReviewComments(event.metadata?.reviewComments);
     const skills = (event.metadata?.skills ?? []) as PromptMarkdownSkill[];
 
     if (isReview) {
@@ -229,6 +232,7 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
               />
             ))}
             {annotations.length > 0 && <PromptBrowserAnnotations annotations={annotations} />}
+            {reviewComments.length > 0 && <ReviewCommentsAttachment comments={reviewComments} />}
             {message && (
               <div className={`min-w-0 max-w-full px-3.5 py-2 rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}>
                 <div className="prose prose-sm dark:prose-invert max-w-none text-left">

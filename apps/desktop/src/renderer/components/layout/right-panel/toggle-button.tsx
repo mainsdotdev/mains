@@ -191,7 +191,7 @@ export function ToggleButton({
             aria-label={browserOpen ? "Close browser" : "Open browser"}
             aria-pressed={browserOpen}
           >
-            <Web className="size-3.75" />
+            <Web className="size-3.75" filled={browserOpen} />
           </Button>
         )}
         {showRightPanel && (
