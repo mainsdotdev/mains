@@ -77,7 +77,7 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
         className={`w-full cursor-pointer text-left px-2.5 py-1.5 rounded-xl text-sm  transition-all flex items-center gap-2
           ${
             isActive
-              ? " glass-outline bg-primary/80 dark:bg-primary/5 text-primary-900 dark:text-primary-100"
+              ? " glass-outline-soft glass-outline bg-primary/80 dark:bg-primary/5 text-primary-900 dark:text-primary-100"
               : "text-primary-800 dark:text-primary-200 bg-transparent hover:bg-primary/50 dark:hover:bg-primary/5"
           }
           `}

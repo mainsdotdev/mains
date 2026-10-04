@@ -3,16 +3,18 @@ import { SVGProps } from "react"
 const SvgComponent = (props: SVGProps<SVGSVGElement>) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    width={800}
-    height={800}
+    width={24}
+    height={24}
     fill="none"
-    viewBox="0 0 24 24"
+    stroke="currentColor"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    strokeWidth={1.5}
+    color="currentColor"
     {...props}
+    viewBox="0 0 24 24"
   >
-    <path
-      fill="currentColor"
-      d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm-6 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm12 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"
-    />
+    <path d="M12 12h.5m6.5 0h.5M5 12h.5m6.5 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm7 0a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM5 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />
   </svg>
 )
 export default SvgComponent

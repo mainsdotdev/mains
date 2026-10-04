@@ -162,11 +162,11 @@ export function toPresentTense(label: string): string {
  * being retyped in each of the thirty-odd tool displays.
  */
 export const TOOL_ROW_TEXT =
-  "text-primary-500 dark:text-primary-400 group-hover:text-primary-950 group-hover:dark:text-primary";
+  "text-primary-500 dark:text-primary-600 group-hover:text-primary-950 group-hover:dark:text-primary";
 
 /** Muted-until-hover text treatment for the icon/verb slots of a tool header. */
 const headerSlotClass =
-  "shrink-0 text-primary-600 dark:text-primary-400 group-hover:text-primary-950 group-hover:dark:text-primary";
+  "shrink-0 text-primary-600 dark:text-primary-600 group-hover:text-primary-950 group-hover:dark:text-primary";
 
 interface ToolHeaderProps {
   /** Tool icon (e.g. <Bash />, <Glob />). Hidden when `isCompact`. */

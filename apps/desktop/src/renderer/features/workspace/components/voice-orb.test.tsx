@@ -53,6 +53,13 @@ function frame(time: number) {
 }
 
 describe("voice orb animation lifetime", () => {
+  it("starts an already-selected Aurora preview with the Aurora renderer", () => {
+    render(<VoiceOrb active getAudioLevels={getAudioLevels} orbStyle="aurora" color="mint" />);
+    expect(mocks.createRenderer.mock.calls[0][2]).toBe("aurora");
+    frame(0);
+    expect(renderers[0].draw).toHaveBeenCalledOnce();
+  });
+
   it.each(["sphere", "aurora"] as const)("switches to %s and back without replacing the shader or resetting its audio-driven flow", async (orbStyle) => {
     const view = render(<VoiceOrb active getAudioLevels={getAudioLevels} />);
     frame(0);

@@ -62,7 +62,7 @@ export function ReadDisplay({
             e.stopPropagation();
             openFile(fullFilePath);
           }}
-          className={`min-w-0 inline-flex items-center gap-1 text-left ${fullFilePath ? "cursor-pointer hover:underline hover:text-primary-950 hover:dark:text-primary" : ""} ${TOOL_ROW_TEXT}`}
+          className={`min-w-0 inline-flex items-center gap-1 text-left ${fullFilePath ? "cursor-pointer hover:underline decoration-dashed hover:text-primary-950 hover:dark:text-primary" : ""} ${TOOL_ROW_TEXT}`}
         >
           {fullFilePath && (
             <FileIconComponent

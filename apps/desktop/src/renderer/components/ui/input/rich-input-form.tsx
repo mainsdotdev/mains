@@ -216,6 +216,9 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
     "inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none " +
     " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
+  if (skill.brandColor) {
+    chip.style.color = `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))`;
+  }
 
   // Icon slot is always present (even as an empty 14×14 spacer) so chip width/height stay stable.
   const iconSlot = document.createElement("span");

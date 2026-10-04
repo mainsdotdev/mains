@@ -269,6 +269,18 @@ html:not(.app-ready) *::after {
   animation: voice-connection-breathe 1.3s ease-in-out infinite;
 }
 
+.voice-orb-connection[data-closing="true"] .voice-orb-reveal {
+  opacity: 0;
+  clip-path: circle(0% at 50% 50%);
+  transition: clip-path 280ms cubic-bezier(0.64, 0, 0.78, 0), opacity 200ms ease-in;
+}
+
+.voice-orb-connection[data-closing="true"] .voice-orb-loading {
+  opacity: 0;
+  transform: scale(0);
+  transition: transform 280ms cubic-bezier(0.64, 0, 0.78, 0), opacity 200ms ease-in;
+}
+
 @keyframes voice-connection-breathe {
   0%, 100% { transform: scale(0.72); opacity: 0.6; }
   50% { transform: scale(1.12); opacity: 1; }
@@ -276,11 +288,16 @@ html:not(.app-ready) *::after {
 
 @media (prefers-reduced-motion: reduce) {
   .voice-orb-reveal,
-  .voice-orb-connection[data-connecting="true"] .voice-orb-reveal {
+  .voice-orb-connection[data-connecting="true"] .voice-orb-reveal,
+  .voice-orb-connection[data-closing="true"] .voice-orb-reveal {
     clip-path: none;
     transition: opacity 75ms ease-out;
   }
   .voice-orb-loading { transition-duration: 75ms; }
+  .voice-orb-connection[data-closing="true"] .voice-orb-loading {
+    transform: none;
+    transition: opacity 75ms ease-out;
+  }
   .voice-orb-connection[data-connecting="true"] .voice-orb-dot { animation: none; }
 }
 

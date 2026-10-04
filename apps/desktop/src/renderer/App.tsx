@@ -349,7 +349,11 @@ function AppContent() {
     <>
       <Toaster />
       <CommandMenu />
-      <RealtimeVoiceDock />
+      {isMobile && (
+        <div className="fixed bottom-5 left-5 z-(--z-overlay)">
+          <RealtimeVoiceDock />
+        </div>
+      )}
       <MainLayout className={animateWorkspaceEntry ? "onboarding-workspace-enter" : undefined}>
         {/* Mobile drawer scrims — tap to dismiss. Each sits just below its panel
             (sidebar z-30, right panel z-50) and above the full-width content. */}

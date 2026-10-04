@@ -1,6 +1,6 @@
 import { ComponentType, SVGProps } from "react";
 import * as Icons from "@/components/ui/icons/space";
-import { Codex, Cursor, Ellipsis, MainsColor } from "@/components/ui/icons";
+import { Codex, Cursor, MainsColor } from "@/components/ui/icons";
 
 export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -14,7 +14,6 @@ export const iconRegistry: Record<string, IconComponent> = {
   code: Icons.Code,
   compass: Icons.Compass,
   earth: Icons.Earth,
-  ellipsis: Ellipsis,
   gallery: Icons.Gallery,
   globe: Icons.Globe,
   heart: Icons.Heart,

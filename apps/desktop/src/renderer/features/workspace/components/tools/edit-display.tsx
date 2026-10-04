@@ -71,7 +71,7 @@ export function EditDisplay({
             e.stopPropagation();
             openFile(filePath);
           }}
-          className={`inline-flex items-center gap-1 min-w-0 ${filePath ? "cursor-pointer hover:underline hover:text-primary-950 hover:dark:text-primary" : ""} ${TOOL_ROW_TEXT}`}
+          className={`inline-flex items-center gap-1 min-w-0 ${filePath ? "cursor-pointer hover:underline decoration-dashed hover:text-primary-950 hover:dark:text-primary" : ""} ${TOOL_ROW_TEXT}`}
         >
           {filePath && (
             <FileIconComponent

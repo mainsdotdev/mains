@@ -269,10 +269,10 @@ export default function WorkspaceItem({
             onClick?.();
           }
         }}
-        className={`block py-1.5
+        className={`block py-1.25
            transition-all duration-200 ease-out ${sortHandle?.listeners ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${grouping !== "project" ? "rounded-2xl px-2.5" : "rounded-[10px] px-2.5"} ${
              isActive
-               ? "bg-primary/50 glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
+               ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
                : "bg-transparent group-hover:bg-primary/50 dark:group-hover:bg-primary/5"
            }`}
       >
@@ -302,7 +302,7 @@ export default function WorkspaceItem({
                   Folder missing
                 </Muted>
               ) : branch && !isRenamingBranch ? (
-                <Muted size="xs" tone="secondary" className="truncate">
+                <Muted size="s" tone="secondary" className="truncate">
                   {branch}
                 </Muted>
               ) : null}
@@ -329,7 +329,7 @@ export default function WorkspaceItem({
       </div>
 
       {/* Diff stats (visible by default, hidden on hover) / Options button (hidden by default, visible on hover) */}
-      <div className="absolute right-1.5 top-1/2 -translate-y-1/2 z-(--z-base)">
+      <div className="absolute right-2 top-1/2 -translate-y-1/2 z-(--z-base)">
         {(insertions || deletions) && (
           <Text
             as="span"

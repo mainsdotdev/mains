@@ -171,7 +171,7 @@ export function ChatItem({
           isRecent ? "pl-2.5" : "pl-7"
         } ${
           isActive
-            ? "bg-primary/50 glass-outline dark:bg-primary/5"
+            ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5"
             : "hover:bg-primary/50 dark:hover:bg-primary/5"
         }`}
       >

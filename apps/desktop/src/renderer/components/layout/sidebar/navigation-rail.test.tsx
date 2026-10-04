@@ -16,6 +16,7 @@ const app: McpAppEntrypoint = {
 vi.mock("@/hooks/use-app-theme", () => ({
   useResolvedAppTheme: () => ({ light: { translucent: false }, dark: { translucent: false } }),
 }));
+vi.mock("@/features/workspace/components/realtime-voice-dock", () => ({ RealtimeVoiceDock: () => null }));
 vi.mock("@/providers/keyboard-shortcuts-provider", () => ({ useKeyboardShortcutBinding: () => null }));
 vi.mock("@/hooks/use-mcp-app-extensions", () => ({
   useMcpAppExtensions: () => ({ available: true, entries: mocks.entries, isLoading: false }),

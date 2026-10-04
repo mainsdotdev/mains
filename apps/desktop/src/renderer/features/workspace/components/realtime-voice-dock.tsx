@@ -3,7 +3,7 @@ import { useJumpToRun } from "../hooks/use-jump-to-run";
 import { useRealtimeVoice } from "../hooks/use-realtime-voice";
 import { RealtimeVoiceBar } from "./realtime-voice-bar";
 
-/** Navigation changes only the call's presentation, never its media owner. */
+/** The rail hosts this presentation; navigation never changes its media owner. */
 export function RealtimeVoiceDock() {
   const { state } = useRealtimeVoice();
   const { currentData: run } = useGetRunByIdQuery(state.runId ?? "", {

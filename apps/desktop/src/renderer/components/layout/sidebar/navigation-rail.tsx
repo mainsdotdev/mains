@@ -12,6 +12,7 @@ import {
   Task,
 } from "@/components/ui/icons";
 import { Clock } from "@/components/ui/icons/space";
+import { RealtimeVoiceDock } from "@/features/workspace/components/realtime-voice-dock";
 import {
   getCommandMenuOpen,
   requestCommandMenu,
@@ -155,6 +156,7 @@ export function NavigationRail({
       </nav>
 
       <div className="mt-auto flex min-h-0 flex-col items-center gap-1">
+        <RealtimeVoiceDock />
         {spaces.length > 0 && (
           <div className="mt-1 flex min-h-0 max-h-[35vh] flex-col items-center">
             <SpaceSelector
