@@ -38,6 +38,8 @@ import {
 } from "../prompt-markdown";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import { PromptBrowserAnnotations } from "./prompt-browser-annotations";
+import { VoiceTaskCard } from "../voice-task-card";
+import type { VoiceTaskLink } from "@mains/contracts/realtime";
 
 interface PromptAttachment {
   name: string;
@@ -117,6 +119,10 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
     dataUrl: string;
   } | null>(null);
   if (!event) return null;
+  if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
+    const task = event.metadata.voiceTask as VoiceTaskLink | undefined;
+    return task && typeof task.id === "string" ? <VoiceTaskCard task={task} /> : null;
+  }
 
   if (event.type === "artifact" && event.metadata?.kind === "user-prompt") {
     const message = (event.content ?? "").trim();
@@ -203,6 +209,11 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
       <div className="w-full overflow-hidden">
         <div className="w-full py-2 flex justify-end">
           <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-2">
+            {!!event.metadata?.voiceDelegation && (
+              <Text as="span" size="xs" tone="muted" className="flex items-center gap-1.5">
+                <Codex className="size-3" /> Sent from voice conversation
+              </Text>
+            )}
             {imageAttachments.length > 0 && (
               <div className="flex flex-wrap justify-end gap-2">
                 {imageAttachments.map((attachment, index) => (

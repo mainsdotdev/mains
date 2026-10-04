@@ -172,11 +172,116 @@ html:not(.app-ready) *::after {
   /* Text on an accent fill. A theme with a light accent switches it to dark. */
   --color-accent-foreground: #ffffff;
 
+  /* Voice artwork, derived from tokens so custom palettes still apply. */
+  --color-voice-orb-deep: color-mix(in srgb, var(--color-accent) 86%, var(--color-primary-950));
+  --color-voice-orb-soft: color-mix(in srgb, var(--color-accent) 32%, var(--color-primary));
+  --color-voice-orb-light: color-mix(in srgb, var(--color-accent) 8%, var(--color-primary));
+
   /* The UI and code fonts from Settings › Appearance (lib/appearance-fonts.ts)
      go in front of the stock stacks, so a font that isn't installed falls
      back to them rather than to the browser default. */
   --font-sans: var(--font-ui-family, "Inter"), -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
   --font-mono: var(--font-code-family, ui-monospace), SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.voice-orb {
+  --color-voice-orb-secondary: hsl(from var(--color-voice-orb-deep) calc(h + 54) calc(s * 0.72) 72%);
+  --color-voice-orb-tertiary: hsl(from var(--color-voice-orb-deep) calc(h - 84) calc(s * 0.65) 76%);
+  background:
+    radial-gradient(ellipse at 76% 24%, var(--color-voice-orb-light) 0%, transparent 62%),
+    radial-gradient(ellipse at 84% 78%, var(--color-voice-orb-soft) 0%, transparent 70%),
+    var(--color-voice-orb-deep);
+}
+
+.voice-orb[data-active="false"] { opacity: 0.55; }
+
+/* Static sphere artwork remains visible with reduced motion or unavailable WebGL. */
+.voice-orb[data-orb-style="sphere"] {
+  background:
+    radial-gradient(ellipse at 88% 82%, color-mix(in srgb, var(--color-voice-orb-deep) 50%, var(--color-primary-950)), transparent 72%),
+    radial-gradient(ellipse at 28% 18%, var(--color-voice-orb-light), transparent 46%),
+    radial-gradient(ellipse at 76% 66%, var(--color-voice-orb-secondary), transparent 65%),
+    radial-gradient(ellipse at 30% 82%, var(--color-voice-orb-tertiary), transparent 62%),
+    radial-gradient(ellipse at 66% 60%, var(--color-voice-orb-soft), transparent 65%),
+    var(--color-voice-orb-deep);
+}
+
+.voice-orb[data-orb-style="sphere"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: url("./features/workspace/assets/voice-orb-grain.svg") repeat;
+  opacity: 0.2;
+  mix-blend-mode: soft-light;
+}
+
+/* Pearl ribbons and a glass rim also work without animation or a GPU. */
+.voice-orb[data-orb-style="aurora"] {
+  background:
+    radial-gradient(ellipse at 30% 22%, var(--color-voice-orb-light), transparent 28%),
+    radial-gradient(ellipse at 80% 82%, color-mix(in srgb, var(--color-voice-orb-deep) 68%, var(--color-primary-950)), transparent 64%),
+    radial-gradient(ellipse 85% 115% at 14% 26%, transparent 30%,
+      var(--color-voice-orb-light) 36%, var(--color-voice-orb-tertiary) 41%, transparent 52%),
+    radial-gradient(ellipse 95% 115% at 100% 100%, transparent 30%,
+      var(--color-voice-orb-secondary) 40%, var(--color-voice-orb-light) 44%,
+      var(--color-voice-orb-soft) 50%, transparent 59%),
+    radial-gradient(ellipse at 72% 36%, var(--color-voice-orb-secondary), transparent 68%),
+    var(--color-voice-orb-deep);
+}
+
+.voice-orb[data-orb-style="aurora"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, transparent 55%, color-mix(in srgb, var(--color-voice-orb-light) 45%, transparent));
+  box-shadow: inset 0 0 1px 1px color-mix(in srgb, var(--color-voice-orb-light) 48%, transparent);
+}
+
+/* Reveal in a fixed slot so connection readiness never moves the composer.
+   Clipping keeps the canvas at full resolution throughout the expansion. */
+.voice-orb-reveal {
+  opacity: 1;
+  clip-path: circle(50% at 50% 50%);
+  transition: clip-path 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease-out;
+}
+
+.voice-orb-loading {
+  opacity: 0;
+  transition: opacity 160ms ease-out;
+}
+
+.voice-orb-dot {
+  background: radial-gradient(circle at 35% 30%, var(--color-voice-orb-light), var(--color-voice-orb-soft) 75%);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--color-voice-orb-soft) 20%, transparent);
+}
+
+.voice-orb-connection[data-connecting="true"] .voice-orb-reveal {
+  opacity: 0;
+  clip-path: circle(5% at 50% 50%);
+}
+
+.voice-orb-connection[data-connecting="true"] .voice-orb-loading { opacity: 1; }
+
+.voice-orb-connection[data-connecting="true"] .voice-orb-dot {
+  animation: voice-connection-breathe 1.3s ease-in-out infinite;
+}
+
+@keyframes voice-connection-breathe {
+  0%, 100% { transform: scale(0.72); opacity: 0.6; }
+  50% { transform: scale(1.12); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-orb-reveal,
+  .voice-orb-connection[data-connecting="true"] .voice-orb-reveal {
+    clip-path: none;
+    transition: opacity 75ms ease-out;
+  }
+  .voice-orb-loading { transition-duration: 75ms; }
+  .voice-orb-connection[data-connecting="true"] .voice-orb-dot { animation: none; }
 }
 
 *:focus {

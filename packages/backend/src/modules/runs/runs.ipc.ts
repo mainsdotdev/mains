@@ -23,6 +23,7 @@ import {
   listPendingApprovals,
 } from "./user-input-broker";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { CreateRealtimeConversationPayload, RunRealtimeStartPayload, RunRealtimeStopPayload } from "@mains/contracts/realtime";
 import type {
   ReadArtifactImagePayload,
   ReadRunTextFilePayload,
@@ -36,6 +37,9 @@ import type {
 // IPC Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerRunsIpc(): void {
+  ipcMain.handle(CHANNELS.runs.createRealtimeConversation, handle((payload: CreateRealtimeConversationPayload) => runsService.createRealtimeConversation(payload)));
+  ipcMain.handle(CHANNELS.runs.startRealtime, handle((payload: RunRealtimeStartPayload) => runsService.startRealtime(payload)));
+  ipcMain.handle(CHANNELS.runs.stopRealtime, handle((payload: RunRealtimeStopPayload) => runsService.stopRealtime(payload)));
   // Runs
   ipcMain.handle(
     CHANNELS.runs.getAll,
@@ -305,6 +309,9 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.execute,
     CHANNELS.runs.abort,
     CHANNELS.runs.continue,
+    CHANNELS.runs.startRealtime,
+    CHANNELS.runs.createRealtimeConversation,
+    CHANNELS.runs.stopRealtime,
     CHANNELS.runs.fork,
     CHANNELS.runs.executeReview,
     CHANNELS.runs.canResume,

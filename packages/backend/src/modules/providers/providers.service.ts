@@ -30,6 +30,7 @@ import {
   listConnectorsForProvider,
   startConnectorOAuthForProvider,
   getRateLimitsForProvider,
+  listRealtimeVoicesForProvider,
   consumeRateLimitResetCreditForProvider,
   setGoalForProvider,
   getGoalForProvider,
@@ -230,6 +231,11 @@ export const providersService = {
   async getRateLimits(id: string): Promise<RateLimitInfo | null> {
     const provider = await requireEnabledProvider(id);
     return getRateLimitsForProvider(provider);
+  },
+
+  async getRealtimeVoices(id: string): Promise<import("@mains/contracts/realtime").RealtimeVoiceCatalog | null> {
+    const provider = await requireEnabledProvider(id);
+    return listRealtimeVoicesForProvider(provider);
   },
 
   async consumeRateLimitResetCredit(

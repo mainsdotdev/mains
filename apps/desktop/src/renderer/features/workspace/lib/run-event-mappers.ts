@@ -28,14 +28,19 @@ function parseRawInput(input: unknown): Record<string, unknown> | undefined {
 /** Convert a RunArtifact to a displayable RunEvent. Always returns an event (fallback on parse error). */
 export function mapArtifactToEvent(artifact: RunArtifact): RunEvent {
   try {
+    const metadata = parseMetadata(artifact.metadata);
+    const voiceStreamId = metadata?.voice === true && typeof metadata.streamId === "string" ? metadata.streamId : undefined;
+    const voiceStartedAt = metadata?.voice === true && typeof metadata.voiceStartedAt === "number" && Number.isFinite(metadata.voiceStartedAt)
+      ? metadata.voiceStartedAt : undefined;
     return {
-      id: `artifact-${artifact.id}`,
+      id: voiceStreamId ? `stream-${voiceStreamId}` : `artifact-${artifact.id}`,
       type: artifact.kind === "log" ? "log" : "artifact",
       content: artifact.content ?? artifact.path ?? JSON.stringify(artifact),
-      timestamp: artifact.createdAt ? new Date(artifact.createdAt) : new Date(),
+      timestamp: voiceStartedAt !== undefined ? new Date(voiceStartedAt)
+        : artifact.createdAt ? new Date(artifact.createdAt) : new Date(),
       metadata: {
-        ...parseMetadata(artifact.metadata),
-        kind: artifact.kind,
+        ...metadata,
+        kind: metadata?.source === "voice-coordinator" && metadata?.voiceTask ? "voice-task" : artifact.kind,
         ...(artifact.kind === "image" && artifact.contentHash
           ? { imageContentHash: artifact.contentHash }
           : {}),
@@ -108,7 +113,7 @@ export function eventsValueEqual(a: RunEvent, b: RunEvent): boolean {
 /**
  * Merge incremental artifact + tool-call deltas into the existing event list.
  *
- * - Keyed by stable event id (`artifact-{id}` / `tool-{id}`): a delta replaces an
+ * - Keyed by stable event id (artifact/tool row ids, or native voice stream ids): a delta replaces an
  *   existing event (tool-call status/output update) or appends a new one.
  * - A delta that is value-identical to the event already present keeps the
  *   existing object reference, so the downstream group reconcile + memoized rows

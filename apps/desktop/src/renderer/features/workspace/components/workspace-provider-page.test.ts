@@ -14,6 +14,7 @@ import appSettingsReducer, {
 } from "@/lib/redux/slices/appSettingsSlice";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import type { BrowserChatAction } from "../../../../shared/browser-chat-window";
+import { voiceChatPresence } from "../lib/voice-chat-presence";
 
 const page = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
@@ -178,6 +179,36 @@ afterEach(() => {
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
+  it("registers only its visible main transcript, never the editor's composer target or floating child", () => {
+    const run = { id: "voice", goal: "Voice chat", status: "succeeded" };
+    page.state = { runs: [run], runsLoaded: true, activeTab: run.id, activeRunId: run.id, activeRun: run,
+      composerRun: run, selectedFile: null, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: { id: "workspace-1", rootPath: "/tmp/workspace-1" },
+      currentEvents: [], currentTurns: [], goal: "", uploadedFiles: [] };
+    const content = () => createElement(MemoryRouter, null, createElement(MainHeaderProvider, null,
+      createElement(WorkspaceProviderPage, { providerId: "codex", variant: "codex" })));
+    const view = render(content());
+    expect(voiceChatPresence.getSnapshot().has("voice")).toBe(true);
+    page.state = { ...page.state, activeTab: "editor", activeRun: null, activeRunId: null };
+    view.rerender(content());
+    expect(voiceChatPresence.getSnapshot().has("voice")).toBe(false);
+    page.state = { ...page.state, activeTab: run.id, activeRun: run, activeRunId: run.id };
+    view.rerender(content());
+    expect(voiceChatPresence.getSnapshot().has("voice")).toBe(true);
+    browser.isExpanded = true;
+    view.rerender(content());
+    expect(voiceChatPresence.getSnapshot().has("voice")).toBe(false);
+    browser.isExpanded = false;
+    page.state = { ...page.state, isEmptyStatePending: true };
+    view.rerender(content());
+    expect(voiceChatPresence.getSnapshot().has("voice")).toBe(false);
+    view.unmount();
+    page.state = { ...page.state, isEmptyStatePending: false };
+    renderPage(true);
+    expect(voiceChatPresence.getSnapshot().has("voice")).toBe(false);
+  });
+
   it("keeps floating queue submissions separate from the parent's current draft", () => {
     const submitSnapshot = vi.fn();
     const setDraft = vi.fn();

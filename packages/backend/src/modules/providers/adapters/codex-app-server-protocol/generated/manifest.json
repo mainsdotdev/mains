@@ -18,6 +18,10 @@
       "sha256": "c3f38c70ffff810867af87a536d915dadea9e4b547343611c4e14731bcb7c648"
     },
     {
+      "path": "CodexResponseHandoffMode.ts",
+      "sha256": "3824582c3f42c3c0b354a5645b7516e9bf5a59c518920420a06a63c5e80a1c67"
+    },
+    {
       "path": "CollaborationMode.ts",
       "sha256": "b45d07e3c94550cff97e3d57d33045bd2d47b26a5f25a918fe2978cb08e0948f"
     },
@@ -28,6 +32,10 @@
     {
       "path": "ContentItem.ts",
       "sha256": "82a9678802f672880ede5b3d61ae339474ca2a3f65c3cbad599f06ce219f2a06"
+    },
+    {
+      "path": "ConversationTextRole.ts",
+      "sha256": "d9ce254fc7b36d90a47c34c1e092fb7d67d1e8a9082998d9687dc0db936ff021"
     },
     {
       "path": "FunctionCallOutputBody.ts",
@@ -108,6 +116,22 @@
     {
       "path": "PlanType.ts",
       "sha256": "6b2c8303cc89573d823fbbc8a53bcf33d635c9823bf11b611692889a46e3bdb5"
+    },
+    {
+      "path": "RealtimeConversationVersion.ts",
+      "sha256": "e62d85018cc1ff726c17eb5a465b38a755388c4964e85241ece29b43cafa843b"
+    },
+    {
+      "path": "RealtimeOutputModality.ts",
+      "sha256": "f9027a452a48a6c3c8be9e055c5fb6679bd4afcb0470c1fc1ae6357774171e05"
+    },
+    {
+      "path": "RealtimeVoice.ts",
+      "sha256": "3d0d02147d7ff8b50f7474684fd594fa606dc4dfe3af9e6c5e4ca598ddfee640"
+    },
+    {
+      "path": "RealtimeVoicesList.ts",
+      "sha256": "90dab674f89a95b27a1a02029b0e9da1b1311396b207b321a2dea0f2d9ff7bb2"
     },
     {
       "path": "ReasoningEffort.ts",
@@ -912,6 +936,94 @@
     {
       "path": "v2/ThreadReadResponse.ts",
       "sha256": "09d84ab28738dd7f906f7adf4dc741e745d5ee826029653f4d7741c4953a7b42"
+    },
+    {
+      "path": "v2/ThreadRealtimeBemItemPresentation.ts",
+      "sha256": "1625c254b59a5776a826cb4bc86524221ffd7a4bed180361652f47010087449b"
+    },
+    {
+      "path": "v2/ThreadRealtimeClosedNotification.ts",
+      "sha256": "96f698f47161d279d86bd3c95db496bfb39d5501bd8f879b9a4e52bb733327c2"
+    },
+    {
+      "path": "v2/ThreadRealtimeErrorNotification.ts",
+      "sha256": "73e74e9c2818597afd19d01793e7e7d4d55fa1d22843a8f54fc9428a2e14c463"
+    },
+    {
+      "path": "v2/ThreadRealtimeInitialItem.ts",
+      "sha256": "0d06088f4ee85175799e0a47a019d590311193d1091093d817ba9a5ca7a8850c"
+    },
+    {
+      "path": "v2/ThreadRealtimeItem.ts",
+      "sha256": "59640a5c18dc6d81dd68c2fcaff7e0da50e9555ee89da664b13787e162843c8f"
+    },
+    {
+      "path": "v2/ThreadRealtimeItemAddedNotification.ts",
+      "sha256": "6f6f9285beb173b2d3e8c12a07d66873c223a7a44f8c912a80c116b5359c2003"
+    },
+    {
+      "path": "v2/ThreadRealtimeItemCompletedNotification.ts",
+      "sha256": "710e08bd8527a0d3db6fca54ebf70a8b7f70472895ea06fed71f25d19d9f48f3"
+    },
+    {
+      "path": "v2/ThreadRealtimeItemStartedNotification.ts",
+      "sha256": "98d537ed94905d435e14553c117049f5a016f7419fa5e9f0ed715fb2bf9c9a6b"
+    },
+    {
+      "path": "v2/ThreadRealtimeItemTranscriptDeltaNotification.ts",
+      "sha256": "b4cc55983e818db84f790547bc1c01f1219a05e9da13b9259ce8658e7c6cf6db"
+    },
+    {
+      "path": "v2/ThreadRealtimeListVoicesParams.ts",
+      "sha256": "eea914c7f1d91a21273cea42c015e4329853b2335b72799bc8528eb5887418d6"
+    },
+    {
+      "path": "v2/ThreadRealtimeListVoicesResponse.ts",
+      "sha256": "142830533686ef77f2a9042b746d2f49919730ee85dff22b28db155256400b91"
+    },
+    {
+      "path": "v2/ThreadRealtimeSdpNotification.ts",
+      "sha256": "d0cd47d527495f4d6257627cdd4cf473d0c593641c71c1917e2964cdf5ff8196"
+    },
+    {
+      "path": "v2/ThreadRealtimeSessionOutcome.ts",
+      "sha256": "faa161e3102ebda54de41e8d91a5c9d07d62d193e09bb56fbdd3cc5f57939c48"
+    },
+    {
+      "path": "v2/ThreadRealtimeStartParams.ts",
+      "sha256": "252c129f29328477912e281b7704b4d97d240192267a8489011dd9d6a7a1c0b6"
+    },
+    {
+      "path": "v2/ThreadRealtimeStartResponse.ts",
+      "sha256": "c0b0acb7ccb57686a81219e472c6d956b75ce6da0c8f501fe4eaeb159c4ec6d1"
+    },
+    {
+      "path": "v2/ThreadRealtimeStartTransport.ts",
+      "sha256": "f99f4e9d1d6951fdc3ac47336fdb529eedacd856581772b38c471ebd44951096"
+    },
+    {
+      "path": "v2/ThreadRealtimeStartedNotification.ts",
+      "sha256": "24d42a3f763447eb7f260ccdd5ba24eff81cc744cfe0572fa891d00641c5a295"
+    },
+    {
+      "path": "v2/ThreadRealtimeStopParams.ts",
+      "sha256": "a20f9db0e0b3e23405be004dfa13738890517efd10affda842a7cedf4f913c11"
+    },
+    {
+      "path": "v2/ThreadRealtimeStopResponse.ts",
+      "sha256": "5289a4f32c827a306e5226e000c75991dc875114048f4630e4e30913d994562d"
+    },
+    {
+      "path": "v2/ThreadRealtimeTranscriptDeltaNotification.ts",
+      "sha256": "9fe0837b12573eacf36384ff25aed63685de51a2b58edf7c6f74ce5b47d80532"
+    },
+    {
+      "path": "v2/ThreadRealtimeTranscriptDoneNotification.ts",
+      "sha256": "fb2e667c004c529028f51558f07e40d5e7f9869081f3b0ad644441cdcb8e6f9f"
+    },
+    {
+      "path": "v2/ThreadRealtimeTranscriptRole.ts",
+      "sha256": "da3503ecb32d08082a0b06a7c2e4fae3bba37426d2fa3a73e5b9ea9a950b1de0"
     },
     {
       "path": "v2/ThreadResumeInitialTurnsPageParams.ts",

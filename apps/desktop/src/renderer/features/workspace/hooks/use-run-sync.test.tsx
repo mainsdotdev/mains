@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Provider } from "react-redux";
 import { configureStore } from "@reduxjs/toolkit";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -15,12 +15,66 @@ import { useGitActionsPanel } from "../components/session-panel/git-actions/use-
 import { createRunCache } from "../lib/run-cache";
 import type { Run } from "../types";
 import { useRunSync } from "./use-run-sync";
+import { toast } from "@/components/ui";
 
 vi.mock("@/components/ui", () => ({ toast: { error: vi.fn() } }));
 
 afterEach(() => {
   cleanup();
   resetTransport();
+  vi.clearAllMocks();
+});
+
+describe("native voice transcript and work sync", () => {
+  it("refreshes idle speech and handles each successive work completion once", async () => {
+    const listeners = new Map<string, (payload: unknown) => void>();
+    let current: Run = { id: "voice", status: "succeeded", goal: "Existing chat", providerId: "codex" };
+    setTransport({
+      kind: "test", invoke: async () => ok(current),
+      subscribe: (channel, callback) => { listeners.set(channel, callback); return () => { listeners.delete(channel); }; },
+      status: () => "connected", onStatusChange: () => () => undefined,
+    });
+    const store = configureStore({
+      reducer: { [baseApi.reducerPath]: baseApi.reducer },
+      middleware: (getDefault) => getDefault().concat(baseApi.middleware),
+    });
+    const cache = createRunCache();
+    cache.markFinalized("voice");
+    const loadRunDetails = vi.fn().mockResolvedValue(undefined);
+    const view = renderHook(() => {
+      const [runs, setRuns] = useState([current]);
+      return useRunSync({ runs, activeRunId: "voice", cache, loadRunDetails,
+        onRunUpdated: (run) => setRuns([run]), clearTurnStreams: vi.fn() });
+    }, { wrapper: ({ children }: { children: ReactNode }) => <Provider store={store}>{children}</Provider> });
+    try {
+      act(() => { listeners.get(CHANNELS.runs.eventPersisted)?.({ runId: "another" }); });
+      expect(loadRunDetails).not.toHaveBeenCalled();
+      act(() => { listeners.get(CHANNELS.runs.eventPersisted)?.({ runId: "voice" }); });
+      await waitFor(() => expect(loadRunDetails).toHaveBeenCalledExactlyOnceWith("voice"));
+      for (let turn = 1; turn <= 2; turn++) {
+        await act(async () => {
+          current = { ...current, status: "running" };
+          listeners.get(CHANNELS.runs.statusChanged)?.({ runId: "voice", status: "running" });
+        });
+        await waitFor(() => expect(cache.isFinalized("voice")).toBe(false));
+        await act(async () => {
+          current = { ...current, status: "failed", lastError: `Voice job ${turn} failed` };
+          listeners.get(CHANNELS.runs.statusChanged)?.({ runId: "voice", status: "failed" });
+        });
+        await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(turn));
+        await act(async () => { await view.result.current.finalizeRun(current); });
+        expect(toast.error).toHaveBeenCalledTimes(turn);
+      }
+      // Work already completed by the time the running push is re-fetched.
+      await act(async () => {
+        current = { ...current, status: "failed", lastError: "Short voice job failed" };
+        listeners.get(CHANNELS.runs.statusChanged)?.({ runId: "voice", status: "running" });
+      });
+      await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(3));
+      await act(async () => { await view.result.current.finalizeRun(current); });
+      expect(toast.error).toHaveBeenCalledTimes(3);
+    } finally { view.unmount(); store.dispatch(baseApi.util.resetApiState()); }
+  });
 });
 
 describe("workspace diff updates after turn undo", () => {
@@ -101,7 +155,7 @@ describe("workspace diff updates after turn undo", () => {
       const loadRunDetails = vi.fn();
       const cache = createRunCache();
       const runs: Run[] = [{ id: activeRunId, status: "succeeded", goal: "Done", providerId: "codex" }];
-      const deps = { runs, activeRunId, cache, loadRunDetails, onRunUpdated: vi.fn(), clearAllStreams: vi.fn() };
+      const deps = { runs, activeRunId, cache, loadRunDetails, onRunUpdated: vi.fn(), clearTurnStreams: vi.fn() };
       const view = renderHook(() => {
         useRunSync(deps);
         return useGitActionsPanel("ws-a");

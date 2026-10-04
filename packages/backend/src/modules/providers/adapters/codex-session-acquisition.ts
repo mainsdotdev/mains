@@ -8,6 +8,7 @@ import type {
   WorkRunForkRequest,
   WorkRunRequest,
   WorkRunReviewRequest,
+  WorkRunRealtimeRequest,
 } from "../../../../shared/adapter.types";
 import {
   createLogger,
@@ -18,6 +19,8 @@ import type { CollaborationMode } from "./codex-app-server-protocol/generated/Co
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import type { MainsToolContext } from "./mains-tools.core";
 import { toCodexDynamicTools } from "./mains-tools.registry";
+import { MainsMcpStdioServer } from "./mains-mcp-server";
+import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import type {
   CodexRunCoordinator,
   CodexRunSession,
@@ -751,7 +754,67 @@ export function createCodexSessionAcquisition(
     };
   }
 
+  async function prepareRealtimeSession(request: WorkRunRealtimeRequest) {
+    let threadId = runCoordinator.getSessionThread(request.runId) ??
+      await findPersistedSession(request.runId);
+    const server = await ensureServer();
+    if (threadId && runCoordinator.hasLiveTurn(request.runId)) {
+      if (request.voiceTools) throw new Error("Wait for the current response to finish before starting voice coordination.");
+      return { server, threadId, model: request.model, dispose: undefined };
+    }
+    const bridge = request.voiceTools ? new MainsMcpStdioServer({
+      ...mainsContext(request.runId, request.execution), voiceTools: request.voiceTools,
+    }, request.mode, { provider: PROVIDER_IDS.codex, scope: "voice" }) : undefined;
+    try {
+      await bridge?.start();
+      let model = await effectiveModel(request.model);
+      const overrides = request.configSnapshot ?? {};
+      const settings = threadSettingsFor(overrides);
+      const turn = turnSettingsFor(overrides);
+      const params = {
+        cwd: request.execution.cwd, ...settings,
+        config: { ...settings.config,
+          ...(turn.effort ? { model_reasoning_effort: turn.effort } : {}),
+          ...(turn.serviceTier ? { service_tier: turn.serviceTier } : {}),
+          ...(bridge ? { "mcp_servers.mains_voice": {
+            command: bridge.mcpConfig.command, args: bridge.mcpConfig.args,
+            env: Object.fromEntries(bridge.mcpConfig.env.map(({ name, value }) => [name, value])),
+            enabled: true, startup_timeout_sec: 10, tool_timeout_sec: 60,
+            // These session-local tools call Mains' own scoped run services.
+            // Worker permissions and other MCP servers keep their native policies.
+            default_tools_approval_mode: "approve",
+          } } : {}),
+        },
+        ...(model ? { model } : {}),
+        ...buildDeveloperInstructionsParam(request.extraInstructions),
+      };
+      if (threadId) {
+        try {
+          const resumed = await server.sendRequest("thread/resume", { threadId, excludeTurns: true, ...params });
+          model = resolveSessionModel(model, resumed.model, "thread/resume");
+        } catch (error) { throw normalizeCodexResumeError(error); }
+      } else {
+        const started = await server.sendRequest("thread/start", { ...params, dynamicTools: toCodexDynamicTools(request.mode) });
+        model = resolveSessionModel(model, started.model, "thread/start");
+        threadId = started.thread.id;
+        if (!threadId) throw new Error("Codex did not create a conversation for voice chat.");
+        await persistSession(request.runId, threadId);
+      }
+      runCoordinator.attachThread(request.runId, threadId);
+      runCoordinator.registerRun({
+        runId: request.runId, threadId,
+        mainsCtx: { workspaceId: request.execution.workspaceId, rootPath: request.execution.cwd, runId: request.runId },
+        subAgents: !runCoordinator.hasSessionSubAgentState(request.runId)
+          ? await findPersistedSubAgents?.(request.runId)
+          : [],
+      });
+      // Loading voice context must not send a turn or overwrite a tracked goal.
+      return { server, threadId, model, dispose: bridge ? () => bridge.stop() : undefined };
+    } catch (error) { await bridge?.stop(); throw error; }
+  }
+
   return {
+    prepareRealtimeSession,
     createSession,
     forkSession,
     resumeSession,

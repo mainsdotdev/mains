@@ -39,12 +39,14 @@ import { browserAnnotationPrompt } from "../lib/browser-annotation";
 import type { McpAppMessageOptions } from "../lib/mcp-app-context";
 import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 import { useConversationSettings } from "./use-conversation-settings";
+import { useRealtimeVoice } from "./use-realtime-voice";
 
 const EMPTY_DIRECTORIES: string[] = [];
 
 
 export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   const dispatch = useAppDispatch();
+  const voice = useRealtimeVoice();
   const mcpPanel = useMcpAppPanel();
   const attachAppRun = mcpPanel?.attachRun;
   const appContext = mcpPanel?.appContext;
@@ -148,6 +150,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     isLoading,
     eventsEndRef,
     setActiveRunId,
+    createVoiceConversation,
     executeRun,
     continueRun,
     forkRun,
@@ -359,7 +362,9 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   // the target is simply that run, as before.
   // The override is stamped with the tab/workspace it was chosen on and
   // simply ignored once either changes — no reset effect needed.
+  const composerVoicePhase = voice.state.runId === composeTargetRunId ? voice.state.phase : "idle";
   useEffect(() => {
+    let canceled = false;
     const checkResume = async () => {
       if (
         composeTargetRunId &&
@@ -368,14 +373,15 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
         composeTargetRun.status !== "queued"
       ) {
         const resumable = await checkCanResume(composeTargetRunId);
-        setCanResume(resumable);
+        if (!canceled) setCanResume(resumable);
       } else {
         setCanResume(false);
       }
     };
     checkResume();
+    return () => { canceled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [composeTargetRunId, composeTargetRun?.status, checkCanResume]);
+  }, [composeTargetRunId, composeTargetRun?.status, composerVoicePhase, checkCanResume]);
 
   const clearInputState = useCallback(() => {
     setGoal("");
@@ -389,6 +395,39 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       });
     }
   }, [setGoal, setUploadedFiles, clearContext, composeTargetRunId, ownerKey]);
+
+  const handleCreateVoiceConversation = useCallback(async () => {
+    if (!conversation.ready || sendingRef.current) return null;
+    if (mode === "developer" && !workspaceId) {
+      toast.error("Select a workspace before starting voice chat.");
+      return null;
+    }
+    sendingRef.current = true;
+    try {
+      const runId = await createVoiceConversation(selectedWorkspace, selectedCollectionId, runAdditionalDirectories, conversationSettings);
+      if (!runId) return null;
+      const nextOwnerKey = composerOwnerKey(contextParts, runId);
+      const state = store.getState().workspace;
+      const items = state.composerContextKey === ownerKey ? state.contextItems : state.contextItemsByKey[ownerKey] ?? [];
+      // Starting the microphone must not submit or discard the written draft.
+      dispatch(transferConversationSettings({ fromKey: ownerKey, toKey: nextOwnerKey }));
+      dispatch(setContextItemsForKey({ key: ownerKey, items: [] }));
+      dispatch(setContextItemsForKey({ key: nextOwnerKey, items }));
+      dispatch(setDraftText({ key: ownerKey, text: "" }));
+      dispatch(setDraftText({ key: nextOwnerKey, text: state.draftTextByKey[ownerKey] ?? "" }));
+      moveTransientUploadsToOwner(ownerKey, nextOwnerKey);
+      dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
+      await (window as any).api?.browser?.reassignTabs?.(ownerKey, nextOwnerKey);
+      attachAppRun?.(ownerKey, runId, contextParts);
+      const visible = store.getState().workspace;
+      if (visible.workspaceViewKey !== viewKey ||
+          (visible.composerContextKey !== ownerKey && visible.composerContextKey !== nextOwnerKey)) return null;
+      dispatch(setActiveTab(runId));
+      if (mode !== "developer") navigate(`/code/runs/${runId}`);
+      return runId;
+    } finally { sendingRef.current = false; }
+  }, [conversation.ready, mode, workspaceId, createVoiceConversation, selectedWorkspace, selectedCollectionId,
+    runAdditionalDirectories, conversationSettings, contextParts, ownerKey, dispatch, attachAppRun, viewKey, navigate]);
 
   const handleExecute = useCallback(async (message?: string, options: McpAppMessageOptions = {}) => {
     if (!conversation.ready) return null;
@@ -623,6 +662,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     // Handlers
     handleModelChange,
     handleExecute,
+    handleCreateVoiceConversation,
     handleQueueSnapshot,
     handleSendTargetChange,
     handleNewConversationContextChange,

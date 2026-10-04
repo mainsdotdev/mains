@@ -621,6 +621,33 @@ input.on("line", (line) => {
       break;
     }
 
+    case "thread/realtime/listVoices":
+      respond(id, { voices: {
+        v1: ["cove", "maple", "juniper"], v2: ["marin", "cedar"],
+        defaultV1: "cove", defaultV2: "marin",
+      } });
+      break;
+
+    case "thread/realtime/start":
+      respond(id, {});
+      setTimeout(() => {
+        notify("thread/realtime/started", { threadId: params.threadId, realtimeSessionId: "fixture-voice" });
+        notify("thread/realtime/sdp", { threadId: params.threadId, sdp: "fixture-answer" });
+        notify("thread/realtime/transcript/delta", { threadId: params.threadId, role: "user", delta: "Calculate this" });
+        notify("thread/realtime/itemAdded", { threadId: params.threadId, item: { type: "handoff_request", input_transcript: "Calculate this" } });
+        const turnId = `voice-turn-${params.threadId}`;
+        notify("turn/started", { threadId: params.threadId, turn: { id: turnId, status: "inProgress" } });
+        notify("thread/realtime/transcript/done", { threadId: params.threadId, role: "user", text: "Calculate this" });
+        notify("item/completed", { threadId: params.threadId, turnId, item: { type: "agentMessage", id: "voice-result", text: "The answer is 1387" } });
+        notify("turn/completed", { threadId: params.threadId, turn: { id: turnId, status: "completed" } });
+      }, 10);
+      break;
+
+    case "thread/realtime/stop":
+      notify("thread/realtime/closed", { threadId: params.threadId, reason: "ended" });
+      respond(id, {});
+      break;
+
     case "thread/unsubscribe":
       activeThreads.delete(params.threadId);
       respond(id, { status: "unsubscribed" });

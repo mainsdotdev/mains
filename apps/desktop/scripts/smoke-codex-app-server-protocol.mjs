@@ -223,6 +223,20 @@ try {
     "input: Array<UserInput>",
   ]);
   assertContains("v2/TurnSteerResponse.ts", ["turnId: string"]);
+  // Voice is an experimental capability validated against the tested 0.160
+  // snapshot, while ordinary text runs still support the older minimum CLI.
+  if (compareVersions(versionOutput, "0.160.0") >= 0) {
+    assertContains("ClientRequest.ts", [
+      '"method": "thread/realtime/start"',
+      '"method": "thread/realtime/stop"',
+    ]);
+    assertContains("v2/ThreadRealtimeStartParams.ts", [
+      "outputModality: RealtimeOutputModality", "version?: RealtimeConversationVersion",
+      "transport?: ThreadRealtimeStartTransport", "clientManagedHandoffs?: boolean",
+    ]);
+    assertContains("v2/ThreadRealtimeStartTransport.ts", ['"type": "webrtc"', "sdp: string"]);
+    assertContains("RealtimeConversationVersion.ts", ['"v3"']);
+  }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",
     "originCallId?: string | null",

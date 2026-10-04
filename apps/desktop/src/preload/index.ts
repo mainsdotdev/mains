@@ -1,6 +1,7 @@
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import { contextBridge, ipcRenderer } from "electron";
 import type { RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
+import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 import type { ModeId } from "../shared/modes";
@@ -457,6 +458,7 @@ const api = {
       ipcRenderer.invoke(CHANNELS.providers.getCommands, id, workspacePath),
     getSkills: (id: string, workspacePath?: string) => ipcRenderer.invoke(CHANNELS.providers.getSkills, id, workspacePath),
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
+    getRealtimeVoices: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRealtimeVoices, id),
     consumeRateLimitResetCredit: (id: string, params: unknown) =>
       ipcRenderer.invoke(CHANNELS.providers.consumeRateLimitResetCredit, id, params),
     // Fired when the provider streams a fresh rate-limit snapshot during a run
@@ -749,6 +751,14 @@ const api = {
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
     steer: (payload: RunSteerPayload) => ipcRenderer.invoke(CHANNELS.runs.steer, payload),
     inputStatus: (payload: RunInputStatusPayload) => ipcRenderer.invoke(CHANNELS.runs.inputStatus, payload),
+    createRealtimeConversation: (payload: CreateRealtimeConversationPayload): Promise<ServiceResponse<CreateRealtimeConversationResponse>> => ipcRenderer.invoke(CHANNELS.runs.createRealtimeConversation, payload),
+    startRealtime: (payload: RunRealtimeStartPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.startRealtime, payload),
+    stopRealtime: (payload: RunRealtimeStopPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.stopRealtime, payload),
+    onRealtimeEvent: (callback: (event: RunRealtimeEvent) => void) => {
+      const listener = (_: unknown, event: RunRealtimeEvent) => callback(event);
+      ipcRenderer.on(CHANNELS.runs.realtimeEvent, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.runs.realtimeEvent, listener);
+    },
     canResume: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.canResume, runId),
     fork: (payload: {
       sourceRunId: string;

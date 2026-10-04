@@ -23,7 +23,7 @@ const CTX: MainsToolContext = {
 
 /** Tools the registry marks available to a given provider. */
 function expectedFor(provider: string): string[] {
-  return MAINS_TOOLS.filter((t) => t.providers.includes(provider as any))
+  return MAINS_TOOLS.filter((t) => !t.scope && t.providers.includes(provider as any))
     .map((t) => t.name)
     .sort();
 }
@@ -53,6 +53,20 @@ describe("mains tool registry — per-provider consistency", () => {
 });
 
 describe("mains tool registry — availability matrix", () => {
+  it("exposes coordination tools only to a Codex voice bridge, in every mode", () => {
+    const names = ["StartVoiceTask", "ListVoiceTasks", "ReadVoiceTask", "WaitVoiceTask", "SendVoiceTaskMessage", "StopVoiceTask", "EndVoiceChat"];
+    for (const mode of ["developer", "work", "chat"] as const) {
+      expect(toMcpToolDefs(mode, PROVIDER_IDS.codex, "voice").map((tool) => tool.name)).toEqual(names);
+      expect(toCodexDynamicTools(mode).some((tool) => "name" in tool && names.includes(tool.name))).toBe(false);
+      expect(toMcpToolDefs(mode).some((tool) => names.includes(tool.name))).toBe(false);
+    }
+  });
+
+  it("rejects coordination without an active capability and validates tool input", async () => {
+    await expect(dispatchMainsTool("StartVoiceTask", { taskKey: "task", title: "Work", prompt: "Do work" }, CTX)).rejects.toThrow("outside the active voice");
+    const start = async () => { throw new Error("should not dispatch invalid input"); };
+    await expect(dispatchMainsTool("StartVoiceTask", { taskKey: "../bad", title: "", prompt: "" }, { ...CTX, voiceTools: { start } as never })).rejects.toThrow();
+  });
   it("CheckPackage is exposed only to Codex and Cursor (Bash-hook guard elsewhere)", () => {
     const checkPackage = MAINS_TOOLS.find((t) => t.name === "CheckPackage")!;
     expect([...checkPackage.providers].sort()).toEqual(

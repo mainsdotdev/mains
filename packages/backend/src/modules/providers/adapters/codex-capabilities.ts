@@ -25,6 +25,7 @@ import {
 } from "./adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
 import type { CodexAppServerResult } from "./codex-app-server-protocol/rpc";
+import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
 import type { McpServerStatus } from "./codex-app-server-protocol/generated/v2/McpServerStatus";
 import { discoverMcpAppEntrypoints, installedMcpAppEntrypoints, type McpAppPluginSource } from "./codex-mcp-apps";
 
@@ -844,6 +845,17 @@ export function createCodexCapabilities(
     mcpInventoryInFlight = null;
   }
 
+  async function listRealtimeVoices(): Promise<RealtimeVoiceCatalog> {
+    const server = await options.ensureServer();
+    const { voices } = await server.sendRequest("thread/realtime/listVoices", {});
+    // Codex 0.160 uses the v1 voice family for its v3 WebRTC conversations.
+    if (!Array.isArray(voices?.v1) || !voices.v1.every((voice) => typeof voice === "string" && voice.length > 0)
+      || typeof voices.defaultV1 !== "string" || !voices.v1.includes(voices.defaultV1)) {
+      throw new Error("Codex returned an invalid voice list.");
+    }
+    return { voices: [...new Set(voices.v1)], defaultVoice: voices.defaultV1 };
+  }
+
   async function listModels(): Promise<ModelInfo[]> {
     try {
       const server = await options.ensureServer();
@@ -1556,6 +1568,7 @@ export function createCodexCapabilities(
 
   return {
     listModels,
+    listRealtimeVoices,
     getAccountInfo,
     getRateLimits,
     consumeRateLimitResetCredit,

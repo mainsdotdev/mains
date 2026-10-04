@@ -88,3 +88,76 @@ describe("Codex active input delivery", () => {
     h.coordinator.shutdown();
   });
 });
+
+describe("Codex native voice work turns", () => {
+  it("keeps an open call subscribed after normal work and tracks successive delegations", async () => {
+    const h = liveRun();
+    const finalizing = deferred<void>();
+    const onTurnStarted = vi.fn().mockResolvedValue(undefined);
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    const onCompleted = vi.fn().mockImplementationOnce(() => finalizing.promise).mockResolvedValue(undefined);
+    let prompt = "First spoken request";
+    const release = h.coordinator.watchRealtimeRun("run", "voice-work-model", { onTurnStarted, onEvent, onCompleted }, () => prompt);
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    await h.finished;
+    await h.coordinator.cleanupRun(h.server, "run");
+    expect(h.sendRequest).not.toHaveBeenCalled();
+
+    h.notify("turn/started", { threadId: "parent", turn: { id: "native-1", status: "inProgress" } });
+    prompt = "Later speech must not replace the first request";
+    h.notify("turn/plan/updated", { turnId: "native-1", plan: [{ step: "Calculate", status: "inProgress" }] });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "native-1", status: "completed" } });
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledOnce());
+    expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith("native-1", "First spoken request", "voice-work-model");
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "plan_update", providerTurnId: "native-1" }));
+    prompt = "Second spoken request";
+    h.notify("turn/started", { threadId: "parent", turn: { id: "native-2", status: "inProgress" } });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "native-2", status: "completed" } });
+    await Promise.resolve();
+    expect(onTurnStarted).toHaveBeenCalledOnce();
+    finalizing.resolve();
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledTimes(2));
+    expect(onTurnStarted).toHaveBeenLastCalledWith("native-2", "Second spoken request", "voice-work-model");
+    expect(onCompleted.mock.calls.map(([result]) => result.status)).toEqual(["succeeded", "succeeded"]);
+    expect(h.sendRequest).not.toHaveBeenCalled();
+    release();
+    await h.coordinator.cleanupRun(h.server, "run");
+    expect(h.sendRequest).toHaveBeenCalledExactlyOnceWith("thread/unsubscribe", { threadId: "parent" });
+    h.coordinator.shutdown();
+  });
+
+  it("finalizes failed preparation once and lets the next voice job start", async () => {
+    const h = liveRun();
+    const onTurnStarted = vi.fn().mockRejectedValueOnce(new Error("Conversation was deleted")).mockResolvedValue(undefined);
+    const onCompleted = vi.fn().mockResolvedValue(undefined);
+    h.coordinator.watchRealtimeRun("run", "model", { onTurnStarted, onEvent: vi.fn(), onCompleted });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    await h.finished;
+    h.notify("turn/started", { threadId: "parent", turn: { id: "failed-turn", status: "inProgress" } });
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledOnce());
+    expect(onCompleted).toHaveBeenCalledWith(expect.objectContaining({ status: "failed", summary: "Conversation was deleted" }));
+    expect(h.sendRequest).toHaveBeenCalledWith("turn/interrupt", { threadId: "parent", turnId: "failed-turn" }, 250);
+    h.notify("turn/started", { threadId: "parent", turn: { id: "next-turn", status: "inProgress" } });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "next-turn", status: "completed" } });
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledTimes(2));
+    expect(onCompleted).toHaveBeenLastCalledWith(expect.objectContaining({ status: "succeeded" }));
+    h.coordinator.shutdown();
+  });
+
+  it("aborts a native work turn without closing its voice owner", async () => {
+    const h = liveRun();
+    const onCompleted = vi.fn().mockResolvedValue(undefined);
+    const release = h.coordinator.watchRealtimeRun("run", "model", { onTurnStarted: vi.fn(), onEvent: vi.fn(), onCompleted });
+    h.notify("turn/completed", { threadId: "parent", turn: { id: "turn-parent", status: "completed" } });
+    await h.finished;
+    h.notify("turn/started", { threadId: "parent", turn: { id: "native", status: "inProgress" } });
+    await h.coordinator.abortNativeRun(h.server, "run");
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledWith(expect.objectContaining({ status: "canceled" })));
+    expect(h.sendRequest).toHaveBeenCalledWith("turn/interrupt", { threadId: "parent", turnId: "native" }, 250);
+    await h.coordinator.cleanupRun(h.server, "run");
+    expect(h.sendRequest.mock.calls.map(([method]) => method)).toEqual(["turn/interrupt"]);
+    release();
+    await h.coordinator.cleanupRun(h.server, "run");
+    h.coordinator.shutdown();
+  });
+});

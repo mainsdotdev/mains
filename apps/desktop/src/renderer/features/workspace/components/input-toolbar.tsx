@@ -1,5 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import { useState, useRef, useCallback, useEffect, useLayoutEffect, type RefObject } from "react";
+import { useState, useRef, useCallback, useLayoutEffect, type RefObject } from "react";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { SkillInfo } from "@/lib/redux/api/providersApi";
 import { PluginsButton } from "./plugins-button";
@@ -8,7 +7,6 @@ import { useModeConfig } from "@/hooks/use-mode-config";
 import {
   CompactComposerControls,
   SendButton,
-  DictationButton,
   ModelSelectDropdown,
   FileUploadDropdown,
   FastModeButton,
@@ -16,19 +14,20 @@ import {
   PermissionModeDropdown,
   FILE_TYPES,
   type UploadedFile,
-  Button,
   Input,
 } from "@/components/ui";
-import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
+import { Microphone } from "@/components/ui/icons";
+import { VoiceMuteButton } from "./voice-mute-button";
+import type { ComposerPrimaryAction } from "../lib/composer-controls";
 
 interface InputToolbarProps {
+  primaryAction: ComposerPrimaryAction & { onClick: () => void };
+  voiceMute?: { muted: boolean; disabled: boolean; onToggle: () => void };
   variant: "claude" | "copilot" | "codex" | "cursor";
   isLoading: boolean;
-  onSubmit: () => void;
-  onGoalChange: (value: string) => void;
   // Model
   selectedModelDisplayName: string;
   modelDisplayNames: string[];
@@ -65,25 +64,18 @@ interface InputToolbarProps {
   supportedEffortLevels?: EffortLevel[];
   // Ultracode (Claude only) — bottom entry of the effort dropdown
   supportsUltracode?: boolean;
-  // Stop run (active run is running)
-  isRunning: boolean;
-  showStop?: boolean;
-  sendLabel?: string;
-  onStop?: () => void;
   // File uploads
   uploadedFiles: UploadedFile[];
   onUploadedFilesChange: (files: UploadedFile[]) => void;
-  // Disable send
-  disabled?: boolean;
   layout?: "default" | "floating";
   floatingChatMode?: FloatingChatMode;
 }
 
 export function InputToolbar({
+  primaryAction,
+  voiceMute,
   variant,
   isLoading,
-  onSubmit,
-  onGoalChange,
   selectedModelDisplayName,
   modelDisplayNames,
   modelEffortLevelsByDisplayName,
@@ -108,13 +100,8 @@ export function InputToolbar({
   onEffortLevelChange,
   supportedEffortLevels,
   supportsUltracode,
-  isRunning,
-  showStop = isRunning,
-  sendLabel,
-  onStop,
   uploadedFiles,
   onUploadedFilesChange,
-  disabled,
   layout = "default",
   floatingChatMode,
 }: InputToolbarProps) {
@@ -137,10 +124,6 @@ export function InputToolbar({
     setShowFileDropdown(false);
     setShowPermissionDropdown(false);
   }, [floatingChatMode, layout]);
-
-  const { isRecording, toggle: toggleDictation } = useSpeechRecognition(
-    (value) => onGoalChange(value),
-  );
 
   useClickOutside(fileDropdownRef, () => {
     if (showFileDropdown) setShowFileDropdown(false);
@@ -188,6 +171,25 @@ export function InputToolbar({
       e.target.value = "";
     },
     [uploadedFiles, onUploadedFilesChange],
+  );
+
+  const actionButtons = (
+    <>
+      {voiceMute && <VoiceMuteButton {...voiceMute} />}
+      <SendButton
+        loading={primaryAction.kind === "send" && isLoading}
+        showStop={primaryAction.kind === "stop"}
+        label={primaryAction.label}
+        stopLabel={primaryAction.label}
+        onSubmit={primaryAction.onClick}
+        onStop={primaryAction.onClick}
+        disabled={primaryAction.disabled}
+        stopDisabled={primaryAction.disabled}
+        icon={<Microphone aria-hidden="true" />}
+        showCustomIcon={primaryAction.kind === "voice"}
+        compact={layout === "floating"}
+      />
+    </>
   );
 
   if (layout === "floating") {
@@ -244,15 +246,7 @@ export function InputToolbar({
             goalMode={goalMode}
             iconOnly
           />
-          <SendButton
-            loading={isLoading}
-            showStop={showStop}
-            label={sendLabel}
-            onSubmit={onSubmit}
-            onStop={isRunning ? onStop : undefined}
-            disabled={disabled}
-            compact
-          />
+          {actionButtons}
         </div>
       </div>
     );
@@ -357,14 +351,7 @@ export function InputToolbar({
             )}
         </div>
         <div className="flex shrink-0 items-center pb-0.5">
-          <SendButton
-            loading={isLoading}
-            showStop={showStop}
-            label={sendLabel}
-            onSubmit={onSubmit}
-            onStop={isRunning ? onStop : undefined}
-            disabled={disabled}
-          />
+          {actionButtons}
         </div>
       </div>
     </div>

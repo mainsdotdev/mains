@@ -26,6 +26,7 @@ import { execSync } from "node:child_process";
 import type { MainsToolContext } from "./mains-tools.core";
 import type { WorkRunEventHandler } from "../../../../shared/adapter.types";
 import type { ModeId } from "@mains/contracts/modes";
+import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
 import {
   toMcpToolDefs,
   dispatchMainsTool,
@@ -86,7 +87,8 @@ function callBridge(toolName, args) {
     client.on("close", () => {
       if (!buf.trim()) reject(new Error("Bridge closed without response"));
     });
-    setTimeout(() => { client.destroy(); reject(new Error("Bridge timeout")); }, 60000);
+    const timer = setTimeout(() => { client.destroy(); reject(new Error("Bridge timeout")); }, 60000);
+    client.on("close", () => clearTimeout(timer));
   });
 }
 
@@ -231,6 +233,7 @@ function findNodeBinary(): NodeBinaryInfo {
 
 export class MainsMcpStdioServer {
   private socketServer: net.Server | null = null;
+  private sockets = new Set<net.Socket>();
   private socketPath: string;
   private scriptPath: string;
   private nodeInfo: NodeBinaryInfo;
@@ -239,6 +242,7 @@ export class MainsMcpStdioServer {
   constructor(
     private ctx: MainsToolContext,
     private mode?: ModeId,
+    private availability: { provider: ProviderId; scope?: "voice" } = { provider: PROVIDER_IDS.cursor },
   ) {
     const id = crypto.randomUUID().slice(0, 8);
     const tmpDir = os.tmpdir();
@@ -249,17 +253,26 @@ export class MainsMcpStdioServer {
 
   async start(): Promise<void> {
     // 1. Write the MCP script to a temp file (tool list is mode-filtered)
-    const script = buildMcpScript(toMcpToolDefs(this.mode));
-    fs.writeFileSync(this.scriptPath, script, "utf8");
+    const tools = toMcpToolDefs(this.mode, this.availability.provider, this.availability.scope);
+    const allowed = new Set(tools.map((tool) => tool.name));
+    const script = buildMcpScript(tools);
+    fs.writeFileSync(this.scriptPath, script, { encoding: "utf8", mode: 0o600 });
 
     // 2. Start the Unix socket bridge
     const ctx = this.ctx;
     this.socketServer = net.createServer((conn) => {
+      this.sockets.add(conn);
+      conn.on("close", () => this.sockets.delete(conn));
+      conn.on("error", () => conn.destroy());
       let buf = "";
+      let dispatched = false;
       conn.on("data", (chunk) => {
+        if (dispatched) return;
         buf += chunk.toString();
+        if (buf.length > 128_000) { conn.destroy(); return; }
         const nl = buf.indexOf("\n");
         if (nl === -1) return;
+        dispatched = true;
 
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
@@ -269,6 +282,10 @@ export class MainsMcpStdioServer {
           req = JSON.parse(line);
         } catch {
           conn.end(JSON.stringify({ id: null, content: [{ type: "text", text: "Parse error" }], isError: true }) + "\n");
+          return;
+        }
+        if (!allowed.has(req.tool)) {
+          conn.end(JSON.stringify({ id: req.id, content: [{ type: "text", text: "Tool is unavailable in this session" }], isError: true }) + "\n");
           return;
         }
 
@@ -321,15 +338,20 @@ export class MainsMcpStdioServer {
       this.socketServer!.listen(this.socketPath, () => resolve());
       this.socketServer!.on("error", reject);
     });
+    fs.chmodSync(this.socketPath, 0o600);
 
   }
 
   async stop(): Promise<void> {
-    if (this.socketServer) {
+    const server = this.socketServer;
+    this.socketServer = null;
+    this.onEvent = null;
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
+    if (server) {
       await new Promise<void>((resolve) => {
-        this.socketServer!.close(() => resolve());
+        server.close(() => resolve());
       });
-      this.socketServer = null;
     }
 
     // Clean up temp files
@@ -361,7 +383,7 @@ export class MainsMcpStdioServer {
       envEntries.push({ name: k, value: v });
     }
     return {
-      name: "mains",
+      name: this.availability.scope === "voice" ? "mains_voice" : "mains",
       command: this.nodeInfo.command,
       args: [this.scriptPath],
       env: envEntries,

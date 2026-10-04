@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   getTurns: vi.fn(),
   getByWorkspace: vi.fn(),
   executeRun: vi.fn(),
+  createVoiceConversation: vi.fn(),
   continueRun: vi.fn(),
   checkCanResume: vi.fn(),
   appContext: vi.fn(),
@@ -34,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   panel: false,
   mode: "work",
   workspaceId: undefined as string | undefined,
+  voiceState: { phase: "idle", runId: null as string | null, connectionId: null, startedAt: null },
 }));
 
 vi.mock("@/lib/redux/hooks", () => ({
@@ -93,6 +95,10 @@ vi.mock("./use-run-operations", () => ({
   useRunOperations: ({ registerNewRun }: { registerNewRun: (id: string) => Promise<string | null> }) => ({
     isLoading: false,
     error: null,
+    createVoiceConversation: async (...args: unknown[]) => {
+      const id = await mocks.createVoiceConversation(...args);
+      return id ? registerNewRun(id) : null;
+    },
     executeRun: async (...args: unknown[]) => {
       const id = await mocks.executeRun(...args);
       return id ? registerNewRun(id) : null;
@@ -107,8 +113,9 @@ vi.mock("./use-run-sync", () => ({
   useRunSync: () => ({ finalizeRun: vi.fn() }),
 }));
 vi.mock("./use-streaming-events", () => ({
-  useStreamingEvents: () => ({ streamingEvents: [], clearAllStreams: vi.fn() }),
+  useStreamingEvents: () => ({ streamingEvents: [], clearTurnStreams: vi.fn() }),
 }));
+vi.mock("./use-realtime-voice", () => ({ useRealtimeVoice: () => ({ state: mocks.voiceState }) }));
 
 import { useWorkspacePage } from "./use-workspace-page";
 
@@ -140,9 +147,11 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) if (vi.isMockFunction(mock)) mock.mockReset();
   mocks.mode = "work";
   mocks.workspaceId = undefined;
+  mocks.voiceState = { phase: "idle", runId: null, connectionId: null, startedAt: null };
   mocks.panel = false;
   mocks.appContext.mockReturnValue([]);
   mocks.executeRun.mockResolvedValue(null);
+  mocks.createVoiceConversation.mockResolvedValue(null);
   mocks.writeSettings.mockResolvedValue({ success: true });
   mocks.continueRun.mockResolvedValue(true);
   mocks.checkCanResume.mockResolvedValue(false);
@@ -183,6 +192,80 @@ function workspacePage(providerId = "claude_code") {
 }
 
 describe("new conversation context", () => {
+  it.each(["empty", "new-run"])("prepares fresh voice from %s and preserves the unsent draft in the new conversation", async (startAt) => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    const created = { ...run, id: "voice-created", providerId: "codex", workspaceId: "ws-1", mode: "developer", goal: null };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [] });
+    mocks.getById.mockResolvedValue({ success: true, data: created });
+    mocks.createVoiceConversation.mockResolvedValue(created.id);
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.showEmptyState).toBe(true));
+    act(() => {
+      if (startAt === "new-run") page.store.dispatch(openNewRunTab());
+      page.result.current.setGoal("Unsent written draft");
+      page.result.current.handleSettingsConfigChange({ modelReasoningEffort: "ultra" });
+    });
+    const previousOwner = page.result.current.ownerKey;
+    await act(async () => {
+      expect(await page.result.current.handleCreateVoiceConversation()).toBe(created.id);
+    });
+    expect(mocks.createVoiceConversation).toHaveBeenCalledWith("ws-1", null, [], expect.objectContaining({ config: expect.objectContaining({ modelReasoningEffort: "ultra" }) }));
+    expect(mocks.executeRun).not.toHaveBeenCalled();
+    expect(mocks.continueRun).not.toHaveBeenCalled();
+    expect(page.result.current.activeTab).toBe(created.id);
+    expect(page.result.current.composerRun?.id).toBe(created.id);
+    expect(page.result.current.goal).toBe("Unsent written draft");
+    expect(mocks.moveUploads).toHaveBeenCalledWith(previousOwner, page.result.current.ownerKey);
+    expect(page.store.getState().workspace.draftTextByKey[previousOwner] ?? "").toBe("");
+  });
+
+  it("continues the thread created by voice even when its idle run status never changes", async () => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    const blank = { ...run, id: "blank-voice", providerId: "codex", workspaceId: "ws-1", mode: "developer", goal: null, sessionId: null };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [blank] });
+    mocks.getById.mockResolvedValue({ success: true, data: blank });
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(blank.id));
+    await waitFor(() => expect(mocks.checkCanResume).toHaveBeenCalledWith(blank.id));
+    expect(page.result.current.canResume).toBe(false);
+    // Native voice preparation has now persisted a thread, without a work turn.
+    mocks.checkCanResume.mockResolvedValue(true);
+    mocks.voiceState = { phase: "connected", runId: blank.id, connectionId: null, startedAt: null };
+    page.rerender();
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+    mocks.voiceState = { phase: "idle", runId: null, connectionId: null, startedAt: null };
+    page.rerender();
+    act(() => page.result.current.setGoal("First written follow-up"));
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(mocks.continueRun).toHaveBeenCalledWith(blank.id, "First written follow-up", expect.any(String), undefined, [], [], expect.any(Object));
+    expect(mocks.executeRun).not.toHaveBeenCalled();
+  });
+
+  it("does not start voice or retarget the composer after selecting another chat during preparation", async () => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    const existing = { ...run, providerId: "codex", workspaceId: "ws-1", mode: "developer" };
+    const created = { ...existing, id: "voice-prepared", goal: null };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
+    mocks.getById.mockImplementation(async (id) => ({ success: true, data: id === created.id ? created : existing }));
+    let finish!: (id: string) => void;
+    mocks.createVoiceConversation.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(existing.id));
+    act(() => page.store.dispatch(openNewRunTab()));
+    let creating!: Promise<string | null>;
+    act(() => { creating = page.result.current.handleCreateVoiceConversation(); });
+    await waitFor(() => expect(mocks.createVoiceConversation).toHaveBeenCalledOnce());
+    await act(async () => { expect(await page.result.current.handleCreateVoiceConversation()).toBeNull(); });
+    act(() => page.result.current.handleSelectRunTab(existing.id));
+    await act(async () => { finish(created.id); expect(await creating).toBeNull(); });
+    expect(page.result.current.activeTab).toBe(existing.id);
+    expect(page.result.current.composerRun?.id).toBe(existing.id);
+    expect(mocks.createVoiceConversation).toHaveBeenCalledOnce();
+  });
+
   it.each(["work", "chat"])("retargets a %s draft to a project without losing its text or context", async (mode) => {
     mocks.mode = mode;
     const page = workspacePage();

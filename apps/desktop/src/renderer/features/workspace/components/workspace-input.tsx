@@ -28,7 +28,9 @@ import {
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import { useModeConfig } from "@/hooks/use-mode-config";
-import { useIsMobile } from "@/lib/platform";
+import { isElectron, useIsMobile } from "@/lib/platform";
+import { appApi } from "@/lib/transport";
+import { useRealtimeVoice } from "../hooks/use-realtime-voice";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import { Chat, Check, Plus } from "@/components/ui/icons";
 import {
@@ -41,6 +43,7 @@ import { ContextChips } from "./context-chips";
 import { ComposerQueueCard } from "./composer-run-queue";
 import type { ComposerRunQueue } from "../hooks/use-composer-run-queue";
 import { hasComposerMessage } from "../lib/composer-message";
+import { composerControls, stopComposerActivity } from "../lib/composer-controls";
 import { ComposerAttachments } from "./composer-attachments";
 import { InputToolbar } from "./input-toolbar";
 import { ContextUsageRing } from "./context-usage-meter";
@@ -165,6 +168,7 @@ interface WorkspaceInputProps {
   goal: string;
   onGoalChange: (value: string) => void;
   onSubmit: () => void;
+  onCreateVoiceConversation?: () => Promise<string | null>;
   isLoading: boolean;
   activeRun: Run | undefined;
   canResume?: boolean;
@@ -200,6 +204,7 @@ export function WorkspaceInput({
   goal,
   onGoalChange,
   onSubmit,
+  onCreateVoiceConversation,
   isLoading,
   activeRun,
   canResume = false,
@@ -225,6 +230,7 @@ export function WorkspaceInput({
   floatingAutoFocus = false,
   floatingStatusPlaceholder,
 }: WorkspaceInputProps) {
+  const voice = useRealtimeVoice();
   const inputRef = useRef<RichInputFormHandle>(null);
   useEffect(() => {
     if (layout !== "floating" || !floatingAutoFocus) return;
@@ -722,6 +728,8 @@ export function WorkspaceInput({
   );
 
   const handleSubmit = useCallback(() => {
+    if (voice.state.runId === activeRun?.id &&
+        (voice.state.phase === "connecting" || voice.state.phase === "connected" || voice.state.phase === "ending" || voice.state.phase === "stop_failed")) return;
     if (activeDescriptor.supportsAdditionalDirectories) {
       const match = goal.trim().match(/^\/add-dir(?:\s+(.+))?$/);
       if (match) {
@@ -737,7 +745,7 @@ export function WorkspaceInput({
     }
     if (unifiedMenu.visible) return;
     onSubmit();
-  }, [unifiedMenu.visible, activeDescriptor.supportsAdditionalDirectories, goal, addAdditionalDirectory, pickAdditionalDirectory, onGoalChange, onSubmit]);
+  }, [voice.state.runId, voice.state.phase, activeRun?.id, unifiedMenu.visible, activeDescriptor.supportsAdditionalDirectories, goal, addAdditionalDirectory, pickAdditionalDirectory, onGoalChange, onSubmit]);
 
   const [isFileDragOver, setIsFileDragOver] = useState(false);
 
@@ -885,18 +893,62 @@ export function WorkspaceInput({
   })();
 
   const hasMessage = hasComposerMessage(goal, uploadedFiles.length, contextItems);
-  const isRunning = activeRun?.status === "running" || activeRun?.status === "queued";
+  const voiceStartingRef = useRef(false);
+  const [voiceStarting, setVoiceStarting] = useState(false);
+  const voiceEnabled = isElectron && activeDescriptor.supportsRealtime && layout !== "floating";
+  const voiceBusy = voice.state.phase === "connecting" || voice.state.phase === "connected" || voice.state.phase === "ending" || voice.state.phase === "stop_failed";
+  const voiceForThisRun = voiceBusy && voice.state.runId === activeRun?.id;
+  const startVoice = async () => {
+    if (voiceStartingRef.current) return;
+    if (voiceBusy) return;
+    voiceStartingRef.current = true;
+    setVoiceStarting(true);
+    try {
+      const run = isNewRunTabActive ? undefined : activeRun;
+      const runId = run?.id ?? await onCreateVoiceConversation?.();
+      if (!runId) return;
+      const account = await appApi.account.get();
+      if (!account.success || !account.data) { toast.error("Could not load your account for voice chat."); return; }
+      // The controller owns cancellation as soon as media preparation starts.
+      // Keep the end button available while microphone permission is pending.
+      voiceStartingRef.current = false;
+      setVoiceStarting(false);
+      await voice.start({ runId, accountId: account.data.id,
+        label: run?.title || run?.goal || "Codex",
+        conversationSettings: { model: selectedModelInfo?.id ?? externalSelectedModel ?? "", config: settingsConfig ?? {} },
+      });
+    } finally {
+      voiceStartingRef.current = false;
+      setVoiceStarting(false);
+    }
+  };
+  const isRunning = !isNewRunTabActive && (activeRun?.status === "running" || activeRun?.status === "queued");
   const canSendDuringRun = activeDescriptor.supportsTurnSteer && !!runQueue;
-  const showStop = isRunning && !runQueue?.editing && (!canSendDuringRun || !hasMessage);
   const steerPending = runQueue?.queue?.mode === "steer" && runQueue.queue.messages.some((message) => message.status === "sending");
-  const submitDisabled = isLoading || !!steerPending || !hasMessage || (isRunning && !canSendDuringRun);
+  const submitDisabled = isLoading || voiceStarting || voiceForThisRun || !!steerPending || !hasMessage || (isRunning && !canSendDuringRun);
+  const sendDisabled = !settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0);
+  const controls = composerControls({
+    state: voice.state, runId: activeRun?.id, isNewRun: !activeRun || isNewRunTabActive,
+    isRunning, voiceEnabled, sendDisabled,
+    sendLabel: runQueue?.editing ? "Save queued message" : "Send prompt",
+    hasMessage, preparing: voiceStarting,
+    startDisabled: ((!activeRun || isNewRunTabActive) && !onCreateVoiceConversation) || !settingsReady || isLoading ||
+      !!runQueue?.queue?.messages.length || !!providerSignedOut || cliUnsupported || !!authErrorMessage,
+  });
+  const reportActionError = (error: unknown) => toast.error(error instanceof Error ? error.message : String(error));
+  const handlePrimaryAction = controls.primary.kind === "stop"
+    ? () => { void stopComposerActivity({ stopVoice: controls.voiceActive ? voice.stop : undefined,
+        stopRun: isRunning ? onStop : undefined }).catch(reportActionError); }
+    : controls.primary.kind === "voice"
+      ? () => { void startVoice().catch(reportActionError); }
+      : handleSubmit;
   const toolbar = (
     <InputToolbar
+      primaryAction={{ ...controls.primary, onClick: handlePrimaryAction }}
+      voiceMute={controls.mute && { ...controls.mute, onToggle: voice.toggleMute }}
       floatingChatMode={floatingChatMode}
       variant={providerVariant}
       isLoading={isLoading}
-      onSubmit={handleSubmit}
-      onGoalChange={onGoalChange}
       selectedModelDisplayName={selectedModelDisplayName}
       modelDisplayNames={modelDisplayNames}
       modelEffortLevelsByDisplayName={modelEffortLevelsByDisplayName}
@@ -921,14 +973,8 @@ export function WorkspaceInput({
       onEffortLevelChange={handleEffortLevelChange}
       supportedEffortLevels={selectedModelInfo?.supportedEffortLevels}
       supportsUltracode={supportsUltracode}
-      isRunning={isRunning}
-      showStop={showStop}
-      sendLabel={runQueue?.editing ? "Save queued message" : isRunning && canSendDuringRun
-        ? runQueue?.queue?.mode === "steer" ? "Steer current turn" : "Queue message" : "Send prompt"}
-      onStop={onStop}
       uploadedFiles={uploadedFiles}
       onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
-      disabled={!settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
       layout={layout === "floating" ? "floating" : "default"}
     />
   );
@@ -1086,7 +1132,7 @@ export function WorkspaceInput({
             query={goal}
             onQueryChange={handleGoalChange}
             onSubmit={handleSubmit}
-            submitDisabled={!settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
+            submitDisabled={sendDisabled}
             onSkillChipsChange={handleSkillChipsChange}
             onFileChipsChange={handleFileChipsChange}
             onCodeChipsChange={handleCodeChipsChange}

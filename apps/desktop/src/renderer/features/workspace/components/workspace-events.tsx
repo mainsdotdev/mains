@@ -15,8 +15,9 @@ import { EditorContent } from "./editor-content";
 import { IssueTabContent } from "./issue-tab-content";
 import { SignalTabContent } from "./signal-tab-content";
 import { NoteTabContent } from "./note-tab-content";
-import { WorkspaceEmptyState } from "./workspace-empty-state";
 import { TurnRail } from "./turn-rail";
+import { RealtimeVoiceBar } from "./realtime-voice-bar";
+import { projectVoiceTranscriptEvents } from "../lib/voice-transcript-view";
 import { CONTENT_COLUMN_GUTTER } from "../lib/content-column";
 import { buildTurnMarkers, type TurnMarker } from "../lib/turn-markers";
 import { useModeConfig } from "@/hooks/use-mode-config";
@@ -404,8 +405,6 @@ interface WorkspaceEventsProps {
   runs: Run[];
   activeTab: "editor" | string;
   currentEvents: RunEvent[];
-  /** The active run's events haven't arrived yet — not the same as having none. */
-  isTranscriptLoading?: boolean;
   currentWorkspace: Workspace | null;
   eventsEndRef: RefObject<HTMLDivElement>;
   issueTabs: IssueWithEntity[];
@@ -424,7 +423,6 @@ export function WorkspaceEvents({
   runs,
   activeTab,
   currentEvents,
-  isTranscriptLoading = false,
   currentWorkspace,
   eventsEndRef,
   issueTabs,
@@ -452,7 +450,6 @@ export function WorkspaceEvents({
   const activeNoteId = isNoteActive ? getNoteId(activeTab) : null;
   const isRunTabActive =
     !isEditorActive && !isIssueActive && !isSignalActive && !isNoteActive && !isNewRunActive;
-  const hasRunContent = isRunTabActive && currentEvents.length > 0;
 
   // Check if current run is still running
   const activeRun = runs.find((r) => r.id === activeTab);
@@ -522,8 +519,11 @@ export function WorkspaceEvents({
     // Stop finished tools from spinning until the run-end sweep resolves their
     // status (providers don't all emit per-tool completions). Runs on the
     // display-ordered list so "later event" matches what the user actually sees.
-    return demoteStaleRunningTools(dedupeGeneratedImageCopies(deduped));
-  }, [currentEvents, activeRunFailedOnAuth]);
+    return projectVoiceTranscriptEvents(
+      demoteStaleRunningTools(dedupeGeneratedImageCopies(deduped)),
+      turns,
+    );
+  }, [currentEvents, activeRunFailedOnAuth, turns]);
 
   // Group events for CLI-style display, reconciled so unchanged groups keep
   // their object identity across streamed tokens — that's what lets the memoized
@@ -589,6 +589,8 @@ export function WorkspaceEvents({
     () => buildTurnRenderRows(eventGroups),
     [eventGroups],
   );
+  const hasTranscript = turnRenderRows.length > 0 || isRunning;
+  const hasRunContent = isRunTabActive && hasTranscript;
 
   // Left-edge navigator: one tick per user message. Built from the same groups
   // the transcript renders, so it can address a turn by group index.
@@ -767,12 +769,9 @@ export function WorkspaceEvents({
   // Run content stays mounted whenever there are events for the active run,
   // just hidden when a non-run tab is active. Preserves accordion open state,
   // scroll position, and other local UI state across tab switches.
-  // A transcript still loading stays blank instead of flashing the empty state.
-  const showEmpty =
-    isRunTabActive && currentEvents.length === 0 && !isTranscriptLoading;
 
   return (
-    <Text as="div" size="sm" tone="inherit" className="h-full flex flex-col">
+    <Text as="div" size="sm" tone="inherit" className="relative h-full flex flex-col">
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {isNewRunActive && (
@@ -782,7 +781,7 @@ export function WorkspaceEvents({
         {isIssueActive && activeIssue && <IssueTabContent issue={activeIssue} />}
         {isSignalActive && activeSignal && <SignalTabContent signal={activeSignal} />}
         {isNoteActive && activeNoteId && <NoteTabContent reviewId={activeNoteId} />}
-        {currentEvents.length > 0 && (
+        {hasTranscript && (
           <div
             ref={transcriptRef}
             className={`h-full overflow-y-auto noscrollbar ${isRunTabActive ? "" : "hidden"}`}
@@ -863,15 +862,15 @@ export function WorkspaceEvents({
             transcriptRef={transcriptRef}
           />
         )}
-        {showEmpty && <WorkspaceEmptyState workspace={currentWorkspace} />}
-        {/* Floating chat uses its own surface; only the main transcript keeps these scroll fades. */}
-        {hasRunContent && !floatingChat && (
-          <>
-            <div className="absolute top-0 left-0 right-0 h-6 bg-linear-to-b from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none z-(--z-base)" />
-            <div className="absolute bottom-0 left-0 right-0 h-6 bg-linear-to-t from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none" />
-          </>
-        )}
       </div>
+      {/* Anchor fades to the whole chat surface, including its voice footer. */}
+      {hasRunContent && !floatingChat && (
+        <>
+          <div className="absolute top-0 left-0 right-0 h-6 bg-linear-to-b from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none z-(--z-base)" />
+          <div className="absolute bottom-0 left-0 right-0 h-6 bg-linear-to-t from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none" />
+        </>
+      )}
+      {!floatingChat && <RealtimeVoiceBar runId={activeRun?.id} />}
     </Text>
   );
 }

@@ -196,6 +196,10 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     abortRun: async (runId: string) => {
       const slot = runState.get(runId);
       if (!slot) {
+        if (driver.abortNativeRun) {
+          await driver.abortNativeRun(runId);
+          return;
+        }
         // Resolving silently here is what let a failed stop look like a
         // successful one; the caller can only fall back to its force-finalize
         // timer, which marks the run canceled while the driver keeps going.
@@ -245,6 +249,8 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
 
   if (driver.steerRun) adapter.steerRun = driver.steerRun.bind(driver);
   if (driver.getInputStatus) adapter.getInputStatus = driver.getInputStatus.bind(driver);
+  if (driver.startRealtime) adapter.startRealtime = driver.startRealtime.bind(driver);
+  if (driver.stopRealtime) adapter.stopRealtime = driver.stopRealtime.bind(driver);
 
   // 1:1 delegation for optional pass-through methods
   if (driver.updateConfig)
@@ -268,6 +274,8 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.generateText = driver.generateText.bind(driver);
   if (driver.getRateLimits)
     adapter.getRateLimits = driver.getRateLimits.bind(driver);
+  if (driver.listRealtimeVoices)
+    adapter.listRealtimeVoices = driver.listRealtimeVoices.bind(driver);
   if (driver.consumeRateLimitResetCredit)
     adapter.consumeRateLimitResetCredit =
       driver.consumeRateLimitResetCredit.bind(driver);

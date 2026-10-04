@@ -3,7 +3,7 @@
  * subscriptions, polling fallback, and once-per-run finalization.
  *
  * Each subscription follows the scope of the state it refreshes:
- *  - transcript pushes are scoped to the *selected running tab* (debounced,
+ *  - transcript pushes are scoped to the *selected tab* (debounced,
  *    since a burst of events shouldn't mean a fetch each);
  *  - workspace diff pushes apply regardless of the selected tab or run status,
  *    since a completed turn's undo and a background run also change the tree;
@@ -35,8 +35,8 @@ export interface RunSyncDeps {
   loadRunDetails: (runId: string) => Promise<void>;
   /** Replace one run in the list with a newer copy of it. */
   onRunUpdated: (run: Run) => void;
-  /** Drop in-flight streaming buffers once nothing is running. */
-  clearAllStreams: () => void;
+  /** Drop work-turn streaming buffers once work is idle; voice has a separate lifetime. */
+  clearTurnStreams: () => void;
 }
 
 export function useRunSync({
@@ -45,7 +45,7 @@ export function useRunSync({
   cache,
   loadRunDetails,
   onRunUpdated,
-  clearAllStreams,
+  clearTurnStreams,
 }: RunSyncDeps) {
   const dispatch = useAppDispatch();
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
@@ -62,7 +62,10 @@ export function useRunSync({
   );
 
   const finalizeRun = useCallback(async (run: Run) => {
-    if (run.status === "running" || run.status === "queued") return;
+    if (run.status === "running" || run.status === "queued") {
+      cache.markRunning(run.id);
+      return;
+    }
     if (cache.isFinalized(run.id)) return;
     cache.markFinalized(run.id);
 
@@ -97,10 +100,11 @@ export function useRunSync({
     dispatch(workspaceApi.util.invalidateTags(["ReviewFindings"]));
   }, [cache, dispatch]);
 
-  // Transcript pushes are scoped to the selected running tab.
+  // Voice transcripts can persist between work turns, while the run is idle.
+  // Subscribe for the selected tab throughout the conversation.
   // Debounce transcript refetches to coalesce event bursts.
   useEffect(() => {
-    if (!activeRunId || activeRunStatus !== "running") return;
+    if (!activeRunId) return;
 
     let refetchTimer: number | null = null;
     const scheduleRefetch = () => {
@@ -119,7 +123,7 @@ export function useRunSync({
       offEvent();
       if (refetchTimer !== null) window.clearTimeout(refetchTimer);
     };
-  }, [activeRunId, activeRunStatus, loadRunDetails]);
+  }, [activeRunId, loadRunDetails]);
 
   // The backend recomputes and broadcasts the workspace diff after undo too.
   // Keep this listener alive when the selected run is finished, and refresh
@@ -141,6 +145,9 @@ export function useRunSync({
     return appEvents.runs.onStatusChanged(async ({ runId, status }) => {
       const targetRunId = statusSyncPolicy.targetRunId(runId, status);
       if (!targetRunId) return;
+      // A short native job can finish before getById returns. Its running
+      // notification still starts a fresh terminal lifecycle in the cache.
+      if (status === "running" || status === "queued") cache.markRunning(targetRunId);
 
       const result = await appApi.runs.getById(targetRunId);
       if (result.success && result.data) {
@@ -152,7 +159,7 @@ export function useRunSync({
       // makes the completed tab ready even before the user switches back.
       void loadRunDetails(targetRunId);
     });
-  }, [statusSyncPolicy, loadRunDetails, finalizeRun, onRunUpdated]);
+  }, [statusSyncPolicy, cache, loadRunDetails, finalizeRun, onRunUpdated]);
 
   // Polling fallback for dropped pushes, stalled adapters, or backgrounded
   // renderers. 10s keeps IO low since push handles the common case.
@@ -162,7 +169,7 @@ export function useRunSync({
         clearInterval(pollingRef.current);
         pollingRef.current = null;
       }
-      clearAllStreams();
+      clearTurnStreams();
       return;
     }
 

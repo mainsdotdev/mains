@@ -7,6 +7,7 @@ import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-mo
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
 import type { ProviderCliInfo } from "@mains/contracts/provider-cli";
+import type { RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { ModeToolPolicy } from "./mode-harness";
 import type {
@@ -578,7 +579,7 @@ export interface McpAppExtensionSession {
 /**
  * Interface that all work run adapters must implement
  */
-export interface WorkRunAdapter {
+export interface WorkRunAdapter extends RealtimeAdapterControls {
   /**
    * Start a work run with the given request.
    * Events are emitted via the onEvent callback during execution.
@@ -703,6 +704,9 @@ export interface WorkRunAdapter {
    * @returns Promise resolving to rate limit data, or null if not supported
    */
   getRateLimits?(): Promise<RateLimitInfo | null>;
+
+  /** List the voices supported by the native voice conversation protocol. */
+  listRealtimeVoices?(): Promise<RealtimeVoiceCatalog>;
 
   /** Spend one earned Codex credit to reset an eligible rate-limit window. */
   consumeRateLimitResetCredit?(
@@ -829,6 +833,29 @@ export interface DriverOutcome {
   summary?: string;
 }
 
+/** Native voice can create work turns without a client issuing turn/start. */
+export interface RealtimeWorkHandlers {
+  onTurnStarted(providerTurnId: string, message?: string, model?: string): Promise<void>;
+  onEvent: WorkRunEventHandler;
+  onCompleted(result: DriverOutcome): Promise<void>;
+}
+
+export type WorkRunRealtimeRequest = Omit<WorkRunContinueRequest,
+  "message" | "clientUserMessageId" | "onInputAccepted"
+> & Pick<import("@mains/contracts/realtime").RunRealtimeStartPayload, "connectionId" | "sdp"> & {
+  voiceTools?: import("./voice-task-tools").VoiceTaskTools;
+  voiceInstructions?: string;
+};
+
+export interface RealtimeAdapterControls {
+  startRealtime?(
+    request: WorkRunRealtimeRequest,
+    onEvent: (event: import("@mains/contracts/realtime").RunRealtimeEvent) => void,
+    work: RealtimeWorkHandlers,
+  ): Promise<void>;
+  stopRealtime?(runId: string, connectionId: string): Promise<void>;
+}
+
 /**
  * Result of a session-acquisition method. Driver returns the opaque session
  * (Core stores it for abort lookup), the prompt to send, and optionally the
@@ -845,7 +872,9 @@ export interface AcquiredSession {
   model?: string;
 }
 
-export interface ProviderDriver {
+export interface ProviderDriver extends RealtimeAdapterControls {
+  /** Interrupt work started by a native session, outside Core's run slots. */
+  abortNativeRun?(runId: string): Promise<void>;
   /** Create a new session and build the initial prompt. */
   createSession(request: WorkRunRequest): Promise<AcquiredSession>;
 
@@ -903,6 +932,7 @@ export interface ProviderDriver {
     opts?: { system?: string; model?: string },
   ): Promise<string>;
   getRateLimits?(): Promise<RateLimitInfo | null>;
+  listRealtimeVoices?(): Promise<RealtimeVoiceCatalog>;
   consumeRateLimitResetCredit?(
     params: ConsumeRateLimitResetCreditParams,
   ): Promise<ConsumeRateLimitResetCreditOutcome>;
@@ -1048,6 +1078,12 @@ export interface CodexAdapterConfig {
   apiKey?: string;
   /** Default model to use (e.g., "gpt-5.4", "gpt-5.4-mini") */
   defaultModel?: string;
+  /** Native voice identifier advertised by thread/realtime/listVoices. */
+  realtimeVoice?: string;
+  /** Artwork preference; independent of the selected speaker. */
+  voiceOrbColor?: VoiceOrbColor;
+  /** Optional orb rendering style; existing preferences default to clouds. */
+  voiceOrbStyle?: VoiceOrbStyle;
   /** Timeout in milliseconds */
   timeout?: number;
   /** Approval policy passed to Codex CLI (no interactive hooks — CLI handles internally) */

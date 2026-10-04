@@ -33,6 +33,7 @@ export { default as Home } from "./home";
 export { default as Inbox } from "./inbox";
 export { default as Lock } from "./lock";
 export { default as Microphone } from "./microphone";
+export { default as MicrophoneToggle } from "./microphone-toggle";
 export { default as Personalize } from "./personalize";
 export { default as Picture } from "./picture";
 export { default as Plus } from "./plus";

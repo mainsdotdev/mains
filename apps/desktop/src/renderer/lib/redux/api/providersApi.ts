@@ -1,6 +1,7 @@
 import { baseApi } from "./baseApi";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { DetectedClis, ProviderCliInfo } from "@mains/contracts/provider-cli";
+import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
 export type { DetectedClis } from "@mains/contracts/provider-cli";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type {
@@ -367,6 +368,15 @@ export const providersApi = baseApi.injectEndpoints({
       providesTags: (_result, _error, id) => [{ type: "ProviderModels", id }],
     }),
 
+    getProviderRealtimeVoices: builder.query<RealtimeVoiceCatalog | null, string>({
+      query: (id) => ({
+        handler: CHANNELS.providers.getRealtimeVoices,
+        args: [id],
+      }),
+      providesTags: (_result, _error, id) => [{ type: "ProviderAccountInfo", id }],
+      keepUnusedDataFor: 300,
+    }),
+
     getProviderCommands: builder.query<
       CommandInfo[],
       { id: string; workspacePath?: string }
@@ -579,6 +589,7 @@ export const {
   useEnableProviderMutation,
   useDisableProviderMutation,
   useGetProviderModelsQuery,
+  useGetProviderRealtimeVoicesQuery,
   useLazyGetProviderModelsQuery,
   useGetProviderCommandsQuery,
   useLazyGetProviderCommandsQuery,

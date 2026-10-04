@@ -636,6 +636,9 @@ export async function emitUserPromptArtifact(
     content,
     metadata: {
       source: "user",
+      ...(options?.context?.find((item) => item.metadata?.voiceDelegation)?.metadata?.voiceDelegation
+        ? { voiceDelegation: options.context.find((item) => item.metadata?.voiceDelegation)!.metadata!.voiceDelegation }
+        : {}),
       ...(options?.clientUserMessageId ? { clientUserMessageId: options.clientUserMessageId } : {}),
       ...(options?.providerTurnId ? { providerTurnId: options.providerTurnId } : {}),
       ...(options?.delivery ? { delivery: options.delivery } : {}),

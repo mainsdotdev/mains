@@ -48,6 +48,9 @@ export const appApi = {
     continue: method<typeof window.api.runs.continue>(CHANNELS.runs.continue),
     steer: method<typeof window.api.runs.steer>(CHANNELS.runs.steer),
     inputStatus: method<typeof window.api.runs.inputStatus>(CHANNELS.runs.inputStatus),
+    createRealtimeConversation: method<typeof window.api.runs.createRealtimeConversation>(CHANNELS.runs.createRealtimeConversation),
+    startRealtime: method<typeof window.api.runs.startRealtime>(CHANNELS.runs.startRealtime),
+    stopRealtime: method<typeof window.api.runs.stopRealtime>(CHANNELS.runs.stopRealtime),
     canResume: method<typeof window.api.runs.canResume>(CHANNELS.runs.canResume),
     fork: method<typeof window.api.runs.fork>(CHANNELS.runs.fork),
     executeReview: method<typeof window.api.runs.executeReview>(

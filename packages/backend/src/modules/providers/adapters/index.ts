@@ -106,6 +106,7 @@ export {
   listConnectorsForProvider,
   startConnectorOAuthForProvider,
   getRateLimitsForProvider,
+  listRealtimeVoicesForProvider,
   consumeRateLimitResetCreditForProvider,
   setGoalForProvider,
   getGoalForProvider,

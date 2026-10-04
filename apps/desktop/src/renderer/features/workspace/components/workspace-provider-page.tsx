@@ -41,6 +41,7 @@ import { useBottomTerminal } from "@/hooks/use-bottom-terminal";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import { useMcpAppConversation } from "../hooks/use-mcp-app-conversation";
+import { useVoiceChatPresence } from "../hooks/use-voice-chat-presence";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import {
@@ -508,6 +509,9 @@ export function WorkspaceProviderPage({
 
   const routeTopRounding = useWorkspaceRouteTopRounding();
   const floatingPanel = mcpPanel?.isExpanded ? { ...mcpPanel, nativeOverlay: false } : browserPanel;
+  useVoiceChatPresence(!browserChatOnly && !floatingPanel.isExpanded && !useCenteredPromptLayout
+    && !ws.showEmptyState && !ws.isEmptyStatePending
+    ? ws.activeRun?.id ?? null : null);
   const browserSelectedRun = ws.activeRun?.id === ws.activeRunId
     ? ws.activeRun
     : null;
@@ -690,7 +694,6 @@ export function WorkspaceProviderPage({
                   runs={ws.runs}
                   activeTab={ws.activeTab}
                   currentEvents={ws.currentEvents}
-                  isTranscriptLoading={ws.isTranscriptLoading}
                   currentWorkspace={ws.currentWorkspace}
                   eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
                   issueTabs={ws.openIssueTabs}
@@ -757,10 +760,7 @@ export function WorkspaceProviderPage({
           <div
             className={`flex h-full min-h-0 flex-col items-center justify-center-safe gap-4 overflow-y-auto py-10 noscrollbar ${CONTENT_COLUMN_GUTTER}`}
           >
-            <WorkspaceEmptyState
-              workspace={ws.currentWorkspace}
-              presentation="headline"
-            />
+            <WorkspaceEmptyState />
             <div className="w-full flex flex-col items-center gap-2">
               <div className="mx-auto w-full max-w-210 ">
                 <NewConversationContextSelect
@@ -775,6 +775,7 @@ export function WorkspaceProviderPage({
                 goal={ws.goal}
                 onGoalChange={ws.setGoal}
                 onSubmit={ws.handleExecute}
+                onCreateVoiceConversation={ws.handleCreateVoiceConversation}
                 isLoading={ws.isLoading}
                 activeRun={ws.activeRun}
                 canResume={ws.canResume ?? false}
@@ -796,14 +797,11 @@ export function WorkspaceProviderPage({
               />
             </div>
           </div>
-        ) : ws.showEmptyState ? (
-          <WorkspaceEmptyState workspace={ws.currentWorkspace} />
-        ) : ws.isEmptyStatePending ? null : (
+        ) : ws.showEmptyState || ws.isEmptyStatePending ? null : (
           <WorkspaceEvents
             runs={ws.runs}
             activeTab={ws.activeTab}
             currentEvents={ws.currentEvents}
-            isTranscriptLoading={ws.isTranscriptLoading}
             currentWorkspace={ws.currentWorkspace}
             eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
             issueTabs={ws.openIssueTabs}
@@ -875,6 +873,7 @@ export function WorkspaceProviderPage({
           goal={ws.goal}
           onGoalChange={ws.setGoal}
           onSubmit={ws.handleExecute}
+          onCreateVoiceConversation={ws.handleCreateVoiceConversation}
           isLoading={ws.isLoading}
           activeRun={ws.composerRun}
           canResume={ws.canResume ?? false}

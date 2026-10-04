@@ -203,6 +203,8 @@ module.exports = {
     appBundleId: 'dev.mains.app',
     // TCC: Apple Events (kTCCServiceAppleEvents), screen capture (kTCCServiceScreenCapture).
     extendInfo: {
+      NSMicrophoneUsageDescription:
+        'Mains uses your microphone when you start a voice conversation.',
       NSAppleEventsUsageDescription:
         'Mains needs permission to send Apple events to control other apps for desktop automation.',
       NSScreenCaptureUsageDescription:

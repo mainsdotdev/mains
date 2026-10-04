@@ -282,6 +282,7 @@ export const CHANNELS = {
     /** Push: native connector catalog, runtime, or OAuth state changed. */
     connectorsUpdated: "providers:connectorsUpdated",
     getRateLimits: "providers:getRateLimits",
+    getRealtimeVoices: "providers:getRealtimeVoices",
     consumeRateLimitResetCredit: "providers:consumeRateLimitResetCredit",
     /** Push: emitted when the provider streams a fresh rate-limit snapshot mid-run. */
     rateLimitsUpdated: "providers:rateLimitsUpdated",
@@ -354,6 +355,10 @@ export const CHANNELS = {
     continue: "runs:continue",
     steer: "runs:steer",
     inputStatus: "runs:inputStatus",
+    createRealtimeConversation: "runs:createRealtimeConversation",
+    startRealtime: "runs:startRealtime",
+    stopRealtime: "runs:stopRealtime",
+    realtimeEvent: "runs:realtimeEvent",
     create: "runs:create",
     delete: "runs:delete",
     deleteSession: "runs:deleteSession",

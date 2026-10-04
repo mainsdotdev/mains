@@ -3,6 +3,7 @@ import type {
   WorkRunEvent,
   WorkRunEventHandler,
   WorkRunSteerRequest,
+  RealtimeWorkHandlers,
 } from "../../../../shared/adapter.types";
 import {
   cancelPendingRequest,
@@ -104,6 +105,13 @@ export function createCodexRunCoordinator(
   const runSinks = new Map<string, CodexRunSink>();
   const serverRequestOwners = new Map<string, string>();
   const turnOwners = new Map<string, string>();
+  const realtimeOwners = new Map<string, {
+    model: string | undefined;
+    work: RealtimeWorkHandlers;
+    getPrompt?: () => string;
+    timeout: number;
+    tail: Promise<void>;
+  }>();
 
   function trackInput(
     runId: string,
@@ -357,7 +365,7 @@ export function createCodexRunCoordinator(
       }
     }
 
-    for (const runId of runSinks.keys()) {
+    for (const runId of new Set([...runSinks.keys(), ...realtimeOwners.keys()])) {
       const state = activeRuns.get(runId);
       if (!state) continue;
       if (
@@ -407,6 +415,41 @@ export function createCodexRunCoordinator(
       const runId = runIdForLiveThread(method, params);
       if (!runId) return;
       const state = activeRuns.get(runId);
+      const realtime = realtimeOwners.get(runId);
+      if (state && realtime && !runSinks.has(runId) && method === "turn/started" &&
+          requestThreadId(params) === state?.threadId) {
+        const turnId = requestTurnId(params);
+        if (!turnId) return;
+        state.aborted = false;
+        state.timeoutError = undefined;
+        const prompt = realtime.getPrompt?.();
+        const beginning = realtime.tail.then(() => realtime.work.onTurnStarted(turnId, prompt, realtime.model));
+        // Install synchronously: the next stdout line may already be a tool
+        // request. Preparation and projection then share this sink's queue.
+        const completion = waitForTurnCompletion(server, runId, realtime.model,
+          async (event) => { await beginning; await realtime.work.onEvent(event); },
+          realtime.timeout);
+        const nativeSink = runSinks.get(runId);
+        const prepared = beginning.catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.error("Native voice turn preparation failed:", message);
+          nativeSink?.finalize({ status: "failed", error: message });
+          // Capture this turn; a later delegation must never be interrupted.
+          void server.sendRequest("turn/interrupt", { threadId: state.threadId!, turnId }, 250).catch(() => {});
+        });
+        realtime.tail = completion.then(async (result) => {
+          await prepared;
+          try {
+            await realtime.work.onCompleted({
+              status: result.status, summary: result.error,
+              usage: eventMapper.flushUsage(runId),
+            });
+          } catch (error) { logger.error("Native voice turn completion failed:", error); }
+          if (!runSinks.has(runId)) await cleanupRun(server, runId);
+        }).catch((error) => {
+          logger.error("Native voice turn failed:", error);
+        });
+      }
       const requestParams = params as
         | Record<string, unknown>
         | undefined;
@@ -853,6 +896,9 @@ export function createCodexRunCoordinator(
     server: CodexAppServer | null,
     runId: string,
   ): Promise<void> {
+    // A completed work turn must not unsubscribe its still-open voice call.
+    // Keep ownership so the next native delegation can create a fresh sink.
+    if (realtimeOwners.has(runId) || runSinks.has(runId)) return;
     const state = activeRuns.get(runId);
     if (server?.isRunning && state) {
       for (const threadId of state.subscribedThreadIds) {
@@ -868,8 +914,10 @@ export function createCodexRunCoordinator(
         }
       }
     }
-    activeRuns.delete(runId);
-    deleteTurnOwnersForRun(runId);
+    if (activeRuns.get(runId) === state && !realtimeOwners.has(runId) && !runSinks.has(runId)) {
+      activeRuns.delete(runId);
+      deleteTurnOwnersForRun(runId);
+    }
   }
 
   function deleteRun(runId: string): void {
@@ -891,6 +939,7 @@ export function createCodexRunCoordinator(
   }
 
   function shutdown(): void {
+    realtimeOwners.clear();
     for (const [runId, state] of activeRuns) {
       state.aborted = true;
       cancelPendingRequests(runId);
@@ -911,6 +960,21 @@ export function createCodexRunCoordinator(
   }
 
   return {
+    hasLiveTurn: (runId: string) => runSinks.has(runId),
+    watchRealtimeRun(runId: string, model: string | undefined, work: RealtimeWorkHandlers, getPrompt?: () => string, timeout = 3_600_000) {
+      if (realtimeOwners.has(runId)) throw new Error("Voice chat is already active for this conversation.");
+      const owner = { model, work, getPrompt, timeout, tail: Promise.resolve() };
+      realtimeOwners.set(runId, owner);
+      return () => { if (realtimeOwners.get(runId) === owner) realtimeOwners.delete(runId); };
+    },
+    async abortNativeRun(server: CodexAppServer | null, runId: string) {
+      const state = activeRuns.get(runId);
+      if (!server?.isRunning || !state || !runSinks.has(runId)) return;
+      state.aborted = true;
+      await interruptRunTurns(server, runId, "Failed to interrupt voice task");
+      const sink = runSinks.get(runId);
+      if (sink) { await sink.notificationQueue; sink.finalize({ status: "canceled" }); }
+    },
     attachThread,
     cleanupRun,
     deleteRun,

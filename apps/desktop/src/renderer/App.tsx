@@ -52,6 +52,8 @@ import { getProviderVariant } from "./lib/provider-variants";
 import { CommandMenu } from "./features/command-menu/command-menu";
 import { useAppshots } from "./hooks/use-appshots";
 import { useRunMessageQueueController } from "./features/workspace/hooks/use-run-message-queue-controller";
+import { useRealtimeVoiceLifecycle } from "./features/workspace/hooks/use-realtime-voice";
+import { RealtimeVoiceDock } from "./features/workspace/components/realtime-voice-dock";
 import { useWindowRequests } from "./hooks/use-window-requests";
 import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
 import { useOnboardingWindow } from "./features/onboarding/hooks/use-onboarding-window";
@@ -117,6 +119,7 @@ function AppContent() {
   const sidebarPanelRoute = hasSidebarPanel(location.pathname);
   const settingsRoute = isSettingsRoute(location.pathname);
   const workspaceRoute = isWorkspaceRoute(location.pathname);
+  useRealtimeVoiceLifecycle();
   const hideRightPanel = shouldHideRightPanel(location.pathname);
   const variant = useWorkspaceVariant();
   const activeProviderId =
@@ -346,6 +349,7 @@ function AppContent() {
     <>
       <Toaster />
       <CommandMenu />
+      <RealtimeVoiceDock />
       <MainLayout className={animateWorkspaceEntry ? "onboarding-workspace-enter" : undefined}>
         {/* Mobile drawer scrims — tap to dismiss. Each sits just below its panel
             (sidebar z-30, right panel z-50) and above the full-width content. */}

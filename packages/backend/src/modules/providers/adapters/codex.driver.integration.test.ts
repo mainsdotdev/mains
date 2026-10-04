@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkRunRequest } from "../../../../shared/adapter.types";
+import { runsRepo } from "../../runs/runs.repo";
 
 // Each test spawns the fake codex app-server as a real Node subprocess and
 // completes a JSON-RPC handshake. Under full-suite load that spawn can blow
@@ -132,6 +133,101 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("starts fresh voice on an empty thread without a synthetic text turn or goal", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-fresh-voice-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const base = request("fresh-voice-run");
+    vi.spyOn(runsRepo, "findRunById").mockResolvedValue(null);
+    vi.spyOn(runsRepo, "findToolCallsByRun").mockResolvedValue([]);
+    const persist = vi.spyOn(runsRepo, "updateRun").mockResolvedValue(null);
+    const onCompleted = vi.fn().mockResolvedValue(undefined);
+    const events: Array<Record<string, unknown>> = [];
+    await driver.startRealtime!({
+      runId: base.runId, accountId: base.accountId, execution: base.execution,
+      connectionId: "fresh-voice-attempt", sdp: "fixture-offer", model: "selected-model", mode: "developer",
+      configSnapshot: { sandboxMode: "read-only", modelReasoningEffort: "ultra", serviceTier: "fast" },
+      extraInstructions: "Use the selected workspace.",
+    }, (event) => { events.push(event as unknown as Record<string, unknown>); }, {
+      onTurnStarted: vi.fn().mockResolvedValue(undefined), onCompleted, onEvent: vi.fn().mockResolvedValue(undefined),
+    });
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledOnce());
+    const log = readProtocolLog(logPath);
+    const starts = log.filter((message) => message.method === "thread/start");
+    expect(starts).toHaveLength(1);
+    expect(persist).toHaveBeenCalledWith(base.runId, { sessionId: expect.any(String) });
+    expect(starts[0].params).toMatchObject({
+      cwd: base.execution.cwd, model: "selected-model", sandbox: "read-only",
+      developerInstructions: "Use the selected workspace.",
+      config: { model_reasoning_effort: "ultra", service_tier: "fast" },
+    });
+    expect(log.filter((message) => message.method === "thread/resume" || message.method === "turn/start" || String(message.method).startsWith("thread/goal/"))).toHaveLength(0);
+    expect(events).toContainEqual(expect.objectContaining({ type: "transcript", role: "user", text: "Calculate this", final: true }));
+    await driver.stopRealtime!(base.runId, "fresh-voice-attempt");
+    expect(events).toContainEqual(expect.objectContaining({ type: "closed", reason: "ended" }));
+  });
+
+  it("resumes native voice with the run's permissions and routes server-owned work without an extra turn/start", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-voice-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const config = { binary: fixtureBinary, sandboxMode: "danger-full-access" as const, timeout: 2000, realtimeVoice: "cove" };
+    const driver = createCodexDriver(config);
+    drivers.push(driver);
+    const base = request("voice-run");
+    const acquired = await driver.createSession(base);
+    await driver.cleanup?.(acquired.session);
+    const goalsBefore = readProtocolLog(logPath).filter((message) => String(message.method).startsWith("thread/goal/"));
+    const events: Array<Record<string, unknown>> = [];
+    const onTurnStarted = vi.fn().mockResolvedValue(undefined);
+    const onCompleted = vi.fn().mockResolvedValue(undefined);
+    const voiceTools = { start: vi.fn(), list: vi.fn(), read: vi.fn(), wait: vi.fn(), send: vi.fn(), cancel: vi.fn(), end: vi.fn() };
+    // Settings refreshes the existing driver without replacing its live server.
+    driver.updateConfig?.({ ...config, realtimeVoice: "maple" });
+    await driver.startRealtime!({
+      runId: base.runId, accountId: base.accountId, execution: base.execution,
+      connectionId: "voice-attempt", sdp: "fixture-offer", model: "native-work-model",
+      configSnapshot: { sandboxMode: "read-only", modelReasoningEffort: "ultra", serviceTier: "fast" },
+      extraInstructions: "Stay within this conversation's permissions.",
+      voiceTools, voiceInstructions: "Delegate lengthy work to separate chats with mains_voice tools.",
+    }, (event) => { events.push(event as unknown as Record<string, unknown>); }, {
+      onTurnStarted, onCompleted,
+      onEvent: async (event) => { events.push(event as unknown as Record<string, unknown>); },
+    });
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledOnce());
+    expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith(`voice-turn-${acquired.sessionId}`, "Calculate this", "native-work-model");
+    expect(onCompleted).toHaveBeenCalledWith(expect.objectContaining({ status: "succeeded" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "sdp", sdp: "fixture-answer", connectionId: "voice-attempt" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "transcript", text: "Calculate this", final: true }));
+    const log = readProtocolLog(logPath);
+    expect(log.find((message) => message.method === "thread/resume")?.params).toMatchObject({
+      threadId: acquired.sessionId, model: "native-work-model", sandbox: "read-only",
+      developerInstructions: "Stay within this conversation's permissions.",
+      config: { model_reasoning_effort: "ultra", service_tier: "fast", "mcp_servers.mains_voice": {
+        command: expect.any(String), args: [expect.any(String)],
+        env: { MAINS_IPC_SOCKET: expect.any(String) }, enabled: true,
+        default_tools_approval_mode: "approve",
+      } },
+    });
+    expect(log.find((message) => message.method === "thread/realtime/start")?.params).toMatchObject({
+      voice: "maple",
+      realtimeStartInstructions: "Delegate lengthy work to separate chats with mains_voice tools.",
+      initialItems: [{ role: "developer" }],
+    });
+    const bridgeScript = (log.find((message) => message.method === "thread/resume")!.params as any).config["mcp_servers.mains_voice"].args[0];
+    expect(fs.existsSync(bridgeScript)).toBe(true);
+    expect(log.filter((message) => message.method === "turn/start")).toHaveLength(0);
+    expect(log.filter((message) => String(message.method).startsWith("thread/goal/"))).toEqual(goalsBefore);
+    await driver.stopRealtime!(base.runId, "old-attempt");
+    expect(readProtocolLog(logPath).filter((message) => message.method === "thread/realtime/stop")).toHaveLength(0);
+    await driver.stopRealtime!(base.runId, "voice-attempt");
+    expect(fs.existsSync(bridgeScript)).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({ type: "closed", reason: "ended" }));
+  });
   it("steers the parent with typed input and projects a single prompt before a delayed ACK/completion", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-steer-"));
     tempDirs.push(tempDir);

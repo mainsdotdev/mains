@@ -466,6 +466,14 @@ export async function getRateLimitsForProvider(
   return adapter.getRateLimits();
 }
 
+export async function listRealtimeVoicesForProvider(
+  provider: ProviderResponse,
+): Promise<import("@mains/contracts/realtime").RealtimeVoiceCatalog | null> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.listRealtimeVoices) return null;
+  return adapter.listRealtimeVoices();
+}
+
 export async function consumeRateLimitResetCreditForProvider(
   provider: ProviderResponse,
   params: ConsumeRateLimitResetCreditParams,

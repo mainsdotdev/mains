@@ -70,6 +70,10 @@ export interface RunSessionContext {
   providerId: string;
   execution: RunExecutionContext;
   initialPromptContent: string;
+  initialModel?: string;
+  initialProviderTurnId?: string;
+  /** Frozen at delegation, independent of whether the voice call stays open. */
+  initialTurnMetadata?: { inputSource: "voice"; realtimeSessionId: string };
   /** Defaults to -1 (fresh run). continueRun passes the recovered max turn index. */
   seedTurnIndex?: number;
 }
@@ -382,6 +386,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     turnBaseline ??= takeTurnBaseline();
     try {
       const nextIndex = turnCounter + 1;
+      const initial = turnCounter === (ctx.seedTurnIndex ?? -1);
       const id = await runsRepo.insertTurn({
         runId,
         turnIndex: nextIndex,
@@ -390,6 +395,13 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       });
       activeTurnId = id;
       turnCounter = nextIndex;
+      if (initial && ctx.initialModel) await runsRepo.updateTurn(id, { model: ctx.initialModel });
+      if (initial && (ctx.initialProviderTurnId || ctx.initialTurnMetadata)) {
+        await runsRepo.patchTurnMetadata(id, {
+          ...ctx.initialTurnMetadata,
+          ...(ctx.initialProviderTurnId ? { providerTurnId: ctx.initialProviderTurnId } : {}),
+        });
+      }
     } catch (err) {
       console.error(`[RunSession ${runId}] Failed to start turn:`, err);
     }
@@ -398,6 +410,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   async function closeActiveTurn(
     usage?: WorkRunUsage,
     endTree?: Promise<string | null>,
+    outcome?: RunSessionResult["status"],
   ): Promise<void> {
     if (activeTurnId === null) return;
     const turnId = activeTurnId;
@@ -426,6 +439,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         model: usage?.model,
         modelUsage: usage?.modelUsage,
       });
+      if (ctx.initialTurnMetadata && outcome) await runsRepo.patchTurnMetadata(turnId, { outcome });
       activeTurnId = null;
     } catch (err) {
       console.error(`[RunSession ${runId}] Failed to close active turn:`, err);
@@ -689,6 +703,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         input: event.input,
         startedAt: event.startedAt ? new Date(event.startedAt) : new Date(),
       });
+      // A running voice tool must already belong to its work block. Waiting
+      // for completion metadata would move it in the transcript mid-execution.
+      if (metadata?.inputSource === "voice") await runsRepo.updateToolCall(toolCallId, { metadata });
       const callKey = metadataToolCallId
         ? String(metadataToolCallId)
         : `${event.toolName}-${event.startedAt || Date.now()}`;
@@ -993,7 +1010,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         stopReason: result.stopReason ?? null,
       });
 
-      await closeActiveTurn(result.usage);
+      if (initialTurnReady) await initialTurnReady;
+      await closeActiveTurn(result.usage, undefined, result.status);
       await closePendingToolCalls(toolCallStatus);
       await closeRunningToolCallsInDb(toolCallStatus);
       await settleUnfinishedSubagents(result.status);
@@ -1039,7 +1057,13 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   initialTurnReady = resolvedToolCallsReady.then(() =>
     startNextTurn(ctx.initialPromptContent),
   );
-  void initialTurnReady;
+  if (ctx.initialTurnMetadata) {
+    // The renderer can show delegated work before the first message or tool.
+    // The running notification above precedes this turn's asynchronous insert.
+    void initialTurnReady.then(() => {
+      if (activeTurnId !== null) broadcastEventPersisted();
+    });
+  }
 
   return session;
 }

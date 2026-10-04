@@ -65,6 +65,7 @@ import {
   isCodexUnavailableThreadError,
 } from "./codex-session-acquisition";
 import type { CodexSubAgentRunMeta } from "./codex-event-mapper";
+import { createCodexRealtime } from "./codex-realtime";
 
 export {
   CODEX_ARCHIVED_CHAT_MESSAGE,
@@ -442,6 +443,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     resolveDefaultModel: catalogDefaultModel,
     logger: codexLogger,
   });
+  const realtime = createCodexRealtime({
+    sessions: sessionAcquisition, runs: runCoordinator,
+    getTimeout: () => config.timeout ?? 3_600_000,
+    getVoice: () => config.realtimeVoice,
+  });
   const capabilities = createCodexCapabilities({
     getDefaultModel: () => config.defaultModel,
     ensureServer: (cwd) => ensureServer(cwd),
@@ -693,6 +699,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       mcpThreadResumePromises.clear();
       mcpApps.clear();
       capabilities.onServerClosed();
+      realtime.serverClosed();
       runCoordinator.handleServerClose();
     });
 
@@ -725,6 +732,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     // Background handler: captures notifications that arrive after turn completes
     // (e.g. thread/name/updated for auto-generated titles)
     server.setBackgroundHandler((method, params) => {
+      realtime.handleNotification(method, params);
       if (method === "thread/name/updated" || method === "thread/nameUpdated") {
         const p = params as Record<string, unknown> | undefined;
         const threadName = p?.threadName as string | undefined;
@@ -875,6 +883,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     resumeSession: sessionAcquisition.resumeSession,
     forkSession: sessionAcquisition.forkSession,
     reviewSession: sessionAcquisition.reviewSession,
+    startRealtime: realtime.start,
+    stopRealtime: realtime.stop,
+    abortNativeRun: (runId) => runCoordinator.abortNativeRun(appServer, runId),
 
     steerRun: (request) => runCoordinator.steerRun(appServer, request),
 
@@ -922,6 +933,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     async archiveSession(runId: string): Promise<void> {
+      await realtime.stopRun(runId);
       const threadId = await findThreadIdForRun(runId);
       if (!threadId) return;
 
@@ -940,6 +952,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     async deleteSession(runId: string): Promise<void> {
+      await realtime.stopRun(runId);
       const threadId = await findThreadIdForRun(runId);
       if (threadId) {
         const server = await ensureServer();
@@ -1025,6 +1038,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     async shutdown(): Promise<void> {
+      realtime.serverClosed();
       runCoordinator.shutdown();
       capabilities.shutdown();
       mcpApps.clear();
@@ -1038,6 +1052,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     listModels: capabilities.listModels,
+    listRealtimeVoices: capabilities.listRealtimeVoices,
 
     getAccountInfo: capabilities.getAccountInfo,
 
