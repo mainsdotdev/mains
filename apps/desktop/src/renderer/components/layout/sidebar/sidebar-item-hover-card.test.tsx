@@ -277,8 +277,9 @@ describe("SidebarItemHoverCard", () => {
   it.each([true, false])(
     "suppresses the native browser only if the card overlaps it (%s)",
     (overlaps) => {
+      const setSuppressed = vi.fn<(lease: string, suppressed: boolean) => void>();
       const setVisible = vi.fn();
-      vi.stubGlobal("api", { browser: { setVisible } });
+      vi.stubGlobal("api", { browser: { setSuppressed, setVisible } });
       const { anchor } = setup();
       const browser = document.createElement("div");
       browser.dataset.browserContent = "";
@@ -293,10 +294,13 @@ describe("SidebarItemHoverCard", () => {
       });
       try {
         openByHover(anchor);
-        if (overlaps) expect(setVisible).toHaveBeenCalledExactlyOnceWith(false);
-        else expect(setVisible).not.toHaveBeenCalled();
+        if (overlaps) expect(setSuppressed).toHaveBeenCalledExactlyOnceWith(expect.any(String), true);
+        else expect(setSuppressed).not.toHaveBeenCalled();
+        const lease = setSuppressed.mock.calls[0]?.[0];
         fireEvent.pointerDown(document.body);
-        if (overlaps) expect(setVisible).toHaveBeenLastCalledWith(true);
+        if (overlaps) expect(setSuppressed.mock.calls).toEqual([[lease, true], [lease, false]]);
+        else expect(setSuppressed).not.toHaveBeenCalled();
+        expect(setVisible).not.toHaveBeenCalled();
       } finally {
         browser.remove();
       }

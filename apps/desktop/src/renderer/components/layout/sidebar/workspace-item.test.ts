@@ -121,20 +121,23 @@ describe("WorkspaceItem branch rename", () => {
 });
 
 describe("WorkspaceItem project actions", () => {
-  it("keeps the native browser behind the workspace menu and restores it after an action", async () => {
+  it("keeps the native browser behind the workspace menu and releases suppression after an action", async () => {
+    const setSuppressed = vi.fn<(lease: string, suppressed: boolean) => void>();
     const setVisible = vi.fn();
-    vi.stubGlobal("api", { browser: { setVisible } });
+    vi.stubGlobal("api", { browser: { setSuppressed, setVisible } });
     const user = userEvent.setup();
     const onArchive = vi.fn();
     render(createElement(WorkspaceItem, { id: "ws-1", name: "mains", onArchive }));
-    expect(setVisible).not.toHaveBeenCalled();
+    expect(setSuppressed).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Workspace options" }));
-    expect(setVisible).toHaveBeenCalledExactlyOnceWith(false);
+    expect(setSuppressed).toHaveBeenCalledExactlyOnceWith(expect.any(String), true);
+    const [lease] = setSuppressed.mock.calls[0];
     await user.click(screen.getByRole("menuitem", { name: "Archive" }));
     expect(onArchive).toHaveBeenCalledOnce();
     expect(screen.queryByRole("menu", { name: "Workspace actions" })).toBeNull();
-    expect(setVisible).toHaveBeenLastCalledWith(true);
+    expect(setSuppressed.mock.calls).toEqual([[lease, true], [lease, false]]);
+    expect(setVisible).not.toHaveBeenCalled();
   });
 
   it("separates workspace, project, and lifecycle actions", async () => {

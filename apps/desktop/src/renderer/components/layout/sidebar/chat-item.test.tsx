@@ -90,22 +90,25 @@ function openCard(row: HTMLElement) {
 
 describe("ChatItem quick actions", () => {
   it("keeps the native browser behind the actions menu and its Move submenu until dismissal", async () => {
+    const setSuppressed = vi.fn<(lease: string, suppressed: boolean) => void>();
     const setVisible = vi.fn();
-    vi.stubGlobal("api", { browser: { setVisible } });
+    vi.stubGlobal("api", { browser: { setSuppressed, setVisible } });
     const { user } = setup();
-    expect(setVisible).not.toHaveBeenCalled();
+    expect(setSuppressed).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Chat options" }));
-    expect(setVisible).toHaveBeenCalledExactlyOnceWith(false);
+    expect(setSuppressed).toHaveBeenCalledExactlyOnceWith(expect.any(String), true);
+    const [lease] = setSuppressed.mock.calls[0];
     await user.click(screen.getByRole("menuitem", { name: "Move" }));
     const submenuItem = screen.getByRole("menuitemradio", { name: "No project" });
     fireEvent.keyDown(submenuItem, { key: "ArrowLeft" });
     expect(screen.getByRole("menu", { name: "Chat actions" })).toBeTruthy();
-    expect(setVisible).toHaveBeenCalledExactlyOnceWith(false);
+    expect(setSuppressed).toHaveBeenCalledExactlyOnceWith(lease, true);
 
     fireEvent.keyDown(screen.getByRole("menu", { name: "Chat actions" }), { key: "Escape" });
     expect(screen.queryByRole("menu", { name: "Chat actions" })).toBeNull();
-    expect(setVisible).toHaveBeenLastCalledWith(true);
+    expect(setSuppressed.mock.calls).toEqual([[lease, true], [lease, false]]);
+    expect(setVisible).not.toHaveBeenCalled();
   });
 
   it("opens the focused rename editor and keeps it focused through card cleanup", async () => {
