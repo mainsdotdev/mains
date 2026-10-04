@@ -73,10 +73,6 @@ npm run release
 
 This project uses Expo Continuous Native Generation. The `ios/` directory is generated and ignored. Keep native configuration in `app.config.ts` or config plugins so a clean prebuild remains reproducible.
 
-## Architecture report
-
-The comparison with T3 Code, the gaps in the desktop backend, and the proposed
-delivery plan live in [`docs/architecture-report.md`](docs/architecture-report.md).
 
 ## Current vertical slice
 

@@ -103,7 +103,7 @@ Three neighbouring modules are easy to confuse, so the split is by *direction*:
 - **backend** — me as a backend (identity, paired devices). Served by both the desktop app and headless `serve`.
 - **localBackend** — exposing this machine (WS host lifecycle, bind/port, Tailscale serve, addresses). Desktop-only, real `ipcMain` (local-only control: a remote client must never toggle the exposure it rides on). Owns the desktop-facing pairing handlers (`localBackend:createPairingCode/listPairedDevices/revokePairedDevice` + the `pairedDevicesChanged` push) because a code needs the host's reachable addresses.
 - **remoteBackends** — *other* backends this desktop connects to: the encrypted at-rest store for their pairing tokens (`remoteBackends:setToken/getToken/deleteToken`; the catalog of `KnownBackend`s lives in the renderer). Formerly `backendAuth`.
-_Avoid_: t3code's vocabulary (`environmentId`, pairing grant, device session) — see `docs/design/mobile-app.md` §10.1 for the mapping; a `pairing` module (it was folded in: pairing always travelled with `describe`); moving identity into `localBackend` (headless `serve` needs it, and the trust boundary differs); registering `backend:describe` on raw `ipcMain` (it must be reachable over the wire).
+
 
 **backend runtime**:
 The small host-capability seam in `packages/backend/src/runtime/backend-runtime.ts`. Backend
@@ -268,6 +268,8 @@ _Avoid_: pre-approving a tool class (`mcp__…`) unconditionally in a permission
 **components/ui**:
 Feature-agnostic primitives — buttons, inputs, modals, icons, spinners, toasts. They sit *below* every feature and may not import from `features/`: a primitive that reaches into a domain stops being reusable and drags that domain into everything that renders a button. Enforced by `no-restricted-imports` in `eslint.config.mjs`, alongside the existing rule that consumers import from the `@/components/ui` barrel (only `icons`, `icons/space`, and `icons/file-icons` are importable directly). When something generic is discovered inside a feature — as `FileIconComponent`, a pure filename→icon map, was inside the file explorer — it moves here rather than being imported across the boundary.
 _Avoid_: importing `@/features/…` from anything under `components/ui/`; deep-importing a primitive past the barrel.
+
+Compact icon actions use `Button variant="icon"`: one neutral light/dark hover surface, 12px radius, centered glyph and visible keyboard focus. Toolbar controls share the default 28px area and 16px glyph; `iconSize="sm"` (24px) and `"xs"` (20px) serve dense rows and embedded clears. Callers add positioning, visibility and semantic active/status colors; geometry, padding and hover fills stay in the primitive. Text actions, navigation tiles and image-overlay controls keep their own variants.
 
 **components/layout**:
 The app shell that hosts whatever route is active: `main/` (route table), `sidebar/`, `right-panel/`, `page-shell`, `resize-handle`. A shell exists to compose features, so importing from `features/` is the *correct* direction here and is deliberately not linted. What does not belong is feature UI that merely happens to be positioned by the shell — the session panel (environment, sources, deliverables) and the subagent panel both lived here and were only ever about the active workspace's run; they live under `features/workspace/components/` now, and the shell renders them from `App.tsx`.

@@ -299,12 +299,12 @@ export function FloatingChatOverlay({
           >
             <div className="flex min-h-12 shrink-0 items-center gap-1 border-b border-primary-200/60 px-3.5 dark:border-primary/5">
               <Button
+                variant="icon"
                 onClick={onMinimize}
                 aria-label="Minimize chat"
                 tooltip="Minimize chat"
-                className="flex size-7 shrink-0 items-center justify-center rounded-full text-primary-600 hover:bg-primary-200/60 hover:text-primary-950 dark:text-primary-300 dark:hover:bg-primary-800 dark:hover:text-primary-50"
               >
-                <Minus className="size-3.5 " />
+                <Minus className="size-3.5" />
               </Button>
               {titleControl ?? <span className="min-w-0 flex-1 truncate text-s font-medium" title={title}>
                 {title}

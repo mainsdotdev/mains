@@ -1337,10 +1337,11 @@ function ProviderPluginCatalog({
           />
           {search && (
             <Button
+              variant="icon" iconSize="sm"
               onClick={() => setSearch("")}
               title="Clear search"
               aria-label="Clear search"
-              className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-primary-600 hover:bg-primary-200/60 hover:text-primary-800 dark:text-primary-400 dark:hover:bg-primary/10 dark:hover:text-primary-200"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2"
             >
               <Close className="size-3" />
             </Button>

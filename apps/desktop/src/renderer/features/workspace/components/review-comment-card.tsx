@@ -40,8 +40,8 @@ export function ReviewCommentCard({ comment, onUpdate, onRemove }: {
   return <article className="glass-card min-w-0 rounded-2xl p-3 font-sans text-xs">
     <div className="mb-2 flex items-center gap-2">
       <span title={comment.filePath} className="min-w-0 flex-1 truncate text-primary-500">{comment.filePath} · {line}</span>
-      {onUpdate && <Button type="button" aria-label={`Edit comment on ${line}`} onClick={() => setEditing(true)} className={actionClass}><Edit className="size-3.5" /></Button>}
-      {onRemove && <Button type="button" aria-label={`Delete comment on ${line}`} onClick={onRemove} className={actionClass}><Trash className="size-3.5" /></Button>}
+      {onUpdate && <Button variant="icon" iconSize="sm" type="button" aria-label={`Edit comment on ${line}`} onClick={() => setEditing(true)}><Edit /></Button>}
+      {onRemove && <Button variant="icon" iconSize="sm" type="button" aria-label={`Delete comment on ${line}`} onClick={onRemove}><Trash /></Button>}
     </div>
     <pre className="mb-2 max-h-24 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-primary/40 px-2 py-1.5 font-mono text-primary-600 dark:bg-primary-950/50 dark:text-primary-400">{comment.lineText || "(empty line)"}</pre>
     {editing && onUpdate ? <ReviewCommentEditor initialValue={comment.comment} onCancel={() => setEditing(false)}

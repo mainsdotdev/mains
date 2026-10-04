@@ -5,8 +5,6 @@ import { useClickOutside } from "@/hooks/use-click-outside";
 import type { ReviewDiffStyle, ReviewFile } from "../lib/review-diff";
 import { searchReviewFiles } from "../lib/review-file-search";
 
-const controlClass = "shrink-0 rounded-xl p-1.5 text-primary-500 hover:bg-primary-100 hover:text-primary-700 dark:hover:bg-primary-900 dark:hover:text-primary-300";
-
 function DiffLayoutIcon({ split }: { split: boolean }) {
   return <svg aria-hidden="true" className="size-4" viewBox="0 0 24 24" fill="none">
     <rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" strokeWidth="1" />
@@ -42,9 +40,9 @@ function ReviewFileSearch({ files, anchorRef, onJump }: {
   const select = (path: string) => { close(); onJump(path); };
 
   return <>
-    <Button ref={trigger} type="button" disabled={!files.length} aria-label="Jump to file"
+    <Button variant="icon" ref={trigger} type="button" disabled={!files.length} aria-label="Jump to file"
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
-      tooltip="Jump to file" tooltipPosition="bottom-left" className={controlClass}
+      tooltip="Jump to file" tooltipPosition="bottom-left"
       onClick={() => { if (!open) { setQuery(""); setActive(0); } setOpen(!open); }}>
       <Search aria-hidden="true" className="size-3.5" />
     </Button>
@@ -107,8 +105,8 @@ export function ReviewToolbar({ files, anchorRef, onJump, diffStyle, onStyleChan
   const label = split ? "Switch to unified diff" : "Switch to split diff";
   return <>
     <ReviewFileSearch files={files} anchorRef={anchorRef} onJump={onJump} />
-    <Button type="button" aria-label={label} aria-pressed={split} tooltip={label}
-      tooltipPosition="bottom-left" className={controlClass} onClick={() => onStyleChange(split ? "unified" : "split")}>
+    <Button variant="icon" type="button" aria-label={label} aria-pressed={split} tooltip={label}
+      tooltipPosition="bottom-left" onClick={() => onStyleChange(split ? "unified" : "split")}>
       <DiffLayoutIcon split={split} />
     </Button>
   </>;

@@ -239,11 +239,12 @@ export function BrowserAddressSuggestions({
             </button>
             {row.kind === "history" && (
               <Button
+                variant="icon"
                 tabIndex={-1}
                 aria-label={`Remove ${row.suggestion.title || row.suggestion.displayUrl} from history`}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => onRemove(row.suggestion.id)}
-                className="mr-1 rounded-lg p-1 text-primary-500 opacity-0 hover:bg-primary-300/50 hover:text-primary-900 group-hover:opacity-100 dark:text-primary-400 dark:hover:bg-primary-700/60 dark:hover:text-primary-100"
+                className="mr-1 opacity-0 group-hover:opacity-100"
               >
                 <Close className="size-3.5" />
               </Button>

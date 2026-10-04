@@ -314,11 +314,11 @@ export function PrDetail({ pr }: PrDetailProps) {
             </Heading3>
           </div>
           <Button
+            variant="icon"
             onClick={() => window.api.shell.openExternal(pr.url)}
             tooltip="Open on GitHub"
-            className="shrink-0 p-1.5 rounded-lg hover:bg-primary/20 dark:hover:bg-primary/10"
           >
-            <External className="w-3.5 h-3.5 text-primary-700 dark:text-primary-300" />
+            <External className="w-3.5 h-3.5" />
           </Button>
         </div>
 

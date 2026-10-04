@@ -666,13 +666,6 @@ label:has(:checked) > .onboarding-radio::after {
   font-size: 10px;
   white-space: nowrap;
 }
-.onboarding-copy-button {
-  flex-shrink: 0;
-  border-radius: 3px;
-  padding: 3px;
-  color: var(--onboarding-muted);
-  transition-property: box-shadow;
-}
 .onboarding-command-label {
   margin: 14px 0 6px;
   color: var(--onboarding-muted);

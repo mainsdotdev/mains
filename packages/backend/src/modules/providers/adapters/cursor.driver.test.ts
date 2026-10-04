@@ -43,9 +43,7 @@ describe("cursor.driver / session mode", () => {
   });
 });
 
-// A realistic parameterized-model-picker config-option set, shaped like the
-// `session/new` response when `_meta.parameterizedModelPicker` is advertised.
-// (See apps/server/scripts/cursor-acp-model-mismatch-probe.ts in t3code.)
+
 const CONFIG_OPTIONS: CursorConfigOption[] = [
   {
     id: "model",

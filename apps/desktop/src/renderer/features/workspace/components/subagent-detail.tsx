@@ -146,12 +146,12 @@ export function SubagentDetail({
         )}
         <StateBadge state={state} />
         <Button
+          variant="icon"
           onClick={onBack}
           title="Back to subagents"
           aria-label="Back to subagents"
-          className="shrink-0 rounded-md p-0.5 text-primary-600 transition-colors hover:bg-primary-50 hover:text-primary-900 dark:text-primary-400 dark:hover:bg-primary/5 dark:hover:text-primary-100"
         >
-          <MinimizeView className="size-4 scale-x-[-1] text-primary-700 dark:text-primary-300 " />
+          <MinimizeView className="size-4 scale-x-[-1]" />
         </Button>
       </div>
 

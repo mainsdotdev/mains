@@ -413,18 +413,6 @@ class CursorAcpServer {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Parameterized model picker — config option parsing
-//
-// When the client advertises `_meta.parameterizedModelPicker: true` in the ACP
-// `initialize` handshake, `cursor agent` returns a `configOptions` array on the
-// `session/new` and `session/set_config_option` responses. Each entry is a
-// `select`/`boolean` describing a tunable: the active model, reasoning effort,
-// context window, fast mode, thinking. We mine these to (a) surface effort
-// levels in the model picker and (b) push the user's effort/fast/thinking
-// choices back via `session/set_config_option`. Mirrors t3code's CursorProvider
-// parsing (apps/server/src/provider/Layers/CursorProvider.ts).
-// ─────────────────────────────────────────────────────────────
 
 export type CursorEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -591,14 +579,7 @@ export function resolveCursorBooleanValue(
   )?.value;
 }
 
-/**
- * Split a mains model spec into its base ACP model id and any encoded `fast`
- * flag. mains' catalog encodes fast mode in the model string itself (e.g.
- * `composer-2.5[fast=true]`), but the parameterized picker advertises the base
- * id (`composer-2.5`) with `fast` as a separate config option — so we strip the
- * `[...]` suffix before sending it and fold the encoded flag into the selection.
- * Mirrors t3code's `resolveCursorAcpBaseModelId`.
- */
+
 export function splitCursorModelSpec(model: string | null | undefined): {
   baseId: string | undefined;
   fast?: boolean;
@@ -2749,14 +2730,6 @@ export function mapStopReasonToOutcome(stopReason: string | undefined): {
   return { status: "succeeded" };
 }
 
-// ─────────────────────────────────────────────────────────────
-// `agent about` parsing — auth / account / version probing
-//
-// `agent about [--format json]` reports the installed CLI version plus the
-// logged-in account (email + subscription tier). We use it for real auth
-// detection (vs. regex-on-error) and to surface account info in Settings.
-// Mirrors t3code's parseCursorAboutOutput (CursorProvider.ts).
-// ─────────────────────────────────────────────────────────────
 
 /** Parsed view of `agent about` output. `email` is null unless truly signed in. */
 export interface CursorAboutInfo {

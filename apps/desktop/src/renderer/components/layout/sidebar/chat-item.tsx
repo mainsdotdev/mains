@@ -242,33 +242,35 @@ export function ChatItem({
           }`}
         >
           <Button
+            variant="icon" iconSize="xs"
             tooltip={isPinned ? "Unpin chat" : "Pin chat"}
             onClick={(e) => {
               e.stopPropagation();
               onTogglePin();
             }}
-            className="hidden group-hover/chat:flex items-center p-0.5 cursor-pointer rounded-md"
+            className="hidden group-hover/chat:flex"
             aria-label={isPinned ? "Unpin chat" : "Pin chat"}
             aria-pressed={isPinned}
           >
             {/* Filled while pinned, outline while it is only an offer — the
                 glyph carries the state, not just the colour. */}
             {isPinned ? (
-              <PinFilled className="w-3.5 h-3.5 text-primary-950 dark:text-primary" />
+              <PinFilled className="w-3.5 h-3.5" />
             ) : (
-              <Pin className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
+              <Pin className="w-3.5 h-3.5" />
             )}
           </Button>
           <Button
+            variant="icon" iconSize="xs"
             ref={triggerRef}
             tooltip="Chat options"
             onClick={openMenu}
-            className="hidden group-hover/chat:flex items-center p-0.5 cursor-pointer rounded-md"
+            className="hidden group-hover/chat:flex"
             aria-label="Chat options"
             aria-haspopup="menu"
             aria-expanded={isMenuOpen}
           >
-            <Option className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
+            <Option className="w-3.5 h-3.5" />
           </Button>
         </div>
       </div>

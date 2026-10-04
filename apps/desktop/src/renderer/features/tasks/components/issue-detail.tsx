@@ -27,11 +27,11 @@ export function IssueDetail({ issue }: { issue: IssueWithEntity }) {
         <div className="ml-auto flex items-center gap-1">
           {entity.url && (
             <Button
+              variant="icon"
               onClick={() => window.api.shell.openExternal(entity.url)}
               tooltip="Open in browser"
-              className="p-1.5 rounded-lg hover:bg-primary/20 dark:hover:bg-primary/10"
             >
-              <External className="w-3.5 h-3.5 text-primary-700 dark:text-primary-300" />
+              <External className="w-3.5 h-3.5" />
             </Button>
           )}
         </div>

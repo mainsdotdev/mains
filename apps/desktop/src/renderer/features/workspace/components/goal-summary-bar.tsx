@@ -120,43 +120,45 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
           <div className="flex shrink-0 items-center gap-0.5">
             {!editing && !isComplete && (
               <Button
+                variant="icon"
                 tooltip="Edit goal"
                 type="button"
                 onClick={startEdit}
                 disabled={isBusy}
-                className="rounded-full p-1 text-primary-600 hover:bg-primary-200/40 hover:text-primary-700 dark:text-primary-400 dark:hover:bg-primary-800 dark:hover:text-primary-300 cursor-pointer"
               >
                 <Edit className="size-3.5" />
               </Button>
             )}
             {goal.status === "active" && (
               <Button
+                variant="icon"
                 tooltip="Pause goal (keep tracking, run continues)"
                 type="button"
                 onClick={() => pause()}
                 disabled={isBusy}
-                className="rounded-full p-1 text-primary-600 hover:bg-primary-200/40 hover:text-primary-700 dark:text-primary-400 dark:hover:bg-primary-800 dark:hover:text-primary-300 cursor-pointer"
               >
                 <Stop className="size-3.5" />
               </Button>
             )}
             {goal.status === "paused" && (
               <Button
+                variant="icon"
                 tooltip="Resume goal"
                 type="button"
                 onClick={() => resume()}
                 disabled={isBusy}
-                className="rounded-full p-1 text-success hover:bg-success/10 cursor-pointer"
+                className="text-success enabled:hover:text-success dark:enabled:hover:text-success"
               >
                 <Play className="size-3.5" />
               </Button>
             )}
             <Button
+              variant="icon"
               tooltip="Clear goal"
               type="button"
               onClick={() => clear()}
               disabled={isBusy}
-              className="rounded-full p-1 text-primary-600 hover:bg-danger/10 hover:text-danger dark:text-primary-400 cursor-pointer"
+              className="enabled:hover:text-danger dark:enabled:hover:text-danger"
             >
               <Trash className="size-3.5" />
             </Button>
@@ -183,19 +185,21 @@ export function GoalSummaryBar({ providerId, runId, isRunning, enabled, rootPath
               placeholder="Goal objective…"
             />
             <Button
+              variant="icon"
               tooltip="Save"
               type="button"
               onClick={commitEdit}
               disabled={isBusy}
-              className="mt-0.5 p-1 rounded-full text-success hover:bg-success/10 cursor-pointer"
+              className="mt-0.5 text-success enabled:hover:text-success dark:enabled:hover:text-success"
             >
               <Check className="size-3.5" />
             </Button>
             <Button
+              variant="icon"
               tooltip="Cancel"
               type="button"
               onClick={() => setEditing(false)}
-              className="mt-0.5 rounded-full p-1 text-primary-600 hover:bg-primary-200/40 dark:text-primary-400 dark:hover:bg-primary-800 cursor-pointer"
+              className="mt-0.5"
             >
               <Close className="size-3.5" />
             </Button>

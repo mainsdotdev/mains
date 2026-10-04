@@ -83,14 +83,15 @@ export const TextSearchRows = memo(function TextSearchRows({
               <span className="ml-auto flex items-center shrink-0 pl-2 pr-1 gap-1">
                 {onAddToContext && (
                   <Button
+                    variant="icon" iconSize="xs"
                     onClick={(e: React.MouseEvent) => {
                       e.stopPropagation();
                       onAddToContext(file);
                     }}
-                    className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded hover:bg-primary/20 dark:hover:bg-primary/10 transition-opacity"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
                     title="Add to context"
                   >
-                    <Plus className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400" />
+                    <Plus className="w-3.5 h-3.5" />
                   </Button>
                 )}
                 <Text as="span" size="xxs" tone="subtle" className="tabular-nums">

@@ -41,8 +41,8 @@ export function ReviewCommentsAttachment({ comments, onUpdate, onRemove }: {
         className="flex min-w-0 items-center gap-2 rounded-xl px-3 py-1.5 text-xs text-primary-800 dark:text-primary-200">
         <Chat className="size-3.5 shrink-0 text-primary-500" /><span className="truncate">{summary}</span>
       </Button>
-      {onRemove && <Button type="button" aria-label="Remove all review comments" onClick={() => { comments.forEach((comment) => onRemove(comment.id)); close(); }}
-        className="mr-1 rounded-full p-1 text-primary-500"><Close className="size-3" /></Button>}
+      {onRemove && <Button variant="icon" iconSize="xs" type="button" aria-label="Remove all review comments" onClick={() => { comments.forEach((comment) => onRemove(comment.id)); close(); }}
+        className="mr-1"><Close /></Button>}
     </div>
     <DropdownWrapper id={id} isOpen={open} usePortal position={position} openUpward={!!onUpdate} triggerRef={trigger} dropdownRef={panel}
       className="z-(--z-modal-critical)"

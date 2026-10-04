@@ -186,8 +186,9 @@ export function WorkspaceReview({ workspaceId, rootPath, isExpanded, onToggleExp
             <span className="min-w-0 flex-1 truncate text-s ml-1 text-primary-500">Uncommitted changes · {files.length} file{files.length === 1 ? "" : "s"}</span>
             <ReviewToolbar files={files} anchorRef={header} onJump={(path) => navigation.current?.jumpToFile(path)}
               diffStyle={diffStyle} onStyleChange={setDiffStyle} />
-            <Button type="button" aria-label="Refresh review changes" disabled={refreshing || isFetching} onClick={() => void refresh()}
-              className="rounded-lg p-2 text-primary-500 hover:bg-primary-100 dark:hover:bg-primary-900"><Refresh className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} /></Button>
+            <Button variant="icon" type="button" aria-label="Refresh review changes" disabled={refreshing || isFetching} onClick={() => void refresh()}>
+              <Refresh className={refreshing ? "animate-spin" : undefined} />
+            </Button>
             <PreviewPanelControls label="Review" isExpanded={isExpanded} onToggleExpanded={onToggleExpanded}
               chatVisible={chatVisible}  />
           </m.header>

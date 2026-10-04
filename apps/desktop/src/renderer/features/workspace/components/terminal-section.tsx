@@ -50,10 +50,10 @@ export function TerminalSection({
           </div>
           {onClose && (
             <Button
+              variant="icon"
               tooltip="Close terminal"
               tooltipPosition="top-left"
               onClick={onClose}
-              className="rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 p-1 text-primary-500 transition-all duration-300 ease-out"
             >
               <Close className="size-4" />
             </Button>

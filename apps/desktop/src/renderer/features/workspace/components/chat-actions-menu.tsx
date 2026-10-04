@@ -136,6 +136,7 @@ export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boole
   return (
     <>
       <Button
+        variant="icon"
         ref={triggerRef}
         tooltip="Chat options"
         tooltipPosition="bottom"
@@ -143,7 +144,7 @@ export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boole
         aria-label="Chat options"
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
-        className="relative z-(--z-panel-toggle) flex shrink-0 items-center rounded-full p-1.5 cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-all duration-300 ease-out"
+        className="relative z-(--z-panel-toggle)"
       >
         <Option className="size-3.75" />
       </Button>

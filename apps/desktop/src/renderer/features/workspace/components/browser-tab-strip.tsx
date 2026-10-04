@@ -157,12 +157,12 @@ export function BrowserTabStrip({
           );
         })}
         <Button
+          variant="icon"
           onClick={onCreate}
           tooltip="New tab"
           tooltipShortcut={newTabShortcutLabel}
           tooltipPosition="bottom-left"
           aria-label="New browser tab"
-          className="shrink-0 rounded-xl p-2.5 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
         >
           <Plus className="size-4" />
         </Button>

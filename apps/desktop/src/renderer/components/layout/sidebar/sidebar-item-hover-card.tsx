@@ -380,8 +380,7 @@ export function SidebarItemHoverCard({
                     tooltipPosition="bottom"
                     tabIndex={-1}
                     className={cn(
-                      "flex size-7 items-center justify-center rounded-lg",
-                      action.variant === "danger" && "text-danger dark:text-danger",
+                      action.variant === "danger" && "text-danger enabled:hover:text-danger dark:enabled:hover:text-danger",
                     )}
                     onClick={() => {
                       const anchor = trigger();

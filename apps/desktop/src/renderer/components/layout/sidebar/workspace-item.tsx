@@ -354,15 +354,17 @@ export default function WorkspaceItem({
           </Text>
         )}
         <Button
+          variant="icon"
+          iconSize="sm"
           tooltip="More options"
           ref={buttonRef}
           onClick={handleOptionClick}
           aria-haspopup="menu"
           aria-expanded={isDropdownOpen}
-          className={`absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 cursor-pointer rounded-md`}
+          className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
           aria-label="Workspace options"
         >
-          <Option className="w-5 h-5 text-primary-700 dark:text-primary-300 hover:text-primary-800 dark:hover:text-primary-200" />
+          <Option className="w-5 h-5" />
         </Button>
       </div>
 

@@ -157,6 +157,7 @@ export function ToggleButton({
       <div className="flex items-center  rounded-full p-0.5">
         {!chatControlsHidden && onTerminalToggle && (
           <Button
+            variant="icon"
             tooltip={terminalTooltip}
             tooltipPosition="left"
             onClick={() => {
@@ -166,28 +167,23 @@ export function ToggleButton({
               }
               onTerminalToggle();
             }}
-            className={` p-1.5 transition-all duration-300 ease-out
-             rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10
-           `}
+            className={terminalOpen ? "text-primary-700 dark:text-primary-300" : undefined}
             aria-label={terminalOpen ? "Close terminal" : "Open terminal"}
           >
             {terminalOpen ? (
-              <TerminalOpen className="size-4 text-primary-800 dark:text-primary-200" />
+              <TerminalOpen className="size-4" />
             ) : (
-              <Terminal className="size-4 text-primary-700 dark:text-primary-300" />
+              <Terminal className="size-4" />
             )}
           </Button>
         )}
         {onBrowserToggle && embeddedBrowser && (
           <Button
+            variant="icon"
             tooltip={browserTooltip}
             tooltipPosition="left"
             onClick={onBrowserToggle}
-            className={`flex size-7 items-center justify-center p-1.5 transition-all duration-300 ease-out rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10 ${
-              browserOpen
-                ? "text-primary-800 dark:text-primary-200"
-                : "text-primary-700 dark:text-primary-300"
-            }`}
+            className={browserOpen ? "text-primary-700 dark:text-primary-300" : undefined}
             aria-label={browserOpen ? "Close browser" : "Open browser"}
             aria-pressed={browserOpen}
           >
@@ -196,16 +192,17 @@ export function ToggleButton({
         )}
         {showRightPanel && (
           <Button
+            variant="icon"
             tooltip={isOpen ? "Close right panel" : "Open right panel"}
             tooltipPosition="left"
             onClick={onClick}
-            className="rounded-full cursor-pointer hover:bg-primary-50 dark:hover:bg-primary/10 p-1.5  transition-all duration-300 ease-out"
+            className={isOpen ? "text-primary-700 dark:text-primary-300" : undefined}
             aria-label={isOpen ? "Close right panel" : "Open right panel"}
           >
             {isOpen ? (
-              <SidebarOpen className="size-4 text-primary-800 dark:text-primary-200 rotate-180" />
+              <SidebarOpen className="size-4 rotate-180" />
             ) : (
-              <SidebarClose className="size-4 text-primary-700 dark:text-primary-300 rotate-180" />
+              <SidebarClose className="size-4 rotate-180" />
             )}
           </Button>
         )}

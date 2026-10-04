@@ -102,23 +102,24 @@ export function SchemaListTab({
 
               <div className="hidden group-hover:flex items-center gap-1 shrink-0">
                 <Button
+                  variant="icon"
                   tooltip="Edit Schema"
                   onClick={() => onOpenEditEditor(entry.id)}
-                  className="p-1 rounded hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
                 >
                   <Edit className="size-4" />
                 </Button>
                 <Button
+                  variant="icon"
                   tooltip="Duplicate Schema"
                   onClick={() => onDuplicate(entry.id)}
-                  className="p-1 rounded hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
                 >
                   <Duplicate className="size-4" />
                 </Button>
                 <Button
+                  variant="icon"
                   tooltip="Delete Schema"
                   onClick={() => onRequestDelete(entry.id)}
-                  className="p-1 rounded hover:bg-danger/10 dark:hover:bg-danger/20 text-danger transition-colors cursor-pointer"
+                  className="text-danger enabled:hover:text-danger dark:enabled:hover:text-danger"
                 >
                   <Trash className="size-4" />
                 </Button>

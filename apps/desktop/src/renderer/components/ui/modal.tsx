@@ -158,11 +158,12 @@ export function ModalHeader({
         {children}
       </div>
       <Button
+        variant="icon"
         onClick={onClose}
         aria-label={closeLabel}
         tooltip={closeIcon ? closeLabel : undefined}
         tooltipPosition="bottom-left"
-        className="ml-3 shrink-0 p-1.5 rounded-full  hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
+        className="ml-3"
       >
         {closeIcon ?? <Close className="size-4 text-primary-500" />}
       </Button>

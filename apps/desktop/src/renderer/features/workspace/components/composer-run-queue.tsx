@@ -67,15 +67,15 @@ function QueuedMessageRow({ message, controls, canSteer, busy, sortHandle, canRe
             tooltip="Send to the active turn now" className="flex items-center gap-1 rounded-full px-1.5 py-1  hover:text-primary-700  dark:hover:text-primary-300 cursor-pointer">
             <Steer className="size-4" /> <span>Steer</span>
           </Button>}
-        <Button type="button" disabled={immutable} onClick={() => controls.onRemove(message.id)}
+        <Button variant="icon" iconSize="sm" type="button" disabled={immutable} onClick={() => controls.onRemove(message.id)}
           aria-label={`Remove queued message: ${message.text || "attachment"}`} tooltip="Remove message"
-          className="rounded-full p-1 hover:bg-danger/10 hover:text-danger cursor-pointer">
+          className="enabled:hover:text-danger dark:enabled:hover:text-danger">
           <Trash className="size-4" />
         </Button>
         <div className="relative shrink-0">
-          <Button ref={triggerRef} type="button" onClick={() => setMenuOpen((open) => !open)}
+          <Button variant="icon" iconSize="xs" ref={triggerRef} type="button" onClick={() => setMenuOpen((open) => !open)}
             aria-label="Queued message options" aria-haspopup="menu" aria-expanded={menuOpen}
-            className="flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-xl  hover:text-primary-700  dark:hover:text-primary-300 cursor-pointer">
+          >
             <Option width={16} height={16} className="pointer-events-none size-4 shrink-0 rotate-90" />
           </Button>
           <DropdownWrapper isOpen={menuOpen} dropdownRef={menuRef} triggerRef={triggerRef} usePortal

@@ -1479,6 +1479,7 @@ export function BrowserPanel({
         <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
           <div className="flex items-center gap-1 rounded-full p-0.5 ">
             <Button
+              variant="icon"
               tooltip="Back"
               tooltipShortcut={keyboardShortcutLabel(backShortcut)}
               tooltipPosition="top"
@@ -1486,12 +1487,12 @@ export function BrowserPanel({
                 void api.back();
               }}
               disabled={!activeTab?.canGoBack}
-              className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label="Back"
             >
               <ChevronLeft className="size-5" />
             </Button>
             <Button
+              variant="icon"
               tooltip="Forward"
               tooltipShortcut={keyboardShortcutLabel(forwardShortcut)}
               tooltipPosition="top"
@@ -1499,18 +1500,18 @@ export function BrowserPanel({
                 void api.forward();
               }}
               disabled={!activeTab?.canGoForward}
-              className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label="Forward"
             >
               <ChevronLeft className="size-5 rotate-180" />
             </Button>
             <Button
+              variant="icon"
               tooltip={activeTab?.isLoading ? "Stop" : "Reload"}
               tooltipPosition="top"
               onClick={() => {
                 void (activeTab?.isLoading ? api.stop() : api.reload());
               }}
-              className="group rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              className="group"
               aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
             >
               {activeTab?.isLoading ? (
@@ -1607,6 +1608,7 @@ export function BrowserPanel({
             />
             {urlInput && (
               <Button
+                variant="icon" iconSize="sm"
                 aria-label="Clear address"
                 tooltip="Clear address"
                 tooltipPosition="bottom"
@@ -1618,7 +1620,7 @@ export function BrowserPanel({
                   setAddressSuggestionIndex(0);
                   locationInputRef.current?.focus();
                 }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-primary-500 hover:bg-primary-100/80 hover:text-primary-900 focus-visible:bg-primary-100/80 dark:text-primary-400 dark:hover:bg-primary-800/60 dark:hover:text-primary-100 dark:focus-visible:bg-primary-800/60"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2"
               >
                 <Close aria-hidden className="size-3.5" />
               </Button>
@@ -1645,27 +1647,24 @@ export function BrowserPanel({
 
           <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
             <Button
+              variant="icon"
               tooltip={selectMode ? "Exit annotation mode" : "Annotate browser"}
               tooltipShortcut="Esc"
               tooltipPosition="top-left"
               onClick={() => void toggleSelect()}
-              className={`rounded-full p-1 transition-colors ${
-                selectMode
-                  ? "bg-primary-500/20 text-primary-800 dark:text-primary-200"
-                  : "text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
-              }`}
+              className={selectMode ? "bg-primary-500/20 text-primary-700 dark:text-primary-300" : undefined}
               aria-label={selectMode ? "Exit annotation mode" : "Annotate browser"}
               aria-pressed={selectMode}
             >
               <Crop className="size-4" />
             </Button>
             <Button
+              variant="icon"
               ref={browserMenuButtonRef}
               tooltip="Browser menu"
               tooltipPosition="top-left"
               onClick={() => void toggleBrowserMenu()}
               onMouseDown={(event) => event.stopPropagation()}
-              className="rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label="Open browser menu"
               aria-haspopup="menu"
               aria-expanded={browserMenuOpen}
@@ -1789,12 +1788,13 @@ export function BrowserPanel({
                 </Button>
               </div>
               <Button
+                variant="icon"
                 role="menuitem"
                 tabIndex={-1}
                 onClick={() => void setZoom(1)}
                 disabled={isBlank}
                 aria-label="Reset zoom"
-                className="rounded-lg p-1.5 mr-1 text-primary-600 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-300 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
+                className="mr-1"
               >
                 <Refresh className="size-3.5" />
               </Button>

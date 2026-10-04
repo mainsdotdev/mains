@@ -157,11 +157,12 @@ export const FileTreeNode = memo(function FileTreeNode({
 
         {onAddToContext && (
           <Button
+            variant="icon" iconSize="xs"
             onClick={handleAddToContext}
-            className="opacity-0 group-hover:opacity-100 w-5 h-5 shrink-0 flex items-center justify-center rounded hover:bg-primary/20 dark:hover:bg-primary/10 transition-opacity mr-1"
+            className="opacity-0 group-hover:opacity-100 transition-opacity mr-1"
             title={isDirectory ? "Add folder to context" : "Add to context"}
           >
-            <Plus className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400" />
+            <Plus className="w-3.5 h-3.5" />
           </Button>
         )}
 

@@ -5,7 +5,7 @@ import { useComposerContext } from "../hooks/use-composer-context";
 import { ImagePreviewModal } from "./image-preview-modal";
 import { BrowserAnnotationElements, BrowserAnnotationComment } from "./browser-annotation-details";
 
-const iconButton = "rounded-lg p-0.5 text-primary-500 transition-colors hover:text-primary-900 dark:hover:text-primary-100";
+const textActionClass = "rounded-lg p-0.5 text-primary-500 transition-colors hover:text-primary-900 dark:hover:text-primary-100";
 
 /** One compact attachment opens all comment groups, just like the page editor. */
 export function ComposerBrowserAnnotations() {
@@ -69,10 +69,12 @@ export function ComposerBrowserAnnotations() {
           <span className="truncate">{summary}</span>
         </Button>
         <Button
+          variant="icon"
+          iconSize="xs"
           type="button"
           aria-label="Remove all annotations"
           onClick={() => { annotations.forEach(remove); setOpen(false); setEditing(null); }}
-          className={`${iconButton} mr-1 shrink-0 rounded-full`}
+          className="mr-1"
         >
           <Close className="size-3" />
         </Button>
@@ -116,14 +118,15 @@ export function ComposerBrowserAnnotations() {
                     {annotation.elements!.length} selected item{annotation.elements!.length === 1 ? "" : "s"}
                   </span>
                   <Button
+                    variant="icon"
+                    iconSize="sm"
                     type="button"
                     aria-label={`Edit annotation ${index + 1}`}
                     onClick={() => { setDraft(annotation.comment || ""); setEditing(annotation.id); }}
-                    className={iconButton}
                   >
                     <Edit className="size-3.5" />
                   </Button>
-                  <Button type="button" aria-label={`Delete annotation ${index + 1}`} onClick={() => remove(annotation)} className={iconButton}>
+                  <Button variant="icon" iconSize="sm" type="button" aria-label={`Delete annotation ${index + 1}`} onClick={() => remove(annotation)}>
                     <Trash className="size-3.5" />
                   </Button>
                 </div>
@@ -148,7 +151,7 @@ export function ComposerBrowserAnnotations() {
                       className="text-xs"
                     />
                     <div className="mt-2 flex justify-end gap-1.5">
-                      <Button type="button" onClick={() => setEditing(null)} className={`${iconButton} px-2 text-xs`}>Cancel</Button>
+                      <Button type="button" onClick={() => setEditing(null)} className={`${textActionClass} px-2 text-xs`}>Cancel</Button>
                       <Button type="button" aria-label="Save comment" onClick={save} className="flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-xs text-accent-foreground">
                         <Check className="size-3" />Save
                       </Button>

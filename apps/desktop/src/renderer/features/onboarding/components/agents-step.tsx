@@ -174,7 +174,6 @@ export function AgentsStep({
               variant="icon"
               tooltip="Copy install command"
               text={instructions.command}
-              className="onboarding-copy-button"
             />
           </div>
         )}
@@ -186,7 +185,6 @@ export function AgentsStep({
               variant="icon"
               tooltip="Copy sign-in command"
               text={loginCommand ?? provider.authLoginCommand}
-              className="onboarding-copy-button"
             />
           </div>
         )}

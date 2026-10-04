@@ -1,10 +1,6 @@
 import { createSlice, nanoid, type PayloadAction } from "@reduxjs/toolkit";
 import type { BackendDescriptor } from "@mains/contracts/backend";
 
-/**
- * A saved remote backend the UI can connect to (a `mains serve` instance reached
- * over WebSocket). Mirrors t3code's KnownEnvironment. See docs/design/remote-backend.md.
- */
 /** SSH tunnel config for a backend reached via `ssh -L` (see ssh.service). */
 export interface BackendSshConfig {
   host: string;

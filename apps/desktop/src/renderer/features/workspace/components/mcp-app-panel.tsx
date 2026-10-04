@@ -93,11 +93,12 @@ export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutCo
           )}
           <div className="ml-1 flex shrink-0 items-center gap-0.5">
             <Button
+              variant="icon"
               onClick={reload}
               tooltip="Reload app"
               tooltipPosition="bottom-left"
               aria-label="Reload app"
-              className="group flex size-7 shrink-0 items-center justify-center rounded-full p-1.5 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 focus-visible:bg-primary-200/60 dark:hover:bg-primary-800/70 dark:hover:text-primary-100 dark:focus-visible:bg-primary-800/70"
+              className="group"
             >
               <Refresh aria-hidden className="size-4 rotate-180 transition-transform duration-200 group-active:rotate-90" />
             </Button>
@@ -105,7 +106,6 @@ export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutCo
               label={app.name}
               isExpanded={panel.isExpanded}
               onToggleExpanded={panel.toggleExpanded}
-              buttonClassName="mx-0 flex size-7 items-center justify-center p-1.5"
             />}
           </div>
           {reserveLayoutControls && (

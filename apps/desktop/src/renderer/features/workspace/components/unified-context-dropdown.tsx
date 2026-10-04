@@ -740,13 +740,14 @@ export function UnifiedContextDropdown({
                           </RowButton>
                           {isDirectory && (
                             <Button
+                              variant="icon" iconSize="sm"
                               type="button"
                               data-dropdown-secondary-action="true"
                               aria-label={`Browse ${entry.name} folder`}
                               title={`Browse ${entry.name}`}
                               onMouseEnter={() => setActiveIndex(idx)}
                               onClick={() => navigateToDirectory(entry, rowDirPath)}
-                              className="absolute right-1.5 top-1/2 -translate-y-1/2 size-6 flex items-center justify-center rounded-lg text-primary-500 hover:bg-primary-300/40 dark:hover:bg-primary-700/50"
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2"
                             >
                               <ArrowUp className="size-3 rotate-90" />
                             </Button>

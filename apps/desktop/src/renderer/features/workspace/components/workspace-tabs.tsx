@@ -248,8 +248,9 @@ export function WorkspaceTabs({
           </div>
         )}
         <Button
+          variant="icon"
           onClick={onNewRun}
-          className="p-2.5 shrink-0 text-primary-900 ml-0.5 mb-0.5 mr-8 dark:text-primary-100  hover:text-primary-950 dark:hover:text-primary-100 hover:bg-primary/20 dark:hover:bg-primary/5  rounded-xl cursor-pointer transition-colors"
+          className="ml-0.5 mb-0.5 mr-8"
           title="New run"
         >
           <Plus className="size-4" />

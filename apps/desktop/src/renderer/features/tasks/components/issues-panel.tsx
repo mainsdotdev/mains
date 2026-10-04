@@ -203,10 +203,11 @@ export function IssuesPanel({ activeEntityId, onSelectIssue }: IssuesPanelProps)
           />
           {text && (
             <Button
+              variant="icon" iconSize="sm"
               onClick={() => setText("")}
               tooltip="Clear search"
               aria-label="Clear search"
-              className="absolute right-2 top-1/2 z-10 -translate-y-1/2 p-1 rounded-lg cursor-pointer text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-200 hover:bg-primary/50 dark:hover:bg-primary/10"
+              className="absolute right-2 top-1/2 z-10 -translate-y-1/2"
             >
               <Close className="size-3" />
             </Button>
@@ -231,6 +232,7 @@ export function IssuesPanel({ activeEntityId, onSelectIssue }: IssuesPanelProps)
               className="w-fit"
             />
             <Button
+              variant="icon"
               ref={filterButtonRef}
               onClick={() => {
                 if (filterOpen) setFilterOpen(false);
@@ -240,11 +242,11 @@ export function IssuesPanel({ activeEntityId, onSelectIssue }: IssuesPanelProps)
               aria-label="Filter issues"
               aria-haspopup="dialog"
               aria-expanded={filterOpen}
-              className={`p-1.5 rounded-xl cursor-pointer transition-colors ${
+              className={
                 filterOpen || activeFilterCount > 0
                   ? "bg-primary/80 dark:bg-primary/10 glass-outline text-primary-900 dark:text-primary-100"
-                  : "text-primary-600 dark:text-primary-400 hover:bg-primary/50 dark:hover:bg-primary/10 hover:text-primary-800 dark:hover:text-primary-200"
-              }`}
+                  : undefined
+              }
             >
               <Layers className="w-3.5 h-3.5" />
             </Button>

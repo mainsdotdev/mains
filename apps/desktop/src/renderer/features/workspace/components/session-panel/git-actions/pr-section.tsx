@@ -243,12 +243,12 @@ export function PrSection({
           </Text>
           {!expanded && (
             <Button
+              variant="icon" iconSize="sm"
               ref={expandButtonRef}
               onClick={() => moveEditor(true)}
               aria-label="Expand PR view"
               tooltip="Expand PR view"
               tooltipPosition="top-left"
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-primary-600 transition-colors hover:bg-primary-200/40 hover:text-primary-900 dark:text-primary-400 dark:hover:bg-primary/10 dark:hover:text-primary-100"
             >
               <Maximize aria-hidden="true" className="size-4" />
             </Button>

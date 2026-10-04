@@ -202,7 +202,7 @@ export function BrowserDeviceToolbar({
       </div>
 
       <Button
-      variant="icon"
+        variant="icon"
         onClick={() =>
           onChange({
             ...device,
@@ -214,7 +214,6 @@ export function BrowserDeviceToolbar({
         tooltip="Rotate device"
         tooltipPosition="bottom"
         aria-label="Rotate device"
-        className="p-1.5!"
       >
         <RotateDevice className="size-4" />
       </Button>
@@ -231,12 +230,12 @@ export function BrowserDeviceToolbar({
       </div>
 
       <Button
-      variant="icon"
+        variant="icon"
         onClick={onClose}
         tooltip="Close device toolbar"
         tooltipPosition="bottom-left"
         aria-label="Close device toolbar"
-        className="ml-auto shrink-0 "
+        className="ml-auto"
       >
         <Close className="size-3.5" />
       </Button>

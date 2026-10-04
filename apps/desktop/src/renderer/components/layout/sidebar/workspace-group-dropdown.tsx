@@ -38,6 +38,8 @@ export function WorkspaceGroupDropdown({
   return (
     <>
       <Button
+        variant="icon"
+        iconSize="sm"
         ref={buttonRef}
         tooltip="Group workspaces"
         tooltipPosition="top"
@@ -45,10 +47,10 @@ export function WorkspaceGroupDropdown({
         onClick={handleClick}
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        className={`p-1 rounded-md cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-colors ${grouping === "none" ? "bg-primary-100/80 dark:bg-primary/5" : ""}`}
+        className={grouping === "none" ? "bg-primary-100 dark:bg-primary-900" : undefined}
       >
         <Layers
-          className="w-3.5 h-3.5 transition-colors text-primary-800 dark:text-primary-200"
+          className="w-3.5 h-3.5 transition-colors"
 
         />
       </Button>
