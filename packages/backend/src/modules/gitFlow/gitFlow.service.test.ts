@@ -27,6 +27,7 @@ vi.mock("../git", () => ({
     stageFiles: vi.fn(),
     getStagedDiff: vi.fn(),
     getDiff: vi.fn(),
+    getCommitPreviewDiff: vi.fn(),
     getBranchDiff: vi.fn(),
     getBranchLog: vi.fn(),
     pullFastForward: vi.fn(),
@@ -100,6 +101,7 @@ describe("gitFlowService — live branch invariants", () => {
       updatedAt: new Date(),
     });
     gitMock.getCurrentBranch.mockResolvedValue("feature/live");
+    gitMock.getCommitPreviewDiff.mockResolvedValue("");
     gitMock.getRemotes.mockResolvedValue([
       {
         name: "origin",
@@ -302,9 +304,8 @@ describe("gitFlowService — live branch invariants", () => {
   });
 
   describe("generateCommitMessage", () => {
-    it("preview mode reads the diffs without staging and omits the model", async () => {
-      gitMock.getStagedDiff.mockResolvedValue("staged-hunk");
-      gitMock.getDiff.mockResolvedValue("working-hunk");
+    it("preview mode includes the full commit preview without staging and omits the model", async () => {
+      gitMock.getCommitPreviewDiff.mockResolvedValue("tracked-hunk\nnew-file-hunk");
       generateTextMock.mockResolvedValue("feat: do the thing");
 
       const message = await gitFlowService.generateCommitMessage({
@@ -316,11 +317,41 @@ describe("gitFlowService — live branch invariants", () => {
       expect(message).toBe("feat: do the thing");
       // Prefill must not mutate the index as a read side effect.
       expect(gitMock.stageFiles).not.toHaveBeenCalled();
+      expect(gitMock.getCommitPreviewDiff).toHaveBeenCalledWith("/repo", true);
       const [prompt, opts] = generateTextMock.mock.calls[0];
-      expect(prompt).toContain("staged-hunk");
-      expect(prompt).toContain("working-hunk");
+      expect(prompt).toContain("tracked-hunk");
+      expect(prompt).toContain("new-file-hunk");
       // No model → the driver's cheap one-shot default, not the chat model.
       expect(opts.model).toBeUndefined();
+    });
+
+    it("respects the staged-only choice when generating a preview", async () => {
+      gitMock.getCommitPreviewDiff.mockResolvedValue("staged-only-hunk");
+      generateTextMock.mockResolvedValue("fix: staged changes");
+
+      await gitFlowService.generateCommitMessage({
+        workspaceId: "ws-1",
+        providerId: "claude_code",
+        includeUnstaged: false,
+        preview: true,
+      });
+
+      expect(gitMock.getCommitPreviewDiff).toHaveBeenCalledWith("/repo", false);
+      expect(generateTextMock.mock.calls[0][0]).toContain("staged-only-hunk");
+      expect(gitMock.stageFiles).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a failed preview rather than generating from partial changes", async () => {
+      gitMock.getCommitPreviewDiff.mockRejectedValue(new Error("Cannot read repository"));
+
+      await expect(gitFlowService.generateCommitMessage({
+        workspaceId: "ws-1",
+        providerId: "claude_code",
+        preview: true,
+      })).rejects.toThrow("Cannot read repository");
+
+      expect(generateTextMock).not.toHaveBeenCalled();
+      expect(gitMock.stageFiles).not.toHaveBeenCalled();
     });
 
     it("non-preview mode stages before reading the staged diff", async () => {
@@ -379,6 +410,55 @@ describe("gitFlowService — live branch invariants", () => {
       });
 
       expect(gitMock.getBranchDiff).toHaveBeenCalledWith("/repo", "origin/main");
+    });
+
+    it("includes all branch commit subjects, including those beyond the old 20-commit cutoff", async () => {
+      gitMock.getBranchDiff.mockResolvedValue("branch-diff");
+      const subjects = Array.from({ length: 35 }, (_, i) => `change ${i + 1}`);
+      gitMock.getBranchLog.mockResolvedValue(subjects);
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      expect(gitMock.getBranchLog).toHaveBeenCalledWith("/repo", "origin/main");
+      const prompt = generateTextMock.mock.calls[0][0];
+      for (const subject of subjects) expect(prompt).toContain(`- ${subject}\n`);
+      expect(gitMock.getLog).not.toHaveBeenCalled();
+    });
+
+    it("uses the complete working-tree preview without unrelated commit history when no base can be read", async () => {
+      gitMock.getBranchDiff.mockRejectedValue(new Error("Unknown base"));
+      gitMock.getCommitPreviewDiff.mockResolvedValue("new-file-hunk");
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      expect(generateTextMock.mock.calls[0][0]).toContain("new-file-hunk");
+      expect(gitMock.getLog).not.toHaveBeenCalled();
+      expect(gitMock.getBranchLog).not.toHaveBeenCalled();
+      expect(gitMock.stageFiles).not.toHaveBeenCalled();
+    });
+
+    it("retains branch commit history even when the commits produce an empty net diff", async () => {
+      gitMock.getBranchDiff.mockResolvedValue("");
+      gitMock.getBranchLog.mockResolvedValue(["Revert feature", "Add feature"]);
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      expect(gitMock.getBranchLog).toHaveBeenCalledWith("/repo", "origin/main");
+      expect(generateTextMock.mock.calls[0][0]).toContain("- Add feature");
+      expect(gitMock.getBranchDiff).not.toHaveBeenCalledWith("/repo", "main");
+    });
+
+    it("surfaces a branch-log failure rather than silently omitting commits", async () => {
+      gitMock.getBranchDiff.mockResolvedValue("branch-diff");
+      gitMock.getBranchLog.mockRejectedValue(new Error("Cannot read branch history"));
+
+      await expect(gitFlowService.generatePrBody({
+        workspaceId: "ws-1", providerId: "claude_code",
+      })).rejects.toThrow("Cannot read branch history");
+      expect(generateTextMock).not.toHaveBeenCalled();
     });
   });
 });

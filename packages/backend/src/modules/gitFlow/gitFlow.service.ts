@@ -418,12 +418,10 @@ export const gitFlowService = {
     let diff = params.stagedDiff;
     if (diff === undefined) {
       if (params.preview) {
-        const staged = await gitService.getStagedDiff(rootPath).catch(() => "");
-        const working =
-          params.includeUnstaged === false
-            ? ""
-            : await gitService.getDiff(rootPath).catch(() => "");
-        diff = [staged, working].filter(Boolean).join("\n");
+        diff = await gitService.getCommitPreviewDiff(
+          rootPath,
+          params.includeUnstaged !== false,
+        );
       } else {
         await this.stage(
           rootPath,
@@ -494,7 +492,7 @@ export const gitFlowService = {
     // contain, and unlike the working-tree/staged diffs it's still populated
     // after the branch is committed and the tree is clean. Try the remote
     // base first (the PR target), then the local base. Fall back to the
-    // working-tree + staged diff only when no base is known.
+    // complete working-tree preview when no branch diff is available.
     const baseBranch =
       params.base?.trim() || (await this.resolveBaseBranch(params.workspaceId));
     let diff = "";
@@ -503,18 +501,15 @@ export const gitFlowService = {
       for (const ref of [`origin/${baseBranch}`, baseBranch]) {
         const r = await gitService
           .getBranchDiff(rootPath, ref)
-          .catch(() => "");
-        if (r.trim()) {
-          diff = r;
-          baseRef = ref;
-          break;
-        }
+          .catch(() => null);
+        if (r === null) continue;
+        diff = r;
+        baseRef = ref;
+        break;
       }
     }
     if (!diff.trim()) {
-      const staged = await gitService.getStagedDiff(rootPath).catch(() => "");
-      const working = await gitService.getDiff(rootPath).catch(() => "");
-      diff = [staged, working].filter(Boolean).join("\n");
+      diff = await gitService.getCommitPreviewDiff(rootPath);
     }
 
     // Lazy: breaks the gitFlow ↔ providers/adapters (mains-tools) require cycle.
@@ -541,23 +536,18 @@ export const gitFlowService = {
       .filter(Boolean)
       .join("\n");
 
-    // Prefer commits unique to this branch (base..HEAD) when the base is
-    // known, so the summary isn't polluted by the base branch's own history;
-    // fall back to recent repo commits only when there's no base ref.
+    // Every commit unique to this branch (base..HEAD), without an arbitrary
+    // count cutoff. Without a base, rely on the diff rather than injecting
+    // unrelated repository history into the PR description.
     let commits = "";
     if (baseRef) {
-      const messages = await gitService
-        .getBranchLog(rootPath, baseRef, 20)
-        .catch(() => [] as string[]);
+      const messages = await gitService.getBranchLog(rootPath, baseRef);
       commits = messages.map((m) => `- ${m}`).join("\n");
-    } else {
-      const log = await gitService.getLog(rootPath, 20).catch(() => []);
-      commits = log.map((c) => `- ${c.message}`).join("\n");
     }
 
     const prompt = [
       "Write a pull request title and body for this branch.",
-      commits ? `\nRecent commits:\n${commits}` : "",
+      commits ? `\nBranch commits:\n${commits}` : "",
       diff ? `\nDiff:\n${truncateDiff(diff)}` : "",
     ]
       .filter(Boolean)
