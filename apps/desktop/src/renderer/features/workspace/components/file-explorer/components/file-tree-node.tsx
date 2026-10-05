@@ -109,7 +109,7 @@ export const FileTreeNode = memo(function FileTreeNode({
     [node, onAddToContext],
   );
 
-  const paddingLeft = 0 + depth * 12;
+  const paddingLeft = depth * 8;
 
   return (
     <div className="select-none space-y-0.5">
@@ -119,6 +119,7 @@ export const FileTreeNode = memo(function FileTreeNode({
         tabIndex={0}
         aria-expanded={isDirectory ? isExpanded : undefined}
         aria-selected={isSelected}
+        title={node.fullPath}
         onClick={handleClick}
         onKeyDown={handleKeyDown}
         className={`
@@ -152,15 +153,16 @@ export const FileTreeNode = memo(function FileTreeNode({
           className="w-4 h-4 shrink-0 mr-1.5"
         />
 
-        <span className="truncate flex-1">{node.name}</span>
+        <span className="min-w-0 truncate flex-1">{node.name}</span>
 
         {onAddToContext && (
           <Button
+            variant="icon" iconSize="xs"
             onClick={handleAddToContext}
-            className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded hover:bg-primary/20 dark:hover:bg-primary/10 transition-opacity mr-1"
+            className="opacity-0 group-hover:opacity-100 transition-opacity mr-1"
             title={isDirectory ? "Add folder to context" : "Add to context"}
           >
-            <Plus className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400" />
+            <Plus className="w-3.5 h-3.5" />
           </Button>
         )}
 

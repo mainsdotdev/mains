@@ -329,10 +329,11 @@ function ArchiveSearch({
         />
         {value && (
           <Button
+            variant="icon" iconSize="sm"
             onClick={() => onChange("")}
             tooltip="Clear search"
             aria-label="Clear search"
-            className="absolute right-2 top-1/2 z-10 -translate-y-1/2 cursor-pointer rounded-lg p-1 text-primary-600 hover:bg-primary/50 hover:text-primary-800 dark:text-primary-400 dark:hover:bg-primary/10 dark:hover:text-primary-200"
+            className="absolute right-2 top-1/2 z-10 -translate-y-1/2"
           >
             <Close className="size-3" />
           </Button>

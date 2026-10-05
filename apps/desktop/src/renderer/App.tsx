@@ -21,9 +21,12 @@ import {
   isSettingsRoute,
   isWorkspaceRoute,
   NAV_RAIL_WIDTH,
+  MCP_APP_PANEL_WIDTH_VAR,
 } from "./lib/layout";
 import { useBottomTerminal } from "./hooks/use-bottom-terminal";
 import { useBrowserPanel, BrowserPanelProvider } from "./hooks/use-browser-panel";
+import { McpAppPanelProvider, useMcpAppPanel } from "./hooks/use-mcp-app-panel";
+import { McpAppPanel } from "./features/workspace/components/mcp-app-panel";
 import { BrowserPanel } from "./features/workspace/components/browser-panel";
 import { useDocumentViewer, DocumentViewerProvider } from "./hooks/use-document-viewer";
 import { DocumentViewerPanel } from "./features/workspace/components/document-viewer-panel";
@@ -48,6 +51,9 @@ import { useAppTheme } from "./hooks/use-app-theme";
 import { getProviderVariant } from "./lib/provider-variants";
 import { CommandMenu } from "./features/command-menu/command-menu";
 import { useAppshots } from "./hooks/use-appshots";
+import { useRunMessageQueueController } from "./features/workspace/hooks/use-run-message-queue-controller";
+import { useRealtimeVoiceLifecycle } from "./features/workspace/hooks/use-realtime-voice";
+import { RealtimeVoiceDock } from "./features/workspace/components/realtime-voice-dock";
 import { useWindowRequests } from "./hooks/use-window-requests";
 import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
 import { useOnboardingWindow } from "./features/onboarding/hooks/use-onboarding-window";
@@ -106,18 +112,22 @@ function AppContent() {
   useAppearanceFonts();
   useAppTheme();
   useAppshots();
+  useRunMessageQueueController();
   useWindowRequests();
   useAppSettingsEvents();
   const location = useLocation();
   const sidebarPanelRoute = hasSidebarPanel(location.pathname);
   const settingsRoute = isSettingsRoute(location.pathname);
   const workspaceRoute = isWorkspaceRoute(location.pathname);
+  useRealtimeVoiceLifecycle();
   const hideRightPanel = shouldHideRightPanel(location.pathname);
   const variant = useWorkspaceVariant();
   const activeProviderId =
     variant === "default" ? undefined : getProviderVariant(variant).providerId;
   const bottomTerminal = useBottomTerminal();
   const browserPanel = useBrowserPanel();
+  const mcpAppPanel = useMcpAppPanel();
+  const appExpanded = !!mcpAppPanel?.isExpanded;
   const docViewer = useDocumentViewer();
   const modeConfig = useModeConfig();
   const showTerminalToggle = variant !== "default" && modeConfig.showTerminal;
@@ -147,6 +157,7 @@ function AppContent() {
     () => !onboardingCompleted && !isWeb && typeof document.startViewTransition !== "function",
   );
   const isMobile = useIsMobile();
+  const browserTabsInHeader = browserPanel.isExpanded && !modeConfig.showTabs && !isMobile;
 
   // Chat/work hide the right panel entirely; a persisted rightPanelOpen from a
   // developer session must not inset the content there (and is left untouched
@@ -155,10 +166,12 @@ function AppContent() {
     rightPaneReady && !hideRightPanel && modeConfig.showRightPanel && isRightPanelOpen;
   // Whatever currently owns the right edge — the content stops there, and the
   // session box aligns to the same edge just inside it.
-  const rightLaneWidth = docViewer.isOpen
+  const rightLaneWidth = mcpAppPanel?.isOpen
+    ? appExpanded ? EDGE_GUTTER : `var(${MCP_APP_PANEL_WIDTH_VAR})`
+    : docViewer.isOpen
     ? DOC_VIEWER_PANEL_WIDTH
     : browserPanel.isOpen
-      ? BROWSER_PANEL_WIDTH
+      ? browserTabsInHeader ? EDGE_GUTTER : BROWSER_PANEL_WIDTH
       : rightPanelVisible
         ? RIGHT_PANEL_WIDTH
         : EDGE_GUTTER;
@@ -197,6 +210,7 @@ function AppContent() {
     hasSubagents &&
     !!sessionRunId &&
     !hideRightPanel &&
+    !mcpAppPanel?.isOpen &&
     rightLaneWidth === EDGE_GUTTER;
   const subagentPanelDocked =
     subagentPanelShown && !isMobile && !subagentPanelCollapsed;
@@ -228,7 +242,7 @@ function AppContent() {
 
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
-  }, { enabled: isMobile || workspaceRoute, allowInEditable: true });
+  }, { enabled: !appExpanded && (isMobile || workspaceRoute), allowInEditable: true });
   useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
     enabled:
       showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
@@ -237,6 +251,7 @@ function AppContent() {
   useKeyboardShortcut("app.toggleBrowser", () => {
     if (!showBrowserToggle) return;
     if (!browserPanel.isOpen) {
+      mcpAppPanel?.close();
       dispatch(setRightPanelOpen(false));
       docViewer.close();
     }
@@ -288,10 +303,57 @@ function AppContent() {
     );
   }
 
+  // App previews use their own reload and expand/collapse controls. Keep the
+  // workspace controls outside animated panels when no app preview is open.
+  const showLayoutControls = !mcpAppPanel?.isOpen && !hideRightPanel && !(isMobile && !sidebarCollapsed);
+  const layoutControls = showLayoutControls ? (
+    <ToggleButton
+      showChatActions={isMobile}
+      hideChatControls={appExpanded}
+      sessionPanelRight={!isMobile
+        ? mcpAppPanel?.isOpen && !appExpanded
+          ? `calc(var(${MCP_APP_PANEL_WIDTH_VAR}) + 0.75rem)`
+          : browserPanel.isOpen && !browserPanel.isExpanded
+            ? `calc(${BROWSER_PANEL_WIDTH} + 0.75rem)`
+            : undefined
+        : undefined}
+      isOpen={rightPanelVisible}
+      onClick={() => {
+        const open = !isRightPanelOpen;
+        if (open) {
+          mcpAppPanel?.close();
+          browserPanel.close();
+          docViewer.close();
+          // The right panel takes the edge the session box sits against.
+          dispatch(setSessionPanelOpen(false));
+        }
+        dispatch(setRightPanelOpen(open));
+      }}
+      terminalOpen={showTerminalToggle ? bottomTerminal.isOpen : undefined}
+      onTerminalToggle={showTerminalToggle ? bottomTerminal.toggle : undefined}
+      browserOpen={showBrowserToggle ? browserPanel.isOpen : undefined}
+      browserExpanded={browserPanel.isExpanded}
+      onBrowserExpandToggle={showBrowserToggle ? browserPanel.toggleExpanded : undefined}
+      onBrowserToggle={showBrowserToggle ? () => {
+        if (!browserPanel.isOpen) {
+          mcpAppPanel?.close();
+          dispatch(setRightPanelOpen(false));
+          docViewer.close();
+        }
+        browserPanel.toggle();
+      } : undefined}
+    />
+  ) : undefined;
+
   return (
     <>
       <Toaster />
       <CommandMenu />
+      {isMobile && (
+        <div className="fixed bottom-5 left-5 z-(--z-overlay)">
+          <RealtimeVoiceDock />
+        </div>
+      )}
       <MainLayout className={animateWorkspaceEntry ? "onboarding-workspace-enter" : undefined}>
         {/* Mobile drawer scrims — tap to dismiss. Each sits just below its panel
             (sidebar z-30, right panel z-50) and above the full-width content. */}
@@ -311,13 +373,13 @@ function AppContent() {
             aria-hidden
           />
         )}
-        {(isMobile || workspaceRoute) && !(
+        {!appExpanded && (isMobile || workspaceRoute) && !(
           isMobile &&
-          (rightPanelVisible || browserPanel.isOpen || docViewer.isOpen)
+          (rightPanelVisible || browserPanel.isOpen || docViewer.isOpen || mcpAppPanel?.isOpen)
         ) && (
           <SidebarToggleButton
             isOpen={!sidebarCollapsed}
-            browserExpanded={browserPanel.isExpanded}
+            browserExpanded={browserPanel.isExpanded || appExpanded}
             onClick={() => dispatch(setSidebarCollapsed(!sidebarCollapsed))}
           />
         )}
@@ -328,44 +390,17 @@ function AppContent() {
           transparentSurface={workspaceRoute}
           contentInsetRight={contentInsetRight}
           hasRightPanel={
-            !hideRightPanel && !rightPanelVisible && !browserPanel.isOpen && !docViewer.isOpen
+            !hideRightPanel && !rightPanelVisible && !browserPanel.isOpen && !docViewer.isOpen && !mcpAppPanel?.isOpen
           }
-          browserOpen={browserPanel.isOpen || docViewer.isOpen}
-          headerHidden={browserPanel.isExpanded}
+          browserOpen={browserPanel.isOpen || docViewer.isOpen || !!mcpAppPanel?.isOpen}
+          headerHidden={(browserPanel.isExpanded && !browserTabsInHeader) || appExpanded}
+          browserTabsInHeader={browserTabsInHeader}
           sidebarCollapsed={sidebarCollapsed}
         >
           <ErrorBoundary level="route">
             <MainRoutes />
           </ErrorBoundary>
         </MainContent>
-        {/* The toggle cluster lives here (not inside RightPanel) so the
-            browser button survives modes that hide the panel entirely. On
-            mobile it hides behind the open sidebar drawer. */}
-        {!hideRightPanel && !(isMobile && !sidebarCollapsed) && (
-          <ToggleButton
-            isOpen={rightPanelVisible}
-            onClick={() => {
-              const open = !isRightPanelOpen;
-              if (open) {
-                browserPanel.close();
-                docViewer.close();
-                // The right panel takes the edge the session box sits against.
-                dispatch(setSessionPanelOpen(false));
-              }
-              dispatch(setRightPanelOpen(open));
-            }}
-            terminalOpen={showTerminalToggle ? bottomTerminal.isOpen : undefined}
-            onTerminalToggle={showTerminalToggle ? bottomTerminal.toggle : undefined}
-            browserOpen={showBrowserToggle ? browserPanel.isOpen : undefined}
-            onBrowserToggle={showBrowserToggle ? () => {
-              if (!browserPanel.isOpen) {
-                dispatch(setRightPanelOpen(false));
-                docViewer.close();
-              }
-              browserPanel.toggle();
-            } : undefined}
-          />
-        )}
         {!hideRightPanel && modeConfig.showRightPanel && (
           <RightPanel isOpen={rightPanelVisible} width={RIGHT_PANEL_WIDTH} />
         )}
@@ -380,7 +415,12 @@ function AppContent() {
         {!hideRightPanel && (
           <SubagentPanel shown={subagentPanelShown} laneOffset={rightLaneWidth} />
         )}
-        <BrowserPanel />
+        <BrowserPanel
+          tabsInMainHeader={browserTabsInHeader}
+          reserveLayoutControls={showLayoutControls}
+        />
+        <McpAppPanel reserveLayoutControls={showLayoutControls} />
+        {layoutControls}
         <DocumentViewerPanel />
       </MainLayout>
     </>
@@ -396,7 +436,9 @@ export default function App() {
             <MainHeaderProvider>
               <BrowserPanelProvider>
                 <DocumentViewerProvider>
-                  <AppContent />
+                  <McpAppPanelProvider>
+                    <AppContent />
+                  </McpAppPanelProvider>
                 </DocumentViewerProvider>
               </BrowserPanelProvider>
             </MainHeaderProvider>

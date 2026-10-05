@@ -1,19 +1,23 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ErrorBoundary, Toaster } from "@/components/ui";
 import { ReduxProvider } from "@/providers/redux-provider";
 import { KeyboardShortcutsProvider } from "@/providers/keyboard-shortcuts-provider";
 import { BrowserChatWindowProvider, useBrowserPanel } from "@/hooks/use-browser-panel";
 import { ActiveSpaceOverrideProvider } from "@/hooks/use-active-space";
+import { McpAppToolOpenerProvider } from "@/hooks/use-mcp-app-tool-opener";
+import type { McpAppToolOpen } from "@mains/contracts/mcp-apps";
 import { WorkspaceProviderPage } from "@/features/workspace/components/workspace-provider-page";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { persistor } from "@/lib/redux";
+import { mirrorRunQueue, type ConversationQueue } from "@/lib/redux/slices/runQueueSlice";
 import {
   setActiveTab,
   setDraftText,
   setSelectedCollectionId,
   setWorkspaceModel,
+  setConversationSettings,
   setContextItemsForKey,
 } from "@/lib/redux/slices/workspaceSlice";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
@@ -35,6 +39,9 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useAppDispatch();
+  const openTool = useCallback((result: McpAppToolOpen, automatic = false) => {
+    void window.api.browserChat.postAction({ type: "openMcpApp", ownerKey: context.ownerKey, result, automatic });
+  }, [context.ownerKey]);
 
   useLayoutEffect(() => {
     if (location.pathname !== context.route) navigate(context.route, { replace: true });
@@ -44,12 +51,15 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
     if (location.pathname !== context.route) return;
     dispatch(setActiveTab(context.activeTab));
     dispatch(setWorkspaceModel({ providerId: context.providerId, model: context.selectedModel }));
+    if (context.conversationSettings) dispatch(setConversationSettings({ key: context.ownerKey, settings: context.conversationSettings }));
     dispatch(setSelectedCollectionId(context.selectedCollectionId));
     dispatch(setContextItemsForKey({ key: context.ownerKey, items: context.contextItems as ContextItem[] }));
+    dispatch(mirrorRunQueue({ ownerKey: context.ownerKey, queue: context.runQueue as ConversationQueue | undefined }));
   }, [
     context.activeTab, context.contextItems, context.ownerKey, context.providerId,
     context.route, context.selectedCollectionId, context.selectedModel,
-    dispatch, location.pathname,
+    context.conversationSettings,
+    dispatch, location.pathname, context.runQueue,
   ]);
 
   // The child owns live typing. Parent context messages echo the previous
@@ -58,7 +68,7 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
   useLayoutEffect(() => {
     dispatch(setDraftText({ key: context.ownerKey, text: context.draft }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context.ownerKey, dispatch]);
+  }, [context.ownerKey, context.draftRevision, dispatch]);
 
   useLayoutEffect(() => {
     setTransientUploadsForOwner(
@@ -75,11 +85,11 @@ function SyncContext({ context }: { context: BrowserChatContext }) {
   return (
     <BrowserChatWindowProvider context={context}>
       <ChatHost />
-      <Routes>
+      <McpAppToolOpenerProvider openTool={openTool}><Routes>
         <Route path="/code" element={<WorkspaceProviderPage providerId={context.providerId} variant={variant} browserChatOnly />} />
         <Route path="/code/runs/:runId" element={<WorkspaceProviderPage providerId={context.providerId} variant={variant} browserChatOnly />} />
         <Route path="/code/:workspaceId" element={<WorkspaceProviderPage providerId={context.providerId} variant={variant} browserChatOnly />} />
-      </Routes>
+      </Routes></McpAppToolOpenerProvider>
     </BrowserChatWindowProvider>
   );
 }

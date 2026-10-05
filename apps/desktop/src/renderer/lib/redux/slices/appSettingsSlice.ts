@@ -23,6 +23,8 @@ import {
 import { isNewRunTab } from "@/features/workspace/lib/repo-utils";
 import { openNewRunTab, setActiveTab } from "./workspaceSlice";
 import { isWorkspaceDraftOwnerKey, runOwnerKey, workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
+import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
+import { normalizeMcpAppPins, MAX_PINNED_MCP_APPS } from "@/lib/mcp-app-extensions";
 
 /** The document currently shown in the document viewer panel. */
 export interface DocumentViewerDoc {
@@ -96,6 +98,8 @@ export interface AppSettingsState {
   workspaceListGrouping: WorkspaceGrouping;
   /** Sidebar group key → expanded. Absent means expanded (the default). */
   workspaceGroupExpanded: Record<string, boolean>;
+  /** Provider → logical app pin keys (or unresolved legacy ids) in pin order, shared across modes/workspaces. */
+  pinnedMcpAppKeysByProvider: Record<string, string[]>;
   /** Onboarding ran its one-time "disable agents whose CLI is missing" pass. */
   onboardingCliAutoSelectApplied: boolean;
 }
@@ -129,6 +133,7 @@ const initialState: AppSettingsState = {
   bottomTerminalOpen: false,
   workspaceListGrouping: "project",
   workspaceGroupExpanded: {},
+  pinnedMcpAppKeysByProvider: {},
   onboardingCliAutoSelectApplied: false,
 };
 
@@ -320,6 +325,32 @@ const appSettingsSlice = createSlice({
       state.workspaceGroupExpanded[action.payload.groupKey] =
         action.payload.expanded;
     },
+    reconcileMcpAppPins: (state, action: PayloadAction<{ providerId: string; entries: McpAppEntrypoint[] }>) => {
+      const { providerId, entries } = action.payload;
+      const keys = state.pinnedMcpAppKeysByProvider[providerId];
+      if (!keys) return;
+      const normalized = normalizeMcpAppPins(keys, entries);
+      if (normalized.length !== keys.length || normalized.some((key, i) => key !== keys[i])) {
+        state.pinnedMcpAppKeysByProvider[providerId] = normalized;
+      }
+    },
+    setMcpAppPinned: (state, action: PayloadAction<{
+      providerId: string; pinKey: string; pinned: boolean; availablePinKeys: string[];
+    }>) => {
+      const { providerId, pinKey, pinned, availablePinKeys } = action.payload;
+      const ids = state.pinnedMcpAppKeysByProvider[providerId] ?? [];
+      if (!pinned) {
+        state.pinnedMcpAppKeysByProvider[providerId] = ids.filter((id) => id !== pinKey);
+        return;
+      }
+      if (ids.includes(pinKey) || !availablePinKeys.includes(pinKey)) return;
+      // A missing/disabled app keeps its preference until the user pins another
+      // app. It must never reserve a slot or be removed by a temporary refresh.
+      const available = new Set(availablePinKeys);
+      const visibleIds = ids.filter((id) => available.has(id));
+      if (visibleIds.length >= MAX_PINNED_MCP_APPS) return;
+      state.pinnedMcpAppKeysByProvider[providerId] = [...visibleIds, pinKey];
+    },
     setOnboardingCliAutoSelectApplied: (
       state,
       action: PayloadAction<boolean>,
@@ -370,6 +401,8 @@ export const {
   setBottomTerminalOpen,
   setWorkspaceListGrouping,
   setWorkspaceGroupExpanded,
+  setMcpAppPinned,
+  reconcileMcpAppPins,
   setOnboardingCliAutoSelectApplied,
 } = appSettingsSlice.actions;
 export default appSettingsSlice.reducer;

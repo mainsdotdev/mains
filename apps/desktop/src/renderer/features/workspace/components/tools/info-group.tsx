@@ -36,6 +36,46 @@ import {
   promptMessageMentionsFile,
   type PromptMarkdownSkill,
 } from "../prompt-markdown";
+import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
+import { readReviewComments } from "@mains/contracts/review-comments";
+import { ReviewCommentsAttachment } from "../review-comments-attachment";
+import { PromptBrowserAnnotations } from "./prompt-browser-annotations";
+import { VoiceTaskCard } from "../voice-task-card";
+import type { VoiceTaskLink } from "@mains/contracts/realtime";
+
+interface PromptAttachment {
+  name: string;
+  type: "image" | "document";
+  mimeType: string;
+  dataUrl?: string;
+  captureName?: string;
+  sourcePath?: string;
+  /** The durable copy saved for this turn (absent on older prompts). */
+  path?: string;
+}
+
+function PromptImageAttachment({ attachment, onPreview }: {
+  attachment: PromptAttachment;
+  onPreview: (image: { name: string; dataUrl: string }) => void;
+}) {
+  const src = useLocalImageUrl(attachment.dataUrl || attachment.path ||
+    (attachment.captureName ? `mains-capture://cap/${encodeURIComponent(attachment.captureName)}` : attachment.sourcePath));
+  return src ? (
+    <Button
+      type="button"
+      onClick={() => onPreview({ name: attachment.name, dataUrl: src })}
+      className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent"
+      title={`Click to preview · ${attachment.name}`}
+      aria-label={`Preview ${attachment.name}`}
+    >
+      <img src={src} alt={attachment.name} draggable={false} className="size-full object-cover" />
+    </Button>
+  ) : (
+    <div className="flex size-20 shrink-0 items-center justify-center rounded-2xl border border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900" title={attachment.name}>
+      <Picture className="size-5 text-primary-500" />
+    </div>
+  );
+}
 
 const IMAGE_PATH_REGEX = /([~/]?[\w./-]+\.(?:png|jpe?g|webp|gif))\b/gi;
 
@@ -81,6 +121,10 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
     dataUrl: string;
   } | null>(null);
   if (!event) return null;
+  if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
+    const task = event.metadata.voiceTask as VoiceTaskLink | undefined;
+    return task && typeof task.id === "string" ? <VoiceTaskCard task={task} /> : null;
+  }
 
   if (event.type === "artifact" && event.metadata?.kind === "user-prompt") {
     const message = (event.content ?? "").trim();
@@ -113,16 +157,10 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
         displayName: parent ? `${parent}/${fileName}` : fileName,
       };
     });
-    const attachments = (event.metadata?.attachments ?? []) as Array<{
-      name: string;
-      type: "image" | "document";
-      mimeType: string;
-      dataUrl?: string;
-      captureName?: string;
-      sourcePath?: string;
-      /** On-disk copy of an uploaded document (absent on older prompts). */
-      path?: string;
-    }>;
+    const attachments = (event.metadata?.attachments ?? []) as PromptAttachment[];
+    const annotations = ((event.metadata?.browserAnnotations ?? []) as BrowserAnnotation[])
+      .filter((annotation) => Array.isArray(annotation.elements) && annotation.elements.length > 0);
+    const reviewComments = readReviewComments(event.metadata?.reviewComments);
     const skills = (event.metadata?.skills ?? []) as PromptMarkdownSkill[];
 
     if (isReview) {
@@ -174,42 +212,16 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
       <div className="w-full overflow-hidden">
         <div className="w-full py-2 flex justify-end">
           <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-2">
+            {!!event.metadata?.voiceDelegation && (
+              <Text as="span" size="xs" tone="muted" className="flex items-center gap-1.5">
+                <Codex className="size-3" /> Sent from voice conversation
+              </Text>
+            )}
             {imageAttachments.length > 0 && (
               <div className="flex flex-wrap justify-end gap-2">
-                {imageAttachments.map((att, index) => {
-                  const imgSrc =
-                    att.dataUrl ||
-                    (att.captureName
-                      ? `mains-capture://cap/${att.captureName}`
-                      : undefined);
-                  return imgSrc ? (
-                    <Button
-                      key={`${att.name}-${index}`}
-                      type="button"
-                      onClick={() =>
-                        setPreviewAtt({ name: att.name, dataUrl: imgSrc })
-                      }
-                      className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent"
-                      title={`Click to preview · ${att.name}`}
-                      aria-label={`Preview ${att.name}`}
-                    >
-                      <img
-                        src={imgSrc}
-                        alt={att.name}
-                        draggable={false}
-                        className="size-full object-cover"
-                      />
-                    </Button>
-                  ) : (
-                    <div
-                      key={`${att.name}-${index}`}
-                      className="flex size-20 shrink-0 items-center justify-center rounded-2xl border border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900"
-                      title={att.name}
-                    >
-                      <Picture className="size-5 text-primary-500" />
-                    </div>
-                  );
-                })}
+                {imageAttachments.map((attachment, index) => (
+                  <PromptImageAttachment key={`${attachment.name}-${index}`} attachment={attachment} onPreview={setPreviewAtt} />
+                ))}
               </div>
             )}
             {documentAttachments.map((att, index) => (
@@ -219,6 +231,8 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
                 filePath={att.path}
               />
             ))}
+            {annotations.length > 0 && <PromptBrowserAnnotations annotations={annotations} />}
+            {reviewComments.length > 0 && <ReviewCommentsAttachment comments={reviewComments} />}
             {message && (
               <div className={`min-w-0 max-w-full px-3.5 py-2 rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}>
                 <div className="prose prose-sm dark:prose-invert max-w-none text-left">

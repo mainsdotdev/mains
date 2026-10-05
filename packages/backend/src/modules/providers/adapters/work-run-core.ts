@@ -120,12 +120,13 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
       runState.set(runId, { session: acquired.session, controller });
       await persistSessionId(runId, acquired.sessionId);
 
-      if (userPromptReq) {
+      if (userPromptReq && !("clientUserMessageId" in userPromptReq && userPromptReq.clientUserMessageId && driver.steerRun)) {
         // The three UserPromptRequest variants all carry these fields, but TS
         // can't see it through the discriminated union — access generically.
         const r = userPromptReq as WorkRunRequest;
         await emitUserPromptArtifact(wrapped, getUserPromptContent(userPromptReq), {
           attachments: r.attachments,
+          context: r.context,
           contextIssues: r.contextIssues,
           contextSignals: r.contextSignals,
           contextFiles: r.contextFiles,
@@ -195,6 +196,10 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     abortRun: async (runId: string) => {
       const slot = runState.get(runId);
       if (!slot) {
+        if (driver.abortNativeRun) {
+          await driver.abortNativeRun(runId);
+          return;
+        }
         // Resolving silently here is what let a failed stop look like a
         // successful one; the caller can only fall back to its force-finalize
         // timer, which marks the run canceled while the driver keeps going.
@@ -209,8 +214,25 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
 
   if (driver.resumeSession) {
     const resume = driver.resumeSession.bind(driver);
-    adapter.continueRun = (request, onEvent) =>
-      runLifecycle(request.runId, () => resume(request), request, onEvent);
+    adapter.continueRun = (request, onEvent) => {
+      let resolvedModel: string | undefined;
+      let projection: Promise<void> | undefined;
+      const input = request.clientUserMessageId && driver.steerRun ? {
+        ...request,
+        onInputAccepted: (turnId: string) => projection ??= (async () => {
+          await emitUserPromptArtifact(onEvent, request.message, {
+            ...request, contextSkills: request.skills,
+            model: resolvedModel, providerTurnId: turnId,
+          });
+          await request.onInputAccepted?.(turnId);
+        })(),
+      } : request;
+      return runLifecycle(request.runId, async () => {
+        const acquired = await resume(input);
+        resolvedModel = acquired.model;
+        return acquired;
+      }, request, onEvent);
+    };
   }
 
   if (driver.forkSession) {
@@ -224,6 +246,11 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.reviewRun = (request: WorkRunReviewRequest, onEvent) =>
       runLifecycle(request.runId, () => review(request), null, onEvent);
   }
+
+  if (driver.steerRun) adapter.steerRun = driver.steerRun.bind(driver);
+  if (driver.getInputStatus) adapter.getInputStatus = driver.getInputStatus.bind(driver);
+  if (driver.startRealtime) adapter.startRealtime = driver.startRealtime.bind(driver);
+  if (driver.stopRealtime) adapter.stopRealtime = driver.stopRealtime.bind(driver);
 
   // 1:1 delegation for optional pass-through methods
   if (driver.updateConfig)
@@ -247,6 +274,8 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.generateText = driver.generateText.bind(driver);
   if (driver.getRateLimits)
     adapter.getRateLimits = driver.getRateLimits.bind(driver);
+  if (driver.listRealtimeVoices)
+    adapter.listRealtimeVoices = driver.listRealtimeVoices.bind(driver);
   if (driver.consumeRateLimitResetCredit)
     adapter.consumeRateLimitResetCredit =
       driver.consumeRateLimitResetCredit.bind(driver);
@@ -272,6 +301,14 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.listConnectors = driver.listConnectors.bind(driver);
   if (driver.startConnectorOAuth)
     adapter.startConnectorOAuth = driver.startConnectorOAuth.bind(driver);
+  if (driver.listMcpAppEntrypoints)
+    adapter.listMcpAppEntrypoints = driver.listMcpAppEntrypoints.bind(driver);
+  if (driver.openMcpAppSession)
+    adapter.openMcpAppSession = driver.openMcpAppSession.bind(driver);
+  if (driver.callMcpAppSessionTool)
+    adapter.callMcpAppSessionTool = driver.callMcpAppSessionTool.bind(driver);
+  if (driver.closeMcpAppSession)
+    adapter.closeMcpAppSession = driver.closeMcpAppSession.bind(driver);
   if (driver.readMcpAppResource)
     adapter.readMcpAppResource = driver.readMcpAppResource.bind(driver);
   if (driver.callMcpAppTool)

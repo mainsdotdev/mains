@@ -186,6 +186,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     () =>
       listenForCommandMenuQuickActions((action) => {
         switch (action) {
+          case "open-add-project":
+            handleOpenAddProjectModal();
+            break;
           case "add-project-from-local":
             void handleAddProject();
             break;
@@ -202,6 +205,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
       }),
     [
       handleAddProject,
+      handleOpenAddProjectModal,
       handleOpenCloneModal,
       handleOpenCreateCollectionModal,
       handleOpenCreateProjectModal,

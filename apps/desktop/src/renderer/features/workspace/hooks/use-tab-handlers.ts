@@ -7,6 +7,8 @@ import {
   closeIssueTab,
   closeSignalTab,
   closeNoteTab,
+  openReviewTab,
+  closeReviewTab,
   openNewRunTab,
   closeNewRunTab,
 } from "@/lib/redux/slices/workspaceSlice";
@@ -15,6 +17,7 @@ import {
   isNewRunTab,
   isNoteTab,
   isRunTab,
+  isReviewTab,
   isSignalTab,
   getIssueEntityId,
   getSignalEntityId,
@@ -44,7 +47,7 @@ export function useTabHandlers({
 }: UseTabHandlersParams) {
   const dispatch = useAppDispatch();
   const [updateRun] = useUpdateRunMutation();
-  const { openIssueTabs, openSignalTabs, openNoteTabs, selectedFile, previousNonEditorTab } = useAppSelector(
+  const { openIssueTabs, openSignalTabs, openNoteTabs, reviewTabOpen, selectedFile, previousNonEditorTab } = useAppSelector(
     (state) => state.workspace,
   );
 
@@ -66,10 +69,11 @@ export function useTabHandlers({
         const id = `note:${t.id}`;
         if (id !== closingTabId) return id;
       }
+      if (reviewTabOpen && closingTabId !== "review") return "review";
       if (selectedFile && closingTabId !== "editor") return "editor";
       return "editor";
     },
-    [runs, openIssueTabs, openSignalTabs, openNoteTabs, selectedFile],
+    [runs, openIssueTabs, openSignalTabs, openNoteTabs, reviewTabOpen, selectedFile],
   );
 
   const handleCloseTab = useCallback(
@@ -99,7 +103,7 @@ export function useTabHandlers({
         const nextTab = getNextTab("new-run");
         dispatch(setActiveTab(nextTab));
         // If switching to a run tab, also load its content
-        if (nextTab !== "editor" && !nextTab.startsWith("issue:") && !nextTab.startsWith("signal:") && !nextTab.startsWith("note:")) {
+        if (isRunTab(nextTab)) {
           selectTab(nextTab);
         }
       }
@@ -107,6 +111,17 @@ export function useTabHandlers({
     },
     [dispatch, activeTab, getNextTab, selectTab],
   );
+
+  const handleSelectReviewTab = useCallback(() => dispatch(openReviewTab()), [dispatch]);
+  const handleCloseReviewTab = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (activeTab === "review") {
+      const next = getNextTab("review");
+      dispatch(setActiveTab(next));
+      if (isRunTab(next)) selectTab(next);
+    }
+    dispatch(closeReviewTab());
+  }, [activeTab, dispatch, getNextTab, selectTab]);
 
   const handleSelectEditorTab = useCallback(() => {
     dispatch(setActiveTab("editor"));
@@ -180,6 +195,7 @@ export function useTabHandlers({
   const isTabStillValid = useCallback(
     (tabId: string | null): tabId is string => {
       if (!tabId || tabId === "editor") return false;
+      if (isReviewTab(tabId)) return !!reviewTabOpen;
       if (isNewRunTab(tabId)) return true;
       if (isIssueTab(tabId)) {
         const id = getIssueEntityId(tabId);
@@ -195,7 +211,7 @@ export function useTabHandlers({
       }
       return runs.some((r) => r.id === tabId);
     },
-    [openIssueTabs, openSignalTabs, openNoteTabs, runs],
+    [openIssueTabs, openSignalTabs, openNoteTabs, reviewTabOpen, runs],
   );
 
   const handleCloseEditorTab = useCallback(
@@ -238,6 +254,8 @@ export function useTabHandlers({
 
   return {
     handleCloseTab,
+    handleSelectReviewTab,
+    handleCloseReviewTab,
     handleRenameRun,
     handleNewRun,
     handleSelectNewRunTab,

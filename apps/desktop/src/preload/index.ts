@@ -1,4 +1,7 @@
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import { contextBridge, ipcRenderer } from "electron";
+import type { RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
+import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
 import type { ModeId } from "../shared/modes";
@@ -13,6 +16,7 @@ import type {
 import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
+import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
 import type {
   BrowserChatAction,
   BrowserChatContext,
@@ -454,6 +458,7 @@ const api = {
       ipcRenderer.invoke(CHANNELS.providers.getCommands, id, workspacePath),
     getSkills: (id: string, workspacePath?: string) => ipcRenderer.invoke(CHANNELS.providers.getSkills, id, workspacePath),
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
+    getRealtimeVoices: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRealtimeVoices, id),
     consumeRateLimitResetCredit: (id: string, params: unknown) =>
       ipcRenderer.invoke(CHANNELS.providers.consumeRateLimitResetCredit, id, params),
     // Fired when the provider streams a fresh rate-limit snapshot during a run
@@ -703,6 +708,7 @@ const api = {
       providerId: string;
       goal: string;
       model?: string;
+      conversationSettings?: ConversationSettings;
       systemPrompt?: string;
       initialContext?: Array<{
         kind: "file" | "diff" | "selection" | "note";
@@ -724,10 +730,12 @@ const api = {
       ipcRenderer.invoke(CHANNELS.runToolCalls.getByRun, runId, sinceUpdatedAt),
     // Session resume methods
     continue: (payload: {
+      clientUserMessageId?: string;
       runId: string;
       accountId: string;
       message: string;
       model?: string;
+      conversationSettings?: ConversationSettings;
       additionalDirectories?: string[];
       additionalContext?: Array<{
         kind: "file" | "diff" | "selection" | "note";
@@ -741,6 +749,16 @@ const api = {
       contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
       contextSkills?: Array<{ name: string; path?: string; mentionPath?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
+    steer: (payload: RunSteerPayload) => ipcRenderer.invoke(CHANNELS.runs.steer, payload),
+    inputStatus: (payload: RunInputStatusPayload) => ipcRenderer.invoke(CHANNELS.runs.inputStatus, payload),
+    createRealtimeConversation: (payload: CreateRealtimeConversationPayload): Promise<ServiceResponse<CreateRealtimeConversationResponse>> => ipcRenderer.invoke(CHANNELS.runs.createRealtimeConversation, payload),
+    startRealtime: (payload: RunRealtimeStartPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.startRealtime, payload),
+    stopRealtime: (payload: RunRealtimeStopPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.stopRealtime, payload),
+    onRealtimeEvent: (callback: (event: RunRealtimeEvent) => void) => {
+      const listener = (_: unknown, event: RunRealtimeEvent) => callback(event);
+      ipcRenderer.on(CHANNELS.runs.realtimeEvent, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.runs.realtimeEvent, listener);
+    },
     canResume: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.canResume, runId),
     fork: (payload: {
       sourceRunId: string;
@@ -767,6 +785,7 @@ const api = {
         instructions?: string;
       };
       model?: string;
+      conversationSettings?: ConversationSettings;
       systemPrompt?: string;
       configSnapshot?: Record<string, unknown>;
       toolPolicySnapshot?: Record<string, unknown>;
@@ -1025,6 +1044,12 @@ const api = {
     sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.visualizations.sign, absPath),
   },
   mcpApps: {
+    listEntrypoints: (payload: { providerId: string }) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.listEntrypoints, payload),
+    openExtension: (payload: { providerId: string; entrypointId: string }) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.openExtension, payload),
+    closeExtension: (payload: { sessionId: string }) =>
+      ipcRenderer.invoke(CHANNELS.mcpApps.closeExtension, payload),
     readResource: (payload: unknown) =>
       ipcRenderer.invoke(CHANNELS.mcpApps.readResource, payload),
     callTool: (payload: unknown) =>
@@ -1143,13 +1168,15 @@ const api = {
       ipcRenderer.invoke(CHANNELS.browser.setBounds, bounds),
     setVisible: (visible: boolean) =>
       ipcRenderer.invoke(CHANNELS.browser.setVisible, visible),
+    setSuppressed: (lease: string, suppressed: boolean) =>
+      ipcRenderer.invoke(CHANNELS.browser.setSuppressed, lease, suppressed),
     navigate: (url: string) => ipcRenderer.invoke(CHANNELS.browser.navigate, url),
     back: () => ipcRenderer.invoke(CHANNELS.browser.back),
     forward: () => ipcRenderer.invoke(CHANNELS.browser.forward),
     reload: () => ipcRenderer.invoke(CHANNELS.browser.reload),
     stop: () => ipcRenderer.invoke(CHANNELS.browser.stop),
-    setSelectMode: (enabled: boolean) =>
-      ipcRenderer.invoke(CHANNELS.browser.setSelectMode, enabled),
+    setSelectMode: (enabled: boolean, theme?: BrowserAnnotationTheme) =>
+      ipcRenderer.invoke(CHANNELS.browser.setSelectMode, enabled, theme),
     getNavState: () => ipcRenderer.invoke(CHANNELS.browser.getNavState),
     getState: () => ipcRenderer.invoke(CHANNELS.browser.getState),
     getDownloads: () => ipcRenderer.invoke(CHANNELS.browser.getDownloads),

@@ -5,6 +5,7 @@ import workspaceReducer, {
   activateWorkspaceView,
   forgetWorkspaceUiState,
   setDraftText,
+  setConversationSettings,
   setSelectedFile,
 } from "./slices/workspaceSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
@@ -96,6 +97,7 @@ describe("workspace persistence — removed UI state", () => {
     const { store, persistor } = await persistedWorkspace(storage);
     store.dispatch(activateWorkspaceView({ key: view, workspaceId: "ws-a", providerId: "codex" }));
     store.dispatch(setDraftText({ key: draft, text: "unsent" }));
+    store.dispatch(setConversationSettings({ key: draft, settings: { model: "draft-model", config: { sandboxMode: "read-only" } } }));
     store.dispatch(forgetWorkspaceUiState({ backendId: "local", workspaceId: "ws-a" }));
     await persistor.flush();
     persistor.pause();
@@ -103,7 +105,25 @@ describe("workspace persistence — removed UI state", () => {
     const restored = await persistedWorkspace(storage);
     expect(restored.store.getState().workspaceViews[view]).toBeUndefined();
     expect(restored.store.getState().draftTextByKey[draft]).toBeUndefined();
+    expect(restored.store.getState().conversationSettingsByKey[draft]).toBeUndefined();
     expect(restored.store.getState().workspaceViewKey).toBeNull();
+    restored.persistor.pause();
+  });
+});
+
+describe("workspace persistence — conversation settings", () => {
+  it("restores draft selections and reloads existing chat preferences from the backend", async () => {
+    const storage = memoryStorage();
+    const draft = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);
+    const run = JSON.stringify(["local", "run", "run-a"]);
+    const settings = { model: "model-a", config: { sandboxMode: "read-only", modelReasoningEffort: "high" } };
+    const { store, persistor } = await persistedWorkspace(storage);
+    store.dispatch(setConversationSettings({ key: draft, settings }));
+    store.dispatch(setConversationSettings({ key: run, settings }));
+    await persistor.flush();
+    persistor.pause();
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().conversationSettingsByKey).toEqual({ [draft]: settings });
     restored.persistor.pause();
   });
 });

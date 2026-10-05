@@ -98,12 +98,54 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
   );
 }
 
+function WebSearchPreview({ input }: { input: Record<string, unknown> }) {
+  if (typeof input.query !== "string" || !input.query.trim()) return renderFallback(input);
+
+  const filters = [
+    { key: "allowed_domains", label: "Only these sites" },
+    { key: "blocked_domains", label: "Excluded sites" },
+  ].map(({ key, label }) => ({
+    label,
+    domains: Array.isArray(input[key])
+      ? input[key].filter((domain): domain is string => typeof domain === "string" && !!domain.trim())
+      : [],
+  })).filter(({ domains }) => domains.length > 0);
+
+  return (
+    <div className="overflow-hidden rounded-xl glass-outline bg-primary-50 dark:bg-primary/5">
+      <div className="space-y-1.5 px-3 py-2.5">
+        <Text as="div" size="xs" tone="subtle">Search query</Text>
+        <Text as="p" size="sm" tone="secondary" className="whitespace-pre-wrap wrap-break-word leading-relaxed">
+          {input.query}
+        </Text>
+      </div>
+      {filters.length > 0 && (
+        <dl className="space-y-2.5 border-t border-primary-200/50 px-3 py-2.5 dark:border-primary-700/30">
+          {filters.map(({ label, domains }) => (
+            <div key={label} className="space-y-1.5">
+              <Text as="dt" size="xs" tone="subtle">{label}</Text>
+              <dd className="flex flex-wrap gap-1.5">
+                {domains.map((domain, index) => (
+                  <Text as="span" key={`${domain}-${index}`} size="xs" tone="muted"
+                    className="max-w-full rounded-md bg-primary-100 px-2 py-0.5 wrap-break-word dark:bg-primary/5">
+                    {domain}
+                  </Text>
+                ))}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
+
 function ShellCommandPreview({ input }: { input: Record<string, unknown> }) {
-  const rawCommand = typeof input.command === "string"
-    ? input.command
-    : String(input.command ?? "");
+  const command = input.command ?? input.fullCommandText;
+  const rawCommand = typeof command === "string" ? command : String(command ?? "");
   const preview = parseShellCommandPreview(rawCommand);
-  const cwd = typeof input.cwd === "string" ? input.cwd : "";
+  const cwdValue = input.cwd ?? input.resolvedWorkingDirectory;
+  const cwd = typeof cwdValue === "string" ? cwdValue : "";
   const hasMeta = !!preview.shell || !!cwd || !!input.timeout;
 
   return (
@@ -258,7 +300,7 @@ const RENDERERS: Record<string, Renderer> = {
     <>
       <div>
         <Label>file</Label>{" "}
-        <Mono>{basenameDisplay(str(input.file_path))}</Mono>
+        <Mono>{filePath(input)}</Mono>
       </div>
       {!!(input.offset || input.limit) && (
         <Text as="div" size="xxs" tone="faint">
@@ -376,15 +418,13 @@ const RENDERERS: Record<string, Renderer> = {
           {str(input.prompt)}
         </Text>
       )}
+      {!!input.redirected_from && (
+        <div><Label>redirected from</Label>{" "}<Mono>{str(input.redirected_from)}</Mono></div>
+      )}
     </>
   ),
 
-  WebSearch: (input) => (
-    <div>
-      <Label>query</Label>{" "}
-      <Mono>{str(input.query)}</Mono>
-    </div>
-  ),
+  WebSearch: (input) => <WebSearchPreview input={input} />,
 
   Task: (input) => (
     <>
@@ -402,6 +442,17 @@ const RENDERERS: Record<string, Renderer> = {
         </Text>
       )}
     </>
+  ),
+
+  Skill: (input) => (
+    <div className="space-y-1.5 px-3 py-2">
+      <Mono>{str(input.skill ?? input.name ?? input.skill_name)}</Mono>
+      {typeof input.args === "string" && input.args && (
+        <Text as="div" size="inherit" tone="subtle" className="whitespace-pre-wrap wrap-break-word">
+          {str(input.args, 1000)}
+        </Text>
+      )}
+    </div>
   ),
 
    Plan: (input) => (
@@ -467,7 +518,7 @@ const RENDERERS: Record<string, Renderer> = {
 
   "[permission:read]": (input) => (
     <div className="px-3 py-2">
-      <Label>file</Label> <Mono>{basenameDisplay(filePath(input))}</Mono>
+      <Label>file</Label> <Mono>{filePath(input)}</Mono>
     </div>
   ),
 };
@@ -486,7 +537,10 @@ const RENDERER_ALIASES: Record<string, string> = {
   delete: "Delete",
   delete_file: "Delete",
   apply_patch: "Apply_patch",
+  websearch: "WebSearch",
+  web_search: "WebSearch",
   "[permission:write]": "[permission:write]",
+  "[permission:url]": "WebFetch",
 };
 
 const SELF_CONTAINED_RENDERERS = new Set([
@@ -496,6 +550,7 @@ const SELF_CONTAINED_RENDERERS = new Set([
   "Create",
   "Delete",
   "Apply_patch",
+  "WebSearch",
   "[permission:shell]",
   "[permission:write]",
 ]);

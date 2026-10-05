@@ -1,3 +1,4 @@
+import { forgetRunQueue, type RunQueueState } from "./slices/runQueueSlice";
 import type { AppDispatch } from "./index";
 import { forgetRunUiState, forgetWorkspaceUiState } from "./slices/workspaceSlice";
 import { forgetRunRightPane, forgetWorkspaceRightPanes } from "./slices/appSettingsSlice";
@@ -16,7 +17,17 @@ export interface DeletedUiContext {
 const pendingBrowserForgets = new Set<string>();
 
 /** Called only after the backend confirms permanent deletion. */
-export function forgetDeletedUiContext(dispatch: AppDispatch, target: DeletedUiContext): void {
+export function forgetDeletedUiContext(
+  dispatch: AppDispatch,
+  target: DeletedUiContext,
+  queues: RunQueueState["byOwner"] = {},
+): void {
+  for (const [ownerKey, queue] of Object.entries(queues)) {
+    if (queue.backendId !== target.backendId || (target.kind === "run" ? queue.runId !== target.id : queue.workspaceId !== target.id)) continue;
+    queue.messages.forEach((message) => clearTransientUploads(message.uploadOwnerKey));
+    if (queue.draftBackup) clearTransientUploads(queue.draftBackup.uploadOwnerKey);
+    dispatch(forgetRunQueue(ownerKey));
+  }
   if (target.kind === "run") {
     dispatch(forgetRunUiState({ backendId: target.backendId, runId: target.id }));
     dispatch(forgetRunRightPane({ backendId: target.backendId, runId: target.id }));

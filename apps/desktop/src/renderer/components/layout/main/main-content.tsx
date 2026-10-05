@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useMainHeader } from "@/hooks/use-main-header";
 import { useCapabilities } from "@/lib/platform";
 import { LAYOUT_PANEL_ANIM_MS } from "@/lib/layout";
@@ -22,6 +22,8 @@ interface MainContentProps {
   browserOpen?: boolean;
   /** Preserve header space while an expanded panel owns the workspace. */
   headerHidden?: boolean;
+  /** Expanded Work/Chat browsers share this row without owning its title. */
+  browserTabsInHeader?: boolean;
 }
 
 export function getCollapsedHeaderPaddingLeft(
@@ -46,8 +48,9 @@ export function MainContent({
   sidebarCollapsed,
   browserOpen,
   headerHidden,
+  browserTabsInHeader,
 }: MainContentProps) {
-  const { header, firstTabActive } = useMainHeader();
+  const { header, firstTabActive, pending, setBrowserTabsHost } = useMainHeader();
   const { windowChrome } = useCapabilities();
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
@@ -71,20 +74,23 @@ export function MainContent({
     // Tabs extend one corner radius over the sidebar; the content surface
     // keeps its own overflow clipped below the header.
     <main
-      className={`flex-1 min-w-0 ${header ? "overflow-visible" : "overflow-hidden"} mx-1.25 my-1.25 flex flex-col`}
+      className={`flex-1 min-w-0 ${header || browserTabsInHeader ? "overflow-visible" : "overflow-hidden"} mx-1.25 my-1.25 flex flex-col`}
       style={{
         marginLeft,
         marginRight,
+        // Expanded workspace surfaces inherit the same gap as the tab strip.
+        "--shell-header-inset-left": headerPaddingLeft ?? "0px",
         // Content margins track the panels as they slide — same duration so the
         // two edges never drift apart mid-animation.
         transition: `margin ${LAYOUT_PANEL_ANIM_MS}ms ease-out`,
-      }}
+      } as CSSProperties}
     >
-      {header && (
+      {(header || browserTabsInHeader) && (
         <div
-          className={`shrink-0 ${hasRightPanel ? "max-w-[calc(100%-150px)]" : browserOpen ? "max-w-[calc(100%-150px)]" : ""}`}
+          className={`shrink-0 ${browserTabsInHeader ? "flex h-(--shell-header-height) min-w-0 items-center" : hasRightPanel || browserOpen ? "max-w-[calc(100%-150px)]" : ""}`}
           aria-hidden={headerHidden || undefined}
-          inert={headerHidden}
+          aria-busy={pending || undefined}
+          inert={headerHidden || pending}
           style={{
             // The browser's edge and the workspace margins move on separate
             // clocks. Hide the covered tabs directly so no gap can expose them.
@@ -98,13 +104,23 @@ export function MainContent({
             transition: `padding ${LAYOUT_PANEL_ANIM_MS}ms ease-out, max-width ${LAYOUT_PANEL_ANIM_MS}ms ease-out`,
           }}
         >
-          {header}
+          {browserTabsInHeader ? (
+            <>
+              {header && (
+                <div className="flex min-w-0 max-w-[40%] items-end">
+                  {header}
+                </div>
+              )}
+              <div ref={setBrowserTabsHost} className="min-w-0 flex-1" data-browser-tabs-host="" />
+            </>
+          ) : header}
         </div>
       )}
-      {!header && (
+      {!header && !browserTabsInHeader && (
         <div className="hidden h-(--shell-header-height) shrink-0 md:block" aria-hidden="true" />
       )}
       <div
+        data-main-content-surface=""
         className={`flex-1 min-h-0 overflow-hidden ${contentRounding} ${transparentSurface ? "bg-transparent" : "bg-primary dark:bg-primary-950"}`}
       >
         <div

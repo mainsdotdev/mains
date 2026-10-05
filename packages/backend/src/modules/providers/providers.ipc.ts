@@ -108,6 +108,11 @@ export function registerProvidersIpc(): void {
   );
 
   ipcMain.handle(
+    CHANNELS.providers.getRealtimeVoices,
+    handle((id: string) => providersService.getRealtimeVoices(id)),
+  );
+
+  ipcMain.handle(
     CHANNELS.providers.consumeRateLimitResetCredit,
     handle((id: string, params: ConsumeRateLimitResetCreditParams) =>
       providersService.consumeRateLimitResetCredit(id, params),
@@ -211,6 +216,7 @@ export function unregisterProvidersIpc(): void {
     CHANNELS.providers.getSkills,
     CHANNELS.providers.getRateLimits,
     CHANNELS.providers.consumeRateLimitResetCredit,
+    CHANNELS.providers.getRealtimeVoices,
     CHANNELS.providers.setGoal,
     CHANNELS.providers.getGoal,
     CHANNELS.providers.clearGoal,

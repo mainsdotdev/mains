@@ -23,9 +23,12 @@ import {
   listPendingApprovals,
 } from "./user-input-broker";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { CreateRealtimeConversationPayload, RunRealtimeStartPayload, RunRealtimeStopPayload } from "@mains/contracts/realtime";
 import type {
   ReadArtifactImagePayload,
   ReadRunTextFilePayload,
+  RunSteerPayload,
+  RunInputStatusPayload,
 } from "@mains/contracts/runs";
 
 // ─────────────────────────────────────────────────────────────
@@ -34,6 +37,9 @@ import type {
 // IPC Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerRunsIpc(): void {
+  ipcMain.handle(CHANNELS.runs.createRealtimeConversation, handle((payload: CreateRealtimeConversationPayload) => runsService.createRealtimeConversation(payload)));
+  ipcMain.handle(CHANNELS.runs.startRealtime, handle((payload: RunRealtimeStartPayload) => runsService.startRealtime(payload)));
+  ipcMain.handle(CHANNELS.runs.stopRealtime, handle((payload: RunRealtimeStopPayload) => runsService.stopRealtime(payload)));
   // Runs
   ipcMain.handle(
     CHANNELS.runs.getAll,
@@ -176,6 +182,9 @@ export function registerRunsIpc(): void {
     handle((payload: ForkRunPayload) => runsService.forkRun(payload)),
   );
 
+  ipcMain.handle(CHANNELS.runs.steer, handle((payload: RunSteerPayload) => runsService.steerRun(payload)));
+  ipcMain.handle(CHANNELS.runs.inputStatus, handle((payload: RunInputStatusPayload) => runsService.getInputStatus(payload)));
+
   ipcMain.handle(
     CHANNELS.runs.executeReview,
     handle((payload: ReviewRunPayload) => runsService.executeReview(payload)),
@@ -271,6 +280,8 @@ export function registerRunsIpc(): void {
 }
 
 export function unregisterRunsIpc(): void {
+  ipcMain.removeHandler(CHANNELS.runs.steer);
+  ipcMain.removeHandler(CHANNELS.runs.inputStatus);
   [
     CHANNELS.runs.getAll,
     CHANNELS.runs.listArchived,
@@ -298,6 +309,9 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.execute,
     CHANNELS.runs.abort,
     CHANNELS.runs.continue,
+    CHANNELS.runs.startRealtime,
+    CHANNELS.runs.createRealtimeConversation,
+    CHANNELS.runs.stopRealtime,
     CHANNELS.runs.fork,
     CHANNELS.runs.executeReview,
     CHANNELS.runs.canResume,

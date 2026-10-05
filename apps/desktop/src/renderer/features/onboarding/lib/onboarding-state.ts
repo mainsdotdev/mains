@@ -4,6 +4,7 @@ import type {
 } from "@/lib/redux/api/appSettingsApi";
 import type { DetectedClis, Provider } from "@/lib/redux/api/providersApi";
 import type { Space } from "@/lib/redux/api/spaceApi";
+import type { ProviderCliSource } from "@mains/contracts/provider-cli";
 import {
   APP_THEME_PRESETS,
   type ThemeAppearance,
@@ -20,6 +21,7 @@ export interface OnboardingProvider {
   space: Space | undefined;
   active: boolean;
   installed: boolean | undefined;
+  source?: ProviderCliSource;
   available: boolean;
 }
 
@@ -30,6 +32,10 @@ export function onboardingProviders(
   detected: DetectedClis | undefined,
   activeSpaceId: string | null,
 ): OnboardingProvider[] {
+  const sources: Partial<Record<ProviderVariant, ProviderCliSource | undefined>> = {
+    claude: detected?.claudeSource,
+    copilot: detected?.copilotSource,
+  };
   return ONBOARDING_AGENT_SLUGS.map((variant) => {
     const { providerId } = getProviderVariant(variant);
     const candidates = spaces
@@ -53,6 +59,7 @@ export function onboardingProviders(
       space,
       active,
       installed,
+      source: sources[variant],
       available: active && installed === true,
     };
   });

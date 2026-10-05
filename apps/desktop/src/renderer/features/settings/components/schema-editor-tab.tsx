@@ -72,8 +72,9 @@ function PropertyRow({
         <Asterisk className="w-4 h-4" />
       </Button>
       <Button
+        variant="icon"
         onClick={onRemove}
-        className="shrink-0 p-2 text-primary-500 cursor-pointer hover:text-danger rounded-lg transition-colors"
+        className="enabled:hover:text-danger dark:enabled:hover:text-danger"
         tooltip="Remove"
       >
         <Trash className="w-4 h-4" />

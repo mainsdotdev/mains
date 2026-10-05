@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { formatDate, formatAbsoluteDate } from "./format-date";
+import {
+  formatDate,
+  formatAbsoluteDate,
+  formatCompactRelativeDate,
+} from "./format-date";
 
 describe("formatDate", () => {
   beforeEach(() => {
@@ -41,13 +45,54 @@ describe("formatDate", () => {
 
   it("handles unix timestamp in seconds", () => {
     // 2026-03-10T11:55:00Z in unix seconds
-    const timestamp = Math.floor(new Date("2026-03-10T11:55:00Z").getTime() / 1000);
+    const timestamp = Math.floor(
+      new Date("2026-03-10T11:55:00Z").getTime() / 1000,
+    );
     expect(formatDate(timestamp)).toBe("5m ago");
   });
 
   it("handles unix timestamp in milliseconds", () => {
     const timestamp = new Date("2026-03-10T11:55:00Z").getTime();
     expect(formatDate(timestamp)).toBe("5m ago");
+  });
+});
+
+describe("formatCompactRelativeDate", () => {
+  const now = Date.parse("2026-10-02T09:00:00Z");
+  const minute = 60_000;
+  const day = 24 * 60 * minute;
+
+  it.each([
+    [0, "now"],
+    [minute - 1, "now"],
+    [minute, "1m"],
+    [7 * minute, "7m"],
+    [60 * minute, "1h"],
+    [day, "1d"],
+    [7 * day, "1w"],
+    [30 * day, "1mo"],
+    [365 * day, "1y"],
+  ])("formats elapsed %s milliseconds as %s", (elapsed, expected) => {
+    expect(formatCompactRelativeDate(now - Number(elapsed), now)).toBe(
+      expected,
+    );
+  });
+
+  it("reads the same timestamp from IPC Dates and numeric or ISO wire values", () => {
+    const date = new Date(now - 7 * minute);
+    for (const value of [
+      date,
+      date.toISOString(),
+      date.getTime(),
+      date.getTime() / 1000,
+    ]) {
+      expect(formatCompactRelativeDate(value, now)).toBe("7m");
+    }
+  });
+
+  it("tolerates clock skew and omits invalid dates", () => {
+    expect(formatCompactRelativeDate(now + minute, now)).toBe("now");
+    expect(formatCompactRelativeDate("invalid date", now)).toBe("");
   });
 });
 
@@ -80,11 +125,15 @@ describe("formatAbsoluteDate", () => {
     const expected = "Jun 16, 2026, 10:03 AM";
 
     expect(formatAbsoluteDate(date.getTime())).toBe(expected);
-    expect(formatAbsoluteDate(Math.floor(date.getTime() / 1000))).toBe(expected);
+    expect(formatAbsoluteDate(Math.floor(date.getTime() / 1000))).toBe(
+      expected,
+    );
   });
 
   it("handles ISO strings", () => {
     const date = new Date(2026, 5, 16, 10, 3);
-    expect(formatAbsoluteDate(date.toISOString())).toBe("Jun 16, 2026, 10:03 AM");
+    expect(formatAbsoluteDate(date.toISOString())).toBe(
+      "Jun 16, 2026, 10:03 AM",
+    );
   });
 });

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { createSelector } from "@reduxjs/toolkit";
+import { shallowEqual } from "react-redux";
+import type { ReviewComment } from "@mains/contracts/review-comments";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { store } from "@/lib/redux";
+import { store, type RootState } from "@/lib/redux";
 import {
   addContextItem,
   clearContextItems,
   removeContextItem,
+  setContextItemsForKey,
 } from "@/lib/redux/slices/workspaceSlice";
 import {
   contextItemKey,
@@ -35,6 +39,12 @@ function releaseAppshotCapture(appshot: ContextAppshotItem) {
 }
 
 function releaseOwnedCapture(item: ContextItem) {
+  // An editor can detach a capture while the original queued input or saved
+  // draft still owns it. Keep those pixels until that ownership is released.
+  const queues = store.getState().runQueue?.byOwner ?? {};
+  const key = contextItemKey(item);
+  if (Object.values(queues).some((queue) => [...queue.messages.flatMap((message) => message.contextItems),
+    ...(queue.draftBackup?.contextItems ?? [])].some((saved) => saved.kind === item.kind && contextItemKey(saved) === key))) return;
   if (item.kind === "browser") releaseBrowserCaptures(item);
   if (item.kind === "appshot") releaseAppshotCapture(item);
 }
@@ -50,24 +60,9 @@ function syncBrowserChatContext() {
   });
 }
 
-/**
- * The composer's attached context: the flat list, the per-kind views the UI
- * renders from, its normal mutations, and the route-scoped reset.
- *
- * This is the read path — calling it subscribes the component to every context
- * change. Somewhere that only *attaches* (the file explorer, the code viewer,
- * the browser panel) should keep dispatching `addContextItem` directly rather
- * than re-rendering on context it never shows.
- */
-export function useComposerContext() {
+/** The normal composer mutations, without subscribing to attached context. */
+export function useComposerContextActions() {
   const dispatch = useAppDispatch();
-  const items = useAppSelector((state) => state.workspace.contextItems);
-  const grouped = useMemo(() => groupContextItems(items), [items]);
-  const itemsRef = useRef(items);
-
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
 
   const add = useCallback(
     (item: ContextItem) => {
@@ -86,10 +81,67 @@ export function useComposerContext() {
     [dispatch],
   );
 
+  const update = useCallback((item: ContextItem) => {
+    const state = store.getState().workspace;
+    const key = contextItemKey(item);
+    dispatch(setContextItemsForKey({
+      key: state.composerContextKey,
+      items: state.contextItems.map((current) =>
+        current.kind === item.kind && contextItemKey(current) === key ? item : current),
+    }));
+    syncBrowserChatContext();
+  }, [dispatch]);
+
   const clear = useCallback(() => {
     dispatch(clearContextItems());
     syncBrowserChatContext();
   }, [dispatch]);
+
+  return useMemo(() => ({ add, remove, update, clear }), [add, remove, update, clear]);
+}
+
+// A derived index of the existing context list, shared by all Review files.
+// shallowEqual retains each reader's array when another file/context kind changes.
+const EMPTY_REVIEW_COMMENTS: readonly ReviewComment[] = Object.freeze([]);
+const selectReviewCommentIndex = createSelector(
+  [(state: RootState) => state.workspace.contextItems],
+  (items) => {
+    const workspaces = new Map<string, { all: ReviewComment[]; files: Map<string, ReviewComment[]> }>();
+    for (const item of items) {
+      if (item.kind !== "review") continue;
+      let workspace = workspaces.get(item.workspaceId);
+      if (!workspace) {
+        workspace = { all: [], files: new Map() };
+        workspaces.set(item.workspaceId, workspace);
+      }
+      workspace.all.push(item);
+      const comments = workspace.files.get(item.filePath) ?? [];
+      comments.push(item);
+      workspace.files.set(item.filePath, comments);
+    }
+    return workspaces;
+  },
+);
+
+/** Review readers subscribe only to comments in their workspace or file. */
+export function useComposerReviewComments(workspaceId: string, filePath?: string): readonly ReviewComment[] {
+  return useAppSelector((state) => {
+    const workspace = selectReviewCommentIndex(state).get(workspaceId);
+    return (filePath === undefined ? workspace?.all : workspace?.files.get(filePath)) ?? EMPTY_REVIEW_COMMENTS;
+  }, shallowEqual);
+}
+
+/** The full context read path, grouped views, mutations and route-scoped reset. */
+export function useComposerContext() {
+  const dispatch = useAppDispatch();
+  const items = useAppSelector((state) => state.workspace.contextItems);
+  const grouped = useMemo(() => groupContextItems(items), [items]);
+  const actions = useComposerContextActions();
+  const itemsRef = useRef(items);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   // Files, issues, and in-app selections belong to the route/workspace that
   // produced them. A global Appshot belongs to the next message, so it survives
@@ -104,5 +156,5 @@ export function useComposerContext() {
     syncBrowserChatContext();
   }, [dispatch]);
 
-  return { items, ...grouped, add, remove, clear, resetForRoute };
+  return { items, ...grouped, ...actions, resetForRoute };
 }

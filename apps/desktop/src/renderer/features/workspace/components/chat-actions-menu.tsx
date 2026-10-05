@@ -20,6 +20,7 @@ import {
 import { useAppSelector } from "@/lib/redux/hooks";
 import { useGetRunByIdQuery } from "@/lib/redux/api";
 import { useModeConfig } from "@/hooks/use-mode-config";
+import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import { isRunTab } from "../lib/repo-utils";
 import { useChatActions } from "../hooks/use-chat-actions";
 
@@ -32,8 +33,7 @@ function chatTitle(run: { title: string | null; goal: string | null }): string {
 }
 
 /**
- * Fixed so the menu can be right-aligned under its trigger: `position.x` is the
- * menu's left edge, and the width is only measured after the first paint.
+ * Fixed so the menu's placement can be chosen before its width is measured.
  * Comfortably wider than the longest row ("Copy recent message"), so the
  * measured width matches and the alignment does not drift.
  */
@@ -50,23 +50,25 @@ function MenuSeparator() {
 }
 
 /**
- * Everything the open chat can have done to it, from the window's top-right —
- * the sidebar row's menu reachable without hunting for the row, and the only
- * one at all in Work and Chat, where there is no tab strip to hang it on.
+ * Everything the open chat can have done to it, from the window's top bar —
+ * the sidebar row's menu reachable without hunting for the row. Work and Chat
+ * place the trigger inside their single conversation tab.
  *
  * Renders nothing in Code: that mode's runs belong to a workspace, whose own
  * menus already own these verbs.
  */
-export function ChatActionsMenu() {
+export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boolean }) {
   const { mode } = useModeConfig();
   const titleId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const [menuOrigin, setMenuOrigin] = useState<"top-left" | "top-right">("top-left");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  useSuppressBrowserView(aboveBrowser && isMenuOpen);
 
   // The open tab, with none of the session panel's fallback to the run a file
   // was opened from: this menu acts on the chat in front of the user, and an
@@ -97,7 +99,12 @@ export function ChatActionsMenu() {
 
   const openMenu = (event: MouseEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    setMenuPosition({ x: rect.right - MENU_WIDTH, y: rect.bottom + 4 });
+    const opensLeft = rect.right + MENU_WIDTH > window.innerWidth - 8;
+    setMenuOrigin(opensLeft ? "top-right" : "top-left");
+    setMenuPosition({
+      x: opensLeft ? rect.right - MENU_WIDTH : rect.left,
+      y: rect.bottom + 4,
+    });
     setIsMenuOpen(true);
   };
 
@@ -129,14 +136,15 @@ export function ChatActionsMenu() {
   return (
     <>
       <Button
+        variant="icon"
         ref={triggerRef}
         tooltip="Chat options"
-        tooltipPosition="left"
+        tooltipPosition="bottom"
         onClick={openMenu}
         aria-label="Chat options"
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
-        className="flex items-center rounded-full p-1.5 cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-all duration-300 ease-out"
+        className="relative z-(--z-panel-toggle)"
       >
         <Option className="size-3.75" />
       </Button>
@@ -145,7 +153,8 @@ export function ChatActionsMenu() {
         aria-label="Chat actions"
         position={menuPosition}
         minWidth={MENU_WIDTH}
-        origin="top-right"
+        origin={menuOrigin}
+        className={aboveBrowser ? "z-10000" : undefined}
         onClose={() => setIsMenuOpen(false)}
       >
         <DropdownMenuItem onClick={act(() => setRenameDraft(label))}>

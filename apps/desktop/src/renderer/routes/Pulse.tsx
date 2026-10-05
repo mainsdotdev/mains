@@ -105,10 +105,11 @@ export default function PulsePage() {
         />
         {query && (
           <Button
+            variant="icon" iconSize="sm"
             onClick={() => setQuery("")}
             tooltip="Clear search"
             aria-label="Clear search"
-            className="absolute right-2.5 top-1/2 z-10 -translate-y-1/2 p-1 rounded-lg text-primary-600 dark:text-primary-400 hover:text-primary-800 dark:hover:text-primary-200 hover:bg-primary/50 dark:hover:bg-primary/10"
+            className="absolute right-2.5 top-1/2 z-10 -translate-y-1/2"
           >
             <Close className="size-3" />
           </Button>

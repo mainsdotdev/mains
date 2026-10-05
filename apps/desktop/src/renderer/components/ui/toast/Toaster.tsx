@@ -32,7 +32,8 @@ function getDefaultIcon(type: ToastType) {
 
 function ToastItem({ toast, onDismiss }: ToastItemProps) {
   const [isPaused, setIsPaused] = useState(false);
-  const [exiting, setExiting] = useState(false);
+  const [exitRequested, setExiting] = useState(false);
+  const exiting = exitRequested || !!toast.dismissing;
   const dismissedRef = useRef(false);
 
   // Auto-dismiss timer
@@ -89,7 +90,7 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
       <span aria-hidden="true" className="toast-item-glow" />
       {icon && <span className="flex items-center">{icon}</span>}
       {/* Colour comes from the toast shell, which owns the surface it sits on. */}
-      <Text as="span" tone="inherit" weight="medium" className="whitespace-nowrap">
+      <Text as="span" tone="inherit" weight="medium" className="min-w-0 whitespace-normal break-words">
         {toast.message}
       </Text>
       {toast.action && (
@@ -99,7 +100,7 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
             toast.action?.onClick();
             handleDismiss();
           }}
-          className="text-sm font-semibold text-accent transition-colors"
+          className="shrink-0 text-sm font-semibold text-accent transition-colors"
         >
           {toast.action.label}
         </Button>
@@ -118,8 +119,9 @@ export function Toaster() {
   // Keyboard dismiss (Escape dismisses top toast)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && toasts.length > 0) {
-        toastApi.dismiss(toasts[0].id);
+      if (e.key === "Escape") {
+        const top = toasts.find((toast) => toast.dismissible && !toast.dismissing);
+        if (top) toastApi.dismiss(top.id, { animate: true });
       }
     };
 

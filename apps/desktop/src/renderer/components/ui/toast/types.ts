@@ -31,6 +31,8 @@ export interface Toast {
     onClick: () => void;
   };
   dismissible: boolean;
+  /** Keep the item mounted while Toaster plays its normal exit transition. */
+  dismissing?: boolean;
   createdAt: number;
   onDismiss?: (id: string) => void;
 }

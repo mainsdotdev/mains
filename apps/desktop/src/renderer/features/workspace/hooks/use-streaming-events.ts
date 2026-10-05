@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { appEvents } from "@/lib/transport";
 
 export interface StreamingEvent {
@@ -24,11 +24,12 @@ interface StreamState {
  * Returns a list of synthetic events that can be merged with DB-backed events
  * for real-time text rendering.
  */
-export function useStreamingEvents(activeRunId: string | null) {
+export function useStreamingEvents(activeRunId: string | null, persistedStreamIds: ReadonlySet<string>) {
   const streamsRef = useRef(new Map<string, StreamState>());
   const snapshotRef = useRef<StreamingEvent[]>([]);
   const listenersRef = useRef(new Set<() => void>());
   const throttleRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
+  const persistedRef = useRef(persistedStreamIds);
 
   const subscribe = useCallback((listener: () => void) => {
     listenersRef.current.add(listener);
@@ -56,6 +57,15 @@ export function useStreamingEvents(activeRunId: string | null) {
     for (const listener of listenersRef.current) listener();
   }, []);
 
+  useLayoutEffect(() => {
+    persistedRef.current = persistedStreamIds;
+    let changed = false;
+    for (const streamId of persistedStreamIds) {
+      if (streamsRef.current.delete(streamId)) changed = true;
+    }
+    if (changed) notify();
+  }, [persistedStreamIds, notify]);
+
   useEffect(() => {
     const streams = streamsRef.current;
     const listeners = listenersRef.current;
@@ -72,14 +82,16 @@ export function useStreamingEvents(activeRunId: string | null) {
 
       const { event, ts } = data;
       const streamId = event.streamId;
-      if (!streamId) return;
+      if (!streamId || persistedRef.current.has(streamId)) return;
+      const previous = streamsRef.current.get(streamId);
+      if (previous?.metadata?.voice === true && previous.metadata.streaming === false) return;
 
       streamsRef.current.set(streamId, {
         kind: event.kind,
         content: event.content ?? "",
         metadata: event.metadata,
         streamId,
-        lastTs: ts,
+        lastTs: event.metadata?.voice === true ? previous?.lastTs ?? ts : ts,
       });
 
       // Throttle to ~60fps
@@ -90,9 +102,22 @@ export function useStreamingEvents(activeRunId: string | null) {
         });
       }
     });
+    const offRealtime = appEvents.runs.onRealtimeEvent((event) => {
+      if (event.runId !== activeRunId || event.type !== "closed") return;
+      let changed = false;
+      for (const [id, stream] of streams) {
+        if (stream.metadata?.voice === true && stream.metadata.realtimeSessionId === event.connectionId &&
+            stream.metadata.streaming !== false) {
+          streams.delete(id);
+          changed = true;
+        }
+      }
+      if (changed) notify();
+    });
 
     return () => {
       cleanup();
+      offRealtime();
       if (throttleRef.current) {
         cancelAnimationFrame(throttleRef.current);
         throttleRef.current = null;
@@ -105,11 +130,13 @@ export function useStreamingEvents(activeRunId: string | null) {
 
   const streamingEvents = useSyncExternalStore(subscribe, getSnapshot);
 
-  const clearAllStreams = useCallback(() => {
-    streamsRef.current.clear();
-    snapshotRef.current = [];
-    for (const listener of listenersRef.current) listener();
-  }, []);
+  const clearTurnStreams = useCallback(() => {
+    // A work turn finishing does not end its conversation's voice call.
+    for (const [id, stream] of streamsRef.current) {
+      if (stream.metadata?.voice !== true) streamsRef.current.delete(id);
+    }
+    notify();
+  }, [notify]);
 
-  return { streamingEvents, clearAllStreams };
+  return { streamingEvents, clearTurnStreams };
 }

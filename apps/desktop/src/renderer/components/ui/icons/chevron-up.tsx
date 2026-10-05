@@ -1,20 +1,20 @@
+import * as React from "react"
 import { SVGProps } from "react"
-
 const SvgComponent = (props: SVGProps<SVGSVGElement>) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
     width={24}
     height={24}
     fill="none"
-    viewBox="0 0 24 24"
+    stroke="currentColor"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    strokeWidth={2}
+    color="currentColor"
     {...props}
+    viewBox="0 0 24 24"
   >
-    <path
-      fill="currentColor"
-      fillRule="evenodd"
-      d="M11.47 3.47a.75.75 0 0 1 1.06 0l6 6a.75.75 0 1 1-1.06 1.06l-4.72-4.72V20a.75.75 0 0 1-1.5 0V5.81l-4.72 4.72a.75.75 0 1 1-1.06-1.06l6-6Z"
-      clipRule="evenodd"
-    />
+    <path d="M12 5.5V19M18 11s-4.419-6-6-6c-1.581 0-6 6-6 6" />
   </svg>
 )
 export default SvgComponent

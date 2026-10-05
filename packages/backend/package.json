@@ -26,8 +26,9 @@
     "lint": "eslint src/ shared/ test/"
   },
   "peerDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.283",
-    "@github/copilot-sdk": "^1.0.11",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.286",
+    "@github/copilot": "^1.0.90",
+    "@github/copilot-sdk": "^1.0.16",
     "@linear/sdk": "^94.0.0",
     "@mains/contracts": "*",
     "@octokit/rest": "^22.0.1",
@@ -41,9 +42,10 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.283",
+    "@anthropic-ai/claude-agent-sdk": "0.3.286",
     "@eslint/js": "^9.39.5",
-    "@github/copilot-sdk": "1.0.11",
+    "@github/copilot": "1.0.90",
+    "@github/copilot-sdk": "1.0.16",
     "@linear/sdk": "94.0.0",
     "@mains/contracts": "file:../contracts",
     "@octokit/rest": "22.0.1",

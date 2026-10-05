@@ -17,10 +17,17 @@ import type {
   McpAppResourcePermissions,
 } from "./mcpApps.document";
 import { sanitizeMcpAppResourceCsp } from "./mcpApps.document";
+import type { McpAppEntrypoint, OpenMcpAppExtensionPayload, OpenMcpAppExtensionResponse } from "@mains/contracts/mcp-apps";
+import type { McpAppReadResourceResult } from "@mains/backend/shared/adapter.types";
 
 const MAX_RESOURCE_BYTES = 4 * 1024 * 1024;
 const MAX_TOOL_PAYLOAD_BYTES = 1024 * 1024;
 const MAX_MESSAGE_CHARS = 32_000;
+const extensionSessions = new Map<string, {
+  providerId: string;
+  app: McpAppEntrypoint;
+  resource: ReadMcpAppResourceResponse;
+}>();
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -137,6 +144,35 @@ async function adapterForRun(runId: string) {
   return { run, adapter: createWorkAdapter(provider) };
 }
 
+async function adapterForProvider(providerId: string) {
+  const provider = await providersService.getById(providerId);
+  if (!provider?.isEnabled) throw new Error("This provider is not enabled");
+  return createWorkAdapter(provider);
+}
+
+function extensionSession(id: unknown) {
+  const sessionId = requiredString(id, "sessionId");
+  const session = extensionSessions.get(sessionId);
+  if (!session) throw new Error("App session expired; reopen the app");
+  return { sessionId, ...session };
+}
+
+function registerResource(result: McpAppReadResourceResult, resourceUri: string): ReadMcpAppResourceResponse {
+  const content =
+    result.contents.find((item) => item.uri === resourceUri && typeof item.text === "string") ??
+    result.contents.find((item) => typeof item.text === "string");
+  if (!content?.text) throw new Error("MCP App resource did not contain HTML text");
+  if (Buffer.byteLength(content.text, "utf8") > MAX_RESOURCE_BYTES) {
+    throw new Error("MCP App resource is too large");
+  }
+  const mimeType = content.mimeType ?? "";
+  if (!/^text\/html(?:\+skybridge)?(?:\s*;|$)/i.test(mimeType)) {
+    throw new Error(`Unsupported MCP App resource type: ${mimeType || "unknown"}`);
+  }
+  const meta = normalizeResourceMeta(content._meta);
+  return { url: mcpAppsRegistry.register(content.text, meta), mimeType, meta };
+}
+
 function extractTextBlocks(value: unknown): string[] {
   if (typeof value === "string") return value.trim() ? [value.trim()] : [];
   if (!Array.isArray(value)) return [];
@@ -163,7 +199,50 @@ function modelContextNote(value: SendMcpAppMessagePayload["modelContext"]): stri
 }
 
 export const mcpAppsService = {
+  async listEntrypoints(raw: { providerId: string }): Promise<McpAppEntrypoint[]> {
+    const adapter = await adapterForProvider(requiredString(raw?.providerId, "providerId"));
+    if (!adapter.listMcpAppEntrypoints) throw new Error("This provider does not support app extensions");
+    return adapter.listMcpAppEntrypoints();
+  },
+
+  async openExtension(raw: OpenMcpAppExtensionPayload): Promise<OpenMcpAppExtensionResponse> {
+    const providerId = requiredString(raw?.providerId, "providerId");
+    const entrypointId = requiredString(raw?.entrypointId, "entrypointId", 8_192);
+    const adapter = await adapterForProvider(providerId);
+    if (!adapter.openMcpAppSession) throw new Error("This provider does not support app extensions");
+    const session = await adapter.openMcpAppSession(entrypointId);
+    try {
+      const resource = registerResource(session.resource, session.app.resourceUri);
+      extensionSessions.set(session.id, { providerId, app: session.app, resource });
+      return { sessionId: session.id, app: session.app, output: session.output };
+    } catch (error) {
+      await adapter.closeMcpAppSession?.(session.id).catch(() => {});
+      throw error;
+    }
+  },
+
+  async closeExtension(raw: { sessionId: string }): Promise<void> {
+    const sessionId = requiredString(raw?.sessionId, "sessionId");
+    const session = extensionSessions.get(sessionId);
+    if (!session) return;
+    extensionSessions.delete(sessionId);
+    mcpAppsRegistry.remove(session.resource.url);
+    const adapter = await adapterForProvider(session.providerId);
+    await adapter.closeMcpAppSession?.(sessionId);
+  },
+
+  async closeAllExtensions(): Promise<void> {
+    await Promise.allSettled([...extensionSessions.keys()].map((sessionId) => this.closeExtension({ sessionId })));
+  },
+
   async readResource(raw: ReadMcpAppResourcePayload): Promise<ReadMcpAppResourceResponse> {
+    if (raw?.sessionId !== undefined) {
+      const session = extensionSession(raw.sessionId);
+      if (raw.server !== session.app.server || raw.resourceUri !== session.app.resourceUri) {
+        throw new Error("This resource does not belong to this app");
+      }
+      return session.resource;
+    }
     const runId = requiredString(raw?.runId, "runId");
     const server = requiredString(raw?.server, "server");
     const resourceUri = requiredString(raw?.resourceUri, "resourceUri", 8_192);
@@ -185,30 +264,20 @@ export const mcpAppsService = {
         ? { linkId: raw.linkId === null ? null : optionalString(raw.linkId, "linkId") }
         : {}),
     });
-    const content =
-      result.contents.find((item) => item.uri === resourceUri && typeof item.text === "string") ??
-      result.contents.find((item) => typeof item.text === "string");
-    if (!content?.text) throw new Error("MCP App resource did not contain HTML text");
-    if (Buffer.byteLength(content.text, "utf8") > MAX_RESOURCE_BYTES) {
-      throw new Error("MCP App resource is too large");
-    }
-    const mimeType = content.mimeType ?? "";
-    // MCP Apps uses text/html;profile=mcp-app. ChatGPT Apps SDK resources
-    // created before the standardization use the equivalent legacy
-    // text/html+skybridge media type (including Skyscanner-style cards).
-    if (!/^text\/html(?:\+skybridge)?(?:\s*;|$)/i.test(mimeType)) {
-      throw new Error(`Unsupported MCP App resource type: ${mimeType || "unknown"}`);
-    }
-
-    const meta = normalizeResourceMeta(content._meta);
-    return {
-      url: mcpAppsRegistry.register(content.text, meta),
-      mimeType,
-      meta,
-    };
+    return registerResource(result, resourceUri);
   },
 
   async callTool(raw: CallMcpAppToolPayload) {
+    if (raw?.sessionId !== undefined) {
+      const session = extensionSession(raw.sessionId);
+      if (raw.server !== session.app.server) throw new Error("This server does not belong to this app");
+      const adapter = await adapterForProvider(session.providerId);
+      if (!adapter.callMcpAppSessionTool) throw new Error("This provider does not support app extensions");
+      return adapter.callMcpAppSessionTool(
+        session.sessionId, requiredString(raw.tool, "tool"),
+        boundedJsonObject(raw.arguments, "arguments"), boundedJsonObject(raw.meta, "meta"),
+      );
+    }
     const runId = requiredString(raw?.runId, "runId");
     const server = requiredString(raw?.server, "server");
     const tool = requiredString(raw?.tool, "tool");

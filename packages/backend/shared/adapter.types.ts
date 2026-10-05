@@ -4,7 +4,11 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
+import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
+import type { ProviderCliInfo } from "@mains/contracts/provider-cli";
+import type { RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
+import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { ModeToolPolicy } from "./mode-harness";
 import type {
   PluginAvailability,
@@ -78,7 +82,7 @@ export interface WorkRunRequest {
    * cached provider config when present (e.g. Pulse forces specific
    * permission/sandbox/mode regardless of the user's current provider settings).
    * Recognised keys: permissionMode, sandboxMode, mode, thinkingMode, effortLevel,
-   * modelReasoningEffort, outputStyle.
+   * modelReasoningEffort, outputStyle, fastMode.
    */
   configSnapshot?: Record<string, unknown> | null;
   /** File attachments (images/documents) to include in the prompt */
@@ -405,6 +409,10 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
  * Request to continue an existing run (resume session)
  */
 export interface WorkRunContinueRequest {
+  /** Correlates a locally queued input with Codex's accepted userMessage. */
+  clientUserMessageId?: string;
+  /** Backend-only callback; never serialized onto the wire. */
+  onInputAccepted?: (turnId: string) => Promise<void>;
   runId: string;
   accountId: string;
   execution: RunExecutionContext;
@@ -458,6 +466,11 @@ export interface WorkRunContinueRequest {
    */
   agents?: AgentsConfig;
 }
+
+/** Input added to the existing active turn; no turn-level overrides. */
+export type WorkRunSteerRequest = Pick<WorkRunContinueRequest,
+  "runId" | "message" | "context" | "attachments" | "contextIssues" |
+  "contextSignals" | "contextFiles" | "skills"> & { clientUserMessageId: string };
 
 /**
  * Request to fork an existing run's session into a new run.
@@ -516,6 +529,7 @@ export interface WorkRunReviewRequest {
   execution: RunExecutionContext;
   target: WorkRunReviewTarget;
   model?: string | null;
+  configSnapshot?: Record<string, unknown> | null;
 }
 
 export interface McpAppReadResourceRequest {
@@ -555,10 +569,17 @@ export interface McpAppCallToolResult {
   _meta?: unknown;
 }
 
+export interface McpAppExtensionSession {
+  id: string;
+  app: McpAppEntrypoint;
+  resource: McpAppReadResourceResult;
+  output: McpAppCallToolResult;
+}
+
 /**
  * Interface that all work run adapters must implement
  */
-export interface WorkRunAdapter {
+export interface WorkRunAdapter extends RealtimeAdapterControls {
   /**
    * Start a work run with the given request.
    * Events are emitted via the onEvent callback during execution.
@@ -575,6 +596,8 @@ export interface WorkRunAdapter {
    * @returns Promise resolving to the final result when the continuation completes
    */
   continueRun?(request: WorkRunContinueRequest, onEvent: WorkRunEventHandler): Promise<WorkRunResult>;
+  steerRun?(request: WorkRunSteerRequest): Promise<{ turnId: string }>;
+  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string }>;
 
   /**
    * Fork an existing run's session into a new run.
@@ -682,6 +705,9 @@ export interface WorkRunAdapter {
    */
   getRateLimits?(): Promise<RateLimitInfo | null>;
 
+  /** List the voices supported by the native voice conversation protocol. */
+  listRealtimeVoices?(): Promise<RealtimeVoiceCatalog>;
+
   /** Spend one earned Codex credit to reset an eligible rate-limit window. */
   consumeRateLimitResetCredit?(
     params: ConsumeRateLimitResetCreditParams,
@@ -753,6 +779,17 @@ export interface WorkRunAdapter {
   /** Start or repeat OAuth for a configured connector MCP server. */
   startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
 
+  /** Discover and host plugin entrypoints independently of an agent run. */
+  listMcpAppEntrypoints?(): Promise<McpAppEntrypoint[]>;
+  openMcpAppSession?(entrypointId: string): Promise<McpAppExtensionSession>;
+  callMcpAppSessionTool?(
+    sessionId: string,
+    tool: string,
+    args?: Record<string, unknown>,
+    meta?: Record<string, unknown>,
+  ): Promise<McpAppCallToolResult>;
+  closeMcpAppSession?(sessionId: string): Promise<void>;
+
   /** Read an MCP App HTML resource through this run's existing provider thread. */
   readMcpAppResource?(
     request: McpAppReadResourceRequest,
@@ -796,6 +833,29 @@ export interface DriverOutcome {
   summary?: string;
 }
 
+/** Native voice can create work turns without a client issuing turn/start. */
+export interface RealtimeWorkHandlers {
+  onTurnStarted(providerTurnId: string, message?: string, model?: string): Promise<void>;
+  onEvent: WorkRunEventHandler;
+  onCompleted(result: DriverOutcome): Promise<void>;
+}
+
+export type WorkRunRealtimeRequest = Omit<WorkRunContinueRequest,
+  "message" | "clientUserMessageId" | "onInputAccepted"
+> & Pick<import("@mains/contracts/realtime").RunRealtimeStartPayload, "connectionId" | "sdp"> & {
+  voiceTools?: import("./voice-task-tools").VoiceTaskTools;
+  voiceInstructions?: string;
+};
+
+export interface RealtimeAdapterControls {
+  startRealtime?(
+    request: WorkRunRealtimeRequest,
+    onEvent: (event: import("@mains/contracts/realtime").RunRealtimeEvent) => void,
+    work: RealtimeWorkHandlers,
+  ): Promise<void>;
+  stopRealtime?(runId: string, connectionId: string): Promise<void>;
+}
+
 /**
  * Result of a session-acquisition method. Driver returns the opaque session
  * (Core stores it for abort lookup), the prompt to send, and optionally the
@@ -812,12 +872,16 @@ export interface AcquiredSession {
   model?: string;
 }
 
-export interface ProviderDriver {
+export interface ProviderDriver extends RealtimeAdapterControls {
+  /** Interrupt work started by a native session, outside Core's run slots. */
+  abortNativeRun?(runId: string): Promise<void>;
   /** Create a new session and build the initial prompt. */
   createSession(request: WorkRunRequest): Promise<AcquiredSession>;
 
   /** Resume an existing session by id and build the follow-up prompt. */
   resumeSession?(request: WorkRunContinueRequest): Promise<AcquiredSession>;
+  steerRun?(request: WorkRunSteerRequest): Promise<{ turnId: string }>;
+  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string }>;
 
   /** Fork an existing session into a new run and build the prompt. */
   forkSession?(request: WorkRunForkRequest): Promise<AcquiredSession>;
@@ -868,6 +932,7 @@ export interface ProviderDriver {
     opts?: { system?: string; model?: string },
   ): Promise<string>;
   getRateLimits?(): Promise<RateLimitInfo | null>;
+  listRealtimeVoices?(): Promise<RealtimeVoiceCatalog>;
   consumeRateLimitResetCredit?(
     params: ConsumeRateLimitResetCreditParams,
   ): Promise<ConsumeRateLimitResetCreditOutcome>;
@@ -882,6 +947,15 @@ export interface ProviderDriver {
   updatePlugin?(pluginId: string): Promise<void>;
   listConnectors?(forceRefresh?: boolean): Promise<ConnectorOverview>;
   startConnectorOAuth?(serverName: string): Promise<ConnectorOAuthStartResult>;
+  listMcpAppEntrypoints?(): Promise<McpAppEntrypoint[]>;
+  openMcpAppSession?(entrypointId: string): Promise<McpAppExtensionSession>;
+  callMcpAppSessionTool?(
+    sessionId: string,
+    tool: string,
+    args?: Record<string, unknown>,
+    meta?: Record<string, unknown>,
+  ): Promise<McpAppCallToolResult>;
+  closeMcpAppSession?(sessionId: string): Promise<void>;
   readMcpAppResource?(
     request: McpAppReadResourceRequest,
   ): Promise<McpAppReadResourceResult>;
@@ -1004,14 +1078,20 @@ export interface CodexAdapterConfig {
   apiKey?: string;
   /** Default model to use (e.g., "gpt-5.4", "gpt-5.4-mini") */
   defaultModel?: string;
+  /** Native voice identifier advertised by thread/realtime/listVoices. */
+  realtimeVoice?: string;
+  /** Artwork preference; independent of the selected speaker. */
+  voiceOrbColor?: VoiceOrbColor;
+  /** Optional orb rendering style; existing preferences default to clouds. */
+  voiceOrbStyle?: VoiceOrbStyle;
   /** Timeout in milliseconds */
   timeout?: number;
   /** Approval policy passed to Codex CLI (no interactive hooks — CLI handles internally) */
   approvalMode?: "untrusted" | "on-request" | "never";
   /** Sandbox mode for file/network isolation */
   sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
-  /** Model reasoning effort level */
-  modelReasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
+  /** App-server effort identifier, advertised per model by model/list. */
+  modelReasoningEffort?: EffortLevel;
   /**
    * Service tier id passed to `turn/start` (e.g. "priority", "flex", "default").
    * Discovered via `model/list` per-model `serviceTiers`. When set on the adapter
@@ -1053,7 +1133,7 @@ export interface CodexAdapterConfig {
  * Configuration for Copilot adapter stored in providers.config
  */
 export interface CopilotAdapterConfig {
-  /** Path to copilot CLI binary (defaults to "copilot" from PATH) */
+  /** Explicit CLI override; otherwise use Mains' bundled Copilot runtime. */
   binary?: string;
   /** Transport method: "stdio" (default) or "tcp" */
   useStdio?: boolean;
@@ -1065,6 +1145,10 @@ export interface CopilotAdapterConfig {
   logLevel?: "debug" | "info" | "warning" | "error" | "none" | "all";
   /** Default model to use */
   defaultModel?: string;
+  /** Request the latency-oriented Auto routing preset; applies only to model "auto". */
+  fastMode?: boolean;
+  /** Default reasoning effort for Copilot models that support it. */
+  modelReasoningEffort?: "low" | "medium" | "high" | "xhigh";
   /** Timeout in milliseconds for operations */
   timeout?: number;
   /** Whether to start the CLI process automatically */
@@ -1258,7 +1342,7 @@ export interface ModelInfo {
   /** Whether this model supports effort levels */
   supportsEffort?: boolean;
   /** Available effort levels for this model */
-  supportedEffortLevels?: ('minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh')[];
+  supportedEffortLevels?: EffortLevel[];
   /**
    * Provider-specific service tiers (e.g. Codex: `priority`, `flex`, `default`).
    * When set, the UI exposes a tier picker so users can trade quality/cost
@@ -1831,19 +1915,13 @@ export interface AccountInfo {
   } | null;
   requiresOpenaiAuth: boolean;
   /**
-   * Optional CLI health/version metadata (Cursor). `outdated` is true only when
+   * Metadata for the executable actually used by the provider. Bundled Claude
+   * updates with Mains and supplies its own login command. `outdated` is true when
    * the CLI is old enough that `agent about` / the parameterized model picker is
    * unsupported — drives an "update CLI" hint in Settings. We deliberately do
    * NOT gate on the `lab` channel: recent CLIs support effort controls without it.
    */
-  cli?: {
-    version: string | null;
-    channel: string | null;
-    outdated: boolean;
-    compatibility?: "supported" | "newer" | "unsupported" | "unknown";
-    minimumVersion?: string;
-    testedProtocolVersion?: string;
-  };
+  cli?: ProviderCliInfo;
 }
 
 /** Result of a provider CLI self-update (e.g. `agent update`). */
@@ -1867,6 +1945,7 @@ export interface PluginInterface {
   brandColor?: string;
   composerIcon?: string;
   logo?: string;
+  logoDark?: string;
   screenshots: string[];
   privacyPolicyUrl?: string;
   termsOfServiceUrl?: string;

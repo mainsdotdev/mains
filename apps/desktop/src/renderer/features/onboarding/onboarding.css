@@ -72,6 +72,16 @@
   color-scheme: dark;
 }
 .onboarding-scene {
+  /* Stay close to the theme's hue: soft light and neighboring tones, rather
+     than turning one accent into a separate multicolor palette. */
+  --onboarding-gradient-glow: oklch(
+    from var(--onboarding-gradient-accent) min(0.94, calc(l + 0.1))
+      calc(c * 0.72) calc(h + 16)
+  );
+  --onboarding-gradient-wash: oklch(
+    from var(--onboarding-gradient-accent) min(0.9, calc(l + 0.06))
+      calc(c * 0.6) calc(h - 14)
+  );
   position: relative;
   isolation: isolate;
   display: grid;
@@ -84,13 +94,13 @@
   border-radius: 32px;
   background: color-mix(
     in oklab,
-    var(--onboarding-gradient-accent) 78%,
+    var(--onboarding-gradient-accent) 64%,
     var(--onboarding-gradient-surface)
   );
   box-shadow: 0 24px 64px -28px var(--onboarding-shadow);
   transition:
-    --onboarding-gradient-surface 600ms,
-    --onboarding-gradient-accent 600ms;
+    --onboarding-gradient-surface 900ms ease-in-out,
+    --onboarding-gradient-accent 900ms ease-in-out;
 }
 .onboarding-scene::before,
 .onboarding-frame::before {
@@ -117,38 +127,37 @@
 }
 .onboarding-gradient > div:nth-child(1) {
   background: radial-gradient(
-    ellipse at 30% 25%,
-    oklch(from var(--onboarding-gradient-accent) calc(l + 0.1) c calc(h + 48)),
-    transparent 62%
+    ellipse at 24% 20%,
+    var(--onboarding-gradient-glow) 0%,
+    color-mix(in oklab, var(--onboarding-gradient-glow) 55%, transparent) 38%,
+    transparent 76%
   );
-  animation: onboarding-gradient-drift 22s ease-in-out infinite alternate;
+  animation: onboarding-gradient-drift 32s ease-in-out infinite alternate;
 }
 .onboarding-gradient > div:nth-child(2) {
   background: radial-gradient(
-    ellipse at 75% 80%,
-    oklch(
-      from var(--onboarding-gradient-accent) calc(l + 0.18) calc(c * 0.8)
-        calc(h - 38)
-    ),
-    transparent 58%
+    ellipse at 78% 78%,
+    var(--onboarding-gradient-wash) 0%,
+    color-mix(in oklab, var(--onboarding-gradient-wash) 48%, transparent) 42%,
+    transparent 78%
   );
-  animation: onboarding-gradient-drift 19s ease-in-out -9s infinite
+  animation: onboarding-gradient-drift 28s ease-in-out -11s infinite
     alternate-reverse;
 }
 .onboarding-gradient > div:nth-child(3) {
   background: radial-gradient(
-    ellipse at 80% 20%,
-    color-mix(in oklab, var(--onboarding-gradient-surface) 30%, transparent),
-    transparent 50%
+    ellipse at 72% 28%,
+    color-mix(in oklab, var(--onboarding-gradient-surface) 62%, transparent) 0%,
+    transparent 72%
   );
-  animation: onboarding-gradient-drift 24s ease-in-out -6s infinite alternate;
+  animation: onboarding-gradient-drift 38s ease-in-out -8s infinite alternate;
 }
 @keyframes onboarding-gradient-drift {
   from {
-    transform: translate(-7%, -4%) rotate(-8deg) scale(1);
+    transform: translate(-4%, -3%) rotate(-4deg) scale(1.02);
   }
   to {
-    transform: translate(8%, 7%) rotate(12deg) scale(1.12);
+    transform: translate(5%, 4%) rotate(6deg) scale(1.08);
   }
 }
 
@@ -340,8 +349,13 @@
   mask-size: 8px 16px, calc(100% - 8px) 100%;
 }
 .onboarding-visual .onboarding-step-panel {
+  isolation: isolate;
   display: grid;
   padding: 32px;
+}
+.onboarding-visual .onboarding-step-panel > :not(.onboarding-riso) {
+  position: relative;
+  z-index: 1;
 }
 .onboarding-panel-note {
   margin: 18px 0 0;
@@ -359,20 +373,73 @@
   justify-content: center;
   min-height: 380px;
 }
-.onboarding-welcome-orbit {
+.onboarding-riso {
   position: absolute;
-  top: 48%;
+  top: 50%;
   left: 50%;
-  width: 370px;
-  height: 370px;
-  border: 1px solid
-    color-mix(in oklab, var(--onboarding-accent) 10%, transparent);
-  border-radius: 50%;
+  width: min(400px, 110%);
+  height: auto;
+  overflow: visible;
   transform: translate(-50%, -50%);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    var(--onboarding-ink) 16%,
+    var(--onboarding-ink) 64%,
+    transparent 94%
+  );
+  pointer-events: none;
 }
-.onboarding-welcome-orbit-inner {
-  width: 280px;
-  height: 280px;
+.onboarding-welcome-riso {
+  top: calc(50% - 66px);
+}
+.onboarding-step-riso {
+  z-index: 0;
+  top: var(--onboarding-riso-y, 50%);
+  left: var(--onboarding-riso-x, 50%);
+  width: min(var(--onboarding-riso-width, 360px), 90%);
+  opacity: 0.76;
+  transform: translate(-50%, -50%)
+    rotate(var(--onboarding-riso-rotation, 0deg));
+}
+.onboarding-step-riso-providers {
+  --onboarding-riso-x: 18%;
+  --onboarding-riso-y: 22%;
+  --onboarding-riso-width: 420px;
+  --onboarding-riso-rotation: -18deg;
+}
+.onboarding-step-riso-theme {
+  --onboarding-riso-x: 82%;
+  --onboarding-riso-y: 22%;
+  --onboarding-riso-width: 380px;
+  --onboarding-riso-rotation: 24deg;
+}
+.onboarding-step-riso-worktrees {
+  --onboarding-riso-x: 22%;
+  --onboarding-riso-y: 33%;
+  --onboarding-riso-rotation: -18deg;
+}
+.onboarding-step-riso-notifications {
+  --onboarding-riso-x: 82%;
+  --onboarding-riso-y: 72%;
+  --onboarding-riso-width: 390px;
+  --onboarding-riso-rotation: 24deg;
+}
+.onboarding-step-riso-ready {
+  --onboarding-riso-y: 40%;
+  --onboarding-riso-rotation: -8deg;
+}
+.onboarding-riso-ink {
+  opacity: 0.42;
+}
+.onboarding-riso-ink-warm {
+  fill: oklch(from var(--onboarding-accent) 0.68 min(0.18, c) 35);
+}
+.onboarding-riso-ink-accent {
+  fill: var(--onboarding-accent);
+}
+.onboarding-root[data-appearance="dark"] .onboarding-riso-ink {
+  opacity: 0.55;
 }
 .onboarding-welcome-mark {
   position: relative;
@@ -599,13 +666,6 @@ label:has(:checked) > .onboarding-radio::after {
   font-size: 10px;
   white-space: nowrap;
 }
-.onboarding-copy-button {
-  flex-shrink: 0;
-  border-radius: 3px;
-  padding: 3px;
-  color: var(--onboarding-muted);
-  transition-property: box-shadow;
-}
 .onboarding-command-label {
   margin: 14px 0 6px;
   color: var(--onboarding-muted);
@@ -614,10 +674,17 @@ label:has(:checked) > .onboarding-radio::after {
 .onboarding-install-actions {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   width: 100%;
   margin-top: 18px;
+}
+.onboarding-install-primary-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
 }
 .onboarding-recheck {
   display: flex;
@@ -678,7 +745,7 @@ label:has(:checked) > .onboarding-radio::after {
   transition-property: left, width, transform;
 }
 .onboarding-app-preview {
-  height: 320px;
+  height: 360px;
   overflow: hidden;
   border-radius: 12px;
   background: var(--app-frame);
@@ -898,15 +965,46 @@ label:has(:checked) > .onboarding-radio::after {
   color: var(--onboarding-muted);
   font-size: 11px;
 }
+.onboarding-select-field {
+  --glass-fill-input: var(--onboarding-tint);
+  --glass-hover-input: color-mix(
+    in oklab,
+    var(--onboarding-accent) 11%,
+    var(--onboarding-surface)
+  );
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 144px;
+  min-width: 0;
+  border-radius: 9px;
+  transition: box-shadow 180ms;
+}
+.onboarding-select-field:has(:focus-visible) {
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--onboarding-ink) 18%, transparent);
+}
 .onboarding-root .onboarding-select {
-  max-width: 180px;
-  padding: 5px 3px;
-  border-radius: 5px;
+  width: 100%;
+  min-height: 32px;
+  padding: 7px 30px 7px 11px;
+  border: 0;
+  border-radius: inherit;
+  appearance: none;
   color: var(--onboarding-ink);
-  background: var(--onboarding-tint);
-  font-size: 11px;
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
   cursor: pointer;
   transition-property: box-shadow;
+}
+.onboarding-select-icon {
+  position: absolute;
+  top: 50%;
+  right: 11px;
+  width: 11px;
+  height: 11px;
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 .onboarding-select option {
   background: var(--onboarding-surface);
@@ -1079,6 +1177,13 @@ html[data-onboarding-transition]::view-transition-new(root) {
   }
   .onboarding-welcome {
     min-height: 260px;
+  }
+  .onboarding-welcome-riso {
+    top: calc(50% - 50px);
+    width: min(300px, 110%);
+  }
+  .onboarding-step-riso {
+    opacity: 0.64;
   }
   .onboarding-welcome-mark {
     width: 90px;

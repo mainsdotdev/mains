@@ -166,12 +166,13 @@ export function SelectResourcesStep<T extends SelectableResource>({
           />
           {query && (
             <Button
+              variant="icon" iconSize="sm"
               onClick={clearSearch}
-              className="absolute right-2 top-1/2 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded hover:bg-primary/20 dark:hover:bg-primary/10"
+              className="absolute right-2 top-1/2 -translate-y-1/2"
               title="Clear search"
               aria-label="Clear search"
             >
-              <Close className="size-3 text-primary-600 dark:text-primary-400" />
+              <Close className="size-3" />
             </Button>
           )}
         </div>

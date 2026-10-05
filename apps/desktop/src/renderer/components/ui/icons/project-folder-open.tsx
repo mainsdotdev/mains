@@ -1,21 +1,23 @@
+import * as React from "react"
 import { SVGProps } from "react"
-
 const SvgComponent = (props: SVGProps<SVGSVGElement>) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    width={16}
-    height={16}
+    width={24}
+    height={24}
     fill="none"
-    viewBox="0 0 24 24"
+    stroke="currentColor"
+    strokeLinejoin="round"
+    strokeWidth={1.5}
+    color="currentColor"
     {...props}
+    viewBox="0 0 24 24"
   >
     <path
-      stroke="currentColor"
       strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={1.5}
-      d="m6.2 14.9 1.3-2.7c.37-.73 1.13-1.15 1.95-1.15H20.1c1.44 0 2.5 1.35 2.15 2.75l-1.25 4.6c-.25 1.02-1.16 1.75-2.2 1.75H5c-1.24 0-2.25-1.01-2.25-2.25V6.95c0-1.24 1.01-2.25 2.25-2.25h2.72c.6 0 1.17.24 1.59.66l1.14 1.14c.42.42.99.66 1.59.66h6.96c1.24 0 2.25 1.01 2.25 2.25v1.6"
+      d="M2 19V7.549c0-1.444 0-2.166.243-2.733a3 3 0 0 1 1.573-1.573C4.383 3 5.098 3 6.55 3h.494a2 2 0 0 1 1.557.745L10.418 6m0 0H16c1.4 0 2.1 0 2.635.272a2.5 2.5 0 0 1 1.092 1.093C20 7.9 20 8.6 20 10v1m-9.582-5H7"
     />
+    <path d="m3.158 15.514.298-.742c.734-1.827 1.101-2.74 1.866-3.256C6.088 11 7.076 11 9.052 11h8.06c2.688 0 4.033 0 4.63.879.598.879.098 2.121-.9 4.607l-.298.742c-.734 1.827-1.101 2.74-1.866 3.256-.766.516-1.754.516-3.73.516h-8.06c-2.688 0-4.033 0-4.63-.879-.598-.878-.098-2.121.9-4.607Z" />
   </svg>
 )
 export default SvgComponent

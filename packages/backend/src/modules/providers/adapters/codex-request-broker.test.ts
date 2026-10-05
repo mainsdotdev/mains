@@ -351,6 +351,80 @@ describe("Codex request broker", () => {
     ]);
   });
 
+  it.each(["form", "openai/form", "openaiForm"])("collects %s input through the form dialog and returns typed content", async (mode) => {
+    const requestedSchema = {
+      type: "object",
+      properties: {
+        calendarId: { type: "string" },
+        count: { type: "integer", minimum: 1 },
+        notify: { type: "boolean" },
+        attendees: { type: "array", items: { type: "string", enum: ["okan", "alex"] } },
+      },
+      required: ["calendarId", "count"],
+    };
+    const content = { calendarId: "work", count: 2, notify: false, attendees: ["okan"] };
+    const { broker, requestApproval, runState } = createHarness(async (request) => ({
+      requestId: request.requestId, approved: true, answer: JSON.stringify(content),
+    }));
+    const responder = createResponder();
+    await handle(broker, responder.server, "mcpServer/elicitation/request", {
+      serverName: "Calendar", mode, message: "Choose a calendar.", requestedSchema,
+    });
+    expect(requestApproval).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      kind: "elicitation", serverName: "Calendar", elicitationMode: "form",
+      question: "Choose a calendar.", requestedSchema,
+    }));
+    expect(responder.responses).toEqual([{ id: 42, result: { action: "accept", content, _meta: null } }]);
+    expect(runState.approvedElicitationServers?.size).toBe(0);
+  });
+
+  it("prompts for optional form fields even after a session-wide connector approval", async () => {
+    const { broker, requestApproval, runState } = createHarness(async (request) => ({
+      requestId: request.requestId, approved: true, answer: '{"label":"Travel"}',
+    }));
+    runState.approvedElicitationServers?.add("calendar");
+    const responder = createResponder();
+    await handle(broker, responder.server, "mcpServer/elicitation/request", {
+      serverName: "Calendar", mode: "form",
+      requestedSchema: { type: "object", properties: { label: { type: "string" } } },
+    });
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(responder.responses[0]?.result).toMatchObject({ action: "accept", content: { label: "Travel" } });
+  });
+
+  it.each([undefined, "not-json", "[]", '{"calendarId":{}}', '{}', '{"calendarId":"unknown"}', '{"calendarId":"work","extra":{}}']) (
+    "declines invalid or incomplete form answers (%s)", async (answer) => {
+      const { broker } = createHarness(async (request) => ({ requestId: request.requestId, approved: true, answer }));
+      const responder = createResponder();
+      await handle(broker, responder.server, "mcpServer/elicitation/request", {
+        serverName: "Calendar", mode: "form",
+        requestedSchema: { type: "object", properties: { calendarId: { type: "string", enum: ["work"] } }, required: ["calendarId"] },
+      });
+      expect(responder.responses).toEqual([{ id: 42, result: { action: "decline", content: null, _meta: null } }]);
+    },
+  );
+
+  it.each([[undefined, "decline"], ["cancel", "cancel"]])("distinguishes a declined form from a canceled form (%s)", async (answer, action) => {
+    const { broker } = createHarness(async (request) => ({ requestId: request.requestId, approved: false, answer }));
+    const responder = createResponder();
+    await handle(broker, responder.server, "mcpServer/elicitation/request", {
+      serverName: "Calendar", requestedSchema: { type: "object", properties: { title: { type: "string" } } },
+    });
+    expect(responder.responses).toEqual([{ id: 42, result: { action, content: null, _meta: null } }]);
+  });
+
+  it("cancels a form when its run aborts while waiting for the answer", async () => {
+    const { broker, runState } = createHarness(async (request) => {
+      Object.assign(runState, { aborted: true });
+      return { requestId: request.requestId, approved: true, answer: '{"title":"Work"}' };
+    });
+    const responder = createResponder();
+    await handle(broker, responder.server, "mcpServer/elicitation/request", {
+      serverName: "Calendar", requestedSchema: { type: "object", properties: { title: { type: "string" } } },
+    });
+    expect(responder.responses).toEqual([{ id: 42, result: { action: "cancel", content: null, _meta: null } }]);
+  });
+
   it("only caches form elicitation approvals that need no values", async () => {
     const { broker, requestApproval, runState } =
       createHarness();

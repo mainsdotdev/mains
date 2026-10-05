@@ -18,6 +18,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { z } from "zod";
+import type { Tool as CopilotTool } from "@github/copilot-sdk";
 import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
 import type { JsonValue } from "./codex-app-server-protocol/generated/serde_json/JsonValue";
 import type { DynamicToolSpec } from "./codex-app-server-protocol/generated/v2/DynamicToolSpec";
@@ -28,6 +29,8 @@ import {
   handleSaveFinding,
   handleSaveFindings,
   handleCheckPackage,
+  handleStartVoiceTask, handleListVoiceTasks, handleReadVoiceTask, handleWaitVoiceTask,
+  handleSendVoiceTaskMessage, handleStopVoiceTask, handleEndVoiceChat,
   type MainsToolContext,
 } from "./mains-tools.core";
 import {
@@ -35,6 +38,8 @@ import {
   SaveFindingSchema,
   SaveFindingsSchema,
   CheckPackageSchema,
+  StartVoiceTaskSchema, ListVoiceTasksSchema, ReadVoiceTaskSchema, WaitVoiceTaskSchema,
+  SendVoiceTaskMessageSchema, StopVoiceTaskSchema, EndVoiceChatSchema,
 } from "./mains-tools.schemas";
 
 /** The MCP-style result every mains handler returns. */
@@ -53,6 +58,7 @@ export interface MainsToolDef {
   providers: ProviderId[];
   /** Which experience modes expose this tool. Absent = every mode. */
   modes?: ModeId[];
+  scope?: "voice";
 }
 
 // Availability groups, named so the asymmetry is self-documenting.
@@ -66,13 +72,23 @@ const REVIEW_FLOW: ProviderId[] = [
 // they need no explicit tool; Codex/Cursor cannot hook that path. Deliberate.
 const PACKAGE_GUARD: ProviderId[] = [PROVIDER_IDS.codex, PROVIDER_IDS.cursor];
 
-// Mode group. Every mains tool belongs to the developer experience: the
+// Mode group. Ordinary mains tools belong to the developer experience: the
 // review flow needs a workspace, and package installs are a coding concern.
-// Work and chat expose none — the field stays per-tool so a future tool can
+// Work and chat expose none outside a voice session — the field stays per-tool so a future tool can
 // widen without reopening the drivers.
 const DEVELOPER_ONLY: ModeId[] = ["developer"];
 
 export const MAINS_TOOLS: MainsToolDef[] = [
+  ...[
+    { name: "StartVoiceTask", schema: StartVoiceTaskSchema, handler: handleStartVoiceTask },
+    { name: "ListVoiceTasks", schema: ListVoiceTasksSchema, handler: handleListVoiceTasks },
+    { name: "ReadVoiceTask", schema: ReadVoiceTaskSchema, handler: handleReadVoiceTask },
+    { name: "WaitVoiceTask", schema: WaitVoiceTaskSchema, handler: handleWaitVoiceTask },
+    { name: "SendVoiceTaskMessage", schema: SendVoiceTaskMessageSchema, handler: handleSendVoiceTaskMessage },
+    { name: "StopVoiceTask", schema: StopVoiceTaskSchema, handler: handleStopVoiceTask },
+    { name: "EndVoiceChat", schema: EndVoiceChatSchema, handler: handleEndVoiceChat },
+  ].map((tool) => ({ ...tool, description: TOOL_DESCRIPTIONS[tool.name as keyof typeof TOOL_DESCRIPTIONS],
+    providers: [PROVIDER_IDS.codex], scope: "voice" as const })),
   {
     name: "SaveReview",
     description: TOOL_DESCRIPTIONS.SaveReview,
@@ -112,9 +128,10 @@ const BY_NAME = new Map(MAINS_TOOLS.map((t) => [t.name, t]));
 function forProvider(
   provider: ProviderId,
   mode: ModeId = DEFAULT_MODE_ID,
+  scope?: "voice",
 ): MainsToolDef[] {
   return MAINS_TOOLS.filter(
-    (t) => t.providers.includes(provider) && (t.modes?.includes(mode) ?? true),
+    (t) => t.scope === scope && t.providers.includes(provider) && (t.modes?.includes(mode) ?? true),
   );
 }
 
@@ -181,37 +198,30 @@ export function toClaudeTools(
 }
 
 /** Copilot custom tool: prefixed name, JSON Schema params, string result. */
-export interface CopilotToolSpec {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  handler: (args: any) => Promise<string>;
-}
-
 export function toCopilotTools(
   ctx: MainsToolContext,
   mode: ModeId = DEFAULT_MODE_ID,
-): CopilotToolSpec[] {
+): CopilotTool[] {
   return forProvider(PROVIDER_IDS.copilot, mode).map((t) => ({
     name: `mcp__mains__${t.name}`,
     description: t.description,
     parameters: toJsonSchema(t.schema),
-    handler: async (args: any) => {
+    handler: async (args) => {
       const result = await t.handler(args, ctx);
       return result.content[0]?.text ?? "";
     },
   }));
 }
 
-/** JSON-Schema tool definition for the Cursor stdio MCP script. */
+/** JSON-Schema tool definition for a session-local stdio MCP script. */
 export interface McpToolDef {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
 }
 
-export function toMcpToolDefs(mode: ModeId = DEFAULT_MODE_ID): McpToolDef[] {
-  return forProvider(PROVIDER_IDS.cursor, mode).map((t) => ({
+export function toMcpToolDefs(mode: ModeId = DEFAULT_MODE_ID, provider: ProviderId = PROVIDER_IDS.cursor, scope?: "voice"): McpToolDef[] {
+  return forProvider(provider, mode, scope).map((t) => ({
     name: t.name,
     description: t.description,
     inputSchema: toJsonSchema(t.schema),

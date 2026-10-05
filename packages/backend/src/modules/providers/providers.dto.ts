@@ -43,8 +43,9 @@ export interface UpdateProviderPayload {
 
 /**
  * `providers:updateRunSettings` — the settings the composer's toolbar edits,
- * as a patch: only the keys present change. `effortLevel` is a level from
- * `EFFORT_LEVELS` or "" for reasoning off; `permissionMode` is one of the
+ * as a patch: only the keys present change. `effortLevel` is a provider-defined
+ * model catalog value (known `EFFORT_LEVELS` outside Codex), or "" for reasoning
+ * off; `permissionMode` is one of the
  * provider's ids (`shared/run-settings.ts`); `goalMode` / `planMode` are
  * Codex-only.
  */
@@ -80,9 +81,4 @@ export interface ProviderListResponse {
 // ─────────────────────────────────────────────────────────────
 // CLI Detection
 // ─────────────────────────────────────────────────────────────
-export interface DetectedClisResponse {
-  claude: boolean;
-  copilot: boolean;
-  codex: boolean;
-  cursor: boolean;
-}
+export type { DetectedClis as DetectedClisResponse } from "@mains/contracts/provider-cli";

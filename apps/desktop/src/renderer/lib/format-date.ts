@@ -11,6 +11,25 @@ function toDate(date: string | number | Date): Date {
   return new Date(date);
 }
 
+/** Compact elapsed time for small metadata labels: now, 7m, 2h, 1d, 1w. */
+export function formatCompactRelativeDate(
+  date: string | number | Date,
+  now = Date.now(),
+): string {
+  const elapsed = Math.max(0, now - toDate(date).getTime());
+  if (!Number.isFinite(elapsed)) return "";
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  if (days < 30) return `${Math.floor(days / 7)}w`;
+  if (days < 365) return `${Math.floor(days / 30)}mo`;
+  return `${Math.floor(days / 365)}y`;
+}
+
 export function formatDate(date: string | number | Date): string {
   const now = new Date();
   const past = toDate(date);

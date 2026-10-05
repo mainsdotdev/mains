@@ -1,3 +1,4 @@
+import { readReviewComments } from "@mains/contracts/review-comments";
 // ─────────────────────────────────────────────────────────────
 // Shared utilities for work run adapters (Claude & Copilot)
 // Pure functions with no SDK-specific dependencies.
@@ -6,6 +7,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
+import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import type {
   WorkRunEvent,
   WorkRunEventHandler,
@@ -258,15 +261,18 @@ export function safeJson(value: unknown): string {
 // ─────────────────────────────────────────────────────────────
 
 /** Where a run's attachments are written: `<tmp>/mains-uploads/<runId>`. */
-export function attachmentUploadDir(runId: string): string {
-  return path.join(os.tmpdir(), "mains-uploads", runId);
+export function attachmentUploadDir(runId: string, clientUserMessageId?: string): string {
+  const root = path.join(os.tmpdir(), "mains-uploads", runId);
+  // Two queued/steered images with the same name must keep independent bytes.
+  return clientUserMessageId ? path.join(root, createHash("sha256").update(clientUserMessageId).digest("hex").slice(0, 24)) : root;
 }
 
 export function saveAttachments(
   attachments: FileAttachment[],
   runId: string,
+  clientUserMessageId?: string,
 ): { savedPaths: string[]; inlineTexts: string[] } {
-  const uploadDir = attachmentUploadDir(runId);
+  const uploadDir = attachmentUploadDir(runId, clientUserMessageId);
   fs.mkdirSync(uploadDir, { recursive: true });
 
   const savedPaths: string[] = [];
@@ -567,6 +573,7 @@ export async function emitUserPromptArtifact(
   content: string,
   options?: {
     attachments?: FileAttachment[];
+    context?: WorkRunContextItem[];
     contextIssues?: Array<{
       provider: string;
       number?: number | null;
@@ -597,29 +604,60 @@ export async function emitUserPromptArtifact(
     }>;
     /** The run the attachments were saved under — locates their on-disk copies. */
     runId?: string;
+    clientUserMessageId?: string;
+    providerTurnId?: string;
+    delivery?: "steer";
     /** Resolved model for the turn this prompt starts. */
     model?: string;
   },
 ): Promise<void> {
+  const reviewComments = readReviewComments((options?.context ?? []).flatMap(({ metadata }) => metadata?.source === "review" ? [metadata] : []));
+  const browserAnnotations: BrowserAnnotation[] = (options?.context ?? []).flatMap(({ metadata, ref }, index) => {
+    if (metadata?.source !== "browser" || !Array.isArray(metadata.elements)) return [];
+    const elements = metadata.elements.flatMap((element) => {
+      if (!element || typeof element.tagName !== "string" || typeof element.selector !== "string") return [];
+      return [{
+        tagName: element.tagName as string,
+        selector: element.selector as string,
+        ...(typeof element.text === "string" ? { text: element.text } : {}),
+        ...(typeof element.componentName === "string" ? { componentName: element.componentName } : {}),
+      }];
+    });
+    if (!elements.length) return [];
+    return [{
+      id: typeof metadata.id === "string" ? metadata.id : `browser-${index}`,
+      url: typeof metadata.url === "string" ? metadata.url : ref ?? "",
+      ...(typeof metadata.title === "string" ? { title: metadata.title } : {}),
+      ...(typeof metadata.comment === "string" ? { comment: metadata.comment } : {}),
+      elements,
+    }];
+  });
   await onEvent({
     type: "artifact",
     kind: "user-prompt",
     content,
     metadata: {
       source: "user",
+      ...(options?.context?.find((item) => item.metadata?.voiceDelegation)?.metadata?.voiceDelegation
+        ? { voiceDelegation: options.context.find((item) => item.metadata?.voiceDelegation)!.metadata!.voiceDelegation }
+        : {}),
+      ...(options?.clientUserMessageId ? { clientUserMessageId: options.clientUserMessageId } : {}),
+      ...(options?.providerTurnId ? { providerTurnId: options.providerTurnId } : {}),
+      ...(options?.delivery ? { delivery: options.delivery } : {}),
+      ...(browserAnnotations.length ? { browserAnnotations } : {}),
+      ...(reviewComments.length ? { reviewComments } : {}),
       attachments: options?.attachments?.map((a) => {
         const captureName =
           a.sourcePath && a.sourcePath.replace(/\\/g, "/").includes("/browser-captures/")
             ? path.basename(a.sourcePath)
             : undefined;
-        // Documents land in the run's upload dir (see `saveAttachments`) — except
-        // .txt, which is inlined into the prompt and never written — so the
-        // transcript can open the copy the agent read.
+        // Images and documents land in the run's upload dir (see `saveAttachments`),
+        // except inline .txt files. Historical previews use the copy the agent
+        // read rather than relying on the bounded browser capture cache.
         const uploadedPath =
           options?.runId &&
-          a.type === "document" &&
-          path.extname(a.name).toLowerCase() !== ".txt"
-            ? path.join(attachmentUploadDir(options.runId), path.basename(a.name))
+          (a.type === "image" || (a.type === "document" && path.extname(a.name).toLowerCase() !== ".txt"))
+            ? path.join(attachmentUploadDir(options.runId, options.clientUserMessageId), path.basename(a.name))
             : undefined;
         return {
           name: a.name,

@@ -29,6 +29,9 @@ function bind<F extends (callback: never) => () => void>(
 
 export const appEvents = {
   runs: {
+    onRealtimeEvent: bind<typeof window.api.runs.onRealtimeEvent>(
+      CHANNELS.runs.realtimeEvent,
+    ),
     onStreamingEvent: bind<typeof window.api.runs.onStreamingEvent>(
       CHANNELS.runs.ephemeralEvent,
     ),

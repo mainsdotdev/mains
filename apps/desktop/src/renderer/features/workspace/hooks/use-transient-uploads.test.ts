@@ -1,15 +1,44 @@
 // @vitest-environment jsdom
 
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   clearTransientUploads,
   clearWorkspaceTransientUploads,
   useTransientUploads,
+  moveTransientUploadsToOwner,
 } from "./use-transient-uploads";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 
 describe("useTransientUploads", () => {
+  it("moves draft attachments to the selected context without revoking their previews", () => {
+    const revoke = vi.fn();
+    const previous = URL.revokeObjectURL;
+    URL.revokeObjectURL = revoke;
+    const from = renderHook(() => useTransientUploads("retarget-from"));
+    const to = renderHook(() => useTransientUploads("retarget-to"));
+    const upload = { file: new File(["image"], "draft.png"), type: "image" as const, preview: "blob:draft" };
+    const oldUpload = { file: new File(["old"], "old.png"), type: "image" as const, preview: "blob:old" };
+    try {
+      act(() => {
+        from.result.current[1]([upload]);
+        to.result.current[1]([oldUpload]);
+      });
+      act(() => moveTransientUploadsToOwner("retarget-from", "retarget-to"));
+      expect(from.result.current[0]).toEqual([]);
+      expect(to.result.current[0]).toEqual([upload]);
+      expect(revoke.mock.calls).toEqual([["blob:old"]]);
+      act(() => clearTransientUploads("retarget-from"));
+      expect(revoke.mock.calls).toEqual([["blob:old"]]);
+      act(() => clearTransientUploads("retarget-to"));
+      expect(revoke.mock.calls).toEqual([["blob:old"], ["blob:draft"]]);
+    } finally {
+      from.unmount();
+      to.unmount();
+      URL.revokeObjectURL = previous;
+    }
+  });
+
   it("keeps unsent files through an unmount and isolates conversations", () => {
     const upload = {
       file: new File(["draft"], "draft.txt", { type: "text/plain" }),

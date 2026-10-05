@@ -1,3 +1,4 @@
+import { pickRunSettingConfig } from "@mains/contracts/run-settings";
 // ─────────────────────────────────────────────────────────────
 // Claude ProviderDriver
 //
@@ -56,9 +57,8 @@ import type {
   WorkRunUsage,
 } from "../../../../shared/adapter.types";
 import {
-  findClaudeBinary,
-  findPackagedClaudeSdkBinary,
-  resolveCandidate,
+  claudeAuthLoginCommand,
+  resolveClaudeRuntime,
 } from "../providers.utils";
 import { AGENT_ID_IN_RESULT } from "../../../../shared/subagent";
 import type { ModeId } from "@mains/contracts/modes";
@@ -265,22 +265,6 @@ export function buildClaudePermissionModeOptions(
     // forward permission requests that require an application decision.
     ...(canUseTool ? { canUseTool } : {}),
   };
-}
-
-/**
- * The Agent SDK ships a Claude Code binary with the same protocol version.
- * Let it select that binary unless the user explicitly configured an override;
- * auto-discovered system CLIs update independently and can break the SDK's
- * bidirectional permission stream.
- */
-export function buildClaudeExecutableOptions(
-  configuredBinary?: string,
-  packagedSdkBinary?: string | null,
-): Pick<SDKOptions, "pathToClaudeCodeExecutable"> {
-  const candidate = configuredBinary ?? packagedSdkBinary;
-  if (!candidate) return {};
-  const resolved = resolveCandidate(candidate);
-  return resolved ? { pathToClaudeCodeExecutable: resolved } : {};
 }
 
 /**
@@ -1262,6 +1246,7 @@ export function createClaudeElicitationHandler({
       cancelApproval(requestId);
       return { action: "cancel" };
     }
+    if (response.answer === "cancel") return { action: "cancel" };
     if (!response.approved) return { action: "decline" };
 
     if (mode === "url") return { action: "accept" };
@@ -2788,27 +2773,16 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
    * that signs in through the CLI, the setting sources, and local plugins.
    */
   function buildProcessOptions(): SDKOptions {
-    const packagedSdkBinary = config.binary
-      ? null
-      : findPackagedClaudeSdkBinary();
-    const executableOptions = buildClaudeExecutableOptions(
-      config.binary,
-      packagedSdkBinary,
-    );
-    if (config.binary && !executableOptions.pathToClaudeCodeExecutable) {
+    const runtime = resolveClaudeRuntime(config.binary);
+    if (!runtime) {
+      throw new Error("Claude is unavailable. Reinstall Mains to restore its bundled Claude runtime.");
+    }
+    if (config.binary && runtime.source === "bundled") {
       logWarn(
         `Configured binary path "${config.binary}" is not a valid executable; using the SDK-bundled Claude CLI`,
       );
-    } else if (executableOptions.pathToClaudeCodeExecutable) {
-      logInfo(
-        config.binary
-          ? "Using configured Claude CLI at:"
-          : "Using packaged SDK-bundled Claude CLI at:",
-        executableOptions.pathToClaudeCodeExecutable,
-      );
-    } else {
-      logInfo("Using SDK-bundled Claude CLI");
     }
+    logInfo(`Using ${runtime.source} Claude CLI at:`, runtime.path);
 
     // Strip API key/auth token when using CLI (subscription mode) so the subprocess
     // uses CLI login session rather than API billing.
@@ -2817,7 +2791,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
 
     const options: SDKOptions = {
-      ...executableOptions,
+      pathToClaudeCodeExecutable: runtime.path,
       env: cleanEnv,
       settingSources: config.settingSources ?? ["user", "project", "local"],
     };
@@ -2832,6 +2806,23 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     }
 
     return options;
+  }
+
+  /** Read CLI metadata without sending a model turn; always release its process. */
+  async function withControlQuery<T>(
+    read: (query: SDKQuery) => Promise<T>,
+    cwd?: string,
+  ): Promise<T> {
+    await ensureSDK();
+    if (!queryFn) throw new Error("Claude SDK not properly initialized");
+    const options = buildProcessOptions();
+    if (cwd) options.cwd = cwd;
+    const query = queryFn({ prompt: "", options });
+    try {
+      return await read(query);
+    } finally {
+      query.close();
+    }
   }
 
   async function buildOptions(args: {
@@ -2862,6 +2853,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     /** Per-run tool policy from the mode harness. */
     toolPolicy?: WorkRunToolPolicy | null;
     additionalDirectories?: string[];
+    configSnapshot?: Record<string, unknown> | null;
   }): Promise<SDKOptions> {
     const {
       model,
@@ -2884,9 +2876,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       additionalDirectories,
     } = args;
 
+    const runConfig = { ...config, ...pickRunSettingConfig(args.configSnapshot ?? {}) } as ClaudeCodeAdapterConfig;
     const processOptions = buildProcessOptions();
     const permissionMode =
-      runPermissionMode ?? config.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
+      runPermissionMode ?? runConfig.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
     const settingSources = processOptions.settingSources!;
     // The bridge auto-allows this set, so it must see the *effective* list —
     // handing it the global default would auto-approve tools the run's policy
@@ -2940,7 +2933,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     }
 
     if (workspacePath) options.cwd = workspacePath;
-    const grantedDirectories = additionalDirectories ?? config.additionalDirectories;
+    const grantedDirectories = additionalDirectories ?? runConfig.additionalDirectories;
     if (grantedDirectories?.length) options.additionalDirectories = grantedDirectories;
 
     if (resumeSessionId) {
@@ -2953,18 +2946,18 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       buildClaudeSessionIdOptions({ newSessionId, resumeSessionId, forkSession }),
     );
 
-    const mergedAgents = mergeAgentsConfig(config.agents, runAgents);
+    const mergedAgents = mergeAgentsConfig(runConfig.agents, runAgents);
     if (mergedAgents && Object.keys(mergedAgents).length > 0) {
       options.agents = convertAgentsConfig(mergedAgents);
     }
 
-    const mergedHooks = mergeHooksConfig(config.hooks, runHooks);
+    const mergedHooks = mergeHooksConfig(runConfig.hooks, runHooks);
     if (mergedHooks && Object.keys(mergedHooks).length > 0) {
       options.hooks = convertHooksConfig(mergedHooks);
     }
 
-    if (config.structuredOutputsSelectedId && config.structuredOutputs) {
-      const entry = config.structuredOutputs[config.structuredOutputsSelectedId];
+    if (runConfig.structuredOutputsSelectedId && runConfig.structuredOutputs) {
+      const entry = runConfig.structuredOutputs[runConfig.structuredOutputsSelectedId];
       if (entry?.schema) {
         options.outputFormat = { type: "json_schema", schema: entry.schema };
       }
@@ -2974,18 +2967,18 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     // thinking is disabled ("effort 'xhigh' is not supported when thinking is
     // disabled on this model"). A stale `thinkingMode: false` alongside
     // `ultracode: true` must therefore not reach the CLI — ultracode wins.
-    const thinkingEnabled = !!config.thinkingMode || !!config.ultracode;
+    const thinkingEnabled = !!runConfig.thinkingMode || !!runConfig.ultracode;
     if (thinkingEnabled) {
       // A fixed token budget takes precedence over adaptive thinking. Useful on
       // models without adaptive support, or to cap cost/latency.
       options.thinking =
-        typeof config.thinkingBudgetTokens === "number" && config.thinkingBudgetTokens > 0
-          ? { type: "enabled", budgetTokens: config.thinkingBudgetTokens }
+        typeof runConfig.thinkingBudgetTokens === "number" && runConfig.thinkingBudgetTokens > 0
+          ? { type: "enabled", budgetTokens: runConfig.thinkingBudgetTokens }
           : { type: "adaptive" };
     } else {
       options.thinking = { type: "disabled" };
     }
-    if (config.ultracode) {
+    if (runConfig.ultracode) {
       // ultracode = xhigh effort + automatic dynamic-workflow orchestration.
       // The CLI applies xhigh itself, so we must NOT also send a conflicting
       // options.effort ("ultracode" is not a valid EffortLevel). Delivered via
@@ -2994,14 +2987,17 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         ...((options.settings as Record<string, unknown>) || {}),
         ultracode: true,
       };
-    } else if (thinkingEnabled && config.effortLevel) {
-      options.effort = config.effortLevel;
+    } else if (thinkingEnabled && runConfig.effortLevel) {
+      options.effort = runConfig.effortLevel;
+    }
+    if (runConfig.ultracode === false) {
+      options.settings = { ...((options.settings as Record<string, unknown>) || {}), ultracode: false };
     }
 
-    if (config.fastMode) {
+    if (runConfig.fastMode !== undefined) {
       options.settings = {
         ...((options.settings as Record<string, unknown>) || {}),
-        fastMode: true,
+        fastMode: runConfig.fastMode,
       };
     }
 
@@ -3151,6 +3147,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     abortController: AbortController,
     isInitial: boolean,
     permissionMode: ClaudePermissionModeRef,
+    fastModeRequested = !!config.fastMode,
   ): ClaudeSession {
     return {
       runId,
@@ -3159,7 +3156,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       permissionMode,
       runtimeSettingsPath:
         typeof options.settings === "string" ? options.settings : undefined,
-      fastModeRequested: !!config.fastMode,
+      fastModeRequested,
       isInitial,
       state: { hasAssistantContent: false },
       toolCallIndex: new Map(),
@@ -3328,16 +3325,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   }
 
   // ─────────────────────────────────────────────────────────────
-  // CLI helpers (version + self-update via the Claude Code CLI)
+  // CLI helpers (the same executable and authentication environment as runs)
   // ─────────────────────────────────────────────────────────────
-
-  function resolveClaudeBinary(): string | null {
-    if (config.binary) {
-      const resolved = resolveCandidate(config.binary);
-      if (resolved) return resolved;
-    }
-    return findClaudeBinary();
-  }
 
   /** Run a one-shot `claude <args>` CLI command. */
   function runClaudeCli(
@@ -3345,13 +3334,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     timeoutMs: number,
     cwd?: string,
   ): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    const binaryPath = resolveClaudeBinary();
-    if (!binaryPath) {
+    const runtime = resolveClaudeRuntime(config.binary);
+    if (!runtime) {
       return Promise.resolve({ stdout: "", stderr: "Claude CLI not found", code: null });
     }
     return new Promise((resolve) => {
-      const child = spawn(binaryPath, args, {
-        env: { ...process.env, HOME: os.homedir() },
+      const child = spawn(runtime.path, args, {
+        env: { ...buildProcessOptions().env, HOME: os.homedir() },
         stdio: ["ignore", "pipe", "pipe"],
         timeout: timeoutMs,
         // project/local scope ops resolve the scope relative to cwd; run them in
@@ -3494,9 +3483,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         mode: request.mode,
         toolPolicy: request.toolPolicy,
         additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, true, permissionModeRef);
+      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
       return { session, prompt: buildStartPrompt(request), sessionId };
@@ -3537,9 +3528,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         mode: request.mode,
         toolPolicy: request.toolPolicy,
         additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, false, permissionModeRef);
+      const session = newSession(request.runId, options, abortController, false, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       // Prime sessionId so executePrompt's "first session_id" persistence is a no-op for resume;
       // the SDK keeps the same id when resuming.
       session.state.sessionId = sessionId;
@@ -3586,9 +3579,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         mode: request.mode,
         toolPolicy: request.toolPolicy,
         additionalDirectories: request.configSnapshot?.additionalDirectories as string[] | undefined,
+        configSnapshot: request.configSnapshot,
       });
 
-      const session = newSession(request.runId, options, abortController, true, permissionModeRef);
+      const session = newSession(request.runId, options, abortController, true, permissionModeRef,
+        typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
       session.state.sessionId = sessionId;
       sessionIdMemo.set(request.runId, sessionId);
       return { session, prompt: buildForkPrompt(request), sessionId };
@@ -3987,7 +3982,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     updateConfig(next) {
+      const binaryChanged = config.binary !== (next as ClaudeCodeAdapterConfig).binary;
       adoptConfig(config, next as ClaudeCodeAdapterConfig);
+      if (binaryChanged) {
+        cachedModels = null;
+        cachedModelsTimestamp = 0;
+        invalidatePluginCaches();
+      }
     },
 
     async shutdown(): Promise<void> {
@@ -4016,29 +4017,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       }
 
       try {
-        await ensureSDK();
-        if (!queryFn) {
-          logWarn("SDK not available, returning fallback models");
-          return getDefaultModels(config.defaultModel);
-        }
-
-        let binaryPath: string | null = null;
-        if (config.binary) {
-          const resolved = resolveCandidate(config.binary);
-          if (resolved) binaryPath = resolved;
-        }
-        if (!binaryPath) binaryPath = findClaudeBinary();
-        if (!binaryPath) {
-          logWarn("CLI not found, returning fallback models");
-          return getDefaultModels(config.defaultModel);
-        }
-
-        const tempQuery = queryFn({
-          prompt: "",
-          options: { pathToClaudeCodeExecutable: binaryPath },
-        });
-
-        const sdkModels = await tempQuery.supportedModels();
+        const sdkModels = await withControlQuery((query) => query.supportedModels());
         if (!sdkModels || sdkModels.length === 0) {
           logWarn("SDK returned no models, using fallback");
           return getDefaultModels(config.defaultModel);
@@ -4100,23 +4079,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       }
 
       try {
-        await ensureSDK();
-        if (!queryFn) return [];
-
-        let binaryPath: string | null = null;
-        if (config.binary) {
-          const resolved = resolveCandidate(config.binary);
-          if (resolved) binaryPath = resolved;
-        }
-        if (!binaryPath) binaryPath = findClaudeBinary();
-        if (!binaryPath) return [];
-
-        const tempQuery = queryFn({
-          prompt: "",
-          options: { pathToClaudeCodeExecutable: binaryPath },
-        });
-
-        const initResult = await tempQuery.initializationResult();
+        const initResult = await withControlQuery(
+          (query) => query.initializationResult(),
+          workspacePath,
+        );
         if (!initResult?.commands || initResult.commands.length === 0) {
           return [];
         }
@@ -4161,7 +4127,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       });
 
       try {
-        if (!resolveClaudeBinary()) return empty("Claude CLI not found");
+        if (!resolveClaudeRuntime(config.binary)) return empty("Claude CLI not found");
 
         // `--available` includes the marketplace catalog (and may sync remotely);
         // marketplace list supplies the install locations / ordering.
@@ -4303,7 +4269,17 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async getAccountInfo(): Promise<AccountInfo> {
-      const cli = { version: await getClaudeVersion(), channel: null, outdated: false };
+      const runtime = resolveClaudeRuntime(config.binary);
+      const cli: NonNullable<AccountInfo["cli"]> = {
+        version: await getClaudeVersion(),
+        channel: null,
+        outdated: false,
+        ...(runtime ? {
+          source: runtime.source,
+          updateMethod: runtime.source === "bundled" ? "app" : "cli",
+          authLoginCommand: claudeAuthLoginCommand(runtime),
+        } : {}),
+      };
 
       // Fast path: read login state straight from the CLI — detects the
       // signed-out case definitively and skips spawning an SDK query process.
@@ -4317,27 +4293,15 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       // never sends a turn). Falls back to no account.
       let account: AccountInfo["account"] = null;
       try {
-        await ensureSDK();
-        const binaryPath = resolveClaudeBinary();
-        if (queryFn && binaryPath) {
-          const tempQuery = queryFn({
-            prompt: "",
-            options: { pathToClaudeCodeExecutable: binaryPath },
-          });
-          try {
-            const info = await tempQuery.accountInfo();
-            if (info?.email) {
-              account = {
-                type: "claude",
-                email: info.email,
-                planType: info.subscriptionType ?? info.organization ?? "",
-              };
-            } else if (info?.apiKeySource || info?.tokenSource) {
-              account = { type: "apiKey" };
-            }
-          } finally {
-            await tempQuery.interrupt().catch(() => {});
-          }
+        const info = await withControlQuery((query) => query.accountInfo());
+        if (info?.email) {
+          account = {
+            type: "claude",
+            email: info.email,
+            planType: info.subscriptionType ?? info.organization ?? "",
+          };
+        } else if (info?.apiKeySource || info?.tokenSource) {
+          account = { type: "apiKey" };
         }
       } catch (error) {
         logWarn(
@@ -4349,6 +4313,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async updateCli(): Promise<CliUpdateResult> {
+      if (resolveClaudeRuntime(config.binary)?.source === "bundled") {
+        return { success: false, output: "Claude is included with Mains and updates with the app. Check for Mains updates in Settings." };
+      }
       const { stdout, stderr, code } = await runClaudeCli(["update"], 120000);
       return { success: code === 0, output: `${stdout}${stderr}`.trim() };
     },

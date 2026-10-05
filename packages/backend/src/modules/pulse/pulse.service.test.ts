@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("./pulse.repo", () => ({
   pulseRepo: {
     findById: vi.fn(),
+    update: vi.fn(),
     claimNextRun: vi.fn(),
     markRun: vi.fn(),
     findNextScheduled: vi.fn().mockReturnValue(undefined),
@@ -76,6 +77,27 @@ describe("pulseService.executePulse — space resolution by the pulse's mode", (
     expect(payload.spaceId).toBe("sp-dev");
     expect(payload.workspaceId).toBe("ws-1");
     expect(payload.collectionId).toBeUndefined();
+  });
+
+  it.each(["ultra", "FutureEffort"])("updates and executes a Codex pulse with effort %j", async (effortLevel) => {
+    const saved = makePulse({ providerId: "codex", model: "server-model" });
+    const updated = { ...saved, effortLevel };
+    vi.mocked(pulseRepo.findById).mockReturnValue(saved as never);
+    vi.mocked(pulseRepo.update).mockReturnValue(updated as never);
+    expect(pulseService.update(saved.id, { effortLevel })).toEqual(updated);
+
+    vi.mocked(pulseRepo.findById).mockReturnValue(updated as never);
+    vi.mocked(spaceService.getAll).mockResolvedValue([space("sp-codex", "codex", "developer")] as never);
+    await pulseService.executePulse(saved.id);
+    expect(vi.mocked(runsService.executeRun).mock.calls[0][0]).toMatchObject({
+      providerId: "codex", model: "server-model", configSnapshot: { modelReasoningEffort: effortLevel },
+    });
+  });
+
+  it("checks the saved effort against the new provider when updating a pulse", () => {
+    vi.mocked(pulseRepo.findById).mockReturnValue(makePulse({ providerId: "codex", effortLevel: "ultra" }) as never);
+    expect(() => pulseService.update("pulse-1", { providerId: "claude_code" })).toThrow("Invalid effortLevel: ultra");
+    expect(pulseRepo.update).not.toHaveBeenCalled();
   });
 
   it("runs a work pulse workspace-less with its collection under a work space", async () => {

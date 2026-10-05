@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import type { WorkspaceVariant } from "@/lib/provider-variants";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
+import { useThemeTokens } from "@/hooks/use-theme-tokens";
 import { useParticleLogo } from "../hooks/use-particle-logo";
 
 const CLAUDE_PATHS = [
@@ -42,6 +43,7 @@ interface ParticleLogoCanvasProps {
 export function ParticleLogoCanvas({ className, variant, text }: ParticleLogoCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reducedMotion = usePrefersReducedMotion();
+  const color = useThemeTokens(["--color-primary-500"])["--color-primary-500"];
 
   let svgPaths = CLAUDE_PATHS;
   let svgViewBox = CLAUDE_VIEWBOX;
@@ -66,7 +68,7 @@ export function ParticleLogoCanvas({ className, variant, text }: ParticleLogoCan
   useParticleLogo(canvasRef, {
     svgPaths,
     svgViewBox,
-    color: "#404040",
+    color,
     text,
     renderMode,
     strokeWidth,

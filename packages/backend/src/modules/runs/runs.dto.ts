@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { ModeId } from "@mains/contracts/modes";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { TreeDiffFile } from "../git";
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
@@ -31,6 +32,7 @@ export interface CreateRunPayload {
 }
 
 export interface UpdateRunPayload {
+  conversationSettings?: ConversationSettings;
   title?: string;
   goal?: string;
   status?: RunStatus;
@@ -370,6 +372,7 @@ export interface StartRunContextItem {
 
 /** Payload for starting a new work run */
 export interface StartRunPayload {
+  conversationSettings?: ConversationSettings;
   accountId: string;
   workspaceId?: string;
   collectionId?: string;
@@ -413,6 +416,8 @@ export interface StartRunResponse {
 
 /** Payload for continuing an existing run (resume session) */
 export interface ContinueRunPayload {
+  conversationSettings?: ConversationSettings;
+  clientUserMessageId?: string;
   runId: string;
   accountId: string;
   /** The follow-up message to send */
@@ -497,6 +502,7 @@ export interface ReviewTarget {
 
 /** Payload for starting a native code review run */
 export interface ReviewRunPayload {
+  conversationSettings?: ConversationSettings;
   accountId: string;
   workspaceId: string;
   spaceId?: string;
@@ -566,7 +572,8 @@ export interface ToolApprovalResponse {
   /**
    * Free-form answer. For a "form" elicitation this carries the collected
    * fields as a JSON object string, so the existing broker/IPC contract does
-   * not need a second payload shape.
+   * not need a second payload shape. With approved: false, "cancel" marks an
+   * explicit cancellation rather than a decline.
    */
   answer?: string;
 }

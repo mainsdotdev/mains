@@ -10,6 +10,7 @@ import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
 import { useListProjectIssuesQuery } from "@/lib/redux/api";
 import { useGetMentionableAppsQuery } from "@/lib/redux/api/shellApi";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import { getProviderVariantById } from "@/lib/provider-variants";
 import { ProviderIcon } from "./provider-icon";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 
@@ -137,10 +138,10 @@ function SkillRowIcon({ skill }: { skill: SkillInfo }) {
   }
   return (
     <div
-      className="size-6 rounded-md shrink-0 flex items-center justify-center bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200"
+      className="size-5 rounded-md shrink-0 flex items-center justify-center bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200"
       style={skill.brandColor ? { backgroundColor: skill.brandColor, color: "#fff" } : undefined}
     >
-      <At className="size-4" />
+      <At className="size-3.5" />
     </div>
   );
 }
@@ -407,7 +408,7 @@ export function UnifiedContextDropdown({
   const filteredCommands = useMemo(() => {
     const userFacing = commands.filter((cmd) => cmd.userFacing !== false);
     if (
-      (providerId === PROVIDER_IDS.claude || providerId === PROVIDER_IDS.codex) &&
+      getProviderVariantById(providerId ?? "")?.supportsAdditionalDirectories &&
       !userFacing.some((cmd) => cmd.name === ADD_DIRECTORY_COMMAND.name)
     ) {
       userFacing.unshift(ADD_DIRECTORY_COMMAND);
@@ -739,13 +740,14 @@ export function UnifiedContextDropdown({
                           </RowButton>
                           {isDirectory && (
                             <Button
+                              variant="icon" iconSize="sm"
                               type="button"
                               data-dropdown-secondary-action="true"
                               aria-label={`Browse ${entry.name} folder`}
                               title={`Browse ${entry.name}`}
                               onMouseEnter={() => setActiveIndex(idx)}
                               onClick={() => navigateToDirectory(entry, rowDirPath)}
-                              className="absolute right-1.5 top-1/2 -translate-y-1/2 size-6 flex items-center justify-center rounded-lg text-primary-500 hover:bg-primary-300/40 dark:hover:bg-primary-700/50"
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2"
                             >
                               <ArrowUp className="size-3 rotate-90" />
                             </Button>

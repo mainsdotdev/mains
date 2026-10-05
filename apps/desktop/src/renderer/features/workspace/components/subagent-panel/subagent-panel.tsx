@@ -8,7 +8,7 @@ import {
   LAYOUT_PANEL_ANIM_MS,
   SESSION_PANEL_GUTTER,
 } from "@/lib/layout";
-import { Check, Close, Minimize, Stop } from "@/components/ui/icons";
+import { Check, Close, MinimizeView, Stop } from "@/components/ui/icons";
 import { AgentGlyph, Button, Caption, Text } from "@/components/ui";
 import { SubagentDetail } from "@/features/workspace/components/subagent-detail";
 import { useSessionSubagents } from "@/features/workspace/hooks/use-session-subagents";
@@ -314,12 +314,12 @@ function SubagentList({
 
         <span className="flex items-center gap-1">
           <Button
+            variant="icon"
             onClick={onCollapse}
             title="Hide subagents"
             aria-label="Hide subagents"
-            className="rounded-md p-0.5 text-primary-400 transition-colors hover:bg-primary-50 hover:text-primary-900 dark:hover:bg-primary/5 dark:hover:text-primary-100"
           >
-            <Minimize className="size-4 scale-x-[-1] text-primary-700 dark:text-primary-300 " />
+            <MinimizeView className="size-4 scale-x-[-1]" />
           </Button>
         </span>
       </div>

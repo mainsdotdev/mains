@@ -36,9 +36,9 @@ export function UpdateBanner() {
                 : "Update ready")}
           </Text>
           <Button
+            variant="icon"
             type="button"
             onClick={() => setDismissed(true)}
-            className="p-0.5 rounded-md hover:bg-primary-200/50 dark:hover:bg-primary/10 transition-colors text-primary-600 dark:text-primary-400 cursor-pointer"
           >
             <Close className="size-3" />
           </Button>

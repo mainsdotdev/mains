@@ -15,7 +15,7 @@
  */
 
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import { appApi } from "@/lib/transport";
+import { appApi, appEvents } from "@/lib/transport";
 import type { Run, RunEvent, RunArtifact, ToolCall } from "../types";
 import type { RunTurn } from "@/lib/redux/api";
 import type { ModeId } from "../../../../shared/modes";
@@ -45,12 +45,19 @@ export function useWorkspaceRuns(
   routeRunId?: string,
   /** Workspaces the user can switch to next; their run lists are fetched ahead. */
   prefetchWorkspaceIds: readonly string[] = NO_WORKSPACE_IDS,
+  /** Embedded app conversations own their selection without changing workspace tabs. */
+  options: { selection?: "workspace" | "local" } = {},
 ) {
+  const publishSelection = options.selection !== "local";
   const [runs, setRuns] = useState<Run[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [runEvents, setRunEvents] = useState<Record<string, RunEvent[]>>({});
   const [runTurns, setRunTurns] = useState<Record<string, RunTurn[]>>({});
-  const { streamingEvents, clearAllStreams } = useStreamingEvents(activeRunId);
+  const persistedStreamIds = useMemo(() => new Set(
+    (activeRunId ? runEvents[activeRunId] ?? [] : [])
+      .map((event) => event.metadata?.streamId).filter((id): id is string => typeof id === "string"),
+  ), [activeRunId, runEvents]);
+  const { streamingEvents, clearTurnStreams } = useStreamingEvents(activeRunId, persistedStreamIds);
   const dispatch = useAppDispatch();
   const [archiveRun] = useArchiveRunMutation();
 
@@ -58,7 +65,7 @@ export function useWorkspaceRuns(
   // Which run a jump asked for, held in a ref: the mount effect depends on
   // `loadWorkspaceRuns`, so reading this from state would re-clear the page
   // every time the request is set or consumed.
-  const pendingRunId = useAppSelector((s) => s.workspace.pendingRunId);
+  const pendingRunId = useAppSelector((s) => publishSelection ? s.workspace.pendingRunId : null);
   const pendingRunIdRef = useRef(pendingRunId);
   useEffect(() => {
     pendingRunIdRef.current = pendingRunId;
@@ -124,7 +131,7 @@ export function useWorkspaceRuns(
     const runResult = await appApi.runs.getById(runId);
     if (runResult.success && runResult.data) {
       const newId = runResult.data.id;
-      setRuns((prev) => [runResult.data, ...prev]);
+      setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
       setActiveRunId(newId);
       dispatch(workspaceApi.util.invalidateTags(["Workspaces"]));
       const allowed = cache.touch(newId);
@@ -307,14 +314,14 @@ export function useWorkspaceRuns(
         setRuns([run]);
         setActiveRunId(run.id);
         if (pendingRunIdRef.current === run.id) dispatch(clearPendingRunId());
-        dispatch(setActiveTab(run.id));
+        if (publishSelection) dispatch(setActiveTab(run.id));
         await loadRunDetails(run.id);
       } catch (err) {
         console.error("Failed to load routed run:", err);
         if (isCurrent()) setLoadedKey(`run:${runId}`);
       }
     },
-    [providerId, mode, dispatch, loadRunDetails],
+    [providerId, mode, dispatch, loadRunDetails, publishSelection],
   );
 
   // The render-time swap above already put the remembered list on screen;
@@ -323,7 +330,7 @@ export function useWorkspaceRuns(
   useEffect(() => {
     let current = true;
     const isCurrent = () => current;
-    void (async () => {
+    const loading = (async () => {
       if (routeRunId) {
         clearState();
         await loadRoutedRun(routeRunId, isCurrent);
@@ -331,10 +338,31 @@ export function useWorkspaceRuns(
         await loadWorkspaceRuns(workspaceId, isCurrent);
       }
     })();
+    // Voice coordination and other windows create runs through the backend.
+    // Add their tabs without selecting them. Wait for the initial list so a
+    // stale list response cannot overwrite a newly announced worker.
+    const revisions = new Map<string, number>();
+    const offUpdated = workspaceId && !routeRunId ? appEvents.runs.onUpdated(({ runId }) => {
+      const revision = (revisions.get(runId) ?? 0) + 1;
+      revisions.set(runId, revision);
+      void (async () => {
+        await loading;
+        if (!current || revisions.get(runId) !== revision) return;
+        const result = await appApi.runs.getById(runId);
+        if (!current || revisions.get(runId) !== revision || !result.success || !result.data) return;
+        const run = result.data;
+        if (run.isArchived || run.workspaceId !== workspaceId ||
+            (providerId && run.providerId !== providerId) || (mode && run.mode !== mode)) return;
+        setRuns((previous) => previous.some((item) => item.id === run.id)
+          ? previous.map((item) => item.id === run.id ? run : item)
+          : [run, ...previous]);
+      })().catch((error) => console.error("Failed to refresh an updated workspace chat:", error));
+    }) : undefined;
     return () => {
       current = false;
+      offUpdated?.();
     };
-  }, [workspaceId, routeRunId, loadRoutedRun, loadWorkspaceRuns, clearState]);
+  }, [workspaceId, routeRunId, providerId, mode, loadRoutedRun, loadWorkspaceRuns, clearState]);
 
   // Keep the remembered list current as runs are started, renamed, or closed.
   useEffect(() => {
@@ -385,12 +413,13 @@ export function useWorkspaceRuns(
     cache,
     loadRunDetails,
     onRunUpdated,
-    clearAllStreams,
+    clearTurnStreams,
   });
 
   const {
     isLoading,
     error,
+    createVoiceConversation,
     executeRun,
     continueRun,
     forkRun,
@@ -400,12 +429,16 @@ export function useWorkspaceRuns(
 
   // --- Derived transcript ---
 
-  const currentEvents = useMemo(() => {
+  const combinedEvents = useMemo(() => {
     const dbEvents = activeRunId ? runEvents[activeRunId] || [] : [];
     if (streamingEvents.length === 0) return dbEvents;
 
-    // Check if DB already has the streamed content (turn completed, artifact persisted)
-    // If so, skip streaming events to avoid duplicates
+    // Prefer a native stream identity when the provider persists one. The final
+    // text can differ from the last delta, or repeat a previous turn's text.
+    const dbArtifactStreamIds = new Set(
+      dbEvents.filter((e) => e.type === "artifact").map((e) => e.metadata?.streamId),
+    );
+    // Providers without a persisted stream identity still reconcile by content.
     const dbArtifactContents = new Set(
       dbEvents
         .filter((e) => e.type === "artifact" && e.metadata?.kind === "report")
@@ -413,7 +446,8 @@ export function useWorkspaceRuns(
     );
 
     const activeStreams = streamingEvents.filter(
-      (se) => !dbArtifactContents.has(se.content.trim()),
+      (se) => !dbArtifactStreamIds.has(se.streamId) &&
+        (se.metadata?.streamId === se.streamId || !dbArtifactContents.has(se.content.trim())),
     );
 
     if (activeStreams.length === 0) return dbEvents;
@@ -423,7 +457,9 @@ export function useWorkspaceRuns(
       // AsciiLoader status line, not into the main timeline as an
       // agent-message bubble.
       const kind =
-        se.kind === "image_generation" ? "image_generation"
+        se.kind === "user-prompt" ? "user-prompt"
+          : se.kind === "image_generation" ? "image_generation"
+          : se.kind === "thinking" ? "thinking"
           : se.streamId.startsWith("cursor-think-") ? "thinking"
           : se.streamId.startsWith("codex-cmd-") ? "thinking"
           : se.streamId.startsWith("claude-think-") ? "thinking"
@@ -436,14 +472,21 @@ export function useWorkspaceRuns(
         metadata: {
           ...se.metadata,
           kind,
-          streaming: true,
+          streaming: se.metadata?.streaming !== false,
           streamId: se.streamId,
         },
       };
     });
 
-    return [...dbEvents, ...streamRunEvents];
+    const merged = [...dbEvents, ...streamRunEvents];
+    // A spoken message stays where speech began, even if work artifacts finish
+    // before its final transcript. Persisted voice messages keep this timestamp.
+    if (activeStreams.some((event) => event.metadata?.voice === true)) {
+      merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    }
+    return merged;
   }, [activeRunId, runEvents, streamingEvents]);
+  const currentEvents = combinedEvents;
 
   // Auto-scroll to bottom. Landing on a run jumps straight to its last message:
   // a smooth scroll from the top of a long transcript is a seconds-long glide
@@ -558,10 +601,14 @@ export function useWorkspaceRuns(
     currentEvents,
     isTranscriptLoading,
     currentTurns,
+    runTurns,
+    isRunDetailsLoaded: cache.isLoaded,
+    loadRunDetails,
     isLoading,
     error,
     eventsEndRef,
     setActiveRunId,
+    createVoiceConversation,
     executeRun,
     continueRun,
     forkRun,

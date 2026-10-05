@@ -25,6 +25,7 @@ import { AgentsStep } from "./agents-step";
 import { ChoiceStep } from "./choice-step";
 import { ThemeStep } from "./theme-step";
 import { WelcomeIntroStep } from "./welcome-intro-step";
+import { RisoBackdrop } from "./riso-backdrop";
 import { useOnboardingWindow } from "../hooks/use-onboarding-window";
 import { prepareWorkspaceWindow } from "../lib/onboarding-completion";
 import "../onboarding.css";
@@ -403,6 +404,11 @@ export function OnboardingScreen() {
                     direction={flow.direction}
                     reducedMotion={reducedMotion}
                   >
+                    {flow.step !== "welcome" && (
+                      <RisoBackdrop
+                        className={`onboarding-step-riso onboarding-step-riso-${flow.step}`}
+                      />
+                    )}
                     {panel}
                   </StepPanel>
                 </AnimatePresence>

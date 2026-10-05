@@ -105,7 +105,7 @@ export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: numbe
       : 0;
 
   return (
-    <div className="relative flex-1 min-h-0 flex flex-col bg-primary-100 dark:bg-primary-900">
+    <div className="relative flex-1 min-h-0 flex flex-col bg-primary dark:bg-primary-950">
       <div ref={scrollRef} className="relative flex-1 min-h-0 overflow-auto p-3">
         {status === "ready" && pdf && firstPageSize && scale > 0 && (
           // `w-max min-w-full` keeps pages centered when they fit and

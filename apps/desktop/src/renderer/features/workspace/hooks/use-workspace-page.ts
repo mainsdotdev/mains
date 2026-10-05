@@ -1,24 +1,31 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { useComposerRunQueue, type QueueMessageSnapshot } from "./use-composer-run-queue";
+import { composerAnnotationPrompt, hasComposerMessage } from "../lib/composer-message";
+import { runMessageQueue } from "../lib/run-message-queue";
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { toast } from "@/components/ui";
 import { useNavigate, useParams } from "react-router-dom";
 import { useAppSelector, useAppDispatch } from "@/lib/redux/hooks";
 import {
-  setWorkspaceModel,
+  transferConversationSettings,
   setActiveTab,
+  setReviewRunId,
   activateWorkspaceView,
   setComposerContextKey,
   setDraftText,
+  setContextItemsForKey,
   clearPendingGoal,
   clearPendingReviewTarget,
   openNewRunTab,
   setSelectedCollectionId,
 } from "@/lib/redux/slices/workspaceSlice";
-import { isRunTab, isNewRunTab } from "@/features/workspace/lib/repo-utils";
+import { isRunTab, isNewRunTab, isReviewTab } from "@/features/workspace/lib/repo-utils";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useComposerContext } from "./use-composer-context";
-import { useTransientUploads } from "./use-transient-uploads";
-import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
+import { useTransientUploads, getTransientUploadsForOwner, moveTransientUploadsToOwner } from "./use-transient-uploads";
+import { composerOwnerKey, workspaceViewKey, type NewConversationContext } from "../lib/ui-context";
+import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
 import { useActiveSpace } from "@/hooks/use-active-space";
+import { getProviderVariantById } from "@/lib/provider-variants";
 import { setRightPaneContextKey, transferRightPaneContext } from "@/lib/redux/slices/appSettingsSlice";
 import { useWorkspaceData } from "./use-workspace-data";
 import { useWorkspaceRuns } from "./use-workspace-runs";
@@ -26,26 +33,34 @@ import { useFileContentLoader } from "./use-file-content-loader";
 import { useTabHandlers } from "./use-tab-handlers";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
 import { collectionIdForVisibleRun } from "@/features/workspace/lib/run-collection-context";
+import { store } from "@/lib/redux";
+import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
+import { contextItemKey } from "../lib/composer-context";
+import type { McpAppMessageOptions } from "../lib/mcp-app-context";
 import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
+import { useConversationSettings } from "./use-conversation-settings";
+import { useRealtimeVoice } from "./use-realtime-voice";
 
 const EMPTY_DIRECTORIES: string[] = [];
 
 
-export function useWorkspacePage(providerId: string) {
+export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   const dispatch = useAppDispatch();
+  const voice = useRealtimeVoice();
+  const mcpPanel = useMcpAppPanel();
+  const attachAppRun = mcpPanel?.attachRun;
+  const appContext = mcpPanel?.appContext;
+  const sendingRef = useRef(false);
   const navigate = useNavigate();
   const { runId: routeRunId } = useParams<{ runId?: string }>();
 
-  const selectedModel = useAppSelector(
-    (state) =>
-      state.workspace.selectedModelByProvider[providerId] || "",
-  );
   const activeTab = useAppSelector(
     (state) => state.workspace.activeTab,
   );
   const selectedFile = useAppSelector(
     (state) => state.workspace.selectedFile,
   );
+  const { reviewTabOpen, reviewRunId } = useAppSelector((state) => state.workspace);
   const activeViewKey = useAppSelector((state) => state.workspace.workspaceViewKey);
   const workspaceViewNeedsDefaultRun = useAppSelector(
     (state) => state.workspace.workspaceViewNeedsDefaultRun,
@@ -90,13 +105,6 @@ export function useWorkspacePage(providerId: string) {
     value: string | "new";
   } | null>(null);
 
-  const handleModelChange = useCallback(
-    (model: string) => {
-      dispatch(setWorkspaceModel({ providerId, model }));
-    },
-    [dispatch, providerId],
-  );
-
   const { workspaceId, selectedWorkspace, currentWorkspace, workspaces } =
     useWorkspaceData(providerId, mode);
   const switchableWorkspaceIds = useMemo(
@@ -137,9 +145,13 @@ export function useWorkspacePage(providerId: string) {
     currentEvents,
     isTranscriptLoading,
     currentTurns,
+    runTurns,
+    isRunDetailsLoaded,
+    loadRunDetails,
     isLoading,
     eventsEndRef,
     setActiveRunId,
+    createVoiceConversation,
     executeRun,
     continueRun,
     forkRun,
@@ -170,7 +182,7 @@ export function useWorkspacePage(providerId: string) {
     composeTargetOverride.workspace === workspaceId
       ? composeTargetOverride.value
       : null;
-  const isRetargetable = activeTab === "editor" && runs.length > 0;
+  const isRetargetable = (activeTab === "editor" || isReviewTab(activeTab)) && runs.length > 0;
   const fallbackTargetRunId =
     previousNonEditorTab &&
     isRunTab(previousNonEditorTab) &&
@@ -179,6 +191,8 @@ export function useWorkspacePage(providerId: string) {
       : null;
   const composeTargetRunId = isRunTab(activeTab)
     ? activeTab
+    : isReviewTab(activeTab)
+      ? runs.some((run) => run.id === reviewRunId) ? reviewRunId : null
     : !isRetargetable || overrideValue === "new"
       ? null
       : overrideValue && runs.some((r) => r.id === overrideValue)
@@ -188,6 +202,19 @@ export function useWorkspacePage(providerId: string) {
     ? runs.find((r) => r.id === composeTargetRunId)
     : undefined;
   const ownerKey = composerOwnerKey(contextParts, composeTargetRunId);
+  const conversation = useConversationSettings({
+    providerId, ownerKey, runId: composeTargetRunId, run: composeTargetRun, mirrorOnly,
+    latestModel: composeTargetRunId
+      ? runTurns[composeTargetRunId]?.slice().reverse().find((turn) => turn.model)?.model : undefined,
+    loadingRun: !!composeTargetRunId && !isRunDetailsLoaded(composeTargetRunId),
+  });
+  useEffect(() => {
+    if (composeTargetRunId && composeTargetRun && !conversation.ready) void loadRunDetails(composeTargetRunId);
+  }, [composeTargetRunId, composeTargetRun, conversation.ready, loadRunDetails]);
+  const conversationSettings = conversation.settings;
+  const saveDraftSettingsToRun = conversation.saveDraftSettingsToRun;
+  const selectedModel = conversationSettings.model;
+  const handleModelChange = conversation.changeModel;
   const browserExpansionKey = mode === "developer" && workspaceId
     ? workspaceBrowserExpansionKey(backendId, workspaceId)
     : ownerKey;
@@ -202,9 +229,51 @@ export function useWorkspacePage(providerId: string) {
     (Array.isArray(storedDirectories)
       ? storedDirectories.filter((value): value is string => typeof value === "string")
       : EMPTY_DIRECTORIES), [directoryDrafts, ownerKey, storedDirectories]);
+  const runAdditionalDirectories = getProviderVariantById(providerId)?.supportsAdditionalDirectories
+    ? additionalDirectories
+    : undefined;
   const setAdditionalDirectories = useCallback((directories: string[]) => {
     setDirectoryDrafts((current) => ({ ...current, [ownerKey]: directories }));
   }, [ownerKey]);
+
+  const supportsTurnSteer = getProviderVariantById(providerId)?.supportsTurnSteer ?? false;
+  const runQueue = useComposerRunQueue({
+    enabled: supportsTurnSteer, ownerKey, backendId, run: composeTargetRun,
+    selectedModel, additionalDirectories, setModel: handleModelChange, setDirectories: setAdditionalDirectories,
+    conversationSettings, setSettings: conversation.changeSettings,
+  });
+  const handleQueueSnapshot = (snapshot: QueueMessageSnapshot) => {
+    const text = snapshot.text.trim() || composerAnnotationPrompt(snapshot.contextItems);
+    if (!hasComposerMessage(text, snapshot.files.length, snapshot.contextItems)) return false;
+    return runQueue.submitSnapshot({ ...snapshot, text,
+      contextItems: [...snapshot.contextItems, ...(snapshot.editingId ? [] : appContext?.(ownerKey) ?? [])],
+    });
+  };
+
+  const handleNewConversationContextChange = useCallback((selection: NewConversationContext) => {
+    if ((mode === "developer") !== ("workspaceId" in selection)) return;
+    const nextParts = { ...contextParts, ...selection };
+    const nextOwnerKey = composerOwnerKey(nextParts, null);
+    dispatch(transferConversationSettings({ fromKey: ownerKey, toKey: nextOwnerKey }));
+    dispatch(setDraftText({ key: nextOwnerKey, text: goal }));
+    moveTransientUploadsToOwner(ownerKey, nextOwnerKey);
+    setDirectoryDrafts((current) => ({ ...current, [nextOwnerKey]: additionalDirectories }));
+    // Workspace navigation normally restores its selected run. Choosing here
+    // instead keeps the destination's new-run composer on screen.
+    dispatch(activateWorkspaceView({
+      key: workspaceViewKey(nextParts),
+      workspaceId: nextParts.workspaceId ?? null,
+      providerId,
+    }));
+    if ("collectionId" in selection) {
+      dispatch(setContextItemsForKey({ key: nextOwnerKey, items: contextItems }));
+      dispatch(setSelectedCollectionId(selection.collectionId));
+    }
+    dispatch(openNewRunTab());
+    navigate("workspaceId" in selection
+      ? `${WORKSPACE_BASE_PATH}/${selection.workspaceId}`
+      : WORKSPACE_BASE_PATH);
+  }, [mode, contextParts, dispatch, goal, ownerKey, additionalDirectories, contextItems, providerId, navigate]);
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey) return;
@@ -228,20 +297,24 @@ export function useWorkspacePage(providerId: string) {
   // Handle pending review target (native code review) — developer-only UI,
   // gated defensively so a stale target can't hijack the tab-less view.
   useEffect(() => {
-    if (activeViewKey !== viewKey || !showTabs || !pendingReviewTarget || !workspaceId || !selectedWorkspace) return;
+    if (activeViewKey !== viewKey || !showTabs || !pendingReviewTarget || !workspaceId || !selectedWorkspace || !conversation.ready) return;
     dispatch(clearPendingReviewTarget());
 
     const run = async () => {
-      const newRunId = await executeReview(selectedWorkspace, providerId, pendingReviewTarget, selectedModel);
+      const newRunId = await executeReview(selectedWorkspace, providerId, pendingReviewTarget, selectedModel, conversationSettings);
       if (newRunId) {
         dispatch(setActiveTab(newRunId));
       }
     };
     run();
-  }, [activeViewKey, viewKey, showTabs, pendingReviewTarget, workspaceId, selectedWorkspace, providerId, selectedModel, executeReview, dispatch]);
+  }, [activeViewKey, viewKey, showTabs, pendingReviewTarget, workspaceId, selectedWorkspace, providerId, selectedModel, conversationSettings, conversation.ready, executeReview, dispatch]);
 
   useLayoutEffect(() => {
     if (activeViewKey !== viewKey || !showTabs) return; // tab-less neutral state is the new-chat screen
+    if (isReviewTab(activeTab)) {
+      if (composeTargetRunId && selectedRunId !== composeTargetRunId) selectTab(composeTargetRunId);
+      return;
+    }
     if (isRunTab(activeTab)) {
       if (selectedRunId !== activeTab) selectTab(activeTab);
       return;
@@ -253,7 +326,7 @@ export function useWorkspacePage(providerId: string) {
       dispatch(setActiveTab(target.id));
       selectTab(target.id);
     }
-  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, selectedRunId, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
+  }, [activeViewKey, viewKey, showTabs, runs, selectedFile, activeTab, composeTargetRunId, selectedRunId, pendingRunId, workspaceViewNeedsDefaultRun, dispatch, selectTab]);
 
   // Tab-less modes use "editor" as the neutral placeholder for a new chat.
   useEffect(() => {
@@ -286,7 +359,7 @@ export function useWorkspacePage(providerId: string) {
     setRuns,
   });
 
-  const activeRunId = isRunTab(activeTab) ? activeTab : null;
+  const activeRunId = isReviewTab(activeTab) ? composeTargetRunId : isRunTab(activeTab) ? activeTab : null;
 
   // ── Composer send target ──
   // On the editor tab the composer has no run context of its own, so every
@@ -296,7 +369,9 @@ export function useWorkspacePage(providerId: string) {
   // the target is simply that run, as before.
   // The override is stamped with the tab/workspace it was chosen on and
   // simply ignored once either changes — no reset effect needed.
+  const composerVoicePhase = voice.state.runId === composeTargetRunId ? voice.state.phase : "idle";
   useEffect(() => {
+    let canceled = false;
     const checkResume = async () => {
       if (
         composeTargetRunId &&
@@ -305,14 +380,15 @@ export function useWorkspacePage(providerId: string) {
         composeTargetRun.status !== "queued"
       ) {
         const resumable = await checkCanResume(composeTargetRunId);
-        setCanResume(resumable);
+        if (!canceled) setCanResume(resumable);
       } else {
         setCanResume(false);
       }
     };
     checkResume();
+    return () => { canceled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [composeTargetRunId, composeTargetRun?.status, checkCanResume]);
+  }, [composeTargetRunId, composeTargetRun?.status, composerVoicePhase, checkCanResume]);
 
   const clearInputState = useCallback(() => {
     setGoal("");
@@ -327,117 +403,153 @@ export function useWorkspacePage(providerId: string) {
     }
   }, [setGoal, setUploadedFiles, clearContext, composeTargetRunId, ownerKey]);
 
-  const handleExecute = useCallback(async () => {
+  const handleCreateVoiceConversation = useCallback(async () => {
+    if (!conversation.ready || sendingRef.current) return null;
+    if (mode === "developer" && !workspaceId) {
+      toast.error("Select a workspace before starting voice chat.");
+      return null;
+    }
+    sendingRef.current = true;
+    try {
+      const runId = await createVoiceConversation(selectedWorkspace, selectedCollectionId, runAdditionalDirectories, conversationSettings);
+      if (!runId) return null;
+      const nextOwnerKey = composerOwnerKey(contextParts, runId);
+      const state = store.getState().workspace;
+      const items = state.composerContextKey === ownerKey ? state.contextItems : state.contextItemsByKey[ownerKey] ?? [];
+      // Starting the microphone must not submit or discard the written draft.
+      dispatch(transferConversationSettings({ fromKey: ownerKey, toKey: nextOwnerKey }));
+      dispatch(setContextItemsForKey({ key: ownerKey, items: [] }));
+      dispatch(setContextItemsForKey({ key: nextOwnerKey, items }));
+      dispatch(setDraftText({ key: ownerKey, text: "" }));
+      dispatch(setDraftText({ key: nextOwnerKey, text: state.draftTextByKey[ownerKey] ?? "" }));
+      moveTransientUploadsToOwner(ownerKey, nextOwnerKey);
+      dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
+      await (window as any).api?.browser?.reassignTabs?.(ownerKey, nextOwnerKey);
+      attachAppRun?.(ownerKey, runId, contextParts);
+      const visible = store.getState().workspace;
+      if (visible.workspaceViewKey !== viewKey ||
+          (visible.composerContextKey !== ownerKey && visible.composerContextKey !== nextOwnerKey)) return null;
+      dispatch(setActiveTab(runId));
+      if (mode !== "developer") navigate(`/code/runs/${runId}`);
+      return runId;
+    } finally { sendingRef.current = false; }
+  }, [conversation.ready, mode, workspaceId, createVoiceConversation, selectedWorkspace, selectedCollectionId,
+    runAdditionalDirectories, conversationSettings, contextParts, ownerKey, dispatch, attachAppRun, viewKey, navigate]);
+
+  const handleExecute = useCallback(async (message?: string, options: McpAppMessageOptions = {}) => {
+    if (!conversation.ready) return null;
+    const currentState = store.getState().workspace;
+    const draft = currentState.draftTextByKey[ownerKey] ?? goal;
+    const files = getTransientUploadsForOwner(ownerKey);
+    const items = currentState.composerContextKey === ownerKey ? currentState.contextItems : currentState.contextItemsByKey[ownerKey] ?? contextItems;
+    const text = (message ?? draft).trim() || (message === undefined ? composerAnnotationPrompt(items) : "");
+    if (!hasComposerMessage(text, files.length, items)) return null;
     if (mode === "developer" && !workspaceId) {
       toast.error("Select a workspace before sending a prompt.");
-      return;
+      return null;
     }
-    // A selected run from the other window may still be joining the list.
-    // Sending during that fetch must not turn its conversation into a new run.
-    if (composeTargetRunId && !composeTargetRun) return;
-    // A run still working can take no second prompt — and must not become a
-    // new run either. The send button already reads Stop; Enter in the editor
-    // reaches here all the same, so the submit itself has to say no.
-    if (
-      composeTargetRun &&
-      (composeTargetRun.status === "running" || composeTargetRun.status === "queued")
-    ) {
-      return;
+    const targetRunId = options.target === "new" ? null : composeTargetRunId;
+    const targetRun = targetRunId ? composeTargetRun : undefined;
+    if (targetRunId && !targetRun) return null;
+    if (message === undefined && runQueue.controls?.editing) {
+      runQueue.saveEdit(text, [...items]);
+      return targetRunId;
     }
-
-    const attachments = uploadedFiles.length > 0
-      ? await serializeAttachments(uploadedFiles)
-      : undefined;
-
-    if (
-      composeTargetRunId &&
-      canResume &&
-      composeTargetRun &&
-      composeTargetRun.status !== "running"
-    ) {
-      // Jump to the target chat right away so the message lands in view
-      // (sending from the editor tab targets the run you came from).
-      if (activeTab !== composeTargetRunId) {
-        dispatch(setActiveTab(composeTargetRunId));
-        selectTab(composeTargetRunId);
+    const live = targetRun?.status === "running" || targetRun?.status === "queued";
+    const queued = store.getState().runQueue?.byOwner[ownerKey];
+    if (targetRunId && supportsTurnSteer && (live || !!queued?.messages.length)) {
+      const id = runQueue.enqueue(text, [...items, ...(appContext?.(ownerKey) ?? [])], files);
+      if (!id) return null;
+      if (message === undefined) {
+        dispatch(setDraftText({ key: ownerKey, text: "" }));
       }
-      const success =
-        (await continueRun(
-          composeTargetRunId,
-          goal,
-          selectedModel,
-          attachments,
-          contextItems,
-          additionalDirectories,
-        )) ?? false;
-      if (success) clearInputState();
-      return success ? composeTargetRunId : null;
-    } else {
-      const newRunId = await executeRun(
-        goal,
-        selectedWorkspace,
-        providerId,
-        selectedModel,
-        attachments,
-        contextItems,
-        selectedCollectionId,
-        additionalDirectories,
-      );
-      if (newRunId) {
-        const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+      dispatch(setContextItemsForKey({ key: ownerKey, items: [] }));
+      if (queued?.mode === "steer" && live) void runMessageQueue.send(ownerKey, id, "steer");
+      return targetRunId;
+    }
+    if (sendingRef.current || live) {
+      if (message !== undefined) throw new Error("Wait for the current response or stop it before sending another message");
+      return null;
+    }
+    if (message !== undefined && targetRunId && !canResume) {
+      throw new Error("This conversation cannot be resumed. Start a new chat.");
+    }
+    sendingRef.current = true;
+    const submitted = [...items];
+    try {
+      const attachments = files.length > 0 ? await serializeAttachments(files) : undefined;
+      const runContext = [...submitted, ...(appContext?.(ownerKey) ?? [])];
+      const continuing = !!targetRunId && canResume && !!targetRun;
+      let nextRunId: string | null;
+      if (continuing) {
+        const success = await continueRun(targetRunId!, text, selectedModel, attachments, runContext, runAdditionalDirectories, conversationSettings);
+        nextRunId = success ? targetRunId : null;
+      } else {
+        nextRunId = await executeRun(text, selectedWorkspace, providerId, selectedModel, attachments,
+          runContext, selectedCollectionId, runAdditionalDirectories, conversationSettings);
+      }
+      if (!nextRunId) return null;
+
+      const nextOwnerKey = composerOwnerKey(contextParts, nextRunId);
+      const state = store.getState().workspace;
+      const current = state.composerContextKey === ownerKey ? state.contextItems : state.contextItemsByKey[ownerKey] ?? [];
+      const remaining = current.filter((item) => !submitted.some((sent) =>
+        item.kind === sent.kind && contextItemKey(item) === contextItemKey(sent) &&
+        (item.kind !== "mcp-app" || sent.kind !== "mcp-app" || item.updateId === sent.updateId) &&
+        (item.kind !== "browser" || sent.kind !== "browser" || item.comment === sent.comment) &&
+        (item.kind !== "review" || sent.kind !== "review" || item.comment === sent.comment)));
+      const draft = state.draftTextByKey[ownerKey] ?? "";
+      const remainingDraft = message === undefined && draft.trim() === text ? "" : draft;
+      dispatch(setContextItemsForKey({ key: ownerKey, items: remaining }));
+      dispatch(setDraftText({ key: ownerKey, text: remainingDraft }));
+      if (!composeTargetRunId) {
+        void saveDraftSettingsToRun(nextRunId, conversationSettings);
+        dispatch(transferConversationSettings({ fromKey: ownerKey, toKey: nextOwnerKey }));
+        dispatch(setContextItemsForKey({ key: ownerKey, items: [] }));
+        dispatch(setContextItemsForKey({ key: nextOwnerKey, items: remaining }));
+        dispatch(setDraftText({ key: ownerKey, text: "" }));
+        dispatch(setDraftText({ key: nextOwnerKey, text: remainingDraft }));
         dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
-        if (!composeTargetRunId) {
-          await (window as any).api?.browser?.reassignTabs?.(
-            ownerKey,
-            nextOwnerKey,
-          );
-        }
-        clearInputState();
-        dispatch(setActiveTab(newRunId));
-        if (mode !== "developer") {
-          navigate(`/code/runs/${newRunId}`);
-        }
+        await (window as any).api?.browser?.reassignTabs?.(ownerKey, nextOwnerKey);
       }
-      return newRunId;
-    }
-  }, [
-    goal,
-    uploadedFiles,
-    contextItems,
-    additionalDirectories,
-    mode,
-    workspaceId,
-    selectedWorkspace,
-    selectedModel,
-    executeRun,
-    continueRun,
-    composeTargetRunId,
-    composeTargetRun,
-    activeTab,
-    selectTab,
-    canResume,
-    clearInputState,
-    dispatch,
-    providerId,
-    selectedCollectionId,
-    navigate,
-    ownerKey,
-    contextParts,
-  ]);
+      if (getTransientUploadsForOwner(ownerKey) === files) setUploadedFiles([]);
+      attachAppRun?.(ownerKey, nextRunId, contextParts);
+      const visible = store.getState().workspace;
+      if (visible.workspaceViewKey !== viewKey ||
+          (visible.composerContextKey !== ownerKey && visible.composerContextKey !== nextOwnerKey)) return nextRunId;
+      if (isReviewTab(visible.activeTab)) {
+        dispatch(setReviewRunId(nextRunId));
+        selectTab(nextRunId);
+      } else {
+        dispatch(setActiveTab(nextRunId));
+        if (continuing) selectTab(nextRunId);
+      }
+      if (mode !== "developer") navigate(`/code/runs/${nextRunId}`);
+      return nextRunId;
+    } finally { sendingRef.current = false; }
+  }, [goal, contextItems, runAdditionalDirectories, mode, workspaceId, selectedWorkspace,
+    selectedModel, conversationSettings, conversation.ready, saveDraftSettingsToRun, executeRun, continueRun, composeTargetRunId, composeTargetRun, selectTab, canResume,
+    setUploadedFiles, dispatch, providerId, selectedCollectionId, navigate, ownerKey, contextParts, appContext, attachAppRun, viewKey, supportsTurnSteer, runQueue]);
 
   // Auto-execute when pendingAutoExecute was set (e.g. "Review Changes" button, suggestion chips)
   useEffect(() => {
-    if (autoExecute && goal) {
+    if (autoExecute && goal && conversation.ready) {
       queueMicrotask(() => setAutoExecute(false));
       if (mode === "developer" && !workspaceId) return;
       // Same rule as handleExecute: a live run is not a place to start another.
       if (activeRun && (activeRun.status === "running" || activeRun.status === "queued")) return;
       const run = async () => {
         if (activeRunId && canResume && activeRun && activeRun.status !== "running") {
-          const success =
-      (await continueRun(activeRunId, goal, selectedModel, undefined, undefined,
-  additionalDirectories)) ?? false;
-            if (success) clearInputState();
+          const success = (await continueRun(
+            activeRunId,
+            goal,
+            selectedModel,
+            undefined,
+            undefined,
+            runAdditionalDirectories,
+            conversationSettings,
+          )) ?? false;
+          if (success) clearInputState();
         } else {
           const newRunId = await executeRun(
             goal,
@@ -447,10 +559,13 @@ export function useWorkspacePage(providerId: string) {
             undefined,
             undefined,
             selectedCollectionId,
-            additionalDirectories
+            runAdditionalDirectories,
+            conversationSettings,
           );
           if (newRunId) {
             const nextOwnerKey = composerOwnerKey(contextParts, newRunId);
+            void saveDraftSettingsToRun(newRunId, conversationSettings);
+            dispatch(transferConversationSettings({ fromKey: ownerKey, toKey: nextOwnerKey }));
             dispatch(transferRightPaneContext({ fromKey: ownerKey, toKey: nextOwnerKey }));
             await (window as any).api?.browser?.reassignTabs?.(
               ownerKey,
@@ -464,7 +579,7 @@ export function useWorkspacePage(providerId: string) {
       };
       run();
     }
-  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, selectedCollectionId, additionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
+  }, [autoExecute, goal, executeRun, continueRun, mode, workspaceId, selectedWorkspace, providerId, selectedModel, conversationSettings, conversation.ready, saveDraftSettingsToRun, selectedCollectionId, runAdditionalDirectories, navigate, dispatch, activeRunId, canResume, activeRun, clearInputState, ownerKey, contextParts]);
 
   const runLabel = (r: { title?: string; goal: string }) =>
     r.title?.trim() ? r.title : r.goal;
@@ -486,13 +601,14 @@ export function useWorkspacePage(providerId: string) {
 
   const handleSendTargetChange = useCallback(
     (runId: string | null) => {
+      if (isReviewTab(activeTab)) { dispatch(setReviewRunId(runId)); return; }
       setComposeTargetOverride({
         tab: activeTab,
         workspace: workspaceId,
         value: runId ?? "new",
       });
     },
-    [activeTab, workspaceId],
+    [activeTab, workspaceId, dispatch],
   );
 
   // The run the composer acts on — the retarget target on the editor tab,
@@ -511,7 +627,7 @@ export function useWorkspacePage(providerId: string) {
     openIssueTabs.length === 0 &&
     openSignalTabs.length === 0 &&
     openNoteTabs.length === 0 &&
-    !showNewRunTab;
+    !showNewRunTab && !reviewTabOpen;
   const showEmptyState = runsLoaded && isEmptyViewCandidate;
   const isEmptyStatePending = !runsLoaded && isEmptyViewCandidate;
 
@@ -520,6 +636,9 @@ export function useWorkspacePage(providerId: string) {
 
   return {
     // State
+    runQueue: runQueue.controls,
+    ownerKey,
+    contextParts,
     goal,
     setGoal,
     uploadedFiles,
@@ -529,12 +648,18 @@ export function useWorkspacePage(providerId: string) {
     setAdditionalDirectories,
     canResume,
     selectedModel,
+    conversationSettings,
+    conversationSettingsReady: conversation.ready,
+    setConversationSettings: conversation.changeSettings,
+    handleSettingsConfigChange: conversation.changeConfig,
     activeTab,
     selectedFile,
     openIssueTabs,
     openSignalTabs,
     openNoteTabs,
+    reviewTabOpen,
     runs,
+    runsLoaded,
     activeRun,
     activeRunId,
     composerRun,
@@ -552,7 +677,10 @@ export function useWorkspacePage(providerId: string) {
     // Handlers
     handleModelChange,
     handleExecute,
+    handleCreateVoiceConversation,
+    handleQueueSnapshot,
     handleSendTargetChange,
+    handleNewConversationContextChange,
     setAutoExecute,
     ...tabHandlers,
   };

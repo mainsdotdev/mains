@@ -9,6 +9,7 @@ import reducer, {
   setRightPanelOpen,
   setSessionPanelOpen,
   setWorkspaceGroupExpanded,
+  setMcpAppPinned,
   forgetRunRightPane,
   forgetWorkspaceRightPanes,
 } from "./appSettingsSlice";
@@ -18,6 +19,46 @@ import { runOwnerKey, workspaceBrowserExpansionKey } from "../../../../shared/ui
 const open = () => reducer(undefined, setSessionPanelOpen(true));
 const context = (ownerKey: string, browserExpansionKey = ownerKey) =>
   setRightPaneContextKey({ ownerKey, browserExpansionKey });
+
+describe("appSettingsSlice — MCP app pins", () => {
+  const availablePinKeys = ["a", "b", "c", "d", "e", "f"];
+  const pin = (pinKey: string, pinned = true, providerId = "codex", available = availablePinKeys) =>
+    setMcpAppPinned({ providerId, pinKey, pinned, availablePinKeys: available });
+
+  it("starts empty and enforces the limit even before React can disable another pin", () => {
+    let state = reducer(undefined, { type: "init" });
+    expect(state.pinnedMcpAppKeysByProvider).toEqual({});
+    for (const id of availablePinKeys) state = reducer(state, pin(id));
+    expect(state.pinnedMcpAppKeysByProvider.codex).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("keeps pin order, deduplicates app identities, and frees a slot on unpin", () => {
+    let state = reducer(undefined, pin("b"));
+    state = reducer(state, pin("a"));
+    state = reducer(state, pin("b"));
+    expect(state.pinnedMcpAppKeysByProvider.codex).toEqual(["b", "a"]);
+    state = reducer(state, pin("b", false));
+    state = reducer(state, pin("c"));
+    expect(state.pinnedMcpAppKeysByProvider.codex).toEqual(["a", "c"]);
+  });
+
+  it("keeps providers independent and pins stable across conversation changes", () => {
+    let state = reducer(undefined, pin("a"));
+    state = reducer(state, pin("b", true, "claude_code"));
+    state = reducer(state, context("another-workspace"));
+    state = reducer(state, openNewRunTab());
+    expect(state.pinnedMcpAppKeysByProvider).toEqual({ codex: ["a"], claude_code: ["b"] });
+  });
+
+  it("does not let unavailable apps consume a slot or accept a stale pin request", () => {
+    let state = reducer(undefined, pin("a"));
+    const available = availablePinKeys.slice(1);
+    state = reducer(state, pin("c", true, "codex", available));
+    expect(state.pinnedMcpAppKeysByProvider.codex).toEqual(["c"]);
+    state = reducer(state, pin("a", true, "codex", available));
+    expect(state.pinnedMcpAppKeysByProvider.codex).toEqual(["c"]);
+  });
+});
 
 // The session panel reads the run in the active tab. A new-run tab has no run,
 // so switching to one has to dismiss the panel rather than leave the previous

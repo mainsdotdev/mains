@@ -69,6 +69,16 @@ function settle(
   }
 }
 
+function settleCanceled(requestId: string, broadcast = true): void {
+  const entry = pending.get(requestId);
+  if (!entry) return;
+  settle(requestId, {
+    requestId,
+    approved: false,
+    ...(entry.request.kind === "elicitation" ? { answer: "cancel" } : {}),
+  }, { broadcast });
+}
+
 function notifyRequest(req: ToolApprovalRequest): void {
   appSettingsService
     .getSettings()
@@ -106,7 +116,7 @@ export function requestToolApproval(
         : REQUEST_TIMEOUT_MS;
     // Auto-deny after timeout
     const timer = setTimeout(() => {
-      settle(req.requestId, { requestId: req.requestId, approved: false });
+      settleCanceled(req.requestId);
     }, timeoutMs);
 
     pending.set(req.requestId, {
@@ -159,7 +169,7 @@ export function cancelPendingRequest(requestId: string): void {
     ) {
       continue;
     }
-    settle(pendingId, { requestId: pendingId, approved: false });
+    settleCanceled(pendingId);
   }
 }
 
@@ -170,7 +180,7 @@ export function cancelPendingRequest(requestId: string): void {
 export function cancelPendingRequests(runId: string): void {
   for (const [requestId, entry] of [...pending]) {
     if (entry.runId === runId) {
-      settle(requestId, { requestId, approved: false });
+      settleCanceled(requestId);
     }
   }
 }
@@ -180,6 +190,6 @@ export function cancelPendingRequests(runId: string): void {
  */
 export function clearAllPendingRequests(): void {
   for (const requestId of [...pending.keys()]) {
-    settle(requestId, { requestId, approved: false }, { broadcast: false });
+    settleCanceled(requestId, false);
   }
 }

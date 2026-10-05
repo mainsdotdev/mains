@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui";
-import { Chat, Close, Maximize, MinimizeView, Plus, Web } from "@/components/ui/icons";
+import { Plus, Web } from "@/components/ui/icons";
+import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
 import { useCapabilities } from "@/lib/platform";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
+import { LAYOUT_TOGGLE_WIDTH_VAR } from "@/lib/layout";
+import { useMainHeader } from "@/hooks/use-main-header";
+import { BaseTab } from "./base-tab";
 
 export interface BrowserTabViewModel {
   tabId: string;
@@ -48,10 +52,10 @@ interface BrowserTabStripProps {
   isExpanded: boolean;
   sidebarCollapsed?: boolean;
   onToggleExpanded: () => void;
-  chatVisible?: boolean;
-  onToggleChat?: () => void;
+  reserveLayoutControls?: boolean;
   newTabShortcutLabel?: string;
   closeTabShortcutLabel?: string;
+  inMainHeader?: boolean;
 }
 
 function BrowserTabIcon({
@@ -100,120 +104,84 @@ export function BrowserTabStrip({
   isExpanded,
   sidebarCollapsed,
   onToggleExpanded,
-  chatVisible,
-  onToggleChat,
+  reserveLayoutControls,
   newTabShortcutLabel,
   closeTabShortcutLabel,
+  inMainHeader,
 }: BrowserTabStripProps) {
+  const { header } = useMainHeader();
   const { windowChrome } = useCapabilities();
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
     if (!windowChrome) return;
     return window.api.app.onFullscreenChange(setIsFullscreen);
   }, [windowChrome]);
-  const reserveTrafficLights = isExpanded && sidebarCollapsed && windowChrome && !isFullscreen;
+  const reserveTrafficLights = isExpanded && !inMainHeader && sidebarCollapsed && windowChrome && !isFullscreen;
+  const firstTabFlush = !reserveTrafficLights &&
+    (!inMainHeader || (!header && !sidebarCollapsed)) &&
+    tabs[0]?.tabId === activeTabId;
 
   return (
-    <div className={`flex min-h-10 items-center border-b border-primary-200/60 pr-2 dark:border-primary-800/50 ${reserveTrafficLights ? "pl-4" : "pl-2"}`}>
+    <div
+      data-browser-flush-tab-active={firstTabFlush ? "true" : undefined}
+      className={`relative z-(--z-panel-toggle) flex h-(--shell-header-height) shrink-0 items-center pr-2 ${reserveTrafficLights ? "pl-20" : "pl-0"}`}
+    >
+      {/* Direct flex children let the tabs share the space left by the add button. */}
       <div
-        className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1.5 scrollbar-none [&::-webkit-scrollbar]:hidden"
+        role="tablist"
+        aria-label="Browser tabs"
+        className="-ml-3 flex min-w-0 flex-1 items-center overflow-x-auto pl-3 scrollbar-none [&::-webkit-scrollbar]:hidden"
       >
-        <div
-          role="tablist"
-          aria-label="Browser tabs"
-          className="flex shrink-0 items-center gap-1"
-        >
-          {tabs.map((tab) => {
-            const active = tab.tabId === activeTabId;
-            return (
-              <div
-                key={tab.tabId}
-                role="tab"
-                aria-selected={active}
-                className={`group relative flex h-7 min-w-24 max-w-44 shrink-0 items-center overflow-hidden rounded-xl  transition-colors ${
-                  active
-                    ? "glass-outline bg-primary-50 text-primary-950  dark:bg-primary-900 dark:text-primary-50"
-                    : " text-primary-500 hover:bg-primary-100/60 hover:text-primary-800 dark:text-primary-500 dark:hover:bg-primary-900/50 dark:hover:text-primary-200"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => onActivate(tab.tabId)}
-                  className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-1.5 pl-2.5 pr-1 text-left focus:outline-none"
-                  aria-label={`Open ${tab.title || "New tab"}`}
-                >
-                  <BrowserTabIcon
-                    faviconUrl={tab.faviconUrl}
-                    isLoading={tab.isLoading}
-                    isCrashed={tab.isCrashed}
-                  />
-                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium">
-                    {tab.title || "New tab"}
-                  </span>
-                </button>
-                <Button
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onClose(tab.tabId);
-                  }}
-                  tooltip="Close tab"
-                  tooltipShortcut={closeTabShortcutLabel}
-                  tooltipPosition="bottom"
-                  aria-label={`Close ${tab.title || "New tab"}`}
-                  className={`mr-1 rounded-full p-0.5 transition-opacity hover:bg-primary-200/70 dark:hover:bg-primary/10 ${
-                    active
-                      ? "opacity-70 hover:opacity-100"
-                      : "opacity-0 group-hover:opacity-70"
-                  }`}
-                >
-                  <Close className="size-3" />
-                </Button>
-              </div>
-            );
-          })}
-        </div>
+        {tabs.map((tab, index) => {
+          const active = tab.tabId === activeTabId;
+          const title = tab.title || "New tab";
+          return (
+            <BaseTab
+              key={tab.tabId}
+              isActive={active}
+              isFirst={index === 0 && (!inMainHeader || !header)}
+              showLeadingCorner={inMainHeader ? undefined : index > 0 || !!reserveTrafficLights}
+              role="tab"
+              ariaLabel={title}
+              onClick={() => onActivate(tab.tabId)}
+              icon={<BrowserTabIcon faviconUrl={tab.faviconUrl} isLoading={tab.isLoading} isCrashed={tab.isCrashed} />}
+              label={title}
+              tooltip={title}
+              closeLabel={`Close ${title}`}
+              closeShortcut={closeTabShortcutLabel}
+              onClose={(event) => {
+                event.stopPropagation();
+                onClose(tab.tabId);
+              }}
+            />
+          );
+        })}
         <Button
+          variant="icon"
           onClick={onCreate}
           tooltip="New tab"
           tooltipShortcut={newTabShortcutLabel}
           tooltipPosition="bottom-left"
           aria-label="New browser tab"
-          className="shrink-0 rounded-md p-1 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
         >
-          <Plus className="size-3.5" />
+          <Plus className="size-4" />
         </Button>
       </div>
-      {isExpanded && onToggleChat && (
-        <Button
-          onClick={onToggleChat}
-          tooltip={chatVisible ? "Browse page" : "Show chat"}
-          tooltipPosition="bottom-left"
-          aria-label={chatVisible ? "Browse page" : "Show chat"}
-          aria-pressed={chatVisible}
-          className="ml-1 shrink-0 rounded-full p-1 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
-        >
-          <Chat className="size-3.5" />
-        </Button>
+      {!reserveLayoutControls && (
+        <PreviewPanelControls
+          label="browser"
+          isExpanded={isExpanded}
+          onToggleExpanded={onToggleExpanded}
+          onClose={onClosePanel}
+        />
       )}
-      <Button
-        onClick={onToggleExpanded}
-        tooltip={isExpanded ? "Restore browser panel" : "Expand browser"}
-        tooltipPosition="bottom-left"
-        aria-label={isExpanded ? "Restore browser panel" : "Expand browser"}
-        aria-pressed={isExpanded}
-        className="ml-1 shrink-0 rounded-full p-1 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
-      >
-        {isExpanded ? <MinimizeView className="size-3.5" /> : <Maximize className="size-3.5" />}
-      </Button>
-      <Button
-        onClick={onClosePanel}
-        tooltip="Close browser"
-        tooltipPosition="bottom-left"
-        aria-label="Close browser"
-        className="ml-1 shrink-0 rounded-full p-1 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
-      >
-        <Close className="size-3.5" />
-      </Button>
+      {reserveLayoutControls && (
+        <div
+          aria-hidden="true"
+          className="shrink-0"
+          style={{ width: `var(${LAYOUT_TOGGLE_WIDTH_VAR}, 0px)` }}
+        />
+      )}
     </div>
   );
 }

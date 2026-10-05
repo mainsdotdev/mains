@@ -1,30 +1,21 @@
+import * as React from "react"
 import { SVGProps } from "react"
-
 const SvgComponent = (props: SVGProps<SVGSVGElement>) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    width={800}
-    height={800}
+    width={24}
+    height={24}
     fill="none"
-    viewBox="0 0 24 24"
+    stroke="currentColor"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    strokeWidth={1.5}
+    color="currentColor"
     {...props}
+    viewBox="0 0 24 24"
   >
-    <path
-      stroke="currentColor"
-      strokeWidth={1.5}
-      d="M9 12c0-.466 0-.699.076-.883a1 1 0 0 1 .541-.54c.184-.077.417-.077.883-.077h3c.466 0 .699 0 .883.076a1 1 0 0 1 .54.541c.077.184.077.417.077.883s0 .699-.076.883a1 1 0 0 1-.541.54c-.184.077-.417.077-.883.077h-3c-.466 0-.699 0-.883-.076a1 1 0 0 1-.54-.541C9 12.699 9 12.466 9 12Z"
-    />
-    <path
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeWidth={1.5}
-      d="M20.5 7v6c0 3.771 0 5.657-1.172 6.828C18.157 21 16.271 21 12.5 21h-1c-3.771 0-5.657 0-6.828-1.172C3.5 18.657 3.5 16.771 3.5 13V7"
-    />
-    <path
-      stroke="currentColor"
-      strokeWidth={1.5}
-      d="M2 5c0-.943 0-1.414.293-1.707C2.586 3 3.057 3 4 3h16c.943 0 1.414 0 1.707.293C22 3.586 22 4.057 22 5c0 .943 0 1.414-.293 1.707C21.414 7 20.943 7 20 7H4c-.943 0-1.414 0-1.707-.293C2 6.414 2 5.943 2 5Z"
-    />
+    <path d="M21 7H3v6c0 3.771 0 5.657 1.172 6.828C5.343 21 7.229 21 11 21h2c3.771 0 5.657 0 6.828-1.172C21 18.657 21 16.771 21 13V7ZM21 7H3l1.2-1.6c.883-1.178 1.325-1.767 1.958-2.083C6.792 3 7.528 3 9 3h6c1.472 0 2.208 0 2.842.317.633.316 1.075.905 1.958 2.083L21 7Z" />
+    <path d="M12 17v-6.5m-3 4c.59.607 2.16 3 3 3 .84 0 2.41-2.393 3-3" />
   </svg>
 )
 export default SvgComponent

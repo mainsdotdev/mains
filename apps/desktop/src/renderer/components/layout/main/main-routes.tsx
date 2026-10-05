@@ -5,12 +5,13 @@ import { useSidebarConfig } from "@/hooks/use-sidebar-config";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import CodePage from "@/routes/Code";
+import PluginsPage from "@/routes/Plugins";
+import McpApp from "@/routes/McpApp";
 
 // Off the boot path (`/` lands on the workspace page, so it stays eager).
 // Loading these lazily keeps their feature graphs out of the startup script
-// eval.
+// eval. Plugins keeps its page shell eager and loads its content inside it.
 const Settings = lazy(() => import("@/routes/Settings"));
-const PluginsPage = lazy(() => import("@/routes/Plugins"));
 const Pulse = lazy(() => import("@/routes/Pulse"));
 const Relay = lazy(() => import("@/routes/Relay"));
 const Tasks = lazy(() => import("@/routes/Tasks"));
@@ -54,6 +55,7 @@ export function MainRoutes() {
         <Route path="/code/:workspaceId" element={<CodePage />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/plugins" element={<PluginsPage />} />
+        <Route path="/apps/:appId" element={<McpApp />} />
         <Route path="/pulse" element={<Pulse />} />
         <Route path="/relay" element={<Relay />} />
         <Route path="/tasks" element={<TasksRoute />} />

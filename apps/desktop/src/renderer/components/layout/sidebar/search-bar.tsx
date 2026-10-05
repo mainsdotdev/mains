@@ -49,21 +49,22 @@ export default function SearchBar({
                         transition-colors duration-200 focus:outline-none focus:bg-primary/20 dark:focus:bg-primary/10 "
           />
           <Button
+            variant="icon" iconSize="sm"
             tooltip="Clear search"
             onClick={onClear}
-            className="absolute cursor-pointer right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-primary/20 dark:hover:bg-primary/10 rounded-md transition-colors duration-200"
+            className="absolute right-2 top-1/2 -translate-y-1/2"
           >
-            <Close className="w-3.5 h-3.5 text-primary-900 dark:text-primary-100" />
+            <Close className="w-3.5 h-3.5" />
           </Button>
         </div>
       ) : (
         <Button
+          variant="icon"
           onClick={onToggle}
           tooltip="Search item"
           tooltipPosition="top"
-          className="p-2 cursor-pointer duration-200 flex items-center justify-center hover:bg-primary/20 dark:hover:bg-primary/10 rounded-xl transition-colors"
         >
-          <Search className="w-4 h-4 text-primary-900 dark:text-primary-100" />
+          <Search className="w-4 h-4" />
         </Button>
       )}
     </div>

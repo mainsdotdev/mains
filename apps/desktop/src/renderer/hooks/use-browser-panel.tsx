@@ -29,6 +29,7 @@ interface BrowserPanelContextValue {
   chatHost: HTMLDivElement | null;
   nativeOverlay: boolean;
   ownerKey: string;
+  composerDirectories?: string[];
   open: () => void;
   openUrl: (url: string) => Promise<void>;
   openHtmlFile: (filePath: string) => Promise<void>;
@@ -182,6 +183,7 @@ export function BrowserChatWindowProvider({
     chatHost,
     nativeOverlay: true,
     ownerKey: context.ownerKey,
+    composerDirectories: context.additionalDirectories,
     open: () => {},
     openUrl: async () => {},
     openHtmlFile: async () => {},
@@ -191,6 +193,6 @@ export function BrowserChatWindowProvider({
     setChatMode,
     setChatVisible: () => {},
     setChatHost,
-  }), [chatHost, context.ownerKey, context.mode, setChatMode]);
+  }), [chatHost, context.ownerKey, context.mode, context.additionalDirectories, setChatMode]);
   return <BrowserPanelContext.Provider value={value}>{children}</BrowserPanelContext.Provider>;
 }

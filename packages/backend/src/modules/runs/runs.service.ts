@@ -1,3 +1,7 @@
+import { CHANNELS } from "@mains/contracts/channels";
+import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent, VoiceTaskLink } from "@mains/contracts/realtime";
+import { insertRunInputArtifact } from "./run-input-artifact";
+import { createVoiceTaskCoordinator, VOICE_COORDINATOR_INSTRUCTIONS } from "./voice-task-coordinator";
 import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -19,6 +23,9 @@ import type {
   ReadRunTextFilePayload,
   RunOutputFile,
   RunTextFile,
+  RunSteerPayload,
+  RunSteerResponse,
+  RunInputStatusPayload,
 } from "@mains/contracts/runs";
 import {
   composeConfigSnapshot,
@@ -27,6 +34,7 @@ import {
 } from "../../../shared/mode-harness";
 import {
   createWorkAdapter,
+  emitUserPromptArtifact,
   type WorkRunContextItem,
   type WorkRunAdapter,
   type WorkRunEvent,
@@ -44,6 +52,7 @@ import {
   syncCollectionSourceDirectory,
 } from "./run-collection-sources";
 import { sanitizeRunAttachments } from "./run-attachments";
+import { resolveConversationSettings, validateConversationSettings } from "./conversation-settings";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
 import { withImageContentHashes } from "./run-image-content-hashes";
@@ -101,10 +110,16 @@ function normalizeAdditionalDirectories(
   providerId: string,
 ): Record<string, unknown> | null {
   if (!snapshot || !("additionalDirectories" in snapshot)) return snapshot;
+  const input = snapshot.additionalDirectories;
   if (providerId !== PROVIDER_IDS.claude && providerId !== PROVIDER_IDS.codex) {
+    // Older composers sent [] for every provider. No directories means no
+    // grant; drop the unsupported field while preserving the other settings.
+    if (Array.isArray(input) && input.length === 0) {
+      const { additionalDirectories: _directories, ...remaining } = snapshot;
+      return remaining;
+    }
     throw new Error("Additional directories are supported by Claude and Codex only");
   }
-  const input = snapshot.additionalDirectories;
   if (!Array.isArray(input) || input.length > MAX_ADDITIONAL_DIRECTORIES) {
     throw new Error(`Choose at most ${MAX_ADDITIONAL_DIRECTORIES} additional directories`);
   }
@@ -549,7 +564,292 @@ async function syncCodexRunSession(
 // Single-item reads return null for absence; mutations on a missing
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
+// Claims cover async continuation preparation, before a live session exists.
+const continuingRuns = new Set<string>();
+const realtimeConnections = new Map<string, {
+  connectionId: string;
+  cancelRequested: boolean;
+  prepared: Promise<void>;
+  dispose?: () => void;
+}>();
+
 export const runsService = {
+  async createRealtimeConversation(payload: CreateRealtimeConversationPayload): Promise<CreateRealtimeConversationResponse> {
+    const { spaceId, mode, space } = await resolveRunMode(payload.spaceId);
+    if (!spaceId || !space) throw new Error("A valid space is required to start voice chat");
+    if (space.accountId !== payload.accountId) throw new Error("Space does not belong to this account");
+    if (space.providerId !== PROVIDER_IDS.codex) throw new Error("Voice chat is currently available for Codex.");
+    const provider = await providersService.getById(space.providerId);
+    if (!provider?.isEnabled || provider.kind !== "agent_runtime") throw new Error("Codex is not enabled");
+    let workspace: Awaited<ReturnType<typeof workspaceService.get>> = null;
+    if (mode === "developer") {
+      if (!payload.workspaceId) throw new Error("Select a workspace before starting voice chat.");
+      workspace = await workspaceService.get(payload.workspaceId);
+      if (!workspace) throw new Error("Workspace not found");
+      if (workspace.accountId !== payload.accountId) throw new Error("Workspace does not belong to this account");
+      assertWorkspacePathExists(workspace.rootPath, workspace.name);
+    } else if (payload.workspaceId) {
+      throw new Error("Work and Chat runs do not use a workspace");
+    }
+    const collectionId = await validateCollectionForRun(payload.collectionId, payload.accountId, mode);
+    const settings = resolveConversationSettings(space.providerId, provider.config,
+      composeConfigSnapshot(mode, space.providerId, null), undefined, payload.conversationSettings);
+    const configSnapshot = normalizeAdditionalDirectories(composeConfigSnapshot(mode, space.providerId, {
+      ...settings.config, conversationSettings: settings,
+      ...(payload.additionalDirectories !== undefined ? { additionalDirectories: payload.additionalDirectories } : {}),
+    }), space.providerId);
+    const runId = generateRunId();
+    // No work has started: the existing terminal status represents an idle
+    // conversation. Its first prompt, turn and timestamps come from real input.
+    await runsRepo.insertRun({
+      id: runId, accountId: payload.accountId, workspaceId: workspace?.id, collectionId,
+      spaceId, providerId: space.providerId, mode, model: settings.model || undefined,
+      status: "succeeded", configSnapshot: configSnapshot ?? undefined,
+      toolPolicySnapshot: composeToolPolicy(mode, null) ?? undefined,
+    });
+    emit(CHANNELS.runs.updated, { runId, ts: Date.now() });
+    return { runId };
+  },
+
+  async startRealtime(payload: RunRealtimeStartPayload): Promise<void> {
+    if (typeof payload?.connectionId !== "string" || !/^[\w-]{1,80}$/.test(payload.connectionId) ||
+        typeof payload.sdp !== "string" || payload.sdp.length > 262_144 || !payload.sdp.startsWith("v=0")) {
+      throw new Error("Invalid voice connection request.");
+    }
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.accountId !== payload.accountId) throw new Error("Run does not belong to this account");
+    if (run.isArchived) throw new Error("Unarchive this conversation before starting voice chat.");
+    if (run.providerId !== PROVIDER_IDS.codex) throw new Error("Voice chat is currently available for Codex.");
+    if (continuingRuns.has(run.id)) throw new Error("Wait for this response to start before opening voice chat.");
+    if (realtimeConnections.has(run.id)) throw new Error("Voice chat is already active for this conversation.");
+    let prepared!: () => void;
+    const connection: NonNullable<ReturnType<typeof realtimeConnections.get>> = { connectionId: payload.connectionId, cancelRequested: false,
+      prepared: new Promise<void>((resolve) => { prepared = resolve; }) };
+    realtimeConnections.set(run.id, connection);
+    let coordinator: ReturnType<typeof createVoiceTaskCoordinator> | undefined;
+    try {
+      const provider = await providersService.getById(run.providerId);
+      if (!provider?.isEnabled) throw new Error("Codex is not enabled");
+      const adapter = createWorkAdapter(provider);
+      if (!adapter.startRealtime) throw new Error("This provider does not support voice chat.");
+      const workspace = run.workspaceId ? await workspaceService.get(run.workspaceId) : null;
+      if (run.workspaceId && !workspace) throw new Error("Run workspace no longer exists");
+      if (workspace) assertWorkspacePathExists(workspace.rootPath, workspace.name);
+      const execution = resolveRunExecution({ runId: run.id, mode: run.mode, workspace });
+      const turns = await runsRepo.findTurnsByRun(run.id);
+      // An already-running thread keeps the permissions/model it started with.
+      const settings = resolveConversationSettings(run.providerId, provider.config, run.configSnapshot,
+        latestKnownModel(turns, run.model), runSessionRegistry.get(run.id) ? undefined : payload.conversationSettings);
+      const configSnapshot = normalizeAdditionalDirectories(composeConfigSnapshot(run.mode, run.providerId, {
+        ...(run.configSnapshot ?? {}), ...settings.config, conversationSettings: settings,
+      }), run.providerId);
+      const toolPolicy = composeToolPolicy(run.mode, run.toolPolicySnapshot);
+      const space = await findSpaceForRun(run.spaceId);
+      const projectInstructions = await buildCollectionSourceInstructions({
+        runId: run.id, accountId: run.accountId, collectionId: run.collectionId,
+        cwd: execution.workspaceId ? null : execution.cwd,
+      });
+      const linkedArtifacts = await runsRepo.findArtifactsByRun(run.id);
+      const links = linkedArtifacts.flatMap((artifact) => {
+        const link = artifact.metadata?.voiceTask as VoiceTaskLink | undefined;
+        return artifact.metadata?.kind === "voice-task" && link && typeof link.id === "string" &&
+          typeof link.taskKey === "string" && typeof link.title === "string" ? [link] : [];
+      });
+      coordinator = createVoiceTaskCoordinator({
+        parentRunId: run.id, accountId: run.accountId, links,
+        isActive: () => realtimeConnections.get(run.id) === connection && !connection.cancelRequested,
+        async create(args) {
+          const target = await resolveRunMode(run.spaceId ?? undefined);
+          if (!target.space || target.space.accountId !== run.accountId ||
+              target.space.providerId !== run.providerId || target.mode !== run.mode) {
+            throw new Error("The voice conversation's space settings changed. Reopen voice in the intended space before delegating work.");
+          }
+          const { runId } = await runsService.executeRun({
+            accountId: run.accountId, providerId: run.providerId,
+            spaceId: target.spaceId ?? undefined, workspaceId: run.workspaceId ?? undefined,
+            collectionId: run.collectionId ?? undefined, goal: args.prompt,
+            model: settings.model || undefined, conversationSettings: settings,
+            systemPrompt: run.systemPrompt ?? undefined, configSnapshot: configSnapshot ?? undefined,
+            toolPolicySnapshot: toolPolicy ?? undefined,
+            initialContext: [{ kind: "note", content: `This task was delegated from a Mains voice conversation. Follow the user's task and constraints; write progress and the final report in this working chat. The voice conversation can send follow-up instructions.`,
+              metadata: { voiceDelegation: { parentRunId: run.id, title: run.title || "Voice conversation", taskKey: args.taskKey } } }],
+          });
+          await runsService.updateRun(runId, { title: args.title });
+          return { id: runId, taskKey: args.taskKey, title: args.title, spaceId: target.spaceId ?? null,
+            providerId: run.providerId, mode: run.mode, workspaceId: run.workspaceId, collectionId: run.collectionId };
+        },
+        async persist(link) {
+          await insertRunInputArtifact(run.id, { type: "artifact", kind: "report", content: link.title,
+            metadata: { kind: "voice-task", source: "voice-coordinator", voiceTask: link } });
+          emit(CHANNELS.runs.eventPersisted, { runId: run.id, ts: Date.now() });
+          emit(CHANNELS.runs.updated, { runId: link.id, ts: Date.now() });
+        },
+        getRun: (id) => runsService.getRunById(id), getTurns: (id) => runsService.getTurnsByRun(id),
+        getArtifacts: (id) => runsService.getArtifactsByRun(id), getTools: (id) => runsService.getToolCallsByRun(id),
+        async inputAccepted(runId, clientUserMessageId) {
+          return (await runsService.getInputStatus({ runId, accountId: run.accountId, clientUserMessageId })).accepted;
+        },
+        async send(runId, message, clientUserMessageId, running) {
+          const additionalContext: StartRunContextItem[] = [{ kind: "note", metadata: {
+            voiceDelegation: { parentRunId: run.id, title: run.title || "Voice conversation" },
+          } }];
+          if (running) await runsService.steerRun({ runId, accountId: run.accountId, message, clientUserMessageId, additionalContext });
+          else await runsService.continueRun({ runId, accountId: run.accountId, message, clientUserMessageId, additionalContext });
+        },
+        async cancel(id) { await runsService.cancelRun(id); },
+        async end() {
+          emit(CHANNELS.runs.realtimeEvent, { runId: run.id, connectionId: payload.connectionId, type: "ending" } satisfies RunRealtimeEvent);
+          await runsService.stopRealtime({ runId: run.id, accountId: run.accountId, connectionId: payload.connectionId });
+        },
+        notify(content, announce) {
+          if (realtimeConnections.get(run.id) !== connection || connection.cancelRequested) return;
+          emit(CHANNELS.runs.realtimeEvent, { runId: run.id, connectionId: payload.connectionId,
+            type: "context", eventId: generateRunId(), content, announce } satisfies RunRealtimeEvent);
+        },
+      });
+      connection.dispose = coordinator.dispose;
+      let session: RunSession | undefined;
+      let nativeTurnId: string | undefined;
+      let latestUserItemId: string | undefined;
+      const transcriptContext = new Map<string, { steering: boolean; providerTurnId?: string }>();
+      const completedItems = new Set<string>();
+      const itemTimestamps = new Map<string, number>();
+      let persistence = Promise.resolve();
+      const onRealtimeEvent = (event: RunRealtimeEvent) => {
+        emit(CHANNELS.runs.realtimeEvent, event);
+        if (event.type === "closed" && realtimeConnections.get(run.id) === connection) {
+          coordinator?.dispose();
+          realtimeConnections.delete(run.id);
+        }
+        if (event.type === "started") coordinator?.activate();
+        if (event.type !== "transcript" || completedItems.has(event.itemId)) return;
+        if (!transcriptContext.has(event.itemId)) {
+          transcriptContext.set(event.itemId, {
+            steering: event.role === "user" && !!runSessionRegistry.get(run.id), providerTurnId: nativeTurnId,
+          });
+          if (transcriptContext.size > 256) transcriptContext.delete(transcriptContext.keys().next().value!);
+        }
+        if (event.role === "user") latestUserItemId = event.itemId;
+        // Capture delivery at speech start, not at transcript completion: the
+        // initiating speech can finish transcription after its work has begun.
+        const context = transcriptContext.get(event.itemId);
+        const providerTurnId = context?.providerTurnId;
+        const streamId = `voice-${payload.connectionId}-${event.itemId}`;
+        const voiceStartedAt = itemTimestamps.get(event.itemId) ?? Date.now();
+        itemTimestamps.set(event.itemId, voiceStartedAt);
+        if (itemTimestamps.size > 256) itemTimestamps.delete(itemTimestamps.keys().next().value!);
+        const kind = event.role === "user" ? "user-prompt" : "report";
+        const metadata = {
+          source: event.role === "user" ? "user" : "agent_message", voice: true,
+          clientUserMessageId: streamId, streamId, voiceStartedAt, itemId: event.itemId,
+          realtimeSessionId: payload.connectionId,
+          ...(providerTurnId ? { providerTurnId } : {}),
+          ...(context?.steering ? { delivery: "steer" } : {}),
+        };
+        // Speech has its own lifetime, including while the work turn is idle.
+        // Reuse chat snapshots; only final text takes the existing DB path.
+        emit(CHANNELS.runs.ephemeralEvent, { runId: run.id, ts: voiceStartedAt,
+          event: { type: "artifact", kind, content: event.text, streamId,
+            metadata: { ...metadata, streaming: !event.final } },
+        });
+        if (!event.final) return;
+        completedItems.add(event.itemId);
+        if (completedItems.size > 256) {
+          const oldest = completedItems.values().next().value!;
+          completedItems.delete(oldest);
+          transcriptContext.delete(oldest);
+          itemTimestamps.delete(oldest);
+        }
+        if (!event.text.trim()) return;
+        persistence = persistence.then(async () => {
+          await insertRunInputArtifact(run.id, {
+            type: "artifact", kind, content: event.text, metadata,
+          });
+          if (event.role === "user" && !run.goal?.trim()) {
+            const current = await runsRepo.findRunById(run.id);
+            if (current && !current.goal?.trim()) {
+              await runsRepo.updateRun(run.id, { goal: event.text.trim() });
+              emit(CHANNELS.runs.updated, { runId: run.id, ts: Date.now() });
+            }
+          }
+          emit(CHANNELS.runs.eventPersisted, { runId: run.id, ts: Date.now() });
+        }).catch((error) => console.error("[RunsService] Voice transcript persistence failed:", error));
+      };
+      // Stop can arrive before the driver owns a native session. Keep the
+      // claim through preparation and cancel before issuing the native start.
+      if (connection.cancelRequested) {
+        onRealtimeEvent({ runId: run.id, connectionId: payload.connectionId, type: "closed", reason: "ended" });
+        return;
+      }
+      await adapter.startRealtime({
+        runId: run.id, accountId: run.accountId, execution, connectionId: payload.connectionId, sdp: payload.sdp,
+        model: settings.model || undefined, mode: run.mode, systemPrompt: run.systemPrompt,
+        configSnapshot, toolPolicy,
+        voiceTools: coordinator.tools,
+        voiceInstructions: `${VOICE_COORDINATOR_INSTRUCTIONS}\nPreviously linked working chats (use ListVoiceTasks for all): ${JSON.stringify(links.slice(-16).map(({ id, taskKey, title }) => ({ runId: id, taskKey, title })))}`,
+        extraInstructions: withProjectResources(composeExtraInstructions(run.mode, space?.systemPrompt), projectInstructions),
+      }, onRealtimeEvent, {
+        async onTurnStarted(providerTurnId, message, model) {
+          await runSessionRegistry.whenIdle(run.id);
+          const fresh = await runsRepo.findRunById(run.id);
+          if (!fresh || fresh.isArchived) throw new Error("This conversation is no longer available.");
+          const existingTurns = await runsRepo.findTurnsByRun(run.id);
+          nativeTurnId = providerTurnId;
+          const context = latestUserItemId ? transcriptContext.get(latestUserItemId) : undefined;
+          if (context && !context.providerTurnId) context.providerTurnId = providerTurnId;
+          await runsRepo.updateRun(run.id, {
+            status: "running", startedAt: new Date(), endedAt: null, lastError: null,
+            configSnapshot: configSnapshot ?? undefined, toolPolicySnapshot: toolPolicy ?? undefined,
+          }, { preserveConversationSettings: true });
+          if (workspace) await workspaceService.update(workspace.id, { status: "in_progress" });
+          session = createRunSession({
+            runId: run.id, accountId: run.accountId, providerId: run.providerId, execution,
+            initialPromptContent: message || "Voice request",
+            initialModel: model, initialProviderTurnId: providerTurnId,
+            initialTurnMetadata: { inputSource: "voice", realtimeSessionId: payload.connectionId },
+            seedTurnIndex: existingTurns.reduce((max, turn) => Math.max(max, turn.turnIndex), -1),
+          });
+        },
+        async onEvent(event) {
+          // Stamp work at its source; closing or changing calls cannot change
+          // the presentation of already-delegated messages, tools or logs.
+          const projected = event.type === "artifact" || event.type === "tool_call" || event.type === "log"
+            ? { ...event, metadata: { ...event.metadata, inputSource: "voice", realtimeSessionId: payload.connectionId,
+              ...(nativeTurnId ? { providerTurnId: nativeTurnId } : {}) } }
+            : event;
+          await session?.project(projected);
+        },
+        async onCompleted(result) {
+          if (session) await session.finalize(result);
+          else if (result.status === "failed") await handlePreSessionFailure(run.id, new Error(result.summary || "Voice task failed."));
+          session = undefined;
+          nativeTurnId = undefined;
+        },
+      });
+    } catch (error) {
+      coordinator?.dispose();
+      if (realtimeConnections.get(run.id) === connection) realtimeConnections.delete(run.id);
+      throw error;
+    } finally { prepared(); }
+  },
+
+  async stopRealtime(payload: RunRealtimeStopPayload): Promise<void> {
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.accountId !== payload.accountId) throw new Error("Run does not belong to this account");
+    const connection = realtimeConnections.get(run.id);
+    if (!connection || connection.connectionId !== payload.connectionId) return;
+    connection.cancelRequested = true;
+    connection.dispose?.();
+    await connection.prepared;
+    if (realtimeConnections.get(run.id) !== connection) return;
+    const provider = await providersService.getById(run.providerId);
+    if (!provider) throw new Error("Codex is unavailable. Voice chat closure could not be confirmed.");
+    const adapter = createWorkAdapter(provider);
+    if (!adapter.stopRealtime) throw new Error("Voice chat closure is unavailable for this provider.");
+    await adapter.stopRealtime(run.id, payload.connectionId);
+  },
   // ─── Run Operations ───
   async getAllRuns(limit?: number): Promise<RunResponse[]> {
     return runsRepo.findAllRuns(limit);
@@ -783,7 +1083,13 @@ export const runsService = {
   },
 
   async updateRun(id: string, payload: UpdateRunPayload): Promise<RunResponse> {
-    const updated = await runsRepo.updateRun(id, payload);
+    const patch = { ...payload };
+    if (payload.conversationSettings !== undefined) {
+      const run = await runsRepo.findRunById(id);
+      if (!run) throw new Error("Run not found");
+      patch.conversationSettings = validateConversationSettings(run.providerId, payload.conversationSettings);
+    }
+    const updated = await runsRepo.updateRun(id, patch);
     if (!updated) throw new Error("Run not found");
     return updated;
   },
@@ -1087,10 +1393,17 @@ export const runsService = {
         typeof provider.config?.outputStyle === "string"
           ? { outputStyle: provider.config.outputStyle }
           : {};
+      const conversationSettings = resolveConversationSettings(
+        payload.providerId, provider.config,
+        composeConfigSnapshot(mode, payload.providerId, payload.configSnapshot),
+        payload.model, payload.conversationSettings,
+      );
       const configSnapshot = normalizeAdditionalDirectories(
         composeConfigSnapshot(mode, payload.providerId, {
           ...providerOutputStyle,
           ...(payload.configSnapshot ?? {}),
+          ...conversationSettings.config,
+          conversationSettings,
           ...(payload.additionalDirectories !== undefined
             ? { additionalDirectories: payload.additionalDirectories }
             : {}),
@@ -1111,7 +1424,7 @@ export const runsService = {
         spaceId: resolvedSpaceId,
         providerId: payload.providerId,
         mode,
-        model: payload.model,
+        model: conversationSettings.model || undefined,
         goal: payload.goal,
         status: "running",
         systemPrompt: payload.systemPrompt,
@@ -1160,7 +1473,7 @@ export const runsService = {
           accountId: payload.accountId,
           execution,
           goal: payload.goal,
-          model: payload.model,
+          model: conversationSettings.model || undefined,
           systemPrompt: payload.systemPrompt,
           mode,
           extraInstructions,
@@ -1236,6 +1549,13 @@ export const runsService = {
               : "code changes"
       }`;
 
+      const conversationSettings = resolveConversationSettings(
+        payload.providerId, provider.config, payload.configSnapshot, payload.model, payload.conversationSettings,
+      );
+      const configSnapshot = composeConfigSnapshot(mode, payload.providerId, {
+        ...payload.configSnapshot, ...conversationSettings.config, conversationSettings,
+      });
+
       await runsRepo.insertRun({
         id: runId,
         accountId: payload.accountId,
@@ -1243,16 +1563,14 @@ export const runsService = {
         spaceId: resolvedSpaceId,
         providerId: payload.providerId,
         mode,
-        model: payload.model,
+        model: conversationSettings.model || undefined,
         goal: goalDescription,
         status: "running",
         systemPrompt: payload.systemPrompt,
         // Composed, not raw: developer's harness adds nothing, but the caller's
         // snapshots still get validated and normalized here rather than sitting
         // on the row until continueRun's compose rejects them mid-resume.
-        configSnapshot:
-          composeConfigSnapshot(mode, payload.providerId, payload.configSnapshot) ??
-          undefined,
+        configSnapshot: configSnapshot ?? undefined,
         toolPolicySnapshot:
           composeToolPolicy(mode, payload.toolPolicySnapshot) ?? undefined,
       });
@@ -1281,7 +1599,8 @@ export const runsService = {
             accountId: payload.accountId,
             execution: { cwd: workspace.rootPath, workspaceId: workspace.id },
             target: payload.target,
-            model: payload.model,
+            model: conversationSettings.model || undefined,
+            configSnapshot,
           },
           eventCallback,
         );
@@ -1293,7 +1612,8 @@ export const runsService = {
             accountId: payload.accountId,
             execution: { cwd: workspace.rootPath, workspaceId: workspace.id },
             goal: "review code changes in this workspace",
-            model: payload.model,
+            model: conversationSettings.model || undefined,
+            configSnapshot,
             systemPrompt: payload.systemPrompt,
           },
           eventCallback,
@@ -1316,153 +1636,248 @@ export const runsService = {
    */
   async continueRun(payload: ContinueRunPayload): Promise<ContinueRunResponse> {
     const { runId, accountId, message, additionalContext } = payload;
-    // Outside the try: its failure path would mark this existing run failed.
-    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+    if (continuingRuns.has(runId)) throw new Error("This conversation is already starting a response.");
+    continuingRuns.add(runId);
     try {
-      const run = await runsRepo.findRunById(runId);
-      if (!run) throw new Error("Run not found");
-      if (run.accountId !== accountId) {
-        throw new Error("Run does not belong to this account");
+      // Preconditions must not mark someone else's live turn failed.
+      const existing = await runsRepo.findRunById(runId);
+      if (!existing) throw new Error("Run not found");
+      if (existing.accountId !== accountId) throw new Error("Run does not belong to this account");
+      if (realtimeConnections.has(runId)) throw new Error("End voice chat before starting a new text response.");
+      if (existing.isArchived) throw new Error("Unarchive this conversation before sending a message.");
+      if (runSessionRegistry.get(runId) || existing.status === "running" || existing.status === "queued") {
+        throw new Error("This conversation already has an active response.");
       }
-
-      const provider = await providersService.getById(run.providerId);
-      if (!provider) {
-        throw new Error(`Provider "${run.providerId}" not found`);
-      }
-      if (!provider.isEnabled) {
-        throw new Error(`Provider "${provider.displayName}" is not enabled`);
-      }
-
-      const workspace = run.workspaceId
-        ? await workspaceService.get(run.workspaceId)
-        : null;
-      if (run.workspaceId && !workspace) {
-        throw new Error("Run workspace no longer exists");
-      }
-      if (workspace) {
-        assertWorkspacePathExists(workspace.rootPath, workspace.name);
-      }
-      const execution = resolveRunExecution({
-        runId,
-        mode: run.mode,
-        workspace,
-      });
-
-      const adapter = createWorkAdapter(provider);
-      if (!adapter.continueRun) {
-        throw new Error("Provider does not support session resumption");
-      }
-      if (adapter.canResumeSession) {
-        const canResume = await adapter.canResumeSession(runId);
-        if (!canResume) {
-          throw new Error("Session cannot be resumed (not found or expired)");
+      const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+      let continuationStarted = false;
+      try {
+        const run = await runsRepo.findRunById(runId);
+        if (!run) throw new Error("Run not found");
+        if (run.accountId !== accountId) {
+          throw new Error("Run does not belong to this account");
         }
-      }
 
-      const existingTurns = await runsRepo.findTurnsByRun(runId);
-      const seedTurnIndex = existingTurns.reduce(
-        (max, t) => Math.max(max, t.turnIndex),
-        -1,
-      );
-      const previousModel = latestKnownModel(existingTurns, run.model);
-
-      const toolPolicy = composeToolPolicy(
-        run.mode,
-        run.toolPolicySnapshot,
-      );
-      const configSnapshot = normalizeAdditionalDirectories(
-        composeConfigSnapshot(run.mode, run.providerId, {
-          ...(run.configSnapshot ?? {}),
-          ...(payload.additionalDirectories !== undefined
-            ? { additionalDirectories: payload.additionalDirectories }
-            : {}),
-        }),
-        run.providerId,
-      );
-
-      if (workspace) {
-        await workspaceService.update(workspace.id, { status: "in_progress" });
-      }
-
-      await runsRepo.updateRun(runId, {
-        status: "running",
-        startedAt: new Date(),
-        endedAt: null,
-        lastError: null,
-        configSnapshot: configSnapshot ?? undefined,
-        toolPolicySnapshot: toolPolicy ?? undefined,
-      });
-
-      const projectInstructions = await buildCollectionSourceInstructions({
-        runId,
-        accountId,
-        collectionId: run.collectionId,
-        cwd: execution.workspaceId ? null : execution.cwd,
-      });
-
-      if (additionalContext && additionalContext.length > 0) {
-        for (const ctx of additionalContext) {
-          await runsRepo.insertContext({
-            runId,
-            kind: ctx.kind as "file" | "selection" | "diff" | "note",
-            ref: ctx.ref,
-            content: ctx.content,
-            contentHash: ctx.content ? hashContent(ctx.content) : undefined,
-            metadata: ctx.metadata,
-          });
+        const provider = await providersService.getById(run.providerId);
+        if (!provider) {
+          throw new Error(`Provider "${run.providerId}" not found`);
         }
-      }
+        if (!provider.isEnabled) {
+          throw new Error(`Provider "${provider.displayName}" is not enabled`);
+        }
 
-      const session = createRunSession({
-        runId,
-        accountId,
-        providerId: run.providerId,
-        execution,
-        initialPromptContent: message,
-        seedTurnIndex,
-      });
+        const workspace = run.workspaceId
+          ? await workspaceService.get(run.workspaceId)
+          : null;
+        if (run.workspaceId && !workspace) {
+          throw new Error("Run workspace no longer exists");
+        }
+        if (workspace) {
+          assertWorkspacePathExists(workspace.rootPath, workspace.name);
+        }
+        const execution = resolveRunExecution({
+          runId,
+          mode: run.mode,
+          workspace,
+        });
 
-      // Re-derive the harness from the run row's mode snapshot — the space's
-      // current mode is irrelevant, but its system prompt is re-read live.
-      const space = await findSpaceForRun(run.spaceId);
+        const adapter = createWorkAdapter(provider);
+        if (!adapter.continueRun) {
+          throw new Error("Provider does not support session resumption");
+        }
+        if (adapter.canResumeSession) {
+          const canResume = await adapter.canResumeSession(runId);
+          if (!canResume) {
+            throw new Error("Session cannot be resumed (not found or expired)");
+          }
+        }
 
-      const runPromise = adapter.continueRun(
-        {
+        const existingTurns = await runsRepo.findTurnsByRun(runId);
+        const seedTurnIndex = existingTurns.reduce(
+          (max, t) => Math.max(max, t.turnIndex),
+          -1,
+        );
+        const previousModel = latestKnownModel(existingTurns, run.model);
+        const conversationSettings = resolveConversationSettings(
+          run.providerId, provider.config, run.configSnapshot,
+          payload.model ?? previousModel,
+          payload.conversationSettings ?? (payload.model ? {
+            model: payload.model,
+            config: resolveConversationSettings(run.providerId, provider.config, run.configSnapshot, previousModel).config,
+          } : undefined),
+        );
+
+        const toolPolicy = composeToolPolicy(
+          run.mode,
+          run.toolPolicySnapshot,
+        );
+        const configSnapshot = normalizeAdditionalDirectories(
+          composeConfigSnapshot(run.mode, run.providerId, {
+            ...(run.configSnapshot ?? {}),
+            ...conversationSettings.config,
+            conversationSettings,
+            ...(payload.additionalDirectories !== undefined
+              ? { additionalDirectories: payload.additionalDirectories }
+              : {}),
+          }),
+          run.providerId,
+        );
+
+        if (workspace) {
+          await workspaceService.update(workspace.id, { status: "in_progress" });
+        }
+
+        await runsRepo.updateRun(runId, {
+          status: "running",
+          startedAt: new Date(),
+          endedAt: null,
+          lastError: null,
+          configSnapshot: configSnapshot ?? undefined,
+          toolPolicySnapshot: toolPolicy ?? undefined,
+        }, { preserveConversationSettings: !!payload.conversationSettings });
+
+        const projectInstructions = await buildCollectionSourceInstructions({
           runId,
           accountId,
+          collectionId: run.collectionId,
+          cwd: execution.workspaceId ? null : execution.cwd,
+        });
+
+        if (additionalContext && additionalContext.length > 0) {
+          for (const ctx of additionalContext) {
+            await runsRepo.insertContext({
+              runId,
+              kind: ctx.kind as "file" | "selection" | "diff" | "note",
+              ref: ctx.ref,
+              content: ctx.content,
+              contentHash: ctx.content ? hashContent(ctx.content) : undefined,
+              metadata: ctx.metadata,
+            });
+          }
+        }
+
+        const session = createRunSession({
+          runId,
+          accountId,
+          providerId: run.providerId,
           execution,
-          message,
-          // An omitted model means "as before". `runs.model` is the initial
-          // snapshot; a conversation may have switched since then.
-          model: payload.model ?? previousModel,
-          systemPrompt: run.systemPrompt,
-          mode: run.mode,
-          extraInstructions: withProjectResources(
-            composeExtraInstructions(run.mode, space?.systemPrompt),
-            projectInstructions,
-          ),
-          toolPolicy,
-          configSnapshot,
-          context: additionalContext as WorkRunContextItem[] | undefined,
-          attachments,
-          contextIssues: payload.contextIssues,
-          contextSignals: payload.contextSignals,
-          contextFiles: payload.contextFiles,
-          skills: payload.contextSkills,
-        },
-        (event: WorkRunEvent) =>
-          session.project(event).catch((err) =>
-            console.error(`[RunsService] project failed for ${runId}:`, err),
-          ),
-      );
+          initialPromptContent: message,
+          seedTurnIndex,
+        });
 
-      wireSessionCompletion(runPromise, session);
+        // Re-derive the harness from the run row's mode snapshot — the space's
+        // current mode is irrelevant, but its system prompt is re-read live.
+        const space = await findSpaceForRun(run.spaceId);
 
-      return { runId, resumed: true };
-    } catch (error) {
-      await handlePreSessionFailure(runId, error);
-      throw error;
+        let acceptInput: () => void = () => {};
+        const inputAccepted = new Promise<void>((resolve) => { acceptInput = resolve; });
+        const waitForInput = !!payload.clientUserMessageId && run.providerId === PROVIDER_IDS.codex;
+        const runPromise = adapter.continueRun(
+          {
+            runId,
+            accountId,
+            execution,
+            message,
+            ...(waitForInput ? {
+              clientUserMessageId: payload.clientUserMessageId,
+              onInputAccepted: async () => { acceptInput(); },
+            } : {}),
+            // An omitted model means "as before". `runs.model` is the initial
+            // snapshot; a conversation may have switched since then.
+            model: conversationSettings.model || undefined,
+            systemPrompt: run.systemPrompt,
+            mode: run.mode,
+            extraInstructions: withProjectResources(
+              composeExtraInstructions(run.mode, space?.systemPrompt),
+              projectInstructions,
+            ),
+            toolPolicy,
+            configSnapshot,
+            context: additionalContext as WorkRunContextItem[] | undefined,
+            attachments,
+            contextIssues: payload.contextIssues,
+            contextSignals: payload.contextSignals,
+            contextFiles: payload.contextFiles,
+            skills: payload.contextSkills,
+          },
+          (event: WorkRunEvent) =>
+            waitForInput ? session.project(event) : session.project(event).catch((err) =>
+              console.error(`[RunsService] project failed for ${runId}:`, err),
+            ),
+        );
+
+        continuationStarted = true;
+        wireSessionCompletion(runPromise, session);
+        if (waitForInput) {
+          await Promise.race([
+            inputAccepted,
+            runPromise.then((result) => {
+              throw new Error(result.summary || "Codex did not accept the queued message.");
+            }),
+          ]);
+        }
+
+        return { runId, resumed: true };
+      } catch (error) {
+        if (!continuationStarted) await handlePreSessionFailure(runId, error);
+        throw error;
+      }
+    } finally {
+      continuingRuns.delete(runId);
     }
+  },
+
+  async steerRun(payload: RunSteerPayload): Promise<RunSteerResponse> {
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.accountId !== payload.accountId) throw new Error("Run does not belong to this account");
+    if (run.isArchived) throw new Error("Unarchive this conversation before sending a message.");
+    if (run.providerId !== PROVIDER_IDS.codex) throw new Error("This provider does not support steering.");
+    if (!runSessionRegistry.get(run.id) || run.status !== "running") {
+      throw new Error("There is no active Codex turn to steer. The message stays queued.");
+    }
+    if (!payload.clientUserMessageId || typeof payload.message !== "string") throw new Error("Invalid message.");
+    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+    const provider = await providersService.getById(run.providerId);
+    if (!provider?.isEnabled) throw new Error("Codex is not enabled.");
+    const adapter = createWorkAdapter(provider);
+    if (!adapter.steerRun) throw new Error("This provider does not support steering.");
+    const { turnId } = await adapter.steerRun({
+      runId: run.id, message: payload.message,
+      clientUserMessageId: payload.clientUserMessageId,
+      attachments, context: payload.additionalContext,
+      contextIssues: payload.contextIssues, contextFiles: payload.contextFiles,
+      contextSignals: payload.contextSignals, skills: payload.contextSkills,
+    });
+    return { runId: run.id, turnId };
+  },
+
+  async getInputStatus(payload: RunInputStatusPayload): Promise<{ accepted: boolean }> {
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Run not found");
+    if (run.accountId !== payload.accountId) throw new Error("Run does not belong to this account");
+    const artifacts = await runsRepo.findArtifactsByRun(run.id);
+    if (artifacts.some((artifact) => artifact.metadata?.clientUserMessageId === payload.clientUserMessageId)) {
+      return { accepted: true };
+    }
+    const provider = await providersService.getById(run.providerId);
+    const adapter = provider ? createWorkAdapter(provider) : undefined;
+    const result = await adapter?.getInputStatus?.(run.id, payload.clientUserMessageId, run.sessionId ?? undefined) ?? { accepted: false };
+    if (result.accepted && payload.input) {
+      const input = payload.input;
+      const attachments = sanitizeRunAttachments(input.attachments, await browserCaptureDir());
+      await emitUserPromptArtifact(async (event) => {
+        if (event.type === "artifact" && await insertRunInputArtifact(run.id, event)) {
+          emit(CHANNELS.runs.eventPersisted, { runId: run.id });
+        }
+      }, input.message, {
+        runId: run.id, clientUserMessageId: payload.clientUserMessageId,
+        providerTurnId: result.turnId, ...(payload.delivery === "steer" ? { delivery: "steer" } : {}),
+        attachments, context: input.additionalContext,
+        contextIssues: input.contextIssues, contextSignals: input.contextSignals,
+        contextFiles: input.contextFiles, contextSkills: input.contextSkills,
+      });
+    }
+    return { accepted: result.accepted };
   },
 
   /**
@@ -1512,7 +1927,11 @@ export const runsService = {
       }
 
       const sourceTurns = await runsRepo.findTurnsByRun(sourceRunId);
-      const sourceModel = latestKnownModel(sourceTurns, sourceRun.model);
+      const conversationSettings = resolveConversationSettings(
+        sourceRun.providerId, provider.config, sourceRun.configSnapshot,
+        latestKnownModel(sourceTurns, sourceRun.model),
+      );
+      const sourceModel = conversationSettings.model || undefined;
 
       if (workspace) {
         await workspaceService.update(workspace.id, { status: "in_progress" });
@@ -1525,7 +1944,7 @@ export const runsService = {
       const configSnapshot = composeConfigSnapshot(
         sourceRun.mode,
         sourceRun.providerId,
-        sourceRun.configSnapshot,
+        { ...sourceRun.configSnapshot, ...conversationSettings.config, conversationSettings },
       );
 
       await runsRepo.insertRun({

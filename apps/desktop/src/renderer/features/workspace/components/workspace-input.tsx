@@ -15,7 +15,6 @@ import { useComposerContext } from "../hooks/use-composer-context";
 import {
   AsciiSpinner,
   Button,
-  DropdownWrapper,
   RichInputForm,
   Tooltip,
   toast,
@@ -28,9 +27,9 @@ import {
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import { useModeConfig } from "@/hooks/use-mode-config";
-import { useIsMobile } from "@/lib/platform";
-import { useClickOutside } from "@/hooks/use-click-outside";
-import { Chat, Check, Plus } from "@/components/ui/icons";
+import { isElectron, useIsMobile } from "@/lib/platform";
+import { appApi } from "@/lib/transport";
+import { useRealtimeVoice } from "../hooks/use-realtime-voice";
 import {
   UnifiedContextDropdown,
   type UnifiedContextBucket,
@@ -38,6 +37,10 @@ import {
 } from "@/features/workspace/components/unified-context-dropdown";
 import type { IssueWithEntity } from "@/lib/redux/api/entitiesApi";
 import { ContextChips } from "./context-chips";
+import { ComposerQueueCard } from "./composer-run-queue";
+import type { ComposerRunQueue } from "../hooks/use-composer-run-queue";
+import { hasComposerMessage } from "../lib/composer-message";
+import { composerControls, stopComposerActivity } from "../lib/composer-controls";
 import { ComposerAttachments } from "./composer-attachments";
 import { InputToolbar } from "./input-toolbar";
 import { ContextUsageRing } from "./context-usage-meter";
@@ -59,6 +62,9 @@ import {
   useKeyboardShortcutBinding,
 } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
+import type { RunSettingConfig } from "@mains/contracts/run-settings";
+import type { ComposerSendTarget } from "../lib/composer-send-target";
+import { ComposerSendTargetSelect } from "./composer-send-target-select";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 const EMPTY_DIRECTORIES: string[] = [];
@@ -149,23 +155,23 @@ interface UnifiedMenuState {
   bucket: UnifiedContextBucket | null;
 }
 
-export interface ComposerSendTarget {
-  /** Run the next send continues, or null for a new chat. */
-  runId: string | null;
-  label: string;
-  options: Array<{ runId: string | null; label: string }>;
-}
+export type { ComposerSendTarget } from "../lib/composer-send-target";
 
 interface WorkspaceInputProps {
+  runQueue?: ComposerRunQueue;
   goal: string;
   onGoalChange: (value: string) => void;
   onSubmit: () => void;
+  onCreateVoiceConversation?: () => Promise<string | null>;
   isLoading: boolean;
   activeRun: Run | undefined;
   canResume?: boolean;
   providerId?: string;
   selectedModel?: string;
   onModelChange?: (model: string) => void;
+  settingsConfig?: RunSettingConfig;
+  onSettingsConfigChange?: (patch: RunSettingConfig) => unknown;
+  settingsReady?: boolean;
   /** When set, shows the send-target pill (editor tab): which chat the next send continues. */
   sendTarget?: ComposerSendTarget | null;
   onSendTargetChange?: (runId: string | null) => void;
@@ -178,10 +184,6 @@ interface WorkspaceInputProps {
   onStop?: () => void;
   /** When true (e.g. new-run draft tab active), focus the prompt after layout. */
   isNewRunTabActive?: boolean;
-  /** Work/Chat project that will own the new conversation. */
-  newChatProjectName?: string;
-  /** Project glyph rendered as part of the empty placeholder. */
-  newChatProjectIcon?: React.ReactNode;
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
   layout?: "default" | "centered" | "floating";
   floatingChatMode?: FloatingChatMode;
@@ -192,15 +194,20 @@ interface WorkspaceInputProps {
 }
 
 export function WorkspaceInput({
+  runQueue,
   goal,
   onGoalChange,
   onSubmit,
+  onCreateVoiceConversation,
   isLoading,
   activeRun,
   canResume = false,
   providerId,
   selectedModel: externalSelectedModel,
   onModelChange: externalOnModelChange,
+  settingsConfig,
+  onSettingsConfigChange,
+  settingsReady = true,
   sendTarget = null,
   onSendTargetChange,
   workspacePath,
@@ -211,14 +218,13 @@ export function WorkspaceInput({
   onAdditionalDirectoriesChange,
   onStop,
   isNewRunTabActive = false,
-  newChatProjectName,
-  newChatProjectIcon,
   layout = "default",
   floatingChatMode,
   onFloatingFocus,
   floatingAutoFocus = false,
   floatingStatusPlaceholder,
 }: WorkspaceInputProps) {
+  const voice = useRealtimeVoice();
   const inputRef = useRef<RichInputFormHandle>(null);
   useEffect(() => {
     if (layout !== "floating" || !floatingAutoFocus) return;
@@ -229,6 +235,7 @@ export function WorkspaceInput({
   const pluginsButtonRef = useRef<HTMLButtonElement>(null);
   const {
     files: contextFiles,
+    items: contextItems,
     skills: contextSkills,
     codeSelections: contextCodeSelections,
     browserSelections: contextBrowserSelections,
@@ -278,6 +285,9 @@ export function WorkspaceInput({
     externalSelectedModel,
     externalOnModelChange,
     workspacePath,
+    settingsConfig,
+    onSettingsConfigChange,
+    settingsReady,
   );
 
   const contextUsage = useContextUsage(layout === "floating" ? null : (activeRun?.id ?? null));
@@ -443,17 +453,17 @@ export function WorkspaceInput({
   const handleSlashCommandSelect = useCallback(
     (command: CommandInfo) => {
       if (command.name === "add-dir" &&
-        (activeProviderId === PROVIDER_IDS.claude || activeProviderId === PROVIDER_IDS.codex)) {
-      const t = unifiedMenu.trigger;
-      const ok = inputRef.current?.replaceTokenWithText(t, "") ?? false;
-      if (!ok) {
-        const next = replaceMentionInGoal(goal, t, unifiedMenu.filter, "");
-        if (next !== null) onGoalChange(next);
+        activeDescriptor.supportsAdditionalDirectories) {
+        const t = unifiedMenu.trigger;
+        const ok = inputRef.current?.replaceTokenWithText(t, "") ?? false;
+        if (!ok) {
+          const next = replaceMentionInGoal(goal, t, unifiedMenu.filter, "");
+          if (next !== null) onGoalChange(next);
+        }
+        updateUnifiedMenu({ visible: false, filter: "" });
+        void pickAdditionalDirectory();
+        return;
       }
-      updateUnifiedMenu({ visible: false, filter: "" });
-      void pickAdditionalDirectory();
-      return;
-    }
       const replacement = `/${command.name} `;
       const t = unifiedMenu.trigger;
       const ok =
@@ -469,7 +479,7 @@ export function WorkspaceInput({
       }
       updateUnifiedMenu({ visible: false, filter: "" });
     },
-    [activeProviderId, goal, onGoalChange, pickAdditionalDirectory,unifiedMenu.filter, unifiedMenu.trigger],
+    [activeDescriptor.supportsAdditionalDirectories, goal, onGoalChange, pickAdditionalDirectory, unifiedMenu.filter, unifiedMenu.trigger],
   );
 
   const handleSkillSelect = useCallback(
@@ -712,7 +722,9 @@ export function WorkspaceInput({
   );
 
   const handleSubmit = useCallback(() => {
-    if (activeProviderId === PROVIDER_IDS.claude || activeProviderId === PROVIDER_IDS.codex) {
+    if (voice.state.runId === activeRun?.id &&
+        (voice.state.phase === "connecting" || voice.state.phase === "connected" || voice.state.phase === "ending" || voice.state.phase === "stop_failed")) return;
+    if (activeDescriptor.supportsAdditionalDirectories) {
       const match = goal.trim().match(/^\/add-dir(?:\s+(.+))?$/);
       if (match) {
         if (match[1]) {
@@ -727,23 +739,18 @@ export function WorkspaceInput({
     }
     if (unifiedMenu.visible) return;
     onSubmit();
-  }, [unifiedMenu.visible, activeProviderId, goal, addAdditionalDirectory, pickAdditionalDirectory, onGoalChange, onSubmit]);
+  }, [voice.state.runId, voice.state.phase, activeRun?.id, unifiedMenu.visible, activeDescriptor.supportsAdditionalDirectories, goal, addAdditionalDirectory, pickAdditionalDirectory, onGoalChange, onSubmit]);
 
   const [isFileDragOver, setIsFileDragOver] = useState(false);
 
-  const sendTargetDropdownRef = useRef<HTMLDivElement>(null);
-  const [targetMenuOpen, setTargetMenuOpen] = useState(false);
   const previousFloatingChatMode = useRef(floatingChatMode);
   useLayoutEffect(() => {
     const previousMode = previousFloatingChatMode.current;
     previousFloatingChatMode.current = floatingChatMode;
     if (layout !== "floating" || previousMode === floatingChatMode) return;
     updateUnifiedMenu({ visible: false, filter: "" });
-    setTargetMenuOpen(false);
   }, [floatingChatMode, layout]);
-  useClickOutside(sendTargetDropdownRef, () => {
-    if (targetMenuOpen) setTargetMenuOpen(false);
-  });
+
 
   const handleWrapperDragEnter = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -809,23 +816,13 @@ export function WorkspaceInput({
   );
 
   const isMobile = useIsMobile();
-  const contextBrowserSelectionCount = contextBrowserSelections.length;
+  const contextBrowserSelectionCount = contextBrowserSelections.filter(
+    (selection) => !selection.elements?.length,
+  ).length;
   const inputPlaceholder = useMemo(() => {
     if (isFileDragOver) {
       return "Drop images or documents here";
     }
-    const withProjectContext = (hint: string) => {
-      if (!newChatProjectName) return hint;
-      const dash = hint.indexOf(" — ");
-      if (dash >= 0) {
-        return `${hint.slice(0, dash)} in ${newChatProjectName}${hint.slice(dash)}`;
-      }
-      const comma = hint.indexOf(", ");
-      if (comma >= 0) {
-        return `${hint.slice(0, comma)} in ${newChatProjectName} — ${hint.slice(comma + 2)}`;
-      }
-      return `${hint} in ${newChatProjectName}`;
-    };
     // Short, calm placeholder on mobile — the long hint wraps to 2–3 lines on a phone.
     const baseHint = isMobile
       ? "Do anything"
@@ -841,26 +838,20 @@ export function WorkspaceInput({
     ).length;
 
     if (imageCount === 0 && documentCount === 0) {
-      return withProjectContext(baseHint);
+      return baseHint;
     }
 
     if (imageCount > 0 && documentCount > 0) {
-      return withProjectContext(
-        "Ask about your attachments — drop more images or documents here",
-      );
+      return "Ask about your attachments — drop more images or documents here";
     }
     if (imageCount > 0) {
-      return withProjectContext(
-        imageCount === 1
-          ? "Ask about this image — drop more files here anytime"
-          : "Ask about these images — drop more files here anytime",
-      );
+      return imageCount === 1
+        ? "Ask about this image — drop more files here anytime"
+        : "Ask about these images — drop more files here anytime";
     }
-    return withProjectContext(
-      documentCount === 1
-        ? "Ask about this document — drop more files here anytime"
-        : "Ask about these documents — drop more files here anytime",
-    );
+    return documentCount === 1
+      ? "Ask about this document — drop more files here anytime"
+      : "Ask about these documents — drop more files here anytime";
   }, [
     isFileDragOver,
     uploadedFiles,
@@ -868,7 +859,6 @@ export function WorkspaceInput({
     canResume,
     isMobile,
     composerPlaceholder,
-    newChatProjectName,
   ]);
   const floatingRunStatus = layout === "floating" && !isFileDragOver
     ? floatingStatusPlaceholder
@@ -891,13 +881,63 @@ export function WorkspaceInput({
     return null;
   })();
 
+  const hasMessage = hasComposerMessage(goal, uploadedFiles.length, contextItems);
+  const voiceStartingRef = useRef(false);
+  const [voiceStarting, setVoiceStarting] = useState(false);
+  const voiceEnabled = isElectron && activeDescriptor.supportsRealtime && layout !== "floating";
+  const voiceBusy = voice.state.phase === "connecting" || voice.state.phase === "connected" || voice.state.phase === "ending" || voice.state.phase === "stop_failed";
+  const voiceForThisRun = voiceBusy && voice.state.runId === activeRun?.id;
+  const startVoice = async () => {
+    if (voiceStartingRef.current) return;
+    if (voiceBusy) return;
+    voiceStartingRef.current = true;
+    setVoiceStarting(true);
+    try {
+      const run = isNewRunTabActive ? undefined : activeRun;
+      const runId = run?.id ?? await onCreateVoiceConversation?.();
+      if (!runId) return;
+      const account = await appApi.account.get();
+      if (!account.success || !account.data) { toast.error("Could not load your account for voice chat."); return; }
+      // The controller owns cancellation as soon as media preparation starts.
+      // Keep the end button available while microphone permission is pending.
+      voiceStartingRef.current = false;
+      setVoiceStarting(false);
+      await voice.start({ runId, accountId: account.data.id,
+        label: run?.title || run?.goal || "Codex",
+        conversationSettings: { model: selectedModelInfo?.id ?? externalSelectedModel ?? "", config: settingsConfig ?? {} },
+      });
+    } finally {
+      voiceStartingRef.current = false;
+      setVoiceStarting(false);
+    }
+  };
+  const isRunning = !isNewRunTabActive && (activeRun?.status === "running" || activeRun?.status === "queued");
+  const canSendDuringRun = activeDescriptor.supportsTurnSteer && !!runQueue;
+  const steerPending = runQueue?.queue?.mode === "steer" && runQueue.queue.messages.some((message) => message.status === "sending");
+  const submitDisabled = isLoading || voiceStarting || voiceForThisRun || !!steerPending || !hasMessage || (isRunning && !canSendDuringRun);
+  const sendDisabled = !settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0);
+  const controls = composerControls({
+    state: voice.state, runId: activeRun?.id, isNewRun: !activeRun || isNewRunTabActive,
+    isRunning, voiceEnabled, sendDisabled,
+    sendLabel: runQueue?.editing ? "Save queued message" : "Send prompt",
+    hasMessage, preparing: voiceStarting,
+    startDisabled: ((!activeRun || isNewRunTabActive) && !onCreateVoiceConversation) || !settingsReady || isLoading ||
+      !!runQueue?.queue?.messages.length || !!providerSignedOut || cliUnsupported || !!authErrorMessage,
+  });
+  const reportActionError = (error: unknown) => toast.error(error instanceof Error ? error.message : String(error));
+  const handlePrimaryAction = controls.primary.kind === "stop"
+    ? () => { void stopComposerActivity({ stopVoice: controls.voiceActive ? voice.stop : undefined,
+        stopRun: isRunning ? onStop : undefined }).catch(reportActionError); }
+    : controls.primary.kind === "voice"
+      ? () => { void startVoice().catch(reportActionError); }
+      : handleSubmit;
   const toolbar = (
     <InputToolbar
+      primaryAction={{ ...controls.primary, onClick: handlePrimaryAction }}
+      voiceMute={controls.mute && { ...controls.mute, onToggle: voice.toggleMute }}
       floatingChatMode={floatingChatMode}
       variant={providerVariant}
       isLoading={isLoading}
-      onSubmit={handleSubmit}
-      onGoalChange={onGoalChange}
       selectedModelDisplayName={selectedModelDisplayName}
       modelDisplayNames={modelDisplayNames}
       modelEffortLevelsByDisplayName={modelEffortLevelsByDisplayName}
@@ -922,11 +962,8 @@ export function WorkspaceInput({
       onEffortLevelChange={handleEffortLevelChange}
       supportedEffortLevels={selectedModelInfo?.supportedEffortLevels}
       supportsUltracode={supportsUltracode}
-      isRunning={activeRun?.status === "running"}
-      onStop={onStop}
       uploadedFiles={uploadedFiles}
       onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
-      disabled={!!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0)}
       layout={layout === "floating" ? "floating" : "default"}
     />
   );
@@ -962,8 +999,9 @@ export function WorkspaceInput({
         )
       )}
 
+      {runQueue && <ComposerQueueCard controls={runQueue} isRunning={isRunning} />}
       <div
-        className={`relative mx-auto flex w-full max-w-210 flex-col cursor-pointer transition-all
+        className={`@container/composer relative mx-auto flex min-w-0 w-full max-w-210 flex-col cursor-pointer transition-all
         ${layout === "floating"
           ? "rounded-[28px] text-primary-950 dark:text-primary-50"
           : "rounded-[28px] glass-surface pb-2"}
@@ -986,64 +1024,13 @@ export function WorkspaceInput({
         )}
         {sendTarget && (
           <div className="flex px-4 pt-3 -mb-1">
-            <div className="relative" ref={sendTargetDropdownRef}>
-              <Button
-                type="button"
-                onClick={() => setTargetMenuOpen((open) => !open)}
-                className="flex items-center gap-1.5 pl-2 pr-1.5 py-1 rounded-full glass-button text-xs dark:text-primary-300 text-primary-700 cursor-pointer"
-                title="Choose which chat this message is sent to"
-                aria-haspopup="menu"
-                aria-expanded={targetMenuOpen}
-              >
-                {sendTarget.runId ? (
-                  <Chat className="size-3 shrink-0" />
-                ) : (
-                  <Plus className="size-3 shrink-0" />
-                )}
-                <span className="truncate max-w-60">{sendTarget.label}</span>
-              </Button>
-              <DropdownWrapper
-                isOpen={targetMenuOpen}
-                aria-label="Send message to"
-                openUpward
-                minWidth="min-w-20"
-              >
-                <div className="max-h-80 overflow-auto noscrollbar py-1">
-                  {sendTarget.options.map((option) => {
-                    const isSelected = option.runId === sendTarget.runId;
-                    return (
-                      <Button
-                        key={option.runId ?? "new"}
-                        type="button"
-                        onClick={() => {
-                          setTargetMenuOpen(false);
-                          onSendTargetChange?.(option.runId);
-                        }}
-                        className={`w-full text-left px-3 py-2 cursor-pointer text-sm transition-colors flex items-center gap-2 ${
-                          isSelected
-                            ? "bg-primary-200/60 dark:bg-primary-200/10 text-primary-950 dark:text-primary"
-                            : "hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300"
-                        }`}
-                        role="menuitemradio"
-                        aria-checked={isSelected}
-                      >
-                        {option.runId ? (
-                          <Chat className="size-3.5 shrink-0" />
-                        ) : (
-                          <Plus className="size-3.5 shrink-0" />
-                        )}
-                        <span className="min-w-0 flex-1 truncate">
-                          {option.label}
-                        </span>
-                        {isSelected && <Check className="size-3.5 shrink-0" />}
-                      </Button>
-                    );
-                  })}
-                </div>
-              </DropdownWrapper>
-            </div>
+            <ComposerSendTargetSelect target={sendTarget} onChange={onSendTargetChange} />
           </div>
         )}
+        {runQueue?.editing && <div className="flex items-center justify-between gap-2 px-4 pt-3 text-xs text-primary-500">
+          <span>Editing queued message</span>
+          <Button onClick={runQueue.onCancelEdit} className="rounded-lg px-2 py-1 text-primary-800 hover:bg-primary-200/50 dark:text-primary-200 dark:hover:bg-primary/5">Cancel edit</Button>
+        </div>}
         <ContextChips />
         {additionalDirectories.length > 0 && (
           <div className="flex flex-wrap gap-1.5 px-4 pt-3">
@@ -1079,8 +1066,7 @@ export function WorkspaceInput({
             query={goal}
             onQueryChange={handleGoalChange}
             onSubmit={handleSubmit}
-            // Mirrors the toolbar: while the agent works, Enter waits too.
-            submitDisabled={activeRun?.status === "running" || activeRun?.status === "queued"}
+            submitDisabled={sendDisabled}
             onSkillChipsChange={handleSkillChipsChange}
             onFileChipsChange={handleFileChipsChange}
             onCodeChipsChange={handleCodeChipsChange}
@@ -1095,7 +1081,7 @@ export function WorkspaceInput({
                   variant={providerVariant}
                   kind={activeRun?.status === "queued" ? "circle" : "square"}
                 />
-              : newChatProjectName ? newChatProjectIcon : undefined}
+              : undefined}
             focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
             compact={layout === "floating"}
           />

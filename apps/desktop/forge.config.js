@@ -60,10 +60,9 @@ module.exports = {
       const stripDirs = [
         // node-pty prebuilds (~58 MB on darwin-arm64)
         path.join(viteNodeModules, 'node-pty', 'prebuilds'),
-        // @github/copilot prebuilds (~24 MB)
-        path.join(viteNodeModules, '@github', 'copilot', 'prebuilds'),
-        // @github/copilot ripgrep binaries (~20 MB)
-        path.join(viteNodeModules, '@github', 'copilot', 'ripgrep', 'bin'),
+        // The SDK runtime's native library and bundled search executable.
+        path.join(viteNodeModules, '@github', `copilot-sdk-${targetPlatform}`, 'prebuilds'),
+        path.join(viteNodeModules, '@github', `copilot-sdk-${targetPlatform}`, 'ripgrep', 'bin'),
       ];
 
       const getDirSize = (dir) => {
@@ -108,15 +107,14 @@ module.exports = {
         }
       }
 
-      // Strip the copilot native-binary packages for other platforms/arches
-      // (vite copies every @github/copilot-<platform>-<arch> package present;
-      // only the target one should ship). Careful: @github/copilot-sdk also
-      // lives under @github and must survive.
+      // Keep the target SDK runtime and matching login CLI. The JS SDK and
+      // CLI meta-packages must survive alongside their platform packages.
       const githubScope = path.join(viteNodeModules, '@github');
       if (fs.existsSync(githubScope)) {
         for (const entry of fs.readdirSync(githubScope, { withFileTypes: true })) {
-          const isNativeBinaryPkg = /^copilot-(darwin|linux|linuxmusl|win32)-/.test(entry.name);
-          if (entry.isDirectory() && isNativeBinaryPkg && entry.name !== `copilot-${targetPlatform}`) {
+          const isNativeBinaryPkg = /^copilot-(?:sdk-)?(darwin|linux|linuxmusl|win32)-/.test(entry.name);
+          const isTarget = entry.name === `copilot-${targetPlatform}` || entry.name === `copilot-sdk-${targetPlatform}`;
+          if (entry.isDirectory() && isNativeBinaryPkg && !isTarget) {
             const fullPath = path.join(githubScope, entry.name);
             const size = getDirSize(fullPath);
             fs.rmSync(fullPath, { recursive: true, force: true });
@@ -205,14 +203,16 @@ module.exports = {
     appBundleId: 'dev.mains.app',
     // TCC: Apple Events (kTCCServiceAppleEvents), screen capture (kTCCServiceScreenCapture).
     extendInfo: {
+      NSMicrophoneUsageDescription:
+        'Mains uses your microphone when you start a voice conversation.',
       NSAppleEventsUsageDescription:
         'Mains needs permission to send Apple events to control other apps for desktop automation.',
       NSScreenCaptureUsageDescription:
         'Mains may capture the screen when you use features or connected tools that need a visual of your desktop.',
     },
     asar: {
-      unpack: '{**/*.node,**/claude,**/copilot,**/spawn-helper,**/rg,**/*.wasm}',
-      unpackDir: '.vite/build/node_modules/{node-pty,@github/copilot-darwin-arm64,@github/copilot-darwin-x64,@github/copilot/prebuilds,@github/copilot/ripgrep,@anthropic-ai/claude-agent-sdk-darwin-arm64,@anthropic-ai/claude-agent-sdk-darwin-x64,@vscode/ripgrep-darwin-arm64,@vscode/ripgrep-darwin-x64}',
+      unpack: '{**/*.node,**/claude,**/copilot,**/copilot-runtime,**/spawn-helper,**/rg,**/*.wasm}',
+      unpackDir: '.vite/build/node_modules/{node-pty,@github/copilot-sdk-darwin-arm64,@github/copilot-sdk-darwin-x64,@github/copilot-darwin-arm64,@github/copilot-darwin-x64,@anthropic-ai/claude-agent-sdk-darwin-arm64,@anthropic-ai/claude-agent-sdk-darwin-x64,@vscode/ripgrep-darwin-arm64,@vscode/ripgrep-darwin-x64}',
     },
     icon: 'src/renderer/public/icon',
     extraResource: [

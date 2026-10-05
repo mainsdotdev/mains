@@ -50,6 +50,7 @@ import { workspaceRepo } from "../../workspace/workspace.repo";
 import { adoptConfig, createLogger, resolveCatalogDefaultId } from "./adapter.shared";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import { CodexAppServer } from "./codex-app-server.client";
+import { codexMcpResourceTarget, createCodexMcpApps } from "./codex-mcp-apps";
 import {
   createCodexCapabilities,
   mapRateLimitSnapshot,
@@ -64,6 +65,7 @@ import {
   isCodexUnavailableThreadError,
 } from "./codex-session-acquisition";
 import type { CodexSubAgentRunMeta } from "./codex-event-mapper";
+import { createCodexRealtime } from "./codex-realtime";
 
 export {
   CODEX_ARCHIVED_CHAT_MESSAGE,
@@ -78,7 +80,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.159.2";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.160.0";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
@@ -441,6 +443,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     resolveDefaultModel: catalogDefaultModel,
     logger: codexLogger,
   });
+  const realtime = createCodexRealtime({
+    sessions: sessionAcquisition, runs: runCoordinator,
+    getTimeout: () => config.timeout ?? 3_600_000,
+    getVoice: () => config.realtimeVoice,
+  });
   const capabilities = createCodexCapabilities({
     getDefaultModel: () => config.defaultModel,
     ensureServer: (cwd) => ensureServer(cwd),
@@ -448,6 +455,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       appServer?.isRunning ? appServer : null,
     getCliHealth: () => getCodexCliHealth(),
     logger: codexLogger,
+  });
+  const mcpApps = createCodexMcpApps({
+    ensureServer: () => ensureServer(),
+    readInventory: capabilities.readMcpInventory,
+    listEntrypoints: capabilities.listMcpAppEntrypoints,
   });
 
   /**
@@ -685,7 +697,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         appServer = null;
       }
       mcpThreadResumePromises.clear();
+      mcpApps.clear();
       capabilities.onServerClosed();
+      realtime.serverClosed();
       runCoordinator.handleServerClose();
     });
 
@@ -699,6 +713,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       capabilities: {
         experimentalApi: true,
         requestAttestation: false,
+        mcpServerOpenaiFormElicitation: true,
+        extensions: { "openai/form": {} },
       },
     });
     if (
@@ -716,6 +732,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     // Background handler: captures notifications that arrive after turn completes
     // (e.g. thread/name/updated for auto-generated titles)
     server.setBackgroundHandler((method, params) => {
+      realtime.handleNotification(method, params);
       if (method === "thread/name/updated" || method === "thread/nameUpdated") {
         const p = params as Record<string, unknown> | undefined;
         const threadName = p?.threadName as string | undefined;
@@ -866,6 +883,21 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     resumeSession: sessionAcquisition.resumeSession,
     forkSession: sessionAcquisition.forkSession,
     reviewSession: sessionAcquisition.reviewSession,
+    startRealtime: realtime.start,
+    stopRealtime: realtime.stop,
+    abortNativeRun: (runId) => runCoordinator.abortNativeRun(appServer, runId),
+
+    steerRun: (request) => runCoordinator.steerRun(appServer, request),
+
+    async getInputStatus(runId, clientUserMessageId, sessionId) {
+      const threadId = runCoordinator.getSessionThread(runId) ?? sessionId;
+      if (!threadId) return { accepted: false };
+      const server = await ensureServer();
+      const { thread } = await server.sendRequest("thread/read", { threadId, includeTurns: true });
+      const turn = thread.turns.find((turn) => turn.items.some((item) =>
+        item.type === "userMessage" && item.clientId === clientUserMessageId));
+      return { accepted: !!turn, ...(turn ? { turnId: turn.id } : {}) };
+    },
 
     async executePrompt(
       sessionParam,
@@ -901,6 +933,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     async archiveSession(runId: string): Promise<void> {
+      await realtime.stopRun(runId);
       const threadId = await findThreadIdForRun(runId);
       if (!threadId) return;
 
@@ -919,6 +952,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     async deleteSession(runId: string): Promise<void> {
+      await realtime.stopRun(runId);
       const threadId = await findThreadIdForRun(runId);
       if (threadId) {
         const server = await ensureServer();
@@ -926,6 +960,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       }
       runCoordinator.deleteRun(runId);
     },
+
+    listMcpAppEntrypoints: capabilities.listMcpAppEntrypoints,
+    openMcpAppSession: mcpApps.open,
+    callMcpAppSessionTool: mcpApps.callTool,
+    closeMcpAppSession: mcpApps.close,
 
     async readMcpAppResource(request) {
       const threadId = await findThreadIdForRun(request.runId);
@@ -936,9 +975,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       const targetVersionComparison = cliVersion
         ? compareCodexVersions(cliVersion, "0.157.1")
         : null;
-      const target = request.connectorId && request.linkId !== undefined &&
-        targetVersionComparison !== null && targetVersionComparison >= 0
-        ? { connectorId: request.connectorId, linkId: request.linkId }
+      const target = targetVersionComparison !== null && targetVersionComparison >= 0
+        ? codexMcpResourceTarget(request)
         : undefined;
       const params: CodexAppServerParams<"mcpServer/resource/read"> = {
         threadId,
@@ -1000,8 +1038,10 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     async shutdown(): Promise<void> {
+      realtime.serverClosed();
       runCoordinator.shutdown();
       capabilities.shutdown();
+      mcpApps.clear();
 
       if (appServer) {
         await appServer.stop();
@@ -1012,6 +1052,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     listModels: capabilities.listModels,
+    listRealtimeVoices: capabilities.listRealtimeVoices,
 
     getAccountInfo: capabilities.getAccountInfo,
 

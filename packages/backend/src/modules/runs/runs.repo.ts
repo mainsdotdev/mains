@@ -193,17 +193,31 @@ export const runsRepo = {
     return payload.id;
   },
 
-  async updateRun(id: string, payload: UpdateRunPayload): Promise<RunResponse | null> {
+  async updateRun(id: string, payload: UpdateRunPayload, options: { preserveConversationSettings?: boolean } = {}): Promise<RunResponse | null> {
     const db = getDb();
-    const updateData: Record<string, unknown> = { updatedAt: sql`(unixepoch())` };
+    // Remembering a composer preference is not new transcript activity.
+    const settingsOnly = payload.conversationSettings !== undefined && Object.keys(payload).every((key) => key === "conversationSettings");
+    const updateData: Record<string, unknown> = settingsOnly ? {} : { updatedAt: sql`(unixepoch())` };
 
     if (payload.title !== undefined) updateData.title = payload.title;
     if (payload.goal !== undefined) updateData.goal = payload.goal;
     if (payload.status !== undefined) updateData.status = payload.status;
     if (payload.model !== undefined) updateData.model = payload.model;
     if (payload.systemPrompt !== undefined) updateData.systemPrompt = payload.systemPrompt;
-    if (payload.configSnapshot !== undefined)
+    if (payload.configSnapshot !== undefined) {
       updateData.configSnapshot = JSON.stringify(payload.configSnapshot);
+      if (options.preserveConversationSettings) {
+        // A queued message uses its captured settings; later composer edits
+        // remain the preferences for the following message.
+        updateData.configSnapshot = sql`json_set(${JSON.stringify(payload.configSnapshot)}, '$.conversationSettings',
+          json(coalesce(json_extract(${runs.configSnapshot}, '$.conversationSettings'),
+            json_extract(${JSON.stringify(payload.configSnapshot)}, '$.conversationSettings'))))`;
+      }
+    }
+    if (payload.conversationSettings !== undefined) {
+      updateData.configSnapshot = sql`json_set(coalesce(${updateData.configSnapshot ?? runs.configSnapshot}, '{}'),
+        '$.conversationSettings', json(${JSON.stringify(payload.conversationSettings)}))`;
+    }
     if (payload.toolPolicySnapshot !== undefined)
       updateData.toolPolicySnapshot = JSON.stringify(payload.toolPolicySnapshot);
     if (payload.startedAt !== undefined) updateData.startedAt = payload.startedAt;

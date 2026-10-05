@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View } from "@/components/ui/icons";
+import { ViewFile } from "@/components/ui/icons";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { FileIconComponent } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
@@ -25,7 +25,7 @@ export function ViewDisplay({ params, output, isCompact = false }: { params: Vie
   return (
     <div>
       <ToolHeader
-        icon={<View className="size-4" />}
+        icon={<ViewFile className="size-4" />}
         verb="Viewed"
         hasDetails={hasContent}
         isExpanded={isExpanded}
@@ -45,7 +45,7 @@ export function ViewDisplay({ params, output, isCompact = false }: { params: Vie
             e.stopPropagation();
             openFile(filePath);
           }}
-          className={`inline-flex items-center gap-1 min-w-0 ${filePath ? "cursor-pointer hover:underline hover:text-primary-950 hover:dark:text-primary" : ""} ${TOOL_ROW_TEXT}`}
+          className={`inline-flex items-center gap-1 min-w-0 ${filePath ? "cursor-pointer hover:underline decoration-dashed hover:text-primary-950 hover:dark:text-primary" : ""} ${TOOL_ROW_TEXT}`}
         >
           {filePath && (
             <FileIconComponent

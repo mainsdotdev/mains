@@ -58,34 +58,34 @@ export function BrowserFindBar({
         {query ? `${activeMatchOrdinal}/${matches}` : "0/0"}
       </Text>
       <Button
+        variant="icon" iconSize="sm"
         onClick={onPrevious}
         disabled={!query || matches === 0}
         tooltip="Previous match"
         tooltipShortcut="⇧↵"
         tooltipPosition="top"
         aria-label="Previous match"
-        className="rounded-md p-1 text-primary-600 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-300 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
       >
         <ArrowUp className="size-3.5 -rotate-90" />
       </Button>
       <Button
+        variant="icon" iconSize="sm"
         onClick={onNext}
         disabled={!query || matches === 0}
         tooltip="Next match"
         tooltipShortcut="↵"
         tooltipPosition="top"
         aria-label="Next match"
-        className="rounded-md p-1 text-primary-600 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-300 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
       >
         <ArrowUp className="size-3.5 rotate-90" />
       </Button>
       <Button
+        variant="icon" iconSize="sm"
         onClick={onClose}
         tooltip="Close find"
         tooltipShortcut="Esc"
         tooltipPosition="top-left"
         aria-label="Close find in page"
-        className="rounded-md p-1 text-primary-600 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-300 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
       >
         <Close className="size-3.5" />
       </Button>

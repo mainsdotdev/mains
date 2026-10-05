@@ -33,9 +33,6 @@ interface PulseListProps {
   onEdit: (pulse: Pulse) => void;
 }
 
-const ACTION_CLASS =
-  "p-1.5 rounded-lg text-primary-500 hover:text-primary-800 dark:hover:text-primary-200 hover:bg-primary-200/40 dark:hover:bg-primary-800/60";
-
 /** Re-render once a minute so "Next in 3h" doesn't go stale on an open page. */
 function useMinuteClock(): number {
   const [now, setNow] = useState(() => Date.now());
@@ -245,7 +242,7 @@ function PulseRow({
           aria-label="Run now"
           onClick={handleRunNow}
           disabled={isRunning}
-          className={ACTION_CLASS}
+          variant="icon"
         >
           {isRunning ? (
             <AsciiSpinner variant="inherit" kind="circle" />
@@ -257,7 +254,7 @@ function PulseRow({
           tooltip="Edit"
           aria-label="Edit"
           onClick={onEdit}
-          className={ACTION_CLASS}
+          variant="icon"
         >
           <Edit className="size-4" />
         </Button>
@@ -265,7 +262,7 @@ function PulseRow({
           tooltip="Delete"
           aria-label="Delete"
           onClick={onDelete}
-          className={ACTION_CLASS}
+          variant="icon"
         >
           <Trash className="size-4" />
         </Button>

@@ -37,21 +37,21 @@ export function SidebarToggleButton({
       className={`fixed flex h-7 items-center gap-1 transition-all duration-300 ease-out ${browserExpanded ? "z-10000" : "z-(--z-panel-toggle)"}`}
       style={{
         top: "calc(0.5875rem + env(safe-area-inset-top))",
-        left: reserveTrafficLights ? "5.5rem" : "0.75rem",
+        left: reserveTrafficLights ? "5.25rem" : "0.75rem",
       }}
     >
       <div className="rounded-full ">
         <Button
+          variant="icon"
           tooltip={tooltip}
           tooltipPosition="right"
           onClick={onClick}
-          className="rounded-full cursor-pointer hover:bg-primary-100/80 dark:hover:bg-primary/10 px-1.75 py-1.5 text-primary-700 dark:text-primary-300 transition-all duration-300 ease-out"
           aria-label={isOpen ? "Close sidebar" : "Open sidebar"}
         >
           {isOpen ? (
-            <SidebarOpen className="size-4 text-primary-800 dark:text-primary-200" />
+            <SidebarOpen className="size-4" />
           ) : (
-            <SidebarClose className="size-4 text-primary-700 dark:text-primary-300" />
+            <SidebarClose className="size-4" />
           )}
         </Button>
       </div>

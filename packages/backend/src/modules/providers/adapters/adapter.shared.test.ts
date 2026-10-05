@@ -5,6 +5,7 @@ import * as path from "path";
 import { describe, it, expect, vi } from "vitest";
 import {
   saveAttachments,
+  attachmentUploadDir,
   adoptConfig,
   createLogger,
   safeJson,
@@ -405,9 +406,10 @@ describe("emitUserPromptArtifact", () => {
       const [pdf, txt, img] = onEvent.mock.calls[0][0].metadata.attachments;
       expect(savedPaths).toContain(pdf.path);
       expect(fs.existsSync(pdf.path)).toBe(true);
-      // .txt is inlined into the prompt, never written; images carry a data URL.
+      // .txt is inlined; image previews also retain the durable uploaded copy.
       expect(txt.path).toBeUndefined();
-      expect(img.path).toBeUndefined();
+      expect(savedPaths).toContain(img.path);
+      expect(fs.existsSync(img.path)).toBe(true);
     } finally {
       fs.rmSync(path.join(os.tmpdir(), "mains-uploads", runId), { recursive: true, force: true });
     }
@@ -419,6 +421,44 @@ describe("emitUserPromptArtifact", () => {
       attachments: [{ name: "a.pdf", type: "document", data: "", mimeType: "application/pdf" }],
     });
     expect(onEvent.mock.calls[0][0].metadata.attachments[0].path).toBeUndefined();
+  });
+
+  it("persists per-prompt browser annotation groups without unrelated context or DOM styling", async () => {
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    await emitUserPromptArtifact(onEvent, "deneme", {
+      context: [
+        { kind: "selection", metadata: { source: "browser", id: "first", url: "https://mains.dev", comment: "Bunlar nedir", elements: [
+          { tagName: "section", selector: "#intro", text: "Introduction", styles: { color: "red" } },
+          { tagName: "a", selector: "#link", componentName: "Link" },
+        ] } },
+        { kind: "selection", metadata: { source: "editor", elements: [{ tagName: "div", selector: "main" }] } },
+        { kind: "selection", metadata: { source: "browser", tagName: "body", selector: "body" } },
+        { kind: "selection", metadata: { source: "browser", id: "second", url: "https://docs.mains.dev", comment: "İkinci yorum", elements: [
+          { tagName: "div", selector: "#card", text: "Card" },
+        ] } },
+      ],
+    });
+    const event = onEvent.mock.calls[0][0];
+    expect(event.content).toBe("deneme");
+    expect(event.metadata.browserAnnotations).toEqual([
+      { id: "first", url: "https://mains.dev", comment: "Bunlar nedir", elements: [
+        { tagName: "section", selector: "#intro", text: "Introduction" },
+        { tagName: "a", selector: "#link", componentName: "Link" },
+      ] },
+      { id: "second", url: "https://docs.mains.dev", comment: "İkinci yorum", elements: [{ tagName: "div", selector: "#card", text: "Card" }] },
+    ]);
+  });
+
+  it("persists review comments with both diff side and original code, excluding malformed context", async () => {
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    const comment = { id: "comment", workspaceId: "ws", filePath: "a.ts", absolutePath: "/repo/a.ts", side: "deletions",
+      lineNumber: 7, lineText: "oldCode", patchId: "patch", comment: "Keep this behavior" };
+    await emitUserPromptArtifact(onEvent, "Address comments", { context: [
+      { kind: "selection", metadata: { source: "review", ...comment } },
+      { kind: "selection", metadata: { source: "review", ...comment, lineNumber: -1 } },
+      { kind: "selection", metadata: { source: "editor", ...comment } },
+    ] });
+    expect(onEvent.mock.calls[0][0].metadata.reviewComments).toEqual([comment]);
   });
 
   it("includes issues and files metadata", async () => {
@@ -480,5 +520,21 @@ describe("toolWrites", () => {
     expect(toolWrites("Read", { file_path: "a.ts" })).toEqual(none);
     expect(toolWrites("Grep", { pattern: "x" })).toEqual(none);
     expect(toolWrites("str_replace_editor", { command: "view", path: "a.ts" })).toEqual(none);
+  });
+});
+
+
+describe("queued input attachment ownership", () => {
+  it("keeps equal filenames in distinct message directories without changing display names", () => {
+    const runId = `queue-attachments-${Date.now()}`;
+    try {
+      const attachment = { name: "image.png", type: "image" as const, data: Buffer.from("first").toString("base64"), mimeType: "image/png" };
+      const first = saveAttachments([attachment], runId, "first-input").savedPaths[0];
+      const second = saveAttachments([{ ...attachment, data: Buffer.from("second").toString("base64") }], runId, "second-input").savedPaths[0];
+      expect(first).not.toBe(second);
+      expect(path.basename(first)).toBe("image.png");
+      expect(fs.readFileSync(first, "utf8")).toBe("first");
+      expect(fs.readFileSync(second, "utf8")).toBe("second");
+    } finally { fs.rmSync(attachmentUploadDir(runId), { recursive: true, force: true }); }
   });
 });

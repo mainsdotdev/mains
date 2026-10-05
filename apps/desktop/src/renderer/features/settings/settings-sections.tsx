@@ -2,19 +2,20 @@ import { lazy, type ComponentType, type ElementType } from "react";
 import {
   Archive,
   Bell,
-  Branch,
   Chart,
   Codex,
   Connect,
   CopilotStatic,
   Cursor,
-  General,
+  FolderGit,
   Keyboard,
   Relay,
+  Settings,
   Sun,
+  View,
 } from "@/components/ui/icons";
 import { capabilities } from "@/lib/platform";
-import { Claude, Scan } from "@/components/ui/icons/space";
+import { Claude } from "@/components/ui/icons/space";
 import GeneralSettings from "./components/general";
 import AppearanceSettings from "./components/appearance";
 import GitSettings from "./components/git";
@@ -92,11 +93,11 @@ export type SettingsNavItem = {
 };
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
-  { id: "general", label: "General", icon: General, showInNav: true, Component: GeneralSettings },
+  { id: "general", label: "General", icon: Settings, showInNav: true, Component: GeneralSettings },
   { id: "appearance", label: "Appearance", icon: Sun, showInNav: true, Component: AppearanceSettings },
   { id: "notifications", label: "Notifications", icon: Bell, showInNav: capabilities.nativeNotifications, Component: NotificationsSettings },
-  { id: "git", label: "Git", icon: Branch, showInNav: true, Component: GitSettings },
-  { id: "lens", label: "Lens", icon: Scan, showInNav: capabilities.appshots, Component: LensSettings },
+  { id: "git", label: "Git", icon: FolderGit, showInNav: true, Component: GitSettings },
+  { id: "lens", label: "Lens", icon: View, showInNav: capabilities.appshots, Component: LensSettings },
   { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard, showInNav: capabilities.windowChrome, Component: KeyboardShortcutsSettings },
   { id: "connections", label: "Connections", icon: Connect, showInNav: true, Component: ConnectionsSettings },
   // Hidden from the Settings nav — surfaced as the top-level Connect route instead.

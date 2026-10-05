@@ -8,6 +8,7 @@ import {
   Kimi,
   Mains,
   Meta,
+  Muse,
   Zai,
 } from "@/components/ui/icons";
 import { Claude } from "@/components/ui/icons/space";
@@ -15,6 +16,9 @@ import type { ProviderVariant } from "./provider-variants";
 
 export function getModelIcon(modelName: string, variant?: ProviderVariant) {
   const name = modelName.toLowerCase();
+  if (name.includes("muse")) {
+    return <Muse className="size-3.5" />;
+  }
   if (name.includes("deepseek")) {
     return <DeepSeek className="size-3.5" />;
   }

@@ -177,11 +177,12 @@ export const pulseService = {
   },
 
   update(id: string, input: UpdatePulseInput): Pulse | null {
-    const validationError = validateUpdate(input);
-    if (validationError) throw new Error(validationError);
-
     const existing = pulseRepo.findById(id);
     if (!existing) throw new Error("Pulse not found");
+
+    const merged = { ...existing, ...input };
+    const validationError = validateUpdate(merged);
+    if (validationError) throw new Error(validationError);
 
     // Recompute nextRunAt if any scheduling field changed
     const scheduleChanged =
@@ -190,7 +191,6 @@ export const pulseService = {
       input.minute !== undefined ||
       input.dayOfWeek !== undefined;
 
-    const merged = { ...existing, ...input };
     // Mode is fixed at creation; an update must keep the target shape
     // consistent with it (developer ⇄ workspace, work/chat ⇄ collection).
     if (merged.mode === "developer") {

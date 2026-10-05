@@ -30,7 +30,7 @@ export function buildApprovalDiffPreviews(
   }
 
   if (kind === "write") {
-    const content = stringValue(input.content ?? input.file_text);
+    const content = stringValue(input.content ?? input.file_text ?? input.newFileContents);
     return [{
       filePath,
       patch: content === undefined

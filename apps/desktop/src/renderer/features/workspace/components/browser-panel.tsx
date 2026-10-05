@@ -3,10 +3,10 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { addContextItemForKey } from "@/lib/redux/slices/workspaceSlice";
 import type { ContextBrowserSelection } from "@/features/workspace/lib/composer-context";
 import {
@@ -35,6 +35,8 @@ import {
   View,
 } from "@/components/ui/icons";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
+import { useMainHeader } from "@/hooks/use-main-header";
+import { usePreviewPanelTransition } from "@/hooks/use-preview-panel-transition";
 import { isElectron } from "@/lib/platform";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setBrowserPanelWidth } from "@/lib/redux/slices/appSettingsSlice";
@@ -74,6 +76,7 @@ import {
   type BrowserClearDataOptionsViewModel,
 } from "./browser-clear-data-panel";
 import { browserPanelBounds } from "../lib/browser-panel-bounds";
+import { browserAnnotationTheme } from "../lib/browser-annotation";
 import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import {
   keyboardShortcutLabel,
@@ -96,7 +99,6 @@ interface FindState {
   matches: number;
 }
 
-type AnimationState = "closed" | "opening" | "open" | "closing";
 /** A DOM overlay that needs the native page view out of its way. */
 type BrowserOverlayId = "device" | "scale" | "address";
 
@@ -138,7 +140,14 @@ function waitForPaint(): Promise<void> {
   });
 }
 
-export function BrowserPanel() {
+export function BrowserPanel({
+  tabsInMainHeader = false,
+  reserveLayoutControls = false,
+}: {
+  tabsInMainHeader?: boolean;
+  reserveLayoutControls?: boolean;
+}) {
+  const { browserTabsHost } = useMainHeader();
   const {
     isOpen,
     isExpanded,
@@ -227,10 +236,7 @@ export function BrowserPanel() {
     "browser.previousTab",
   );
 
-  const [animState, dispatchAnim] = useReducer(
-    (_: AnimationState, next: AnimationState) => next,
-    isOpen ? "open" : "closed",
-  );
+  const { isVisible, isAnimatedIn } = usePreviewPanelTransition(isOpen);
 
   const api = getBrowserApi();
   const browserPanelWidth = useAppSelector(
@@ -360,24 +366,6 @@ export function BrowserPanel() {
     [api],
   );
 
-  useEffect(() => {
-    dispatchAnim(isOpen ? "opening" : "closing");
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (animState === "opening") {
-      const timer = setTimeout(() => dispatchAnim("open"), 50);
-      return () => clearTimeout(timer);
-    }
-    if (animState === "closing") {
-      const timer = setTimeout(() => dispatchAnim("closed"), 300);
-      return () => clearTimeout(timer);
-    }
-    return undefined;
-  }, [animState]);
-
-  const isVisible = animState !== "closed";
-  const isAnimatedIn = animState === "open";
   // A native child window draws the chat above the live WebContentsView. The
   // old screenshot path remains only for the standalone web renderer.
   const chatOverlayActive = isOpen && isExpanded && chatVisible && !isElectron;
@@ -590,7 +578,9 @@ export function BrowserPanel() {
         key: selectionOwnerKey || ownerKey,
         item: { kind: "browser", ...contextSelection },
       }));
-      toast.success("Added browser selection to chat context");
+      toast.success(contextSelection.elements?.length
+        ? "Added annotation to chat"
+        : "Added browser selection to chat context");
     });
     const offFind = api.onFindResult((result) => {
       if (result.tabId !== activeTabIdRef.current) return;
@@ -1233,6 +1223,11 @@ export function BrowserPanel() {
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      if (event.key === "Escape" && selectMode) {
+        event.preventDefault();
+        void api?.setSelectMode(false);
+        return;
+      }
       if (matchesKeyboardShortcut(event, focusLocationShortcut)) {
         event.preventDefault();
         locationInputRef.current?.focus();
@@ -1302,6 +1297,7 @@ export function BrowserPanel() {
     printShortcut,
     printPage,
     resetZoomShortcut,
+    selectMode,
     setZoom,
     backShortcut,
     forwardShortcut,
@@ -1324,7 +1320,7 @@ export function BrowserPanel() {
 
   const toggleSelect = useCallback(async () => {
     if (!api) return;
-    const response = await api.setSelectMode(!selectMode);
+    const response = await api.setSelectMode(!selectMode, browserAnnotationTheme());
     if (response?.success === false) {
       toast.error(response.error || "Failed to start browser selection");
     }
@@ -1392,10 +1388,10 @@ export function BrowserPanel() {
   }, []);
 
   if (!isVisible) return null;
+  // Keep the DOM surface and native viewport on the same content edge.
+  // Space for window controls belongs only to the tab strip above them.
   const panelWidth = isExpanded
-    ? sidebarCollapsed
-      ? "calc(100% - var(--content-left) - 4rem)"
-      : "calc(100% - var(--content-left) + 0.3rem)"
+    ? "calc(100% - var(--content-left) + 0.3rem)"
     : "var(--browser-panel-width)";
 
   if (!api) {
@@ -1418,13 +1414,31 @@ export function BrowserPanel() {
     (download) =>
       download.state === "progressing" || download.state === "paused",
   ).length;
+  const tabStrip = (
+    <BrowserTabStrip
+      tabs={browserState.tabs}
+      activeTabId={browserState.activeTabId}
+      onActivate={activateTab}
+      onClose={closeTab}
+      onCreate={createTab}
+      onClosePanel={() => void closePanel()}
+      isExpanded={isExpanded}
+      sidebarCollapsed={sidebarCollapsed}
+      onToggleExpanded={toggleExpanded}
+      reserveLayoutControls={reserveLayoutControls}
+      newTabShortcutLabel={keyboardShortcutLabel(newTabShortcut)}
+      closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}
+      inMainHeader={tabsInMainHeader}
+    />
+  );
 
   return (
     <div
       data-browser-panel=""
-      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[width,transform,opacity] duration-300 ease-out"
+      className="fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden transition-[width,transform,opacity] duration-300 ease-out"
       style={{
         width: panelWidth,
+        top: tabsInMainHeader ? "var(--shell-header-height)" : undefined,
         transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
         opacity: isAnimatedIn ? 1 : 0,
       }}
@@ -1455,29 +1469,17 @@ export function BrowserPanel() {
         />
       )}
 
-      {/* Both panel sizes retain the translucent frame gap. The painted surface
-          stays inset so native page content clears its rounded corners. */}
-      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950 -pl-20">
-      <BrowserTabStrip
-        tabs={browserState.tabs}
-        activeTabId={browserState.activeTabId}
-        onActivate={activateTab}
-        onClose={closeTab}
-        onCreate={createTab}
-        onClosePanel={() => void closePanel()}
-        isExpanded={isExpanded}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleExpanded={toggleExpanded}
-        chatVisible={chatVisible}
-        onToggleChat={() => setChatVisible(!chatVisible)}
-        newTabShortcutLabel={keyboardShortcutLabel(newTabShortcut)}
-        closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}
-      />
+      {/* The tab strip shares the shell header surface. Browser content starts
+          below it, inside the inset rounded panel. */}
+      <div className="absolute inset-1.25 flex min-h-0 flex-col">
+      {tabsInMainHeader && browserTabsHost ? createPortal(tabStrip, browserTabsHost) : tabStrip}
 
+      <div data-browser-content="" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
       <div className="relative">
         <div className="flex items-center gap-1 border-b border-primary-200/60 px-2 py-1 dark:border-primary-800/50">
           <div className="flex items-center gap-1 rounded-full p-0.5 ">
             <Button
+              variant="icon"
               tooltip="Back"
               tooltipShortcut={keyboardShortcutLabel(backShortcut)}
               tooltipPosition="top"
@@ -1485,12 +1487,12 @@ export function BrowserPanel() {
                 void api.back();
               }}
               disabled={!activeTab?.canGoBack}
-              className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label="Back"
             >
               <ChevronLeft className="size-5" />
             </Button>
             <Button
+              variant="icon"
               tooltip="Forward"
               tooltipShortcut={keyboardShortcutLabel(forwardShortcut)}
               tooltipPosition="top"
@@ -1498,18 +1500,18 @@ export function BrowserPanel() {
                 void api.forward();
               }}
               disabled={!activeTab?.canGoForward}
-              className="rounded-full p-0.5 text-primary-700 hover:bg-primary-200/60 disabled:opacity-40 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label="Forward"
             >
               <ChevronLeft className="size-5 rotate-180" />
             </Button>
             <Button
+              variant="icon"
               tooltip={activeTab?.isLoading ? "Stop" : "Reload"}
               tooltipPosition="top"
               onClick={() => {
                 void (activeTab?.isLoading ? api.stop() : api.reload());
               }}
-              className="group rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
+              className="group"
               aria-label={activeTab?.isLoading ? "Stop" : "Reload"}
             >
               {activeTab?.isLoading ? (
@@ -1520,7 +1522,7 @@ export function BrowserPanel() {
             </Button>
           </div>
 
-          <div className="min-w-0 flex-1">
+          <div className="relative mx-auto my-1 flex min-w-0 max-w-3xl flex-1">
             <Input
               ref={locationInputRef}
               type="text"
@@ -1601,34 +1603,68 @@ export function BrowserPanel() {
               autoCapitalize="none"
               autoComplete="off"
               autoCorrect="off"
-              className="w-full rounded-full py-1.75 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:text-primary-100 dark:focus:bg-primary-800/60"
+              className="w-full max-w-3xl rounded-xl py-2 pr-9 text-xs text-primary-900 placeholder:text-primary-500 focus:bg-primary-200/60 dark:[--glass-fill-input:var(--color-primary-900)] dark:text-primary-100 dark:focus:bg-primary-800/60"
               spellCheck={false}
             />
+            {urlInput && (
+              <Button
+                variant="icon" iconSize="sm"
+                aria-label="Clear address"
+                tooltip="Clear address"
+                tooltipPosition="bottom"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setUrlInput("");
+                  if (!addressSuggestionsOpen) setAddressOverlayReady(false);
+                  setAddressSuggestionsOpen(true);
+                  setAddressSuggestionIndex(0);
+                  locationInputRef.current?.focus();
+                }}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2"
+              >
+                <Close aria-hidden className="size-3.5" />
+              </Button>
+            )}
+            {addressSuggestionsVisible && (
+              <div className="absolute inset-x-0 top-full z-(--z-dropdown)">
+                <BrowserAddressSuggestions
+                  rows={addressRows}
+                  selectedIndex={selectedAddressSuggestionIndex}
+                  onHighlight={setAddressSuggestionIndex}
+                  onSelect={(row) => {
+                    if (row.kind === "input") {
+                      navigate(row.value);
+                      return;
+                    }
+                    setUrlInput(row.suggestion.url);
+                    navigate(row.suggestion.url);
+                  }}
+                  onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
+                />
+              </div>
+            )}
           </div>
 
           <div className="flex shrink-0 items-center gap-1 rounded-full p-0.5 ">
             <Button
-              tooltip={selectMode ? "Exit select mode" : "Select in browser"}
+              variant="icon"
+              tooltip={selectMode ? "Exit annotation mode" : "Annotate browser"}
               tooltipShortcut="Esc"
               tooltipPosition="top-left"
               onClick={() => void toggleSelect()}
-              className={`rounded-full p-1 transition-colors ${
-                selectMode
-                  ? "bg-primary-500/20 text-primary-800 dark:text-primary-200"
-                  : "text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
-              }`}
-              aria-label={selectMode ? "Exit select mode" : "Select in browser"}
+              className={selectMode ? "bg-primary-500/20 text-primary-700 dark:text-primary-300" : undefined}
+              aria-label={selectMode ? "Exit annotation mode" : "Annotate browser"}
               aria-pressed={selectMode}
             >
               <Crop className="size-4" />
             </Button>
             <Button
+              variant="icon"
               ref={browserMenuButtonRef}
               tooltip="Browser menu"
               tooltipPosition="top-left"
               onClick={() => void toggleBrowserMenu()}
               onMouseDown={(event) => event.stopPropagation()}
-              className="rounded-full p-1 text-primary-700 hover:bg-primary-200/60 dark:text-primary-300 dark:hover:bg-primary-800/60"
               aria-label="Open browser menu"
               aria-haspopup="menu"
               aria-expanded={browserMenuOpen}
@@ -1638,24 +1674,6 @@ export function BrowserPanel() {
           </div>
         </div>
 
-        {addressSuggestionsVisible && (
-          <div className="absolute inset-x-0 top-full z-(--z-dropdown)">
-            <BrowserAddressSuggestions
-              rows={addressRows}
-              selectedIndex={selectedAddressSuggestionIndex}
-              onHighlight={setAddressSuggestionIndex}
-              onSelect={(row) => {
-                if (row.kind === "input") {
-                  navigate(row.value);
-                  return;
-                }
-                setUrlInput(row.suggestion.url);
-                navigate(row.suggestion.url);
-              }}
-              onRemove={(historyEntryId) => void removeHistoryEntry(historyEntryId)}
-            />
-          </div>
-        )}
       </div>
 
       {activeTab?.deviceEmulation.enabled && (
@@ -1770,12 +1788,13 @@ export function BrowserPanel() {
                 </Button>
               </div>
               <Button
+                variant="icon"
                 role="menuitem"
                 tabIndex={-1}
                 onClick={() => void setZoom(1)}
                 disabled={isBlank}
                 aria-label="Reset zoom"
-                className="rounded-lg p-1.5 mr-1 text-primary-600 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-300 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
+                className="mr-1"
               >
                 <Refresh className="size-3.5" />
               </Button>
@@ -1851,7 +1870,7 @@ export function BrowserPanel() {
         />
       )}
 
-      <div className={`relative flex min-h-0 flex-1 ${sidebarCollapsed && isExpanded ? "-ml-17" : ""}`}>
+      <div className="relative flex min-h-0 flex-1">
       <BrowserDeviceStage
         device={activeTab?.deviceEmulation ?? null}
         viewportRef={viewportRef}
@@ -1889,7 +1908,7 @@ export function BrowserPanel() {
         )}
         {selectMode && (
           <div className="absolute left-1/2 top-2 z-10 -translate-x-1/2 rounded-full bg-primary-500/90 px-2 py-0.5 text-t font-medium text-primary-100 shadow pointer-events-none">
-            Click an element to capture · Esc to cancel
+            Click elements to annotate · Esc to exit
           </div>
         )}
       </BrowserDeviceStage>
@@ -1911,6 +1930,7 @@ export function BrowserPanel() {
           aria-label="Browser chat"
         />
       )}
+      </div>
       </div>
       </div>
     </div>

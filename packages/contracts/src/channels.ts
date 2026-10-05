@@ -93,6 +93,7 @@ export const CHANNELS = {
     setDeviceEmulation: "browser:setDeviceEmulation",
     setSelectMode: "browser:setSelectMode",
     setVisible: "browser:setVisible",
+    setSuppressed: "browser:setSuppressed",
     chatUpdateWindow: "browser:chatUpdateWindow",
     chatPublishContext: "browser:chatPublishContext",
     chatGetContext: "browser:chatGetContext",
@@ -222,6 +223,9 @@ export const CHANNELS = {
     sign: "imageProxy:sign",
   },
   mcpApps: {
+    listEntrypoints: "mcpApps:listEntrypoints",
+    openExtension: "mcpApps:openExtension",
+    closeExtension: "mcpApps:closeExtension",
     callTool: "mcpApps:callTool",
     readResource: "mcpApps:readResource",
     sendMessage: "mcpApps:sendMessage",
@@ -278,6 +282,7 @@ export const CHANNELS = {
     /** Push: native connector catalog, runtime, or OAuth state changed. */
     connectorsUpdated: "providers:connectorsUpdated",
     getRateLimits: "providers:getRateLimits",
+    getRealtimeVoices: "providers:getRealtimeVoices",
     consumeRateLimitResetCredit: "providers:consumeRateLimitResetCredit",
     /** Push: emitted when the provider streams a fresh rate-limit snapshot mid-run. */
     rateLimitsUpdated: "providers:rateLimitsUpdated",
@@ -348,6 +353,12 @@ export const CHANNELS = {
     complete: "runs:complete",
     contextUsage: "runs:contextUsage",
     continue: "runs:continue",
+    steer: "runs:steer",
+    inputStatus: "runs:inputStatus",
+    createRealtimeConversation: "runs:createRealtimeConversation",
+    startRealtime: "runs:startRealtime",
+    stopRealtime: "runs:stopRealtime",
+    realtimeEvent: "runs:realtimeEvent",
     create: "runs:create",
     delete: "runs:delete",
     deleteSession: "runs:deleteSession",

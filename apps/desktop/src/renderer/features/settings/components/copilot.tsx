@@ -72,7 +72,7 @@ export default function CopilotSettings(
       isLoading={isLoading}
       error={error}
     >
-      {/* CLI version + self-update — `copilot --version` / `copilot update` */}
+      {/* Bundled runtime updates with Mains; explicit overrides update independently. */}
       <ProviderCliSection
         providerId={PROVIDER_IDS.copilot}
         cliName="GitHub Copilot CLI"

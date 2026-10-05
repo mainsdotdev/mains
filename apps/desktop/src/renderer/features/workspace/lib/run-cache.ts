@@ -36,6 +36,8 @@ export interface RunCache {
   advanceCursors(runId: string, deltas: { artifactMaxId?: number; toolMaxMs?: number }): void;
   markFinalized(runId: string): boolean;
   isFinalized(runId: string): boolean;
+  /** A continued or voice-delegated run gets a new terminal transition. */
+  markRunning(runId: string): void;
   /** Admit one load per run. Returns false (and queues a trailing reload) when one is already running. */
   tryAcquireLoad(runId: string): boolean;
   clearPending(runId: string): void;
@@ -127,6 +129,10 @@ export function createRunCache(): RunCache {
 
     isFinalized(runId) {
       return finalizedRunIds.has(runId);
+    },
+
+    markRunning(runId) {
+      finalizedRunIds.delete(runId);
     },
 
     tryAcquireLoad(runId) {

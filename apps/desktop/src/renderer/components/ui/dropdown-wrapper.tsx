@@ -11,10 +11,13 @@ import { cn } from "../../lib/cn";
 import { isAppReady } from "../../lib/app-ready";
 
 export interface DropdownWrapperProps {
+  className?: string;
   id?: string;
   isOpen: boolean;
   children?: ReactNode;
   openUpward?: boolean;
+  /** Defaults to scaling from the anchored corner; up/down reveal vertically without horizontal scaling. */
+  animationDirection?: "origin" | "up" | "down";
   minWidth?: string;
   position?: "left" | "right";
   usePortal?: boolean;
@@ -29,10 +32,12 @@ export interface DropdownWrapperProps {
 }
 
 export default function DropdownWrapper({
+  className,
   id,
   isOpen,
   children,
   openUpward = false,
+  animationDirection = "origin",
   minWidth = "min-w-(--dropdown-min-width)",
   position = "left",
   usePortal = false,
@@ -106,11 +111,15 @@ export default function DropdownWrapper({
   const positionClass = position === "right" ? "right-0" : "left-0";
   const verticalClass = openUpward ? "bottom-10" : "top-8";
 
-  const hiddenClass = animateIn ? "animate-dropdown-in" : "dropdown-prewarm";
+  const verticalAnimation = animationDirection !== "origin";
+  const hiddenClass = animateIn
+    ? verticalAnimation ? "animate-dropdown-vertical-in" : "animate-dropdown-in"
+    : verticalAnimation ? "dropdown-prewarm-vertical" : "dropdown-prewarm";
 
   const dropdown = (
     <div
       id={id}
+      data-animation-direction={animationDirection}
       ref={dropdownRef}
       className={cn(
         usePortal ? "fixed" : "absolute",
@@ -120,9 +129,13 @@ export default function DropdownWrapper({
         "bg-linear-to-b from-primary/90 to-primary-50/80 dark:from-primary-900 dark:to-primary-800",
         "z-(--z-dropdown) glass-surface rounded-2xl",
         hiddenClass,
+        verticalAnimation && "dropdown-vertical",
+        className,
       )}
       style={{
-        transformOrigin: openUpward
+        transformOrigin: verticalAnimation
+          ? animationDirection === "up" ? "bottom center" : "top center"
+          : openUpward
           ? position === "right"
             ? "bottom right"
             : "bottom left"
@@ -136,7 +149,7 @@ export default function DropdownWrapper({
               left: position === "right" ? "auto" : `${coords.left}px`,
               right:
                 position === "right"
-                  ? `${window.innerWidth - coords.left - coords.width}px`
+                  ? `${window.innerWidth - coords.left}px`
                   : "auto",
               ...(matchTriggerWidth ? { width: coords.width } : {}),
             }

@@ -7,6 +7,10 @@ const harness = vi.hoisted(() => ({
   callTool: vi.fn(),
   continueRun: vi.fn(),
   registerDocument: vi.fn(),
+  removeDocument: vi.fn(),
+  openSession: vi.fn(),
+  closeSession: vi.fn(),
+  callSessionTool: vi.fn(),
 }));
 
 vi.mock("@mains/backend/modules/runs", () => ({
@@ -20,10 +24,13 @@ vi.mock("@mains/backend/modules/providers", () => ({
   createWorkAdapter: () => ({
     readMcpAppResource: harness.readResource,
     callMcpAppTool: harness.callTool,
+    openMcpAppSession: harness.openSession,
+    closeMcpAppSession: harness.closeSession,
+    callMcpAppSessionTool: harness.callSessionTool,
   }),
 }));
 vi.mock("./mcpApps.registry", () => ({
-  mcpAppsRegistry: { register: harness.registerDocument },
+  mcpAppsRegistry: { register: harness.registerDocument, remove: harness.removeDocument },
 }));
 
 import { mcpAppsService } from "./mcpApps.service";
@@ -31,6 +38,7 @@ import { mcpAppsService } from "./mcpApps.service";
 describe("mcpAppsService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    harness.closeSession.mockResolvedValue(undefined);
     harness.findRunById.mockResolvedValue({
       id: "run-1",
       accountId: "account-1",
@@ -174,5 +182,41 @@ describe("mcpAppsService", () => {
         content: 'Interactive MCP App context:\n{"flightId":"flight-1"}',
       }],
     });
+  });
+
+  it("hosts a standalone app without a run and rejects resources outside its session", async () => {
+    const app = {
+      id: "tldraw-entry", name: "tldraw", server: "codex_apps", tool: "tldraw.tldraw_home",
+      resourceUri: "ui://tldraw/app.html", entrypoints: ["global"], preferredModelDisplayMode: "fullscreen",
+    };
+    harness.openSession.mockResolvedValue({
+      id: "app-session", app, output: { content: [] },
+      resource: { contents: [{ uri: app.resourceUri, mimeType: "text/html;profile=mcp-app", text: "<main>Canvas</main>" }] },
+    });
+    harness.callSessionTool.mockResolvedValue({ content: [] });
+    await expect(mcpAppsService.openExtension({ providerId: "codex", entrypointId: app.id }))
+      .resolves.toMatchObject({ sessionId: "app-session", app });
+    await mcpAppsService.readResource({ sessionId: "app-session", server: app.server, resourceUri: app.resourceUri });
+    await expect(mcpAppsService.readResource({
+      sessionId: "app-session", server: app.server, resourceUri: "ui://other/app.html",
+    })).rejects.toThrow("does not belong");
+    await mcpAppsService.callTool({ sessionId: "app-session", server: app.server, tool: "_dotcom_boards" });
+    expect(harness.callSessionTool).toHaveBeenCalledWith("app-session", "_dotcom_boards", undefined, undefined);
+    expect(harness.findRunById).not.toHaveBeenCalled();
+    await mcpAppsService.closeExtension({ sessionId: "app-session" });
+    expect(harness.closeSession).toHaveBeenCalledWith("app-session");
+    expect(harness.removeDocument).toHaveBeenCalled();
+    await expect(mcpAppsService.callTool({ sessionId: "app-session", server: app.server, tool: "_dotcom_boards" }))
+      .rejects.toThrow("expired");
+  });
+
+  it("closes the provider session if its resource cannot be hosted", async () => {
+    harness.openSession.mockResolvedValue({
+      id: "bad-session", app: { resourceUri: "ui://bad/app.html" },
+      resource: { contents: [{ uri: "ui://bad/app.html", text: "not HTML", mimeType: "text/plain" }] },
+    });
+    await expect(mcpAppsService.openExtension({ providerId: "codex", entrypointId: "bad-app" }))
+      .rejects.toThrow("Unsupported MCP App resource type");
+    expect(harness.closeSession).toHaveBeenCalledWith("bad-session");
   });
 });

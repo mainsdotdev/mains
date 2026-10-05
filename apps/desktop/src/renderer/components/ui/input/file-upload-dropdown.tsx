@@ -41,7 +41,7 @@ export function FileUploadDropdown({
     <div className="relative flex shrink-0 items-center " ref={dropdownRef}>
       <Button
         type="button"
-        tooltip="Upload file or photo"
+        tooltip="Upload image or document"
         tooltipPosition="top"
         onClick={onToggle}
         className={`shrink-0 cursor-pointer rounded-full transition-colors hover:bg-primary-200/30 dark:hover:bg-primary-800 ${compact ? "flex size-9 items-center justify-center p-0" : "p-2"}`}

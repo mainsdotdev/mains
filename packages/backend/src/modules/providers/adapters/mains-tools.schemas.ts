@@ -11,6 +11,27 @@
 
 import { z } from "zod";
 
+const voiceRunId = z.string().trim().min(1).max(100).describe("Working chat ID returned by StartVoiceTask or ListVoiceTasks");
+export const StartVoiceTaskSchema = z.object({
+  taskKey: z.string().regex(/^[a-z0-9_-]{1,80}$/).describe("Stable task key; reuse the same key for the same task, a new key for independent work"),
+  title: z.string().trim().min(1).max(120),
+  prompt: z.string().trim().min(1).max(16000).describe("Self-contained user-authorized task, relevant context, constraints and validation"),
+});
+export const ListVoiceTasksSchema = z.object({});
+export const ReadVoiceTaskSchema = z.object({ runId: voiceRunId });
+export const WaitVoiceTaskSchema = z.object({
+  runId: voiceRunId,
+  afterCursor: z.string().max(200).optional(),
+  timeoutMs: z.number().int().min(0).max(30000).optional(),
+});
+export const SendVoiceTaskMessageSchema = z.object({
+  runId: voiceRunId,
+  message: z.string().trim().min(1).max(16000),
+  messageId: z.string().regex(/^[\w-]{1,80}$/).describe("Unique ID for this instruction; keep it unchanged when checking or retrying delivery"),
+});
+export const StopVoiceTaskSchema = ReadVoiceTaskSchema;
+export const EndVoiceChatSchema = z.object({});
+
 // The finding fields are shared between SaveFinding (one finding) and
 // SaveFindings (an array of findings), so they're declared once.
 const findingFields = {
