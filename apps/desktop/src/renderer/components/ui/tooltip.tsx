@@ -41,6 +41,7 @@ export default function Tooltip({
   const [coords, setCoords] = useState({ top: 0, left: 0 });
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const frameRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
 
   const updatePosition = () => {
@@ -93,41 +94,49 @@ export default function Tooltip({
     setCoords({ top, left });
   };
 
+  // Every scheduled callback is tracked so a newer show/hide replaces it and
+  // unmount cancels it — an orphaned one sets state after the component (or a
+  // test's jsdom) is gone.
+  const cancelPending = () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  };
+
   const showTooltip = () => {
     if (disabled) return;
+    // Hover and focus can both open it, and a pending hide would close it again.
+    cancelPending();
     timeoutRef.current = setTimeout(() => {
+      timeoutRef.current = null;
       updatePosition();
       setShouldRender(true);
-      requestAnimationFrame(() => {
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = null;
         setIsVisible(true);
       });
     }, delay);
   };
 
   const hideTooltip = () => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
+    cancelPending();
     setIsVisible(false);
-    if (hideTimeoutRef.current) clearTimeout(hideTimeoutRef.current);
     hideTimeoutRef.current = setTimeout(() => {
       hideTimeoutRef.current = null;
       setShouldRender(false);
     }, 100);
   };
 
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-      // A hide still fading out must not set state after unmount.
-      if (hideTimeoutRef.current) {
-        clearTimeout(hideTimeoutRef.current);
-      }
-    };
-  }, []);
+  useEffect(() => cancelPending, []);
 
   if (disabled) {
     return <>{children}</>;
