@@ -259,6 +259,9 @@ function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }
                 </div>
               </div>
             )}
+            {typeof event.metadata?.sendError === "string" && (
+              <Text size="xs" tone="secondary">{event.metadata.sendError}</Text>
+            )}
             {previewAtt && (
               <PromptPreviewModal preview={previewAtt} onClose={() => setPreviewAtt(null)} />
             )}

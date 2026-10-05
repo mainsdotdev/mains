@@ -364,6 +364,8 @@ export interface StartRunContextItem {
 
 /** Payload for starting a new work run */
 export interface StartRunPayload {
+  /** Correlates immediate local feedback with the persisted prompt. */
+  clientPromptId?: string;
   conversationSettings?: ConversationSettings;
   accountId: string;
   workspaceId?: string;
@@ -408,6 +410,7 @@ export interface StartRunResponse {
 
 /** Payload for continuing an existing run (resume session) */
 export interface ContinueRunPayload {
+  clientPromptId?: string;
   conversationSettings?: ConversationSettings;
   clientUserMessageId?: string;
   runId: string;

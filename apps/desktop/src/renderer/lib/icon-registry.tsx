@@ -1,6 +1,6 @@
 import { ComponentType, SVGProps } from "react";
 import * as Icons from "@/components/ui/icons/space";
-import { Codex, Cursor, MainsColor } from "@/components/ui/icons";
+import { Codex, Cursor, MainsOutline } from "@/components/ui/icons";
 
 export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -72,7 +72,7 @@ export const iconRegistry: Record<string, IconComponent> = {
   telescope: Icons.Telescope,
   "text-italic-square": Icons.TextItalicSquare,
 
-  mains:MainsColor,
+  mains:MainsOutline,
 
 
 

@@ -3,6 +3,10 @@ import { createTestDb } from "../../../test/setup-db";
 import { createAccount, createProvider } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
 import type Database from "better-sqlite3";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { isDiscoveredSkillDocument, rememberSkillDocuments } from "./skill-document-paths";
 
 let db: DatabaseInstance;
 let _sqlite: Database.Database;
@@ -354,6 +358,23 @@ describe("providersService", () => {
   });
 
   describe("getSkills", () => {
+    it("registers discovered global SKILL.md files for the document viewer", async () => {
+      createProvider(db, { id: "skill-doc-provider", isEnabled: true });
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "mains-skill-document-"));
+      const skillPath = path.join(directory, "SKILL.md");
+      try {
+        await fs.writeFile(skillPath, "# Skill document");
+        const { listSkillsForProvider } = await import("./adapters");
+        vi.mocked(listSkillsForProvider).mockResolvedValueOnce([{ name: "skill", path: skillPath }]);
+        const result = await providersService.getSkills("skill-doc-provider");
+        expect(result).toEqual([{ name: "skill", path: skillPath }]);
+        expect(isDiscoveredSkillDocument(await fs.realpath(skillPath))).toBe(true);
+      } finally {
+        await rememberSkillDocuments("skill-doc-provider", undefined, []);
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    });
+
     it("returns skills for enabled provider", async () => {
       createProvider(db, { id: "p1", isEnabled: true });
 

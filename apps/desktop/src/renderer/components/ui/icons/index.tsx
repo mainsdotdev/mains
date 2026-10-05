@@ -148,7 +148,7 @@ export { default as Powerpoint } from "./powerpoint";
 export { default as Goal } from "./goal";
 export { default as ProjectFolder } from "./project-folder";
 export { default as ProjectFolderOpen } from "./project-folder-open";
-export { default as MainsColor } from "./mains-color";
+export { default as MainsOutline } from "./mains-color";
 export { default as Download } from "./download";
 export { default as Plugin } from "./plugin";
 export { default as Workflow } from "./workflow";
@@ -180,7 +180,7 @@ export { default as Sql} from "./sql"
 export { default as FolderGit} from "./folder-git"
 export { default as Review} from "./review"
 export { default as JumpToFile} from "./jump-to-file"
-
+export { default as Activity} from "./activity"
 
 
 

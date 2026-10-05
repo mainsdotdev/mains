@@ -721,13 +721,14 @@ export function WorkspaceProviderPage({
           onComposerHeightChange={browserChatOnly ? handleBrowserComposerHeight : undefined}
           composer={browserComposer}
         >
-          {browserSelectedRun && (
+          {(browserSelectedRun || ws.isSubmitting) && (
             <>
               <div className="min-h-0 flex-1 overflow-hidden">
                 <WorkspaceEvents
                   runs={ws.runs}
-                  activeTab={reviewActive ? browserSelectedRun.id : ws.activeTab}
+                  activeTab={reviewActive && browserSelectedRun ? browserSelectedRun.id : ws.activeTab}
                   currentEvents={ws.currentEvents}
+                  isSubmitting={ws.isSubmitting}
                   currentWorkspace={ws.currentWorkspace}
                   eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
             history={ws.history}
@@ -842,6 +843,7 @@ export function WorkspaceProviderPage({
             runs={ws.runs}
             activeTab={ws.activeTab}
             currentEvents={ws.currentEvents}
+            isSubmitting={ws.isSubmitting}
             currentWorkspace={ws.currentWorkspace}
             eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
             history={ws.history}

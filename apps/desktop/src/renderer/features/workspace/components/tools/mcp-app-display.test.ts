@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
     onupdatemodelcontext?: (context: unknown) => Promise<unknown>;
     close: ReturnType<typeof vi.fn>;
     connect: ReturnType<typeof vi.fn>;
+    sendToolInput: ReturnType<typeof vi.fn>;
+    sendToolResult: ReturnType<typeof vi.fn>;
     capabilities: Record<string, unknown>;
     getAppCapabilities: ReturnType<typeof vi.fn>;
     setHostContext: ReturnType<typeof vi.fn>;
@@ -107,6 +109,166 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   mocks.bridges.length = 0;
+});
+
+describe("MCP App tool synchronization", () => {
+  const props = {
+    runId: "run-1", presentation: "page" as const, panelDisplayMode: "inline" as const,
+    app, input: { origin: "IST" }, title: "Flights",
+  };
+  const output = { content: [], structuredContent: { flights: ["IST → TYO"] }, _meta: { searchId: "search-1" } };
+
+  it("starts initial and reloaded panels on an inert document while the resource is loading", async () => {
+    mocks.readResource.mockImplementation(() => new Promise(() => undefined));
+    const initial = render(createElement(McpAppDisplay, props));
+    expect(screen.getByTitle("Flights interactive app").getAttribute("src")).toBe("about:blank");
+    expect(mocks.bridges).toHaveLength(0);
+    initial.unmount();
+
+    render(createElement(McpAppDisplay, props));
+    expect(screen.getByTitle("Flights interactive app").getAttribute("src")).toBe("about:blank");
+    expect(mocks.bridges).toHaveLength(0);
+  });
+
+  async function renderFlights() {
+    mocks.readResource.mockResolvedValue({ success: true, data: {
+      url: "about:blank", meta: { availableDisplayModes: ["inline", "fullscreen"] },
+    } });
+    const view = render(createElement(McpAppDisplay, props));
+    const iframe = await screen.findByTitle<HTMLIFrameElement>("Flights interactive app");
+    await waitFor(() => expect(iframe.getAttribute("src")).toBe("about:blank"));
+    const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage").mockImplementation(() => undefined);
+    return { view, iframe, postMessage, bridge: mocks.bridges[0] };
+  }
+
+  function compatibilityReady(iframe: HTMLIFrameElement, source = iframe.contentWindow) {
+    act(() => { window.dispatchEvent(new MessageEvent("message", {
+      source, data: { type: "mains:mcp-app-ready" },
+    })); });
+  }
+
+  it("renders a late result in a compatibility app without reloading or a standard handshake", async () => {
+    const { view, iframe, postMessage, bridge } = await renderFlights();
+    // A compatibility widget displays results from globals; it never initializes AppBridge.
+    postMessage.mockImplementation((message) => {
+      if (message.type !== "mains:mcp-app-globals" || !("toolOutput" in message.globals)) return;
+      iframe.contentDocument!.body.textContent = message.globals.toolOutput?.flights?.join(", ") ?? "";
+    });
+    fireEvent.load(iframe);
+    compatibilityReady(iframe);
+    expect(iframe.contentDocument!.body.textContent).toBe("");
+    postMessage.mockClear();
+
+    view.rerender(createElement(McpAppDisplay, { ...props, output }));
+
+    expect(iframe.contentDocument!.body.textContent).toBe("IST → TYO");
+    expect(postMessage).toHaveBeenCalledWith({ type: "mains:mcp-app-globals", globals: {
+      toolOutput: output.structuredContent, toolResponseMetadata: output._meta,
+    } }, "*");
+    expect(postMessage.mock.calls.some(([message]) => message.globals && "widgetState" in message.globals)).toBe(false);
+    expect(screen.getByTitle("Flights interactive app")).toBe(iframe);
+    expect(mocks.readResource).toHaveBeenCalledOnce();
+    expect(mocks.bridges).toHaveLength(1);
+    expect(bridge.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("updates compatibility tool arguments without replaying bootstrap state", async () => {
+    const { view, iframe, postMessage, bridge } = await renderFlights();
+    compatibilityReady(iframe);
+    postMessage.mockClear();
+    const input = { origin: "IST", destination: "TYO" };
+
+    view.rerender(createElement(McpAppDisplay, { ...props, input }));
+
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "mains:mcp-app-globals", globals: {
+      toolInput: input,
+    } }, "*");
+    expect(bridge.sendToolInput).not.toHaveBeenCalled();
+    view.rerender(createElement(McpAppDisplay, { ...props, input: { ...input } }));
+    expect(postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes the latest data when compatibility readiness arrives after the result", async () => {
+    const { view, iframe, postMessage, bridge } = await renderFlights();
+    const input = { origin: "IST", destination: "TYO" };
+    view.rerender(createElement(McpAppDisplay, { ...props, input, output }));
+    expect(postMessage).not.toHaveBeenCalled();
+
+    compatibilityReady(iframe);
+
+    expect(postMessage).toHaveBeenCalledWith({ type: "mains:mcp-app-globals", globals: expect.objectContaining({
+      toolInput: input, toolOutput: output.structuredContent, toolResponseMetadata: output._meta,
+    }) }, "*");
+    expect(bridge.sendToolInput).not.toHaveBeenCalled();
+    expect(bridge.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("still delivers the latest data through the standard bridge when it initializes later", async () => {
+    const { view, iframe, postMessage, bridge } = await renderFlights();
+    compatibilityReady(iframe);
+    view.rerender(createElement(McpAppDisplay, { ...props, output }));
+    act(() => bridge.oninitialized?.());
+    expect(bridge.sendToolInput).toHaveBeenCalledExactlyOnceWith({ arguments: props.input });
+    expect(bridge.sendToolResult).toHaveBeenCalledExactlyOnceWith(output);
+    postMessage.mockClear();
+    bridge.sendToolResult.mockClear();
+
+    view.rerender(createElement(McpAppDisplay, { ...props, output: { ...output } }));
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(bridge.sendToolResult).not.toHaveBeenCalled();
+    const nextOutput = { ...output, structuredContent: { flights: ["IST → LHR"] } };
+    view.rerender(createElement(McpAppDisplay, { ...props, output: nextOutput }));
+    expect(bridge.sendToolResult).toHaveBeenCalledExactlyOnceWith(nextOutput);
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "mains:mcp-app-globals", globals: {
+      toolOutput: nextOutput.structuredContent, toolResponseMetadata: nextOutput._meta,
+    } }, "*");
+  });
+
+  it("delivers results when the standard bridge initializes before the compatibility shim", async () => {
+    const { view, iframe, postMessage, bridge } = await renderFlights();
+    act(() => bridge.oninitialized?.());
+    view.rerender(createElement(McpAppDisplay, { ...props, output }));
+    expect(bridge.sendToolResult).toHaveBeenCalledExactlyOnceWith(output);
+    expect(postMessage).not.toHaveBeenCalled();
+
+    compatibilityReady(iframe);
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ globals: expect.objectContaining({
+      toolOutput: output.structuredContent,
+    }) }), "*");
+    expect(bridge.sendToolResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the replacement document's own readiness before forwarding updates", async () => {
+    const { view, iframe, bridge } = await renderFlights();
+    compatibilityReady(iframe);
+    mocks.readResource.mockResolvedValue({ success: true, data: {
+      url: "about:blank#replacement", meta: { availableDisplayModes: ["inline", "fullscreen"] },
+    } });
+    const nextProps = { ...props, app: { ...app, resourceUri: "ui://maps/another.html" } };
+    view.rerender(createElement(McpAppDisplay, nextProps));
+    await waitFor(() => expect(iframe.getAttribute("src")).toBe("about:blank#replacement"));
+    expect(bridge.close).toHaveBeenCalledOnce();
+    const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage").mockImplementation(() => undefined);
+    view.rerender(createElement(McpAppDisplay, { ...nextProps, output }));
+    expect(postMessage).not.toHaveBeenCalled();
+
+    compatibilityReady(iframe);
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ globals: expect.objectContaining({
+      toolOutput: output.structuredContent,
+    }) }), "*");
+    expect(mocks.bridges[1].sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("ignores readiness from another window", async () => {
+    const { view, iframe, postMessage } = await renderFlights();
+    compatibilityReady(iframe, window);
+    view.rerender(createElement(McpAppDisplay, { ...props, output }));
+    expect(postMessage).not.toHaveBeenCalled();
+    compatibilityReady(iframe);
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ globals: expect.objectContaining({
+      toolOutput: output.structuredContent,
+    }) }), "*");
+  });
 });
 
 describe("MCP App display modes", () => {

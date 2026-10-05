@@ -517,16 +517,17 @@ describe("runsService", () => {
       const created = await runsService.executeRun({
         accountId: "default", providerId: "codex", spaceId: "codex-settings-space",
         workspaceId: "codex-settings-workspace", goal: "hello", conversationSettings: settings,
+        clientPromptId: "local-start",
       });
       await flushBackground();
-      expect(startRun.mock.calls[0][0]).toMatchObject({ model: settings.model, configSnapshot: settings.config });
+      expect(startRun.mock.calls[0][0]).toMatchObject({ model: settings.model, configSnapshot: settings.config, clientPromptId: "local-start" });
       expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(settings);
 
       const next = { ...settings, config: { ...settings.config, modelReasoningEffort: effort === "ultra" ? "FutureEffort" : "ultra" } };
       await runsService.updateRun(created.runId, { conversationSettings: next });
-      await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Queued", conversationSettings: settings });
+      await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Queued", conversationSettings: settings, clientPromptId: "local-continue" });
       await flushBackground();
-      expect(continueRun.mock.calls[0][0]).toMatchObject({ configSnapshot: settings.config });
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ configSnapshot: settings.config, clientPromptId: "local-continue" });
       expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(next);
       await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Use saved settings" });
       await flushBackground();

@@ -556,6 +556,7 @@ export async function emitUserPromptArtifact(
     /** The run the attachments were saved under — locates their on-disk copies. */
     runId?: string;
     clientUserMessageId?: string;
+    clientPromptId?: string;
     providerTurnId?: string;
     delivery?: "steer";
     /** Resolved model for the turn this prompt starts. */
@@ -593,6 +594,7 @@ export async function emitUserPromptArtifact(
         ? { voiceDelegation: options.context.find((item) => item.metadata?.voiceDelegation)!.metadata!.voiceDelegation }
         : {}),
       ...(options?.clientUserMessageId ? { clientUserMessageId: options.clientUserMessageId } : {}),
+      ...(options?.clientPromptId ? { clientPromptId: options.clientPromptId } : {}),
       ...(options?.providerTurnId ? { providerTurnId: options.providerTurnId } : {}),
       ...(options?.delivery ? { delivery: options.delivery } : {}),
       ...(browserAnnotations.length ? { browserAnnotations } : {}),

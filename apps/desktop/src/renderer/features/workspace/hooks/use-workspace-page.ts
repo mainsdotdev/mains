@@ -40,6 +40,7 @@ import type { McpAppMessageOptions } from "../lib/mcp-app-context";
 import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 import { useConversationSettings } from "./use-conversation-settings";
 import { useRealtimeVoice } from "./use-realtime-voice";
+import { useSubmittedPrompts } from "./use-submitted-prompts";
 
 const EMPTY_DIRECTORIES: string[] = [];
 
@@ -361,6 +362,8 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
   });
 
   const activeRunId = isReviewTab(activeTab) ? composeTargetRunId : isRunTab(activeTab) ? activeTab : null;
+  const submittedPrompts = useSubmittedPrompts({ ownerKey, viewKey, activeRunId, events: currentEvents, runs, historical: history.historical });
+  const { begin: beginPrompt, accept: acceptPrompt, reject: rejectPrompt } = submittedPrompts;
 
   // ── Composer send target ──
   // On the editor tab the composer has no run context of its own, so every
@@ -477,19 +480,25 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     }
     sendingRef.current = true;
     const submitted = [...items];
+    let clientPromptId: string | undefined;
+    let accepted = false;
     try {
-      const attachments = files.length > 0 ? await serializeAttachments(files) : undefined;
       const runContext = [...submitted, ...(appContext?.(ownerKey) ?? [])];
       const continuing = !!targetRunId && canResume && !!targetRun;
+      clientPromptId = beginPrompt(text, runContext, files, continuing ? targetRunId : null);
+      if (continuing && history.historical) void history.loadLatest();
+      const attachments = files.length > 0 ? await serializeAttachments(files) : undefined;
       let nextRunId: string | null;
       if (continuing) {
-        const success = await continueRun(targetRunId!, text, selectedModel, attachments, runContext, runAdditionalDirectories, conversationSettings);
+        const success = await continueRun(targetRunId!, text, selectedModel, attachments, runContext, runAdditionalDirectories, conversationSettings, clientPromptId);
         nextRunId = success ? targetRunId : null;
       } else {
         nextRunId = await executeRun(text, selectedWorkspace, providerId, selectedModel, attachments,
-          runContext, selectedCollectionId, runAdditionalDirectories, conversationSettings);
+          runContext, selectedCollectionId, runAdditionalDirectories, conversationSettings, clientPromptId);
       }
       if (!nextRunId) return null;
+      acceptPrompt(clientPromptId, nextRunId);
+      accepted = true;
 
       const nextOwnerKey = composerOwnerKey(contextParts, nextRunId);
       const state = store.getState().workspace;
@@ -527,10 +536,13 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       }
       if (mode !== "developer") navigate(`/code/runs/${nextRunId}`);
       return nextRunId;
-    } finally { sendingRef.current = false; }
+    } finally {
+      if (!accepted && clientPromptId) rejectPrompt(clientPromptId);
+      sendingRef.current = false;
+    }
   }, [goal, contextItems, runAdditionalDirectories, mode, workspaceId, selectedWorkspace,
     selectedModel, conversationSettings, conversation.ready, saveDraftSettingsToRun, executeRun, continueRun, composeTargetRunId, composeTargetRun, selectTab, canResume,
-    setUploadedFiles, dispatch, providerId, selectedCollectionId, navigate, ownerKey, contextParts, appContext, attachAppRun, viewKey, supportsTurnSteer, runQueue]);
+    setUploadedFiles, dispatch, providerId, selectedCollectionId, navigate, ownerKey, contextParts, appContext, attachAppRun, viewKey, supportsTurnSteer, runQueue, beginPrompt, acceptPrompt, rejectPrompt, history]);
 
   // Auto-execute when pendingAutoExecute was set (e.g. "Review Changes" button, suggestion chips)
   useEffect(() => {
@@ -665,17 +677,18 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     activeRunId,
     composerRun,
     sendTarget,
-    currentEvents,
+    currentEvents: submittedPrompts.currentEvents,
     isTranscriptLoading,
     currentTurns,
-    isLoading,
+    isLoading: isLoading || submittedPrompts.isSubmitting,
+    isSubmitting: submittedPrompts.isSubmitting,
     eventsEndRef,
     history,
     currentWorkspace,
-    showEmptyState,
-    isEmptyStatePending,
+    showEmptyState: showEmptyState && !submittedPrompts.hasSubmittedPrompt,
+    isEmptyStatePending: isEmptyStatePending && !submittedPrompts.hasSubmittedPrompt,
     showInput,
-    showNewRunTab,
+    showNewRunTab: showNewRunTab && !submittedPrompts.hasSubmittedPrompt,
     // Handlers
     handleModelChange,
     handleExecute,

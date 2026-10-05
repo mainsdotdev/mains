@@ -7,20 +7,26 @@ const mocks = vi.hoisted(() => ({
   mode: "developer" as "developer" | "work" | "chat",
   dispatch: vi.fn(),
   execute: vi.fn(),
+  continue: vi.fn(),
+  getById: vi.fn(),
   createRealtimeConversation: vi.fn(),
   getAccount: vi.fn(),
 }));
 
 vi.mock("@/lib/transport", () => ({
+  getTransport: () => ({}),
   appApi: {
     account: { get: mocks.getAccount },
     runs: {
       execute: mocks.execute,
+      continue: mocks.continue,
+      getById: mocks.getById,
       createRealtimeConversation: mocks.createRealtimeConversation,
       canResume: vi.fn(),
     },
   },
 }));
+vi.mock("../lib/conversation-settings-writer", () => ({ waitForConversationSettings: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock("@/components/ui", () => ({
   toast: { error: vi.fn() },
@@ -49,6 +55,9 @@ beforeEach(() => {
   mocks.mode = "developer";
   mocks.dispatch.mockReset();
   mocks.execute.mockReset();
+  mocks.continue.mockReset();
+  mocks.continue.mockResolvedValue({ success: true, data: { runId: "run-1", resumed: true } });
+  mocks.getById.mockResolvedValue({ success: true, data: null });
   mocks.createRealtimeConversation.mockReset();
   mocks.createRealtimeConversation.mockResolvedValue({ success: true, data: { runId: "voice-run" } });
   mocks.execute.mockResolvedValue({
@@ -73,6 +82,17 @@ function renderOperations() {
 }
 
 describe("useRunOperations collection payload", () => {
+  it("carries local prompt identity through execute and ordinary continue without queue acceptance fields", async () => {
+    const { result } = renderOperations();
+    await act(async () => {
+      await result.current.executeRun("Hello", "workspace-1", "codex", undefined, undefined, [], undefined, undefined, undefined, "local-start");
+      await result.current.continueRun("run-1", "Hello again", undefined, undefined, [], undefined, undefined, "local-continue");
+    });
+    expect(mocks.execute).toHaveBeenCalledWith(expect.objectContaining({ clientPromptId: "local-start" }));
+    expect(mocks.continue).toHaveBeenCalledWith(expect.objectContaining({ clientPromptId: "local-continue" }));
+    expect(mocks.continue.mock.calls[0][0]).not.toHaveProperty("clientUserMessageId");
+  });
+
   it("reports failed voice preparation without starting a text run and allows a retry", async () => {
     mocks.createRealtimeConversation.mockResolvedValueOnce({ success: false, error: "Codex is not enabled" });
     const { result } = renderOperations();

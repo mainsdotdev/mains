@@ -18,6 +18,7 @@ import workspaceReducer, {
 } from "@/lib/redux/slices/workspaceSlice";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import type { ContextBrowserItem, ContextMcpAppItem, ContextReviewItem } from "../lib/composer-context";
+import type { UploadedFile } from "@/components/ui";
 
 const mocks = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -39,6 +40,8 @@ const mocks = vi.hoisted(() => ({
   mode: "work",
   workspaceId: undefined as string | undefined,
   voiceState: { phase: "idle", runId: null as string | null, connectionId: null, startedAt: null },
+  files: [] as UploadedFile[],
+  serializeAttachments: vi.fn(),
 }));
 
 vi.mock("@/lib/redux/hooks", () => ({
@@ -90,9 +93,12 @@ vi.mock("./use-composer-context", () => ({
   useComposerContext: () => ({ items: useSelector((state: { workspace: { contextItems: unknown[] } }) => state.workspace.contextItems), clear: vi.fn() }),
 }));
 vi.mock("./use-transient-uploads", () => ({
-  useTransientUploads: () => [[], vi.fn()],
-  getTransientUploadsForOwner: () => [],
+  useTransientUploads: () => [mocks.files, vi.fn()],
+  getTransientUploadsForOwner: () => mocks.files,
   moveTransientUploadsToOwner: mocks.moveUploads,
+}));
+vi.mock("../lib/run-helpers", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../lib/run-helpers")>(), serializeAttachments: mocks.serializeAttachments,
 }));
 vi.mock("../lib/run-message-queue", () => ({ runMessageQueue: { send: vi.fn(), remove: vi.fn(), resume: vi.fn() } }));
 vi.mock("./use-file-content-loader", () => ({ useFileContentLoader: () => {} }));
@@ -154,6 +160,8 @@ beforeEach(() => {
   mocks.workspaceId = undefined;
   mocks.voiceState = { phase: "idle", runId: null, connectionId: null, startedAt: null };
   mocks.panel = false;
+  mocks.files = [];
+  mocks.serializeAttachments.mockResolvedValue([]);
   mocks.appContext.mockReturnValue([]);
   mocks.executeRun.mockResolvedValue(null);
   mocks.createVoiceConversation.mockResolvedValue(null);
@@ -204,6 +212,143 @@ function workspacePage(providerId = "claude_code") {
   }), { wrapper }) };
 }
 
+describe("submitted prompt feedback", () => {
+  it("shows feedback while an unresumable conversation starts a fresh run", async () => {
+    const created = { ...run, id: "replacement-run", status: "running" as const };
+    mocks.getById.mockImplementation(async (id: string) => ({ success: true, data: id === created.id ? created : run }));
+    let finish!: (id: string) => void;
+    mocks.executeRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const page = workspacePage();
+    act(() => page.store.dispatch(setActiveTab(run.id)));
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(run.id));
+    await waitFor(() => expect(page.result.current.conversationSettingsReady).toBe(true));
+    act(() => page.result.current.setGoal("Start a fresh session"));
+    let sending!: Promise<string | null>;
+    act(() => { sending = page.result.current.handleExecute(); });
+    expect(page.result.current.currentEvents.some((event) => event.content === "Start a fresh session")).toBe(true);
+    await waitFor(() => expect(mocks.executeRun).toHaveBeenCalled());
+    await act(async () => { finish(created.id); await sending; });
+    expect(page.result.current.activeTab).toBe(created.id);
+    expect(page.result.current.currentEvents.filter((event) => event.content === "Start a fresh session")).toHaveLength(1);
+  });
+
+  it("shows file attachments before serialization completes and preserves them when serialization fails", async () => {
+    const file = { file: new File(["hi"], "note.txt", { type: "text/plain" }), type: "document" as const };
+    mocks.files = [file];
+    let fail!: (error: Error) => void;
+    mocks.serializeAttachments.mockImplementation(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showNewRunTab).toBe(true));
+    act(() => page.result.current.setGoal("Read my attachment"));
+    let sending!: Promise<string | null>;
+    act(() => { sending = page.result.current.handleExecute(); });
+    expect(page.result.current.currentEvents[0].metadata?.attachments).toEqual([expect.objectContaining({ name: "note.txt" })]);
+    expect(mocks.executeRun).not.toHaveBeenCalled();
+    await act(async () => { fail(new Error("Could not read attachment")); await expect(sending).rejects.toThrow("Could not read attachment"); });
+    expect(page.result.current.goal).toBe("Read my attachment");
+    expect(page.result.current.uploadedFiles).toEqual([file]);
+    expect(page.result.current.isSubmitting).toBe(false);
+    // The send guard is released after preparation errors, so retry is possible.
+    mocks.serializeAttachments.mockResolvedValue([]);
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(mocks.executeRun).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the submitted text with a failure when the session cannot prepare a persisted prompt", async () => {
+    const created = { ...run, id: "failed-session", status: "failed" as const, lastError: "Session unavailable" };
+    mocks.getById.mockResolvedValue({ success: true, data: created });
+    mocks.getArtifacts.mockResolvedValue({ success: true, data: [] });
+    mocks.executeRun.mockResolvedValue(created.id);
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showNewRunTab).toBe(true));
+    act(() => page.result.current.setGoal("Do not lose my input"));
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(page.result.current.currentEvents).toEqual([expect.objectContaining({ content: "Do not lose my input", metadata: expect.objectContaining({ sendError: "Session unavailable" }) })]);
+    expect(page.result.current.isSubmitting).toBe(false);
+  });
+
+  it("shows a new prompt while execution is pending, then replaces it with its persisted identity", async () => {
+    const created = { ...run, id: "created-prompt", status: "running" as const, goal: "Hello immediately" };
+    mocks.getArtifacts.mockResolvedValue({ success: true, data: [] });
+    mocks.getById.mockResolvedValue({ success: true, data: created });
+    let finish!: (id: string) => void;
+    mocks.executeRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showNewRunTab).toBe(true));
+    act(() => page.result.current.setGoal(created.goal));
+    let sending!: Promise<string | null>;
+    act(() => { sending = page.result.current.handleExecute(); });
+    expect(page.result.current.currentEvents).toEqual([expect.objectContaining({ content: created.goal, metadata: expect.objectContaining({ kind: "user-prompt", clientPromptId: expect.any(String) }) })]);
+    expect(page.result.current.showEmptyState).toBe(false);
+    expect(page.result.current.isSubmitting).toBe(true);
+    await waitFor(() => expect(mocks.executeRun).toHaveBeenCalled());
+    const clientPromptId = page.result.current.currentEvents[0].metadata!.clientPromptId;
+    await act(async () => { finish(created.id); await sending; });
+    expect(mocks.getHistory).toHaveBeenCalledWith(expect.objectContaining({ runId: created.id }));
+    expect(page.result.current.currentEvents.filter((event) => event.content === created.goal)).toHaveLength(1);
+    mocks.getArtifacts.mockResolvedValue({ success: true, data: [{ id: 41, runId: created.id, kind: "user-prompt", content: created.goal, metadata: { clientPromptId }, createdAt: new Date() }] });
+    await act(async () => { await page.result.current.history.loadLatest(); });
+    expect(page.result.current.currentEvents.filter((event) => event.content === created.goal)).toHaveLength(1);
+    expect(page.result.current.currentEvents[0].id).not.toMatch(/^pending-prompt:/);
+  });
+
+  it("shows a continuation before the API resolves without matching an older identical prompt", async () => {
+    mocks.getById.mockResolvedValue({ success: true, data: run });
+    mocks.checkCanResume.mockResolvedValue(true);
+    let finish!: (success: boolean) => void;
+    mocks.continueRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const page = workspacePage();
+    act(() => page.store.dispatch(setActiveTab(run.id)));
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+    await waitFor(() => expect(page.result.current.currentEvents).toHaveLength(1));
+    act(() => page.result.current.setGoal(run.goal));
+    let sending!: Promise<string | null>;
+    act(() => { sending = page.result.current.handleExecute(); });
+    expect(page.result.current.currentEvents.filter((event) => event.content === run.goal)).toHaveLength(2);
+    await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    await act(async () => { finish(true); await sending; });
+    expect(page.result.current.currentEvents.filter((event) => event.content === run.goal)).toHaveLength(2);
+  });
+
+  it("preserves the draft after a rejected send and removes the unaccepted projection", async () => {
+    let finish!: (id: null) => void;
+    mocks.executeRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const page = workspacePage();
+    await waitFor(() => expect(page.result.current.showNewRunTab).toBe(true));
+    act(() => page.result.current.setGoal("Keep this draft"));
+    let sending!: Promise<string | null>;
+    act(() => { sending = page.result.current.handleExecute(); });
+    expect(page.result.current.currentEvents).toHaveLength(1);
+    await waitFor(() => expect(mocks.executeRun).toHaveBeenCalled());
+    await act(async () => { finish(null); await sending; });
+    expect(page.result.current.goal).toBe("Keep this draft");
+    expect(page.result.current.currentEvents).toHaveLength(0);
+    expect(page.result.current.showNewRunTab).toBe(true);
+  });
+
+  it("keeps an unpersisted continuation out of older history and restores it when returning to latest", async () => {
+    mocks.getById.mockResolvedValue({ success: true, data: run });
+    mocks.checkCanResume.mockResolvedValue(true);
+    const page = workspacePage();
+    act(() => page.store.dispatch(setActiveTab(run.id)));
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+    act(() => page.result.current.setGoal("Latest pending input"));
+    await act(async () => { await page.result.current.handleExecute(); });
+    expect(page.result.current.currentEvents.some((event) => event.content === "Latest pending input")).toBe(true);
+    mocks.getHistory.mockResolvedValueOnce({ success: true, data: {
+      artifacts: [{ id: 1, runId: run.id, kind: "user-prompt", content: "Older input", createdAt: new Date(1000) }],
+      toolCalls: [], turns: [], start: { timestamp: 1000, source: "artifact", id: 1 },
+      end: { timestamp: 2000, source: "artifact", id: 2 }, last: { timestamp: 3000, source: "artifact", id: 3 },
+      hasOlder: false, hasNewer: true,
+    } });
+    await act(async () => { await page.result.current.history.loadOlder(); });
+    expect(page.result.current.history.historical).toBe(true);
+    expect(page.result.current.currentEvents.map((event) => event.content)).toEqual(["Older input"]);
+    await act(async () => { await page.result.current.history.loadLatest(); });
+    expect(page.result.current.currentEvents.some((event) => event.content === "Latest pending input")).toBe(true);
+  });
+});
+
 describe("new conversation context", () => {
   it.each(["empty", "new-run"])("prepares fresh voice from %s and preserves the unsent draft in the new conversation", async (startAt) => {
     mocks.mode = "developer";
@@ -252,7 +397,7 @@ describe("new conversation context", () => {
     page.rerender();
     act(() => page.result.current.setGoal("First written follow-up"));
     await act(async () => { await page.result.current.handleExecute(); });
-    expect(mocks.continueRun).toHaveBeenCalledWith(blank.id, "First written follow-up", expect.any(String), undefined, [], [], expect.any(Object));
+    expect(mocks.continueRun).toHaveBeenCalledWith(blank.id, "First written follow-up", expect.any(String), undefined, [], [], expect.any(Object), expect.any(String));
     expect(mocks.executeRun).not.toHaveBeenCalled();
   });
 
@@ -467,7 +612,7 @@ describe("workspace conversations across renderers", () => {
     let sending!: Promise<string | null | undefined>;
     act(() => { sending = page.result.current.handleExecute("Edited app prompt"); });
     await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
-    expect(mocks.continueRun).toHaveBeenCalledWith(existing.id, "Edited app prompt", "", undefined, [selected, activeApp], [], page.result.current.conversationSettings);
+    expect(mocks.continueRun).toHaveBeenCalledWith(existing.id, "Edited app prompt", "", undefined, [selected, activeApp], [], page.result.current.conversationSettings, expect.any(String));
     const newer = { ...selected, updateId: "after" };
     act(() => { page.store.dispatch(replaceMcpAppContext({ key: ownerKey, sessionId: "document-1", items: [newer] }));
       page.result.current.setGoal("Newer draft edit"); });
@@ -510,8 +655,10 @@ describe("workspace conversations across renderers", () => {
     let sending!: Promise<string | null | undefined>;
     act(() => { sending = page.result.current.handleExecute("Reviewed app message"); });
     await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    expect(page.result.current.currentEvents.some((event) => event.content === "Reviewed app message")).toBe(true);
     act(() => page.result.current.handleSelectRunTab(second.id));
     await waitFor(() => expect(page.result.current.composerRun?.id).toBe(second.id));
+    expect(page.result.current.currentEvents.some((event) => event.content === "Reviewed app message")).toBe(false);
     await act(async () => { finish(true); expect(await sending).toBe(first.id); });
     expect(page.result.current.activeTab).toBe(second.id);
     expect(page.result.current.composerRun?.id).toBe(second.id);
@@ -583,7 +730,7 @@ describe("workspace conversations across renderers", () => {
     await act(async () => resolveRun({ success: true, data: synced }));
     await waitFor(() => expect(page.result.current.canResume).toBe(true));
     await act(async () => { expect(await page.result.current.handleExecute()).toBe(synced.id); });
-    expect(mocks.continueRun).toHaveBeenCalledWith(synced.id, "Continue this conversation", "", undefined, [], [], page.result.current.conversationSettings);
+    expect(mocks.continueRun).toHaveBeenCalledWith(synced.id, "Continue this conversation", "", undefined, [], [], page.result.current.conversationSettings, expect.any(String));
     expect(mocks.executeRun).not.toHaveBeenCalled();
   });
 

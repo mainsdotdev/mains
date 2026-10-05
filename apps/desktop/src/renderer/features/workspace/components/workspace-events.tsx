@@ -42,6 +42,7 @@ import {
 const EMPTY_TURNS: RunTurn[] = [];
 import { isIssueTab, getIssueEntityId, isSignalTab, getSignalEntityId, isNoteTab, getNoteId, isNewRunTab } from "../lib/repo-utils";
 import { AsciiLoader } from "./ascii-loader";
+import { selectActiveTool } from "../lib/select-active-tool";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
 import { ArrowUp, Brain, Fork } from "@/components/ui/icons";
@@ -409,6 +410,7 @@ interface WorkspaceEventsProps {
   runs: Run[];
   activeTab: "editor" | string;
   currentEvents: RunEvent[];
+  isSubmitting?: boolean;
   currentWorkspace: Workspace | null;
   eventsEndRef: RefObject<HTMLDivElement>;
   issueTabs: IssueWithEntity[];
@@ -428,6 +430,7 @@ export function WorkspaceEvents({
   runs,
   activeTab,
   currentEvents,
+  isSubmitting = false,
   currentWorkspace,
   eventsEndRef,
   issueTabs,
@@ -442,7 +445,7 @@ export function WorkspaceEvents({
   floatingChat = false,
   history,
 }: WorkspaceEventsProps) {
-  const isEditorActive = activeTab === "editor";
+  const isEditorActive = activeTab === "editor" && !isSubmitting;
   const isIssueActive = isIssueTab(activeTab);
   const isSignalActive = isSignalTab(activeTab);
   const isNoteActive = isNoteTab(activeTab);
@@ -455,7 +458,7 @@ export function WorkspaceEvents({
     : null;
   const activeNoteId = isNoteActive ? getNoteId(activeTab) : null;
   const isRunTabActive =
-    !isEditorActive && !isIssueActive && !isSignalActive && !isNoteActive && !isNewRunActive;
+    !isEditorActive && !isIssueActive && !isSignalActive && !isNoteActive && (!isNewRunActive || isSubmitting);
 
   // Check if current run is still running
   const activeRun = runs.find((r) => r.id === activeTab);
@@ -481,7 +484,7 @@ export function WorkspaceEvents({
     activeRun?.status === "failed" &&
     classifyRunErrorKind(activeRun.lastError) === "auth";
   const isRunning =
-    activeRun?.status === "running" || activeRun?.status === "queued";
+    isSubmitting || activeRun?.status === "running" || activeRun?.status === "queued";
   const isRunCompleted =
     activeRun?.status === "succeeded" ||
     activeRun?.status === "failed" ||
@@ -766,6 +769,8 @@ export function WorkspaceEvents({
           isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}</TranscriptItemScope> };
   }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
 
+  const activeTool = useMemo(() => selectActiveTool(currentEvents), [currentEvents]);
+
   // Latest thinking: ephemeral Cursor stream (cursor-think-*) or legacy persisted [thinking] logs
   const latestThinking = useMemo(() => {
     const reversed = [...currentEvents].reverse();
@@ -797,7 +802,7 @@ export function WorkspaceEvents({
     <TranscriptViewProvider view={transcriptView}><Text as="div" size="sm" tone="inherit" className="group/voice-chat relative h-full flex flex-col">
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden relative">
-        {isNewRunActive && (
+        {isNewRunActive && !isSubmitting && (
           <div className="h-full min-h-0 shrink-0" aria-hidden />
         )}
         {isEditorActive && <EditorContent className="h-full" />}
@@ -833,7 +838,7 @@ export function WorkspaceEvents({
                 />
               )}
               {isRunning && !history?.historical && !hasActiveImageGeneration && (
-                <AsciiLoader thinkingText={latestThinking} />
+                <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />
               )}
               {history?.historical && (
                 <div className="flex justify-center gap-4 text-xs text-secondary py-2">

@@ -35,6 +35,14 @@ vi.mock("@/lib/redux/api", () => ({
 
 afterEach(cleanup);
 
+it.each(["editor", "new-run"])("shows the submitted prompt before a run exists on %s", (activeTab) => {
+  const view = render(<WorkspaceEvents runs={[]} activeTab={activeTab} isSubmitting
+    currentEvents={[{ id: "pending-prompt:local", content: "Show my prompt now", type: "artifact", timestamp: new Date(), metadata: { kind: "user-prompt" } }]}
+    currentWorkspace={null} issueTabs={[]} eventsEndRef={createRef<HTMLDivElement>() as RefObject<HTMLDivElement>} />);
+  expect(view.getByText("Show my prompt now")).toBeTruthy();
+  expect(view.getByText("Working…")).toBeTruthy();
+});
+
 const scope = { inputSource: "voice", realtimeSessionId: "call", providerTurnId: "native" };
 const turn: RunTurn = {
   id: 1, runId: "run", turnIndex: 0, metadata: scope, status: "active", startedAt: 10_000, endedAt: null,

@@ -110,20 +110,6 @@ export function useWorkspaceRuns(
     setRuns((prev) => prev.map((r) => (r.id === run.id ? run : r)));
   }, []);
 
-  /** Fetch a newly created run, add it to state, and return its ID */
-  const registerNewRun = useCallback(async (runId: string): Promise<string | null> => {
-    const runResult = await appApi.runs.getById(runId);
-    if (runResult.success && runResult.data) {
-      const newId = runResult.data.id;
-      setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
-      setActiveRunId(newId);
-      dispatch(workspaceApi.util.invalidateTags(["Workspaces"]));
-      cache.touch(newId);
-      return newId;
-    }
-    return null;
-  }, [dispatch, cache]);
-
   // --- Data loading ---
 
   const loadRunDetailsOnce = loadHistory;
@@ -147,6 +133,21 @@ export function useWorkspaceRuns(
     },
     [loadRunDetailsOnce, cache],
   );
+
+  /** Select a newly created run and catch up even if its first push already fired. */
+  const registerNewRun = useCallback(async (runId: string): Promise<string | null> => {
+    const runResult = await appApi.runs.getById(runId);
+    if (runResult.success && runResult.data) {
+      const newId = runResult.data.id;
+      setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
+      setActiveRunId(newId);
+      dispatch(workspaceApi.util.invalidateTags(["Workspaces"]));
+      cache.touch(newId);
+      void loadRunDetails(newId);
+      return newId;
+    }
+    return null;
+  }, [dispatch, cache, loadRunDetails]);
 
   const loadWorkspaceRuns = useCallback(
     async (wsId: string, isCurrent: () => boolean) => {

@@ -1511,6 +1511,7 @@ export const runsService = {
           accountId: payload.accountId,
           execution,
           goal: payload.goal,
+          clientPromptId: payload.clientPromptId,
           model: conversationSettings.model || undefined,
           systemPrompt: payload.systemPrompt,
           mode,
@@ -1817,6 +1818,7 @@ export const runsService = {
             accountId,
             execution,
             message,
+            clientPromptId: payload.clientPromptId,
             ...(waitForInput ? {
               clientUserMessageId: payload.clientUserMessageId,
               onInputAccepted: async () => { acceptInput(); },

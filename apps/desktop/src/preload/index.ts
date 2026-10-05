@@ -703,6 +703,7 @@ const api = {
     getHistory: (payload: import("@mains/contracts/runs").ReadRunHistoryPayload): Promise<ServiceResponse<import("@mains/backend/modules/runs").RunHistoryPage>> =>
       ipcRenderer.invoke(CHANNELS.runs.getHistory, payload),
     execute: (payload: {
+      clientPromptId?: string;
       accountId: string;
       workspaceId?: string;
       collectionId?: string;
@@ -735,6 +736,7 @@ const api = {
     // Session resume methods
     continue: (payload: {
       clientUserMessageId?: string;
+      clientPromptId?: string;
       runId: string;
       accountId: string;
       message: string;

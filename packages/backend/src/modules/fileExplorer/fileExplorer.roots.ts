@@ -5,6 +5,7 @@ import { projectsService } from "../projects";
 import { collectionsService } from "../collections";
 import { managedExecutionRoots } from "../runs";
 import { workspaceService } from "../workspace";
+import { isDiscoveredSkillDocument } from "../providers/skill-document-paths";
 
 // ─────────────────────────────────────────────────────────────
 // Content roots
@@ -82,8 +83,9 @@ export async function assertWithinContentRoots(realPath: string): Promise<void> 
   throw new Error("Path is outside your workspaces");
 }
 
-/** Registered Collection source files are readable, but remain outside write roots. */
+/** Collection sources and discovered skill documents are read-only exceptions. */
 export async function assertWithinReadableContentRoots(realPath: string): Promise<void> {
+  if (isDiscoveredSkillDocument(realPath)) return;
   try {
     await assertWithinContentRoots(realPath);
     return;

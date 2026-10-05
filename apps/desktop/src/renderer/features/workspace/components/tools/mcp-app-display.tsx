@@ -222,6 +222,8 @@ export function McpAppDisplay({
   const bridgeRef = useRef<AppBridge | null>(null);
   const bridgeHostContextRef = useRef<McpUiHostContext>({});
   const initializedRef = useRef(false);
+  // The window.openai shim can be ready without a standard MCP handshake.
+  const compatibilityReadyRef = useRef(false);
   useEffect(() => registerBeforeSuspend?.(async () => {
     if (!initializedRef.current || !bridgeRef.current) return;
     try {
@@ -248,6 +250,8 @@ export function McpAppDisplay({
   const latestIsDarkRef = useRef(isDark);
   const lastSentResultRef = useRef<string | null>(null);
   const lastSentInputRef = useRef<string | null>(null);
+  const lastCompatibilityResultRef = useRef<string | null>(null);
+  const lastCompatibilityInputRef = useRef<string | null>(null);
   const [loadState, setLoadState] = useState<{
     key: string;
     resource?: LoadedMcpAppResource;
@@ -362,9 +366,12 @@ export function McpAppDisplay({
     let connectionStarted = false;
     const frameReadyDeadline = Date.now() + 10_000;
     initializedRef.current = false;
+    compatibilityReadyRef.current = false;
     if (!hasContextHost) latestContextRef.current = null;
     lastSentResultRef.current = null;
     lastSentInputRef.current = null;
+    lastCompatibilityResultRef.current = null;
+    lastCompatibilityInputRef.current = null;
 
     const callServerTool = async (
       tool: string,
@@ -545,6 +552,8 @@ export function McpAppDisplay({
         },
         "*",
       );
+      lastCompatibilityInputRef.current = JSON.stringify(latestInputRef.current);
+      lastCompatibilityResultRef.current = hasResultRef.current ? resultSignature(latestResultRef.current) : null;
     };
 
     const respond = (id: number | undefined, result?: unknown, responseError?: unknown) => {
@@ -566,6 +575,7 @@ export function McpAppDisplay({
       const message = objectRecord(event.data) as CompatibilityMessage | null;
       if (!message) return;
       if (message.type === "mains:mcp-app-ready") {
+        compatibilityReadyRef.current = true;
         postGlobals();
         return;
       }
@@ -685,6 +695,7 @@ export function McpAppDisplay({
       iframe.removeEventListener("load", onLoad);
       bridgeRef.current = null;
       initializedRef.current = false;
+      compatibilityReadyRef.current = false;
       void bridge.close();
     };
   }, [
@@ -712,20 +723,31 @@ export function McpAppDisplay({
   }, [modelContext, hasContextHost]);
 
   useEffect(() => {
-    const signature = JSON.stringify(input ?? {});
-    if (!initializedRef.current || signature === lastSentInputRef.current) return;
-    lastSentInputRef.current = signature;
-    void bridgeRef.current?.sendToolInput({ arguments: input ?? {} });
+    const args = input ?? {};
+    const signature = JSON.stringify(args);
+    if (initializedRef.current && signature !== lastSentInputRef.current) {
+      lastSentInputRef.current = signature;
+      void bridgeRef.current?.sendToolInput({ arguments: args });
+    }
+    if (!compatibilityReadyRef.current || signature === lastCompatibilityInputRef.current) return;
+    lastCompatibilityInputRef.current = signature;
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "mains:mcp-app-globals", globals: { toolInput: args } },
+      "*",
+    );
   }, [input]);
 
   useEffect(() => {
     const bridge = bridgeRef.current;
-    if (!bridge || !initializedRef.current || !hasResultRef.current) return;
+    if (!hasResultRef.current) return;
     const result = latestResultRef.current;
     const signature = resultSignature(result);
-    if (signature === lastSentResultRef.current) return;
-    lastSentResultRef.current = signature;
-    void bridge.sendToolResult(result);
+    if (bridge && initializedRef.current && signature !== lastSentResultRef.current) {
+      lastSentResultRef.current = signature;
+      void bridge.sendToolResult(result);
+    }
+    if (!compatibilityReadyRef.current || signature === lastCompatibilityResultRef.current) return;
+    lastCompatibilityResultRef.current = signature;
     iframeRef.current?.contentWindow?.postMessage(
       {
         type: "mains:mcp-app-globals",
@@ -864,7 +886,8 @@ export function McpAppDisplay({
       )}
       <iframe
         ref={iframeRef}
-        src="mains-mcp-app://uninitialized/index.html"
+        // Start on an inert document; a made-up protocol URL creates a Chromium error frame.
+        src="about:blank"
         title={`${title} interactive app`}
         className={resource
           ? `block w-full border-0 bg-transparent ${isPage || isFullscreen ? "min-h-0 flex-1" : ""}`

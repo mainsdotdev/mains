@@ -118,6 +118,9 @@ export function useRunSync({
     const offEvent = appEvents.runs.onEventPersisted(({ runId }) => {
       if (runId === activeRunId) scheduleRefetch();
     });
+    // Subscribe before the catch-up read so an event persisted while the tab
+    // was being registered cannot leave it waiting for the polling fallback.
+    void loadRunDetails(activeRunId);
 
     return () => {
       offEvent();

@@ -54,6 +54,8 @@ export interface RunExecutionContext {
  * Request to start a work run
  */
 export interface WorkRunRequest {
+  /** Display correlation only; does not alter provider input acceptance. */
+  clientPromptId?: string;
   runId: string;
   accountId: string;
   execution: RunExecutionContext;
@@ -401,6 +403,7 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
  * Request to continue an existing run (resume session)
  */
 export interface WorkRunContinueRequest {
+  clientPromptId?: string;
   /** Correlates a locally queued input with Codex's accepted userMessage. */
   clientUserMessageId?: string;
   /** Backend-only callback; never serialized onto the wire. */
