@@ -5,9 +5,9 @@ import type { FileAttachment } from "./runs.dto";
 // ─────────────────────────────────────────────────────────────
 // Run attachments cross a trust boundary: the local renderer sends them, but
 // so do WebSocket clients and paired phones, through the same `runs:execute` /
-// `runs:continue` / `runs:fork` handlers. The adapters write every attachment
-// to `<tmp>/mains-uploads/<runId>/<name>` and read `sourcePath` straight off
-// disk, so both fields are narrowed here, before a run starts:
+// `runs:continue` / `runs:fork` handlers. The run service durably copies every
+// attachment before handing prepared originals to adapters. Narrow both
+// filename and capture source here, before a run starts:
 //  - `name` is a display filename, never a path — only its last segment stays.
 //  - `sourcePath` exists for main-process-owned browser/Appshot screenshots,
 //    which are already written under `browser-captures`. An image path

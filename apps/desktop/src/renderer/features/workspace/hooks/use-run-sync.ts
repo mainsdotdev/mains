@@ -73,9 +73,9 @@ export function useRunSync({
       const lastError = run.lastError || "Run failed";
       let isAuthError = classifyRunErrorKind(lastError) === "auth";
       if (!isAuthError && /exited with code/i.test(lastError)) {
-        const artRes = await appApi.runArtifacts.getByRun(run.id);
+        const artRes = await appApi.runs.getHistory({ runId: run.id, direction: "latest" });
         if (artRes.success && artRes.data) {
-          isAuthError = artRes.data.some(
+          isAuthError = artRes.data.artifacts.some(
             (a: { content: any }) => classifyRunErrorKind(a.content) === "auth",
           );
         }

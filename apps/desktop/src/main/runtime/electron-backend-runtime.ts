@@ -32,7 +32,7 @@ export function createElectronBackendRuntime(): BackendRuntime {
       stop: (id) => powerSaveBlocker.stop(id),
     },
     imagePreview: {
-      resizeToJpeg(bytes, maxSide) {
+      async resizeToJpeg(bytes, maxSide) {
         const source = nativeImage.createFromBuffer(bytes);
         if (source.isEmpty()) return null;
         const size = source.getSize();
@@ -43,8 +43,8 @@ export function createElectronBackendRuntime(): BackendRuntime {
         const scaled =
           scale < 1
             ? source.resize({
-                width: Math.round(size.width * scale),
-                height: Math.round(size.height * scale),
+                width: Math.max(1, Math.round(size.width * scale)),
+                height: Math.max(1, Math.round(size.height * scale)),
                 quality: "good",
               })
             : source;

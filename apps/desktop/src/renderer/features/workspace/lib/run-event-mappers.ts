@@ -1,6 +1,5 @@
-import type { RunEvent, RunArtifact, ToolCall } from "../types";
-import { formatToolData } from "./format-tool-data";
-import { parseToolContent } from "./parse-tool-content";
+import type { RunEvent } from "../types";
+import { previewParams } from "./parse-tool-content";
 
 function parseMetadata(metadata: unknown): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
@@ -25,8 +24,19 @@ function parseRawInput(input: unknown): Record<string, unknown> | undefined {
   }
 }
 
+interface MappableArtifact {
+  id: number;
+  runId: string;
+  kind: string;
+  path?: string | null;
+  content?: string | null;
+  contentHash?: string | null;
+  metadata?: unknown;
+  createdAt?: Date | string | number;
+}
+
 /** Convert a RunArtifact to a displayable RunEvent. Always returns an event (fallback on parse error). */
-export function mapArtifactToEvent(artifact: RunArtifact): RunEvent {
+export function mapArtifactToEvent(artifact: MappableArtifact): RunEvent {
   try {
     const metadata = parseMetadata(artifact.metadata);
     const voiceStreamId = metadata?.voice === true && typeof metadata.streamId === "string" ? metadata.streamId : undefined;
@@ -71,22 +81,27 @@ function eventNumericId(e: RunEvent): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Structural equality fallback for object-valued metadata (e.g. a tool call's
- *  `parsed` / `input`), which is rebuilt fresh on every map so reference
- *  equality always fails. Plain JSON-ish metadata only; guarded for safety. */
-function stableEqual(a: unknown, b: unknown): boolean {
-  try {
-    return JSON.stringify(a) === JSON.stringify(b);
-  } catch {
-    return false;
+/** Compare JSON-like payloads without allocating two full serialized copies. */
+function stableEqual(a: unknown, b: unknown, depth = 0): boolean {
+  if (Object.is(a, b)) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object" || depth > 100) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+      a.every((value, index) => stableEqual(value, b[index], depth + 1));
   }
+  if (a instanceof Date || b instanceof Date) return a instanceof Date && b instanceof Date && a.getTime() === b.getTime();
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every((key) =>
+    Object.prototype.hasOwnProperty.call(right, key) && stableEqual(left[key], right[key], depth + 1));
 }
 
 /**
  * Value-equality of two run events, used to decide whether a freshly-mapped
  * delta is actually different from the event already in the list. Tool-call
- * metadata (`input` / `parsed`) is a new object on every `mapToolCallToEvent`
- * call, so comparing those by reference would mark every re-fetched-but-
+ * metadata (`input` / `output`) can be decoded into new objects on every fetch,
+ * so comparing those by reference would mark every re-fetched-but-
  * unchanged row as "changed" — defeating memoization. Object values are
  * compared structurally instead.
  */
@@ -127,12 +142,18 @@ export function eventsValueEqual(a: RunEvent, b: RunEvent): boolean {
  */
 export function mergeRunEvents(
   existing: RunEvent[],
-  artifactDeltas: RunArtifact[],
-  toolCallDeltas: ToolCall[],
+  artifactDeltas: readonly MappableArtifact[],
+  toolCallDeltas: readonly MappableToolCall[],
 ): RunEvent[] {
-  if (artifactDeltas.length === 0 && toolCallDeltas.length === 0) {
-    return existing;
-  }
+  return mergeMappedRunEvents(existing, [
+    ...artifactDeltas.map(mapArtifactToEvent),
+    ...toolCallDeltas.map(mapToolCallToEvent).filter((event): event is RunEvent => event !== null),
+  ]);
+}
+
+/** Reconcile an already mapped page without building its payloads a second time. */
+export function mergeMappedRunEvents(existing: RunEvent[], incoming: readonly RunEvent[]): RunEvent[] {
+  if (!incoming.length) return existing;
   const byId = new Map<string, RunEvent>();
   for (const e of existing) byId.set(e.id, e);
 
@@ -143,11 +164,7 @@ export function mergeRunEvents(
     byId.set(ev.id, ev);
     changed = true;
   };
-  for (const a of artifactDeltas) upsert(mapArtifactToEvent(a));
-  for (const tc of toolCallDeltas) {
-    const ev = mapToolCallToEvent(tc);
-    if (ev) upsert(ev);
-  }
+  for (const event of incoming) upsert(event);
   // Re-fetched rows were all value-identical (e.g. a `>=` overlap on an idle
   // poll): nothing to render, so hand back the original reference.
   if (!changed) return existing;
@@ -185,10 +202,12 @@ export interface MappableToolCall {
 /** Convert a ToolCall to a displayable RunEvent. Returns null on parse error. */
 export function mapToolCallToEvent(tc: MappableToolCall): RunEvent | null {
   try {
-    const inputDisplay = formatToolData(tc.input);
-    const outputDisplay = formatToolData(tc.output);
+    const input = parseRawInput(tc.input);
     const persistedMetadata = parseMetadata(tc.metadata);
-    const content = `${tc.toolName}: ${inputDisplay}${outputDisplay ? `\n→ ${outputDisplay}` : ""}`;
+    // Raw input/output have a single home. The content field is only a bounded
+    // header preview, never a second serialized copy of the tool payload.
+    const summary = previewParams(input);
+    const content = `${tc.toolName}: ${summary}`;
 
     return {
       id: `tool-${tc.id}`,
@@ -204,11 +223,8 @@ export function mapToolCallToEvent(tc: MappableToolCall): RunEvent | null {
         // persisted metadata's parentToolUseId which only lands on completion.
         // The transcript grouping keys on it to keep subagent children out.
         parentToolCallId: tc.parentToolCallId ?? undefined,
-        input: parseRawInput(tc.input),
+        input: input ?? (typeof tc.input === "string" ? tc.input : undefined),
         output: tc.output,
-        // Pre-parsed once at event-creation time so `ToolCallItem` doesn't
-        // re-`JSON.parse` the content string on every render.
-        parsed: parseToolContent(content),
       },
     };
   } catch (err) {

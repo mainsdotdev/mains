@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   getByWorkspace: vi.fn(),
   getById: vi.fn(),
+  getHistory: vi.fn(),
   getArtifacts: vi.fn(),
   getToolCalls: vi.fn(),
   getTurns: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock("@/lib/transport", () => ({
       getByWorkspace: mocks.getByWorkspace,
       getById: mocks.getById,
       getToolCalls: mocks.getToolCalls,
+      getHistory: mocks.getHistory,
     },
     runArtifacts: { getByRun: mocks.getArtifacts },
     runTurns: { getByRun: mocks.getTurns },
@@ -101,6 +103,14 @@ beforeEach(() => {
   }));
   mocks.getToolCalls.mockResolvedValue({ success: true, data: [] });
   mocks.getTurns.mockResolvedValue({ success: true, data: [] });
+  mocks.getHistory.mockImplementation(async ({ runId }: { runId: string }) => ({
+    success: true, data: {
+      artifacts: (await mocks.getArtifacts(runId)).data, toolCalls: (await mocks.getToolCalls(runId)).data,
+      turns: (await mocks.getTurns(runId)).data,
+      start: { timestamp: 1, source: "artifact", id: 1 }, end: null, last: { timestamp: 2, source: "artifact", id: 2 },
+      hasOlder: false, hasNewer: false,
+    },
+  }));
 });
 
 describe("working chats created from voice", () => {

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
+import { useMemo } from "react";
 import { Edit } from "@/components/ui/icons";
 import { normalizePatchForPatchDiff } from "../../lib/patch-utils";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
@@ -31,7 +32,7 @@ export function EditDisplay({
   output?: unknown;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const openFile = useOpenFileInEditor();
 
   const filePath = params.file_path ?? params.path ?? "";

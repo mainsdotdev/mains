@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Button, Text } from "@/components/ui";
+import { Button, Text, toast } from "@/components/ui";
 import {
   ArrowUp,
   Bug,
@@ -26,6 +26,9 @@ import { useOpenLink } from "@/hooks/use-open-link";
 import { useOpenFileInEditor } from "@/features/workspace/hooks/use-open-file-in-editor";
 import { useRunEventRefetch } from "@/features/workspace/hooks/use-run-event-refetch";
 import { ImagePreviewModal } from "@/features/workspace/components/image-preview-modal";
+import { AttachmentImagePreview } from "../attachment-image-preview";
+import { useAttachmentImage } from "../../lib/attachment-image";
+import { appApi } from "@/lib/transport";
 import { BrowserFavicon } from "@/features/workspace/components/browser-favicon";
 import { faviconUrlForHref } from "@/lib/favicon-url";
 import { PanelItem } from "./panel-item";
@@ -34,6 +37,8 @@ import {
   type SessionPlugin,
   type SessionResource,
 } from "./session-resources";
+
+type ResourcePreview = { name: string; src: string; attachmentId?: string; runId?: string };
 
 const COLLAPSED_ITEM_COUNT = 4;
 const EMPTY_CONTEXT: RunContext[] = [];
@@ -120,18 +125,21 @@ function SessionSourceImage({
   onPreview,
 }: {
   resource: SessionResource;
-  onPreview: (preview: { name: string; src: string }) => void;
+  onPreview: (preview: ResourcePreview) => void;
 }) {
   const source =
     resource.target?.type === "image" ? resource.target.value : undefined;
-  const imageUrl = useLocalImageUrl(source);
+  const { observe, src: storedSrc } = useAttachmentImage(resource.target?.runId, resource.target?.attachmentId);
+  const legacy = useLocalImageUrl(resource.target?.attachmentId ? undefined : source);
+  const imageUrl = resource.target?.attachmentId ? storedSrc : legacy;
 
   return (
     <Button
+      ref={observe}
       onClick={() =>
-        imageUrl && onPreview({ name: resource.title, src: imageUrl })
+        onPreview({ name: resource.title, src: imageUrl ?? "", attachmentId: resource.target?.attachmentId, runId: resource.target?.runId })
       }
-      disabled={!imageUrl}
+      disabled={!imageUrl && !(resource.target?.attachmentId && resource.target?.runId)}
       title={resource.title}
       aria-label={`Preview ${resource.title}`}
       className="group relative h-16 w-20 shrink-0 overflow-hidden rounded-xl  bg-primary-50 transition-colors  disabled:opacity-100 dark:bg-primary-900/60 "
@@ -179,7 +187,7 @@ function SessionSourceImages({
   onPreview,
 }: {
   resources: SessionResource[];
-  onPreview: (preview: { name: string; src: string }) => void;
+  onPreview: (preview: ResourcePreview) => void;
 }) {
   if (resources.length === 0) return null;
 
@@ -273,13 +281,15 @@ function SessionResourceRow({
   onPreview,
 }: {
   resource: SessionResource;
-  onPreview: (preview: { name: string; src: string }) => void;
+  onPreview: (preview: ResourcePreview) => void;
 }) {
   const openFile = useOpenFileInEditor();
   const openLink = useOpenLink();
   const imageSource =
     resource.target?.type === "image" ? resource.target.value : undefined;
-  const imageUrl = useLocalImageUrl(imageSource);
+  const stored = useAttachmentImage(resource.target?.runId, resource.target?.type === "image" ? resource.target.attachmentId : undefined, 256, true);
+  const legacy = useLocalImageUrl(resource.target?.attachmentId ? undefined : imageSource);
+  const imageUrl = resource.target?.attachmentId ? stored.src : legacy;
 
   const onClick = (() => {
     if (resource.kind === "folder") return undefined;
@@ -289,10 +299,17 @@ function SessionResourceRow({
       return () => void openLink(target.value);
     }
     if (target.type === "file") {
-      return () => void openFile(target.value);
+      return () => {
+        if (target.attachmentId && target.runId) {
+          void appApi.runArtifacts.resolveAttachmentPath({ runId: target.runId, attachmentId: target.attachmentId }).then((result) => {
+            if (result.success) void openFile(result.data);
+            else toast.error(result.error);
+          }).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Could not open attachment"));
+        } else void openFile(target.value);
+      };
     }
     if (imageUrl) {
-      return () => onPreview({ name: resource.title, src: imageUrl });
+      return () => onPreview({ name: resource.title, src: imageUrl, attachmentId: target.attachmentId, runId: target.runId });
     }
     return undefined;
   })();
@@ -317,7 +334,7 @@ function ResourceList({
   resources: SessionResource[];
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  onPreview: (preview: { name: string; src: string }) => void;
+  onPreview: (preview: ResourcePreview) => void;
 }) {
   const visible = expanded
     ? resources
@@ -362,7 +379,7 @@ export function SessionResourcesSection({
   const [sourcesOpen, setSourcesOpen] = useState(true);
   const [sourceListExpanded, setSourceListExpanded] = useState(false);
   const [deliverablesExpanded, setDeliverablesExpanded] = useState(false);
-  const [preview, setPreview] = useState<{ name: string; src: string } | null>(
+  const [preview, setPreview] = useState<ResourcePreview | null>(
     null,
   );
   const {
@@ -521,11 +538,9 @@ export function SessionResourcesSection({
       )}
 
       {preview && (
-        <ImagePreviewModal
-          name={preview.name}
-          src={preview.src}
-          onClose={() => setPreview(null)}
-        />
+        preview.attachmentId && preview.runId
+          ? <AttachmentImagePreview runId={preview.runId} attachmentId={preview.attachmentId} name={preview.name} fallbackSrc={preview.src} onClose={() => setPreview(null)} />
+          : <ImagePreviewModal name={preview.name} src={preview.src} onClose={() => setPreview(null)} />
       )}
     </div>
   );

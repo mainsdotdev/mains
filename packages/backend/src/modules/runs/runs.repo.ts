@@ -1,11 +1,16 @@
 import { randomUUID } from "crypto";
-import { eq, desc, and, sql, asc, gt, gte, inArray } from "drizzle-orm";
+import { eq, desc, and, sql, asc, gt, gte, inArray, getTableColumns } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
+import type { ReadRunHistoryPayload, RunHistoryCursor } from "@mains/contracts/runs";
+import { historyWindow, compareHistoryCursors as compareCursor } from "./run-history";
+import type { SQLWrapper, SQL } from "drizzle-orm";
 import {
   runs,
   runContext,
   runArtifacts,
+  runAttachments,
+  runAttachmentRefs,
   toolCalls,
   runTurns,
   runTurnChanges,
@@ -24,6 +29,7 @@ import type {
   CreateRunTurnPayload,
   UpdateRunTurnPayload,
   RunTurnResponse,
+  RunHistoryPage,
   RunTurnChangesSummary,
   RunTurnChangesDiffResponse,
   CreateRunTurnChangesPayload,
@@ -36,6 +42,100 @@ import type {
 // Runs Repository
 // ─────────────────────────────────────────────────────────────
 export const runsRepo = {
+  findHistoryPage(request: ReadRunHistoryPayload): RunHistoryPage {
+    const db = getDb();
+    return db.transaction(() => {
+      // Read only chronological keys for navigation, never historical bodies.
+      const timeline = sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id FROM run_artifacts WHERE run_id = ${request.runId}
+        UNION ALL SELECT created_at * 1000 AS timestamp, 'tool' AS source, id FROM tool_calls WHERE run_id = ${request.runId}`;
+      const first = db.get<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) ORDER BY timestamp, source, id LIMIT 1`);
+      const last = db.get<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) ORDER BY timestamp DESC, source DESC, id DESC LIMIT 1`);
+      const anchors = db.all<RunHistoryCursor>(sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id
+        FROM run_artifacts WHERE run_id = ${request.runId} AND kind = 'user-prompt' ORDER BY timestamp, id`);
+      if (!anchors.length && first) {
+        // Imported/log-only runs still have bounded, navigable pages.
+        anchors.push(...db.all<RunHistoryCursor>(sql`SELECT timestamp, source, id FROM (
+          SELECT *, ROW_NUMBER() OVER (ORDER BY timestamp, source, id) AS position FROM (${timeline})
+        ) WHERE (position - 1) % 20 = 0 ORDER BY timestamp, source, id`));
+      } else if (first && (!anchors[0] || compareCursor(first, anchors[0]) < 0)) anchors.unshift(first);
+      const range = historyWindow(anchors, request);
+      const artifacts = range.start ? db.select().from(runArtifacts).where(and(eq(runArtifacts.runId, request.runId),
+        historyCut(artifactHistoryTime, "artifact", runArtifacts.id, range.start, false),
+        range.end ? historyCut(artifactHistoryTime, "artifact", runArtifacts.id, range.end, true) : undefined)).all() : [];
+      const calls = range.start ? db.select({ ...getTableColumns(toolCalls),
+        ...(request.deferToolOutput ? { output: sql<string | null>`CASE
+          WHEN lower(${toolCalls.toolName}) IN ('read', 'bash', 'shell')
+            AND ${toolCalls.status} IN ('done', 'error', 'canceled')
+            AND length(${toolCalls.output}) > 16384
+            AND json_type(CASE WHEN json_valid(${toolCalls.metadata}) THEN ${toolCalls.metadata} ELSE '{}' END, '$.mcpApp') IS NULL
+          THEN json_object('type', 'mains/deferred-tool-output', 'chars', length(${toolCalls.output}),
+            'preview', substr(${toolCalls.output}, 1, 2000)) ELSE ${toolCalls.output} END` } : {}),
+      }).from(toolCalls).where(and(eq(toolCalls.runId, request.runId),
+        historyCut(sql`${toolCalls.createdAt} * 1000`, "tool", toolCalls.id, range.start, false),
+        range.end ? historyCut(sql`${toolCalls.createdAt} * 1000`, "tool", toolCalls.id, range.end, true) : undefined)).all() : [];
+      return {
+        artifacts: artifacts.map(mapArtifactRowToResponse),
+        toolCalls: calls.map(mapToolCallRowToResponse),
+        turns: range.start ? selectRunTurns(request.runId, range.start, range.end) : [],
+        ...range,
+        last: last ?? null,
+        hasOlder: !!(first && range.start && compareCursor(first, range.start) < 0),
+        hasNewer: !!(last && range.end && compareCursor(last, range.end) >= 0),
+      };
+    });
+  },
+  findToolOutput(runId: string, toolId: number): { output: unknown } | null {
+    const row = getDb().select({ output: toolCalls.output }).from(toolCalls)
+      .where(and(eq(toolCalls.runId, runId), eq(toolCalls.id, toolId))).get();
+    return row ? { output: safeJsonParse(row.output) } : null;
+  },
+  // Originals have run-owned references, independent of transcript row deletion.
+  findAttachment(runId: string, attachmentId: string) {
+    return getDb().select({ attachment: runAttachments }).from(runAttachments)
+      .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))
+      .where(and(eq(runAttachmentRefs.runId, runId), eq(runAttachments.id, attachmentId)))
+      .get()?.attachment ?? null;
+  },
+
+  findAttachmentForInput(runId: string, inputKey: string, ordinal: number) {
+    return getDb().select({ attachment: runAttachments }).from(runAttachments)
+      .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))
+      .where(and(eq(runAttachmentRefs.runId, runId), eq(runAttachmentRefs.inputKey, inputKey), eq(runAttachmentRefs.ordinal, ordinal)))
+      .get()?.attachment ?? null;
+  },
+
+  findStoredAttachment(id: string) {
+    return getDb().select().from(runAttachments).where(eq(runAttachments.id, id)).get() ?? null;
+  },
+
+  retainAttachment(runId: string, inputKey: string, ordinal: number, attachment: typeof runAttachments.$inferInsert) {
+    getDb().transaction((tx) => {
+      tx.insert(runAttachments).values(attachment).onConflictDoNothing().run();
+      tx.insert(runAttachmentRefs).values({ runId, attachmentId: attachment.id, inputKey, ordinal }).onConflictDoNothing().run();
+    });
+  },
+
+  inheritAttachmentRefs(sourceRunId: string, runId: string) {
+    getDb().transaction((tx) => {
+      if (!tx.select({ id: runs.id }).from(runs).where(eq(runs.id, sourceRunId)).get()) throw new Error("Source run not found");
+      const refs = tx.select().from(runAttachmentRefs).where(eq(runAttachmentRefs.runId, sourceRunId)).all();
+      for (const { attachmentId } of refs) {
+        tx.insert(runAttachmentRefs).values({ runId, attachmentId, inputKey: `fork:${sourceRunId}:${attachmentId}`, ordinal: 0 }).onConflictDoNothing().run();
+      }
+    });
+  },
+
+  listUnreferencedAttachments() {
+    return getDb().select().from(runAttachments)
+      .where(sql`NOT EXISTS (SELECT 1 FROM run_attachment_refs WHERE attachment_id = ${runAttachments.id})`).limit(100).all();
+  },
+
+  claimUnreferencedAttachment(id: string) {
+    return getDb().delete(runAttachments).where(and(eq(runAttachments.id, id),
+      sql`NOT EXISTS (SELECT 1 FROM run_attachment_refs WHERE attachment_id = ${runAttachments.id})`))
+      .returning().get() ?? null;
+  },
+
   // ─────────────────────────────────────────────────────────────
   // Run Operations
   // ─────────────────────────────────────────────────────────────
@@ -461,31 +561,7 @@ export const runsRepo = {
   // Run Turn Operations
   // ─────────────────────────────────────────────────────────────
   async findTurnsByRun(runId: string): Promise<RunTurnResponse[]> {
-    const db = getDb();
-    // The change summary rides along with its turn; the patch itself does not —
-    // turns are re-fetched on every transcript sync, the patch only on Review.
-    const rows = await db
-      .select({
-        turn: runTurns,
-        changes: {
-          id: runTurnChanges.id,
-          filesJson: runTurnChanges.filesJson,
-          additions: runTurnChanges.additions,
-          deletions: runTurnChanges.deletions,
-          truncated: runTurnChanges.truncated,
-          undoneAt: runTurnChanges.undoneAt,
-        },
-      })
-      .from(runTurns)
-      .leftJoin(runTurnChanges, eq(runTurnChanges.turnId, runTurns.id))
-      .where(eq(runTurns.runId, runId))
-      .orderBy(asc(runTurns.turnIndex));
-    return rows.map((row) =>
-      mapTurnRowToResponse(
-        row.turn,
-        row.changes ? mapTurnChangesSummary(row.changes) : null,
-      ),
-    );
+    return selectRunTurns(runId);
   },
 
   async findActiveTurnByRun(runId: string): Promise<RunTurnResponse | null> {
@@ -639,6 +715,35 @@ export const runsRepo = {
 // ─────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────
+// Voice transcripts retain the time speech began, rather than finalization.
+const artifactHistoryTime = sql`CASE WHEN json_valid(${runArtifacts.metadata})
+  AND json_extract(${runArtifacts.metadata}, '$.voice') = 1
+  AND json_type(${runArtifacts.metadata}, '$.voiceStartedAt') IN ('integer', 'real')
+  THEN CAST(json_extract(${runArtifacts.metadata}, '$.voiceStartedAt') AS INTEGER)
+  ELSE ${runArtifacts.createdAt} * 1000 END`;
+
+function historyCut(time: SQL, source: RunHistoryCursor["source"], id: SQLWrapper, cursor: RunHistoryCursor, before: boolean): SQL {
+  const rank = Number(source === "tool"), boundaryRank = Number(cursor.source === "tool");
+  return before
+    ? sql`(${time} < ${cursor.timestamp} OR (${time} = ${cursor.timestamp} AND (${rank} < ${boundaryRank} OR (${rank} = ${boundaryRank} AND ${id} < ${cursor.id}))))`
+    : sql`(${time} > ${cursor.timestamp} OR (${time} = ${cursor.timestamp} AND (${rank} > ${boundaryRank} OR (${rank} = ${boundaryRank} AND ${id} >= ${cursor.id}))))`;
+}
+
+function selectRunTurns(runId: string, start?: RunHistoryCursor, end?: RunHistoryCursor | null): RunTurnResponse[] {
+  const time = sql`coalesce(${runTurns.startedAt}, ${runTurns.createdAt}) * 1000`;
+  const rows = getDb().select({
+    turn: runTurns,
+    changes: { id: runTurnChanges.id, filesJson: runTurnChanges.filesJson, additions: runTurnChanges.additions,
+      deletions: runTurnChanges.deletions, truncated: runTurnChanges.truncated, undoneAt: runTurnChanges.undoneAt },
+  }).from(runTurns).leftJoin(runTurnChanges, eq(runTurnChanges.turnId, runTurns.id))
+    .where(and(eq(runTurns.runId, runId),
+      start ? sql`(${time} >= ${start.timestamp} OR ${runTurns.id} = (SELECT id FROM run_turns WHERE run_id = ${runId}
+        AND coalesce(started_at, created_at) * 1000 <= ${start.timestamp} ORDER BY turn_index DESC LIMIT 1))` : undefined,
+      end ? sql`${time} <= ${end.timestamp}` : undefined))
+    .orderBy(asc(runTurns.turnIndex)).all();
+  return rows.map((row) => mapTurnRowToResponse(row.turn, row.changes ? mapTurnChangesSummary(row.changes) : null));
+}
+
 function mapRunRowToResponse(row: typeof runs.$inferSelect): RunResponse {
   return {
     id: row.id,

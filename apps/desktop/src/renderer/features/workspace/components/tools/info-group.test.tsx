@@ -17,6 +17,11 @@ vi.mock("../prompt-markdown", () => ({
 vi.mock("@/hooks/use-local-image-url", () => ({
   useLocalImageUrl: (src: string | undefined) => src?.startsWith("/") ? `mains-localimg://signed?path=${encodeURIComponent(src)}` : src,
 }));
+vi.mock("../../lib/attachment-image", () => ({
+  useAttachmentImage: (_runId?: string, attachmentId?: string, maxSide = 256) => ({
+    observe: () => {}, src: attachmentId ? `blob:${attachmentId}:${maxSide}` : undefined,
+  }),
+}));
 vi.mock("../image-preview-modal", () => ({
   ImagePreviewModal: ({ name, src }: { name: string; src: string }) => <div role="dialog" aria-label={name}>{src}</div>,
 }));
@@ -45,6 +50,12 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("prompt browser annotations", () => {
+  it("opens the bounded expanded preview from a compact attachment reference", () => {
+    render(<InfoGroup runId="run" group={prompt({ attachments: [{ name: "screen.png", type: "image", attachmentId: "image-id", mimeType: "image/png", byteSize: 100 }] })} />);
+    expect(screen.getByRole("img").getAttribute("src")).toBe("blob:image-id:256");
+    fireEvent.click(screen.getByRole("button", { name: "Preview screen.png" }));
+    expect(screen.getByRole("dialog", { name: "screen.png" }).textContent).toBe("blob:image-id:1600");
+  });
   it("shows screenshots, one annotation chip and the message, with read-only grouped details", async () => {
     render(<InfoGroup group={prompt()} />);
     const chip = screen.getByRole("button", { name: "2 annotations" });

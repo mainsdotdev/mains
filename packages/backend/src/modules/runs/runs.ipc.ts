@@ -26,6 +26,9 @@ import { CHANNELS } from "@mains/contracts/channels";
 import type { CreateRealtimeConversationPayload, RunRealtimeStartPayload, RunRealtimeStopPayload } from "@mains/contracts/realtime";
 import type {
   ReadArtifactImagePayload,
+  ReadRunHistoryPayload,
+  ReadAttachmentImagePayload,
+  ResolveAttachmentPathPayload,
   ReadRunTextFilePayload,
   RunSteerPayload,
   RunInputStatusPayload,
@@ -37,6 +40,7 @@ import type {
 // IPC Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerRunsIpc(): void {
+  ipcMain.handle(CHANNELS.runs.getHistory, handle((payload: ReadRunHistoryPayload) => runsService.getHistoryPage(payload)));
   ipcMain.handle(CHANNELS.runs.createRealtimeConversation, handle((payload: CreateRealtimeConversationPayload) => runsService.createRealtimeConversation(payload)));
   ipcMain.handle(CHANNELS.runs.startRealtime, handle((payload: RunRealtimeStartPayload) => runsService.startRealtime(payload)));
   ipcMain.handle(CHANNELS.runs.stopRealtime, handle((payload: RunRealtimeStopPayload) => runsService.stopRealtime(payload)));
@@ -226,6 +230,12 @@ export function registerRunsIpc(): void {
     CHANNELS.runArtifacts.readImage,
     handle((payload: ReadArtifactImagePayload) => runsService.readArtifactImage(payload)),
   );
+  ipcMain.handle(CHANNELS.runArtifacts.readAttachmentImage,
+    handle((payload: ReadAttachmentImagePayload) => runsService.readAttachmentImage(payload)));
+  ipcMain.handle(CHANNELS.runArtifacts.resolveAttachmentPath,
+    handle((payload: ResolveAttachmentPathPayload) => runsService.resolveAttachmentPath(payload)));
+  ipcMain.handle(CHANNELS.runArtifacts.readAttachmentFile,
+    handle((payload: ResolveAttachmentPathPayload) => runsService.readAttachmentFile(payload)));
 
   ipcMain.handle(
     CHANNELS.runArtifacts.add,
@@ -239,6 +249,8 @@ export function registerRunsIpc(): void {
 
 
   // Tool Calls
+  ipcMain.handle(CHANNELS.runToolCalls.getOutput,
+    handle((runId: string, toolId: number) => runsService.getToolOutput(runId, toolId)));
   ipcMain.handle(
     CHANNELS.runToolCalls.getByRun,
     handle((runId: string, sinceUpdatedAt?: Date) => runsService.getToolCallsByRun(runId, sinceUpdatedAt)),
@@ -306,6 +318,7 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.archive,
     CHANNELS.runs.unarchive,
     CHANNELS.runs.getDetails,
+    CHANNELS.runs.getHistory,
     CHANNELS.runs.execute,
     CHANNELS.runs.abort,
     CHANNELS.runs.continue,
@@ -321,9 +334,13 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runContext.remove,
     CHANNELS.runArtifacts.getByRun,
     CHANNELS.runArtifacts.readImage,
+    CHANNELS.runArtifacts.readAttachmentImage,
+    CHANNELS.runArtifacts.resolveAttachmentPath,
+    CHANNELS.runArtifacts.readAttachmentFile,
     CHANNELS.runArtifacts.add,
     CHANNELS.runArtifacts.remove,
     CHANNELS.runToolCalls.getByRun,
+    CHANNELS.runToolCalls.getOutput,
     CHANNELS.runTurns.getByRun,
     CHANNELS.runTurns.getChangesDiff,
     CHANNELS.runTurns.undoChanges,

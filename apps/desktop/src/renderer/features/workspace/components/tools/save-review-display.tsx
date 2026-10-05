@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Mains } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader } from "./_shared";
 import { Tiny } from "@/components/ui";
@@ -19,7 +19,7 @@ export function SaveReviewDisplay({
   params: SaveReviewParams;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const hasSummary = !!params.summary;
 
   return (

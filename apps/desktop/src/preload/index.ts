@@ -700,6 +700,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.runs.unarchive, id),
     // New methods for executing work runs
     getDetails: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.getDetails, runId),
+    getHistory: (payload: import("@mains/contracts/runs").ReadRunHistoryPayload): Promise<ServiceResponse<import("@mains/backend/modules/runs").RunHistoryPage>> =>
+      ipcRenderer.invoke(CHANNELS.runs.getHistory, payload),
     execute: (payload: {
       accountId: string;
       workspaceId?: string;
@@ -728,6 +730,8 @@ const api = {
     abort: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.abort, runId),
     getToolCalls: (runId: string, sinceUpdatedAt?: Date) =>
       ipcRenderer.invoke(CHANNELS.runToolCalls.getByRun, runId, sinceUpdatedAt),
+    getToolOutput: (runId: string, toolId: number): Promise<ServiceResponse<{ output: unknown }>> =>
+      ipcRenderer.invoke(CHANNELS.runToolCalls.getOutput, runId, toolId),
     // Session resume methods
     continue: (payload: {
       clientUserMessageId?: string;
@@ -887,6 +891,12 @@ const api = {
   runArtifacts: {
     getByRun: (runId: string, sinceId?: number) =>
       ipcRenderer.invoke(CHANNELS.runArtifacts.getByRun, runId, sinceId),
+    readAttachmentImage: (payload: import("@mains/contracts/runs").ReadAttachmentImagePayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.readAttachmentImage, payload),
+    resolveAttachmentPath: (payload: import("@mains/contracts/runs").ResolveAttachmentPathPayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.resolveAttachmentPath, payload),
+    readAttachmentFile: (payload: import("@mains/contracts/runs").ResolveAttachmentPathPayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.readAttachmentFile, payload),
     add: (payload: unknown) => ipcRenderer.invoke(CHANNELS.runArtifacts.add, payload),
     remove: (id: number) => ipcRenderer.invoke(CHANNELS.runArtifacts.remove, id),
   },

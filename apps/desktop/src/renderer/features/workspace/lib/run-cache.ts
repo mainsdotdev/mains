@@ -2,38 +2,26 @@
 // Run cache — the transcript hook's bookkeeping state machine
 //
 // Plain (React-free) index extracted from use-workspace-runs.ts so the LRU,
-// incremental-sync cursors, and in-flight dedup are testable through their
+// loaded flags and in-flight dedup are testable through their
 // interface rather than woven through async callbacks. The hook holds one
-// instance in a ref and owns all data-fetching + setState; this module owns
+// stable instance and owns all data-fetching + setState; this module owns
 // only the bookkeeping and its invariants.
 //
 // Key invariant (folded into `touch`): when a run falls out of the LRU its
-// incremental cursors + "loaded" flag are dropped too, so a re-opened run
-// re-fetches its full history rather than a truncated delta.
+// "loaded" flag is dropped too, so a re-opened run
+// fetches the latest history page again.
 // ─────────────────────────────────────────────────────────────
 
 /** Most-recent runs whose event/turn caches we retain; older ones are evicted. */
 export const MAX_RETAINED_RUNS = 4;
 
-export interface DeltaCursors {
-  /** True once a run has been fully loaded — drives delta vs full fetch. */
-  isIncremental: boolean;
-  /** Max artifact id seen (insert-only); undefined ⇒ full fetch. */
-  artifactSince: number | undefined;
-  /** Max tool-call updatedAt in ms; undefined ⇒ full fetch. */
-  toolSinceMs: number | undefined;
-}
-
 export interface RunCache {
   /** Mark `runId` most-recently-used; evict + prune the overflow; return the whitelist (size ≤ MAX). */
   touch(runId: string): Set<string>;
-  /** Drop a closed run from the LRU and its incremental bookkeeping. */
+  /** Drop a closed run from the LRU and its bookkeeping. */
   forget(runId: string): void;
   isLoaded(runId: string): boolean;
   markLoaded(runId: string): void;
-  getDeltaCursors(runId: string): DeltaCursors;
-  /** Advance cursors monotonically from a freshly-fetched delta. */
-  advanceCursors(runId: string, deltas: { artifactMaxId?: number; toolMaxMs?: number }): void;
   markFinalized(runId: string): boolean;
   isFinalized(runId: string): boolean;
   /** A continued or voice-delegated run gets a new terminal transition. */
@@ -43,37 +31,23 @@ export interface RunCache {
   clearPending(runId: string): void;
   hasPending(runId: string): boolean;
   releaseLoad(runId: string): void;
-  /** Reset cache contents (LRU, cursors, loaded, finalized) — mirrors the hook's clearState. */
+  /** Reset cache contents (LRU, loaded, finalized) — mirrors the hook's clearState. */
   clear(): void;
 }
 
 export function createRunCache(): RunCache {
   /** LRU of recently-viewed run IDs (most recent last). */
   const recentRunIds: string[] = [];
-  /** Runs fully loaded at least once — absent ⇒ never loaded or evicted ⇒ full fetch. */
+  /** Runs whose first history page has loaded — absent means new or evicted. */
   const loadedRunIds = new Set<string>();
-  const artifactCursor: Record<string, number> = {}; // max artifact id seen
-  const toolCursor: Record<string, number> = {}; // max toolcall updatedAt (ms) seen
   /** Runs whose terminal transition we've already handled (prevents double-toast). */
   const finalizedRunIds = new Set<string>();
   /** Admits one load per run; a request mid-load queues a single trailing reload. */
   const inFlightLoads = new Set<string>();
   const pendingReload = new Set<string>();
 
-  /**
-   * Drop incremental bookkeeping for runs no longer in `allowed`. Iterate
-   * `loadedRunIds` (the superset) rather than the cursor maps: a run with tool
-   * calls but no artifacts has no artifact cursor, so keying off that map would
-   * leave its tool cursor + loaded flag behind and reload it as a truncated delta.
-   */
-  function pruneCursors(allowed: Set<string>): void {
-    for (const id of Array.from(loadedRunIds)) {
-      if (!allowed.has(id)) {
-        delete artifactCursor[id];
-        delete toolCursor[id];
-        loadedRunIds.delete(id);
-      }
-    }
+  function pruneLoaded(allowed: Set<string>): void {
+    for (const id of loadedRunIds) if (!allowed.has(id)) loadedRunIds.delete(id);
   }
 
   return {
@@ -83,15 +57,13 @@ export function createRunCache(): RunCache {
       recentRunIds.push(runId);
       while (recentRunIds.length > MAX_RETAINED_RUNS) recentRunIds.shift();
       const allowed = new Set(recentRunIds);
-      pruneCursors(allowed);
+      pruneLoaded(allowed);
       return allowed;
     },
 
     forget(runId) {
       const idx = recentRunIds.indexOf(runId);
       if (idx !== -1) recentRunIds.splice(idx, 1);
-      delete artifactCursor[runId];
-      delete toolCursor[runId];
       loadedRunIds.delete(runId);
     },
 
@@ -101,24 +73,6 @@ export function createRunCache(): RunCache {
 
     markLoaded(runId) {
       loadedRunIds.add(runId);
-    },
-
-    getDeltaCursors(runId) {
-      const isIncremental = loadedRunIds.has(runId);
-      return {
-        isIncremental,
-        artifactSince: isIncremental ? artifactCursor[runId] : undefined,
-        toolSinceMs: isIncremental ? toolCursor[runId] : undefined,
-      };
-    },
-
-    advanceCursors(runId, { artifactMaxId, toolMaxMs }) {
-      if (artifactMaxId != null) {
-        artifactCursor[runId] = Math.max(artifactCursor[runId] ?? 0, artifactMaxId);
-      }
-      if (toolMaxMs != null) {
-        toolCursor[runId] = Math.max(toolCursor[runId] ?? 0, toolMaxMs);
-      }
     },
 
     markFinalized(runId) {
@@ -163,8 +117,6 @@ export function createRunCache(): RunCache {
       recentRunIds.length = 0;
       loadedRunIds.clear();
       finalizedRunIds.clear();
-      for (const k of Object.keys(artifactCursor)) delete artifactCursor[k];
-      for (const k of Object.keys(toolCursor)) delete toolCursor[k];
     },
   };
 }

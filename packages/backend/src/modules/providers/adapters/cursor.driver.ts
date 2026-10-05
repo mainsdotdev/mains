@@ -52,7 +52,7 @@ import {
   adoptConfig,
   createLogger,
   appendPromptSections,
-  saveAttachments,
+  attachmentPromptParts,
   formatContextSection,
   resolveCatalogDefaultId,
 } from "./adapter.shared";
@@ -1685,7 +1685,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     });
 
     if (request.attachments && request.attachments.length > 0) {
-      const { savedPaths, inlineTexts } = saveAttachments(request.attachments, request.runId);
+      const { savedPaths, inlineTexts } = attachmentPromptParts(request.attachments);
       if (inlineTexts.length > 0) {
         prompt = `${prompt}\n\n---\n\nAttached documents:\n${inlineTexts.join("\n\n")}`;
       }
@@ -1707,7 +1707,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     });
 
     if (request.attachments && request.attachments.length > 0) {
-      const { savedPaths, inlineTexts } = saveAttachments(request.attachments, request.runId);
+      const { savedPaths, inlineTexts } = attachmentPromptParts(request.attachments);
       if (inlineTexts.length > 0) {
         prompt = `${prompt}\n\n---\n\nAttached documents:\n${inlineTexts.join("\n\n")}`;
       }
@@ -1777,7 +1777,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
     let prompt = `${preamble}${body}`;
     if (request.attachments && request.attachments.length > 0) {
-      const { savedPaths, inlineTexts } = saveAttachments(request.attachments, request.runId);
+      const { savedPaths, inlineTexts } = attachmentPromptParts(request.attachments);
       if (inlineTexts.length > 0) {
         prompt = `${prompt}\n\n---\n\nAttached documents:\n${inlineTexts.join("\n\n")}`;
       }

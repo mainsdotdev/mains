@@ -730,6 +730,7 @@ export function WorkspaceProviderPage({
                   currentEvents={ws.currentEvents}
                   currentWorkspace={ws.currentWorkspace}
                   eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
+            history={ws.history}
                   issueTabs={ws.openIssueTabs}
                   signalTabs={ws.openSignalTabs}
                   turns={ws.currentTurns}
@@ -843,6 +844,7 @@ export function WorkspaceProviderPage({
             currentEvents={ws.currentEvents}
             currentWorkspace={ws.currentWorkspace}
             eventsEndRef={ws.eventsEndRef as RefObject<HTMLDivElement>}
+            history={ws.history}
             issueTabs={ws.openIssueTabs}
             signalTabs={ws.openSignalTabs}
             turns={ws.currentTurns}

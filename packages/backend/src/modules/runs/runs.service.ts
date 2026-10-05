@@ -9,6 +9,8 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { runsRepo } from "./runs.repo";
+import { validateHistoryRequest } from "./run-history";
+import type { ReadRunHistoryPayload } from "@mains/contracts/runs";
 import { providersService } from "../providers";
 import { collectionsService } from "../collections";
 import { projectsService } from "../projects";
@@ -19,7 +21,10 @@ import { appSettingsService } from "../appSettings";
 import { DEFAULT_MODE_ID, type ModeId } from "@mains/contracts/modes";
 import type {
   ArtifactImage,
+  AttachmentFile,
   ReadArtifactImagePayload,
+  ReadAttachmentImagePayload,
+  ResolveAttachmentPathPayload,
   ReadRunTextFilePayload,
   RunOutputFile,
   RunTextFile,
@@ -52,6 +57,8 @@ import {
   syncCollectionSourceDirectory,
 } from "./run-collection-sources";
 import { sanitizeRunAttachments } from "./run-attachments";
+import { prepareRunAttachments, pruneUnreferencedAttachments, resolveRunAttachment } from "./run-attachment-storage";
+import { readAttachmentImage } from "./run-attachment-images";
 import { resolveConversationSettings, validateConversationSettings } from "./conversation-settings";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
@@ -1176,6 +1183,7 @@ export const runsService = {
     removeManagedRunDir(run.id, run.mode);
     await runsRepo.deleteRun(id);
     removeManagedRunImages(id);
+    await pruneUnreferencedAttachments();
   },
 
   /** Delete every run of a workspace (project removal cleanup). */
@@ -1183,6 +1191,7 @@ export const runsService = {
     const runIds = await runsRepo.findRunIdsByWorkspaceId(workspaceId);
     await runsRepo.deleteRunsByWorkspaceId(workspaceId);
     for (const runId of runIds) removeManagedRunImages(runId);
+    await pruneUnreferencedAttachments();
   },
 
   async archiveRun(id: string): Promise<RunResponse> {
@@ -1237,6 +1246,20 @@ export const runsService = {
   },
 
   // ─── Run Artifact Operations ───
+  async getHistoryPage(payload: ReadRunHistoryPayload) {
+    validateHistoryRequest(payload);
+    if (!await runsRepo.findRunById(payload.runId)) throw new Error("Conversation not found");
+    const page = runsRepo.findHistoryPage(payload);
+    return { ...page, artifacts: await withImageContentHashes(page.artifacts) };
+  },
+
+  async getToolOutput(runId: string, toolId: number) {
+    if (typeof runId !== "string" || !runId || !Number.isSafeInteger(toolId) || toolId <= 0) throw new Error("Invalid tool call");
+    const result = runsRepo.findToolOutput(runId, toolId);
+    if (!result) throw new Error("Tool call not found in this conversation");
+    return result;
+  },
+
   async getArtifactsByRun(
     runId: string,
     sinceId?: number,
@@ -1267,7 +1290,7 @@ export const runsService = {
       Math.max(payload.maxSide ?? ARTIFACT_IMAGE_MAX_SIDE, 128),
       ARTIFACT_IMAGE_MAX_SIDE,
     );
-    const preview = getBackendRuntime().imagePreview?.resizeToJpeg(
+    const preview = await getBackendRuntime().imagePreview?.resizeToJpeg(
       bytes,
       maxSide,
     );
@@ -1286,6 +1309,20 @@ export const runsService = {
       width: preview.width,
       height: preview.height,
     };
+  },
+
+  readAttachmentImage(payload: ReadAttachmentImagePayload): Promise<ArtifactImage> {
+    return readAttachmentImage(payload);
+  },
+
+  async resolveAttachmentPath(payload: ResolveAttachmentPathPayload): Promise<string> {
+    return (await resolveRunAttachment(payload.runId, payload.attachmentId)).path;
+  },
+
+  async readAttachmentFile(payload: ResolveAttachmentPathPayload): Promise<AttachmentFile> {
+    const { attachment, path: sourcePath } = await resolveRunAttachment(payload.runId, payload.attachmentId);
+    return { attachmentId: attachment.id, name: attachment.name, type: attachment.type, mimeType: attachment.mimeType,
+      byteSize: attachment.byteSize, base64: (await fs.promises.readFile(sourcePath)).toString("base64") };
   },
 
   async addArtifact(payload: CreateRunArtifactPayload): Promise<number> {
@@ -1337,7 +1374,7 @@ export const runsService = {
    */
   async executeRun(payload: StartRunPayload): Promise<StartRunResponse> {
     // Before anything is written: a refused attachment must leave no run behind.
-    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+    const uploads = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
     const runId = generateRunId();
     try {
       const provider = await providersService.getById(payload.providerId);
@@ -1432,6 +1469,7 @@ export const runsService = {
         toolPolicySnapshot: toolPolicy ?? undefined,
       });
       await runsRepo.updateRun(runId, { startedAt: new Date() });
+      const attachments = await prepareRunAttachments(runId, uploads);
 
       const projectInstructions = await buildCollectionSourceInstructions({
         runId,
@@ -1648,7 +1686,7 @@ export const runsService = {
       if (runSessionRegistry.get(runId) || existing.status === "running" || existing.status === "queued") {
         throw new Error("This conversation already has an active response.");
       }
-      const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+      const uploads = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
       let continuationStarted = false;
       try {
         const run = await runsRepo.findRunById(runId);
@@ -1690,6 +1728,8 @@ export const runsService = {
             throw new Error("Session cannot be resumed (not found or expired)");
           }
         }
+
+        const attachments = await prepareRunAttachments(runId, uploads, payload.clientUserMessageId);
 
         const existingTurns = await runsRepo.findTurnsByRun(runId);
         const seedTurnIndex = existingTurns.reduce(
@@ -1836,11 +1876,12 @@ export const runsService = {
       throw new Error("There is no active Codex turn to steer. The message stays queued.");
     }
     if (!payload.clientUserMessageId || typeof payload.message !== "string") throw new Error("Invalid message.");
-    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+    const uploads = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
     const provider = await providersService.getById(run.providerId);
     if (!provider?.isEnabled) throw new Error("Codex is not enabled.");
     const adapter = createWorkAdapter(provider);
     if (!adapter.steerRun) throw new Error("This provider does not support steering.");
+    const attachments = await prepareRunAttachments(run.id, uploads, payload.clientUserMessageId);
     const { turnId } = await adapter.steerRun({
       runId: run.id, message: payload.message,
       clientUserMessageId: payload.clientUserMessageId,
@@ -1864,7 +1905,8 @@ export const runsService = {
     const result = await adapter?.getInputStatus?.(run.id, payload.clientUserMessageId, run.sessionId ?? undefined) ?? { accepted: false };
     if (result.accepted && payload.input) {
       const input = payload.input;
-      const attachments = sanitizeRunAttachments(input.attachments, await browserCaptureDir());
+      const uploads = sanitizeRunAttachments(input.attachments, await browserCaptureDir());
+      const attachments = await prepareRunAttachments(run.id, uploads, payload.clientUserMessageId);
       await emitUserPromptArtifact(async (event) => {
         if (event.type === "artifact" && await insertRunInputArtifact(run.id, event)) {
           emit(CHANNELS.runs.eventPersisted, { runId: run.id });
@@ -1886,7 +1928,7 @@ export const runsService = {
    */
   async forkRun(payload: ForkRunPayload): Promise<ForkRunResponse> {
     const { sourceRunId, accountId, message } = payload;
-    const attachments = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+    const uploads = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
     const newRunId = generateRunId();
     try {
       const sourceRun = await runsRepo.findRunById(sourceRunId);
@@ -1962,6 +2004,9 @@ export const runsService = {
         configSnapshot: configSnapshot ?? undefined,
         toolPolicySnapshot: toolPolicy ?? undefined,
       });
+
+      runsRepo.inheritAttachmentRefs(sourceRunId, newRunId);
+      const attachments = await prepareRunAttachments(newRunId, uploads);
 
       const execution = resolveRunExecution({
         runId: newRunId,

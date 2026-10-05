@@ -1,3 +1,4 @@
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { useState } from "react";
 import { Button } from "@/components/ui";
 import { Picture } from "@/components/ui/icons";
@@ -20,7 +21,7 @@ export function ImageViewDisplay({
   const imagePath = params.path ?? "";
   const fileName = imagePath.split("/").pop() || "image";
   const url = useLocalImageUrl(imagePath);
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useToolExpansion(true);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [thumbFailed, setThumbFailed] = useState(false);
 

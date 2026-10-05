@@ -13,6 +13,8 @@ interface ImagePreviewModalProps {
   name: string;
   src: string;
   onClose: () => void;
+  onDownload?: () => Promise<void>;
+  status?: string;
 }
 
 const MIN_SCALE = 0.25;
@@ -29,7 +31,7 @@ const floatingButtonClass =
 const zoomButtonClass =
   "p-1.5 rounded-full text-white/80 hover:text-white hover:bg-white/15 disabled:opacity-40";
 
-export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps) {
+export function ImagePreviewModal({ name, src, onClose, onDownload, status }: ImagePreviewModalProps) {
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -142,6 +144,7 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
   };
 
   const handleDownload = useCallback(async () => {
+    if (onDownload) { await onDownload(); return; }
     const filename = name || "image";
     try {
       const res = await fetch(src);
@@ -161,7 +164,7 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
       a.download = filename;
       a.click();
     }
-  }, [src, name]);
+  }, [src, name, onDownload]);
 
   return (
     <Modal
@@ -179,7 +182,7 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
         onClick={onStageClick}
       >
         <img
-          src={src}
+          src={src || undefined}
           alt={name}
           draggable={false}
           className="block max-h-[70vh] max-w-[70vw] object-contain rounded-lg shadow-2xl select-none"
@@ -194,9 +197,12 @@ export function ImagePreviewModal({ name, src, onClose }: ImagePreviewModalProps
           onPointerCancel={endDrag}
         />
 
+        {status && <span role="status" className="absolute bottom-14 rounded-lg bg-black/55 px-3 py-2 text-sm text-white">{status}</span>}
+
         <div className="absolute right-0 top-0 z-10 flex items-center gap-2">
           <Button
             onClick={handleDownload}
+            disabled={!src && !onDownload}
             aria-label="Download image"
             tooltip="Download"
             tooltipPosition="bottom"

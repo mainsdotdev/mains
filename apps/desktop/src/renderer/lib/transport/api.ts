@@ -34,6 +34,7 @@ export const appApi = {
     get: method<typeof window.api.account.get>(CHANNELS.account.get),
   },
   runs: {
+    getHistory: method<typeof window.api.runs.getHistory>(CHANNELS.runs.getHistory),
     getById: method<typeof window.api.runs.getById>(CHANNELS.runs.getById),
     getByWorkspace: method<typeof window.api.runs.getByWorkspace>(
       CHANNELS.runs.getByWorkspace,
@@ -41,6 +42,7 @@ export const appApi = {
     getToolCalls: method<typeof window.api.runs.getToolCalls>(
       CHANNELS.runToolCalls.getByRun,
     ),
+    getToolOutput: method<typeof window.api.runs.getToolOutput>(CHANNELS.runToolCalls.getOutput),
     getExecutionRoot: method<typeof window.api.runs.getExecutionRoot>(
       CHANNELS.runs.getExecutionRoot,
     ),
@@ -62,6 +64,9 @@ export const appApi = {
     ),
   },
   runArtifacts: {
+    readAttachmentImage: method<typeof window.api.runArtifacts.readAttachmentImage>(CHANNELS.runArtifacts.readAttachmentImage),
+    resolveAttachmentPath: method<typeof window.api.runArtifacts.resolveAttachmentPath>(CHANNELS.runArtifacts.resolveAttachmentPath),
+    readAttachmentFile: method<typeof window.api.runArtifacts.readAttachmentFile>(CHANNELS.runArtifacts.readAttachmentFile),
     getByRun: method<typeof window.api.runArtifacts.getByRun>(
       CHANNELS.runArtifacts.getByRun,
     ),

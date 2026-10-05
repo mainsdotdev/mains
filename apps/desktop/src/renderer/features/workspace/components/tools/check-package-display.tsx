@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Mains } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader } from "./_shared";
 import { Text, Tiny } from "@/components/ui";
@@ -22,7 +22,7 @@ export function CheckPackageDisplay({
   output?: unknown;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const packages = params.packages || [];
   const hasContent = packages.length > 0;
   const outputText = typeof output === "string" ? output : "";

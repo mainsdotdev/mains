@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Text } from "@/components/ui";
 import { resolveTool } from "../../lib/resolve-tool";
 import { ToolHeader, ToolCollapse, type ToolStatus } from "./_shared";
@@ -146,12 +146,10 @@ export function McpDisplay({
   runId,
   mcpApp,
 }: McpDisplayProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const resolvedIcon = icon ?? resolveTool(displayName).icon;
 
-  const outputSegments = extractMcpOutputSegments(output);
-  //const inputSummary = summarizeInput(params);
-  const hasOutput = outputSegments.length > 0;
+  const hasOutput = output != null && output !== "";
 
   return (
     <div>
@@ -180,10 +178,14 @@ export function McpDisplay({
       {hasOutput && (
         <ToolCollapse isExpanded={isExpanded}>
           <div className="pt-1">
-            <McpOutput segments={outputSegments} />
+            <McpDetails output={output} />
           </div>
         </ToolCollapse>
       )}
     </div>
   );
+}
+
+function McpDetails({ output }: { output: unknown }) {
+  return <McpOutput segments={extractMcpOutputSegments(output)} />;
 }

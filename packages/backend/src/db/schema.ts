@@ -516,10 +516,40 @@ export const runs = sqliteTable(
   ],
 );
 
+/** Immutable originals, shared by run references when a conversation forks. */
+export const runAttachments = sqliteTable(
+  "run_attachments",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    type: text("type", { enum: ["image", "document"] }).notNull(),
+    mimeType: text("mime_type").notNull(),
+    storageKey: text("storage_key").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    contentHash: text("content_hash").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [uniqueIndex("uniq_run_attachments_storage_key").on(t.storageKey)],
+);
+
+export const runAttachmentRefs = sqliteTable(
+  "run_attachment_refs",
+  {
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    attachmentId: text("attachment_id").notNull().references(() => runAttachments.id, { onDelete: "restrict" }),
+    inputKey: text("input_key").notNull(),
+    ordinal: integer("ordinal").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.runId, t.attachmentId] }),
+    uniqueIndex("uniq_run_attachment_refs_input").on(t.runId, t.inputKey, t.ordinal),
+    index("idx_run_attachment_refs_attachment").on(t.attachmentId),
+  ],
+);
+
 /* -----------------------------
    RUN TURNS (per-turn tracking with usage)
 ------------------------------ */
-
 export const runTurns = sqliteTable(
   "run_turns",
   {

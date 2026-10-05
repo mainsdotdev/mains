@@ -14,7 +14,7 @@ export function registerToolsIpc(): void {
   // Tool Calls
   ipcMain.handle(
     CHANNELS.toolCalls.getByRun,
-    handle((runId: string) => toolsService.getToolCallsByRun(runId)),
+    handle((runId: string, subagentsOnly?: boolean) => toolsService.getToolCallsByRun(runId, subagentsOnly === true)),
   );
 
   ipcMain.handle(
