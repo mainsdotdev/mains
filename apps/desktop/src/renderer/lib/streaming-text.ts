@@ -12,7 +12,9 @@ export function rehypeStreamingText() {
         const child = parent.children[index];
         if (child.type === "element") {
           visit(child);
-        } else if (child.type === "text") {
+        } else if (child.type === "text" && /\S/.test(child.value)) {
+          // Structural whitespace must remain text, especially under tables
+          // where a span is invalid and prevents react-markdown's cleanup.
           const words: Element[] = (child.value.match(/\S+\s*|\s+/g) ?? []).map((value) => ({
             type: "element",
             tagName: "span",

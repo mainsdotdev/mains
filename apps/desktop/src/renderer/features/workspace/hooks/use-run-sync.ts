@@ -35,8 +35,8 @@ export interface RunSyncDeps {
   loadRunDetails: (runId: string) => Promise<void>;
   /** Replace one run in the list with a newer copy of it. */
   onRunUpdated: (run: Run) => void;
-  /** Drop work-turn streaming buffers once work is idle; voice has a separate lifetime. */
-  clearTurnStreams: () => void;
+  /** Settle assistant previews, clear transient status, and leave voice alone. */
+  clearTurnStreams: (interrupted?: boolean) => void;
 }
 
 export function useRunSync({
@@ -172,7 +172,9 @@ export function useRunSync({
         clearInterval(pollingRef.current);
         pollingRef.current = null;
       }
-      clearTurnStreams();
+      if (activeRunStatus === "succeeded" || activeRunStatus === "canceled" || activeRunStatus === "failed") {
+        clearTurnStreams(activeRunStatus !== "succeeded");
+      }
       return;
     }
 

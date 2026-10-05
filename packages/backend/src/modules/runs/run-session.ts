@@ -1,4 +1,6 @@
 import { insertRunInputArtifact } from "./run-input-artifact";
+import { randomUUID } from "node:crypto";
+import { isAssistantReportStream } from "../../../shared/report-stream";
 import {
   couldModifyFiles,
   toolWrites,
@@ -173,6 +175,11 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // callKey → the files a running tool call named at start, claimed for the
   // turn only when it completes successfully (see noteToolWrites).
   const pendingToolWrites = new Map<string, string[]>();
+  type ArtifactEvent = Extract<WorkRunEvent, { type: "artifact" }>;
+  const reportStreams = new Map<string, ArtifactEvent>();
+  const artifactProjections = new Set<Promise<boolean>>();
+  const streamScope = randomUUID();
+  let reportSequence = 0;
 
   async function hydrateResolvedToolCalls(): Promise<void> {
     try {
@@ -770,6 +777,17 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   ): Promise<boolean> {
     // Streaming chunks: push to renderer only, skip DB and the persisted-event broadcast.
     if (event.ephemeral) {
+      if (event.streamId && isAssistantReportStream(event)) {
+        const nativeId = event.streamId;
+        const previous = reportStreams.get(nativeId);
+        // Some providers reuse a block id within a turn or on resume. Give
+        // each live message its own identity so an older DB row cannot hide it.
+        const streamId = previous?.streamId ?? (event.content
+          ? `${nativeId}-${streamScope}-${++reportSequence}` : nativeId);
+        event = { ...event, streamId, metadata: { ...event.metadata, streamId } };
+        if (event.content) reportStreams.set(nativeId, event);
+        else reportStreams.delete(nativeId);
+      }
       broadcastEphemeralEvent({
         type: event.type,
         kind: event.kind,
@@ -780,7 +798,23 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       return false;
     }
 
+    let reportKey: string | undefined;
+    if (event.kind === "report" && event.metadata?.isFromSubagent !== true) {
+      const streamId = event.streamId ?? event.metadata?.streamId;
+      if (typeof streamId === "string") {
+        reportKey = reportStreams.has(streamId) ? streamId
+          : [...reportStreams].find(([, report]) => report.streamId === streamId)?.[0];
+      } else if (event.content?.trim()) {
+        // Claude's completed text blocks have no native stream id. Match the
+        // final block to its live prefix before retiring that preview.
+        reportKey = [...reportStreams].find(([, report]) =>
+          report.content?.trim() && event.content!.trim().startsWith(report.content.trim()))?.[0];
+      }
+      const report = reportKey === undefined ? undefined : reportStreams.get(reportKey);
+      if (report) event = { ...event, metadata: { ...event.metadata, streamId: report.streamId } };
+    }
     if (!await insertRunInputArtifact(runId, event)) return false;
+    if (reportKey !== undefined) reportStreams.delete(reportKey);
 
     // Turn boundary side-effects
     const artifactKind = (event.metadata as Record<string, unknown> | undefined)?.kind;
@@ -929,7 +963,15 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         didPersist = true;
         break;
       case "artifact":
-        didPersist = await projectArtifact(event);
+        {
+          const projection = projectArtifact(event);
+          artifactProjections.add(projection);
+          try {
+            didPersist = await projection;
+          } finally {
+            artifactProjections.delete(projection);
+          }
+        }
         break;
       case "prompt_suggestion":
         await projectPromptSuggestion(event);
@@ -995,6 +1037,25 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     const toolCallStatus = result.status === "succeeded" ? "done" : "error";
 
     try {
+      // Finish any final-message insert already in flight before recovering
+      // the remaining previews, so a Stop cannot save the same message twice.
+      await Promise.allSettled([...artifactProjections]);
+      for (const report of [...reportStreams.values()]) {
+        if (!report.content?.trim()) continue;
+        try {
+          await projectArtifact({
+            ...report,
+            ephemeral: false,
+            metadata: {
+              ...report.metadata,
+              streaming: false,
+              interrupted: result.status !== "succeeded",
+            },
+          });
+        } catch (err) {
+          console.error(`[RunSession ${runId}] Failed to preserve streamed report:`, err);
+        }
+      }
       // Persist diff before status flip — renderer polling sees status change
       // with the diff already available.
       if (result.status === "succeeded") {

@@ -82,6 +82,7 @@ import { runsRepo } from "./runs.repo";
 import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
 import { APP_WRITER, worktreeWrites } from "../git";
+import { registerEventSink } from "../../ipc-kit/event-bus";
 
 describe("RunSession", () => {
   beforeEach(() => {
@@ -1174,6 +1175,92 @@ describe("RunSession", () => {
   // finalize
   // ─────────────────────────────────────────────────────────────
   describe("finalize", () => {
+    it.each(["canceled", "failed", "succeeded"] as const)("preserves the latest streamed answer before publishing %s", async (status) => {
+      const session = makeSession();
+      await flushBackground();
+      const atStatus: Array<ReturnType<typeof runsRepo.findArtifactsByRun>> = [];
+      const off = registerEventSink({ kind: "test", send: (channel, payload) => {
+        if (channel === "runs:statusChanged" && (payload as { status: string }).status === status) {
+          atStatus.push(runsRepo.findArtifactsByRun("r1"));
+        }
+      } });
+      try {
+        for (const content of ["First chunk", "Received answer ".repeat(1000)]) {
+          await session.project({ type: "artifact", kind: "report", content, ephemeral: true,
+            streamId: "native-message", metadata: { source: "agent_message_streaming" } });
+        }
+        expect(await runsRepo.findArtifactsByRun("r1")).toEqual([]);
+        await session.finalize({ status });
+        await session.finalize({ status });
+        const artifacts = await runsRepo.findArtifactsByRun("r1");
+        expect(artifacts).toHaveLength(1);
+        expect(artifacts[0]).toMatchObject({ kind: "report", content: "Received answer ".repeat(1000),
+          metadata: { streaming: false, interrupted: status !== "succeeded", streamId: expect.stringContaining("native-message-") } });
+        expect(atStatus).toHaveLength(1);
+        expect(await atStatus[0]).toEqual(artifacts);
+      } finally { off(); }
+    });
+
+    it("does not recover completed messages, cleared previews, thinking, or tool status", async () => {
+      const session = makeSession();
+      await flushBackground();
+      await session.project({ type: "artifact", kind: "report", content: "Complete", ephemeral: true,
+        streamId: "done", metadata: { source: "agent_message_streaming" } });
+      await session.project({ type: "artifact", kind: "report", content: "Complete answer",
+        metadata: { source: "assistant.message" } });
+      await session.project({ type: "artifact", kind: "report", content: "Cleared", ephemeral: true,
+        streamId: "cleared", metadata: { source: "agent_message_streaming" } });
+      await session.project({ type: "artifact", kind: "report", content: "", ephemeral: true,
+        streamId: "cleared", metadata: { source: "agent_message_streaming" } });
+      for (const source of ["agent_thinking_streaming", "agent_thought_streaming", "codex_cmd_streaming", "codex_plan_streaming"]) {
+        await session.project({ type: "artifact", kind: "report", content: "Status", ephemeral: true, streamId: source, metadata: { source } });
+      }
+      await session.finalize({ status: "canceled" });
+      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({
+        content: "Complete answer", metadata: expect.objectContaining({ streamId: expect.stringContaining("done-") }),
+      })]);
+    });
+
+    it("gives reused provider block ids a new identity and preserves the interrupted block", async () => {
+      const session = makeSession();
+      await flushBackground();
+      for (const content of ["First answer", "Second answer"]) {
+        await session.project({ type: "artifact", kind: "report", content, ephemeral: true,
+          streamId: "reused-block", metadata: { source: "agent_message_streaming" } });
+        if (content === "First answer") await session.project({ type: "artifact", kind: "report", content,
+          metadata: { source: "assistant.message" } });
+      }
+      await session.finalize({ status: "canceled" });
+      const artifacts = await runsRepo.findArtifactsByRun("r1");
+      expect(artifacts.map((artifact) => artifact.content)).toEqual(["First answer", "Second answer"]);
+      expect(artifacts[0].metadata?.streamId).not.toBe(artifacts[1].metadata?.streamId);
+      expect(artifacts[1].metadata?.interrupted).toBe(true);
+    });
+
+    it("waits for an in-flight final message insert instead of duplicating the live answer", async () => {
+      const session = makeSession();
+      await flushBackground();
+      await session.project({ type: "artifact", kind: "report", content: "Partial", ephemeral: true,
+        streamId: "message", metadata: { source: "agent_message_streaming" } });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const original = runsRepo.insertArtifact.bind(runsRepo);
+      const insert = vi.spyOn(runsRepo, "insertArtifact").mockImplementation(async (params) => {
+        await gate;
+        return original(params);
+      });
+      try {
+        const writing = session.project({ type: "artifact", kind: "report", content: "Full answer",
+          metadata: { streamId: "message" } });
+        const finishing = session.finalize({ status: "canceled" });
+        expect((await runsRepo.findRunById("r1"))?.status).toBe("running");
+        release();
+        await Promise.all([writing, finishing]);
+        expect(insert).toHaveBeenCalledTimes(1);
+        expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({ content: "Full answer" })]);
+      } finally { release(); insert.mockRestore(); }
+    });
+
     it("updates run status to the result status", async () => {
       const session = makeSession();
       await flushBackground();

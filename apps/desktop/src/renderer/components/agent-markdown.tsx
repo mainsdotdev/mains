@@ -8,6 +8,7 @@ import "katex/dist/katex.min.css";
 
 import { Text } from "@/components/ui";
 import { normalizeMathMarkdown, remarkStreamingMath } from "@/lib/math-markdown";
+import { remarkStreamingLinks } from "@/lib/streaming-links";
 import { rehypeStreamingText } from "@/lib/streaming-text";
 
 import { agentMarkdownComponents } from "./markdown-components";
@@ -32,7 +33,7 @@ export function AgentMarkdown({
         remarkPlugins={[
           remarkGfm,
           remarkMath,
-          ...(isStreaming ? [remarkStreamingMath] : []),
+          ...(isStreaming ? [remarkStreamingLinks, remarkStreamingMath] : []),
         ]}
         rehypePlugins={[
           ...(isStreaming ? [rehypeStreamingText] : []),

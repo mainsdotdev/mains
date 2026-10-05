@@ -247,6 +247,96 @@ describe("assistant markdown / math", () => {
   });
 });
 
+describe("assistant markdown / streaming links", () => {
+  it.each([
+    "[Terence Tao’s explanation](https://terrytao.wordpress.com/notes)",
+    "[Hou [and] Yu’s **lecture notes**](https://example.com/notes)",
+    "[Notes with `array[i]`](https://example.com/notes)",
+    "[Notes with `array[i]extra`](https://example.com/notes)",
+    "[Notes](https://example.com/notes_(draft))",
+    String.raw`[Notes](https://example.com/notes\(draft\))`,
+    '[Notes](https://example.com/notes "A title with (parentheses)")',
+    "[Notes](https://example.com/Tao's_notes)",
+  ])("withholds the whole link at every character boundary: %s", (link) => {
+    const prose = "A **complete** sentence &amp; `literal`. ";
+    const view = renderMarkdown(prose, true);
+    const firstWord = view.container.querySelector(".stream-word");
+
+    for (let end = 1; end < link.length; end++) {
+      view.rerender(<AgentMarkdown isStreaming>{prose + link.slice(0, end)}</AgentMarkdown>);
+      expect(view.container.textContent?.trimEnd()).toBe("A complete sentence & literal.");
+      expect(view.container.querySelector("a, img")).toBeNull();
+      expect(view.container.querySelector(".stream-word")).toBe(firstWord);
+    }
+
+    view.rerender(<AgentMarkdown isStreaming>{prose + link}</AgentMarkdown>);
+    expect(view.container.querySelector("a")).not.toBeNull();
+    expect(view.container.textContent).not.toContain("](https:");
+  });
+
+  it("waits for the whole angle-delimited file path and keeps its open action", () => {
+    const prose = "Open ";
+    const link = '[Document](</Users/example/My notes (draft).md> "The (draft)")';
+    const view = renderMarkdown(prose, true);
+    for (let end = 1; end < link.length; end++) {
+      view.rerender(<AgentMarkdown isStreaming>{prose + link.slice(0, end)}</AgentMarkdown>);
+      expect(view.container.textContent?.trimEnd()).toBe("Open");
+      expect(screen.queryByRole("button")).toBeNull();
+    }
+    view.rerender(<AgentMarkdown isStreaming>{prose + link}</AgentMarkdown>);
+    fireEvent.click(screen.getByText("Document").closest("button")!);
+    expect(linkHarness.openFile).toHaveBeenCalledWith("/Users/example/My notes (draft).md");
+  });
+
+  it.each([
+    ["> Quote &amp; [Notes](https://example.com/notes", "Quote &"],
+    ["- List [Notes](https://example.com/notes", "List"],
+    ["# Heading [Notes](https://example.com/notes", "Heading"],
+    ["| Item |\n| --- |\n| Table [Notes](https://example.com/notes", "ItemTable"],
+    ["> Quote [Notes\n> continued](https://example.com/notes", "Quote"],
+  ])("buffers links inside Markdown containers: %s", (partial, visible) => {
+    const view = renderMarkdown(partial, true);
+    expect(view.container.textContent?.replace(/\s+/g, " ").trim()).toBe(visible);
+    expect(view.container.querySelector("a")).toBeNull();
+
+    view.rerender(<AgentMarkdown isStreaming>{partial + ")"}</AgentMarkdown>);
+    expect(view.container.querySelector("a")).not.toBeNull();
+  });
+
+  it("keeps completed links and equations visible while the next link streams", () => {
+    const prefix = "[First](https://example.com/first)\n\n$$\nx^2\n$$\n\nNext ";
+    const view = renderMarkdown(prefix + "[Second](https://example.com/sec", true);
+    expect(screen.getByRole("link", { name: "First" })).not.toBeNull();
+    expect(view.container.querySelectorAll("a")).toHaveLength(1);
+    expect(view.container.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(view.container.textContent).toContain("Next");
+    expect(view.container.textContent).not.toContain("Second");
+
+    view.rerender(<AgentMarkdown isStreaming>{prefix + "[Second](https://example.com/second) done."}</AgentMarkdown>);
+    expect(view.container.querySelectorAll("a")).toHaveLength(2);
+    expect(view.container.textContent).toContain("done.");
+  });
+
+  it("leaves code, literal brackets and earlier unfinished prose alone", () => {
+    const source = "Literal [note] remains and &#91;entity bracket. `code [x](url`\n\n```md\n[Example](unfinished\n```\n\nEarlier [unfinished\n\nCurrent prose.";
+    const view = renderMarkdown(source, true);
+    expect(view.container.textContent).toContain("Literal [note] remains and [entity bracket.");
+    expect(view.container.querySelector("code")?.textContent).toBe("code [x](url");
+    expect(view.container.querySelector("pre code")?.textContent).toContain("[Example](unfinished");
+    expect(view.container.textContent).toContain("Earlier [unfinished");
+    expect(view.container.textContent).toContain("Current prose.");
+  });
+
+  it("preserves the usual Markdown rendering when a stream ends mid-link", () => {
+    const source = "Text [unfinished](https://example.com/notes";
+    const view = renderMarkdown(source, true);
+    expect(view.container.textContent?.trimEnd()).toBe("Text");
+
+    view.rerender(<AgentMarkdown>{source}</AgentMarkdown>);
+    expect(view.container.textContent).toBe(source);
+  });
+});
+
 describe("assistant markdown / streaming fade", () => {
   it("retains previous word spans while new words arrive and removes them when settled", () => {
     const view = renderMarkdown("Hello wo", true);
@@ -273,6 +363,12 @@ describe("assistant markdown / streaming fade", () => {
     expect(view.container.querySelector("code .stream-word")).toBeNull();
     expect(view.container.querySelector(".katex")).not.toBeNull();
     expect(view.container.querySelector(".katex .stream-word")).toBeNull();
+  });
+
+  it("fades table content without wrapping structural whitespace in spans", () => {
+    const { container } = renderMarkdown("| Item |\n| --- |\n| Table content |", true);
+    expect(container.querySelector("table > span, thead > span, tbody > span, tr > span")).toBeNull();
+    expect(container.querySelector("td .stream-word")?.textContent).toBe("Table ");
   });
 });
 

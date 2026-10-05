@@ -51,6 +51,34 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("streaming assistant equations", () => {
+  it("keeps incomplete math hidden in a persisted interrupted report", () => {
+    const event = mapArtifactToEvent({ id: 1, runId: "run", kind: "report",
+      content: "Received text\n" + String.raw`\[\frac{1}{`,
+      metadata: { interrupted: true, streaming: false, streamId: "stopped-report" } });
+    const group = groupEvents([event])[0];
+    const view = render(<InfoGroup group={group} />);
+    expect(view.container.textContent).toContain("Received text");
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+  });
+  it("retains the visible prefix when a long stopped answer replaces its live preview", async () => {
+    const content = "Received answer ".repeat(100);
+    const live = { id: "stream-stopped", type: "artifact" as const, timestamp: new Date(), content,
+      metadata: { kind: "report", streamId: "stopped", streaming: true } };
+    const liveGroup = groupEvents([live])[0];
+    const view = render(<InfoGroup key={liveGroup.id} group={liveGroup} />);
+    await waitFor(() => expect(view.container.textContent?.length).toBeGreaterThan(content.length - 180));
+    const visible = view.container.textContent ?? "";
+    expect(visible.length).toBeLessThan(content.length);
+    const stoppedGroup = groupEvents([{ ...live, metadata: { ...live.metadata, streaming: false, interrupted: true } }])[0];
+    view.rerender(<InfoGroup key={stoppedGroup.id} group={stoppedGroup} />);
+    expect(view.container.textContent).toBe(visible);
+    const savedGroup = groupEvents([mapArtifactToEvent({ id: 42, runId: "run", kind: "report", content,
+      metadata: { streamId: "stopped", streaming: false, interrupted: true } })])[0];
+    view.rerender(<InfoGroup key={savedGroup.id} group={savedGroup} />);
+    expect(view.container.textContent).toBe(visible);
+    await waitFor(() => expect(view.container.textContent).toBe(content.trimEnd()), { timeout: 4000 });
+  });
+
   it("waits for the equation while the report streams and while its final buffer drains", async () => {
     const group: EventGroup = {
       id: "response-stream-native-report", type: "response", startTime: new Date(), endTime: new Date(),

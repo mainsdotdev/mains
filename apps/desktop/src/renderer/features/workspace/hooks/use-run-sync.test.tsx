@@ -26,6 +26,30 @@ afterEach(() => {
 });
 
 describe("native voice transcript and work sync", () => {
+  it("settles previews only at a terminal status, marking stopped answers interrupted", () => {
+    const current: Run = { id: "run", status: "running", goal: "Stream", providerId: "codex" };
+    setTransport({ kind: "test", invoke: async () => ok(current),
+      subscribe: () => () => {}, status: () => "connected", onStatusChange: () => () => {} });
+    const store = configureStore({ reducer: { [baseApi.reducerPath]: baseApi.reducer },
+      middleware: (defaults) => defaults().concat(baseApi.middleware) });
+    const clearTurnStreams = vi.fn();
+    const cache = createRunCache();
+    const view = renderHook(({ status }: { status: Run["status"] | undefined }) => useRunSync({
+      runs: status ? [{ ...current, status }] : [], activeRunId: "run", cache,
+      loadRunDetails: vi.fn().mockResolvedValue(undefined), onRunUpdated: vi.fn(), clearTurnStreams,
+    }), { initialProps: { status: undefined as Run["status"] | undefined },
+      wrapper: ({ children }: { children: ReactNode }) => <Provider store={store}>{children}</Provider> });
+    try {
+      view.rerender({ status: "queued" });
+      view.rerender({ status: "running" });
+      expect(clearTurnStreams).not.toHaveBeenCalled();
+      view.rerender({ status: "canceled" });
+      expect(clearTurnStreams).toHaveBeenLastCalledWith(true);
+      view.rerender({ status: "succeeded" });
+      expect(clearTurnStreams).toHaveBeenLastCalledWith(false);
+    } finally { view.unmount(); store.dispatch(baseApi.util.resetApiState()); }
+  });
+
   it("catches up immediately after subscribing when the first persisted push preceded run selection", async () => {
     const listeners = new Map<string, (payload: unknown) => void>();
     const current: Run = { id: "new-run-id", status: "running", goal: "Hello", providerId: "cursor" };

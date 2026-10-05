@@ -410,6 +410,7 @@ function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }
       <ArtifactBody
         content={content}
         isStreaming={isStreaming}
+        interrupted={event.metadata?.interrupted === true}
         previewAtt={previewAtt}
         onPreview={setPreviewAtt}
         workspaceRootPath={workspaceRootPath}
@@ -807,12 +808,14 @@ function InlineMarkdownImage({
 function ArtifactBody({
   content,
   isStreaming,
+  interrupted,
   previewAtt,
   onPreview,
   workspaceRootPath,
 }: {
   content: string;
   isStreaming: boolean;
+  interrupted: boolean;
   previewAtt: { name: string; dataUrl: string } | null;
   onPreview: (att: { name: string; dataUrl: string } | null) => void;
   workspaceRootPath?: string;
@@ -851,7 +854,7 @@ function ArtifactBody({
       <div className="prose prose-sm dark:prose-invert max-w-none relative">
         <AgentMarkdown
           className={isRevealing ? "streaming-text" : undefined}
-          isStreaming={isRevealing}
+          isStreaming={isRevealing || interrupted}
         >
           {displayContent}
         </AgentMarkdown>
