@@ -708,7 +708,7 @@ export function WorkspaceEvents({
               />
             )
           ) : (
-            <InfoGroup group={group} workspaceRootPath={currentWorkspace?.rootPath} floatingChat={floatingChat} />
+            <InfoGroup group={group} runId={activeRun?.id} workspaceRootPath={currentWorkspace?.rootPath} floatingChat={floatingChat} />
           )}
           {group.type !== "prompt_suggestion" && turnChangesCard}
           {group.type !== "prompt_suggestion" && sessionBarForThis && (

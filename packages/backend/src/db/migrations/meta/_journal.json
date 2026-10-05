@@ -190,6 +190,13 @@
       "when": 1790515037315,
       "tag": "0026_lucky_swordsman",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1791203554203,
+      "tag": "0027_pretty_dragon_man",
+      "breakpoints": true
     }
   ]
 }

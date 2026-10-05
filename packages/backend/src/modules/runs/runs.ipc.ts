@@ -26,6 +26,8 @@ import { CHANNELS } from "@mains/contracts/channels";
 import type { CreateRealtimeConversationPayload, RunRealtimeStartPayload, RunRealtimeStopPayload } from "@mains/contracts/realtime";
 import type {
   ReadArtifactImagePayload,
+  ReadAttachmentImagePayload,
+  ResolveAttachmentPathPayload,
   ReadRunTextFilePayload,
   RunSteerPayload,
   RunInputStatusPayload,
@@ -226,6 +228,12 @@ export function registerRunsIpc(): void {
     CHANNELS.runArtifacts.readImage,
     handle((payload: ReadArtifactImagePayload) => runsService.readArtifactImage(payload)),
   );
+  ipcMain.handle(CHANNELS.runArtifacts.readAttachmentImage,
+    handle((payload: ReadAttachmentImagePayload) => runsService.readAttachmentImage(payload)));
+  ipcMain.handle(CHANNELS.runArtifacts.resolveAttachmentPath,
+    handle((payload: ResolveAttachmentPathPayload) => runsService.resolveAttachmentPath(payload)));
+  ipcMain.handle(CHANNELS.runArtifacts.readAttachmentFile,
+    handle((payload: ResolveAttachmentPathPayload) => runsService.readAttachmentFile(payload)));
 
   ipcMain.handle(
     CHANNELS.runArtifacts.add,
@@ -321,6 +329,9 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runContext.remove,
     CHANNELS.runArtifacts.getByRun,
     CHANNELS.runArtifacts.readImage,
+    CHANNELS.runArtifacts.readAttachmentImage,
+    CHANNELS.runArtifacts.resolveAttachmentPath,
+    CHANNELS.runArtifacts.readAttachmentFile,
     CHANNELS.runArtifacts.add,
     CHANNELS.runArtifacts.remove,
     CHANNELS.runToolCalls.getByRun,

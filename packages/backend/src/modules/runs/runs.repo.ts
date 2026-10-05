@@ -6,6 +6,8 @@ import {
   runs,
   runContext,
   runArtifacts,
+  runAttachments,
+  runAttachmentRefs,
   toolCalls,
   runTurns,
   runTurnChanges,
@@ -36,6 +38,53 @@ import type {
 // Runs Repository
 // ─────────────────────────────────────────────────────────────
 export const runsRepo = {
+  // Originals have run-owned references, independent of transcript row deletion.
+  findAttachment(runId: string, attachmentId: string) {
+    return getDb().select({ attachment: runAttachments }).from(runAttachments)
+      .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))
+      .where(and(eq(runAttachmentRefs.runId, runId), eq(runAttachments.id, attachmentId)))
+      .get()?.attachment ?? null;
+  },
+
+  findAttachmentForInput(runId: string, inputKey: string, ordinal: number) {
+    return getDb().select({ attachment: runAttachments }).from(runAttachments)
+      .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))
+      .where(and(eq(runAttachmentRefs.runId, runId), eq(runAttachmentRefs.inputKey, inputKey), eq(runAttachmentRefs.ordinal, ordinal)))
+      .get()?.attachment ?? null;
+  },
+
+  findStoredAttachment(id: string) {
+    return getDb().select().from(runAttachments).where(eq(runAttachments.id, id)).get() ?? null;
+  },
+
+  retainAttachment(runId: string, inputKey: string, ordinal: number, attachment: typeof runAttachments.$inferInsert) {
+    getDb().transaction((tx) => {
+      tx.insert(runAttachments).values(attachment).onConflictDoNothing().run();
+      tx.insert(runAttachmentRefs).values({ runId, attachmentId: attachment.id, inputKey, ordinal }).onConflictDoNothing().run();
+    });
+  },
+
+  inheritAttachmentRefs(sourceRunId: string, runId: string) {
+    getDb().transaction((tx) => {
+      if (!tx.select({ id: runs.id }).from(runs).where(eq(runs.id, sourceRunId)).get()) throw new Error("Source run not found");
+      const refs = tx.select().from(runAttachmentRefs).where(eq(runAttachmentRefs.runId, sourceRunId)).all();
+      for (const { attachmentId } of refs) {
+        tx.insert(runAttachmentRefs).values({ runId, attachmentId, inputKey: `fork:${sourceRunId}:${attachmentId}`, ordinal: 0 }).onConflictDoNothing().run();
+      }
+    });
+  },
+
+  listUnreferencedAttachments() {
+    return getDb().select().from(runAttachments)
+      .where(sql`NOT EXISTS (SELECT 1 FROM run_attachment_refs WHERE attachment_id = ${runAttachments.id})`).limit(100).all();
+  },
+
+  claimUnreferencedAttachment(id: string) {
+    return getDb().delete(runAttachments).where(and(eq(runAttachments.id, id),
+      sql`NOT EXISTS (SELECT 1 FROM run_attachment_refs WHERE attachment_id = ${runAttachments.id})`))
+      .returning().get() ?? null;
+  },
+
   // ─────────────────────────────────────────────────────────────
   // Run Operations
   // ─────────────────────────────────────────────────────────────

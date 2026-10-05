@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   BackendRuntime,
+  ImagePreviewAdapter,
   PowerInhibitorAdapter,
   SecretStorageAdapter,
 } from "./backend-runtime";
@@ -17,6 +18,7 @@ export interface NodeBackendRuntimeOptions {
   appRoot?: string;
   resourcesPath?: string | null;
   appVersion: string;
+  imagePreview?: ImagePreviewAdapter;
 }
 
 function createFileSecretStorage(dataDir: string): SecretStorageAdapter {
@@ -144,9 +146,6 @@ export function createNodeBackendRuntime(
     },
     secretStorage: createFileSecretStorage(dataDir),
     powerInhibitor: createNoopPowerInhibitor(),
-    // Keep the standalone runtime dependency-light. PNG/JPEG and other common
-    // formats are sent as bounded raw bytes; a future optional image adapter can
-    // add thumbnailing without coupling the backend to Electron.
-    imagePreview: null,
+    imagePreview: options.imagePreview ?? null,
   };
 }

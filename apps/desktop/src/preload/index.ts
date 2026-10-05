@@ -887,6 +887,12 @@ const api = {
   runArtifacts: {
     getByRun: (runId: string, sinceId?: number) =>
       ipcRenderer.invoke(CHANNELS.runArtifacts.getByRun, runId, sinceId),
+    readAttachmentImage: (payload: import("@mains/contracts/runs").ReadAttachmentImagePayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.readAttachmentImage, payload),
+    resolveAttachmentPath: (payload: import("@mains/contracts/runs").ResolveAttachmentPathPayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.resolveAttachmentPath, payload),
+    readAttachmentFile: (payload: import("@mains/contracts/runs").ResolveAttachmentPathPayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.readAttachmentFile, payload),
     add: (payload: unknown) => ipcRenderer.invoke(CHANNELS.runArtifacts.add, payload),
     remove: (id: number) => ipcRenderer.invoke(CHANNELS.runArtifacts.remove, id),
   },

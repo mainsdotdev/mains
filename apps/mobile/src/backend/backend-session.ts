@@ -59,6 +59,7 @@ import {
   syncTargets,
   upsertBackend,
   readArtifactImage,
+  readAttachmentImage,
   readRunTextFile,
 } from "./sync";
 import { isConnectionLoss, WsTransport, type CloseInfo } from "./ws-transport";
@@ -559,6 +560,11 @@ class BackendSession {
       return Promise.reject(new Error("Connect to Mains on your computer to load this image"));
     }
     return readArtifactImage(this.transport, artifactId);
+  }
+
+  readAttachmentImage(runId: string, attachmentId: string): Promise<ArtifactImage> {
+    if (!this.isConnected() || !this.transport) return Promise.reject(new Error("Connect to Mains on your computer to load this image"));
+    return readAttachmentImage(this.transport, runId, attachmentId);
   }
 
   /** A Markdown file linked from one Work/Chat transcript. */

@@ -2,6 +2,7 @@ export { registerRunsIpc, unregisterRunsIpc } from "./runs.ipc";
 export { runsService } from "./runs.service";
 export { runSessionRegistry } from "./run-session-registry";
 export { managedExecutionRoots } from "./run-execution";
+export { startAttachmentMaintenance, stopAttachmentMaintenance } from "./run-attachment-maintenance";
 export {
   handleToolApprovalResponse,
   listPendingApprovals,

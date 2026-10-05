@@ -1,7 +1,11 @@
 import type { RunArtifactRow, ToolCallRow } from "@/db/schema";
 
+import { parsePromptImages, type PromptImage } from "./prompt-images";
+
 import { promptFileFromPath, type PromptFile, type PromptSkill } from "./prompt-chips";
 import { partitionSubagentCalls, type SessionSubagent } from "./subagents";
+
+export type { PromptImage } from "./prompt-images";
 
 /**
  * The phone's transcript layout — a port of the rules in the desktop's
@@ -50,15 +54,6 @@ export type TranscriptItem =
 export interface TranscriptImage {
   artifactId: number;
   fileName: string;
-}
-
-/** One image the user attached to a prompt, already reachable on this phone. */
-export interface PromptImage {
-  key: string;
-  name: string;
-  uri: string;
-  /** Presentation-only crop used by the camera's simulator fallback. */
-  previewCropBottom?: number;
 }
 
 /** Pre-fold shape: one entry per tool call or image, before consecutive ones merge. */
@@ -112,7 +107,7 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
     case "prompt_suggestion":
       return null;
     case "user-prompt": {
-      const images = promptImages(meta);
+      const images = parsePromptImages(meta.attachments, artifact.runId);
       return artifact.content || images.length > 0
         ? {
             key,
@@ -156,37 +151,6 @@ function promptFiles(meta: ArtifactMetadata): PromptFile[] {
     if (!entry || typeof entry !== "object") continue;
     const path = (entry as { path?: unknown }).path;
     if (typeof path === "string" && path) out.push(promptFileFromPath(path));
-  }
-  return out;
-}
-
-/** Phone uploads return through prompt metadata as safe, self-contained data URLs. */
-function promptImages(meta: ArtifactMetadata): PromptImage[] {
-  if (!Array.isArray(meta.attachments)) return [];
-  const out: PromptImage[] = [];
-  for (const [index, entry] of meta.attachments.entries()) {
-    if (!entry || typeof entry !== "object") continue;
-    const attachment = entry as {
-      name?: unknown;
-      type?: unknown;
-      dataUrl?: unknown;
-    };
-    if (
-      attachment.type !== "image" ||
-      typeof attachment.dataUrl !== "string" ||
-      !attachment.dataUrl.startsWith("data:image/")
-    ) {
-      continue;
-    }
-    const name =
-      typeof attachment.name === "string" && attachment.name
-        ? attachment.name
-        : `image-${index + 1}`;
-    out.push({
-      key: `prompt-image:${index}:${name}`,
-      name,
-      uri: attachment.dataUrl,
-    });
   }
   return out;
 }

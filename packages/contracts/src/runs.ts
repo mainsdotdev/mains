@@ -157,6 +157,41 @@ export interface ArtifactImage {
   height: number | null;
 }
 
+/** Compact, durable prompt attachment. Bytes and host paths never live in history. */
+export interface StoredAttachment {
+  attachmentId: string;
+  name: string;
+  type: "image" | "document";
+  mimeType: string;
+  byteSize: number;
+}
+
+/** Upload input; sourcePath is restricted to backend-owned captures. */
+export interface FileAttachment {
+  name: string;
+  type: "image" | "document";
+  mimeType: string;
+  data?: string;
+  sourcePath?: string;
+}
+
+export interface ReadAttachmentImagePayload {
+  runId: string;
+  attachmentId: string;
+  /** 256 for transcript tiles; capped at 1600 for an expanded preview. */
+  maxSide?: number;
+}
+
+export interface ResolveAttachmentPathPayload {
+  runId: string;
+  attachmentId: string;
+}
+
+/** Fetched only when the user downloads an original, never with history. */
+export interface AttachmentFile extends StoredAttachment {
+  base64: string;
+}
+
 /**
  * `runs:readTextFile` — one Markdown link resolved inside a Work/Chat run's
  * managed directory. The paired device never receives general filesystem
@@ -292,15 +327,6 @@ export interface CommandSummary {
   argumentHint?: string;
   /** False for internal commands; those never list. */
   userFacing?: boolean;
-}
-
-/** A phone-local file serialized for the Mac's existing attachment pipeline. */
-export interface FileAttachment {
-  name: string;
-  type: "image" | "document";
-  /** Base64-encoded bytes without a data-URL prefix. */
-  data: string;
-  mimeType: string;
 }
 
 export interface StartRunPayload {

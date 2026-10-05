@@ -28,6 +28,7 @@ import type {
 } from "../../types";
 
 import { ImageGallery } from "./artifact-image";
+import { usePromptImageUri } from "../../lib/prompt-image";
 import { Markdown } from "./markdown";
 import { MessageActions } from "./message-actions";
 import { PromptSegmentView } from "./prompt-chips";
@@ -402,6 +403,7 @@ function FlyingPromptImage({
   progress: SharedValue<number>;
   reduceMotion: boolean;
 }) {
+  const uri = usePromptImageUri(image);
   const animatedStyle = useAnimatedStyle(() => {
     const value = progress.value;
     return {
@@ -431,7 +433,8 @@ function FlyingPromptImage({
       ]}
     >
       <Image
-        source={{ uri: image.uri }}
+        source={{ uri }}
+        cachePolicy={image.attachmentId ? "none" : "memory-disk"}
         contentFit="cover"
         style={
           image.previewCropBottom
@@ -561,27 +564,28 @@ function PromptImageGrid({
             backgroundColor: colors.fill,
           }}
         >
-          <Image
-            accessible
-            accessibilityLabel={image.name}
-            source={{ uri: image.uri }}
-            contentFit="cover"
-            transition={motion.fast}
-            style={
-              image.previewCropBottom
-                ? {
-                    position: "absolute",
-                    left: 0,
-                    top: 0,
-                    width: tileWidth,
-                    height: tileHeight / (1 - image.previewCropBottom),
-                  }
-                : { flex: 1 }
-            }
-          />
+          <PromptImageTile image={image} width={tileWidth} height={tileHeight} />
         </View>
       ))}
     </View>
+  );
+}
+
+function PromptImageTile({ image, width, height }: { image: PromptImage; width: number; height: number }) {
+  const uri = usePromptImageUri(image);
+  return (
+    <Image
+      accessible
+      accessibilityLabel={image.name}
+      source={uri ? { uri } : undefined}
+      cachePolicy={image.attachmentId ? "none" : "memory-disk"}
+      contentFit="cover"
+      transition={motion.fast}
+      style={image.previewCropBottom ? {
+        position: "absolute", left: 0, top: 0, width,
+        height: height / (1 - image.previewCropBottom),
+      } : { flex: 1 }}
+    />
   );
 }
 

@@ -1,5 +1,5 @@
 import type { FileAttachment, WorkRunContextItem, WorkRunRequest } from "../../../../shared/adapter.types";
-import { appendPromptSections, formatContextSection, saveAttachments } from "./adapter.shared";
+import { appendPromptSections, formatContextSection, attachmentPromptParts } from "./adapter.shared";
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import type { CodexSubAgentRunMeta } from "./codex-event-mapper";
 
@@ -74,10 +74,8 @@ export function buildCodexTurnInput(
   }
 
   if (request.attachments && request.attachments.length > 0) {
-    const { savedPaths, inlineTexts } = saveAttachments(
+    const { savedPaths, inlineTexts } = attachmentPromptParts(
       request.attachments,
-      request.runId,
-      request.clientUserMessageId,
     );
     let attachmentPrompt = prompt;
     if (inlineTexts.length > 0) {

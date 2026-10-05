@@ -771,6 +771,10 @@ export function readArtifactImage(transport: WsTransport, artifactId: number): P
   ]);
 }
 
+export function readAttachmentImage(transport: WsTransport, runId: string, attachmentId: string): Promise<ArtifactImage> {
+  return invoke<ArtifactImage>(transport, CHANNELS.runArtifacts.readAttachmentImage, [{ runId, attachmentId, maxSide: 256 }]);
+}
+
 /** One Markdown file, resolved and guarded by its Work/Chat run on the Mac. */
 export function readRunTextFile(
   transport: WsTransport,

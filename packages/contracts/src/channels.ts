@@ -327,6 +327,9 @@ export const CHANNELS = {
     add: "runArtifacts:add",
     getByRun: "runArtifacts:getByRun",
     readImage: "runArtifacts:readImage",
+    readAttachmentImage: "runArtifacts:readAttachmentImage",
+    readAttachmentFile: "runArtifacts:readAttachmentFile",
+    resolveAttachmentPath: "runArtifacts:resolveAttachmentPath",
     remove: "runArtifacts:remove",
   },
   runContext: {

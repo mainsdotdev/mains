@@ -62,6 +62,9 @@ export const appApi = {
     ),
   },
   runArtifacts: {
+    readAttachmentImage: method<typeof window.api.runArtifacts.readAttachmentImage>(CHANNELS.runArtifacts.readAttachmentImage),
+    resolveAttachmentPath: method<typeof window.api.runArtifacts.resolveAttachmentPath>(CHANNELS.runArtifacts.resolveAttachmentPath),
+    readAttachmentFile: method<typeof window.api.runArtifacts.readAttachmentFile>(CHANNELS.runArtifacts.readAttachmentFile),
     getByRun: method<typeof window.api.runArtifacts.getByRun>(
       CHANNELS.runArtifacts.getByRun,
     ),
