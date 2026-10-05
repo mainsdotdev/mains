@@ -179,7 +179,7 @@ export { default as GenericTool} from "./generic-tool"
 export { default as Sql} from "./sql"
 export { default as FolderGit} from "./folder-git"
 export { default as Review} from "./review"
-
+export { default as JumpToFile} from "./jump-to-file"
 
 
 

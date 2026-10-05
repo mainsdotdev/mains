@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { Button, DropdownWrapper, Input, focusNextFrom } from "@/components/ui";
-import { FileIconComponent, Search } from "@/components/ui/icons";
+import { FileIconComponent, JumpToFile, Search } from "@/components/ui/icons";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { ReviewDiffStyle, ReviewFile } from "../lib/review-diff";
 import { searchReviewFiles } from "../lib/review-file-search";
@@ -44,7 +44,7 @@ function ReviewFileSearch({ files, anchorRef, onJump }: {
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
       tooltip="Jump to file" tooltipPosition="bottom-left"
       onClick={() => { if (!open) { setQuery(""); setActive(0); } setOpen(!open); }}>
-      <Search aria-hidden="true" className="size-3.5" />
+      <JumpToFile aria-hidden="true" className="size-3.5" />
     </Button>
     <DropdownWrapper id={id} isOpen={open} role="dialog" aria-label="Jump to file" usePortal
       triggerRef={anchorRef} dropdownRef={menu} position="right" animationDirection="down"
