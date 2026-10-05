@@ -57,7 +57,7 @@ import {
   resolveCatalogDefaultId,
 } from "./adapter.shared";
 import { MainsMcpStdioServer } from "./mains-mcp-server";
-import { CursorMessageStream } from "./cursor-message-stream";
+import { CURSOR_CLOSED_ITERABLE_DIAGNOSTIC, CursorMessageStream } from "./cursor-message-stream";
 import type { ModeId } from "@mains/contracts/modes";
 import type { MainsToolContext } from "./mains-tools.core";
 
@@ -2249,7 +2249,17 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           });
         }
         if (message.failure && outcome.status !== "canceled") {
-          outcome = { ...outcome, status: "failed", summary: message.failure };
+          // Cursor can append this close error after delivering a reply. ACP
+          // also returns end_turn for real failures, so only tolerate this exact
+          // diagnostic with final prose, no pending tools and a normal RPC end.
+          const completedReply = message.failure === CURSOR_CLOSED_ITERABLE_DIAGNOSTIC &&
+            outcome.status === "succeeded" && outcome.stopReason === "end_turn" &&
+            !!message.content.trim() && cs.toolCallCache.size === 0 && !signal.aborted;
+          if (completedReply) {
+            logInfo("Cursor closed its response stream after end_turn; retaining the completed reply");
+          } else {
+            outcome = { ...outcome, status: "failed", summary: message.failure };
+          }
         }
         return outcome;
       } finally {

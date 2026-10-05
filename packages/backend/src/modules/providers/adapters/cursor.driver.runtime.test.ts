@@ -204,13 +204,13 @@ describe("Cursor ACP transcript", () => {
     expect(events.every((event) => event.type !== "artifact" || !event.ephemeral || !event.content?.includes("title:"))).toBe(true);
   });
 
-  it("preserves the reply and fails the turn when Cursor appends its transport diagnostic then returns end_turn", async () => {
+  it("keeps a completed reply successful when Cursor appends its closed-iterable diagnostic", async () => {
     const { outcome, events } = await replay(["Hello — glad you’re here.", "\n\n" + diagnostic]);
-    expect(outcome).toMatchObject({ status: "failed", summary: diagnostic });
+    expect(outcome).toEqual({ status: "succeeded", stopReason: "end_turn" });
     expect(reports(events)).toEqual([expect.objectContaining({ content: "Hello — glad you’re here." })]);
   });
 
-  it("reports a Cursor transport failure through the shared run status and cleans up the bridge", async () => {
+  it("ends the shared run successfully without an error notification after a completed reply", async () => {
     const events: WorkRunEvent[] = [];
     fixture.onPrompt = (message) => {
       const sessionId = message.params!.sessionId as string;
@@ -219,12 +219,95 @@ describe("Cursor ACP transcript", () => {
       fixture.finish(message);
     };
     const result = await createWorkRunAdapter(driver).startRun({ runId: "run-1", accountId: "account-1", execution: { cwd: "/fixture", workspaceId: null }, goal: "hi" }, (event) => { events.push(event); });
-    expect(result).toMatchObject({ status: "failed", summary: diagnostic });
+    expect(result).toMatchObject({ status: "succeeded", stopReason: "end_turn" });
     expect(events.filter((event) => event.type === "status")).toEqual([
-      expect.objectContaining({ status: "running" }), expect.objectContaining({ status: "failed", error: diagnostic }),
+      expect.objectContaining({ status: "running" }), expect.objectContaining({ status: "succeeded" }),
     ]);
+    expect(events.some((event) => event.type === "status" && event.error)).toBe(false);
     expect(reports(events)).toEqual([expect.objectContaining({ content: "Hello." })]);
     expect(mocks.bridges[0].isRunning).toBe(false);
+  });
+
+  it.each(["", " \n", "---\ntitle: Hello\n---\n\n"])("still fails when the closed-iterable diagnostic arrives without a reply (%j)", async (prefix) => {
+    const { outcome, events } = await replay([prefix, "\n\n" + diagnostic]);
+    expect(outcome).toMatchObject({ status: "failed", summary: diagnostic });
+    expect(reports(events)).toEqual([]);
+  });
+
+  it.each([
+    "Error: ConnectError: [unavailable] transport closed",
+    "Error: ConnectError: [aborted] transport aborted",
+    "Error: ConnectError: [deadline_exceeded] timed out",
+    "Something went wrong communicating with the server. Please try again.",
+  ])("still fails a partial reply ending in a different transport diagnostic: %s", async (failure) => {
+    const { outcome, events } = await replay(["Partial reply.", "\n\n" + failure]);
+    expect(outcome).toMatchObject({ status: "failed", summary: failure });
+    expect(reports(events)).toEqual([expect.objectContaining({ content: "Partial reply." })]);
+  });
+
+  it.each([undefined, "refusal", "max_tokens"])("does not suppress a closed-iterable diagnostic without a normal end_turn (%s)", async (stopReason) => {
+    const acquired = await acquire();
+    fixture.onPrompt = (message) => {
+      fixture.text(acquired.sessionId!, "Partial reply.");
+      fixture.text(acquired.sessionId!, "\n\n" + diagnostic);
+      fixture.respond(message.id!, { stopReason });
+    };
+    const outcome = await driver.executePrompt(acquired.session, acquired.prompt, () => {}, new AbortController().signal);
+    expect(outcome.status).toBe("failed");
+  });
+
+  it("keeps a real RPC failure failed even when a reply preceded the diagnostic", async () => {
+    const acquired = await acquire();
+    fixture.onPrompt = (message) => {
+      fixture.text(acquired.sessionId!, "Partial reply.");
+      fixture.text(acquired.sessionId!, "\n\n" + diagnostic);
+      fixture.send({ id: message.id, error: { code: -32000, message: "Prompt failed" } });
+    };
+    const outcome = await driver.executePrompt(acquired.session, acquired.prompt, () => {}, new AbortController().signal);
+    expect(outcome.status).toBe("failed");
+  });
+
+  it("does not mistake commentary before a tool for a completed final reply", async () => {
+    const acquired = await acquire();
+    const events: WorkRunEvent[] = [];
+    fixture.onPrompt = (message) => {
+      fixture.text(acquired.sessionId!, "Checking the file.");
+      fixture.update(acquired.sessionId!, { sessionUpdate: "tool_call", toolCallId: "read-1", kind: "read", title: "Read File", status: "pending" });
+      fixture.text(acquired.sessionId!, "\n\n" + diagnostic);
+      fixture.finish(message);
+    };
+    const outcome = await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    expect(outcome).toMatchObject({ status: "failed", summary: diagnostic });
+    expect(reports(events)).toEqual([expect.objectContaining({ content: "Checking the file." })]);
+  });
+
+  it.each([false, true])("only tolerates closure after a final reply when the preceding tool finished (%s)", async (toolCompleted) => {
+    const acquired = await acquire();
+    fixture.onPrompt = (message) => {
+      fixture.update(acquired.sessionId!, { sessionUpdate: "tool_call", toolCallId: "read-1", kind: "read", title: "Read File", status: "pending" });
+      if (toolCompleted) fixture.update(acquired.sessionId!, { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed", rawOutput: "contents" });
+      fixture.text(acquired.sessionId!, "The file is ready.");
+      fixture.text(acquired.sessionId!, "\n\n" + diagnostic);
+      fixture.finish(message);
+    };
+    const outcome = await driver.executePrompt(acquired.session, acquired.prompt, () => {}, new AbortController().signal);
+    expect(outcome.status).toBe(toolCompleted ? "succeeded" : "failed");
+  });
+
+  it("handles the closure diagnostic across consecutive turns and split deltas", async () => {
+    const acquired = await acquire();
+    for (const reply of ["Hello.", "Doing well."]) {
+      const events: WorkRunEvent[] = [];
+      fixture.onPrompt = (message) => {
+        fixture.text(acquired.sessionId!, reply);
+        for (const chunk of "\n\n" + diagnostic) fixture.text(acquired.sessionId!, chunk);
+        fixture.finish(message);
+      };
+      const outcome = await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+      expect(outcome).toEqual({ status: "succeeded", stopReason: "end_turn" });
+      expect(reports(events)).toEqual([expect.objectContaining({ content: reply })]);
+      expect(events.every((event) => event.type !== "artifact" || !event.content?.includes("RetriableError"))).toBe(true);
+    }
   });
 
   it("preserves partial output and clears live previews when the ACP process errors", async () => {
