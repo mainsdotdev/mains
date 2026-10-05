@@ -320,7 +320,7 @@ describe("onboarding flow", () => {
       providerId: "claude_code", cliName: "Claude Code CLI", shortName: "Claude",
       cli: { version: "2.1.283", channel: null, outdated: false, source: "bundled", updateMethod: "app" },
     }), { wrapper: harness.wrapper });
-    expect(view.getByText("Included with Mains · Updates with the app")).toBeTruthy();
+    expect(view.getByText("Updates with Mains")).toBeTruthy();
     expect(view.queryByRole("button", { name: "Update CLI" })).toBeNull();
   });
 
