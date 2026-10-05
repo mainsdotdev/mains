@@ -78,10 +78,10 @@ function RealtimeVoicePresentation({ props, voice, config }: {
     );
   }
   return (
-    <m.div role="region" aria-label="Voice chat controls" aria-busy={connecting}
+    <m.div role="region" aria-label="Voice chat controls" aria-busy={connecting} data-voice-orb-overlay=""
       inert={!isPresent} aria-hidden={!isPresent || undefined}
       initial={false} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={exitTransition}
-      className="relative z-(--z-base) mx-auto mb-3 w-full min-w-0 max-w-210 shrink-0 px-4 pt-2">
+      className="pointer-events-none absolute inset-x-0 bottom-3 z-(--z-base) mx-auto w-full min-w-0 max-w-210 px-4">
       <div className="flex min-w-0 justify-center">
         {orb}
       </div>

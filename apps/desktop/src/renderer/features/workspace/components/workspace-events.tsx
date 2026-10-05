@@ -771,7 +771,7 @@ export function WorkspaceEvents({
   // scroll position, and other local UI state across tab switches.
 
   return (
-    <Text as="div" size="sm" tone="inherit" className="relative h-full flex flex-col">
+    <Text as="div" size="sm" tone="inherit" className="group/voice-chat relative h-full flex flex-col">
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {isNewRunActive && (
@@ -789,7 +789,9 @@ export function WorkspaceEvents({
             {/* The main transcript shares its gutter with the composer. Floating
                 chat uses 16px sides and omits the turn rail so text stays clear. */}
             <div className={floatingChat ? "px-4" : CONTENT_COLUMN_GUTTER}>
-            <div className={floatingChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" :"min-h-75 max-w-210 mx-auto space-y-4 pt-12 pb-24" }>
+            {/* Keep the latest message above the orb when following the tail;
+                this padding scrolls away with history beneath the overlay. */}
+            <div className={floatingChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" :"min-h-75 max-w-210 mx-auto space-y-4 pt-12 pb-24 group-has-[[data-voice-orb-overlay]]/voice-chat:pb-52 sm:group-has-[[data-voice-orb-overlay]]/voice-chat:pb-68" }>
               {turnRenderRows.map((row, rowIndex) => {
                 const isLastRow = rowIndex === turnRenderRows.length - 1;
                 let rowKey: string;
@@ -863,7 +865,7 @@ export function WorkspaceEvents({
           />
         )}
       </div>
-      {/* Anchor fades to the whole chat surface, including its voice footer. */}
+      {/* Anchor fades to the chat surface beneath the floating voice orb. */}
       {hasRunContent && !floatingChat && (
         <>
           <div className="absolute top-0 left-0 right-0 h-6 bg-linear-to-b from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none z-(--z-base)" />
