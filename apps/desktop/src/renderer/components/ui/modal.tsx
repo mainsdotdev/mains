@@ -94,7 +94,7 @@ export function Modal({
           backdrop === "media"
             ? "bg-black/80 "
             : backdrop === "command"
-              ? "bg-primary-950/25 backdrop-blur-sm dark:bg-primary-950/50"
+              ? "bg-primary-950/25 backdrop-blur-xs dark:bg-primary-950/50"
               : "dark:bg-primary-950/60 bg-primary/80",
         )}
         role="presentation"
