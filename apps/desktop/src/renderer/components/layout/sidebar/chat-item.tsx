@@ -20,13 +20,18 @@ import {
   Trash,
 } from "@/components/ui/icons";
 import type { Collection, RecentRun } from "@/lib/redux/api";
+import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import { ProjectIcon } from "./project-icon";
+import { SidebarItemHoverCard } from "./sidebar-item-hover-card";
 
 /** What the row prints — title, else the goal's first line. */
 export function chatLabel(run: Pick<RecentRun, "title" | "goal">): string {
   const title = run.title?.trim();
   if (title) return title;
-  const goalLine = run.goal?.split("\n").find((line) => line.trim())?.trim();
+  const goalLine = run.goal
+    ?.split("\n")
+    .find((line) => line.trim())
+    ?.trim();
   if (goalLine) return goalLine;
   return "Untitled chat";
 }
@@ -71,6 +76,7 @@ export function ChatItem({
     anchorTop: 0,
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  useSuppressBrowserView(isMenuOpen);
   const [draft, setDraft] = useState<string | null>(null);
   // Escape leaves without saving, but it also blurs the input — this tells the
   // blur handler the edit was already abandoned.
@@ -111,13 +117,51 @@ export function ChatItem({
   };
 
   return (
-    <>
+    <SidebarItemHoverCard
+      title={label}
+      updatedAt={run.updatedAt}
+      description={
+        collections.find((collection) => collection.id === run.collectionId)
+          ?.name ?? "Chat"
+      }
+      disabled={isEditing || isMenuOpen}
+      actions={[
+        {
+          label: isPinned ? "Unpin chat" : "Pin chat",
+          icon: isPinned ? (
+            <PinFilled className="size-4" />
+          ) : (
+            <Pin className="size-4" />
+          ),
+          pressed: isPinned,
+          onSelect: onTogglePin,
+        },
+        {
+          label: "Rename chat",
+          icon: <Edit className="size-4" />,
+          onSelect: startRename,
+        },
+        {
+          label: "Archive chat",
+          icon: <Archive className="size-4" />,
+          onSelect: onArchive,
+        },
+        {
+          label: "Delete chat",
+          icon: <Trash className="size-4" />,
+          onSelect: onDelete,
+          variant: "danger",
+        },
+      ]}
+    >
       <div
         role="button"
         tabIndex={0}
+        aria-haspopup="dialog"
+        aria-keyshortcuts="ArrowRight"
         onClick={isEditing ? undefined : onSelect}
         onKeyDown={(e) => {
-          if (isEditing) return;
+          if (isEditing || e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onSelect();
@@ -127,7 +171,7 @@ export function ChatItem({
           isRecent ? "pl-2.5" : "pl-7"
         } ${
           isActive
-            ? "bg-primary/50 glass-outline dark:bg-primary/5"
+            ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5"
             : "hover:bg-primary/50 dark:hover:bg-primary/5"
         }`}
       >
@@ -198,33 +242,35 @@ export function ChatItem({
           }`}
         >
           <Button
+            variant="icon" iconSize="xs"
             tooltip={isPinned ? "Unpin chat" : "Pin chat"}
             onClick={(e) => {
               e.stopPropagation();
               onTogglePin();
             }}
-            className="hidden group-hover/chat:flex items-center p-0.5 cursor-pointer rounded-md"
+            className="hidden group-hover/chat:flex"
             aria-label={isPinned ? "Unpin chat" : "Pin chat"}
             aria-pressed={isPinned}
           >
             {/* Filled while pinned, outline while it is only an offer — the
                 glyph carries the state, not just the colour. */}
             {isPinned ? (
-              <PinFilled className="w-3.5 h-3.5 text-primary-950 dark:text-primary" />
+              <PinFilled className="w-3.5 h-3.5" />
             ) : (
-              <Pin className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
+              <Pin className="w-3.5 h-3.5" />
             )}
           </Button>
           <Button
+            variant="icon" iconSize="xs"
             ref={triggerRef}
             tooltip="Chat options"
             onClick={openMenu}
-            className="hidden group-hover/chat:flex items-center p-0.5 cursor-pointer rounded-md"
+            className="hidden group-hover/chat:flex"
             aria-label="Chat options"
             aria-haspopup="menu"
             aria-expanded={isMenuOpen}
           >
-            <Option className="w-3.5 h-3.5 text-primary-800 dark:text-primary-200" />
+            <Option className="w-3.5 h-3.5" />
           </Button>
         </div>
       </div>
@@ -300,6 +346,6 @@ export function ChatItem({
           <span>Delete</span>
         </DropdownMenuItem>
       </DropdownMenu>
-    </>
+    </SidebarItemHoverCard>
   );
 }

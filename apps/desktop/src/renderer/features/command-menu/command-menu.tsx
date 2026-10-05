@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useNavigate } from "react-router-dom";
@@ -58,7 +59,10 @@ import {
 import { useCommandNavigation } from "./use-command-navigation";
 import {
   OPEN_COMMAND_MENU_EVENT,
+  getCommandMenuOpen,
   requestCommandMenuQuickAction,
+  setCommandMenuOpen,
+  subscribeCommandMenuOpen,
 } from "./command-menu-bridge";
 import { Bag, Code } from "@/components/ui/icons/space";
 import { useKeyboardShortcut } from "@/providers/keyboard-shortcuts-provider";
@@ -245,7 +249,10 @@ function MenuGroup({
 }
 
 export function CommandMenu() {
-  const [open, setOpen] = useState(false);
+  const open = useSyncExternalStore(
+    subscribeCommandMenuOpen,
+    getCommandMenuOpen,
+  );
   const [query, setQuery] = useState("");
   const [pendingDocument, setPendingDocument] =
     useState<PendingDocument | null>(null);
@@ -296,10 +303,10 @@ export function CommandMenu() {
     { skip: !shouldSearchRecords },
   );
 
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => setCommandMenuOpen(false), []);
   const openMenu = useCallback(() => {
     setQuery("");
-    setOpen(true);
+    setCommandMenuOpen(true);
   }, []);
   const toggleMenu = useCallback(() => {
     if (open) close();
@@ -319,7 +326,10 @@ export function CommandMenu() {
 
   useEffect(() => {
     window.addEventListener(OPEN_COMMAND_MENU_EVENT, openMenu);
-    return () => window.removeEventListener(OPEN_COMMAND_MENU_EVENT, openMenu);
+    return () => {
+      window.removeEventListener(OPEN_COMMAND_MENU_EVENT, openMenu);
+      setCommandMenuOpen(false);
+    };
   }, [openMenu]);
 
   useEffect(() => {
@@ -699,7 +709,7 @@ export function CommandMenu() {
         loop
         className="flex min-h-0 flex-col gap-3 bg-transparent"
       >
-        <div className="glass-command flex h-14 shrink-0 items-center gap-3 rounded-3xl px-4 backdrop-blur-2xl backdrop-saturate-125">
+        <div className="glass-command flex h-14 shrink-0 items-center gap-3 rounded-3xl px-4 backdrop-blur-sm ">
           <Mains className="size-5 shrink-0 text-primary-500 dark:text-primary-400" />
           <Command.Input
             ref={inputRef}
@@ -721,7 +731,7 @@ export function CommandMenu() {
           )}
         </div>
 
-        <div className="glass-command min-h-0 overflow-hidden rounded-4xl backdrop-blur-2xl backdrop-saturate-125">
+        <div className="glass-command min-h-0 overflow-hidden rounded-4xl backdrop-blur-sm">
           <Command.List
             aria-busy={isFetching}
             className="noscrollbar max-h-[min(31rem,62vh)] min-h-24 overflow-y-auto overscroll-contain py-1.5"

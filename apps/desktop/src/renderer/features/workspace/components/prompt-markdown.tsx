@@ -163,7 +163,7 @@ function PromptSkillChip({ skill }: { skill: PromptMarkdownSkill }) {
 
   return (
     <span
-      className="inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none bg-primary dark:bg-primary-300/10 dark:text-primary-200 text-primary-800"
+      className="inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none  text-accent hover:decoration-dotted hover:underline "
       title={tooltip}
     >
       <span className="inline-flex items-center justify-center size-3.5 shrink-0 rounded-sm overflow-hidden">
@@ -197,7 +197,7 @@ function PromptFileChip({ file }: { file: PromptMarkdownFile }) {
 
   return (
     <span
-      className="inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none bg-primary dark:bg-primary-300/10 dark:text-primary-200 text-primary-800"
+      className="inline-flex align-middle items-center gap-1 mb-0.5 mx-0.5 rounded-lg text-s font-medium leading-none select-none  text-accent hover:decoration-dotted hover:underline "
       title={file.fullPath}
     >
       <FileIconComponent
@@ -224,7 +224,7 @@ function PromptCodeChip({ token }: { token: string }) {
 
   return (
     <span
-      className="inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none bg-primary dark:bg-primary-300/10 dark:text-primary-200 text-primary-800"
+      className="inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none  text-accent hover:decoration-dotted hover:underline "
       title={token}
     >
       <FileIconComponent

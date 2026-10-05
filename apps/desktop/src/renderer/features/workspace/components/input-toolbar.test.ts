@@ -14,6 +14,20 @@ vi.mock("@/hooks/use-mode-config", () => ({
 }));
 
 import { InputToolbar } from "./input-toolbar";
+import { hasComposerMessage } from "../lib/composer-message";
+import { composerControls, stopComposerActivity } from "../lib/composer-controls";
+
+function nativeToolbarProps(): Parameters<typeof InputToolbar>[0] {
+  return {
+    variant: "codex", isLoading: false,
+    selectedModelDisplayName: "gpt-5", modelDisplayNames: ["gpt-5"], onModelChange: vi.fn(), isLoadingModels: false,
+    modelEffortLevelsByDisplayName: { "gpt-5": ["medium"] }, uploadedFiles: [], onUploadedFilesChange: vi.fn(),
+    permissionMode: "workspace-write", onPermissionModeChange: vi.fn(),
+    thinkingMode: true, onThinkingModeToggle: vi.fn(), fastMode: false, onFastModeToggle: vi.fn(), supportsFastMode: false,
+    effortLevel: "medium", onEffortLevelChange: vi.fn(),
+    primaryAction: { kind: "send", disabled: false, label: "Send prompt", onClick: vi.fn() },
+  };
+}
 
 describe("floating composer controls", () => {
   it("keeps attachment, model and effort, permissions, and send in one row", () => {
@@ -22,8 +36,7 @@ describe("floating composer controls", () => {
       variant: "codex",
       layout: "floating",
       isLoading: false,
-      onSubmit,
-      onGoalChange: vi.fn(),
+      primaryAction: { kind: "send", disabled: false, label: "Send prompt", onClick: onSubmit },
       selectedModelDisplayName: "gpt-5",
       modelDisplayNames: ["gpt-5"],
       modelEffortLevelsByDisplayName: { "gpt-5": ["medium"] },
@@ -38,7 +51,6 @@ describe("floating composer controls", () => {
       supportsFastMode: false,
       effortLevel: "medium",
       onEffortLevelChange: vi.fn(),
-      isRunning: false,
       uploadedFiles: [],
       onUploadedFilesChange: vi.fn(),
     };
@@ -80,8 +92,7 @@ describe("floating composer controls", () => {
       layout: "floating",
       floatingChatMode: "details",
       isLoading: false,
-      onSubmit: vi.fn(),
-      onGoalChange: vi.fn(),
+      primaryAction: { kind: "send", disabled: false, label: "Send prompt", onClick: vi.fn() },
       selectedModelDisplayName: "gpt-5",
       modelDisplayNames: ["gpt-5"],
       modelEffortLevelsByDisplayName: { "gpt-5": ["medium"] },
@@ -96,7 +107,6 @@ describe("floating composer controls", () => {
       supportsFastMode: false,
       effortLevel: "medium",
       onEffortLevelChange: vi.fn(),
-      isRunning: false,
       uploadedFiles: [],
       onUploadedFilesChange: vi.fn(),
     };
@@ -123,5 +133,125 @@ describe("floating composer controls", () => {
 
     rerender(createElement(InputToolbar, { ...props, floatingChatMode: "icon" }));
     expect(screen.queryAllByRole("menu")).toHaveLength(0);
+  });
+});
+
+const idleComposer = {
+  state: { phase: "idle" as const, runId: null, muted: false }, runId: "chat", isNewRun: false,
+  isRunning: false, voiceEnabled: true, hasMessage: false, preparing: false, startDisabled: false, sendDisabled: false,
+};
+
+describe("single primary composer button", () => {
+  it.each(["new", "existing"])("switches the %s chat between microphone and Send for text or attachments, without an extra voice button", (kind) => {
+    const props = nativeToolbarProps();
+    const onStart = vi.fn();
+    const onSubmit = vi.fn();
+    const primaryAction = (text: string, attachments = 0) => {
+      const { primary } = composerControls({ ...idleComposer,
+        isNewRun: kind === "new", runId: kind === "new" ? undefined : "chat",
+        hasMessage: hasComposerMessage(text, attachments, []), sendDisabled: !text.trim() && attachments === 0,
+      });
+      return { ...primary, onClick: primary.kind === "voice" ? onStart : onSubmit };
+    };
+    const { rerender } = render(createElement(InputToolbar, { ...props, primaryAction: primaryAction("  ") }));
+    const start = screen.getByRole("button", { name: "Start voice chat" });
+    expect(screen.getAllByRole("button", { name: "Start voice chat" })).toHaveLength(1);
+    const microphoneIcon = start.querySelector('[data-active="true"] svg')?.innerHTML;
+    expect(microphoneIcon).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send prompt" })).toBeNull();
+    fireEvent.click(start);
+    expect(onStart).toHaveBeenCalledOnce();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    for (const action of [primaryAction("hello"), primaryAction("", 1)]) {
+      rerender(createElement(InputToolbar, { ...props, primaryAction: action }));
+      expect(screen.queryByRole("button", { name: "Start voice chat" })).toBeNull();
+      const send = screen.getByRole("button", { name: "Send prompt" });
+      expect(send.querySelector('[data-active="true"] svg')?.innerHTML).not.toBe(microphoneIcon);
+      fireEvent.click(send);
+    }
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+    expect(onStart).toHaveBeenCalledOnce();
+
+    rerender(createElement(InputToolbar, { ...props, primaryAction: primaryAction("") }));
+    expect((screen.getByRole("button", { name: "Start voice chat" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByRole("button", { name: /mute microphone/i })).toBeNull();
+  });
+
+  it("puts mute immediately before the call's Stop and changes its icon when muted", () => {
+    const props = nativeToolbarProps();
+    const onMute = vi.fn();
+    const controls = (muted: boolean) => {
+      const value = composerControls({ ...idleComposer, state: { phase: "connected", runId: "chat", muted }, hasMessage: true });
+      return { primaryAction: { ...value.primary, onClick: props.primaryAction.onClick },
+        voiceMute: { ...value.mute!, onToggle: onMute } };
+    };
+    const { rerender } = render(createElement(InputToolbar, {
+      ...props, ...controls(false),
+    }));
+    const mute = screen.getByRole("button", { name: "Mute microphone" });
+    const end = screen.getByRole("button", { name: "End voice chat" });
+    const unmutedIcon = mute.querySelector("svg")?.innerHTML;
+    expect(mute.querySelector("rect")).not.toBeNull();
+    expect(mute.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(Array.from(end.parentElement!.closest(".shrink-0")!.querySelectorAll("button"))).toEqual([mute, end]);
+    fireEvent.click(mute);
+    expect(onMute).toHaveBeenCalledOnce();
+    fireEvent.click(end);
+    expect(props.primaryAction.onClick).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Start voice chat" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send prompt" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
+
+    rerender(createElement(InputToolbar, { ...props, ...controls(true) }));
+    const unmute = screen.getByRole("button", { name: "Unmute microphone" });
+    expect(unmute.getAttribute("aria-pressed")).toBe("true");
+    expect(unmute.querySelector("svg")?.innerHTML).not.toBe(unmutedIcon);
+    fireEvent.click(unmute);
+    expect(onMute).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["default", "floating"] as const)("keeps Stop while work is running in the %s composer, even with a draft", (layout) => {
+    const props = nativeToolbarProps();
+    const onStop = vi.fn();
+    const controls = (hasMessage: boolean) => ({ ...composerControls({ ...idleComposer, isRunning: true, hasMessage,
+      sendLabel: "Save queued message", sendDisabled: true }).primary, onClick: onStop });
+    const { rerender } = render(createElement(InputToolbar, { ...props, layout, primaryAction: controls(false) }));
+    for (const hasMessage of [false, true]) {
+      rerender(createElement(InputToolbar, { ...props, layout, primaryAction: controls(hasMessage) }));
+      fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+      expect(screen.queryByRole("button", { name: /Send prompt|Save queued message|Start voice chat/ })).toBeNull();
+    }
+    expect(onStop).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the same Stop to close voice and stop work without submitting draft text", () => {
+    const props = nativeToolbarProps();
+    const stopVoice = vi.fn();
+    const stopRun = vi.fn();
+    const controls = composerControls({ ...idleComposer, isRunning: true, hasMessage: true,
+      state: { phase: "connected", runId: "chat", muted: false } });
+    render(createElement(InputToolbar, { ...props,
+      primaryAction: { ...controls.primary, onClick: () => { void stopComposerActivity({ stopVoice, stopRun }); } },
+      voiceMute: { ...controls.mute!, onToggle: vi.fn() },
+    }));
+    expect(screen.getAllByRole("button", { name: "Stop voice chat and run" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Stop voice chat and run" }));
+    expect(stopVoice).toHaveBeenCalledOnce();
+    expect(stopRun).toHaveBeenCalledOnce();
+    expect(props.primaryAction.onClick).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Send prompt|Start voice chat/ })).toBeNull();
+  });
+
+  it("disables the microphone when not ready and keeps clients without native voice on Send", () => {
+    const props = nativeToolbarProps();
+    const action = (voiceEnabled: boolean) => ({ ...composerControls({ ...idleComposer,
+      voiceEnabled, startDisabled: true, sendDisabled: true }).primary, onClick: props.primaryAction.onClick });
+    const { rerender } = render(createElement(InputToolbar, { ...props, primaryAction: action(true) }));
+    fireEvent.click(screen.getByRole("button", { name: "Start voice chat" }));
+    expect(props.primaryAction.onClick).not.toHaveBeenCalled();
+    rerender(createElement(InputToolbar, { ...props, variant: "claude", primaryAction: action(false) }));
+    expect(screen.queryByRole("button", { name: "Start voice chat" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Send prompt" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

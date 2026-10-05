@@ -1,6 +1,7 @@
 import type { RunSession, RunSessionResult } from "./run-session";
 
 const activeSessions = new Map<string, RunSession>();
+const idleWaiters = new Map<string, Array<() => void>>();
 
 export const runSessionRegistry = {
   register(runId: string, session: RunSession): void {
@@ -9,6 +10,18 @@ export const runSessionRegistry = {
 
   unregister(runId: string): void {
     activeSessions.delete(runId);
+    for (const resolve of idleWaiters.get(runId) ?? []) resolve();
+    idleWaiters.delete(runId);
+  },
+
+  /** A native voice turn may arrive while the previous turn is finalizing. */
+  whenIdle(runId: string): Promise<void> {
+    if (!activeSessions.has(runId)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiters = idleWaiters.get(runId) ?? [];
+      waiters.push(resolve);
+      idleWaiters.set(runId, waiters);
+    });
   },
 
   get(runId: string): RunSession | undefined {

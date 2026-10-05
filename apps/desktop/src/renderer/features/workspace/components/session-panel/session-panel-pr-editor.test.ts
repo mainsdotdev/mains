@@ -11,6 +11,11 @@ const state = vi.hoisted(() => ({
   changeEditor: null as null | ((open: boolean, transitioning: boolean) => void),
 }));
 
+vi.mock("@/lib/redux/api", () => ({
+  useListWorkspacesQuery: () => ({ data: [{ id: "workspace-1", projectId: "project-1", rootPath: "/repos/mains" }] }),
+  useListProjectsQuery: () => ({ data: [{ id: "project-1", name: "mains" }] }),
+}));
+
 vi.mock("@/lib/redux/hooks", () => ({
   useAppDispatch: () => (action: { payload: boolean }) => {
     state.sessionPanelOpen = action.payload;

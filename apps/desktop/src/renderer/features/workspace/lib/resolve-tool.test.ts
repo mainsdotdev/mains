@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { resolveTool } from "./resolve-tool";
 
+describe("resolveTool — legacy Copilot permission labels", () => {
+  it.each([["write", "Edit"], ["shell", "Bash"], ["read", "Read"], ["url", "WebFetch"]])("recognizes %s with and without a JSON payload", (kind, displayName) => {
+      for (const name of [`[permission:${kind}]`, `[permission:${kind}]: {"toolCallId":"internal"}`]) {
+        expect(resolveTool(name)).toMatchObject({ displayName, isBuiltin: true });
+      }
+    });
+});
+
 // Connected codex apps (Gmail, Linear, Google Calendar, …) are bridged through
 // the `codex_apps` MCP server. The app slug `resolveTool` extracts is what the
 // plugin-logo lookup keys on, so mis-parsing it swaps the app's real logo for

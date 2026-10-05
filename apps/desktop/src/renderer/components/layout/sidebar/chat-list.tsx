@@ -304,12 +304,13 @@ export function SidebarChatList({
               Projects
             </Text>
             <Button
+              variant="icon"
               tooltip="Create project"
               aria-label="Create project"
               onClick={onCreateCollection}
-              className="ml-auto -mr-1 p-1 rounded-md hover:bg-primary-100/80 dark:hover:bg-primary/10 transition-colors"
+              className="ml-auto -mr-1"
             >
-              <Plus className="size-3  text-primary-800 dark:text-primary-200 " />
+              <Plus className="size-3" />
             </Button>
           </div>
           <SortableList

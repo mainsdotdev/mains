@@ -1,4 +1,6 @@
 import type { CreatePulseInput, UpdatePulseInput, PulseFrequency } from "./pulse.dto";
+import { isEffortLevel } from "@mains/contracts/effort-levels";
+import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import {
   DEFAULT_MODE_ID,
   isModeId,
@@ -7,7 +9,11 @@ import {
 } from "@mains/contracts/modes";
 
 const FREQUENCIES: PulseFrequency[] = ["hourly", "daily", "weekdays", "weekly"];
-const EFFORT_LEVELS = ["", "minimal", "low", "medium", "high", "max", "xhigh"];
+
+function validEffort(providerId: string, level: unknown): boolean {
+  return typeof level === "string" &&
+    (providerId === PROVIDER_IDS.codex || level === "" || isEffortLevel(level));
+}
 
 export function validateCreate(input: CreatePulseInput): string | null {
   if (input.mode !== undefined && !isModeId(input.mode)) {
@@ -47,14 +53,15 @@ export function validateCreate(input: CreatePulseInput): string | null {
   if (input.minute < 0 || input.minute > 59) return "minute must be 0-59";
   if (!input.timezone?.trim()) return "timezone is required";
 
-  if (input.effortLevel != null && !EFFORT_LEVELS.includes(input.effortLevel)) {
+  if (input.effortLevel != null && !validEffort(input.providerId, input.effortLevel)) {
     return `Invalid effortLevel: ${input.effortLevel}`;
   }
 
   return null;
 }
 
-export function validateUpdate(input: UpdatePulseInput): string | null {
+/** Validate the merged settings so an effort-only patch uses the saved provider. */
+export function validateUpdate(input: UpdatePulseInput & { providerId: string }): string | null {
   if (input.frequency !== undefined && !FREQUENCIES.includes(input.frequency)) {
     return `Invalid frequency: ${input.frequency}`;
   }
@@ -69,7 +76,7 @@ export function validateUpdate(input: UpdatePulseInput): string | null {
   }
   if (
     input.effortLevel != null &&
-    !EFFORT_LEVELS.includes(input.effortLevel)
+    !validEffort(input.providerId, input.effortLevel)
   ) {
     return `Invalid effortLevel: ${input.effortLevel}`;
   }

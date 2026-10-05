@@ -455,7 +455,7 @@ export function ComposerBar({
                   ? "Add attachment or plugin"
                   : providerId === PROVIDER_IDS.codex
                     ? "Upload image"
-                    : "Upload file or photo"
+                    : "Upload image or document"
               }
               controlRef={attachmentButtonRef}
               onPress={openAttachments}

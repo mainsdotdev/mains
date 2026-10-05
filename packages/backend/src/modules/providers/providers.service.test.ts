@@ -160,6 +160,24 @@ describe("providersService", () => {
       expect(updated.config).not.toHaveProperty("effortLevel");
     });
 
+    it.each(["ultra", "future-effort", "FutureEffort"])(
+      "preserves Codex's app-server effort %j in paired-device settings",
+      async (effortLevel) => {
+        createProvider(db, { id: "codex" });
+        const updated = await providersService.updateRunSettings("codex", { effortLevel });
+        expect(updated.config).toMatchObject({ modelReasoningEffort: effortLevel, thinkingMode: true });
+        expect((await providersService.getById("codex"))?.config).toEqual(updated.config);
+      },
+    );
+
+    it.each([123, true, null, [], {}].map((effortLevel) => ({ effortLevel })))("rejects a non-string effort $effortLevel", async ({ effortLevel }) => {
+      createProvider(db, { id: "codex" });
+      await expect(providersService.updateRunSettings("codex", {
+        effortLevel: effortLevel as never,
+      })).rejects.toThrow(/effort level/);
+      expect((await providersService.getById("codex"))?.config).toBeNull();
+    });
+
     it("clears the level when reasoning is turned off", async () => {
       createProvider(db, {
         id: "claude_code",

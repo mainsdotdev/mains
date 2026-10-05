@@ -16,8 +16,7 @@ import type { ProviderVariant } from "@/lib/provider-variants";
 import { formatEffortLevel } from "@/lib/format";
 import { ArrowUp, Brain, Check } from "../icons";
 import { ULTRACODE_GRADIENT_TEXT } from "./ultracode-styles";
-
-type EffortLevel = "minimal" | "low" | "medium" | "high" | "max" | "xhigh";
+import type { EffortLevel } from "@mains/contracts/effort-levels";
 
 // ─────────────────────────────────────────────────────────────
 // Submenu travel ("safe triangle")
@@ -397,14 +396,12 @@ export function ModelSelectDropdown({
   );
 
   return (
-    <div className="relative" ref={dropdownRef}>
-      <div className={`flex cursor-pointer items-center hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 transition-colors ${iconOnly ? "rounded-full" : "rounded-2xl"}`}>
+    <div className="relative min-w-0 max-w-full" ref={dropdownRef}>
+      <div className={`flex min-w-0 max-w-full cursor-pointer items-center hover:bg-primary-200/30 animate-blur-reveal dark:hover:bg-primary-800 transition-colors ${iconOnly ? "rounded-full" : "rounded-2xl"}`}>
         <Button
           tooltip={noModels
             ? "No models available"
-            : iconOnly
-              ? `${displayModel}${selectedEffortLabel ? ` · ${selectedEffortLabel}` : ""}`
-              : "Select model"}
+            : `${displayModel}${selectedEffortLabel ? ` · ${selectedEffortLabel}` : ""}`}
           tooltipPosition="top"
           type="button"
           onClick={
@@ -415,7 +412,7 @@ export function ModelSelectDropdown({
                   onToggle();
                 }
           }
-          className={`text-s flex items-center gap-1.5 ${iconOnly ? "size-9 justify-center rounded-full p-0" : "px-2 py-1.5"} ${
+          className={`text-s flex min-w-0 max-w-full items-center gap-1 ${iconOnly ? "size-8 justify-center rounded-full p-0" : "px-2 py-1.5"} ${
             noModels
               ? "text-primary-600 dark:text-primary-400 cursor-not-allowed"
               : "cursor-pointer text-primary-950 dark:text-primary"
@@ -426,22 +423,22 @@ export function ModelSelectDropdown({
           disabled={noModels || (isLoading && !displayModel)}
         >
           {iconOnly ? (
-            <Brain className="size-4.5" />
+            <Brain className="size-4" />
           ) : isLoading && !displayModel ? (
-            <span className="inline-flex items-center gap-1.5">
+            <span className="min-w-0 truncate">
               <Text as="span" tone="inherit" className="shine-text">
                 Loading models...
               </Text>
             </span>
           ) : noModels ? (
-            <span>No models found</span>
+            <span className="min-w-0 truncate">No models found</span>
           ) : (
             <>
-              {getModelIcon(displayModel, variant)}
-              <span className="min-w-0 truncate">{displayModel}</span>
+              <span className="inline-flex shrink-0">{getModelIcon(displayModel, variant)}</span>
+              <span className="min-w-0 max-w-48 truncate @max-[480px]/composer:max-w-32 @max-[360px]/composer:max-w-20">{displayModel}</span>
               {selectedEffortLabel && (
                 <span
-                  className={`shrink-0 capitalize ${
+                  className={`shrink-0 capitalize @max-[480px]/composer:hidden ${
                     effortLevel === "ultracode"
                       ? `font-medium ${ULTRACODE_GRADIENT_TEXT}`
                       : "font-normal text-primary-600 dark:text-primary-400"

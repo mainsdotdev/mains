@@ -31,6 +31,20 @@ function toolCall(
 }
 
 describe("mapArtifactToEvent", () => {
+  it("restores a voice task navigation card from the existing report artifact, without restyling ordinary reports", () => {
+    const card = artifact(30, "Hero refactor", 25);
+    card.metadata = JSON.stringify({ kind: "voice-task", source: "voice-coordinator", voiceTask: { id: "worker", taskKey: "hero" } });
+    expect(mapArtifactToEvent(card).metadata).toMatchObject({ kind: "voice-task", voiceTask: { id: "worker" } });
+    expect(mapArtifactToEvent(artifact(31, "Ordinary written reply", 26)).metadata?.kind).toBe("report");
+  });
+  it("keeps a voice message's live identity and speech timestamp when its final text is persisted", () => {
+    const speech = artifact(29, "Final spoken text", 20);
+    speech.metadata = JSON.stringify({ voice: true, streamId: "voice-connection-message", voiceStartedAt: 10_123 });
+    expect(mapArtifactToEvent(speech)).toMatchObject({
+      id: "stream-voice-connection-message", timestamp: new Date(10_123), content: "Final spoken text",
+    });
+  });
+
   it("passes an image's byte hash to the transcript filter", () => {
     const image = {
       id: 28,

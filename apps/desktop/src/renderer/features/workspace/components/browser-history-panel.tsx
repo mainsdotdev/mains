@@ -3,9 +3,9 @@ import { Button, Input, Text } from "@/components/ui";
 import {
   ChevronLeft,
   Clock,
-  Close,
   External,
   Search,
+  Trash,
 } from "@/components/ui/icons";
 import { BrowserFavicon } from "./browser-favicon";
 
@@ -115,12 +115,12 @@ export function BrowserHistoryPanel({
     <div className="w-90" role="none">
       <div className="flex h-10 items-center gap-2 border-b border-primary-200/70 px-2 dark:border-primary-800/70">
         <Button
+          variant="icon"
           autoFocus
           role="menuitem"
           tabIndex={-1}
           onClick={onBack}
           aria-label="Back to browser menu"
-          className="rounded-lg text-primary-600 hover:text-primary-900 dark:text-primary-300 dark:hover:text-primary-100"
         >
           <ChevronLeft className="size-3.5" />
         </Button>
@@ -245,26 +245,27 @@ export function BrowserHistoryPanel({
                     role="none"
                   >
                     <Button
+                      variant="icon"
                       role="menuitem"
                       tabIndex={-1}
                       tooltip="Open in new tab"
                       tooltipPosition="top-left"
                       onClick={() => onOpenNewTab(entry.url)}
                       aria-label={`Open ${entry.title || entry.url} in new tab`}
-                      className="rounded-lg p-1.5 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-400 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
                     >
                       <External className="size-3.5" />
                     </Button>
                     <Button
+                      variant="icon"
                       role="menuitem"
                       tabIndex={-1}
                       tooltip="Remove from history"
                       tooltipPosition="top-left"
                       onClick={() => onRemove(entry.id)}
                       aria-label={`Remove ${entry.title || entry.url} from history`}
-                      className="rounded-lg p-1.5 text-primary-500 hover:bg-primary-200/60 hover:text-danger dark:text-primary-400 dark:hover:bg-primary-800/70 dark:hover:text-danger"
+                      className="enabled:hover:text-danger dark:enabled:hover:text-danger"
                     >
-                      <Close className="size-3.5" />
+                      <Trash className="size-3.5" />
                     </Button>
                   </div>
                 </div>

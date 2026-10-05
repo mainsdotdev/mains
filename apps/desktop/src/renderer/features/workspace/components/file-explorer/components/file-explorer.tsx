@@ -17,6 +17,7 @@ import {
   type TextSearchHit,
 } from "@/features/workspace/lib/text-search";
 import { FileTreeNode } from "./file-tree-node";
+import { compactDirectoryPath } from "@/features/workspace/lib/file-explorer-path";
 import { TextSearchRows } from "./text-search-rows";
 import { FileIconComponent } from "@/components/ui/icons";
 import { Button, Caption, Input, SegmentedTabs, Text } from "@/components/ui";
@@ -461,31 +462,32 @@ export const FileExplorer = memo(function FileExplorer({
           />
           {isSearching && (
             <Button
+              variant="icon" iconSize="xs"
               onClick={() => {
                 setQuery("");
                 searchInputRef.current?.focus();
               }}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 w-4 h-4 flex items-center justify-center rounded cursor-pointer hover:bg-primary/20 dark:hover:bg-primary/10"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2"
               title="Clear search"
             >
-              <Close className="w-3 h-3 text-primary-600 dark:text-primary-400" />
+              <Close className="w-3 h-3" />
             </Button>
           )}
         </div>
         <Button
+          variant="icon" iconSize="xs"
           onClick={() => setReloadToken((t) => t + 1)}
-          className="w-5 h-5 shrink-0 flex items-center justify-center rounded-lg cursor-pointer hover:bg-primary/20 dark:hover:bg-primary/10"
           title="Refresh explorer"
         >
-          <Refresh className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400" />
+          <Refresh className="w-3.5 h-3.5" />
         </Button>
         {onCollapseAll && (
           <Button
+            variant="icon" iconSize="xs"
             onClick={onCollapseAll}
-            className="w-5 h-5 shrink-0 flex items-center justify-center rounded-lg cursor-pointer hover:bg-primary/20 dark:hover:bg-primary/10"
             title="Collapse all folders"
           >
-            <CollapseAll className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400" />
+            <CollapseAll className="w-3.5 h-3.5" />
           </Button>
         )}
       </div>
@@ -595,6 +597,7 @@ export const FileExplorer = memo(function FileExplorer({
                     key={entry.fullPath}
                     role="option"
                     aria-selected={isSelected}
+                    title={entry.fullPath}
                     data-search-active={isActive ? "true" : undefined}
                     onClick={() => handleSelect(dirEntryToFileNode(entry))}
                     onMouseEnter={() => setActiveIndex(index)}
@@ -616,19 +619,20 @@ export const FileExplorer = memo(function FileExplorer({
                       isDirectory={false}
                       className="w-4 h-4 shrink-0 mr-1.5"
                     />
-                    <span className="truncate shrink-0 max-w-[60%]">{entry.name}</span>
+                    <span className="min-w-0 flex-1 truncate">{entry.name}</span>
                     {dir && (
-                      <Text as="span" size="xs" tone="subtle" className="truncate ml-2">
-                        {dir}
+                      <Text as="span" size="xs" tone="subtle" className="min-w-0 max-w-[30%] truncate ml-2" title={dir}>
+                        {compactDirectoryPath(dir)}
                       </Text>
                     )}
                     {onAddToContext && (
                       <Button
+                        variant="icon" iconSize="xs"
                         onClick={(e: React.MouseEvent) => handleAddToContext(e, entry)}
-                        className="opacity-0 group-hover:opacity-100 ml-auto w-5 h-5 flex items-center justify-center rounded hover:bg-primary/20 dark:hover:bg-primary/10 transition-opacity mr-1 shrink-0"
+                        className="opacity-0 group-hover:opacity-100 ml-auto transition-opacity mr-1"
                         title="Add to context"
                       >
-                        <Plus className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400" />
+                        <Plus className="w-3.5 h-3.5" />
                       </Button>
                     )}
                   </div>

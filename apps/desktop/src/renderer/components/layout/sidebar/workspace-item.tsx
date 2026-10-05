@@ -15,7 +15,6 @@ import {
   DropdownMenuSub,
   Input,
   SquareSpinner,
-  Tooltip,
   type SortableHandle,
 } from "@/components/ui";
 import {
@@ -30,11 +29,16 @@ import {
   Plus,
   ProjectFolder,
   Pin,
+  PinFilled,
 } from "@/components/ui/icons";
 import { useGetInstalledAppsQuery } from "@/lib/redux/api";
 import { useGetLatestWorkspaceDiffSummaryQuery } from "@/lib/redux/api/workspaceApi";
-//import { formatDate } from "@/lib/format-date";
+import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import type { GroupingMode } from "./workspace-group-dropdown";
+import {
+  SidebarItemHoverCard,
+  type SidebarItemQuickAction,
+} from "./sidebar-item-hover-card";
 
 function WorkspaceMenuSeparator() {
   return (
@@ -77,7 +81,7 @@ export default function WorkspaceItem({
   rootPath,
   branch,
   pathExists = true,
-  //updatedAt,
+  updatedAt,
   isActive = false,
   projectId,
   projectIcon,
@@ -95,6 +99,7 @@ export default function WorkspaceItem({
 }: WorkspaceItemProps) {
   const { data: latestDiff } = useGetLatestWorkspaceDiffSummaryQuery(id);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  useSuppressBrowserView(isDropdownOpen);
   // Detecting installed apps sweeps every `.app` bundle in the main process, so
   // it isn't something to do for a menu that may never open. Start on hover
   // instead of on click — the options button only appears on hover anyway, so
@@ -193,12 +198,60 @@ export default function WorkspaceItem({
     }
   }, [isRenamingBranch]);
 
+  const quickActions: SidebarItemQuickAction[] = [];
+  if (onTogglePin)
+    quickActions.push({
+      label: isPinned ? "Unpin workspace" : "Pin workspace",
+      icon: isPinned ? (
+        <PinFilled className="size-4" />
+      ) : (
+        <Pin className="size-4" />
+      ),
+      pressed: isPinned,
+      onSelect: handleTogglePinClick,
+    });
+  if (branch && onRenameBranch)
+    quickActions.push({
+      label: "Rename branch",
+      icon: <Edit className="size-4" />,
+      onSelect: handleRenameBranchClick,
+    });
+  else if (projectId && onSettings)
+    quickActions.push({
+      label: "Project settings",
+      icon: <Settings className="size-4" />,
+      onSelect: handleSettingsClick,
+    });
+  if (onArchive)
+    quickActions.push({
+      label: "Archive workspace",
+      icon: <Archive className="size-4" />,
+      onSelect: handleArchiveClick,
+    });
+  if (onDelete)
+    quickActions.push({
+      label: "Delete workspace",
+      icon: <Trash className="size-4" />,
+      onSelect: handleDeleteClick,
+      variant: "danger",
+    });
+
   return (
-    <div className="relative group" onMouseEnter={() => setHasHovered(true)}>
+    <SidebarItemHoverCard
+      className="relative group"
+      onHover={() => setHasHovered(true)}
+      title={name}
+      updatedAt={updatedAt}
+      description={pathExists ? branch ?? undefined : "Folder missing"}
+      actions={quickActions}
+      disabled={isDropdownOpen || isRenamingBranch}
+    >
       <div
         ref={sortHandle?.ref}
         role="button"
         tabIndex={0}
+        aria-haspopup="dialog"
+        aria-keyshortcuts="ArrowRight"
         onPointerDown={(event) => {
           if ((event.target as HTMLElement).closest("button, input")) return;
           sortHandle?.listeners?.onPointerDown?.(event);
@@ -208,6 +261,7 @@ export default function WorkspaceItem({
           onClick?.();
         }}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
           sortHandle?.onKeyDown?.(e);
           if (e.defaultPrevented) return;
           if (e.key === "Enter" || e.key === " ") {
@@ -215,12 +269,12 @@ export default function WorkspaceItem({
             onClick?.();
           }
         }}
-        className={`block py-1.5
+        className={`block py-1.25
            transition-all duration-200 ease-out ${sortHandle?.listeners ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${grouping !== "project" ? "rounded-2xl px-2.5" : "rounded-[10px] px-2.5"} ${
-            isActive
-              ? "bg-primary/50 glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
-              : "bg-transparent group-hover:bg-primary/50 dark:group-hover:bg-primary/5"
-          }`}
+             isActive
+               ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5 hover:bg-primary/90 dark:hover:bg-primary/10"
+               : "bg-transparent group-hover:bg-primary/50 dark:group-hover:bg-primary/5"
+           }`}
       >
         <div className="flex flex-col ">
           {grouping !== "project" && (
@@ -236,30 +290,19 @@ export default function WorkspaceItem({
             </div>
           )}
           <div className="flex flex-col min-w-0">
-            <div className={`flex items-center gap-1.5 ${grouping === "project" ? "pl-0" : "pl-0"}`}>
+            <div
+              className={`flex items-center gap-1.5 ${grouping === "project" ? "pl-0" : "pl-0"}`}
+            >
               <span aria-hidden="true" className="size-3.5 shrink-0" />
               {!pathExists ? (
                 // Replaces the branch line rather than sitting next to it: with
                 // no folder there is no branch to show, and the reason the row
                 // looks inert is the more useful thing to surface.
-                <Tooltip
-                  content={`Folder not found: ${rootPath ?? "unknown path"}`}
-                  position="top"
-                >
-                  <Muted
-                    size="xs"
-                    tone="warning"
-                    className="truncate"
-                  >
-                    Folder missing
-                  </Muted>
-                </Tooltip>
+                <Muted size="xs" tone="warning" className="truncate">
+                  Folder missing
+                </Muted>
               ) : branch && !isRenamingBranch ? (
-                <Muted
-                  size="xs"
-                  tone="secondary"
-                  className="truncate"
-                >
+                <Muted size="s" tone="secondary" className="truncate">
                   {branch}
                 </Muted>
               ) : null}
@@ -280,14 +323,13 @@ export default function WorkspaceItem({
                   className="text-xs bg-primary/20 dark:bg-primary/10 text-primary-800 dark:text-primary-200 rounded-md px-1 py-0.5 outline-none glass-input w-full max-w-35"
                 />
               )}
-
             </div>
           </div>
         </div>
       </div>
 
       {/* Diff stats (visible by default, hidden on hover) / Options button (hidden by default, visible on hover) */}
-      <div className="absolute right-1.5 top-1/2 -translate-y-1/2 z-(--z-base)">
+      <div className="absolute right-2 top-1/2 -translate-y-1/2 z-(--z-base)">
         {(insertions || deletions) && (
           <Text
             as="span"
@@ -312,15 +354,17 @@ export default function WorkspaceItem({
           </Text>
         )}
         <Button
+          variant="icon"
+          iconSize="sm"
           tooltip="More options"
           ref={buttonRef}
           onClick={handleOptionClick}
           aria-haspopup="menu"
           aria-expanded={isDropdownOpen}
-          className={`absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 cursor-pointer rounded-md`}
+          className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
           aria-label="Workspace options"
         >
-          <Option className="w-5 h-5 text-primary-700 dark:text-primary-300 hover:text-primary-800 dark:hover:text-primary-200" />
+          <Option className="w-5 h-5" />
         </Button>
       </div>
 
@@ -418,6 +462,6 @@ export default function WorkspaceItem({
           <span>Delete</span>
         </DropdownMenuItem>
       </DropdownMenu>
-    </div>
+    </SidebarItemHoverCard>
   );
 }

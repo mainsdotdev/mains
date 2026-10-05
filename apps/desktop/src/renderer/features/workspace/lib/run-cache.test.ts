@@ -39,6 +39,18 @@ describe("run cache — LRU", () => {
 });
 
 describe("run cache — cursors", () => {
+  it("allows another completion after a native delegation without dropping transcript cursors", () => {
+    const cache = createRunCache();
+    cache.touch("voice");
+    cache.markLoaded("voice");
+    cache.advanceCursors("voice", { artifactMaxId: 12, toolMaxMs: 3000 });
+    expect(cache.markFinalized("voice")).toBe(true);
+    cache.markRunning("voice");
+    expect(cache.isFinalized("voice")).toBe(false);
+    expect(cache.getDeltaCursors("voice")).toMatchObject({ isIncremental: true, artifactSince: 12, toolSinceMs: 3000 });
+    expect(cache.markFinalized("voice")).toBe(true);
+    expect(cache.markFinalized("voice")).toBe(false);
+  });
   it("returns a full-fetch signal for a never-loaded run", () => {
     const cache = createRunCache();
     expect(cache.getDeltaCursors("x")).toEqual({

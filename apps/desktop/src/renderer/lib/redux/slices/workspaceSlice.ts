@@ -8,7 +8,9 @@ import {
   type ContextItem,
   type ContextKind,
 } from "@/features/workspace/lib/composer-context";
+import { isRunTab } from "@/features/workspace/lib/repo-utils";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import {
   isWorkspaceDraftOwnerKey,
   isWorkspaceViewKey,
@@ -48,6 +50,8 @@ interface WorkspaceViewSnapshot {
   openSignalTabs: SignalWithEntity[];
   openNoteTabs: ReviewTab[];
   sidebarTab: WorkspaceSidebarTab;
+  reviewTabOpen?: boolean;
+  reviewRunId?: string | null;
 }
 
 export interface WorkspaceState {
@@ -59,6 +63,7 @@ export interface WorkspaceState {
   workspaceViewNeedsDefaultRun: boolean;
   activeWorkspaceIdByProvider: Record<string, string>;
   selectedModelByProvider: Record<string, string>;
+  conversationSettingsByKey: Record<string, ConversationSettings>;
   selectedProviderId: string;
   thinkingEnabled: boolean;
   selectedFile: FileNode | null;
@@ -92,9 +97,13 @@ export interface WorkspaceState {
   composerContextReady: boolean;
   contextItemsByKey: Record<string, ContextItem[]>;
   draftTextByKey: Record<string, string>;
+  /** The conversation opened from each plugin page, scoped to backend/space/app. */
+  mcpAppRunIdByKey: Record<string, string>;
   openIssueTabs: IssueWithEntity[];
   openSignalTabs: SignalWithEntity[];
   openNoteTabs: ReviewTab[];
+  reviewTabOpen: boolean;
+  reviewRunId: string | null;
   pendingGoal: string | null;
   pendingAutoExecute: boolean;
   /**
@@ -127,6 +136,7 @@ const initialState: WorkspaceState = {
   workspaceViewNeedsDefaultRun: false,
   activeWorkspaceIdByProvider: {},
   selectedModelByProvider: {},
+  conversationSettingsByKey: {},
   selectedProviderId: PROVIDER_IDS.claude,
   thinkingEnabled: false,
   selectedFile: null,
@@ -143,9 +153,12 @@ const initialState: WorkspaceState = {
   composerContextReady: false,
   contextItemsByKey: {},
   draftTextByKey: {},
+  mcpAppRunIdByKey: {},
   openIssueTabs: [],
   openSignalTabs: [],
   openNoteTabs: [],
+  reviewTabOpen: false,
+  reviewRunId: null,
   pendingGoal: null,
   pendingAutoExecute: false,
   providerAuthTerminal: null,
@@ -164,6 +177,8 @@ function snapshotWorkspaceView(state: WorkspaceState): WorkspaceViewSnapshot {
     openSignalTabs: state.openSignalTabs,
     openNoteTabs: state.openNoteTabs,
     sidebarTab: state.sidebarTab,
+    reviewTabOpen: state.reviewTabOpen,
+    reviewRunId: state.reviewRunId,
   };
 }
 
@@ -180,12 +195,18 @@ function restoreWorkspaceView(state: WorkspaceState, view?: WorkspaceViewSnapsho
   state.openIssueTabs = view?.openIssueTabs ?? [];
   state.openSignalTabs = view?.openSignalTabs ?? [];
   state.openNoteTabs = view?.openNoteTabs ?? [];
+  state.reviewTabOpen = view?.reviewTabOpen ?? false;
+  state.reviewRunId = view?.reviewRunId ?? null;
 }
 
 function detachRunFromViews(state: WorkspaceState, backendId: string, runId: string): void {
+  for (const [key, id] of Object.entries(state.mcpAppRunIdByKey)) {
+    if (id === runId && viewKeyBelongsToBackend(key, backendId)) delete state.mcpAppRunIdByKey[key];
+  }
   for (const [key, view] of Object.entries(state.workspaceViews)) {
     if (!viewKeyBelongsToBackend(key, backendId)) continue;
     if (view.activeTab === runId) view.activeTab = "editor";
+    if (view.reviewRunId === runId) view.reviewRunId = null;
     if (view.previousNonEditorTab === runId) view.previousNonEditorTab = null;
   }
   if (state.workspaceViewKey && viewKeyBelongsToBackend(state.workspaceViewKey, backendId)) {
@@ -194,6 +215,7 @@ function detachRunFromViews(state: WorkspaceState, backendId: string, runId: str
       // A stale list may still contain this run until its query refreshes.
       state.workspaceViewNeedsDefaultRun = false;
     }
+    if (state.reviewRunId === runId) state.reviewRunId = null;
     if (state.previousNonEditorTab === runId) state.previousNonEditorTab = null;
   }
   if (state.pendingRunId === runId) state.pendingRunId = null;
@@ -245,6 +267,10 @@ const workspaceSlice = createSlice({
       if (action.payload.text) state.draftTextByKey[action.payload.key] = action.payload.text;
       else delete state.draftTextByKey[action.payload.key];
     },
+    setMcpAppRunId: (state, action: PayloadAction<{ key: string; runId: string | null }>) => {
+      if (action.payload.runId) state.mcpAppRunIdByKey[action.payload.key] = action.payload.runId;
+      else delete state.mcpAppRunIdByKey[action.payload.key];
+    },
     detachArchivedRun: (state, action: PayloadAction<{ backendId: string; runId: string }>) => {
       detachRunFromViews(state, action.payload.backendId, action.payload.runId);
     },
@@ -253,6 +279,7 @@ const workspaceSlice = createSlice({
       const ownerKey = runOwnerKey(backendId, runId);
       delete state.draftTextByKey[ownerKey];
       delete state.contextItemsByKey[ownerKey];
+      delete state.conversationSettingsByKey[ownerKey];
       if (state.composerContextKey === ownerKey) {
         state.contextItems = [];
         state.composerContextKey = "default";
@@ -271,6 +298,9 @@ const workspaceSlice = createSlice({
       }
       for (const key of Object.keys(state.contextItemsByKey)) {
         if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.contextItemsByKey[key];
+      }
+      for (const key of Object.keys(state.conversationSettingsByKey)) {
+        if (isWorkspaceDraftOwnerKey(key, backendId, workspaceId)) delete state.conversationSettingsByKey[key];
       }
       if (isWorkspaceDraftOwnerKey(state.composerContextKey, backendId, workspaceId)) {
         state.contextItems = [];
@@ -292,6 +322,15 @@ const workspaceSlice = createSlice({
     },
     setWorkspaceModel: (state, action: PayloadAction<{ providerId: string; model: string }>) => {
       state.selectedModelByProvider[action.payload.providerId] = action.payload.model;
+    },
+    setConversationSettings: (state, action: PayloadAction<{ key: string; settings: ConversationSettings }>) => {
+      state.conversationSettingsByKey[action.payload.key] = action.payload.settings;
+    },
+    transferConversationSettings: (state, action: PayloadAction<{ fromKey: string; toKey: string }>) => {
+      if (action.payload.fromKey === action.payload.toKey) return;
+      const settings = state.conversationSettingsByKey[action.payload.fromKey];
+      if (settings) state.conversationSettingsByKey[action.payload.toKey] = settings;
+      delete state.conversationSettingsByKey[action.payload.fromKey];
     },
     setWorkspaceThinkingEnabled: (state, action: PayloadAction<boolean>) => {
       state.thinkingEnabled = action.payload;
@@ -355,6 +394,22 @@ const workspaceSlice = createSlice({
       }
       state.activeTab = action.payload;
     },
+    openReviewTab: (state) => {
+      if (!state.reviewTabOpen) {
+        const target = isRunTab(state.activeTab) ? state.activeTab : state.previousNonEditorTab;
+        state.reviewRunId = target && isRunTab(target) ? target : null;
+      }
+      state.reviewTabOpen = true;
+      state.workspaceViewNeedsDefaultRun = false;
+      state.activeTab = "review";
+    },
+    closeReviewTab: (state) => {
+      state.reviewTabOpen = false;
+      if (state.activeTab === "review") state.activeTab = "editor";
+    },
+    setReviewRunId: (state, action: PayloadAction<string | null>) => {
+      state.reviewRunId = action.payload;
+    },
     /** Attach an item, unless the same one is already attached. */
     addContextItem: (state, action: PayloadAction<ContextItem>) => {
       const incoming = action.payload;
@@ -385,6 +440,18 @@ const workspaceSlice = createSlice({
       state.contextItemsByKey[key] = items;
       if (key === state.composerContextKey) state.contextItems = items;
     },
+    /** An app update replaces only the previous context from that app instance. */
+    replaceMcpAppContext: (
+      state,
+      action: PayloadAction<{ key: string; sessionId: string; items: ContextItem[] }>,
+    ) => {
+      const { key, sessionId, items } = action.payload;
+      const current = key === state.composerContextKey ? state.contextItems : state.contextItemsByKey[key] ?? [];
+      const next = [...current.filter((item) => item.kind !== "mcp-app" || item.sessionId !== sessionId),
+        ...items.filter((item) => item.kind === "mcp-app" && item.sessionId === sessionId)];
+      state.contextItemsByKey[key] = next;
+      if (key === state.composerContextKey) state.contextItems = next;
+    },
     /**
      * Detach by kind + key rather than by object identity: the caller usually
      * holds a copy from a render, not the instance in the store.
@@ -394,9 +461,17 @@ const workspaceSlice = createSlice({
       action: PayloadAction<{ kind: ContextKind; key: string }>,
     ) => {
       const { kind, key } = action.payload;
+      const removed = state.contextItems.find((item) => item.kind === kind && contextItemKey(item) === key);
       state.contextItems = state.contextItems.filter(
         (item) => item.kind !== kind || contextItemKey(item) !== key,
       );
+      if (removed?.kind === "mcp-app") {
+        for (const item of state.contextItems) {
+          if (item.kind === "mcp-app" && item.sessionId === removed.sessionId) {
+            item.updateId = `${removed.updateId}:removed:${removed.id}`;
+          }
+        }
+      }
       state.contextItemsByKey[state.composerContextKey] = state.contextItems;
     },
     clearContextItems: (state) => {
@@ -514,11 +589,15 @@ export const {
   activateWorkspaceView,
   setComposerContextKey,
   setDraftText,
+  setMcpAppRunId,
+  replaceMcpAppContext,
   forgetRunUiState,
   detachArchivedRun,
   forgetWorkspaceUiState,
   setWorkspaceSidebarTab,
   setWorkspaceModel,
+  setConversationSettings,
+  transferConversationSettings,
   setWorkspaceThinkingEnabled,
   setSelectedFile,
   revealInEditor,
@@ -531,6 +610,9 @@ export const {
   expandExplorerPaths,
   collapseAllExplorerPaths,
   setActiveTab,
+  openReviewTab,
+  closeReviewTab,
+  setReviewRunId,
   addContextItem,
   addContextItemForKey,
   setContextItemsForKey,

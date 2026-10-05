@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkRunRequest } from "../../../../shared/adapter.types";
+import { runsRepo } from "../../runs/runs.repo";
 
 // Each test spawns the fake codex app-server as a real Node subprocess and
 // completes a JSON-RPC handshake. Under full-suite load that spawn can blow
@@ -13,6 +14,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const approvalHarness = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
+  formAnswer: undefined as string | undefined,
 }));
 
 vi.mock("../../runs/user-input-broker", () => ({
@@ -23,7 +25,7 @@ vi.mock("../../runs/user-input-broker", () => ({
     return {
       requestId: request.requestId,
       approved: true,
-      answer: "Yes",
+      answer: request.kind === "elicitation" ? approvalHarness.formAnswer ?? "Yes" : "Yes",
     };
   }),
 }));
@@ -114,7 +116,9 @@ async function waitForDriverEvent(
 afterEach(async () => {
   vi.restoreAllMocks();
   approvalHarness.requests.length = 0;
+  approvalHarness.formAnswer = undefined;
   delete process.env.MAINS_CODEX_FIXTURE_LOG;
+  delete process.env.MAINS_CODEX_FIXTURE_EFFORTS;
   delete process.env.MAINS_CODEX_FIXTURE_VERSION;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_INITIALIZE;
   delete process.env.MAINS_CODEX_FIXTURE_PLUGINS_ENABLED;
@@ -129,6 +133,123 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("starts fresh voice on an empty thread without a synthetic text turn or goal", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-fresh-voice-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const base = request("fresh-voice-run");
+    vi.spyOn(runsRepo, "findRunById").mockResolvedValue(null);
+    vi.spyOn(runsRepo, "findToolCallsByRun").mockResolvedValue([]);
+    const persist = vi.spyOn(runsRepo, "updateRun").mockResolvedValue(null);
+    const onCompleted = vi.fn().mockResolvedValue(undefined);
+    const events: Array<Record<string, unknown>> = [];
+    await driver.startRealtime!({
+      runId: base.runId, accountId: base.accountId, execution: base.execution,
+      connectionId: "fresh-voice-attempt", sdp: "fixture-offer", model: "selected-model", mode: "developer",
+      configSnapshot: { sandboxMode: "read-only", modelReasoningEffort: "ultra", serviceTier: "fast" },
+      extraInstructions: "Use the selected workspace.",
+    }, (event) => { events.push(event as unknown as Record<string, unknown>); }, {
+      onTurnStarted: vi.fn().mockResolvedValue(undefined), onCompleted, onEvent: vi.fn().mockResolvedValue(undefined),
+    });
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledOnce());
+    const log = readProtocolLog(logPath);
+    const starts = log.filter((message) => message.method === "thread/start");
+    expect(starts).toHaveLength(1);
+    expect(persist).toHaveBeenCalledWith(base.runId, { sessionId: expect.any(String) });
+    expect(starts[0].params).toMatchObject({
+      cwd: base.execution.cwd, model: "selected-model", sandbox: "read-only",
+      developerInstructions: "Use the selected workspace.",
+      config: { model_reasoning_effort: "ultra", service_tier: "fast" },
+    });
+    expect(log.filter((message) => message.method === "thread/resume" || message.method === "turn/start" || String(message.method).startsWith("thread/goal/"))).toHaveLength(0);
+    expect(events).toContainEqual(expect.objectContaining({ type: "transcript", role: "user", text: "Calculate this", final: true }));
+    await driver.stopRealtime!(base.runId, "fresh-voice-attempt");
+    expect(events).toContainEqual(expect.objectContaining({ type: "closed", reason: "ended" }));
+  });
+
+  it("resumes native voice with the run's permissions and routes server-owned work without an extra turn/start", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-voice-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const config = { binary: fixtureBinary, sandboxMode: "danger-full-access" as const, timeout: 2000, realtimeVoice: "cove" };
+    const driver = createCodexDriver(config);
+    drivers.push(driver);
+    const base = request("voice-run");
+    const acquired = await driver.createSession(base);
+    await driver.cleanup?.(acquired.session);
+    const goalsBefore = readProtocolLog(logPath).filter((message) => String(message.method).startsWith("thread/goal/"));
+    const events: Array<Record<string, unknown>> = [];
+    const onTurnStarted = vi.fn().mockResolvedValue(undefined);
+    const onCompleted = vi.fn().mockResolvedValue(undefined);
+    const voiceTools = { start: vi.fn(), list: vi.fn(), read: vi.fn(), wait: vi.fn(), send: vi.fn(), cancel: vi.fn(), end: vi.fn() };
+    // Settings refreshes the existing driver without replacing its live server.
+    driver.updateConfig?.({ ...config, realtimeVoice: "maple" });
+    await driver.startRealtime!({
+      runId: base.runId, accountId: base.accountId, execution: base.execution,
+      connectionId: "voice-attempt", sdp: "fixture-offer", model: "native-work-model",
+      configSnapshot: { sandboxMode: "read-only", modelReasoningEffort: "ultra", serviceTier: "fast" },
+      extraInstructions: "Stay within this conversation's permissions.",
+      voiceTools, voiceInstructions: "Delegate lengthy work to separate chats with mains_voice tools.",
+    }, (event) => { events.push(event as unknown as Record<string, unknown>); }, {
+      onTurnStarted, onCompleted,
+      onEvent: async (event) => { events.push(event as unknown as Record<string, unknown>); },
+    });
+    await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledOnce());
+    expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith(`voice-turn-${acquired.sessionId}`, "Calculate this", "native-work-model");
+    expect(onCompleted).toHaveBeenCalledWith(expect.objectContaining({ status: "succeeded" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "sdp", sdp: "fixture-answer", connectionId: "voice-attempt" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "transcript", text: "Calculate this", final: true }));
+    const log = readProtocolLog(logPath);
+    expect(log.find((message) => message.method === "thread/resume")?.params).toMatchObject({
+      threadId: acquired.sessionId, model: "native-work-model", sandbox: "read-only",
+      developerInstructions: "Stay within this conversation's permissions.",
+      config: { model_reasoning_effort: "ultra", service_tier: "fast", "mcp_servers.mains_voice": {
+        command: expect.any(String), args: [expect.any(String)],
+        env: { MAINS_IPC_SOCKET: expect.any(String) }, enabled: true,
+        default_tools_approval_mode: "approve",
+      } },
+    });
+    expect(log.find((message) => message.method === "thread/realtime/start")?.params).toMatchObject({
+      voice: "maple",
+      realtimeStartInstructions: "Delegate lengthy work to separate chats with mains_voice tools.",
+      initialItems: [{ role: "developer" }],
+    });
+    const bridgeScript = (log.find((message) => message.method === "thread/resume")!.params as any).config["mcp_servers.mains_voice"].args[0];
+    expect(fs.existsSync(bridgeScript)).toBe(true);
+    expect(log.filter((message) => message.method === "turn/start")).toHaveLength(0);
+    expect(log.filter((message) => String(message.method).startsWith("thread/goal/"))).toEqual(goalsBefore);
+    await driver.stopRealtime!(base.runId, "old-attempt");
+    expect(readProtocolLog(logPath).filter((message) => message.method === "thread/realtime/stop")).toHaveLength(0);
+    await driver.stopRealtime!(base.runId, "voice-attempt");
+    expect(fs.existsSync(bridgeScript)).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({ type: "closed", reason: "ended" }));
+  });
+  it("steers the parent with typed input and projects a single prompt before a delayed ACK/completion", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-steer-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const acquired = await driver.createSession({ ...request("steer-run"), goal: "timeout turn" });
+    const events: Array<Record<string, unknown>> = [];
+    const execution = driver.executePrompt(acquired.session, acquired.prompt, async (event) => { events.push(event as unknown as Record<string, unknown>); }, new AbortController().signal);
+    await waitForDriverEvent(events, (event) => event.type === "context_usage", "live parent turn");
+    const result = await driver.steerRun!({ runId: "steer-run", clientUserMessageId: "input-1", message: "change direction", skills: [{ name: "skill", path: "/tmp/skill/SKILL.md" }] });
+    expect(await execution).toMatchObject({ status: "succeeded" });
+    const requests = readProtocolLog(logPath);
+    const steer = requests.find((message) => message.method === "turn/steer");
+    expect(steer?.params).toMatchObject({ threadId: acquired.sessionId, expectedTurnId: `turn-${acquired.sessionId}`, clientUserMessageId: "input-1",
+      input: [{ type: "text", text: "change direction", text_elements: [] }, { type: "skill", name: "skill", path: "/tmp/skill/SKILL.md" }] });
+    expect(result.turnId).toBe(`turn-${acquired.sessionId}`);
+    expect(requests.filter((message) => message.method === "turn/start")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(1);
+  });
+
   // First test in the file pays the cold start (fixture process spawn + first
   // handshake), which can exceed the default 5s when the full suite saturates
   // the CPU — it passes alone. Explicit timeout like the app-server exit test.
@@ -155,6 +276,7 @@ describe("codex.driver / app-server protocol", () => {
         title: "Mains Desktop",
         version: "0.4.2",
       },
+      capabilities: { mcpServerOpenaiFormElicitation: true, extensions: { "openai/form": {} } },
     });
   }, 15_000);
 
@@ -400,14 +522,14 @@ describe("codex.driver / app-server protocol", () => {
     await driver.createSession(request("run-mcp-target"));
     await driver.readMcpAppResource?.({
       runId: "run-mcp-target",
-      server: "fixture-mcp",
+      server: "codex_apps",
       uri: "ui://fixture/card.html",
       connectorId: "connector-1",
       linkId: "linked-account-2",
     });
     await driver.readMcpAppResource?.({
       runId: "run-mcp-target",
-      server: "fixture-mcp",
+      server: "codex_apps",
       uri: "ui://fixture/card.html",
       connectorId: "connector-1",
       linkId: null,
@@ -426,6 +548,29 @@ describe("codex.driver / app-server protocol", () => {
         target: { connectorId: "connector-1", linkId: null },
       }),
     }));
+  });
+
+  it("uses no-auth targets for synthetic links and legacy discovery for independent MCP servers", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    process.env.MAINS_CODEX_FIXTURE_VERSION = CODEX_APP_SERVER_PROTOCOL_VERSION;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    await driver.createSession(request("run-mcp-legacy-target"));
+    await driver.readMcpAppResource?.({
+      runId: "run-mcp-legacy-target", server: "fixture-mcp", uri: "ui://fixture/card.html",
+      connectorId: "connector-1", linkId: "linked-account-2",
+    });
+    await driver.readMcpAppResource?.({
+      runId: "run-mcp-legacy-target", server: "codex_apps", uri: "ui://fixture/card.html",
+      connectorId: "connector-1", linkId: "synthetic_link::connector-1",
+    });
+    const reads = readProtocolLog(logPath).filter((message) => message.method === "mcpServer/resource/read");
+    expect(reads).toHaveLength(2);
+    expect(reads[0].params).not.toHaveProperty("target");
+    expect(reads[1].params).toMatchObject({ target: { connectorId: "connector-1", linkId: null } });
   });
 
   it("resumes an unsubscribed thread before retrying MCP App operations", async () => {
@@ -501,7 +646,7 @@ describe("codex.driver / app-server protocol", () => {
 
     const resource = await driver.readMcpAppResource?.({
       runId: "run-mcp-shared-thread",
-      server: "fixture-mcp",
+      server: "codex_apps",
       uri: "ui://fixture/card.html",
       originCallId: "call-1",
       connectorId: "connector-1",
@@ -517,7 +662,7 @@ describe("codex.driver / app-server protocol", () => {
           originCallId: "call-1",
         }) }),
         expect.objectContaining({ params: {
-          server: "fixture-mcp",
+          server: "codex_apps",
           uri: "ui://fixture/card.html",
           connectorId: "connector-1",
           target: { connectorId: "connector-1", linkId: "linked-account-2" },
@@ -1217,6 +1362,77 @@ describe("codex.driver / app-server protocol", () => {
     });
     expect(log.some((message) => message.method === "thread/goal/set")).toBe(false);
   });
+
+  it("uses chat-specific effort, sandbox, and fast mode on start, resume, and fork", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-settings-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 500,
+      sandboxMode: "danger-full-access", modelReasoningEffort: "high", serviceTier: "fast" });
+    drivers.push(driver);
+    const configSnapshot = { sandboxMode: "read-only", modelReasoningEffort: "low", serviceTier: "" };
+    const created = await driver.createSession({ ...request("settings-source"), configSnapshot });
+    await driver.executePrompt(created.session, created.prompt, async () => undefined, new AbortController().signal);
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/start")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
+      .toMatchObject({ effort: "low", serviceTier: null });
+
+    const resumed = await driver.resumeSession!({ runId: "settings-source", accountId: "account-1",
+      execution: request("settings-source").execution, message: "Reasoning off", configSnapshot: { ...configSnapshot, modelReasoningEffort: "" } });
+    await driver.executePrompt(resumed.session, resumed.prompt, async () => undefined, new AbortController().signal);
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/resume")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
+      .toMatchObject({ effort: null, serviceTier: null, collaborationMode: { settings: { reasoning_effort: null } } });
+
+    const forked = await driver.forkSession!({ runId: "settings-fork", sourceRunId: "settings-source", accountId: "account-1",
+      execution: request("settings-fork").execution, message: "Fork", configSnapshot });
+    await driver.executePrompt(forked.session, forked.prompt, async () => undefined, new AbortController().signal);
+    expect(readProtocolLog(logPath).find((entry) => entry.method === "thread/fork")?.params).toMatchObject({ sandbox: "read-only" });
+    expect(readProtocolLog(logPath).filter((entry) => entry.method === "turn/start").at(-1)?.params)
+      .toMatchObject({ effort: "low", serviceTier: null });
+  });
+
+  it.each(["ultra", "FutureEffort"])(
+    "discovers and forwards app-server effort %j on start, resume, and fork",
+    async (effort) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-effort-"));
+      tempDirs.push(tempDir);
+      const logPath = path.join(tempDir, "protocol.jsonl");
+      process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+      const levels = ["medium", "ultra", "FutureEffort"];
+      process.env.MAINS_CODEX_FIXTURE_EFFORTS = JSON.stringify(levels);
+      const driver = createCodexDriver({ binary: fixtureBinary, timeout: 500, modelReasoningEffort: effort });
+      drivers.push(driver);
+      await expect(driver.listModels!()).resolves.toEqual([
+        expect.objectContaining({ supportedEffortLevels: levels }),
+      ]);
+
+      const created = await driver.createSession({ ...request("effort-source"), configSnapshot: { planMode: false } });
+      await driver.executePrompt(created.session, created.prompt, async () => undefined, new AbortController().signal);
+      const configSnapshot = { modelReasoningEffort: effort, planMode: true };
+      const resumed = await driver.resumeSession!({
+        runId: "effort-source", accountId: "account-1", execution: request("effort-source").execution,
+        message: "Continue", configSnapshot,
+      });
+      await driver.executePrompt(resumed.session, resumed.prompt, async () => undefined, new AbortController().signal);
+      const forked = await driver.forkSession!({
+        runId: "effort-fork", sourceRunId: "effort-source", accountId: "account-1",
+        execution: request("effort-fork").execution, message: "Fork", configSnapshot,
+      });
+      await driver.executePrompt(forked.session, forked.prompt, async () => undefined, new AbortController().signal);
+
+      const turns = readProtocolLog(logPath).filter((entry) => entry.method === "turn/start");
+      expect(turns).toHaveLength(3);
+      expect(turns[0].params).toMatchObject({ effort });
+      for (const turn of turns.slice(1)) {
+        expect(turn.params).toMatchObject({
+          effort,
+          collaborationMode: { mode: "plan", settings: { reasoning_effort: effort } },
+        });
+      }
+    },
+  );
 
   it("keeps a forked run out of plan mode when its snapshot says so", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
@@ -2017,11 +2233,16 @@ describe("codex.driver / app-server protocol", () => {
     expect(response?.result).not.toHaveProperty("decision");
   });
 
-  it("safely declines MCP forms whose required values cannot be collected", async () => {
+  it.each([
+    [undefined, "decline", null],
+    ['{"calendarId":"work"}', "accept", { calendarId: "work" }],
+    ["cancel", "cancel", null],
+  ])("responds to a native MCP form with %s as %s", async (answer, action, content) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    approvalHarness.formAnswer = answer;
 
     const driver = createCodexDriver({
       binary: fixtureBinary,
@@ -2046,11 +2267,16 @@ describe("codex.driver / app-server protocol", () => {
     );
     expect(response).toMatchObject({
       result: {
-        action: "decline",
-        content: null,
+        action,
+        content,
         _meta: null,
       },
     });
+    expect(approvalHarness.requests).toContainEqual(expect.objectContaining({
+      kind: "elicitation", serverName: "calendar", elicitationMode: "form",
+      question: "Choose a calendar.",
+      requestedSchema: expect.objectContaining({ required: ["calendarId"] }),
+    }));
   });
 
   it("answers currentTime/read with epoch seconds", async () => {

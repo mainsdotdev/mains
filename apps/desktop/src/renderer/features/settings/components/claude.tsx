@@ -121,10 +121,10 @@ export default function ClaudeSettings() {
             : null
         }
         isApiKey={account?.type === "apiKey"}
-        notSignedInDescription="Run `claude auth login` in your terminal to authenticate"
+        notSignedInDescription="Open a Claude chat and choose Sign in to connect your account."
       />
 
-      {/* CLI version + self-update — `claude --version` / `claude update` */}
+      {/* The runtime used for chats; bundled Claude updates with Mains. */}
       <ProviderCliSection
         providerId={PROVIDER_IDS.claude}
         cliName="Claude Code CLI"

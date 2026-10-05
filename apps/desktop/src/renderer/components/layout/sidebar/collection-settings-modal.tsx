@@ -314,10 +314,10 @@ export function CollectionSettingsModal({
                   </Text>
                 </div>
                 <Button
-                  variant="bare"
+                  variant="icon"
                   tooltip="Remove source"
                   aria-label={`Remove ${source.name}`}
-                  className="rounded-lg p-1.5 text-primary-600 opacity-60 hover:bg-primary-200/60 hover:text-danger focus:opacity-100 group-hover/source:opacity-100 dark:text-primary-300 dark:hover:bg-primary-800/60 dark:hover:text-danger"
+                  className="opacity-60 enabled:hover:text-danger focus:opacity-100 group-hover/source:opacity-100 dark:enabled:hover:text-danger"
                   onClick={async () => {
                     try {
                       await removeSource({

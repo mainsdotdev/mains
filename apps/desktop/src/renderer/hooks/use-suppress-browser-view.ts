@@ -4,16 +4,16 @@ import { useEffect } from "react";
  * The browser panel is a native Electron `WebContentsView`, which always paints
  * above DOM content regardless of z-index. Any full-window DOM overlay (modal,
  * preview, alert) would otherwise render *behind* it. While `active` is true this
- * hides the native view so the overlay shows on top, then restores it on close.
+ * holds a suppression lease so the overlay shows on top, then releases it.
  *
  * Ref-counted across all callers, so the view is only restored once the last
  * overlay closes — nested/stacked overlays won't prematurely reveal the browser.
- * `setVisible` is a no-op in the main process when no browser view exists, so this
- * is safe to call unconditionally even when the browser panel is closed.
+ * Main applies leases without changing whether the panel is attached or wants
+ * its page visible. Closing a modal cannot reopen a closed or hidden panel.
  */
 let suppressors = 0;
 
-function browserApi(): { setVisible?: (visible: boolean) => unknown } | null {
+function browserApi(): { setSuppressed?: (lease: string, suppressed: boolean) => unknown } | null {
   return (window as any).api?.browser ?? null;
 }
 
@@ -27,16 +27,18 @@ function setBrowserChatOverlayInteractive(interactive: boolean): void {
 export function useSuppressBrowserView(active: boolean): void {
   useEffect(() => {
     if (!active) return;
+    const lease = crypto.randomUUID();
+    const api = browserApi();
+    api?.setSuppressed?.(lease, true);
     suppressors += 1;
     if (suppressors === 1) {
       setBrowserChatOverlayInteractive(true);
-      browserApi()?.setVisible?.(false);
     }
     return () => {
       suppressors -= 1;
+      api?.setSuppressed?.(lease, false);
       if (suppressors === 0) {
         setBrowserChatOverlayInteractive(false);
-        browserApi()?.setVisible?.(true);
       }
     };
   }, [active]);

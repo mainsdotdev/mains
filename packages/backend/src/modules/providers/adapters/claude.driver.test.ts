@@ -10,7 +10,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   buildClaudePermissionModeOptions,
-  buildClaudeExecutableOptions,
   buildClaudeSessionIdOptions,
   classifyOutcome,
   createClaudePermissionBridge,
@@ -228,16 +227,6 @@ describe("claude.driver / skill frontmatter", () => {
 });
 
 describe("claude.driver / permission mode options", () => {
-  it("uses the SDK-matched bundled CLI unless a binary override is explicit", () => {
-    expect(buildClaudeExecutableOptions()).toEqual({});
-    expect(buildClaudeExecutableOptions(process.execPath)).toEqual({
-      pathToClaudeCodeExecutable: process.execPath,
-    });
-    expect(buildClaudeExecutableOptions(undefined, process.execPath)).toEqual({
-      pathToClaudeCodeExecutable: process.execPath,
-    });
-  });
-
   it("names a fresh session and a fork, but never a plain resume", () => {
     // Measured: a plain resume plus an id exits the CLI with
     // "--session-id can only be used with --continue or --resume if
@@ -2048,6 +2037,14 @@ describe("claude.driver / elicitation handler", () => {
   });
 
   // A URL elicitation is a browser round-trip; there is no content to send back.
+  it("returns cancel for explicit form cancellation", async () => {
+    const handler = createClaudeElicitationHandler({
+      runId: "run-1",
+      requestApproval: vi.fn().mockResolvedValue({ requestId: "x", approved: false, answer: "cancel" }),
+    });
+    await expect(handler(FORM_REQUEST, opts())).resolves.toEqual({ action: "cancel" });
+  });
+
   it("accepts a url elicitation without content", async () => {
     const handler = createClaudeElicitationHandler({
       runId: "run-1",

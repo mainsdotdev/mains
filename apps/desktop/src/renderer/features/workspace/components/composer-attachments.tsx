@@ -15,6 +15,8 @@ import type {
   ContextBrowserSelection,
 } from "@/features/workspace/lib/composer-context";
 import { ImagePreviewModal } from "./image-preview-modal";
+import { ComposerReviewComments } from "./review-comments-attachment";
+import { ComposerBrowserAnnotations } from "./composer-browser-annotations";
 
 /**
  * A draft attachment has no file on disk yet, so the viewer reads it through a
@@ -121,7 +123,7 @@ export function ComposerAttachments({
   const [browserPreviewId, setBrowserPreviewId] = useState<string | null>(null);
   const [appshotPreviewId, setAppshotPreviewId] = useState<string | null>(null);
   const preview = previewIndex !== null ? files[previewIndex] : undefined;
-  const { appshots, browserSelections, remove: removeContext } =
+  const { appshots, browserSelections, reviewComments, remove: removeContext } =
     useComposerContext();
   const browserPreview = browserSelections.find(
     (selection) => selection.id === browserPreviewId,
@@ -137,7 +139,7 @@ export function ComposerAttachments({
     : undefined;
   const { open: openDocument } = useDocumentViewer();
   const hasAttachments =
-    files.length > 0 || browserSelections.length > 0 || appshots.length > 0;
+    files.length > 0 || browserSelections.length > 0 || appshots.length > 0 || reviewComments.length > 0;
 
   useEffect(() => {
     const present = new Set(files.map((f) => f.file));
@@ -202,7 +204,7 @@ export function ComposerAttachments({
               );
             })}
 
-            {browserSelections.map((selection) => {
+            {browserSelections.filter((selection) => !selection.elements?.length).map((selection) => {
               const src = selection.screenshotCaptureName
                 ? `mains-capture://cap/${selection.screenshotCaptureName}`
                 : undefined;
@@ -324,6 +326,8 @@ export function ComposerAttachments({
                 </div>
               );
             })}
+            <ComposerBrowserAnnotations />
+            <ComposerReviewComments />
           </div>
         </div>
       </div>

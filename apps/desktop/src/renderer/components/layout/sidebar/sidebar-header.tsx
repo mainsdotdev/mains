@@ -38,11 +38,12 @@ export function SidebarHeader({
         )}
       </div>
       <Button
+        variant="icon"
         onClick={requestCommandMenu}
         tooltip="Search Mains"
         tooltipShortcut={commandMenuShortcut}
         aria-label="Search Mains"
-        className="flex size-8 shrink-0 items-center justify-center rounded-full text-primary-600 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary/5 md:hidden"
+        className="md:hidden"
       >
         <Search aria-hidden="true" className="size-4" />
       </Button>

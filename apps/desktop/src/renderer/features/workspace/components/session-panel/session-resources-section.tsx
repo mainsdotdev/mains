@@ -359,7 +359,7 @@ export function SessionResourcesSection({
   /** Draw the divider only when this component actually renders. */
   separated?: boolean;
 }) {
-  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(true);
   const [sourceListExpanded, setSourceListExpanded] = useState(false);
   const [deliverablesExpanded, setDeliverablesExpanded] = useState(false);
   const [preview, setPreview] = useState<{ name: string; src: string } | null>(

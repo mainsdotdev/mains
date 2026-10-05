@@ -101,12 +101,12 @@ export function BrowserDownloadsPanel({
     <div className="w-90" role="none">
       <div className="flex h-10 items-center gap-2 border-b border-primary-200/70 px-2 dark:border-primary-800/70">
         <Button
+          variant="icon"
           autoFocus
           role="menuitem"
           tabIndex={-1}
           onClick={onBack}
           aria-label="Back to browser menu"
-          className="rounded-lg text-primary-600  hover:text-primary-900 dark:text-primary-300  dark:hover:text-primary-100"
         >
           <ChevronLeft className="size-3.5" />
         </Button>
@@ -220,13 +220,14 @@ export function BrowserDownloadsPanel({
                 <div className="flex shrink-0 items-center gap-0.5 self-center" role="none">
                   {isActive && (
                     <Button
+                      variant="icon"
                       role="menuitem"
                       tabIndex={-1}
                       tooltip="Cancel download"
                       tooltipPosition="top-left"
                       onClick={() => onCancel(download.id)}
                       aria-label={`Cancel ${download.fileName}`}
-                      className="rounded-lg p-1.5 text-primary-500 hover:bg-primary-200/60 hover:text-danger dark:text-primary-400 dark:hover:bg-primary-800/70 dark:hover:text-danger"
+                      className="enabled:hover:text-danger dark:enabled:hover:text-danger"
                     >
                       <Stop className="size-3.5" />
                     </Button>
@@ -234,24 +235,24 @@ export function BrowserDownloadsPanel({
                   {isCompleted && (
                     <>
                       <Button
+                        variant="icon"
                         role="menuitem"
                         tabIndex={-1}
                         tooltip="Open"
                         tooltipPosition="top-left"
                         onClick={() => onOpen(download.id)}
                         aria-label={`Open ${download.fileName}`}
-                        className="rounded-lg p-1.5 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-400 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
                       >
                         <OpenWith className="size-3.5" />
                       </Button>
                       <Button
+                        variant="icon"
                         role="menuitem"
                         tabIndex={-1}
                         tooltip="Show in Finder"
                         tooltipPosition="top-left"
                         onClick={() => onShowInFolder(download.id)}
                         aria-label={`Show ${download.fileName} in Finder`}
-                        className="rounded-lg p-1.5 text-primary-500 hover:bg-primary-200/60 hover:text-primary-900 dark:text-primary-400 dark:hover:bg-primary-800/70 dark:hover:text-primary-100"
                       >
                         <Finder className="size-3.5" />
                       </Button>

@@ -39,7 +39,9 @@ export const mcpAppsRegistry = {
       permissionsPolicy: buildMcpAppPermissionsPolicy(meta.permissions),
       expiresAt: Date.now() + RESOURCE_TTL_MS,
     });
-    return `mains-mcp-app://resource/${token}/index.html`;
+    // Each document gets its own origin, separate from Mains and other apps.
+    // Canvas/sync libraries need IndexedDB and sessionStorage in their iframe.
+    return `mains-mcp-app://${token}/index.html`;
   },
 
   get(token: string): RegisteredMcpAppDocument | null {
@@ -54,5 +56,9 @@ export const mcpAppsRegistry = {
 
   clear(): void {
     documents.clear();
+  },
+  remove(url: string): void {
+    const token = new URL(url).hostname;
+    if (token) documents.delete(token);
   },
 };

@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest";
 import { buildApprovalDiffPreviews } from "./tool-approval-diff";
 
 describe("buildApprovalDiffPreviews", () => {
+  it("normalizes the SDK's absolute-path diff without losing the proposed change", () => {
+    const filePath = "/workspace/components/hero-section.tsx";
+    const [preview] = buildApprovalDiffPreviews("edit", { file_path: filePath,
+      diff: `diff --git a${filePath} b${filePath}\nindex 0000000..0000000 100644\n--- a${filePath}\n+++ b${filePath}\n@@ -69,1 +69,1 @@\n-old copy\n+new copy` });
+    expect(preview.filePath).toBe(filePath);
+    expect(preview.patch).toContain("@@ -69,1 +69,1 @@");
+    expect(preview.patch).toContain("-old copy\n+new copy");
+  });
+
+  it("builds a content preview from legacy Copilot newFileContents", () => {
+    const [preview] = buildApprovalDiffPreviews("write", { fileName: "new.ts", newFileContents: "export const ready = true;\n" });
+    expect(preview.patch).toContain("+export const ready = true;");
+  });
+
   it("builds an edit patch from Claude old/new strings", () => {
     const [preview] = buildApprovalDiffPreviews("edit", {
       file_path: "src/card.tsx",

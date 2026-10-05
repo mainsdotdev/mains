@@ -20,6 +20,7 @@ vi.mock("../keyboardShortcuts", () => ({
 import { browserService } from "./browser.service";
 import { CHANNELS } from "@mains/contracts/channels";
 import { runOwnerKey } from "../../../shared/ui-state-keys";
+import type { BrowserSelectionPayload } from "./browser.dto";
 
 function resetInMemory() {
   if (browserService.persistTimer) clearTimeout(browserService.persistTimer);
@@ -33,8 +34,12 @@ function resetInMemory() {
   browserService.activeOwnerKey = "default";
   browserService.activeTabIdsByOwner = {};
   browserService.restored = false;
+  browserService._clearIdleTimer();
+  browserService.attached = false;
   browserService.visible = false;
+  browserService.suppressionLeases.clear();
   browserService.host = null;
+  browserService.selectMode = false;
 }
 
 describe("browserService — tabs by chat", () => {
@@ -83,7 +88,89 @@ describe("browserService — tabs by chat", () => {
     send.mockRestore();
   });
 
+  it("captures an annotation from its originating tab and keeps selection mode active", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/a");
+    const source = browserService.tabs.get(browserService.activeTabId!)!;
+    await browserService.createTab("https://example.com/b");
+    const other = browserService.tabs.get(browserService.activeTabId!)!;
+    const image = { isEmpty: () => false, toPNG: () => Buffer.from("annotation pixels") };
+    const sourceCapture = vi.fn().mockResolvedValue(image);
+    const otherCapture = vi.fn();
+    const executeJavaScript = vi.fn().mockResolvedValue(undefined);
+    source.view = { webContents: { isDestroyed: () => false, capturePage: sourceCapture, executeJavaScript } } as unknown as typeof source.view;
+    other.view = { webContents: { isDestroyed: () => false, capturePage: otherCapture } } as unknown as typeof other.view;
+    browserService.selectMode = true;
+    const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => undefined);
+    const element = {
+      selector: "h1", tagName: "h1", text: "Introduction", styles: {},
+      rect: { x: 10, y: 20, width: 100, height: 30 },
+      pageRect: { x: 10, y: 20, width: 100, height: 30 },
+      scroll: { x: 0, y: 0 }, viewport: { width: 1000, height: 700 }, devicePixelRatio: 2,
+    };
+    const payload: Omit<BrowserSelectionPayload, "id"> = {
+      ...element, type: "browser_selection", url: source.url, title: "Docs",
+      elements: [element, { ...element, selector: "nav", tagName: "nav" }],
+      comment: "Explain these", timestamp: "2026-10-02T11:00:00Z",
+    };
+    await browserService._handleSelection(payload, source);
+    expect(sourceCapture).toHaveBeenCalledWith(undefined);
+    expect(otherCapture).not.toHaveBeenCalled();
+    expect(browserService.selectMode).toBe(true);
+    expect(executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("finishCapture"));
+    expect(send).not.toHaveBeenCalledWith(CHANNELS.browser.selectModeChanged, expect.anything());
+    const selection = send.mock.calls.find(([channel]) => channel === CHANNELS.browser.selection)![1] as Record<string, unknown>;
+    expect(selection).toMatchObject({ ownerKey: "chat-a", elements: payload.elements, comment: payload.comment });
+    expect(readFileSync(selection.screenshotPath as string).toString()).toBe("annotation pixels");
+    send.mockRestore();
+  });
+
+  it("exits annotation mode when the active page navigates", async () => {
+    await browserService.createTab("https://example.com/docs");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const executeJavaScript = vi.fn().mockResolvedValue(undefined);
+    const view = { webContents: {
+      on: (name: string, listener: (...args: unknown[]) => void) => { listeners.set(name, listener); },
+      setWindowOpenHandler: vi.fn(), executeJavaScript,
+    } } as unknown as Parameters<typeof browserService._wireView>[1];
+    browserService._wireView(record, view);
+    browserService.selectMode = true;
+    const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => undefined);
+    listeners.get("did-start-navigation")!({}, "https://example.com/next", false, false);
+    expect(browserService.selectMode).toBe(true);
+    listeners.get("did-start-navigation")!({}, "https://example.com/next", false, true);
+    expect(browserService.selectMode).toBe(false);
+    expect(send).toHaveBeenCalledWith(CHANNELS.browser.selectModeChanged, { enabled: false });
+    expect(executeJavaScript).toHaveBeenCalledOnce();
+    send.mockRestore();
+  });
+
+  it("focuses the guest when annotation starts so Escape works before the first selection", async () => {
+    await browserService.createTab("https://example.com/docs");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const contents = {
+      isDestroyed: () => false,
+      executeJavaScript: vi.fn().mockResolvedValue("installed"),
+      focus: vi.fn(),
+    };
+    record.view = { webContents: contents } as unknown as typeof record.view;
+    const send = vi.spyOn(browserService, "_sendToRenderer").mockImplementation(() => undefined);
+    try {
+      await expect(browserService.setSelectMode(true)).resolves.toEqual({ enabled: true });
+      expect(contents.focus).toHaveBeenCalledOnce();
+      expect(browserService.selectMode).toBe(true);
+      await browserService.setSelectMode(false);
+      expect(contents.focus).toHaveBeenCalledOnce();
+      expect(browserService.selectMode).toBe(false);
+      expect(send).toHaveBeenLastCalledWith(CHANNELS.browser.selectModeChanged, { enabled: false });
+    } finally {
+      send.mockRestore();
+    }
+  });
+
   it("remounts the selected chat's page when leaving a floating overlay", async () => {
+    browserService.attached = true;
     await browserService.setContext("chat-a");
     await browserService.createTab("https://example.com/a");
     browserService.setVisible(false);
@@ -114,6 +201,7 @@ describe("browserService — tabs by chat", () => {
       isDestroyed: () => false,
       contentView: { children: [view] },
     } as unknown as typeof browserService.host;
+    browserService.attached = true;
     browserService.visible = true;
 
     await browserService._mountActiveView();
@@ -146,6 +234,7 @@ describe("browserService — tabs by chat", () => {
       },
     };
     tab.view = view as unknown as typeof tab.view;
+    browserService.attached = true;
     browserService.visible = true;
 
     await browserService.navigate("https://mains.dev/");
@@ -159,6 +248,71 @@ describe("browserService — tabs by chat", () => {
     browserService.visible = false;
     await browserService.navigate("https://mains.dev/");
     expect(view.setVisible).toHaveBeenLastCalledWith(false);
+  });
+
+  it("does not create or reopen a browser panel when an overlay closes on another page", () => {
+    const mount = vi.spyOn(browserService, "_mountActiveView").mockResolvedValue(undefined);
+    try {
+      browserService.setSuppressed("preview", true);
+      browserService.setSuppressed("preview", false);
+      browserService.setVisible(true);
+      expect(browserService.visible).toBe(false);
+      expect(browserService.attached).toBe(false);
+      expect(browserService.tabs.size).toBe(0);
+      expect(mount).not.toHaveBeenCalled();
+    } finally { mount.mockRestore(); }
+  });
+
+  it("releases stacked overlay leases without overriding a hidden or detached panel", async () => {
+    await browserService.createTab("https://example.com/docs");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const view = { setVisible: vi.fn(), webContents: { isDestroyed: () => false } };
+    record.view = view as unknown as typeof record.view;
+    browserService.attached = browserService.visible = true;
+    const mount = vi.spyOn(browserService, "_mountActiveView").mockResolvedValue(undefined);
+    try {
+      browserService.setSuppressed("main-modal", true);
+      browserService.setSuppressed("floating-modal", true);
+      expect(view.setVisible).toHaveBeenLastCalledWith(false);
+      expect(browserService.visible).toBe(true);
+      browserService.setSuppressed("main-modal", false);
+      expect(mount).not.toHaveBeenCalled();
+      browserService.setSuppressed("floating-modal", false);
+      expect(mount).toHaveBeenCalledOnce();
+      mount.mockClear();
+
+      browserService.setVisible(false);
+      browserService.setSuppressed("preview", true);
+      browserService.setSuppressed("preview", false);
+      expect(mount).not.toHaveBeenCalled();
+      expect(browserService.visible).toBe(false);
+
+      browserService.setSuppressed("preview", true);
+      browserService.detach();
+      browserService.setSuppressed("preview", false);
+      browserService.setVisible(true);
+      expect(mount).not.toHaveBeenCalled();
+      expect(browserService.attached).toBe(false);
+      expect(view.setVisible).toHaveBeenLastCalledWith(false);
+    } finally { mount.mockRestore(); }
+  });
+
+  it("keeps an asynchronously mounting view hidden after the panel closes", async () => {
+    await browserService.createTab("https://example.com/docs");
+    browserService.attached = browserService.visible = true;
+    const addChildView = vi.fn();
+    browserService.host = { isDestroyed: () => false, contentView: { children: [], addChildView } } as unknown as typeof browserService.host;
+    const view = { setVisible: vi.fn() };
+    let ready!: (value: Awaited<ReturnType<typeof browserService._ensureTabView>>) => void;
+    const ensure = vi.spyOn(browserService, "_ensureTabView").mockReturnValue(new Promise((resolve) => { ready = resolve; }));
+    try {
+      const mounting = browserService._mountActiveView();
+      browserService.detach();
+      ready(view as unknown as Awaited<ReturnType<typeof browserService._ensureTabView>>);
+      await mounting;
+      expect(addChildView).not.toHaveBeenCalled();
+      expect(view.setVisible).toHaveBeenCalledWith(false);
+    } finally { ensure.mockRestore(); }
   });
 
   it("restores the last active tab and URL for each chat after a restart", async () => {

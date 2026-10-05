@@ -84,14 +84,20 @@ jobs:
         working-directory: packages/backend
         run: npm ci
 
-      # npm ci on the arm64 runner only installs the host-arch copilot binary
-      # package (@github/copilot-darwin-arm64). The x64 build needs the x64
-      # variant, so fetch its tarball and drop it into node_modules directly —
+      # npm ci on the arm64 runner installs only host-arch agent packages.
+      # The x64 build needs the SDK runtime and login CLI for x64, so fetch
+      # their tarballs and drop them into node_modules directly —
       # `npm install --cpu x64` would re-reify the whole tree against x64 and
       # could swap out build tooling (esbuild etc.) needed on the arm64 host.
       - name: Install x64 agent binary packages
         if: matrix.arch == 'x64'
         run: |
+          COPILOT_SDK_VERSION=$(node -p "JSON.parse(require('fs').readFileSync('node_modules/@github/copilot-sdk/package.json', 'utf8')).optionalDependencies['@github/copilot-sdk-darwin-x64']")
+          npm pack "@github/copilot-sdk-darwin-x64@$COPILOT_SDK_VERSION"
+          mkdir -p node_modules/@github/copilot-sdk-darwin-x64
+          tar -xzf github-copilot-sdk-darwin-x64-*.tgz -C node_modules/@github/copilot-sdk-darwin-x64 --strip-components=1
+          rm github-copilot-sdk-darwin-x64-*.tgz
+
           # Read the file directly — @github/copilot's "exports" field blocks
           # require('@github/copilot/package.json') as a bare specifier.
           VERSION=$(node -p "JSON.parse(require('fs').readFileSync('node_modules/@github/copilot/package.json', 'utf8')).optionalDependencies['@github/copilot-darwin-x64']")

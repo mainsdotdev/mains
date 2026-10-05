@@ -29,8 +29,9 @@ export function useRecentChats() {
   );
 
   useEffect(() => {
-    const invalidate = () => {
-      dispatch(runsApi.util.invalidateTags(["RunsRecent"]));
+    const invalidate = ({ runId }: { runId: string }) => {
+      // The titlebar shares the run cache with the chat actions menu.
+      dispatch(runsApi.util.invalidateTags(["RunsRecent", { type: "Runs", id: runId }]));
     };
     const offUpdated = appEvents.runs.onUpdated(invalidate);
     const offStatusChanged = appEvents.runs.onStatusChanged(invalidate);

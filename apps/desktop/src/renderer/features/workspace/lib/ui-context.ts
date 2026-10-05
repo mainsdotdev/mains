@@ -1,7 +1,7 @@
 import { isRunTab } from "./repo-utils";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 
-interface UiContextParts {
+export interface UiContextParts {
   backendId: string | null;
   spaceId: string;
   providerId: string;
@@ -9,6 +9,10 @@ interface UiContextParts {
   workspaceId?: string;
   collectionId?: string | null;
 }
+
+export type NewConversationContext =
+  | { workspaceId: string }
+  | { collectionId: string | null };
 
 /** Local UI state belongs to the backend as well as the visible space. */
 export function workspaceViewKey(parts: UiContextParts): string {
@@ -19,6 +23,11 @@ export function workspaceViewKey(parts: UiContextParts): string {
     parts.mode,
     parts.workspaceId ?? null,
   ]);
+}
+
+export function mcpAppConversationKey(parts: UiContextParts, entrypointId: string): string {
+  return JSON.stringify([parts.backendId ?? "local", parts.spaceId, parts.providerId,
+    parts.mode, ["mcp-app", entrypointId]]);
 }
 
 /** A pre-run draft gets a stable owner; its browser tabs move to the run on send. */

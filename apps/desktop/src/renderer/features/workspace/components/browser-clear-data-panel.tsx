@@ -93,13 +93,13 @@ export function BrowserClearDataPanel({
     <div className="w-90" role="none">
       <div className="flex h-10 items-center gap-2 border-b border-primary-200/70 px-2 dark:border-primary-800/70">
         <Button
+          variant="icon"
           autoFocus
           role="menuitem"
           tabIndex={-1}
           onClick={onBack}
           disabled={clearing}
           aria-label="Back to browser menu"
-          className="rounded-lg text-primary-600 hover:text-primary-900 dark:text-primary-300 dark:hover:text-primary-100"
         >
           <ChevronLeft className="size-3.5" />
         </Button>

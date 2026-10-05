@@ -14,6 +14,7 @@ import {
   type AdapterLogger,
 } from "./adapter.shared";
 import { getBackendRuntime } from "../../../runtime/backend-runtime";
+import { parseElicitationSchema, validateElicitationContent } from "../../../../shared/mcp-elicitation";
 
 export interface CodexServerResponder {
   respondToRequest(
@@ -33,6 +34,7 @@ export interface CodexRequestRunState {
     Array<{ path: string; kind: string; diff?: string }>
   >;
   approvedElicitationServers?: Set<string>;
+  aborted?: boolean;
 }
 
 export interface CodexServerRequest {
@@ -495,37 +497,25 @@ export function createCodexRequestBroker(
       const serverName =
         (p?.serverName as string) ?? "App";
       const mode = (p?.mode as string) ?? "form";
+      if (!["form", "openai/form", "openaiForm", "url"].includes(mode)) {
+        server.respondToRequest(id, { action: "cancel", content: null, _meta: null });
+        break;
+      }
       const url = p?.url as string | undefined;
       const sessionKey = serverName.toLowerCase();
       const requestedSchema = p?.requestedSchema as
         | Record<string, unknown>
         | undefined;
-      const requiredFields = Array.isArray(
-        requestedSchema?.required,
-      )
-        ? requestedSchema.required.filter(
-            (field): field is string =>
-              typeof field === "string",
-          )
-        : [];
-      const canAcceptWithoutFormValues =
-        mode === "url" || requiredFields.length === 0;
+      const form = parseElicitationSchema(requestedSchema);
+      const hasFormFields = mode !== "url" && (form.fields.length > 0 || form.unsupported.length > 0);
 
       if (
         mode !== "url" &&
+        !hasFormFields &&
         getRunState(runId)?.approvedElicitationServers
           ?.has(sessionKey)
       ) {
-        server.respondToRequest(
-          id,
-          canAcceptWithoutFormValues
-            ? { action: "accept", content: {}, _meta: null }
-            : {
-                action: "decline",
-                content: null,
-                _meta: null,
-              },
-        );
+        server.respondToRequest(id, { action: "accept", content: {}, _meta: null });
         break;
       }
 
@@ -539,14 +529,32 @@ export function createCodexRequestBroker(
           runId,
           toolName: serverName,
           toolInput: { ...(p ?? {}) },
-          kind: "tool_approval",
+          kind: hasFormFields ? "elicitation" : "tool_approval",
+          ...(hasFormFields ? {
+            serverName,
+            elicitationMode: "form" as const,
+            question: typeof p?.message === "string" ? p.message : undefined,
+            requestedSchema,
+          } : {}),
           timestamp: now(),
         });
 
-        if (!result.approved || !canAcceptWithoutFormValues) {
+        const liveState = getRunState(runId);
+        if (!liveState || liveState.aborted || result.answer === "cancel") {
+          server.respondToRequest(id, { action: "cancel", content: null, _meta: null });
+        } else if (!result.approved) {
           server.respondToRequest(id, {
             action: "decline",
             content: null,
+            _meta: null,
+          });
+        } else if (hasFormFields) {
+          let answer: unknown;
+          try { answer = result.answer ? JSON.parse(result.answer) : undefined; } catch { /* Invalid form responses are declined below. */ }
+          const validation = validateElicitationContent(requestedSchema, answer);
+          server.respondToRequest(id, {
+            action: validation.ok ? "accept" : "decline",
+            content: validation.ok ? validation.content : null,
             _meta: null,
           });
         } else {

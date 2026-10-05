@@ -211,7 +211,7 @@ export function BrowserAddressSuggestions({
       id="browser-address-suggestions"
       role="listbox"
       aria-label="Address suggestions"
-      className="mx-2 mb-1 mt-1 max-h-64 shrink-0 overflow-y-auto rounded-2xl p-1 glass-outline bg-primary-50/95 shadow-xl backdrop-blur-xl dark:bg-primary-950/95"
+      className="mb-1 mt-1 max-h-64 w-full max-w-3xl shrink-0 overflow-y-auto rounded-2xl p-1 glass-outline bg-primary-50/95 shadow-xl backdrop-blur-xl dark:bg-primary-950/95"
     >
       {rows.map((row, index) => {
         const isSelected = index === selectedIndex;
@@ -239,11 +239,12 @@ export function BrowserAddressSuggestions({
             </button>
             {row.kind === "history" && (
               <Button
+                variant="icon"
                 tabIndex={-1}
                 aria-label={`Remove ${row.suggestion.title || row.suggestion.displayUrl} from history`}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => onRemove(row.suggestion.id)}
-                className="mr-1 rounded-lg p-1 text-primary-500 opacity-0 hover:bg-primary-300/50 hover:text-primary-900 group-hover:opacity-100 dark:text-primary-400 dark:hover:bg-primary-700/60 dark:hover:text-primary-100"
+                className="mr-1 opacity-0 group-hover:opacity-100"
               >
                 <Close className="size-3.5" />
               </Button>

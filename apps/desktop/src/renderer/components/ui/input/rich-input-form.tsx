@@ -120,7 +120,7 @@ const composerMarkdownComponents: Components = {
     <span
       data-markdown-image-src={typeof src === "string" ? src : ""}
       data-markdown-image-alt={alt ?? ""}
-      className="inline-flex rounded-lg bg-primary-200/40 px-2 py-1 text-xs text-primary-600 dark:bg-primary/10 dark:text-primary-400"
+      className="inline-flex rounded-lg bg-primary-200/40 px-2 py-1 text-s text-primary-600 dark:bg-primary/10 dark:text-primary-400"
     >
       {alt?.trim() || "Image"}
     </span>
@@ -213,9 +213,12 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   // Fixed height + leading-none + align-middle so the line box height stays constant
   // regardless of whether the chip carries an icon — keeps the caret height consistent.
   chip.className =
-    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none " +
-    "bg-primary dark:bg-primary-300/10 dark:text-primary-200 " +
+    "inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none " +
+    " text-accent hover:decoration-dotted hover:underline " +
     " cursor-default";
+  if (skill.brandColor) {
+    chip.style.color = `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))`;
+  }
 
   // Icon slot is always present (even as an empty 14×14 spacer) so chip width/height stay stable.
   const iconSlot = document.createElement("span");
@@ -278,8 +281,8 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = file.path;
   chip.className =
-    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none " +
-    "bg-primary dark:bg-primary-300/10 dark:text-primary-200 cursor-default";
+    "inline-flex align-middle items-center gap-1 h-6 mx-0.5 text-accent hover:decoration-dotted hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    "  cursor-default";
 
   const iconSlot = document.createElement("span");
   iconSlot.className = "inline-flex items-center justify-center size-3.5 shrink-0";
@@ -301,8 +304,8 @@ function buildCodeChip(code: RichCodeChipData): HTMLSpanElement {
   chip.contentEditable = "false";
   chip.title = code.key;
   chip.className =
-    "inline-flex align-middle items-center gap-1 px-1.5 mb-0.5 h-6 mx-0.5 rounded-lg text-xs font-medium leading-none select-none " +
-    "bg-primary dark:bg-primary-300/10 dark:text-primary-200 cursor-default";
+    "inline-flex align-middle items-center gap-1  mb-0.5 h-6 mx-0.5 text-accent hover:underline rounded-lg text-s font-medium leading-none select-none " +
+    " text-accent hover:decoration-dotted hover:underline cursor-default";
 
   const iconSlot = document.createElement("span");
   iconSlot.className = "inline-flex items-center justify-center size-3.5 shrink-0";
@@ -953,6 +956,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
           if (!submitDisabled) onSubmit();
@@ -1015,13 +1019,13 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           onPaste={handlePaste}
           className={`w-full text-sm outline-none whitespace-pre-wrap wrap-break-word [&>p]:my-2 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 overflow-y-auto noscrollbar dark:text-primary-300 text-primary-700 ${compact
             ? "min-h-12 max-h-40 rounded-[28px] py-3 pl-12 pr-28"
-            : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1"}`}
+            : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1 @max-[480px]/composer:pr-5"}`}
         />
         {isEmpty && placeholder && (
           <Text
             as="div"
             tone="faint"
-            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-36 top-3.5" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20" : "right-5"}`}`}
+            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-36 top-3.5" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20 @max-[480px]/composer:pr-0" : "right-5"}`}`}
           >
             {placeholderIcon ? (
               <span
@@ -1031,7 +1035,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
                 {placeholderIcon}
               </span>
             ) : null}
-            <span className={compact ? "min-w-0 truncate" : undefined}>{placeholder}</span>
+            <span className={compact ? "min-w-0 truncate" : "min-w-0 @max-[480px]/composer:line-clamp-2"}>{placeholder}</span>
           </Text>
         )}
         {showFocusHint && focusShortcutLabel && (
@@ -1039,7 +1043,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
             as="kbd"
             size="t"
             tone="faint"
-            className="absolute cursor-default right-2 top-3.5 px-1.5 py-0.5 opacity-80 font-sans"
+            className="absolute cursor-default right-2 top-3.5 px-1.5 py-0.5 opacity-80 font-sans @max-[480px]/composer:hidden"
           >
             {focusShortcutLabel} to focus
           </Text>

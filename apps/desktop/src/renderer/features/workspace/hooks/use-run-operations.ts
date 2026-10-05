@@ -1,6 +1,7 @@
+import { hasComposerMessage } from "../lib/composer-message";
 /**
- * The five ways a run gets started or extended — execute, continue, fork,
- * review, and the resume probe that gates continue.
+ * Conversation creation, execution, continuation, fork, review and the resume
+ * probe that gates continue.
  *
  * They share one shape: validate the input, project the composer's context onto
  * a payload, call the API behind `runOperation` (which owns the in-flight flag,
@@ -13,7 +14,9 @@
  */
 
 import { useCallback, useState } from "react";
-import { appApi } from "@/lib/transport";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
+import { appApi, getTransport } from "@/lib/transport";
+import { waitForConversationSettings } from "../lib/conversation-settings-writer";
 import { toast } from "@/components/ui";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { workspaceApi } from "@/lib/redux/api";
@@ -81,6 +84,23 @@ export function useRunOperations({
     }
   }, []);
 
+  const createVoiceConversation = useCallback(async (
+    selectedWorkspace?: string,
+    collectionId?: string | null,
+    additionalDirectories?: string[],
+    conversationSettings?: ConversationSettings,
+  ): Promise<string | null> => runOperation(async (accountId) => {
+    const result = await appApi.runs.createRealtimeConversation({
+      accountId, spaceId: activeSpaceId || undefined,
+      workspaceId: activeSpace?.mode === "developer" ? selectedWorkspace || undefined : undefined,
+      collectionId: activeSpace?.mode === "developer" ? undefined : collectionId || undefined,
+      conversationSettings,
+      ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
+    });
+    if (!result.success) throw new Error(result.error || "Failed to create voice conversation");
+    return registerNewRun(result.data.runId);
+  }, null, "Failed to create voice conversation"), [runOperation, registerNewRun, activeSpaceId, activeSpace?.mode]);
+
   const executeRun = useCallback(
     async (
       goal: string,
@@ -91,9 +111,10 @@ export function useRunOperations({
       context?: readonly ContextItem[],
       collectionId?: string | null,
       additionalDirectories?: string[],
+      conversationSettings?: ConversationSettings,
     ) => {
       if (
-        !goal.trim() ||
+        !hasComposerMessage(goal, uploads?.length ?? 0, context ?? []) ||
         !selectedProvider ||
         (activeSpace?.mode === "developer" && !selectedWorkspace)
       ) {
@@ -118,7 +139,8 @@ export function useRunOperations({
           providerId: selectedProvider,
           goal: goal.trim(),
           model: model || undefined,
-          additionalDirectories,
+          conversationSettings,
+          ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
           initialContext,
           ...contextPayload,
         });
@@ -140,8 +162,9 @@ export function useRunOperations({
     uploads?: Attachments,
     context?: readonly ContextItem[],
     additionalDirectories?: string[],
+    conversationSettings?: ConversationSettings,
   ) => {
-    if (!message.trim()) {
+    if (!hasComposerMessage(message, uploads?.length ?? 0, context ?? [])) {
       setError("Please enter a message");
       return false;
     }
@@ -155,12 +178,14 @@ export function useRunOperations({
     );
 
     return runOperation(async (accountId) => {
+      await waitForConversationSettings(getTransport(), runId);
       const result = await appApi.runs.continue({
         runId,
         accountId,
         message: message.trim(),
         model: model || undefined,
-        additionalDirectories,
+        conversationSettings,
+        ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
         additionalContext: initialContext,
         ...contextPayload,
       });
@@ -189,6 +214,7 @@ export function useRunOperations({
       }
 
       return runOperation(async (accountId) => {
+        await waitForConversationSettings(getTransport(), sourceRunId);
         const result = await appApi.runs.fork({
           sourceRunId,
           accountId,
@@ -211,6 +237,7 @@ export function useRunOperations({
       selectedProvider: string,
       target: ReviewTarget,
       model?: string,
+      conversationSettings?: ConversationSettings,
     ): Promise<string | null> => {
       if (!selectedWorkspace || !selectedProvider) {
         toast.error("Please select a workspace and provider");
@@ -225,6 +252,7 @@ export function useRunOperations({
           providerId: selectedProvider,
           target,
           model: model || undefined,
+          conversationSettings,
         });
 
         if (!result.success) {
@@ -252,6 +280,7 @@ export function useRunOperations({
   return {
     isLoading,
     error,
+    createVoiceConversation,
     executeRun,
     continueRun,
     forkRun,

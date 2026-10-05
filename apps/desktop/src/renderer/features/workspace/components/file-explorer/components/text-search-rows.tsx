@@ -3,6 +3,7 @@ import type { TextSearchFileMatch } from "@mains/contracts/text-search";
 import { FileIconComponent } from "@/components/ui/icons";
 import { ArrowUp, Plus } from "@/components/ui/icons";
 import { Button, Text } from "@/components/ui";
+import { compactDirectoryPath } from "@/features/workspace/lib/file-explorer-path";
 import {
   previewSegments,
   type TextSearchHit,
@@ -73,23 +74,24 @@ export const TextSearchRows = memo(function TextSearchRows({
                 isDirectory={false}
                 className="w-4 h-4 shrink-0 mr-1.5"
               />
-              <span className="truncate shrink-0 max-w-[60%]">{name}</span>
+              <span className="min-w-0 flex-1 truncate">{name}</span>
               {dir && (
-                <Text as="span" size="xs" tone="subtle" className="truncate ml-2">
-                  {dir}
+                <Text as="span" size="xs" tone="subtle" className="min-w-0 max-w-[30%] truncate ml-2" title={dir}>
+                  {compactDirectoryPath(dir)}
                 </Text>
               )}
               <span className="ml-auto flex items-center shrink-0 pl-2 pr-1 gap-1">
                 {onAddToContext && (
                   <Button
+                    variant="icon" iconSize="xs"
                     onClick={(e: React.MouseEvent) => {
                       e.stopPropagation();
                       onAddToContext(file);
                     }}
-                    className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded hover:bg-primary/20 dark:hover:bg-primary/10 transition-opacity"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
                     title="Add to context"
                   >
-                    <Plus className="w-3.5 h-3.5 text-primary-600 dark:text-primary-400" />
+                    <Plus className="w-3.5 h-3.5" />
                   </Button>
                 )}
                 <Text as="span" size="xxs" tone="subtle" className="tabular-nums">

@@ -3,9 +3,9 @@ import { Text } from "@/components/ui";
 import { resolveTool } from "../../lib/resolve-tool";
 import { ToolHeader, ToolCollapse, type ToolStatus } from "./_shared";
 import {
-  McpAppDisplay,
   type McpAppToolMetadata,
 } from "./mcp-app-display";
+import { McpAppLauncher } from "./mcp-app-launcher";
 
 interface McpDisplayProps {
   displayName: string;
@@ -167,7 +167,8 @@ export function McpDisplay({
       </ToolHeader>
 
       {runId && mcpApp && status === "done" && hasUsableMcpAppResult(output) && (
-        <McpAppDisplay
+        <McpAppLauncher
+          icon={resolvedIcon}
           runId={runId}
           app={mcpApp}
           input={params}

@@ -13,6 +13,9 @@ import { ToolCallItem } from "./tool-call-item";
 import type { EventGroup } from "../../lib/group-events";
 import { Button } from "@/components/ui";
 
+const TOOL_GROUP_LABEL_TEXT =
+  "text-primary-600 dark:text-primary-600 group-hover:text-primary-600 group-hover:dark:text-primary-200";
+
 interface ToolCallGroupProps {
   group: EventGroup;
   defaultExpanded?: boolean;
@@ -98,7 +101,7 @@ function ToolCallGroupImpl({
     <div className="mb-2">
       <Button
         onClick={() => setExpandedOverride(!isExpanded)}
-        className="group w-full flex items-center gap-1 mb-1 text-s font-sans cursor-pointer"
+        className="group w-full flex items-center gap-0.5 mb-1 text-s font-sans cursor-pointer"
       >
         {/* `min-w-0` so the sentence truncates inside the row instead of
             pushing the chevron past the edge — the header now carries a
@@ -126,10 +129,10 @@ function ToolCallGroupImpl({
               ))}
             </span>
           </span>
-          <span className={`truncate ${TOOL_ROW_TEXT}`}>{toolSummary}</span>
+          <span className={`truncate ${TOOL_GROUP_LABEL_TEXT}`}>{toolSummary}</span>
         </div>
         <ArrowUp
-          className={`size-4 shrink-0 opacity-100 transition-all duration-200 group-hover:opacity-100 ${isExpanded ? "rotate-180" : "rotate-90"} ${TOOL_ROW_TEXT}`}
+          className={`size-4 shrink-0 opacity-100 transition-all duration-200 group-hover:opacity-100 ${isExpanded ? "rotate-180" : "rotate-90"} ${TOOL_GROUP_LABEL_TEXT}`}
         />
       </Button>
 

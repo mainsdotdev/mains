@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
+import { useListProjectsQuery, useListWorkspacesQuery } from "@/lib/redux/api";
 import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { useIsMobile } from "@/lib/platform";
@@ -64,6 +65,11 @@ export function SessionPanel({
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
   const { showGitActions, showSources, showDeliverables } = useModeConfig();
   const showEnvironment = showGitActions && !!activeWorkspaceId;
+  const { data: workspaces = [] } = useListWorkspacesQuery(undefined, { skip: !showEnvironment });
+  const { data: projects = [] } = useListProjectsQuery(undefined, { skip: !showEnvironment });
+  const workspace = workspaces.find((item) => item.id === activeWorkspaceId);
+  const project = projects.find((item) => item.id === workspace?.projectId);
+  const repositoryName = project?.name ?? workspace?.rootPath.split("/").filter(Boolean).at(-1) ?? "Repository";
   const showRunResources = showSources && !!runId;
   const hasContent = showEnvironment || showRunResources;
 
@@ -97,7 +103,7 @@ export function SessionPanel({
       className={`fixed z-(--z-panel-toggle) w-(--session-panel-width) max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl glass-outline dark:bg-primary-950 bg-primary will-change-transform ${
         // Lying on top of the transcript, it needs the lift to read as a
         // separate surface; sharing the layout, it doesn't overlap anything.
-        floating ? "shadow-2xl" : ""
+        floating ? "shadow-sm" : ""
       }`}
       style={{
         // Tucked under the top-right toolbar, aligned to the same edge — inside
@@ -145,9 +151,10 @@ export function SessionPanel({
               size="xs"
               tone="subtle"
               weight="medium"
-              className="px-2 pb-1 pt-2"
+              className="truncate px-2 pb-1 pt-2"
+              title={repositoryName}
             >
-              Environment
+              {repositoryName}
             </Text>
             <GitActionsSection
               providerId={providerId}

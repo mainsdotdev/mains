@@ -85,7 +85,7 @@ describe("buildElicitationContent", () => {
 
   it("reports missing required fields by label instead of submitting a partial payload", () => {
     const result = buildElicitationContent(fields, { username: "  ", apiKey: "" });
-    expect(result).toEqual({ ok: false, missing: ["Username", "apiKey"] });
+    expect(result).toMatchObject({ ok: false, missing: ["Username", "apiKey"] });
   });
 
   it("omits blank optional fields rather than sending empty strings", () => {
@@ -107,9 +107,35 @@ describe("buildElicitationContent", () => {
     const numeric: ElicitationField[] = [
       { name: "port", label: "Port", type: "number", required: true, isSecret: false },
     ];
-    expect(buildElicitationContent(numeric, { port: "abc" })).toEqual({
+    expect(buildElicitationContent(numeric, { port: "abc" })).toMatchObject({
       ok: false,
       missing: ["Port"],
     });
+  });
+
+  it("collects titled single and multiple selections using their values", () => {
+    const fields = parseElicitationFields({
+      type: "object",
+      properties: {
+        calendar: { type: "string", oneOf: [{ const: "work", title: "Work calendar" }, { const: "home", title: "Home calendar" }] },
+        people: { type: "array", items: { anyOf: [{ const: "okan", title: "Okan" }, { const: "alex", title: "Alex" }] }, minItems: 1 },
+      },
+      required: ["people"],
+    });
+    expect(fields).toHaveLength(2);
+    expect(buildElicitationContent(fields, { calendar: "work", people: ["okan"] })).toMatchObject({
+      ok: true, content: { calendar: "work", people: ["okan"] },
+    });
+  });
+
+  it("rejects unknown enum values instead of returning them to the MCP server", () => {
+    expect(buildElicitationContent(fields, { username: "okan", apiKey: "k", region: "unknown" })).toMatchObject({ ok: false });
+  });
+
+  it("validates optional numbers and integer bounds", () => {
+    const numeric = parseElicitationFields({ properties: { seats: { type: "integer", minimum: 1, maximum: 5 } } });
+    for (const seats of ["abc", "Infinity", "1.5", "0", "6"]) {
+      expect(buildElicitationContent(numeric, { seats })).toMatchObject({ ok: false });
+    }
   });
 });

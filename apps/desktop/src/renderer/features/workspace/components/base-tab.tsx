@@ -6,11 +6,19 @@ import { useAppSelector } from "@/lib/redux/hooks";
 interface BaseTabProps {
   isActive: boolean;
   isFirst?: boolean;
+  /** Override the leading curve when a tab strip has its own panel edge. */
+  showLeadingCorner?: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: React.ReactNode;
   onClose?: (e: React.MouseEvent) => void;
   closeIcon?: React.ReactNode;
+  closeLabel?: string;
+  closeShortcut?: string;
+  /** Persistent action inside the tab, such as the current chat's menu. */
+  trailingAction?: React.ReactNode;
+  role?: "button" | "tab";
+  ariaLabel?: string;
   /** Full title shown in a tooltip below the tab on hover */
   tooltip?: string;
 }
@@ -23,21 +31,42 @@ const COLORS = {
 export function BaseTab({
   isActive,
   isFirst,
+  showLeadingCorner,
   onClick,
   icon,
   label,
   onClose,
   closeIcon,
+  closeLabel,
+  closeShortcut,
+  trailingAction,
+  role = "button",
+  ariaLabel,
   tooltip,
 }: BaseTabProps) {
   const sidebarCollapsed = useAppSelector((state) => state.appSettings.sidebarCollapsed);
 
-  const tab = (
+  const title = (
+    <Text
+      as="span"
+      size="inherit"
+      className="relative min-w-0 flex-1 mb-0.5 truncate transition-colors duration-150"
+    >
+      {typeof label === "string" ? (
+        <Text as="span" size="xs" tone="inherit" weight="medium" className="tracking-tight">{label}</Text>
+      ) : label}
+    </Text>
+  );
+
+  return (
     <div
-      role="button"
+      role={role}
+      aria-label={ariaLabel}
+      aria-selected={role === "tab" ? isActive : undefined}
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onClick();
@@ -46,7 +75,7 @@ export function BaseTab({
       // `w-44` is the ideal width; tabs shrink from there as the strip fills up.
       // `min-w-28` is the floor (past it the strip scrolls) and is also what lets
       // them shrink at all — otherwise the flex auto minimum pins them at `w-44`.
-      className="group relative flex items-center gap-1 pl-2.5 pr-6 py-1.5 cursor-pointer w-44 min-w-28 min-h-10"
+      className={`group relative flex items-center gap-1 pl-2.5 ${trailingAction ? "pr-1.5" : "pr-6"} py-1.5 cursor-pointer w-44 min-w-28 min-h-10`}
     >
       {/* Active background layer — always rendered, opacity transitions */}
       <div
@@ -62,7 +91,7 @@ export function BaseTab({
       />
 
       {/* Inverted corners — always rendered, opacity transitions */}
-      <InvertedCorner side="left" visible={isActive && (!isFirst || sidebarCollapsed)} />
+      <InvertedCorner side="left" visible={isActive && (showLeadingCorner ?? (!isFirst || sidebarCollapsed))} />
       <InvertedCorner side="right" visible={isActive} />
 
       {/* Content */}
@@ -73,38 +102,33 @@ export function BaseTab({
       </span>
       {/* Active and idle resolved to the same colour, so the label just takes
           the default tone. */}
-      <Text
-        as="span"
-        size="inherit"
-        className="relative min-w-0 flex-1 mb-0.5 truncate transition-colors duration-150"
-      >
-        {typeof label === "string" ? (
-          <Text as="span" size="xs" tone="inherit" weight="medium" className="tracking-tight">{label}</Text>
-        ) : (
-          label
-        )}
-      </Text>
+      {tooltip ? (
+        <Tooltip
+          content={tooltip}
+          position="bottom"
+          delay={400}
+          className="max-w-xs whitespace-normal wrap-break-word"
+        >
+          {title}
+        </Tooltip>
+      ) : title}
+      {trailingAction && (
+        <div
+          className="relative shrink-0"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          {trailingAction}
+        </div>
+      )}
       {onClose && (
-        <CloseOverlay isActive={isActive} onClose={onClose} closeIcon={closeIcon} />
+        <CloseOverlay isActive={isActive} onClose={onClose} closeIcon={closeIcon} closeLabel={closeLabel} closeShortcut={closeShortcut} />
       )}
     </div>
   );
-
-  if (!tooltip) return tab;
-
-  return (
-    <Tooltip
-      content={tooltip}
-      position="bottom"
-      delay={400}
-      className="max-w-xs whitespace-normal wrap-break-word"
-    >
-      {tab}
-    </Tooltip>
-  );
 }
 
-function InvertedCorner({ side, visible }: { side: "left" | "right"; visible: boolean }) {
+export function InvertedCorner({ side, visible }: { side: "left" | "right"; visible: boolean }) {
   const isLeft = side === "left";
 
   return (
@@ -129,10 +153,14 @@ function CloseOverlay({
   isActive,
   onClose,
   closeIcon,
+  closeLabel,
+  closeShortcut,
 }: {
   isActive: boolean;
   onClose: (e: React.MouseEvent) => void;
   closeIcon?: React.ReactNode;
+  closeLabel?: string;
+  closeShortcut?: string;
 }) {
   return (
     <div
@@ -152,6 +180,10 @@ function CloseOverlay({
       )}
       <Button
         onClick={onClose}
+        aria-label={closeLabel}
+        tooltip={closeLabel}
+        tooltipShortcut={closeShortcut}
+        tooltipPosition="bottom"
         className="relative z-(--z-base) p-1  hover:bg-primary/5 cursor-pointer rounded-full transition-all pointer-events-auto"
       >
         {closeIcon || <Close className="size-3.25 text-primary-900 dark:text-primary hover:text-primary-900 dark:hover:text-primary-100" />}

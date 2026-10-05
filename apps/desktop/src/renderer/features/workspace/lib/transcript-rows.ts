@@ -5,8 +5,8 @@
 // workspace-events.tsx so it is testable through its interface rather than
 // only by rendering. Two public functions:
 //
-//   • buildTurnRenderRows(groups) → how grouped events collapse into flat rows
-//     and accordions (plan/media break out of the collapsed bucket).
+//   • buildTurnRenderRows(groups) → flat voice conversation/tools and regular
+//     text accordions (plan/media stay directly reachable).
 //   • matchTurnsToGroups(groups, turns, …) → which group index each session
 //     time bar attaches to.
 //
@@ -19,6 +19,7 @@
 import { isPlanToolCallGroup, type EventGroup } from "./group-events";
 import { documentDeliverableKey } from "./deliverable-identity";
 import type { RunTurn } from "@/lib/redux/api";
+import { voiceWorkTurnIdentity } from "./voice-transcript-view";
 
 export interface SessionInfo {
   elapsed: number;
@@ -67,6 +68,23 @@ export function matchTurnsToGroups(
   for (const turn of turns) {
     if (turn.status !== "completed" || !turn.elapsedMs || turn.elapsedMs <= 0) continue;
 
+    const workIndices = groups.flatMap((group, index) =>
+      group.events.some((event) => event.metadata?.voiceWorkTurnId === turn.id) ? [index] : [],
+    );
+    if (voiceWorkTurnIdentity(turn) || workIndices.length) {
+      const last = workIndices.at(-1);
+      if (last !== undefined) {
+        const workGroups = workIndices.map((index) => groups[index]);
+        result.set(last, {
+          elapsed: turn.elapsedMs,
+          responseContent: turn.responseContent || collectResponseContent(workGroups, 0, workGroups.length - 1),
+          turn,
+        });
+        lastGroupIdx = Math.max(lastGroupIdx, last + 1);
+      }
+      continue;
+    }
+
     // Find the best group index for this turn's end time
     const turnEndMs = turn.endedAt
       ? new Date(turn.endedAt).getTime()
@@ -89,7 +107,8 @@ export function matchTurnsToGroups(
       for (let i = lastGroupIdx + 1; i < groups.length; i++) {
         const isUserPrompt =
           groups[i].type === "info" &&
-          groups[i].events[0]?.metadata?.kind === "user-prompt";
+          groups[i].events[0]?.metadata?.kind === "user-prompt" &&
+          groups[i].events[0]?.metadata?.delivery !== "steer";
         if (isUserPrompt) {
           bestIdx = i - 1;
           break;
@@ -111,10 +130,15 @@ export function matchTurnsToGroups(
     // time. Nothing to attach it to, so it gets no bar and claims no groups.
     if (bestIdx < lastGroupIdx) continue;
 
+    // Voice conversation can continue between work turns. Copying a text
+    // response must not collect that speech or another turn's hidden work.
+    const normalGroups = groups.slice(lastGroupIdx, bestIdx + 1).filter((group) =>
+      group.events.every((event) => event.metadata?.voice !== true && !event.metadata?.voiceWorkId),
+    );
     result.set(bestIdx, {
       elapsed: turn.elapsedMs,
       responseContent:
-        turn.responseContent || collectResponseContent(groups, lastGroupIdx, bestIdx),
+        turn.responseContent || collectResponseContent(normalGroups, 0, normalGroups.length - 1),
       turn,
     });
 
@@ -140,9 +164,7 @@ function computeSessionTimesFromEvents(
 
   for (let i = 0; i < groups.length; i++) {
     const group = groups[i];
-    const isUserPrompt =
-      group.type === "info" &&
-      group.events[0]?.metadata?.kind === "user-prompt";
+    const isUserPrompt = isTurnStartingPromptGroup(group);
     const isStatus =
       group.type === "info" && group.events[0]?.type === "status";
 
@@ -191,6 +213,10 @@ function computeSessionTimesFromEvents(
   return result;
 }
 
+function isTurnStartingPromptGroup(g: EventGroup): boolean {
+  return isUserPromptGroup(g) && g.events[0]?.metadata?.delivery !== "steer";
+}
+
 export function isUserPromptGroup(g: EventGroup): boolean {
   return g.type === "info" && g.events[0]?.metadata?.kind === "user-prompt";
 }
@@ -211,7 +237,7 @@ export function matchModelChangesToPromptGroups(
 ): Map<number, ModelChangeMarker> {
   const result = new Map<number, ModelChangeMarker>();
   const promptGroupIndices = groups.reduce<number[]>((indices, group, index) => {
-    if (isUserPromptGroup(group)) indices.push(index);
+    if (isTurnStartingPromptGroup(group)) indices.push(index);
     return indices;
   }, []);
   const orderedTurns = [...turns].sort((a, b) => a.turnIndex - b.turnIndex);
@@ -375,7 +401,7 @@ function groupHasMediaArtifact(
 }
 
 /** Linear plan: every group index appears exactly once, in order. */
-export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
+function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
   const rows: TurnRenderRow[] = [];
   let idx = 0;
   while (idx < groups.length) {
@@ -473,5 +499,37 @@ export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
       previousToolSummary: formatAccordionToolSummary(toolTotal),
     });
   }
+  return rows;
+}
+
+/** Speech and native voice tools stay in chronological chat flow. Typed turns
+ * keep the existing layout; voice work never adds a separate work disclosure. */
+export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
+  const rows: TurnRenderRow[] = [];
+  const flushRegular = (from: number, to: number) => {
+    if (from >= to) return;
+    for (const row of buildRegularTurnRenderRows(groups.slice(from, to))) {
+      const offset = (indices: number[]) => indices.map((index) => index + from);
+      rows.push(row.kind === "flat" ? { ...row, indices: offset(row.indices) } : {
+        ...row,
+        previousSegments: row.previousSegments.map(offset),
+        lastSegment: offset(row.lastSegment),
+        planBreakoutIndices: offset(row.planBreakoutIndices),
+        messageBreakoutIndices: offset(row.messageBreakoutIndices),
+      });
+    }
+  };
+  let regularStart = 0;
+  for (let index = 0; index < groups.length; index++) {
+    const group = groups[index];
+    const metadata = group.events[0]?.metadata;
+    const workId = typeof metadata?.voiceWorkId === "string" ? metadata.voiceWorkId : null;
+    const speech = group.events.some((event) => event.metadata?.voice === true || event.metadata?.kind === "voice-task");
+    if (!workId && !speech) continue;
+    flushRegular(regularStart, index);
+    regularStart = index + 1;
+    rows.push({ kind: "flat", indices: [index] });
+  }
+  flushRegular(regularStart, groups.length);
   return rows;
 }

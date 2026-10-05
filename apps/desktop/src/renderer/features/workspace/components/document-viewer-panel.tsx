@@ -141,11 +141,12 @@ export function DocumentViewerPanel() {
         {currentDoc && !isTextDocType(currentDoc.docType) && (
           <Text as="div" size="inherit" tone="muted" className="flex items-center gap-0.5">
             <Button
+              variant="icon"
+              iconSize="sm"
               tooltip="Zoom out"
               tooltipPosition="bottom"
               onClick={zoomOut}
               disabled={zoom <= ZOOM_MIN}
-              className="size-6 flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
               aria-label="Zoom out"
             >
               <Text as="span" size="sm" tone="inherit" className="leading-none">−</Text>
@@ -160,11 +161,12 @@ export function DocumentViewerPanel() {
               {Math.round(zoom * 100)}%
             </Button>
             <Button
+              variant="icon"
+              iconSize="sm"
               tooltip="Zoom in"
               tooltipPosition="bottom"
               onClick={zoomIn}
               disabled={zoom >= ZOOM_MAX}
-              className="size-6 flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
               aria-label="Zoom in"
             >
               <Text as="span" size="sm" tone="inherit" className="leading-none">+</Text>
@@ -176,11 +178,11 @@ export function DocumentViewerPanel() {
             disk yet, so there is nothing to copy. */}
         {!currentDoc?.path.startsWith("blob:") && (
           <Button
+            variant="icon"
             tooltip="Save a copy…"
             tooltipPosition="bottom"
             onClick={() => void saveCopy()}
             disabled={!currentDoc || isSaving}
-            className="p-1 rounded-full cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60 disabled:opacity-40"
             aria-label="Save a copy of this document"
           >
             <Download className="size-4" />
@@ -188,10 +190,10 @@ export function DocumentViewerPanel() {
         )}
 
         <Button
+          variant="icon"
           tooltip="Close"
           tooltipPosition="bottom-left"
           onClick={close}
-          className="p-1 rounded-full  cursor-pointer text-primary-700 dark:text-primary-300 hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
           aria-label="Close document viewer"
         >
           <Close className="size-4" />

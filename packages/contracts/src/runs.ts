@@ -23,6 +23,34 @@ export function modeLabel(mode: ModeId): string {
 }
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type RunTurnStatus = "active" | "completed";
+
+/** Explicit input for an active turn. Settings stay owned by that turn. */
+export interface RunSteerPayload {
+  runId: string;
+  accountId: string;
+  clientUserMessageId: string;
+  message: string;
+  attachments?: Array<{ name: string; type: string; data?: string; sourcePath?: string; mimeType: string }>;
+  additionalContext?: Array<{ kind: "file" | "diff" | "selection" | "note"; ref?: string; content?: string; metadata?: Record<string, unknown> }>;
+  contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;
+  contextSignals?: Array<{ source: string; level: string; category: string; title: string; body?: string | null; stackTrace?: string | null; eventCount?: number }>;
+  contextFiles?: Array<{ path: string; type?: "file" | "directory" }>;
+  contextSkills?: Array<{ name: string; path?: string; mentionPath?: string; displayName?: string; description?: string; shortDescription?: string; iconSmall?: string; iconLarge?: string; brandColor?: string; scope?: string }>;
+}
+
+export interface RunInputStatusPayload {
+  runId: string;
+  accountId: string;
+  clientUserMessageId: string;
+  /** Frozen renderer input for recovering a confirmed, previously lost ACK. */
+  input?: Omit<RunSteerPayload, "runId" | "accountId" | "clientUserMessageId">;
+  delivery?: "queue" | "steer";
+}
+
+export interface RunSteerResponse {
+  runId: string;
+  turnId: string;
+}
 export type ToolCallStatus = "queued" | "running" | "done" | "error" | "canceled";
 
 export interface RunResponse {
@@ -397,6 +425,8 @@ export interface ToolApprovalRequest {
   autoResolutionMs?: number;
   serverName?: string;
   elicitationMode?: "form" | "url";
+  /** Flat JSON Schema for a form elicitation. */
+  requestedSchema?: Record<string, unknown>;
   url?: string;
   description?: string;
   timestamp: number;
@@ -415,7 +445,7 @@ export interface ToolApprovalResolvedEvent {
  * Body of `runs:toolApprovalResponse`. `answer` formats mirror the desktop's
  * dialog: chosen option labels joined with ", " or free text for a question;
  * "acceptForSession" to allow a tool for the rest of the run; a JSON object
- * string for an elicitation form.
+ * string for an elicitation form; "cancel" with approved: false to cancel it.
  */
 export interface ToolApprovalResponse {
   requestId: string;

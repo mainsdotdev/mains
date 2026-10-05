@@ -19,7 +19,7 @@ export interface ModalProps {
   children?: ReactNode;
   /** Panel overrides — sizing (w-*, max-w-*) and radius. */
   className?: string;
-  /** "dim" matches Alert/WizardModal; "command" keeps the app visible behind the palette. */
+  /** "dim" matches Alert/WizardModal; "command" softly blurs and dims the app behind the palette. */
   backdrop?: "dim" | "command" | "media";
   /** "panel" is the glass card; "bare" drops the fill, rim, radius, and shadow so media content floats on the backdrop. */
   surface?: "panel" | "bare";
@@ -94,7 +94,7 @@ export function Modal({
           backdrop === "media"
             ? "bg-black/80 "
             : backdrop === "command"
-              ? "bg-primary-950/15 dark:bg-primary-950/35"
+              ? "bg-primary-950/25 backdrop-blur-xs dark:bg-primary-950/50"
               : "dark:bg-primary-950/60 bg-primary/80",
         )}
         role="presentation"
@@ -158,11 +158,12 @@ export function ModalHeader({
         {children}
       </div>
       <Button
+        variant="icon"
         onClick={onClose}
         aria-label={closeLabel}
         tooltip={closeIcon ? closeLabel : undefined}
         tooltipPosition="bottom-left"
-        className="ml-3 shrink-0 p-1.5 rounded-full  hover:bg-primary-200 dark:hover:bg-primary-800 transition-colors cursor-pointer"
+        className="ml-3"
       >
         {closeIcon ?? <Close className="size-4 text-primary-500" />}
       </Button>

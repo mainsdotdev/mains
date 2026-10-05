@@ -1,4 +1,8 @@
 import { baseApi } from "./baseApi";
+import type { EffortLevel } from "@mains/contracts/effort-levels";
+import type { DetectedClis, ProviderCliInfo } from "@mains/contracts/provider-cli";
+import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
+export type { DetectedClis } from "@mains/contracts/provider-cli";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type {
   PluginAvailability,
@@ -105,14 +109,7 @@ export interface ModelInfo {
   contextWindow?: number;
   supportsFastMode?: boolean;
   supportsEffort?: boolean;
-  supportedEffortLevels?: (
-    | 'minimal'
-    | 'low'
-    | 'medium'
-    | 'high'
-    | 'max'
-    | 'xhigh'
-  )[];
+  supportedEffortLevels?: EffortLevel[];
   /**
    * Provider-specific service tiers (e.g. Codex: priority/flex/default).
    * Mirrors the field on the main-process `ModelInfo`; populated from
@@ -266,28 +263,17 @@ export interface AccountInfo {
     type: "claude";
     email: string;
     planType: string;
+  } | {
+    type: "copilot";
+    login: string | null;
   } | null;
   requiresOpenaiAuth: boolean;
-  cli?: {
-    version: string | null;
-    channel: string | null;
-    outdated: boolean;
-    compatibility?: "supported" | "newer" | "unsupported" | "unknown";
-    minimumVersion?: string;
-    testedProtocolVersion?: string;
-  };
+  cli?: ProviderCliInfo;
 }
 
 export interface CliUpdateResult {
   success: boolean;
   output: string;
-}
-
-export interface DetectedClis {
-  claude: boolean;
-  copilot: boolean;
-  codex: boolean;
-  cursor: boolean;
 }
 
 export const providersApi = baseApi.injectEndpoints({
@@ -380,6 +366,15 @@ export const providersApi = baseApi.injectEndpoints({
         args: [id],
       }),
       providesTags: (_result, _error, id) => [{ type: "ProviderModels", id }],
+    }),
+
+    getProviderRealtimeVoices: builder.query<RealtimeVoiceCatalog | null, string>({
+      query: (id) => ({
+        handler: CHANNELS.providers.getRealtimeVoices,
+        args: [id],
+      }),
+      providesTags: (_result, _error, id) => [{ type: "ProviderAccountInfo", id }],
+      keepUnusedDataFor: 300,
     }),
 
     getProviderCommands: builder.query<
@@ -594,6 +589,7 @@ export const {
   useEnableProviderMutation,
   useDisableProviderMutation,
   useGetProviderModelsQuery,
+  useGetProviderRealtimeVoicesQuery,
   useLazyGetProviderModelsQuery,
   useGetProviderCommandsQuery,
   useLazyGetProviderCommandsQuery,

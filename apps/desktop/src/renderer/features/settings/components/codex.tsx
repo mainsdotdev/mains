@@ -10,11 +10,13 @@ import {
   useGetProviderRateLimitsQuery,
   useGetProviderAccountInfoQuery,
   useConsumeProviderRateLimitResetCreditMutation,
+  useGetProviderRealtimeVoicesQuery,
 } from "@/lib/redux/api";
 import { providersApi } from "@/lib/redux/api/providersApi";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import type { RateLimitInfo } from "../../../../shared/adapter.types";
 import { StructuredOutputsModal } from "./structured-outputs-modal";
+import { CodexVoiceSettings } from "./codex-voice-settings";
 import type { CodexAdapterConfig } from "../../../../shared/adapter.types";
 
 type CodexApprovalMode = NonNullable<CodexAdapterConfig["approvalMode"]>;
@@ -66,8 +68,9 @@ const SANDBOX_OPTIONS = CODEX_SANDBOX_MODES.map((m) => ({
 }));
 
 export default function CodexSettings() {
-  const { provider, isLoading, error, config, updateConfig } =
+  const { provider, isLoading, error, config, updateConfig, updating } =
     useProviderSettings<CodexAdapterConfig>(PROVIDER_IDS.codex, "codex");
+  const voices = useGetProviderRealtimeVoicesQuery(PROVIDER_IDS.codex, { skip: !provider?.isEnabled });
   const { data: rateLimits, isLoading: isLoadingRateLimits } =
     useGetProviderRateLimitsQuery(PROVIDER_IDS.codex, {
       pollingInterval: 60000,
@@ -257,6 +260,16 @@ export default function CodexSettings() {
             ? "Advanced usage is temporarily unavailable for this account."
             : undefined
         }
+      />
+
+      <CodexVoiceSettings
+        config={config}
+        catalog={voices.data}
+        loading={voices.isFetching}
+        error={voices.error}
+        updating={updating}
+        onUpdate={updateConfig}
+        onRetry={() => { void voices.refetch(); }}
       />
 
       <SettingsSection title="Configuration">

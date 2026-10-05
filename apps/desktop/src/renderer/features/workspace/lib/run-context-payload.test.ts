@@ -198,6 +198,37 @@ describe("buildRunContextPayload", () => {
     });
   });
 
+  it("sends one screenshot and the shared comment with every selected element", () => {
+    const first = browserSel();
+    const second = browserSel({ selector: "h1", tagName: "h1", text: "Dashboard heading", sourceFile: "src/heading.tsx" });
+    const payload = buildRunContextPayload([
+      browserSel({
+        elements: [first, second], comment: "Explain these two elements",
+        screenshotPath: "/caps/annotation.png",
+      }),
+    ]);
+    expect(payload.attachments).toHaveLength(1);
+    expect(payload.attachments?.[0].name).toBe("browser-example.com-annotation-abcdef.png");
+    expect(payload.initialContext).toHaveLength(1);
+    const item = payload.initialContext[0];
+    expect(item.content).toContain("2 selected items");
+    expect(item.content).toContain("User comment: Explain these two elements");
+    expect(item.content).toContain("Selector: main > div > button.save");
+    expect(item.content).toContain("Selector: h1");
+    expect(item.content).toContain("Source file: src/heading.tsx");
+    expect(item.metadata).toMatchObject({ source: "browser", elements: [first, second], comment: "Explain these two elements" });
+  });
+
+  it("keeps each element's component and source metadata independent", () => {
+    const first = browserSel({ componentName: "Header", sourceFile: "src/header.tsx" });
+    const second = browserSel({ selector: "footer", tagName: "footer", text: "Footer" });
+    const [context] = buildRunContextPayload([{ ...first, elements: [first, second] }]).initialContext;
+    const secondDescription = context.content!.split("Selected item 2")[1];
+    expect(secondDescription).toContain("Element: footer");
+    expect(secondDescription).not.toContain("Header");
+    expect(secondDescription).not.toContain("src/header.tsx");
+  });
+
   it("sends an Appshot image and its accessibility snapshot together", () => {
     const payload = buildRunContextPayload([appshot()]);
     expect(payload.attachments).toEqual([

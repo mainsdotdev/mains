@@ -30,6 +30,10 @@ import { eq } from "drizzle-orm";
 import { collections, providers } from "../../db/schema";
 import type { DatabaseInstance } from "../../db/types";
 import type Database from "better-sqlite3";
+import type { RealtimeWorkHandlers, WorkRunRealtimeRequest } from "../../../shared/adapter.types";
+import type { RunRealtimeEvent, RunRealtimeUpdate } from "@mains/contracts/realtime";
+import { CHANNELS } from "@mains/contracts/channels";
+import { registerEventSink } from "../../ipc-kit/event-bus";
 
 const flushBackground = () => new Promise((r) => setTimeout(r, 50));
 
@@ -67,9 +71,10 @@ vi.mock("electron", () => ({
   },
 }));
 
-vi.mock("../providers/adapters", () => ({
+vi.mock("../providers/adapters", async () => ({
   createWorkAdapter: vi.fn(),
   couldModifyFiles: vi.fn().mockReturnValue(false),
+  emitUserPromptArtifact: (await import("../providers/adapters/adapter.shared")).emitUserPromptArtifact,
 }));
 
 // gitService is throw-style: plain resolved values, rejects on failure.
@@ -113,7 +118,7 @@ import { runsService } from "./runs.service";
 import { runsRepo } from "./runs.repo";
 import { managedRunDir, managedRunImageDir } from "./run-execution";
 import { runSessionRegistry } from "./run-session-registry";
-import { createWorkAdapter } from "../providers/adapters";
+import { createWorkAdapter, emitUserPromptArtifact } from "../providers/adapters";
 import { collectionsService } from "../collections";
 import { workspaceService } from "../workspace";
 import { gitService } from "../git/git.service";
@@ -150,6 +155,442 @@ describe("runsService", () => {
   // ─────────────────────────────────────────────────────────────
   // Run Operations
   // ─────────────────────────────────────────────────────────────
+  describe("native Codex voice", () => {
+    function voiceFixture(fresh = false, spaceId?: string) {
+      const run = createRun(db, { providerId: "codex", spaceId, mode: "chat", status: "succeeded", sessionId: fresh ? null : "native-thread", goal: fresh ? null : "Existing conversation" });
+      let work!: RealtimeWorkHandlers;
+      let publish!: (event: RunRealtimeEvent) => void;
+      const payload = { runId: run.id, accountId: "default", connectionId: "voice-connection", sdp: "v=0\r\n" };
+      const startRealtime = vi.fn(async (_request: WorkRunRealtimeRequest, onEvent: typeof publish, handlers: RealtimeWorkHandlers) => {
+        publish = onEvent;
+        work = handlers;
+      });
+      const stopRealtime = vi.fn(async () => { publish({ ...payload, type: "closed", reason: "ended" }); });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRealtime, stopRealtime } as never);
+      const voice = (event: RunRealtimeUpdate) => publish({ runId: run.id, connectionId: payload.connectionId, ...event });
+      return { run, payload, startRealtime, stopRealtime, voice, work: () => work };
+    }
+
+    it("links a separate worker with inherited settings, attributes its prompt and recovers it on the next call", async () => {
+      const space = createSpace(db, { providerId: "codex", mode: "chat" });
+      const h = voiceFixture(false, space.id);
+      const worker = createRun(db, { providerId: "codex", spaceId: space.id, mode: "chat", status: "running", goal: "Worker task" });
+      const execute = vi.spyOn(runsService, "executeRun").mockResolvedValue({ runId: worker.id });
+      const cancel = vi.spyOn(runsService, "cancelRun");
+      try {
+        await runsService.startRealtime(h.payload);
+        const request = h.startRealtime.mock.calls[0][0];
+        expect(request.voiceInstructions).toContain("separate working chat");
+        const args = { taskKey: "hero", title: "Hero refactor", prompt: "Refactor the hero, preserve the appearance." };
+        await expect(request.voiceTools!.start(args)).resolves.toMatchObject({ runId: worker.id, reused: false });
+        expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          accountId: "default", providerId: "codex", goal: args.prompt,
+          configSnapshot: request.configSnapshot, conversationSettings: expect.any(Object),
+          initialContext: [{ kind: "note", content: expect.any(String), metadata: {
+            voiceDelegation: { parentRunId: h.run.id, title: expect.any(String), taskKey: "hero" },
+          } }],
+        }));
+        const cards = (await runsRepo.findArtifactsByRun(h.run.id)).filter((a) => a.metadata?.kind === "voice-task");
+        expect(cards).toHaveLength(1);
+        expect(cards[0].metadata).toMatchObject({ voiceTask: { id: worker.id, taskKey: "hero", title: args.title, mode: "chat" } });
+        const prompts: any[] = [];
+        await emitUserPromptArtifact(async (event) => { prompts.push(event); }, args.prompt, { context: execute.mock.calls[0][0].initialContext });
+        expect(prompts[0].metadata.voiceDelegation).toMatchObject({ parentRunId: h.run.id });
+        await runsService.stopRealtime(h.payload);
+        await expect(request.voiceTools!.read({ runId: worker.id })).rejects.toThrow("ended");
+        expect(cancel).not.toHaveBeenCalled();
+        expect((await runsService.getRunById(worker.id))?.status).toBe("running");
+        await runsService.startRealtime({ ...h.payload, connectionId: "next-call" });
+        const next = h.startRealtime.mock.calls[1][0];
+        expect(next.voiceInstructions).toContain(worker.id);
+        await expect(next.voiceTools!.start(args)).resolves.toMatchObject({ runId: worker.id, reused: true });
+        expect(execute).toHaveBeenCalledOnce();
+      } finally { await runsService.stopRealtime({ ...h.payload, connectionId: "next-call" }); h.voice({ type: "closed", reason: "ended" }); }
+    });
+
+    it("creates a blank conversation with selected settings without writing a prompt or starting work", async () => {
+      createProvider(db, { id: "codex" });
+      const space = createSpace(db, { providerId: "codex", mode: "work" });
+      const collection = createCollection(db);
+      const result = await runsService.createRealtimeConversation({
+        accountId: "default", spaceId: space.id, collectionId: collection.id,
+        conversationSettings: { model: "selected-model", config: { modelReasoningEffort: "ultra" } },
+      });
+      expect(await runsService.getRunById(result.runId)).toMatchObject({
+        providerId: "codex", mode: "work", status: "succeeded", spaceId: space.id, collectionId: collection.id,
+        workspaceId: null, goal: null, sessionId: null, model: "selected-model",
+        configSnapshot: { conversationSettings: { model: "selected-model", config: { modelReasoningEffort: "ultra" } } },
+      });
+      expect(await runsRepo.findArtifactsByRun(result.runId)).toHaveLength(0);
+      expect(await runsRepo.findTurnsByRun(result.runId)).toHaveLength(0);
+      expect(runSessionRegistry.get(result.runId)).toBeUndefined();
+    });
+
+    it("accepts a sessionless conversation and uses the first spoken user sentence as its goal", async () => {
+      const h = voiceFixture(true);
+      try {
+        await runsService.startRealtime(h.payload);
+        expect(h.startRealtime).toHaveBeenCalledOnce();
+        h.voice({ type: "transcript", itemId: "first", role: "user", text: "My first spoken request", final: true });
+        h.voice({ type: "transcript", itemId: "first", role: "user", text: "My first spoken request", final: true });
+        await vi.waitFor(async () => expect((await runsService.getRunById(h.run.id))?.goal).toBe("My first spoken request"));
+        const artifacts = await runsRepo.findArtifactsByRun(h.run.id);
+        expect(artifacts).toHaveLength(1);
+        expect(artifacts[0]).toMatchObject({ kind: "user-prompt", content: "My first spoken request", metadata: { voice: true } });
+        expect(await runsRepo.findTurnsByRun(h.run.id)).toHaveLength(0);
+      } finally { await runsService.stopRealtime(h.payload); }
+    });
+
+    it("validates the space provider and Developer workspace before creating a voice conversation", async () => {
+      const other = createSpace(db, { providerId: "claude_code", mode: "chat" });
+      await expect(runsService.createRealtimeConversation({ accountId: "default", spaceId: other.id })).rejects.toThrow("Codex");
+      createProvider(db, { id: "codex" });
+      const dev = createSpace(db, { name: "Developer voice", providerId: "codex", mode: "developer" });
+      await expect(runsService.createRealtimeConversation({ accountId: "default", spaceId: dev.id })).rejects.toThrow("workspace");
+      await expect(runsService.createRealtimeConversation({ accountId: "other-account", spaceId: dev.id })).rejects.toThrow("account");
+      expect(await runsService.getRunsByAccount("default")).toHaveLength(0);
+    });
+
+    it("persists speech between work turns and creates exactly one tracked turn per delegation", async () => {
+      const h = voiceFixture();
+      const send = vi.fn();
+      const off = registerEventSink({ kind: "test", send });
+      try {
+        await runsService.startRealtime({ ...h.payload, conversationSettings: { model: "requested", config: { permissionMode: "danger-full-access", modelReasoningEffort: "ultra" } } });
+        expect(await runsRepo.findTurnsByRun(h.run.id)).toHaveLength(0);
+        expect((await runsService.getRunById(h.run.id))?.status).toBe("succeeded");
+        expect(h.startRealtime.mock.calls[0][0]).toMatchObject({ mode: "chat", configSnapshot: { modelReasoningEffort: "ultra", sandboxMode: "read-only" } });
+        await expect(runsService.continueRun({ runId: h.run.id, accountId: "default", message: "Competing text turn" })).rejects.toThrow("End voice chat");
+
+        h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate", final: false });
+        await h.work().onTurnStarted("native-1", "Calculate this", "resolved-model");
+        h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate this", final: true });
+        h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate this", final: true });
+        await h.work().onEvent({ type: "plan_update", providerTurnId: "native-1", steps: [{ step: "Calculate", status: "completed" }] });
+        await h.work().onCompleted({ status: "succeeded" });
+        h.voice({ type: "transcript", itemId: "reply-1", role: "assistant", text: "The answer is ready", final: true });
+        await vi.waitFor(async () => expect((await runsRepo.findArtifactsByRun(h.run.id)).filter((artifact) => artifact.metadata?.voice)).toHaveLength(2));
+        const input = (await runsRepo.findArtifactsByRun(h.run.id)).find((artifact) => artifact.metadata?.source === "user");
+        expect(input?.metadata).toMatchObject({ voice: true, providerTurnId: "native-1", realtimeSessionId: "voice-connection" });
+        expect(input?.metadata).not.toHaveProperty("delivery");
+        expect(send.mock.calls.some(([channel]) => channel === CHANNELS.runs.eventPersisted)).toBe(true);
+
+        await h.work().onTurnStarted("native-2", "Another spoken request", "resolved-model");
+        await h.work().onCompleted({ status: "succeeded" });
+        const turns = await runsRepo.findTurnsByRun(h.run.id);
+        expect(turns.map((turn) => turn.turnIndex)).toEqual([0, 1]);
+        expect(turns[0]).toMatchObject({ model: "resolved-model", promptContent: "Calculate this", metadata: { providerTurnId: "native-1", codexPlan: { providerTurnId: "native-1" } } });
+        expect(turns[1]).toMatchObject({ model: "resolved-model", promptContent: "Another spoken request", metadata: { providerTurnId: "native-2" } });
+        expect(turns.every((turn) => turn.endedAt !== null)).toBe(true);
+        expect((await runsService.getRunById(h.run.id))?.goal).toBe("Existing conversation");
+      } finally {
+        await runSessionRegistry.get(h.run.id)?.finalize({ status: "canceled" });
+        await runsService.stopRealtime(h.payload);
+        off();
+      }
+    });
+
+    it("scopes narrated work messages to their native turn and voice connection", async () => {
+      const h = voiceFixture();
+      const send = vi.fn();
+      const off = registerEventSink({ kind: "test", send });
+      try {
+        await runsService.startRealtime(h.payload);
+        await h.work().onTurnStarted("native-1", "Check the build", "resolved-model");
+        const metadata = { source: "agent_message", itemId: "work-message", messagePhase: "commentary" };
+        await h.work().onEvent({ type: "artifact", kind: "report", content: "The build passed", metadata });
+        await h.work().onEvent({ type: "artifact", ephemeral: true, kind: "report", streamId: "work-preview",
+          content: "The build passed", metadata: { source: "agent_message_streaming" } });
+        const [artifact] = await runsRepo.findArtifactsByRun(h.run.id);
+        expect(artifact.metadata).toMatchObject({ ...metadata,
+          providerTurnId: "native-1", realtimeSessionId: "voice-connection" });
+        const preview = send.mock.calls.find(([channel]) => channel === CHANNELS.runs.ephemeralEvent)?.[1];
+        expect(preview).toMatchObject({ event: { metadata: {
+          source: "agent_message_streaming", providerTurnId: "native-1", realtimeSessionId: "voice-connection",
+        } } });
+        expect(metadata).not.toHaveProperty("providerTurnId");
+      } finally {
+        await runSessionRegistry.get(h.run.id)?.finalize({ status: "canceled" });
+        await runsService.stopRealtime(h.payload);
+        off();
+      }
+    });
+
+    it("announces the native work turn before its first work event", async () => {
+      const h = voiceFixture();
+      const send = vi.fn();
+      const off = registerEventSink({ kind: "test", send });
+      try {
+        await runsService.startRealtime(h.payload);
+        send.mockClear();
+        await h.work().onTurnStarted("native-empty-work", "Check the build", "resolved-model");
+        await vi.waitFor(() => expect(send.mock.calls.some(([channel]) => channel === CHANNELS.runs.eventPersisted)).toBe(true));
+        const [active] = await runsRepo.findTurnsByRun(h.run.id);
+        expect(active.metadata).toMatchObject({ inputSource: "voice", providerTurnId: "native-empty-work" });
+        expect(await runsRepo.findArtifactsByRun(h.run.id)).toHaveLength(0);
+      } finally {
+        await runSessionRegistry.get(h.run.id)?.finalize({ status: "canceled" });
+        await runsService.stopRealtime(h.payload);
+        off();
+      }
+    });
+
+    it("persists voice work origin on active tools and the turn after the call closes", async () => {
+      const h = voiceFixture();
+      try {
+        await runsService.startRealtime(h.payload);
+        await h.work().onTurnStarted("native-work", "Check the build", "resolved-model");
+        await h.work().onEvent({ type: "tool_call", toolName: "Read", input: { path: "package.json" },
+          metadata: { phase: "start", toolCallId: "native-tool" } });
+        const [tool] = await runsRepo.findToolCallsByRun(h.run.id);
+        expect(tool.metadata).toMatchObject({ inputSource: "voice", realtimeSessionId: "voice-connection", providerTurnId: "native-work" });
+        const [active] = await runsRepo.findTurnsByRun(h.run.id);
+        expect(active.metadata).toMatchObject({ inputSource: "voice", realtimeSessionId: "voice-connection", providerTurnId: "native-work" });
+        await runsService.stopRealtime(h.payload);
+        await h.work().onEvent({ type: "tool_call", toolName: "Read", output: "Read it",
+          metadata: { phase: "end", toolCallId: "native-tool" } });
+        await h.work().onEvent({ type: "log", level: "info", message: "Work continues after voice closes" });
+        await h.work().onCompleted({ status: "failed", summary: "Build failed" });
+        const [ended] = await runsRepo.findTurnsByRun(h.run.id);
+        expect(ended.metadata).toMatchObject({ inputSource: "voice", realtimeSessionId: "voice-connection", providerTurnId: "native-work", outcome: "failed" });
+        expect((await runsRepo.findToolCallsByRun(h.run.id))[0].metadata).toMatchObject({ inputSource: "voice", providerTurnId: "native-work" });
+        expect((await runsRepo.findArtifactsByRun(h.run.id))[0].metadata).toMatchObject({ inputSource: "voice", providerTurnId: "native-work" });
+      } finally {
+        await runSessionRegistry.get(h.run.id)?.finalize({ status: "canceled" });
+        await runsService.stopRealtime(h.payload);
+      }
+    });
+
+    it("keeps an assistant transcript scoped to the turn where speech began", async () => {
+      const h = voiceFixture();
+      try {
+        await runsService.startRealtime(h.payload);
+        await h.work().onTurnStarted("native-1", "First request", "resolved-model");
+        h.voice({ type: "transcript", itemId: "reply", role: "assistant", text: "First answer", final: false });
+        await h.work().onCompleted({ status: "succeeded" });
+        await h.work().onTurnStarted("native-2", "Second request", "resolved-model");
+        h.voice({ type: "transcript", itemId: "reply", role: "assistant", text: "First answer completed", final: true });
+        await vi.waitFor(async () => expect(await runsRepo.findArtifactsByRun(h.run.id)).toHaveLength(1));
+        const [artifact] = await runsRepo.findArtifactsByRun(h.run.id);
+        expect(artifact.metadata).toMatchObject({ voice: true, providerTurnId: "native-1" });
+        expect(artifact.metadata).not.toHaveProperty("delivery");
+      } finally {
+        await runSessionRegistry.get(h.run.id)?.finalize({ status: "canceled" });
+        await runsService.stopRealtime(h.payload);
+      }
+    });
+
+    it("streams idle speech as one chat message and persists only its final text with the same identity", async () => {
+      const h = voiceFixture();
+      const send = vi.fn();
+      const off = registerEventSink({ kind: "test", send });
+      try {
+        await runsService.startRealtime(h.payload);
+        h.voice({ type: "transcript", itemId: "reply", role: "assistant", text: "Hel", final: false });
+        const first = send.mock.calls.find(([channel]) => channel === CHANNELS.runs.ephemeralEvent)?.[1];
+        expect(first).toMatchObject({ runId: h.run.id, event: {
+          kind: "report", content: "Hel", streamId: "voice-voice-connection-reply",
+          metadata: { voice: true, streaming: true, source: "agent_message" },
+        } });
+        expect(await runsRepo.findArtifactsByRun(h.run.id)).toHaveLength(0);
+        h.voice({ type: "transcript", itemId: "reply", role: "assistant", text: "Hello", final: true });
+        h.voice({ type: "transcript", itemId: "reply", role: "assistant", text: "late delta", final: false });
+        h.voice({ type: "transcript", itemId: "reply", role: "assistant", text: "Hello", final: true });
+        await vi.waitFor(async () => expect(await runsRepo.findArtifactsByRun(h.run.id)).toHaveLength(1));
+        const [artifact] = await runsRepo.findArtifactsByRun(h.run.id);
+        expect(artifact).toMatchObject({ content: "Hello", metadata: {
+          streamId: first.event.streamId, voiceStartedAt: first.ts, voice: true,
+        } });
+        const previews = send.mock.calls.filter(([channel]) => channel === CHANNELS.runs.ephemeralEvent).map(([, data]) => data);
+        expect(previews).toHaveLength(2);
+        expect(previews[1]).toMatchObject({ ts: first.ts, event: { content: "Hello", metadata: { streaming: false } } });
+        h.voice({ type: "transcript", itemId: "input", role: "user", text: "Next", final: false });
+        expect(send.mock.calls.at(-1)?.[1]).toMatchObject({ event: { kind: "user-prompt", metadata: { source: "user" } } });
+      } finally { await runsService.stopRealtime(h.payload); off(); }
+    });
+
+    it("enforces account, archived and provider guards before starting", async () => {
+      const h = voiceFixture();
+      const callsBefore = vi.mocked(createWorkAdapter).mock.calls.length;
+      await expect(runsService.startRealtime({ ...h.payload, accountId: "another" })).rejects.toThrow("this account");
+      await expect(runsService.stopRealtime({ ...h.payload, accountId: "another" })).rejects.toThrow("this account");
+      await expect(runsService.startRealtime({ ...h.payload, sdp: "bad" })).rejects.toThrow("Invalid voice");
+      await runsRepo.archiveRun(h.run.id);
+      await expect(runsService.startRealtime(h.payload)).rejects.toThrow("Unarchive");
+      await runsRepo.unarchiveRun(h.run.id);
+      const other = createRun(db, { providerId: "claude_code", mode: "chat", sessionId: "other" });
+      await expect(runsService.startRealtime({ ...h.payload, runId: other.id })).rejects.toThrow("available for Codex");
+      expect(vi.mocked(createWorkAdapter).mock.calls.length).toBe(callsBefore);
+      expect(h.startRealtime).not.toHaveBeenCalled();
+    });
+
+    it("claims one async start and rolls back the claim after a failed start", async () => {
+      const h = voiceFixture();
+      let reject!: (error: Error) => void;
+      h.startRealtime.mockReturnValueOnce(new Promise<void>((_resolve, no) => { reject = no; }));
+      const first = runsService.startRealtime(h.payload);
+      // Attach the rejection assertion before rejecting the pending RPC.
+      const failure = expect(first).rejects.toThrow("Start failed");
+      await vi.waitFor(() => expect(h.startRealtime).toHaveBeenCalledOnce());
+      await expect(runsService.startRealtime(h.payload)).rejects.toThrow("already active");
+      reject(new Error("Start failed"));
+      await failure;
+      await runsService.startRealtime(h.payload);
+      expect(h.startRealtime).toHaveBeenCalledTimes(2);
+      await runsService.stopRealtime(h.payload);
+    });
+
+    it("recovers run status when native work preparation fails before a session registers", async () => {
+      const h = voiceFixture();
+      await runsService.startRealtime(h.payload);
+      const failure = vi.spyOn(runsRepo, "findRunById").mockRejectedValueOnce(new Error("Preparation failed"));
+      await expect(h.work().onTurnStarted("native", "Speech")).rejects.toThrow("Preparation failed");
+      failure.mockRestore();
+      await h.work().onCompleted({ status: "failed", summary: "Preparation failed" });
+      expect((await runsService.getRunById(h.run.id))?.status).toBe("failed");
+      expect(runSessionRegistry.get(h.run.id)).toBeUndefined();
+      await runsService.stopRealtime(h.payload);
+    });
+
+    it("retains the voice claim after a failed stop and ignores stale connection cleanup", async () => {
+      const h = voiceFixture();
+      await runsService.startRealtime(h.payload);
+      await runsService.stopRealtime({ ...h.payload, connectionId: "older-connection" });
+      expect(h.stopRealtime).not.toHaveBeenCalled();
+      h.stopRealtime.mockRejectedValueOnce(new Error("Stop failed"));
+      await expect(runsService.stopRealtime(h.payload)).rejects.toThrow("Stop failed");
+      await expect(runsService.startRealtime(h.payload)).rejects.toThrow("already active");
+      await expect(runsService.continueRun({ runId: h.run.id, accountId: "default", message: "Text" })).rejects.toThrow("End voice chat");
+      await runsService.stopRealtime(h.payload);
+      expect(h.stopRealtime).toHaveBeenCalledTimes(2);
+      await runsService.startRealtime(h.payload);
+      await runsService.stopRealtime(h.payload);
+    });
+
+    it("cancels a stop during service preparation without opening a late native call", async () => {
+      const h = voiceFixture();
+      let finishPreparation!: (value: never[]) => void;
+      const turnRead = vi.spyOn(runsRepo, "findTurnsByRun").mockReturnValueOnce(
+        new Promise((resolve) => { finishPreparation = resolve; }));
+      const runRead = vi.spyOn(runsRepo, "findRunById");
+      try {
+        const starting = runsService.startRealtime(h.payload);
+        await vi.waitFor(() => expect(turnRead).toHaveBeenCalledOnce());
+        let stopped = false;
+        const stopping = runsService.stopRealtime(h.payload).then(() => { stopped = true; });
+        await vi.waitFor(() => expect(runRead).toHaveBeenCalledTimes(2));
+        expect(stopped).toBe(false);
+        finishPreparation([]);
+        await Promise.all([starting, stopping]);
+        expect(h.startRealtime).not.toHaveBeenCalled();
+        expect(h.stopRealtime).not.toHaveBeenCalled();
+        await runsService.startRealtime(h.payload);
+        expect(h.startRealtime).toHaveBeenCalledOnce();
+        await runsService.stopRealtime(h.payload);
+      } finally { turnRead.mockRestore(); runRead.mockRestore(); }
+    });
+
+    it("reports a missing stop capability instead of confirming an active call ended", async () => {
+      const h = voiceFixture();
+      await runsService.startRealtime(h.payload);
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRealtime: h.startRealtime } as never);
+      await expect(runsService.stopRealtime(h.payload)).rejects.toThrow("closure is unavailable");
+      await expect(runsService.startRealtime(h.payload)).rejects.toThrow("already active");
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRealtime: h.startRealtime, stopRealtime: h.stopRealtime } as never);
+      await runsService.stopRealtime(h.payload);
+    });
+  });
+
+  describe("conversation settings", () => {
+    afterEach(() => { vi.mocked(gitService.getHeadSha).mockClear(); });
+    it.each(["ultra", "FutureEffort"])("preserves Codex effort %j through saved settings, queued continuation, and fork", async (effort) => {
+      createProvider(db, { id: "codex" });
+      createWorkspace(db, { id: "codex-settings-workspace" });
+      createSpace(db, { id: "codex-settings-space", providerId: "codex", mode: "developer" });
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const forkRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun, continueRun, forkRun,
+        canResumeSession: vi.fn().mockResolvedValue(true) } as never);
+      const settings = { model: "server-model", config: { modelReasoningEffort: effort, thinkingMode: true } };
+      const created = await runsService.executeRun({
+        accountId: "default", providerId: "codex", spaceId: "codex-settings-space",
+        workspaceId: "codex-settings-workspace", goal: "hello", conversationSettings: settings,
+      });
+      await flushBackground();
+      expect(startRun.mock.calls[0][0]).toMatchObject({ model: settings.model, configSnapshot: settings.config });
+      expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(settings);
+
+      const next = { ...settings, config: { ...settings.config, modelReasoningEffort: effort === "ultra" ? "FutureEffort" : "ultra" } };
+      await runsService.updateRun(created.runId, { conversationSettings: next });
+      await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Queued", conversationSettings: settings });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ configSnapshot: settings.config });
+      expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(next);
+      await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Use saved settings" });
+      await flushBackground();
+      expect(continueRun.mock.calls[1][0]).toMatchObject({ configSnapshot: next.config });
+      const fork = await runsService.forkRun({ sourceRunId: created.runId, accountId: "default", message: "Fork" });
+      await flushBackground();
+      expect(forkRun.mock.calls[0][0]).toMatchObject({ configSnapshot: next.config });
+      expect((await runsService.getRunById(fork.runId))?.configSnapshot?.conversationSettings).toMatchObject(next);
+    });
+
+    it("keeps two chats isolated through provider changes, continuation, and fork", async () => {
+      createWorkspace(db, { id: "settings-workspace" });
+      createSpace(db, { id: "settings-space", providerId: "copilot_cli", mode: "developer" });
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const forkRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun, continueRun, forkRun,
+        canResumeSession: vi.fn().mockResolvedValue(true) } as any);
+      const a = { model: "model-a", config: { permissionMode: "default", modelReasoningEffort: "low", thinkingMode: true } };
+      const b = { model: "model-b", config: { permissionMode: "bypassPermissions", modelReasoningEffort: "high" } };
+      const payload = { accountId: "default", providerId: "copilot_cli", spaceId: "settings-space", workspaceId: "settings-workspace", goal: "hello" };
+      const first = await runsService.executeRun({ ...payload, conversationSettings: a });
+      await flushBackground();
+      const second = await runsService.executeRun({ ...payload, conversationSettings: b });
+      await flushBackground();
+      expect(startRun.mock.calls[1][0].configSnapshot.thinkingMode).toBe(true);
+      await db.update(providers).set({ config: JSON.stringify({ permissionMode: "plan", modelReasoningEffort: "medium" }) }).where(eq(providers.id, "copilot_cli"));
+      await runsService.continueRun({ runId: first.runId, accountId: "default", message: "continue" });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ model: "model-a", configSnapshot: a.config });
+      expect((await runsService.getRunById(second.runId))?.configSnapshot?.conversationSettings).toMatchObject(b);
+      await runsService.continueRun({ runId: first.runId, accountId: "default", message: "queued snapshot", conversationSettings: b });
+      await flushBackground();
+      expect(continueRun.mock.calls[1][0]).toMatchObject({ model: "model-b", configSnapshot: b.config });
+      expect((await runsService.getRunById(first.runId))?.configSnapshot?.conversationSettings).toMatchObject(a);
+      await runsService.updateRun(first.runId, { conversationSettings: { model: "model-c", config: { ...a.config, modelReasoningEffort: "", thinkingMode: false } } });
+      const restored = await runsService.getRunById(first.runId);
+      expect(restored?.model).toBe("model-a");
+      expect(restored?.configSnapshot?.conversationSettings).toMatchObject({ model: "model-c", config: { modelReasoningEffort: "", thinkingMode: false } });
+      await runsService.continueRun({ runId: first.runId, accountId: "default", message: "reasoning off" });
+      await flushBackground();
+      expect(continueRun.mock.calls[2][0]).toMatchObject({ model: "model-c", configSnapshot: { permissionMode: "default", modelReasoningEffort: "", thinkingMode: false } });
+      const fork = await runsService.forkRun({ sourceRunId: first.runId, accountId: "default", message: "fork" });
+      await flushBackground();
+      expect(forkRun.mock.calls[0][0]).toMatchObject({ model: "model-c", configSnapshot: { modelReasoningEffort: "", thinkingMode: false } });
+      expect((await runsService.getRunById(fork.runId))?.configSnapshot?.conversationSettings).toMatchObject({ model: "model-c" });
+    });
+
+    it("changes the next-message preferences without changing an active turn or its snapshot", async () => {
+      createRun(db, { id: "settings-live", model: "original", status: "running", configSnapshot: JSON.stringify({ permissionMode: "default", outputStyle: "Concise", additionalDirectories: ["/tmp"] }) });
+      const updated = await runsService.updateRun("settings-live", { conversationSettings: { model: "next", config: { permissionMode: "plan", modelReasoningEffort: "high" } } });
+      expect(updated).toMatchObject({ status: "running", model: "original", configSnapshot: {
+        permissionMode: "default", outputStyle: "Concise", additionalDirectories: ["/tmp"],
+        conversationSettings: { model: "next", config: { permissionMode: "plan", modelReasoningEffort: "high" } },
+      } });
+    });
+
+    it("rejects invalid modes, effort, and non-run configuration", async () => {
+      createRun(db, { id: "settings-validate" });
+      for (const config of [{ permissionMode: "workspace-write" }, { modelReasoningEffort: "expensive" }, { apiKey: "secret" }]) {
+        await expect(runsService.updateRun("settings-validate", { conversationSettings: { model: "test", config } as any })).rejects.toThrow();
+      }
+      expect((await runsService.getRunById("settings-validate"))?.configSnapshot).toBeNull();
+    });
+  });
   describe("getAllRuns", () => {
     it("returns empty array when no runs", async () => {
       const result = await runsService.getAllRuns();
@@ -712,14 +1153,97 @@ describe("runsService", () => {
       );
     });
 
-    it("scopes extra folder grants to one chat and replaces them on continuation", async () => {
+    it.each(["copilot_cli", "cursor"] as const)("starts and continues %s prompts with an empty directory list", async (providerId) => {
+      createProvider(db, { id: providerId });
+      createWorkspace(db, { id: "ws-no-folders" });
+      createSpace(db, { id: "sp-no-folders", providerId, mode: "developer" });
+      const configSnapshot = providerId === "cursor"
+        ? { mode: "ask" }
+        : { permissionMode: "default" };
+      const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({
+        startRun,
+        continueRun,
+        canResumeSession: vi.fn().mockResolvedValue(true),
+      } as any);
+
+      const { runId } = await runsService.executeRun({
+        accountId: "default",
+        workspaceId: "ws-no-folders",
+        spaceId: "sp-no-folders",
+        providerId,
+        goal: "hi",
+        configSnapshot,
+        additionalDirectories: [],
+      });
+      await flushBackground();
+      expect(startRun.mock.calls[0][0].configSnapshot).toMatchObject(configSnapshot);
+      expect((await runsService.getRunById(runId))?.configSnapshot).toMatchObject(configSnapshot);
+
+      await runsService.continueRun({
+        runId,
+        accountId: "default",
+        message: "continue",
+        additionalDirectories: [],
+      });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0].configSnapshot).toMatchObject(configSnapshot);
+      expect((await runsService.getRunById(runId))?.configSnapshot).toMatchObject(configSnapshot);
+    });
+
+    it.each(["copilot_cli", "cursor"] as const)("continues a stored %s session with a legacy empty directory list", async (providerId) => {
+      createWorkspace(db, { id: "ws-legacy-folders" });
+      createRun(db, {
+        id: "legacy-folders",
+        providerId,
+        workspaceId: "ws-legacy-folders",
+        mode: "developer",
+        status: "succeeded",
+        configSnapshot: JSON.stringify({ additionalDirectories: [] }),
+      });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({
+        continueRun,
+        canResumeSession: vi.fn().mockResolvedValue(true),
+      } as any);
+
+      await runsService.continueRun({
+        runId: "legacy-folders",
+        accountId: "default",
+        message: "continue",
+      });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0].configSnapshot).not.toHaveProperty("additionalDirectories");
+      expect((await runsService.getRunById("legacy-folders"))?.configSnapshot).not.toHaveProperty("additionalDirectories");
+    });
+
+    it.each(["copilot_cli", "cursor"] as const)("rejects actual extra directory grants for %s", async (providerId) => {
+      createProvider(db, { id: providerId });
+      createWorkspace(db, { id: "ws-unsupported-folders" });
+      createSpace(db, { id: "sp-unsupported-folders", providerId, mode: "developer" });
+      const startRun = mockStartAdapter();
+
+      await expect(runsService.executeRun({
+        accountId: "default",
+        workspaceId: "ws-unsupported-folders",
+        spaceId: "sp-unsupported-folders",
+        providerId,
+        goal: "hi",
+        additionalDirectories: [tmpdir()],
+      })).rejects.toThrow("Additional directories are supported by Claude and Codex only");
+      expect(startRun).not.toHaveBeenCalled();
+    });
+
+    it.each(["claude_code", "codex"] as const)("scopes extra folder grants to one %s chat and replaces them on continuation", async (providerId) => {
       const first = mkdtempSync(join(tmpdir(), "mains-added-dir-"));
       const second = mkdtempSync(join(tmpdir(), "mains-added-dir-"));
       try {
+        createProvider(db, { id: providerId });
         createSpace(db, {
           id: "sp-folders",
           accountId: "default",
-          providerId: "claude_code",
+          providerId,
           mode: "work",
         });
         const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
@@ -733,7 +1257,7 @@ describe("runsService", () => {
         const { runId } = await runsService.executeRun({
           accountId: "default",
           spaceId: "sp-folders",
-          providerId: "claude_code",
+          providerId,
           goal: "read the folder",
           additionalDirectories: [first, join(first, ".")],
         });
@@ -804,13 +1328,13 @@ describe("runsService", () => {
       await flushBackground();
 
       const request = startRun.mock.calls[0][0];
-      expect(request.configSnapshot).toEqual({
+      expect(request.configSnapshot).toMatchObject({
         sandboxMode: "read-only",
         planMode: false,
         goalMode: false,
       });
       const run = await runsService.getRunById(runId);
-      expect(run?.configSnapshot).toEqual({
+      expect(run?.configSnapshot).toMatchObject({
         sandboxMode: "read-only",
         planMode: false,
         goalMode: false,
@@ -1057,7 +1581,7 @@ describe("runsService", () => {
       await flushBackground();
 
       const request = continueRun.mock.calls[0][0];
-      expect(request.configSnapshot).toEqual({
+      expect(request.configSnapshot).toMatchObject({
         sandboxMode: "read-only",
         planMode: false,
         goalMode: false,
@@ -2636,7 +3160,77 @@ describe("runsService", () => {
   // ─────────────────────────────────────────────────────────────
   // continueRun
   // ─────────────────────────────────────────────────────────────
+  describe("steer input delivery", () => {
+    it("forwards active input without model or directory overrides", async () => {
+      createProvider(db, { id: "codex" });
+      createRun(db, { id: "steer-run", providerId: "codex", accountId: "default", status: "running" });
+      runSessionRegistry.register("steer-run", { runId: "steer-run", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() });
+      const steerRun = vi.fn().mockResolvedValue({ turnId: "native-turn" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
+      try {
+        await expect(runsService.steerRun({ runId: "steer-run", accountId: "default", clientUserMessageId: "input", message: "change direction" })).resolves.toEqual({ runId: "steer-run", turnId: "native-turn" });
+        expect(steerRun).toHaveBeenCalledWith(expect.objectContaining({ runId: "steer-run", message: "change direction", clientUserMessageId: "input" }));
+        expect(steerRun.mock.calls[0][0]).not.toHaveProperty("model");
+        expect(steerRun.mock.calls[0][0]).not.toHaveProperty("execution");
+        expect(await runsRepo.findTurnsByRun("steer-run")).toEqual([]);
+      } finally { runSessionRegistry.unregister("steer-run"); }
+    });
+
+    it("recovers an accepted native message once across concurrent delivery checks", async () => {
+      createProvider(db, { id: "codex" });
+      createRun(db, { id: "uncertain-run", providerId: "codex", accountId: "default", status: "succeeded" });
+      const getInputStatus = vi.fn().mockResolvedValue({ accepted: true, turnId: "native-turn" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ getInputStatus } as any);
+      const payload = { runId: "uncertain-run", accountId: "default", clientUserMessageId: "input",
+        delivery: "steer" as const, input: { message: "accepted guidance", contextSkills: [{ name: "skill" }] } };
+      await expect(Promise.all([runsService.getInputStatus(payload), runsService.getInputStatus(payload)])).resolves.toEqual([{ accepted: true }, { accepted: true }]);
+      const artifacts = await runsRepo.findArtifactsByRun("uncertain-run");
+      expect(artifacts).toHaveLength(1);
+      expect(artifacts[0]).toMatchObject({ content: "accepted guidance", metadata: { clientUserMessageId: "input", providerTurnId: "native-turn", delivery: "steer", skills: [{ name: "skill" }] } });
+      expect(await runsRepo.findTurnsByRun("uncertain-run")).toEqual([]);
+      getInputStatus.mockClear();
+      await expect(runsService.getInputStatus(payload)).resolves.toEqual({ accepted: true });
+      expect(getInputStatus).not.toHaveBeenCalled();
+    });
+
+    it("retains unconfirmed input without inventing transcript rows", async () => {
+      createProvider(db, { id: "codex" });
+      createRun(db, { id: "uncertain-run", providerId: "codex", accountId: "default" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ getInputStatus: vi.fn().mockResolvedValue({ accepted: false }) } as any);
+      await expect(runsService.getInputStatus({ runId: "uncertain-run", accountId: "default", clientUserMessageId: "input", input: { message: "unconfirmed" } })).resolves.toEqual({ accepted: false });
+      expect(await runsRepo.findArtifactsByRun("uncertain-run")).toEqual([]);
+    });
+  });
+
   describe("continueRun", () => {
+    function createContinuableRun(overrides: Parameters<typeof createRun>[1]) {
+      return createRun(db, { status: "succeeded", ...overrides });
+    }
+
+    it("rejects concurrent continuation without failing the active run", async () => {
+      createContinuableRun({ id: "live-run", accountId: "default", status: "running" });
+      await expect(runsService.continueRun({ runId: "live-run", accountId: "default", message: "queued" })).rejects.toThrow("active response");
+      expect((await runsRepo.findRunById("live-run"))?.status).toBe("running");
+    });
+
+    it("returns a queued continuation only after native input acceptance", async () => {
+      createContinuableRun({ id: "queue-run", accountId: "default", providerId: "codex", mode: "work" });
+      let accept!: (turnId: string) => Promise<void>;
+      let finish!: (result: { status: "succeeded" }) => void;
+      const pending = new Promise<{ status: "succeeded" }>((resolve) => { finish = resolve; });
+      const adapter = setupContinueAdapter({ continueRun: vi.fn((request) => { accept = request.onInputAccepted; return pending; }) });
+      let returned = false;
+      const continuation = runsService.continueRun({ runId: "queue-run", accountId: "default", message: "next", clientUserMessageId: "client-id" });
+      void continuation.then(() => { returned = true; });
+      await vi.waitFor(() => expect(adapter.continueRun).toHaveBeenCalled());
+      expect(returned).toBe(false);
+      expect(adapter.continueRun.mock.calls[0][0]).toMatchObject({ clientUserMessageId: "client-id" });
+      await accept("native-turn");
+      await expect(continuation).resolves.toEqual({ runId: "queue-run", resumed: true });
+      finish({ status: "succeeded" });
+      await flushBackground();
+    });
+
     function setupContinueAdapter(overrides: Record<string, unknown> = {}) {
       const mockAdapter = {
         continueRun: vi.fn().mockResolvedValue({
@@ -2660,13 +3254,13 @@ describe("runsService", () => {
 
     it("returns error when run does not belong to account", async () => {
       createAccount(db, { id: "other" });
-      createRun(db, { id: "r1", accountId: "other" });
+      createContinuableRun({ id: "r1", accountId: "other" });
 
       await expect(runsService.continueRun({ runId: "r1", accountId: "default", message: "continue", })).rejects.toThrow("Run does not belong to this account");
     });
 
     it("returns error when provider not found", async () => {
-      createRun(db, { id: "r1", accountId: "default" });
+      createContinuableRun({ id: "r1", accountId: "default" });
       vi.spyOn(
         await import("../providers/providers.repo").then(m => m.providersRepo),
         "findById"
@@ -2677,14 +3271,14 @@ describe("runsService", () => {
 
     it("returns error when provider is disabled", async () => {
       createProvider(db, { id: "disabled_p", isEnabled: false, displayName: "Disabled" });
-      createRun(db, { id: "r1", accountId: "default", providerId: "disabled_p" });
+      createContinuableRun({ id: "r1", accountId: "default", providerId: "disabled_p" });
 
       await expect(runsService.continueRun({ runId: "r1", accountId: "default", message: "continue", })).rejects.toThrow("not enabled");
     });
 
     it("returns error when adapter has no continueRun", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       vi.mocked(createWorkAdapter).mockReturnValue({} as any);
 
       await expect(runsService.continueRun({ runId: "r1", accountId: "default", message: "continue", })).rejects.toThrow("Provider does not support session resumption");
@@ -2692,7 +3286,7 @@ describe("runsService", () => {
 
     it("returns error when canResumeSession returns false", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter({
         canResumeSession: vi.fn().mockResolvedValue(false),
       });
@@ -2702,7 +3296,7 @@ describe("runsService", () => {
 
     it("succeeds on happy path", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter();
 
       const result = await runsService.continueRun({
@@ -2717,7 +3311,7 @@ describe("runsService", () => {
 
     it("calls adapter.continueRun with correct args", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       const mockAdapter = setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2734,7 +3328,7 @@ describe("runsService", () => {
 
     it("continues with the latest turn model when the caller omits one", async () => {
       createWorkspace(db, { id: "ws-model" });
-      createRun(db, {
+      createContinuableRun({
         id: "run-model",
         accountId: "default",
         workspaceId: "ws-model",
@@ -2767,7 +3361,7 @@ describe("runsService", () => {
     });
 
     it("lets an explicit continue model override the latest turn model", async () => {
-      createRun(db, {
+      createContinuableRun({
         id: "run-explicit-model",
         accountId: "default",
         mode: "work",
@@ -2796,7 +3390,7 @@ describe("runsService", () => {
 
     it("updates run status to running", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1", status: "succeeded" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1", status: "succeeded" });
       setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2812,7 +3406,7 @@ describe("runsService", () => {
 
     it("background .then() updates to succeeded", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2828,7 +3422,7 @@ describe("runsService", () => {
 
     it("background .catch() marks run as failed", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter({
         continueRun: vi.fn().mockRejectedValue(new Error("continue crashed")),
       });
@@ -2847,7 +3441,7 @@ describe("runsService", () => {
 
     it("persists additional context when provided", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2865,7 +3459,7 @@ describe("runsService", () => {
     });
 
     it("works when no workspace attached to run", async () => {
-      createRun(db, { id: "r1", accountId: "default", mode: "work" });
+      createContinuableRun({ id: "r1", accountId: "default", mode: "work" });
       setupContinueAdapter();
 
       await runsService.continueRun({
@@ -2878,7 +3472,7 @@ describe("runsService", () => {
 
     it("skips canResumeSession check when adapter lacks it", async () => {
       createWorkspace(db, { id: "ws1" });
-      createRun(db, { id: "r1", accountId: "default", workspaceId: "ws1" });
+      createContinuableRun({ id: "r1", accountId: "default", workspaceId: "ws1" });
       setupContinueAdapter({ canResumeSession: undefined });
 
       await runsService.continueRun({
@@ -2890,7 +3484,7 @@ describe("runsService", () => {
     });
 
     it("returns error on outer catch", async () => {
-      createRun(db, { id: "r1", accountId: "default", mode: "work" });
+      createContinuableRun({ id: "r1", accountId: "default", mode: "work" });
       setupContinueAdapter();
       // Make updateRun throw during the "set running" step
       const originalUpdateRun = runsRepo.updateRun.bind(runsRepo);

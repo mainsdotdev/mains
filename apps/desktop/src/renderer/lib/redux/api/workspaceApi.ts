@@ -388,7 +388,7 @@ export const workspaceApi = baseApi.injectEndpoints({
             if (index !== -1) workspaces.splice(index, 1);
           }));
         }
-        forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "workspace", id });
+        forgetDeletedUiContext(dispatch as AppDispatch, { backendId, kind: "workspace", id }, (getState() as RootState).runQueue?.byOwner);
         return { data: undefined };
       },
       invalidatesTags: ["Workspaces", "WorkspaceGitStates"],

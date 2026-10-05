@@ -1,4 +1,4 @@
-import { CLAUDE_PERMISSION_MODE_IDS } from "./claude-permission-modes";
+import { CLAUDE_PERMISSION_MODE_IDS, DEFAULT_CLAUDE_PERMISSION_MODE } from "./claude-permission-modes";
 import { PROVIDER_IDS, type ProviderId } from "./provider-ids";
 
 /**
@@ -48,3 +48,58 @@ export const RUN_SETTING_CONFIG_KEYS = [
   "goalMode",
   "planMode",
 ] as const;
+
+export interface RunSettingConfig {
+  effortLevel?: string;
+  modelReasoningEffort?: string;
+  permissionMode?: string;
+  sandboxMode?: string;
+  mode?: string;
+  serviceTier?: string;
+  thinkingMode?: boolean;
+  ultracode?: boolean;
+  fastMode?: boolean;
+  goalMode?: boolean;
+  planMode?: boolean;
+}
+
+/** Preferences for the next message, stored in runs.configSnapshot.conversationSettings. */
+export interface ConversationSettings {
+  model: string;
+  config: RunSettingConfig;
+}
+
+export function pickRunSettingConfig(config: Record<string, unknown> = {}): RunSettingConfig {
+  return Object.fromEntries(RUN_SETTING_CONFIG_KEYS.flatMap((key) => {
+    const value = config[key];
+    return typeof value === "string" || typeof value === "boolean" ? [[key, value]] : [];
+  }));
+}
+
+/** Explicit empty/false values keep another chat's provider defaults from leaking in. */
+export function snapshotRunSettingConfig(providerId: string, config: Record<string, unknown> = {}): RunSettingConfig {
+  const defaults: Record<string, string> = {
+    [PROVIDER_IDS.claude]: DEFAULT_CLAUDE_PERMISSION_MODE,
+    [PROVIDER_IDS.copilot]: "default",
+    [PROVIDER_IDS.codex]: "workspace-write",
+    [PROVIDER_IDS.cursor]: "agent",
+  };
+  const permissionKey = permissionConfigKeyFor(providerId);
+  const coupledThinking = providerId === PROVIDER_IDS.codex || providerId === PROVIDER_IDS.copilot;
+  const thinkingMode = typeof config.thinking === "boolean" ? config.thinking :
+    coupledThinking && !!config.modelReasoningEffort;
+  return {
+    effortLevel: "", modelReasoningEffort: "", thinkingMode,
+    ultracode: false, fastMode: false, serviceTier: "", goalMode: false, planMode: false,
+    ...(permissionKey ? { [permissionKey]: defaults[providerId] } : {}),
+    ...pickRunSettingConfig(config),
+  };
+}
+
+export function conversationSettingsFrom(snapshot: Record<string, unknown> | null | undefined): ConversationSettings | null {
+  const value = snapshot?.conversationSettings;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const settings = value as ConversationSettings;
+  if (typeof settings.model !== "string" || !settings.config || typeof settings.config !== "object" || Array.isArray(settings.config)) return null;
+  return { model: settings.model, config: pickRunSettingConfig(settings.config as Record<string, unknown>) };
+}

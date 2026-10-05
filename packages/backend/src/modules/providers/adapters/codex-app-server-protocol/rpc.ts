@@ -1,5 +1,11 @@
 import type { InitializeParams } from "./generated/InitializeParams";
 import type { InitializeResponse } from "./generated/InitializeResponse";
+import type { ThreadRealtimeStartParams } from "./generated/v2/ThreadRealtimeStartParams";
+import type { ThreadRealtimeStartResponse } from "./generated/v2/ThreadRealtimeStartResponse";
+import type { ThreadRealtimeStopParams } from "./generated/v2/ThreadRealtimeStopParams";
+import type { ThreadRealtimeStopResponse } from "./generated/v2/ThreadRealtimeStopResponse";
+import type { ThreadRealtimeListVoicesParams } from "./generated/v2/ThreadRealtimeListVoicesParams";
+import type { ThreadRealtimeListVoicesResponse } from "./generated/v2/ThreadRealtimeListVoicesResponse";
 import type { AppsInstalledParams } from "./generated/v2/AppsInstalledParams";
 import type { AppsInstalledResponse } from "./generated/v2/AppsInstalledResponse";
 import type { AppsListParams } from "./generated/v2/AppsListParams";
@@ -63,6 +69,8 @@ import type { ThreadUnsubscribeParams } from "./generated/v2/ThreadUnsubscribePa
 import type { ThreadUnsubscribeResponse } from "./generated/v2/ThreadUnsubscribeResponse";
 import type { TurnInterruptParams } from "./generated/v2/TurnInterruptParams";
 import type { TurnInterruptResponse } from "./generated/v2/TurnInterruptResponse";
+import type { TurnSteerParams } from "./generated/v2/TurnSteerParams";
+import type { TurnSteerResponse } from "./generated/v2/TurnSteerResponse";
 import type { TurnStartParams } from "./generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/v2/TurnStartResponse";
 
@@ -73,7 +81,7 @@ interface RpcMethod<Params, Result> {
 
 /**
  * Typed request/result pairs for every app-server RPC currently emitted by
- * codex.driver.ts, against Codex's generated 0.159.2 bindings. The snapshot is
+ * codex.driver.ts, against Codex's generated 0.160.0 bindings. The snapshot is
  * generated with `--experimental`, so experimental fields the driver actually
  * sends — `collaborationMode` on turn/start, `dynamicTools` on thread/start —
  * are typed here rather than patched in at the call site.
@@ -135,6 +143,9 @@ export interface CodexAppServerRpc {
   "thread/goal/get": RpcMethod<ThreadGoalGetParams, ThreadGoalGetResponse>;
   "thread/goal/set": RpcMethod<ThreadGoalSetParams, ThreadGoalSetResponse>;
   "thread/read": RpcMethod<ThreadReadParams, ThreadReadResponse>;
+  "thread/realtime/start": RpcMethod<ThreadRealtimeStartParams, ThreadRealtimeStartResponse>;
+  "thread/realtime/stop": RpcMethod<ThreadRealtimeStopParams, ThreadRealtimeStopResponse>;
+  "thread/realtime/listVoices": RpcMethod<ThreadRealtimeListVoicesParams, ThreadRealtimeListVoicesResponse>;
   "thread/resume": RpcMethod<ThreadResumeParams, ThreadResumeResponse>;
   "thread/start": RpcMethod<ThreadStartParams, ThreadStartResponse>;
   "thread/unarchive": RpcMethod<ThreadUnarchiveParams, ThreadUnarchiveResponse>;
@@ -144,6 +155,7 @@ export interface CodexAppServerRpc {
   >;
   "turn/interrupt": RpcMethod<TurnInterruptParams, TurnInterruptResponse>;
   "turn/start": RpcMethod<TurnStartParams, TurnStartResponse>;
+  "turn/steer": RpcMethod<TurnSteerParams, TurnSteerResponse>;
 }
 
 export type CodexAppServerMethod = keyof CodexAppServerRpc;

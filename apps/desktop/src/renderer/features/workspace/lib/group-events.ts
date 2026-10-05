@@ -91,6 +91,7 @@ function restoreLegacyImageViews(events: RunEvent[]): RunEvent[] {
         content: `ImageView: ${JSON.stringify(input)}`,
         timestamp: event.timestamp,
         metadata: {
+          ...event.metadata,
           status: "done",
           toolName: "ImageView",
           toolCallId: item.id,
@@ -141,6 +142,10 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
 
   for (const event of restoreLegacyImageViews(events)) {
     if (event.type === "tool_call") {
+      // Task cards represent successful coordinator operations. Keep failures
+      // reachable, while normal connected tools retain their usual transcript.
+      if (typeof event.metadata?.toolName === "string" && event.metadata.toolName.startsWith("mcp__mains_voice__") &&
+          event.metadata.status !== "error") continue;
       // Subagent machinery lives in the session panel, not the chat: spawn
       // calls (Codex collab variants and Claude's Agent/Task) and the
       // sub-agents' own tool calls are dropped here without flushing, so the
@@ -148,6 +153,11 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
       if (isSubagentSpawnEvent(event) || isSubagentChildEvent(event)) {
         continue;
       }
+      // Adjacent tools from different work turns must not share an accordion.
+      if (
+        currentToolGroup.length > 0 &&
+        currentToolGroup[0].metadata?.voiceWorkId !== event.metadata?.voiceWorkId
+      ) flushToolGroup();
       // Plan/ExitPlanMode tool calls render standalone, never inside a group
       if (isPlanToolEvent(event)) {
         flushToolGroup();
@@ -198,7 +208,8 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
         const lastIsImageGroup =
           lastGroup?.type === "response" &&
           lastGroup.events[0]?.type === "artifact" &&
-          lastGroup.events[0]?.metadata?.kind === "image";
+          lastGroup.events[0]?.metadata?.kind === "image" &&
+          lastGroup.events[0]?.metadata?.voiceWorkId === event.metadata?.voiceWorkId;
         if (lastIsImageGroup) {
           lastGroup.events.push(event);
           lastGroup.endTime = event.timestamp;

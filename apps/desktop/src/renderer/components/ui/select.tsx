@@ -397,7 +397,7 @@ export default function Select<T extends string = string>({
             }}
           >
             <div
-              className="overflow-auto noscrollbar space-y-0.5 p-1.5"
+              className="overflow-auto noscrollbar space-y-0.5 p-1"
               style={{ maxHeight: dropdownPosition.maxHeight }}
             >
               {options.map((option, index) => {
@@ -419,7 +419,7 @@ export default function Select<T extends string = string>({
                     onClick={() => selectOption(option)}
                     tooltip={showOptionDescriptionTooltip ? option.description : undefined}
                     className={`
-                      flex w-full cursor-pointer items-center gap-1 px-3 py-1 rounded-xl text-left ${OPTION_SIZE[size]}
+                      flex w-full cursor-pointer items-center gap-1 px-3 py-1 rounded-[10px] text-left ${OPTION_SIZE[size]}
                       text-primary-900 transition-colors focus:outline-none dark:text-primary
                       hover:bg-primary-950/5 focus:bg-primary-950/5 dark:hover:bg-primary/5 dark:focus:bg-primary/5
                       ${isSelected || isActive ? "bg-primary-950/5 dark:bg-primary/10" : ""}

@@ -43,9 +43,9 @@ export function getSignalEntityId(tabId: string): string {
   return tabId.slice(7);
 }
 
-/** Check if an activeTab ID represents a run tab (not editor, issue, signal, note, or new-run). */
+/** Check if an activeTab ID represents a run tab (not editor, issue, signal, note, review, or new-run). */
 export function isRunTab(tabId: string): boolean {
-  return tabId !== "editor" && !isIssueTab(tabId) && !isSignalTab(tabId) && !isNoteTab(tabId) && !isNewRunTab(tabId);
+  return tabId !== "editor" && !isIssueTab(tabId) && !isSignalTab(tabId) && !isNoteTab(tabId) && !isNewRunTab(tabId) && !isReviewTab(tabId);
 }
 
 /** Check if an activeTab ID represents a note tab. */
@@ -61,4 +61,8 @@ export function getNoteId(tabId: string): string {
 /** Build a stable tab ID for a note. */
 export function makeNoteTabId(noteId: string): string {
   return `note:${noteId}`;
+}
+
+export function isReviewTab(tabId: string): boolean {
+  return tabId === "review";
 }

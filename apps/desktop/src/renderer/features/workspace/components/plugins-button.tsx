@@ -59,16 +59,17 @@ export const PluginsButton = forwardRef<HTMLButtonElement, PluginsButtonProps>(
         onClick={onToggle}
         aria-haspopup="menu"
         aria-expanded={isOpen}
+        aria-label="Plugins"
         className={`flex items-center gap-1.5 px-2 py-1.5 rounded-full text-sm transition-colors animate-blur-reveal cursor-pointer hover:bg-primary-200/30 dark:hover:bg-primary-800 text-primary-700 dark:text-primary-300 ${
           isOpen ? "bg-primary-200/30 dark:bg-primary-800" : ""
         }`}
       >
-        <span className="flex items-center -space-x-1">
+        <span className="flex shrink-0 items-center -space-x-1">
           {stack.map((skill) => (
             <StackedPluginIcon key={`${skill.name}-${skill.path ?? ""}`} skill={skill} />
           ))}
         </span>
-        <span className="whitespace-nowrap">Plugins</span>
+        <span className="whitespace-nowrap @max-[480px]/composer:hidden">Plugins</span>
       </Button>
     );
   },

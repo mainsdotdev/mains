@@ -1,20 +1,17 @@
+import { buildCodexTurnInput } from "./codex-turn-input";
 import type {
   AcquiredSession,
   CodexAdapterConfig,
-  FileAttachment,
   RunExecutionContext,
-  WorkRunContextItem,
   WorkRunContinueRequest,
   WorkRunEvent,
   WorkRunForkRequest,
   WorkRunRequest,
   WorkRunReviewRequest,
+  WorkRunRealtimeRequest,
 } from "../../../../shared/adapter.types";
 import {
-  appendPromptSections,
   createLogger,
-  formatContextSection,
-  saveAttachments,
   type AdapterLogger,
 } from "./adapter.shared";
 import type { CodexAppServer } from "./codex-app-server.client";
@@ -22,6 +19,8 @@ import type { CollaborationMode } from "./codex-app-server-protocol/generated/Co
 import type { CodexAppServerParams } from "./codex-app-server-protocol/rpc";
 import type { MainsToolContext } from "./mains-tools.core";
 import { toCodexDynamicTools } from "./mains-tools.registry";
+import { MainsMcpStdioServer } from "./mains-mcp-server";
+import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import type {
   CodexRunCoordinator,
   CodexRunSession,
@@ -48,17 +47,6 @@ type CodexOutputSchema = Exclude<
 // driver negotiates `experimentalApi: true`. No local widening needed.
 type CodexThreadStartParams = CodexAppServerParams<"thread/start">;
 type CodexTurnStartParams = CodexAppServerParams<"turn/start">;
-type TurnInput = CodexAppServerParams<"turn/start">["input"];
-
-interface TurnInputRequest {
-  runId: string;
-  context?: WorkRunContextItem[];
-  contextIssues?: WorkRunRequest["contextIssues"];
-  contextSignals?: WorkRunRequest["contextSignals"];
-  contextFiles?: WorkRunRequest["contextFiles"];
-  skills?: WorkRunRequest["skills"];
-  attachments?: FileAttachment[];
-}
 
 interface CodexSessionAcquisitionOptions {
   config: CodexAdapterConfig;
@@ -205,7 +193,7 @@ export function buildCollaborationMode(
     settings: {
       model,
       reasoning_effort:
-        effort ?? (planEnabled ? "medium" : null),
+        effort || (planEnabled ? "medium" : null),
       developer_instructions: null,
     },
   };
@@ -246,105 +234,6 @@ export function buildCodexReviewTarget(
     type: "custom",
     instructions: target.instructions,
   };
-}
-
-function buildTurnInput(
-  message: string,
-  request: TurnInputRequest,
-  interruptedSubAgents: CodexSubAgentRunMeta[] = [],
-): TurnInput {
-  let prompt =
-    request.context && request.context.length > 0
-      ? `Context:\n${formatContextSection(request.context)}\n\n---\n\n ${message}`
-      : message;
-
-  prompt = appendPromptSections(prompt, {
-    contextIssues: request.contextIssues,
-    contextSignals: request.contextSignals,
-    contextFiles: request.contextFiles,
-    runId: request.runId,
-  });
-
-  if (interruptedSubAgents.length > 0) {
-    const agents = interruptedSubAgents.map((agent) => ({
-      id: agent.threadId,
-      ...(agent.nickname ? { name: agent.nickname } : {}),
-      ...(agent.role ? { role: agent.role } : {}),
-    }));
-    prompt +=
-      "\n\n<mains_interrupted_subagents>\n" +
-      "The previous turn was stopped, so these subagents are interrupted and are not making progress:\n" +
-      `${JSON.stringify(agents)}\n` +
-      "If the user's current request still depends on their work, do not call wait_agent on them yet. " +
-      "First call resume_agent for each interrupted id, then call send_input asking it to continue its previously assigned task. " +
-      "If an agent cannot be resumed, spawn a replacement for that task. " +
-      "If the current request no longer depends on them, continue without waiting for them.\n" +
-      "</mains_interrupted_subagents>";
-  }
-
-  const input: TurnInput = [{
-    type: "text",
-    text: prompt,
-    text_elements: [],
-  }];
-
-  for (const skill of request.skills ?? []) {
-    if (skill.name && skill.mentionPath) {
-      input.push({
-        type: "mention",
-        name: skill.displayName || skill.name,
-        path: skill.mentionPath,
-      });
-    } else if (skill.name && skill.path) {
-      input.push({
-        type: "skill",
-        name: skill.name,
-        path: skill.path,
-      });
-    }
-  }
-
-  if (request.attachments && request.attachments.length > 0) {
-    const { savedPaths, inlineTexts } = saveAttachments(
-      request.attachments,
-      request.runId,
-    );
-    let attachmentPrompt = prompt;
-    if (inlineTexts.length > 0) {
-      attachmentPrompt +=
-        "\n\n---\n\nAttached documents:\n" + inlineTexts.join("\n\n");
-    }
-
-    const filePaths: string[] = [];
-    for (const attachmentPath of savedPaths) {
-      const lowerPath = attachmentPath.toLowerCase();
-      if (
-        lowerPath.endsWith(".png") ||
-        lowerPath.endsWith(".jpg") ||
-        lowerPath.endsWith(".jpeg") ||
-        lowerPath.endsWith(".gif") ||
-        lowerPath.endsWith(".webp") ||
-        lowerPath.endsWith(".bmp")
-      ) {
-        input.push({
-          type: "localImage",
-          path: attachmentPath,
-        });
-      } else {
-        // App-server turn input has no document variant. Keep other files on
-        // disk and pass their paths so Codex can read them with its tools.
-        filePaths.push(attachmentPath);
-      }
-    }
-    if (filePaths.length > 0) {
-      attachmentPrompt +=
-        "\n\n---\n\nAttached files:\n" +
-        filePaths.map((filePath) => `- ${filePath}`).join("\n");
-    }
-    if (input[0].type === "text") input[0].text = attachmentPrompt;
-  }
-
-  return input;
 }
 
 function mainsContext(
@@ -478,6 +367,14 @@ export function createCodexSessionAcquisition(
     };
   }
 
+  function turnSettingsFor(overrides: Record<string, unknown> = {}) {
+    return {
+      effort: typeof overrides.modelReasoningEffort === "string" ? overrides.modelReasoningEffort :
+        typeof overrides.effortLevel === "string" ? overrides.effortLevel : config.modelReasoningEffort,
+      serviceTier: typeof overrides.serviceTier === "string" ? overrides.serviceTier : config.serviceTier,
+    };
+  }
+
   function makeSession(
     runId: string,
     model: string | undefined,
@@ -502,18 +399,6 @@ export function createCodexSessionAcquisition(
     const overrides = (
       request.configSnapshot ?? {}
     ) as Record<string, unknown>;
-    const overrideEffort =
-      typeof overrides.modelReasoningEffort === "string"
-        ? overrides.modelReasoningEffort
-        : typeof overrides.effortLevel === "string" &&
-            overrides.effortLevel
-          ? overrides.effortLevel
-          : undefined;
-    const overrideServiceTier =
-      typeof overrides.serviceTier === "string" &&
-      overrides.serviceTier
-        ? overrides.serviceTier
-        : undefined;
     const toggles = runTogglesFor(overrides);
     const settings = threadSettingsFor(overrides);
     const threadStartParams: CodexThreadStartParams = {
@@ -551,10 +436,7 @@ export function createCodexSessionAcquisition(
       mainsCtx: mainsContext(runId, request.execution),
     });
 
-    const effort =
-      overrideEffort ?? config.modelReasoningEffort;
-    const serviceTier =
-      overrideServiceTier ?? config.serviceTier;
+    const { effort, serviceTier } = turnSettingsFor(overrides);
     const collaborationMode = buildCollaborationMode(
       toggles.planMode,
       model,
@@ -563,10 +445,10 @@ export function createCodexSessionAcquisition(
     const outputSchema = resolveOutputSchema(config);
     const turnStartParams: CodexTurnStartParams = {
       threadId: threadId ?? "",
-      input: buildTurnInput(request.goal, request),
+      input: buildCodexTurnInput(request.goal, request),
       ...(model ? { model } : {}),
-      ...(effort ? { effort } : {}),
-      ...(serviceTier ? { serviceTier } : {}),
+      ...(effort !== undefined ? { effort: effort || null } : {}),
+      ...(serviceTier !== undefined ? { serviceTier: serviceTier || null } : {}),
       ...(outputSchema ? { outputSchema } : {}),
       ...(collaborationMode ? { collaborationMode } : {}),
     };
@@ -673,32 +555,41 @@ export function createCodexSessionAcquisition(
       false,
     );
 
+    const { effort, serviceTier } = turnSettingsFor(resumeOverrides);
     const collaborationMode = buildCollaborationMode(
       resumeToggles.planMode,
       model,
-      config.modelReasoningEffort,
+      effort,
       true,
     );
     const outputSchema = resolveOutputSchema(config);
     const turnStartParams: CodexTurnStartParams = {
       threadId: currentThreadId,
-      input: buildTurnInput(
+      input: buildCodexTurnInput(
         message,
         request,
         interruptedSubAgents,
       ),
+      ...(request.clientUserMessageId ? { clientUserMessageId: request.clientUserMessageId } : {}),
       ...(model ? { model } : {}),
-      ...(config.modelReasoningEffort
-        ? { effort: config.modelReasoningEffort }
-        : {}),
-      ...(config.serviceTier
-        ? { serviceTier: config.serviceTier }
-        : {}),
+      ...(effort !== undefined ? { effort: effort || null } : {}),
+      ...(serviceTier !== undefined ? { serviceTier: serviceTier || null } : {}),
       ...(outputSchema ? { outputSchema } : {}),
       ...(collaborationMode ? { collaborationMode } : {}),
     };
     const startTurn = async () => {
-      await server.sendRequest("turn/start", turnStartParams);
+      const tracked = request.clientUserMessageId && request.onInputAccepted
+        ? runCoordinator.trackInput(runId, request.clientUserMessageId, request.onInputAccepted)
+        : undefined;
+      try {
+        const result = await server.sendRequest("turn/start", turnStartParams);
+        await tracked?.accept(result.turn.id);
+      } catch (error) {
+        if (!tracked?.accepted) throw error;
+        await tracked.accept(tracked.turnId!);
+      } finally {
+        tracked?.finish();
+      }
     };
     return {
       session: makeSession(runId, model, startTurn),
@@ -759,23 +650,20 @@ export function createCodexSessionAcquisition(
       mainsCtx: mainsContext(runId, request.execution),
     });
 
+    const { effort, serviceTier } = turnSettingsFor(forkOverrides);
     const collaborationMode = buildCollaborationMode(
       forkToggles.planMode,
       model,
-      config.modelReasoningEffort,
+      effort,
       true,
     );
     const outputSchema = resolveOutputSchema(config);
     const turnStartParams: CodexTurnStartParams = {
       threadId: forkedThreadId,
-      input: buildTurnInput(message, request),
+      input: buildCodexTurnInput(message, request),
       ...(model ? { model } : {}),
-      ...(config.modelReasoningEffort
-        ? { effort: config.modelReasoningEffort }
-        : {}),
-      ...(config.serviceTier
-        ? { serviceTier: config.serviceTier }
-        : {}),
+      ...(effort !== undefined ? { effort: effort || null } : {}),
+      ...(serviceTier !== undefined ? { serviceTier: serviceTier || null } : {}),
       ...(outputSchema ? { outputSchema } : {}),
       ...(collaborationMode ? { collaborationMode } : {}),
     };
@@ -797,7 +685,7 @@ export function createCodexSessionAcquisition(
     const target = buildCodexReviewTarget(request.target);
     let model = await effectiveModel(request.model);
     const server = await ensureServer();
-    const settings = threadSettingsFor();
+    const settings = threadSettingsFor(request.configSnapshot ?? {});
     const threadStartParams: CodexThreadStartParams = {
       cwd: request.execution.cwd,
       ...settings,
@@ -866,7 +754,67 @@ export function createCodexSessionAcquisition(
     };
   }
 
+  async function prepareRealtimeSession(request: WorkRunRealtimeRequest) {
+    let threadId = runCoordinator.getSessionThread(request.runId) ??
+      await findPersistedSession(request.runId);
+    const server = await ensureServer();
+    if (threadId && runCoordinator.hasLiveTurn(request.runId)) {
+      if (request.voiceTools) throw new Error("Wait for the current response to finish before starting voice coordination.");
+      return { server, threadId, model: request.model, dispose: undefined };
+    }
+    const bridge = request.voiceTools ? new MainsMcpStdioServer({
+      ...mainsContext(request.runId, request.execution), voiceTools: request.voiceTools,
+    }, request.mode, { provider: PROVIDER_IDS.codex, scope: "voice" }) : undefined;
+    try {
+      await bridge?.start();
+      let model = await effectiveModel(request.model);
+      const overrides = request.configSnapshot ?? {};
+      const settings = threadSettingsFor(overrides);
+      const turn = turnSettingsFor(overrides);
+      const params = {
+        cwd: request.execution.cwd, ...settings,
+        config: { ...settings.config,
+          ...(turn.effort ? { model_reasoning_effort: turn.effort } : {}),
+          ...(turn.serviceTier ? { service_tier: turn.serviceTier } : {}),
+          ...(bridge ? { "mcp_servers.mains_voice": {
+            command: bridge.mcpConfig.command, args: bridge.mcpConfig.args,
+            env: Object.fromEntries(bridge.mcpConfig.env.map(({ name, value }) => [name, value])),
+            enabled: true, startup_timeout_sec: 10, tool_timeout_sec: 60,
+            // These session-local tools call Mains' own scoped run services.
+            // Worker permissions and other MCP servers keep their native policies.
+            default_tools_approval_mode: "approve",
+          } } : {}),
+        },
+        ...(model ? { model } : {}),
+        ...buildDeveloperInstructionsParam(request.extraInstructions),
+      };
+      if (threadId) {
+        try {
+          const resumed = await server.sendRequest("thread/resume", { threadId, excludeTurns: true, ...params });
+          model = resolveSessionModel(model, resumed.model, "thread/resume");
+        } catch (error) { throw normalizeCodexResumeError(error); }
+      } else {
+        const started = await server.sendRequest("thread/start", { ...params, dynamicTools: toCodexDynamicTools(request.mode) });
+        model = resolveSessionModel(model, started.model, "thread/start");
+        threadId = started.thread.id;
+        if (!threadId) throw new Error("Codex did not create a conversation for voice chat.");
+        await persistSession(request.runId, threadId);
+      }
+      runCoordinator.attachThread(request.runId, threadId);
+      runCoordinator.registerRun({
+        runId: request.runId, threadId,
+        mainsCtx: { workspaceId: request.execution.workspaceId, rootPath: request.execution.cwd, runId: request.runId },
+        subAgents: !runCoordinator.hasSessionSubAgentState(request.runId)
+          ? await findPersistedSubAgents?.(request.runId)
+          : [],
+      });
+      // Loading voice context must not send a turn or overwrite a tracked goal.
+      return { server, threadId, model, dispose: bridge ? () => bridge.stop() : undefined };
+    } catch (error) { await bridge?.stop(); throw error; }
+  }
+
   return {
+    prepareRealtimeSession,
     createSession,
     forkSession,
     resumeSession,

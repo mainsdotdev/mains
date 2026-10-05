@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createElement, type ComponentProps } from "react";
+import { createElement, useMemo, type ComponentProps } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MainHeaderProvider, useSetMainHeader } from "@/hooks/use-main-header";
@@ -31,6 +31,12 @@ function RunContent({ expanded, collapsed }: { expanded: boolean; collapsed: boo
   );
 }
 
+function HeaderOwner({ label, pending }: { label: string; pending: boolean }) {
+  const header = useMemo(() => pending ? null : createElement("button", null, label), [label, pending]);
+  useSetMainHeader(header, true, pending);
+  return null;
+}
+
 beforeEach(() => {
   vi.stubGlobal("api", { app: { onFullscreenChange: () => () => {} } });
 });
@@ -57,6 +63,38 @@ describe("MainContent under the expanded browser", () => {
     const header = screen.getByText("Selected run").parentElement!;
     expect(getComputedStyle(header).visibility).toBe("visible");
     expect(screen.getByRole("button", { name: "Selected run" })).toBeTruthy();
+  });
+});
+
+describe("MainContent during sidebar navigation", () => {
+  it("preserves the tab and corner while loading, disables stale actions, and clears the header when its page leaves", () => {
+    const content = (label: string, pending: boolean, showOwner = true) =>
+      createElement(MainHeaderProvider, null,
+        showOwner && createElement(HeaderOwner, { label, pending }),
+        createElement(MainContent, { marginLeft: "22rem", marginRight: "0", sidebarCollapsed: false } as MainContentProps,
+          createElement("div", null, "Transcript")));
+    const view = render(content("First chat", true));
+    expect(screen.queryByRole("button")).toBeNull();
+
+    view.rerender(content("First chat", false));
+    const tab = screen.getByRole("button", { name: "First chat" });
+    const header = tab.parentElement!;
+    const surface = document.querySelector("[data-main-content-surface]")!;
+    view.rerender(content("Second chat", true));
+    expect(screen.getByText("First chat")).toBe(tab);
+    expect(tab.parentElement).toBe(header);
+    expect(header.hasAttribute("inert")).toBe(true);
+    expect(header.getAttribute("aria-busy")).toBe("true");
+    expect(surface.classList.contains("rounded-tl-none")).toBe(true);
+
+    view.rerender(content("Second chat", false));
+    expect(screen.getByRole("button", { name: "Second chat" })).toBe(tab);
+    expect(header.hasAttribute("inert")).toBe(false);
+    expect(header.hasAttribute("aria-busy")).toBe(false);
+
+    view.rerender(content("", true, false));
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(surface.classList.contains("rounded-tl-none")).toBe(false);
   });
 });
 

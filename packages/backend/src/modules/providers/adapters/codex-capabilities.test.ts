@@ -85,6 +85,13 @@ describe("Codex capabilities", () => {
         capabilities: { vision: true },
       }),
     ]);
+    await expect(capabilities.listRealtimeVoices()).resolves.toEqual({
+      voices: ["cove", "maple", "juniper"], defaultVoice: "cove",
+    });
+    const voiceRequests = readProtocolLog(logPath).filter(
+      (message) => String(message.method).startsWith("thread/realtime/"),
+    );
+    expect(voiceRequests).toMatchObject([{ method: "thread/realtime/listVoices", params: {} }]);
     await expect(capabilities.getAccountInfo()).resolves.toMatchObject({
       account: {
         type: "chatgpt",

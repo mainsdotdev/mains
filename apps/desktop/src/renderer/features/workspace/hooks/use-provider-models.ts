@@ -5,7 +5,6 @@ import {
   useGetProviderCommandsQuery,
   useGetProviderSkillsQuery,
   useGetProviderByIdQuery,
-  useUpdateProviderMutation,
 } from "@/lib/redux/api/providersApi";
 import { setWorkspaceModel } from "@/lib/redux/slices/workspaceSlice";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
@@ -15,6 +14,7 @@ import {
   type ProviderVariant,
 } from "@/lib/provider-variants";
 import { resolveEffortSelection } from "@/features/workspace/lib/resolve-effort";
+import type { RunSettingConfig } from "@mains/contracts/run-settings";
 
 export function useProviderModels(
   activeProviderId: string,
@@ -22,6 +22,9 @@ export function useProviderModels(
   externalSelectedModel?: string,
   externalOnModelChange?: (model: string) => void,
   workspacePath?: string,
+  conversationConfig?: RunSettingConfig,
+  onConfigChange?: (patch: RunSettingConfig) => unknown,
+  settingsReady = true,
 ) {
   const dispatch = useAppDispatch();
   const caps = getProviderVariant(variant);
@@ -54,8 +57,7 @@ export function useProviderModels(
   const { data: providerData } = useGetProviderByIdQuery(activeProviderId, {
     skip: variant !== "claude" && variant !== "codex" && variant !== "copilot" && variant !== "cursor",
   });
-  const [updateProvider] = useUpdateProviderMutation();
-  const config = (providerData?.config ?? {}) as Record<string, any>;
+  const config = (conversationConfig ?? providerData?.config ?? {}) as Record<string, any>;
 
   const permissionMode: string = config[caps.permissionKey] ?? caps.permissionDefault;
   const thinkingMode = caps.thinkingCoupledToEffort
@@ -79,115 +81,53 @@ export function useProviderModels(
   const goalMode: boolean = caps.supportsGoalMode && !!config.goalMode;
 
   const handlePermissionModeChange = useCallback(async (mode: string) => {
-    if (!providerData) return;
-    const currentConfig = providerData.config ?? {};
-    const configKey = caps.permissionKey;
-    await updateProvider({
-      id: activeProviderId,
-      payload: {
-        config: {
-          ...currentConfig,
-          [configKey]: mode,
-        },
-      },
-    });
-  }, [providerData, activeProviderId, caps, updateProvider]);
+    await onConfigChange?.({ [caps.permissionKey]: mode });
+  }, [caps, onConfigChange]);
 
   const handlePlanModeToggle = useCallback(async () => {
-    if (!providerData) return;
-    const currentConfig = providerData.config ?? {};
-    await updateProvider({
-      id: activeProviderId,
-      payload: {
-        config: {
-          ...currentConfig,
-          planMode: !planMode,
-        },
-      },
-    });
-  }, [providerData, planMode, activeProviderId, updateProvider]);
+    await onConfigChange?.({ planMode: !planMode, ...(!planMode ? { goalMode: false } : {}) });
+  }, [planMode, onConfigChange]);
 
   const handleGoalModeToggle = useCallback(async () => {
-    if (!providerData) return;
-    const currentConfig = providerData.config ?? {};
     const enabling = !goalMode;
-    await updateProvider({
-      id: activeProviderId,
-      payload: {
-        config: {
-          ...currentConfig,
-          goalMode: !goalMode,
-          // Goal and plan modes are mutually exclusive — turning goal on clears plan.
-          ...(enabling ? { planMode: false } : {}),
-        },
-      },
-    });
-  }, [providerData, goalMode, activeProviderId, updateProvider]);
+    await onConfigChange?.({ goalMode: enabling, ...(enabling ? { planMode: false } : {}) });
+  }, [goalMode, onConfigChange]);
 
   const handleThinkingModeToggle = useCallback(async () => {
-    if (!providerData) return;
-    const currentConfig = providerData.config ?? {};
     const enabling = !thinkingMode;
-    await updateProvider({
-      id: activeProviderId,
-      payload: {
-        config: {
-          ...currentConfig,
-          thinkingMode: enabling,
-          // ultracode means xhigh, which the API rejects outright when thinking
-          // is disabled. Leaving it set here is what produced "effort 'xhigh'
-          // is not supported when thinking is disabled on this model" — turning
-          // thinking off has to clear the effort selection with it.
-          ...(enabling ? {} : { ultracode: false, [caps.effortKey]: undefined }),
-        },
-      },
-    });
-  }, [providerData, thinkingMode, activeProviderId, updateProvider, caps]);
+    await onConfigChange?.({ thinkingMode: enabling,
+      ...(enabling ? {} : { ultracode: false, [caps.effortKey]: "" }) });
+  }, [thinkingMode, onConfigChange, caps]);
 
   const handleFastModeToggle = useCallback(async () => {
-    if (!providerData) return;
-    const currentConfig = providerData.config ?? {};
     // Codex toggles the "fast" service tier on/off (canonical id from
     // model/list); other variants keep the simple boolean.
-    const patch: Record<string, unknown> = caps.fastMode.kind === "serviceTier"
-      ? { [caps.fastMode.key]: fastMode ? undefined : caps.fastMode.on }
+    const patch: RunSettingConfig = caps.fastMode.kind === "serviceTier"
+      ? { [caps.fastMode.key]: fastMode ? "" : caps.fastMode.on }
       : { [caps.fastMode.key]: !fastMode };
-    await updateProvider({
-      id: activeProviderId,
-      payload: {
-        config: {
-          ...currentConfig,
-          ...patch,
-        },
-      },
-    });
-  }, [providerData, fastMode, activeProviderId, updateProvider, caps]);
+    await onConfigChange?.(patch);
+  }, [fastMode, onConfigChange, caps]);
 
   const handleEffortLevelChange = useCallback(async (level: string) => {
-    if (!providerData) return;
-    const currentConfig = providerData.config ?? {};
-    let patch: Record<string, unknown>;
+    let patch: RunSettingConfig;
     if (caps.thinkingCoupledToEffort) {
       // Codex/Copilot store the effort directly; thinking is inferred from it.
       // `thinkingMode` still rides along as the record of intent — without it,
       // clearing the level is indistinguishable from never having chosen one
       // and the clamp effect seeds the default straight back.
-      patch = { [caps.effortKey]: level || undefined, thinkingMode: !!level };
+      patch = { [caps.effortKey]: level, thinkingMode: !!level };
     } else if (caps.supportsUltracode && level === "ultracode") {
       // ultracode is stored as a boolean. It implies xhigh + workflow
       // orchestration, so clear effortLevel and let the driver send it via
       // settings.ultracode instead of options.effort.
-      patch = { thinkingMode: true, ultracode: true, effortLevel: undefined };
+      patch = { thinkingMode: true, ultracode: true, effortLevel: "" };
     } else {
       // Claude/Cursor use thinkingMode + effortLevel. Any non-ultracode
       // selection (including "Off") turns ultracode back off.
-      patch = { thinkingMode: !!level, effortLevel: level || undefined, ultracode: false };
+      patch = { thinkingMode: !!level, effortLevel: level, ultracode: false };
     }
-    await updateProvider({
-      id: activeProviderId,
-      payload: { config: { ...currentConfig, ...patch } },
-    });
-  }, [providerData, activeProviderId, updateProvider, caps]);
+    await onConfigChange?.(patch);
+  }, [onConfigChange, caps]);
 
   const selectableModels = useMemo(
     () => dedupeModelsByPrettyName(providerModels ?? [], variant),
@@ -213,8 +153,8 @@ export function useProviderModels(
   const selectedModel = externalSelectedModel ?? persistedModel ?? "";
   const setSelectedModel = useCallback(
     (model: string) => {
-      externalOnModelChange?.(model);
-      dispatch(setWorkspaceModel({ providerId: activeProviderId, model }));
+      if (externalOnModelChange) externalOnModelChange(model);
+      else dispatch(setWorkspaceModel({ providerId: activeProviderId, model }));
     },
     [externalOnModelChange, dispatch, activeProviderId],
   );
@@ -235,7 +175,7 @@ export function useProviderModels(
   }, [providerModels, selectedModel]);
 
   useEffect(() => {
-    if (!providerModels || providerModels.length === 0) return;
+    if (!settingsReady || !providerModels || providerModels.length === 0) return;
     const selectCatalogDefault = () => {
       const defaultModel =
         providerModels.find((m) => m.isDefault) ?? providerModels[0];
@@ -252,7 +192,7 @@ export function useProviderModels(
     // can't clobber a still-valid selection.
     if (isFetchingModels || modelsError) return;
     if (!providerModels.some((m) => m.id === selectedModel)) selectCatalogDefault();
-  }, [providerModels, selectedModel, setSelectedModel, isFetchingModels, modelsError]);
+  }, [settingsReady, providerModels, selectedModel, setSelectedModel, isFetchingModels, modelsError]);
 
   // Background model-capability discovery (e.g. Cursor per-model effort levels)
   // runs after the initial fast model list returns; refetch to pick up the
@@ -275,7 +215,7 @@ export function useProviderModels(
   // the effort level itself, so it reads false whenever nothing is stored and
   // would block the very seeding this effect exists to do.
   useEffect(() => {
-    if (!selectedModelInfo) return;
+    if (!settingsReady || !selectedModelInfo) return;
     const resolution = resolveEffortSelection({
       supportedEffortLevels: selectedModelInfo.supportedEffortLevels,
       effortLevel,
@@ -285,6 +225,7 @@ export function useProviderModels(
     });
     if (resolution) handleEffortLevelChange(resolution.effortLevel);
   }, [
+    settingsReady,
     selectedModelInfo,
     effortLevel,
     ultracode,
@@ -310,7 +251,7 @@ export function useProviderModels(
     selectedModelDisplayName,
     modelDisplayNames,
     modelEffortLevelsByDisplayName,
-    isLoadingModels,
+    isLoadingModels: isLoadingModels || !settingsReady,
     isFetchingModels,
     handleModelChange,
     providerCommands,

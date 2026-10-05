@@ -8,7 +8,7 @@ export interface MobileTab {
   id: string;
   label: string;
   icon: ReactNode;
-  group: "Editor" | "Issues" | "Signals" | "Notes" | "Runs";
+  group: "Editor" | "Issues" | "Signals" | "Notes" | "Review" | "Runs";
   onSelect: () => void;
   onClose?: (e: React.MouseEvent) => void;
 }
@@ -18,6 +18,7 @@ const GROUP_ORDER: MobileTab["group"][] = [
   "Issues",
   "Signals",
   "Notes",
+  "Review",
   "Runs",
 ];
 
@@ -108,13 +109,14 @@ export function MobileTabSwitcher({
                       </Button>
                       {t.onClose && (
                         <Button
+                          variant="icon" iconSize="xs"
                           type="button"
                           role="menuitem"
                           aria-label="Close tab"
                           onClick={(e) => {
                             t.onClose!(e);
                           }}
-                          className="mr-2 shrink-0 rounded p-0.5 hover:bg-primary-300/40 dark:hover:bg-primary-700/40"
+                          className="mr-2"
                         >
                           <Close className="size-3" />
                         </Button>

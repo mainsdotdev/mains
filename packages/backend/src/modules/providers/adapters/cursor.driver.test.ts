@@ -43,9 +43,7 @@ describe("cursor.driver / session mode", () => {
   });
 });
 
-// A realistic parameterized-model-picker config-option set, shaped like the
-// `session/new` response when `_meta.parameterizedModelPicker` is advertised.
-// (See apps/server/scripts/cursor-acp-model-mismatch-probe.ts in t3code.)
+
 const CONFIG_OPTIONS: CursorConfigOption[] = [
   {
     id: "model",
@@ -457,6 +455,12 @@ describe("cursor.driver / resolveCursorSelection", () => {
     expect(resolveCursorSelection({ thinkingMode: true }, {})).toMatchObject({
       thinking: true,
     });
+  });
+
+  it("keeps explicit Off selections from falling back to another chat's provider defaults", () => {
+    expect(resolveCursorSelection({ effortLevel: "", thinkingMode: false, fastMode: false },
+      { effortLevel: "high", thinking: true, fastMode: true }))
+      .toEqual({ effort: undefined, thinking: false, fastMode: false });
   });
 
   it("returns all-undefined when nothing is set", () => {

@@ -1,4 +1,5 @@
 import type { CSSProperties, MouseEvent } from "react";
+import { useSyncExternalStore } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import {
@@ -11,7 +12,12 @@ import {
   Task,
 } from "@/components/ui/icons";
 import { Clock } from "@/components/ui/icons/space";
-import { requestCommandMenu } from "@/features/command-menu/command-menu-bridge";
+import { RealtimeVoiceDock } from "@/features/workspace/components/realtime-voice-dock";
+import {
+  getCommandMenuOpen,
+  requestCommandMenu,
+  subscribeCommandMenuOpen,
+} from "@/features/command-menu/command-menu-bridge";
 import { useResolvedAppTheme } from "@/hooks/use-app-theme";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import type { Space } from "@/lib/redux/api";
@@ -19,6 +25,9 @@ import { isSettingsRoute, isWorkspaceRoute } from "@/lib/layout";
 import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 import SpaceSelector from "./space-selector";
+import { useMcpAppExtensions } from "@/hooks/use-mcp-app-extensions";
+import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
+import { McpAppRail } from "./mcp-app-rail";
 
 interface NavigationRailProps {
   showTasks: boolean;
@@ -54,9 +63,17 @@ export function NavigationRail({
   const commandMenuShortcut = keyboardShortcutLabel(
     useKeyboardShortcutBinding("app.commandMenu"),
   );
-  const homeActive = isWorkspaceRoute(pathname);
+  const appPanel = useMcpAppPanel();
+  const homeActive = isWorkspaceRoute(pathname) && !appPanel?.isOpen;
   const settingsActive = isSettingsRoute(pathname);
-  const destinations = [
+  const commandMenuOpen = useSyncExternalStore(
+    subscribeCommandMenuOpen,
+    getCommandMenuOpen,
+  );
+  const { entries: appExtensions } = useMcpAppExtensions();
+  const destinations: Array<{
+    label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
+  }> = [
     {
       label: "Plugins",
       path: "/plugins",
@@ -70,8 +87,8 @@ export function NavigationRail({
   const buttonClass = (active: boolean) =>
     `flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors ${
       active
-        ? ` text-primary-950  ${translucent ? " dark:bg-primary/5 bg-primary/50 " :" dark:bg-primary-900 bg-primary-200/50 "}  dark:text-primary-50`
-        : "text-primary-700 hover:bg-primary/50 dark:text-primary-300 dark:hover:bg-primary-800/40"
+        ? ` text-primary-800  ${translucent ? " dark:bg-primary/5 bg-primary/50 " :" dark:bg-primary-800 bg-primary-200/50 "}  dark:text-primary`
+        : "text-primary-600 hover:bg-primary-300/20 dark:text-primary-400 dark:hover:bg-primary/10"
     }`;
 
   return (
@@ -85,7 +102,7 @@ export function NavigationRail({
       }
       aria-label="Primary navigation"
     >
-      <nav className="flex flex-col items-center gap-2" aria-label="Pages">
+      <nav className="flex min-h-0 flex-col items-center gap-2 overflow-y-auto" aria-label="Pages">
         <Button
           variant="bare"
           className={buttonClass(homeActive)}
@@ -93,20 +110,25 @@ export function NavigationRail({
           tooltipPosition="right"
           aria-label="Home"
           aria-current={homeActive ? "page" : undefined}
-          onClick={onHomeClick}
+          onClick={() => {
+            appPanel?.close();
+            onHomeClick();
+          }}
         >
-          <Home className="size-5" aria-hidden />
+          <Home className="size-5" filled={homeActive} aria-hidden />
         </Button>
         <Button
           variant="bare"
-          className={buttonClass(false)}
+          className={buttonClass(commandMenuOpen)}
           tooltip="Search Mains"
           tooltipShortcut={commandMenuShortcut}
           tooltipPosition="right"
           aria-label="Search Mains"
+          aria-haspopup="dialog"
+          aria-expanded={commandMenuOpen}
           onClick={requestCommandMenu}
         >
-          <Search className="size-5" aria-hidden />
+          <Search className="size-5" filled={commandMenuOpen} aria-hidden />
         </Button>
         {destinations.map(({ label, path, Icon, disabled }) => {
           const active = pathname === path || pathname.startsWith(`${path}/`);
@@ -124,14 +146,17 @@ export function NavigationRail({
             >
               <Icon
                 className={`size-5 ${label === "Plugins" ? "-rotate-45" : ""}`}
+                filled={active}
                 aria-hidden
               />
             </Button>
           );
         })}
+        {appExtensions.length > 0 && <McpAppRail entries={appExtensions} buttonClass={buttonClass} />}
       </nav>
 
       <div className="mt-auto flex min-h-0 flex-col items-center gap-1">
+        <RealtimeVoiceDock />
         {spaces.length > 0 && (
           <div className="mt-1 flex min-h-0 max-h-[35vh] flex-col items-center">
             <SpaceSelector
@@ -168,7 +193,7 @@ export function NavigationRail({
           aria-current={settingsActive ? "page" : undefined}
           onClick={onSettingsClick}
         >
-          <Settings className="size-4.5" aria-hidden />
+          <Settings className="size-4.5" filled={settingsActive} aria-hidden />
         </Button>
       </div>
     </aside>
