@@ -6,6 +6,8 @@ import type {
   ForkRunPayload,
   PendingApproval,
   ReadArtifactImagePayload,
+  ReadRunHistoryPayload,
+  RunHistoryCursor,
   ReadRunTextFilePayload,
   RunTextFile,
   SkillSummary,
@@ -14,6 +16,7 @@ import type {
   ToolApprovalResponse,
   UpdateRunSettingsPayload,
 } from "@mains/contracts/runs";
+import { historyWindow, compareHistoryCursors } from "@mains/contracts/run-history";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
 
 import type { DemoHandler } from "./demo-socket";
@@ -434,6 +437,34 @@ export class DemoBackend implements DemoHandler {
         return [...this.approvals.values()].filter(
           (approval) => !runId || approval.runId === runId,
         );
+      }
+      case CHANNELS.runs.getHistory: {
+        const request = args[0] as ReadRunHistoryPayload;
+        const artifacts = this.artifacts.get(request.runId) ?? [];
+        const calls = this.toolCalls.get(request.runId) ?? [];
+        const artifactKey = (artifact: DemoArtifact): RunHistoryCursor => ({
+          timestamp: artifact.metadata?.voice === true && typeof artifact.metadata.voiceStartedAt === "number"
+            ? artifact.metadata.voiceStartedAt : new Date(artifact.createdAt).getTime(),
+          source: "artifact", id: artifact.id,
+        });
+        const toolKey = (call: DemoToolCall): RunHistoryCursor => ({ timestamp: new Date(String(call.createdAt)).getTime(), source: "tool", id: call.id });
+        const keys = [...artifacts.map(artifactKey), ...calls.map(toolKey)].sort(compareHistoryCursors);
+        const anchors = artifacts.filter((a) => a.kind === "user-prompt").map(artifactKey).sort(compareHistoryCursors);
+        if (!anchors.length) anchors.push(...keys.filter((_, index) => index % 20 === 0));
+        else if (keys[0] && compareHistoryCursors(keys[0], anchors[0]) < 0) anchors.unshift(keys[0]);
+        const range = historyWindow(anchors, request);
+        const contains = (key: RunHistoryCursor) => range.start && compareHistoryCursors(key, range.start) >= 0 && (!range.end || compareHistoryCursors(key, range.end) < 0);
+        const turns = this.turns.get(request.runId) ?? [];
+        const turnTime = (turn: Json) => new Date(String(turn.startedAt ?? turn.createdAt)).getTime();
+        const preceding = [...turns].reverse().find((t) => range.start && turnTime(t) <= range.start.timestamp);
+        return {
+          artifacts: artifacts.filter((a) => contains(artifactKey(a))),
+          toolCalls: calls.filter((c) => contains(toolKey(c))),
+          turns: turns.filter((t) => range.start && (turnTime(t) >= range.start.timestamp || t.id === preceding?.id) && (!range.end || turnTime(t) <= range.end.timestamp)),
+          ...range, last: keys.at(-1) ?? null,
+          hasOlder: Boolean(keys[0] && range.start && compareHistoryCursors(keys[0], range.start) < 0),
+          hasNewer: Boolean(keys.at(-1) && range.end && compareHistoryCursors(keys.at(-1)!, range.end) >= 0),
+        };
       }
       case CHANNELS.runTurns.getByRun:
         return this.turns.get(String(args[0])) ?? [];

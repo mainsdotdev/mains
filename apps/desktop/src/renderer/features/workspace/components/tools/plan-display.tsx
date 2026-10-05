@@ -1,3 +1,4 @@
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -43,7 +44,7 @@ export function PlanDisplay({
   // A plan stays open only while it still needs a decision. Applied, dismissed,
   // and failed ones are settled history, and a transcript of long plans all
   // sitting open buries everything that came after them.
-  const [isExpanded, setIsExpanded] = useState(savedStatus === "pending");
+  const [isExpanded, setIsExpanded] = useToolExpansion(savedStatus === "pending");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const content = (input?.plan as string) || event.content || "";

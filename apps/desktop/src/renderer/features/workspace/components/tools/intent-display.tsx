@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Notes } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
 
@@ -7,7 +7,7 @@ export interface IntentParams {
 }
 
 export function IntentDisplay({ params, isCompact = false }: { params: IntentParams; isCompact?: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const hasIntent = !!params.intent;
 
   return (

@@ -24,61 +24,26 @@ describe("run cache — LRU", () => {
     expect(allowed.has("b")).toBe(false);
   });
 
-  it("drops evicted runs' cursors and loaded flag (no truncated re-fetch)", () => {
+  it("drops evicted runs' loaded flag so reopening fetches a new page", () => {
     const cache = createRunCache();
     cache.touch("r0");
     cache.markLoaded("r0");
-    cache.advanceCursors("r0", { artifactMaxId: 99, toolMaxMs: 5000 });
-    // Push r0 out of the LRU.
     for (let i = 1; i <= MAX_RETAINED_RUNS; i++) cache.touch(`r${i}`);
-    const cursors = cache.getDeltaCursors("r0");
-    expect(cursors.isIncremental).toBe(false); // re-opening r0 will full-fetch
-    expect(cursors.artifactSince).toBeUndefined();
-    expect(cursors.toolSinceMs).toBeUndefined();
+    expect(cache.isLoaded("r0")).toBe(false);
   });
 });
 
-describe("run cache — cursors", () => {
-  it("allows another completion after a native delegation without dropping transcript cursors", () => {
+describe("run cache — completion", () => {
+  it("allows another completion after delegation without dropping the loaded page", () => {
     const cache = createRunCache();
     cache.touch("voice");
     cache.markLoaded("voice");
-    cache.advanceCursors("voice", { artifactMaxId: 12, toolMaxMs: 3000 });
     expect(cache.markFinalized("voice")).toBe(true);
     cache.markRunning("voice");
     expect(cache.isFinalized("voice")).toBe(false);
-    expect(cache.getDeltaCursors("voice")).toMatchObject({ isIncremental: true, artifactSince: 12, toolSinceMs: 3000 });
+    expect(cache.isLoaded("voice")).toBe(true);
     expect(cache.markFinalized("voice")).toBe(true);
     expect(cache.markFinalized("voice")).toBe(false);
-  });
-  it("returns a full-fetch signal for a never-loaded run", () => {
-    const cache = createRunCache();
-    expect(cache.getDeltaCursors("x")).toEqual({
-      isIncremental: false,
-      artifactSince: undefined,
-      toolSinceMs: undefined,
-    });
-  });
-
-  it("returns the delta cursors once loaded", () => {
-    const cache = createRunCache();
-    cache.touch("x");
-    cache.markLoaded("x");
-    cache.advanceCursors("x", { artifactMaxId: 12, toolMaxMs: 3000 });
-    expect(cache.getDeltaCursors("x")).toEqual({
-      isIncremental: true,
-      artifactSince: 12,
-      toolSinceMs: 3000,
-    });
-  });
-
-  it("advances cursors monotonically (never moves backward)", () => {
-    const cache = createRunCache();
-    cache.touch("x");
-    cache.markLoaded("x");
-    cache.advanceCursors("x", { artifactMaxId: 10, toolMaxMs: 1000 });
-    cache.advanceCursors("x", { artifactMaxId: 5, toolMaxMs: 500 }); // lower → ignored
-    expect(cache.getDeltaCursors("x")).toMatchObject({ artifactSince: 10, toolSinceMs: 1000 });
   });
 });
 
@@ -108,20 +73,18 @@ describe("run cache — finalized + forget + clear", () => {
     const cache = createRunCache();
     cache.touch("r");
     cache.markLoaded("r");
-    cache.advanceCursors("r", { artifactMaxId: 7 });
     cache.forget("r");
-    expect(cache.getDeltaCursors("r").isIncremental).toBe(false);
+    expect(cache.isLoaded("r")).toBe(false);
     expect(cache.touch("other").has("r")).toBe(false);
   });
 
-  it("clear resets cursors, loaded, LRU and finalized", () => {
+  it("clear resets loaded, LRU and finalized", () => {
     const cache = createRunCache();
     cache.touch("r");
     cache.markLoaded("r");
-    cache.advanceCursors("r", { artifactMaxId: 3 });
     cache.markFinalized("r");
     cache.clear();
-    expect(cache.getDeltaCursors("r").isIncremental).toBe(false);
+    expect(cache.isLoaded("r")).toBe(false);
     expect(cache.isFinalized("r")).toBe(false);
     expect(cache.touch("r2").has("r")).toBe(false);
   });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Task } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
 
@@ -9,7 +9,7 @@ export interface TaskParams {
 }
 
 export function TaskDisplay({ params, isCompact = false }: { params: TaskParams; isCompact?: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const hasPrompt = !!params.prompt;
 
   return (

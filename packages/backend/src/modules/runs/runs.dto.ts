@@ -277,6 +277,8 @@ export interface UpdateRunTurnPayload {
   metadata?: Record<string, unknown>;
 }
 
+export type RunHistoryPage = import("@mains/contracts/runs").RunHistoryPage<RunArtifactResponse, ToolCallResponse, RunTurnResponse>;
+
 export interface RunTurnResponse {
   id: number;
   runId: string;

@@ -16,6 +16,8 @@ import { IssueTabContent } from "./issue-tab-content";
 import { SignalTabContent } from "./signal-tab-content";
 import { NoteTabContent } from "./note-tab-content";
 import { TurnRail } from "./turn-rail";
+import type { TranscriptHistory } from "../hooks/use-run-history";
+import { useTranscriptScroll } from "../hooks/use-transcript-scroll";
 import { RealtimeVoiceBar } from "./realtime-voice-bar";
 import { projectVoiceTranscriptEvents } from "../lib/voice-transcript-view";
 import { CONTENT_COLUMN_GUTTER } from "../lib/content-column";
@@ -56,6 +58,8 @@ import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
 import { TurnChangesCard } from "./turn-changes-card";
+import { TranscriptWindow, type TranscriptWindowRow } from "./transcript-window";
+import { createTranscriptViewCache, TranscriptItemScope, TranscriptViewProvider, useTranscriptValue } from "../lib/transcript-view-state";
 
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
@@ -316,12 +320,12 @@ function AgentTurnMessagesAccordion({
   renderGroup: (index: number) => ReactNode;
   isRunInProgress: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useTranscriptValue("turn-open", false);
 
   useEffect(() => {
     if (!isRunInProgress) return;
     queueMicrotask(() => setOpen(false));
-  }, [isRunInProgress]);
+  }, [isRunInProgress, setOpen]);
 
   const expanded = isRunInProgress || open;
 
@@ -375,7 +379,7 @@ function AgentTurnMessagesAccordion({
               : "grid-rows-[0fr] opacity-0 pointer-events-none"
           }`}
         >
-          <div className="min-h-0 overflow-hidden">{previousInner}</div>
+          <div className="min-h-0 overflow-hidden">{expanded ? previousInner : null}</div>
         </div>
         {messageBreakoutIndices.length > 0 && (
           <div className="space-y-4">
@@ -417,6 +421,7 @@ interface WorkspaceEventsProps {
   onDismissPlan?: () => void;
   hasPendingPlanApproval?: boolean;
   floatingChat?: boolean;
+  history?: TranscriptHistory;
 }
 
 export function WorkspaceEvents({
@@ -435,6 +440,7 @@ export function WorkspaceEvents({
   onDismissPlan,
   hasPendingPlanApproval = false,
   floatingChat = false,
+  history,
 }: WorkspaceEventsProps) {
   const isEditorActive = activeTab === "editor";
   const isIssueActive = isIssueTab(activeTab);
@@ -453,6 +459,8 @@ export function WorkspaceEvents({
 
   // Check if current run is still running
   const activeRun = runs.find((r) => r.id === activeTab);
+  const [viewCache] = useState(createTranscriptViewCache);
+  const transcriptView = useMemo(() => isRunTabActive ? viewCache.get(activeTab) : null, [isRunTabActive, activeTab, viewCache]);
   const { data: providerModels = [] } = useGetProviderModelsQuery(
     activeRun?.providerId ?? "",
     { skip: !activeRun?.providerId },
@@ -488,6 +496,7 @@ export function WorkspaceEvents({
   // applies when the run actually produced a document — pure image runs are
   // untouched.
   const displayEvents = useMemo(() => {
+    if (!isRunTabActive) return [];
     const docPaths = currentEvents
       .filter((e) => e.type === "artifact" && e.metadata?.kind === "document")
       .map((e) => (e.metadata?.path as string | undefined) ?? "")
@@ -523,7 +532,7 @@ export function WorkspaceEvents({
       demoteStaleRunningTools(dedupeGeneratedImageCopies(deduped)),
       turns,
     );
-  }, [currentEvents, activeRunFailedOnAuth, turns]);
+  }, [currentEvents, activeRunFailedOnAuth, turns, isRunTabActive]);
 
   // Group events for CLI-style display, reconciled so unchanged groups keep
   // their object identity across streamed tokens — that's what lets the memoized
@@ -589,18 +598,20 @@ export function WorkspaceEvents({
     () => buildTurnRenderRows(eventGroups),
     [eventGroups],
   );
-  const hasTranscript = turnRenderRows.length > 0 || isRunning;
+  const hasTranscript = turnRenderRows.length > 0 || isRunning || Boolean(history?.error);
   const hasRunContent = isRunTabActive && hasTranscript;
 
   // Left-edge navigator: one tick per user message. Built from the same groups
   // the transcript renders, so it can address a turn by group index.
   const turnMarkers = useMemo(() => buildTurnMarkers(eventGroups), [eventGroups]);
-  const transcriptRef = useRef<HTMLDivElement>(null);
+  const { container: transcriptRef, onScroll: onTranscriptScroll, page: pageHistory, onResize: onTranscriptResize } = useTranscriptScroll(
+    activeTab, currentEvents, isRunTabActive, history, transcriptView,
+  );
   const scrollToTurn = useCallback((marker: TurnMarker) => {
     transcriptRef.current
       ?.querySelector(`[data-group-index="${marker.index}"]`)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, []);
+  }, [transcriptRef]);
 
   /** User messages grouped as `info` + user-prompt — must stay in sync with `turns` length when events are up to date. */
   const userPromptGroupCount = useMemo(
@@ -649,7 +660,7 @@ export function WorkspaceEvents({
         ) : null;
 
       return (
-        <Fragment key={group.id}>
+        <TranscriptItemScope key={group.id} id={group.id}>
           {modelChange && (
             <ModelChangeNotice
               fromModel={modelChange.fromModel}
@@ -717,7 +728,7 @@ export function WorkspaceEvents({
               onFork={index === lastSessionIndex && isRunCompleted && onForkRun ? handleFork : undefined}
             />
           )}
-        </Fragment>
+        </TranscriptItemScope>
       );
     },
     [
@@ -742,6 +753,18 @@ export function WorkspaceEvents({
       providerModels,
     ],
   );
+
+  const windowRows = useMemo<TranscriptWindowRow[]>(() => turnRenderRows.map((row, rowIndex) => {
+    const first = row.kind === "flat" ? row.indices[0] : row.previousSegments[0]?.[0] ?? row.lastSegment[0];
+    const id = `row-${row.kind === "flat" ? "flat" : "acc"}-${eventGroups[first]?.id}`;
+    const indices = row.kind === "flat" ? row.indices : row.lastSegment;
+    const estimate = Math.min(1400, 64 + indices.reduce((total, index) => total + eventGroups[index].events.reduce((sum, event) => sum + Math.min(1000, 32 + Math.ceil(event.content.length / 90) * 20), 0), 0));
+    return { id, groupIndex: row.kind === "flat" ? first : undefined, estimate,
+      render: () => <TranscriptItemScope id={id}>{row.kind === "flat"
+        ? row.indices.map(renderGroupAt)
+        : <AgentTurnMessagesAccordion {...row} renderGroup={renderGroupAt}
+          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}</TranscriptItemScope> };
+  }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
 
   // Latest thinking: ephemeral Cursor stream (cursor-think-*) or legacy persisted [thinking] logs
   const latestThinking = useMemo(() => {
@@ -771,7 +794,7 @@ export function WorkspaceEvents({
   // scroll position, and other local UI state across tab switches.
 
   return (
-    <Text as="div" size="sm" tone="inherit" className="group/voice-chat relative h-full flex flex-col">
+    <TranscriptViewProvider view={transcriptView}><Text as="div" size="sm" tone="inherit" className="group/voice-chat relative h-full flex flex-col">
       {/* Content area */}
       <div className="flex-1 min-h-0 overflow-hidden relative">
         {isNewRunActive && (
@@ -781,9 +804,11 @@ export function WorkspaceEvents({
         {isIssueActive && activeIssue && <IssueTabContent issue={activeIssue} />}
         {isSignalActive && activeSignal && <SignalTabContent signal={activeSignal} />}
         {isNoteActive && activeNoteId && <NoteTabContent reviewId={activeNoteId} />}
-        {hasTranscript && (
+        {hasRunContent && transcriptView && (
           <div
             ref={transcriptRef}
+            onScroll={onTranscriptScroll}
+            style={{ overflowAnchor: "none" }}
             className={`h-full overflow-y-auto noscrollbar ${isRunTabActive ? "" : "hidden"}`}
           >
             {/* The main transcript shares its gutter with the composer. Floating
@@ -791,57 +816,15 @@ export function WorkspaceEvents({
             <div className={floatingChat ? "px-4" : CONTENT_COLUMN_GUTTER}>
             {/* Keep the latest message above the orb when following the tail;
                 this padding scrolls away with history beneath the overlay. */}
-            <div className={floatingChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" :"min-h-75 max-w-210 mx-auto space-y-4 pt-12 pb-24 group-has-[[data-voice-orb-overlay]]/voice-chat:pb-52 sm:group-has-[[data-voice-orb-overlay]]/voice-chat:pb-68" }>
-              {turnRenderRows.map((row, rowIndex) => {
-                const isLastRow = rowIndex === turnRenderRows.length - 1;
-                let rowKey: string;
-                let content: ReactNode;
-                if (row.kind === "flat") {
-                  const first = row.indices[0];
-                  const lastIdx = row.indices[row.indices.length - 1];
-                  rowKey = `row-flat-${first}-${lastIdx}`;
-                  content = row.indices.map((index) => renderGroupAt(index));
-                } else {
-                  const isLiveTurnAccordion =
-                    isRunning && !suppressLiveAccordionForStaleEvents && isLastRow;
-                  rowKey = `row-acc-${row.previousSegments[0]?.[0] ?? 0}-${row.planBreakoutIndices.join("-") || "x"}-${row.lastSegment[0] ?? 0}`;
-                  content = (
-                    <AgentTurnMessagesAccordion
-                      previousSegments={row.previousSegments}
-                      planBreakoutIndices={row.planBreakoutIndices}
-                      messageBreakoutIndices={row.messageBreakoutIndices}
-                      lastSegment={row.lastSegment}
-                      previousMessageCount={row.previousMessageCount}
-                      previousToolSummary={row.previousToolSummary}
-                      renderGroup={renderGroupAt}
-                      isRunInProgress={isLiveTurnAccordion}
-                    />
-                  );
-                }
-                // Historical rows carried `content-visibility: auto` to skip their
-                // layout and paint while off-screen. Measured against a real
-                // 17-turn transcript (~12k nodes, 33 rows) it did the opposite of
-                // its job: a fast fling produced two blank frames every time —
-                // the black gaps users reported — and cost ~25% more per frame
-                // (10.3ms avg / 20ms worst, against 7.8ms / 12ms without it).
-                // Raising `contain-intrinsic-size` changed nothing, because the
-                // cost is laying each row out as it enters, not the size guess.
-                // At this scale the containment bookkeeping outweighs the work it
-                // skips. See docs/design/transcript-performance.md — the answer
-                // for genuinely long transcripts is windowing, not containment,
-                // which cannot produce a blank frame in the first place.
-                return (
-                  <div
-                    key={rowKey}
-                    // Scroll target for the turn rail. Every user prompt is its
-                    // own flat row, so the first index identifies the row.
-                    data-group-index={row.kind === "flat" ? row.indices[0] : undefined}
-                    className="space-y-4"
-                  >
-                    {content}
-                  </div>
-                );
-              })}
+            <div className={floatingChat ? "min-h-75-max-w-125 mx-auto space-y-4 pt-4 pb-0" :"min-h-75 max-w-210 mx-auto space-y-4 pt-12 pb-24 group-has-data-voice-orb-overlay/voice-chat:pb-52 sm:group-has-data-voice-orb-overlay/voice-chat:pb-68" }>
+              {(history?.hasOlder || history?.error) && (
+                <button type="button" className="block mx-auto text-secondary text-xs py-2 hover:text-primary"
+                  disabled={history.loading} onClick={() => void pageHistory(history?.error ? "refresh" : "older")}>
+                  {history.loading ? "Loading earlier messages…" : history.error ? "Retry loading messages" : "Load earlier messages"}
+                </button>
+              )}
+              <TranscriptWindow key={activeTab} rows={windowRows} scrollRef={transcriptRef}
+                view={transcriptView} onResize={onTranscriptResize} />
               {activeRunFailedOnAuth && !providerSignedOut && (
                 <ProviderAuthNotice
                   variant={variant}
@@ -849,8 +832,16 @@ export function WorkspaceEvents({
                   message={activeRun?.lastError}
                 />
               )}
-              {isRunning && !hasActiveImageGeneration && (
+              {isRunning && !history?.historical && !hasActiveImageGeneration && (
                 <AsciiLoader thinkingText={latestThinking} />
+              )}
+              {history?.historical && (
+                <div className="flex justify-center gap-4 text-xs text-secondary py-2">
+                  {history.hasNewer && <button type="button" disabled={history.loading}
+                    onClick={() => void pageHistory("newer")}>Load newer messages</button>}
+                  <button type="button" disabled={history.loading}
+                    onClick={() => void pageHistory("latest")}>Jump to latest</button>
+                </div>
               )}
               <div ref={eventsEndRef} />
             </div>
@@ -873,6 +864,6 @@ export function WorkspaceEvents({
         </>
       )}
       {!floatingChat && <RealtimeVoiceBar runId={activeRun?.id} />}
-    </Text>
+    </Text></TranscriptViewProvider>
   );
 }

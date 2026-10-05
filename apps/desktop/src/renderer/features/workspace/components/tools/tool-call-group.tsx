@@ -12,6 +12,7 @@ import {
 import { ToolCallItem } from "./tool-call-item";
 import type { EventGroup } from "../../lib/group-events";
 import { Button } from "@/components/ui";
+import { useTranscriptValue } from "../../lib/transcript-view-state";
 
 const TOOL_GROUP_LABEL_TEXT =
   "text-primary-600 dark:text-primary-600 group-hover:text-primary-600 group-hover:dark:text-primary-200";
@@ -26,7 +27,7 @@ function ToolCallGroupImpl({
   group,
   defaultExpanded = false,
 }: ToolCallGroupProps) {
-  const [expandedOverride, setExpandedOverride] = useState<boolean | null>(null);
+  const [expandedOverride, setExpandedOverride] = useTranscriptValue<boolean | null>("group-expanded", null);
   const [showTopFade, setShowTopFade] = useState(false);
   const [showBottomFade, setShowBottomFade] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -145,7 +146,7 @@ function ToolCallGroupImpl({
               className="noscrollbar max-h-80 overflow-y-auto overscroll-contain"
             >
               <div ref={scrollContentRef} className="space-y-0.5">
-                {toolEvents.map((event) => (
+                {isExpanded && toolEvents.map((event) => (
                   <ToolCallItem key={event.id} event={event} isCompact={false} />
                 ))}
               </div>

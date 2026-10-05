@@ -77,15 +77,15 @@ const PREVIEW_KEYS = [
 const PREVIEW_SKIP_KEYS = new Set(["type", "kind", "schema", "$schema"]);
 
 function toOneLine(value: string, max = 80): string {
-  const flat = value.replace(/\s+/g, " ").trim();
+  const flat = value.slice(0, max * 4).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
 function scalarPreview(value: unknown): string {
-  if (typeof value === "string") return value.trim();
+  if (typeof value === "string") return value.slice(0, 320).trim();
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) {
-    return value
+    return value.slice(0, 20)
       .filter((v) => typeof v === "string" || typeof v === "number")
       .slice(0, 3)
       .join(", ");

@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import { AppState } from "react-native";
 
 import { toWebSocketUrl } from "@mains/contracts/backend";
+import { setHistoryFollowing } from "./run-history";
 import { CHANNELS } from "@mains/contracts/channels";
 import type {
   AccountResponse,
@@ -492,7 +493,8 @@ class BackendSession {
     };
     const result = await this.command<ContinueRunResponse>(CHANNELS.runs.continue, [payload]);
     if (result.success && this.transport) {
-      void syncRun(this.transport, backend.backendId, runId).catch(() => {});
+      setHistoryFollowing(backend.backendId, runId, true);
+      void syncRun(this.transport, backend.backendId, runId, "latest").catch(() => {});
     }
     return result;
   }
@@ -576,6 +578,12 @@ class BackendSession {
   }
 
   /** The transcript on screen — its events trigger refetches; others wait. */
+  async pageRunHistory(runId: string, direction: "older" | "newer" | "latest" | "refresh"): Promise<void> {
+    const backendId = this.snapshot.backend?.backendId;
+    if (!this.transport || !backendId) throw new Error("Connect to Mains to load conversation history");
+    await syncRun(this.transport, backendId, runId, direction);
+  }
+
   openRun(runId: string): void {
     if (this.viewingRunId && this.viewingRunId !== runId) {
       clearStreamingMessages(this.viewingRunId);

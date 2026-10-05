@@ -1,4 +1,4 @@
-import { eq, asc, desc, and, isNull, sql } from "drizzle-orm";
+import { eq, asc, desc, and, isNull, sql, getTableColumns } from "drizzle-orm";
 import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
 import { toolCalls } from "../../db/schema";
@@ -15,12 +15,23 @@ export const toolsRepo = {
   // ─────────────────────────────────────────────────────────────
   // Tool Call Operations
   // ─────────────────────────────────────────────────────────────
-  async findToolCallsByRun(runId: string): Promise<ToolCallResponse[]> {
+  async findToolCallsByRun(runId: string, subagentsOnly = false): Promise<ToolCallResponse[]> {
     const db = getDb();
     const rows = await db
-      .select()
+      .select({ ...getTableColumns(toolCalls),
+        ...(subagentsOnly ? {
+          output: sql<null>`NULL`,
+          input: sql<string>`json_object('description', json_extract(${toolCalls.input}, '$.description'),
+            'subagent_type', json_extract(${toolCalls.input}, '$.subagent_type'), 'to', json_extract(${toolCalls.input}, '$.to'))`,
+        } : {}),
+      })
       .from(toolCalls)
-      .where(eq(toolCalls.runId, runId))
+      .where(and(eq(toolCalls.runId, runId), subagentsOnly ? sql`(
+        lower(${toolCalls.toolName}) IN ('agent', 'task')
+        OR json_type(${toolCalls.metadata}, '$.subagent') = 'object'
+        OR json_extract(${toolCalls.metadata}, '$.task.subagentType') IS NOT NULL
+        OR json_extract(${toolCalls.metadata}, '$.task.taskType') = 'local_agent'
+      )` : undefined))
       // Monotonic row ids, not second-grained createdAt: consumers (subagent
       // fold, flow ordering) treat this as execution order, and timestamp
       // ties would make it unstable across refetches.

@@ -9,6 +9,8 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { runsRepo } from "./runs.repo";
+import { validateHistoryRequest } from "./run-history";
+import type { ReadRunHistoryPayload } from "@mains/contracts/runs";
 import { providersService } from "../providers";
 import { collectionsService } from "../collections";
 import { projectsService } from "../projects";
@@ -1244,6 +1246,20 @@ export const runsService = {
   },
 
   // ─── Run Artifact Operations ───
+  async getHistoryPage(payload: ReadRunHistoryPayload) {
+    validateHistoryRequest(payload);
+    if (!await runsRepo.findRunById(payload.runId)) throw new Error("Conversation not found");
+    const page = runsRepo.findHistoryPage(payload);
+    return { ...page, artifacts: await withImageContentHashes(page.artifacts) };
+  },
+
+  async getToolOutput(runId: string, toolId: number) {
+    if (typeof runId !== "string" || !runId || !Number.isSafeInteger(toolId) || toolId <= 0) throw new Error("Invalid tool call");
+    const result = runsRepo.findToolOutput(runId, toolId);
+    if (!result) throw new Error("Tool call not found in this conversation");
+    return result;
+  },
+
   async getArtifactsByRun(
     runId: string,
     sinceId?: number,

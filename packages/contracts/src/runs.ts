@@ -24,6 +24,46 @@ export function modeLabel(mode: ModeId): string {
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type RunTurnStatus = "active" | "completed";
 
+/** Chronological position; artifacts precede tools when timestamps tie. */
+export interface RunHistoryCursor {
+  timestamp: number;
+  source: "artifact" | "tool";
+  id: number;
+}
+
+export interface ReadRunHistoryPayload {
+  runId: string;
+  direction?: "latest" | "older" | "newer" | "refresh";
+  /** Inclusive beginning of the current window, or the boundary being crossed. */
+  cursor?: RunHistoryCursor;
+  /** Exclusive end of a historical window; omitted/null follows live history. */
+  end?: RunHistoryCursor | null;
+  /** Desktop transcript may fetch large command/read outputs on expansion. */
+  deferToolOutput?: boolean;
+}
+
+export interface DeferredToolOutput {
+  type: "mains/deferred-tool-output";
+  preview: string;
+  chars: number;
+}
+
+export function isDeferredToolOutput(value: unknown): value is DeferredToolOutput {
+  return !!value && typeof value === "object" &&
+    (value as DeferredToolOutput).type === "mains/deferred-tool-output";
+}
+
+export interface RunHistoryPage<A = RunArtifactResponse, C = ToolCallResponse, T = RunTurnResponse> {
+  artifacts: A[];
+  toolCalls: C[];
+  turns: T[];
+  start: RunHistoryCursor | null;
+  end: RunHistoryCursor | null;
+  last: RunHistoryCursor | null;
+  hasOlder: boolean;
+  hasNewer: boolean;
+}
+
 /** Explicit input for an active turn. Settings stay owned by that turn. */
 export interface RunSteerPayload {
   runId: string;

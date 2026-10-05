@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Text } from "@/components/ui";
 import { Question, Check } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
@@ -35,7 +35,7 @@ export function AskUserQuestionDisplay({
   output?: unknown;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   const parsed = parseOutput(output);
   const fromParams = params.questions?.length

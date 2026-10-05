@@ -76,6 +76,7 @@ interface McpAppDisplayProps {
   panelDisplayMode?: McpAppDisplayMode;
   onDisplayModeChange?: (mode: McpAppDisplayMode) => void;
   isActive?: boolean;
+  registerBeforeSuspend?: (callback: () => Promise<void>) => () => void;
   /** Host compatibility failures that apps can handle through their own fallback. */
   unsupportedTools?: Readonly<Record<string, string>>;
   app: McpAppToolMetadata;
@@ -189,6 +190,7 @@ export function McpAppDisplay({
   panelDisplayMode,
   onDisplayModeChange,
   isActive = true,
+  registerBeforeSuspend,
   unsupportedTools,
   app,
   input,
@@ -220,6 +222,15 @@ export function McpAppDisplay({
   const bridgeRef = useRef<AppBridge | null>(null);
   const bridgeHostContextRef = useRef<McpUiHostContext>({});
   const initializedRef = useRef(false);
+  useEffect(() => registerBeforeSuspend?.(async () => {
+    if (!initializedRef.current || !bridgeRef.current) return;
+    try {
+      await bridgeRef.current.teardownResource({}, { timeout: 1_500 });
+    } catch {
+      // Compatibility apps may not implement teardown. Their widget state is
+      // already saved by setWidgetState; the conversation lives in the host.
+    }
+  }), [registerBeforeSuspend]);
   const latestContextRef = useRef<{ content?: unknown; structuredContent?: unknown } | null>(null);
   const conversationRef = useRef({ runId, onMessage, onModelContextChange, modelContext, unsupportedTools });
   const browserOpenRef = useRef(openBrowserUrl);

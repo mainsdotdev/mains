@@ -1,4 +1,4 @@
-import { useReducer, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Button } from "@/components/ui";
 import { Refresh } from "@/components/ui/icons";
 import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
@@ -14,18 +14,46 @@ import { mcpAppCompatibility } from "@/lib/mcp-app-extensions";
 import { BaseTab } from "./base-tab";
 import { McpAppWorkspace } from "./mcp-app-workspace";
 
+export const MCP_APP_IDLE_MS = 2 * 60 * 1000;
+
 export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutControls?: boolean }) {
   const panel = useMcpAppPanel();
   const setChatHost = panel?.setChatHost;
   const { isVisible, isAnimatedIn } = usePreviewPanelTransition(!!panel?.isOpen);
   const [reloadKey, reload] = useReducer((value: number) => value + 1, 0);
   const [startedDocumentId, setStartedDocumentId] = useState<string | null>(null);
+  const beforeSuspend = useRef<(() => Promise<void>) | null>(null);
+  const registerBeforeSuspend = useCallback((callback: () => Promise<void>) => {
+    beforeSuspend.current = callback;
+    return () => { if (beforeSuspend.current === callback) beforeSuspend.current = null; };
+  }, []);
   const documentId = panel?.document?.id;
+  const currentDocument = useRef(documentId);
+  useEffect(() => {
+    currentDocument.current = documentId;
+    return () => { currentDocument.current = undefined; };
+  }, [documentId]);
   // A rail launch changes the conversation owner before the panel can be
   // shown. Latch its first visible render, then keep the canvas mounted.
   if (documentId && panel?.isOpen && isVisible && startedDocumentId !== documentId) {
     setStartedDocumentId(documentId);
   }
+  useEffect(() => {
+    if (panel?.isOpen || !startedDocumentId) return;
+    // Conversation/draft/model context live in the panel provider. Widget
+    // state is saved by the app bridge and supplied again on initialization.
+    let canceled = false;
+    const timer = setTimeout(() => {
+      const teardown = beforeSuspend.current;
+      if (!teardown) { setStartedDocumentId(null); return; }
+      void teardown().catch(() => {}).finally(() => {
+        // If reopened during teardown, rebuild the app it prepared to close.
+        if (canceled && currentDocument.current === documentId) reload();
+        else if (!canceled) setStartedDocumentId(null);
+      });
+    }, MCP_APP_IDLE_MS);
+    return () => { canceled = true; clearTimeout(timer); };
+  }, [panel?.isOpen, startedDocumentId, documentId]);
   useSuppressBrowserView(isVisible && !!panel?.document);
   const isDarkMode = useIsDarkMode();
   if (!panel?.document) return null;
@@ -114,7 +142,7 @@ export function McpAppPanel({ reserveLayoutControls = false }: { reserveLayoutCo
         </header>
         <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl ${panel.isExpanded ? "" : "rounded-tl-none"} bg-primary dark:bg-primary-950`}>
           <div className="relative min-h-0 flex-1 isolate">
-            {startedDocumentId === documentId && <McpAppWorkspace key={reloadKey} />}
+            {startedDocumentId === documentId && <McpAppWorkspace key={reloadKey} registerBeforeSuspend={registerBeforeSuspend} />}
             {!interfaceUnsupported && <div ref={setChatHost} className="pointer-events-none absolute inset-0 z-10" />}
           </div>
         </div>

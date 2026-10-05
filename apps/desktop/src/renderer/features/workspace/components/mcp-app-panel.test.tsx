@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     toggleExpanded: vi.fn(), newChat: vi.fn(), close: vi.fn(),
   },
   mounts: 0,
+  teardown: null as (() => Promise<void>) | null,
 }));
 vi.mock("@/hooks/use-mcp-app-panel", () => ({ useMcpAppPanel: () => mocks.panel }));
 vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView: vi.fn() }));
@@ -24,22 +25,67 @@ vi.mock("@/lib/redux/api", () => ({
   useGetCollectionQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/components/layout/sidebar/mcp-app-icon", () => ({ McpAppIcon: () => <svg aria-hidden /> }));
-vi.mock("./mcp-app-workspace", () => ({ McpAppWorkspace: () => {
-  useEffect(() => { mocks.mounts++; }, []);
+vi.mock("./mcp-app-workspace", () => ({ McpAppWorkspace: ({ registerBeforeSuspend }: { registerBeforeSuspend: (callback: () => Promise<void>) => () => void }) => {
+  useEffect(() => { mocks.mounts++; return mocks.teardown ? registerBeforeSuspend(mocks.teardown) : undefined; }, [registerBeforeSuspend]);
   return <><iframe title="App canvas" /><div data-floating-chat-surface="">Floating chat</div></>;
 } }));
-import { McpAppPanel } from "./mcp-app-panel";
+import { McpAppPanel, MCP_APP_IDLE_MS } from "./mcp-app-panel";
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   mocks.mounts = 0;
+  mocks.teardown = null;
   Object.assign(mocks.panel.document.app, { name: "MagicPath", tool: "magicpath.open_canvas" });
   Object.assign(mocks.panel, { isOpen: true, isExpanded: false, chatVisible: true, chatMode: "input", width: 608 });
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("MCP app panel interactions", () => {
+  it("allows the app to save state before dropping its iframe", async () => {
+    let saved!: () => void;
+    mocks.teardown = vi.fn(() => new Promise<void>((resolve) => { saved = resolve; }));
+    const view = render(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(50));
+    mocks.panel.isOpen = false;
+    view.rerender(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(MCP_APP_IDLE_MS));
+    expect(mocks.teardown).toHaveBeenCalledOnce();
+    expect(document.querySelector("iframe")).not.toBeNull();
+    await act(async () => { saved(); });
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  it("releases a long-hidden app and reopens the same conversation", () => {
+    const view = render(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(50));
+    const frame = screen.getByTitle("App canvas");
+    mocks.panel.isOpen = false;
+    view.rerender(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(MCP_APP_IDLE_MS - 1));
+    expect(document.querySelector("iframe")).toBe(frame);
+    act(() => vi.advanceTimersByTime(1));
+    expect(document.querySelector("iframe")).toBeNull();
+    mocks.panel.isOpen = true;
+    view.rerender(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(50));
+    expect(screen.getByTitle("App canvas")).not.toBe(frame);
+    expect(mocks.panel.runId).toBe("run-1");
+    expect(mocks.panel.newChat).not.toHaveBeenCalled();
+  });
+
+  it("cancels hibernation when reopened during the grace period", () => {
+    const view = render(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(50));
+    const frame = screen.getByTitle("App canvas");
+    mocks.panel.isOpen = false;
+    view.rerender(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(MCP_APP_IDLE_MS / 2));
+    mocks.panel.isOpen = true;
+    view.rerender(<McpAppPanel />);
+    act(() => vi.advanceTimersByTime(MCP_APP_IDLE_MS));
+    expect(screen.getByTitle("App canvas")).toBe(frame);
+  });
   it("waits for the panel to become visible before mounting a new app, then retains it while hidden", () => {
     mocks.panel.isOpen = false;
     const view = render(<McpAppPanel />);

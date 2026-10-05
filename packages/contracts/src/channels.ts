@@ -339,6 +339,7 @@ export const CHANNELS = {
   },
   runToolCalls: {
     getByRun: "runToolCalls:getByRun",
+    getOutput: "runToolCalls:getOutput",
   },
   runTurns: {
     getByRun: "runTurns:getByRun",
@@ -382,6 +383,7 @@ export const CHANNELS = {
     readTextFile: "runs:readTextFile",
     getByWorkspace: "runs:getByWorkspace",
     getDetails: "runs:getDetails",
+    getHistory: "runs:getHistory",
     listActive: "runs:listActive",
     listPendingApprovals: "runs:listPendingApprovals",
     listRecent: "runs:listRecent",

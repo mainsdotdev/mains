@@ -64,6 +64,8 @@ type FlatItem =
 
 interface ArtifactMetadata {
   level?: unknown;
+  voice?: unknown;
+  voiceStartedAt?: unknown;
   isFromSubagent?: unknown;
   parentToolUseId?: unknown;
   /** Present on a user prompt: the skills and files the composer attached. */
@@ -86,7 +88,8 @@ function metadataOf(artifact: RunArtifactRow): ArtifactMetadata {
 
 function artifactItem(artifact: RunArtifactRow): FlatItem | null {
   const meta = metadataOf(artifact);
-  const at = artifact.createdAt.getTime();
+  const at = meta.voice === true && typeof meta.voiceStartedAt === "number" && Number.isFinite(meta.voiceStartedAt)
+    ? Math.trunc(meta.voiceStartedAt) : artifact.createdAt.getTime();
   const key = `artifact-${artifact.id}`;
 
   if (meta.isFromSubagent || typeof meta.parentToolUseId === "string") return null;

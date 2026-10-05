@@ -1,11 +1,12 @@
 import { useRouter, type Href } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, View, type NativeScrollEvent } from "react-native";
+import { ScrollView, View, Pressable, type NativeScrollEvent } from "react-native";
 import Animated, { FadeIn, FadeOut, useAnimatedStyle } from "react-native-reanimated";
 // Not Reanimated's: its own hook is deprecated (iOS bugs) and points here.
 import { useAnimatedKeyboard } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { setHistoryFollowing } from "@/backend/run-history";
 import { backendSession } from "@/backend/backend-session";
 import { RoundGlassButton, ThemedText } from "@/components/ui";
 import type { ComposerAttachment } from "@/lib/composer-attachments";
@@ -89,7 +90,7 @@ export function RunView({
   const {
     backend: { id: backendId, connected },
     run: { record: run, isLive: runIsLive, providerId, mode, workspacePath },
-    transcript: { items, streamingItems, thinking },
+    transcript: { items, streamingItems, thinking, history },
     approvals: { waiting, now },
     modelSelection,
   } = useRunData(runId, expectedProviderId);
@@ -241,6 +242,7 @@ export function RunView({
             attachments: sentAttachments,
           });
           pinned.current = true;
+          setHistoryFollowing(backendId, runId, true);
         },
         onOptimisticRollback: () => {
           rollbackContinuation();
@@ -313,6 +315,14 @@ export function RunView({
    * `scrollToOverflowEnabled` is what lets the header's negative rest offset
    * through.
    */
+  const rowLayouts = useRef(new Map<string, { y: number; height: number }>());
+  const pageAnchor = useRef<{ key: string; offset: number; items: typeof items } | null>(null);
+  const paging = useRef(false);
+  const dragging = useRef(false);
+  useEffect(() => {
+    const keys = new Set(rows.map((row) => row.key));
+    for (const key of rowLayouts.current.keys()) if (!keys.has(key)) rowLayouts.current.delete(key);
+  }, [rows]);
   const metrics = useRef({ frame: 0, content: 0, offset: null as number | null });
   /** Whether the way back down is on screen; the ref keeps `onScroll` cheap. */
   const [awayFromEnd, setAwayFromEnd] = useState(false);
@@ -382,8 +392,32 @@ export function RunView({
   };
 
   /** The way back down: start following the end again, then go to it. */
+  const pageHistory = async (direction: "older" | "newer" | "latest" | "refresh") => {
+    if (paging.current || history.loading || !connected) return;
+    paging.current = true;
+    const toLatest = direction === "latest" || !history.loaded;
+    pinned.current = toLatest;
+    setHistoryFollowing(backendId, runId, pinned.current);
+    const offset = metrics.current.offset ?? 0;
+    const first = rows.find((row) => {
+      const layout = rowLayouts.current.get(row.key);
+      return layout && layout.y + layout.height > offset + topInset;
+    });
+    pageAnchor.current = !toLatest && first
+      ? { key: first.key, offset: rowLayouts.current.get(first.key)!.y - offset, items }
+      : null;
+    try {
+      await backendSession.pageRunHistory(runId, direction);
+    } catch {
+      pageAnchor.current = null;
+    } finally {
+      paging.current = false;
+    }
+  };
   const jumpToEnd = () => {
+    if (history.end) { void pageHistory("latest"); return; }
     pinned.current = true;
+    setHistoryFollowing(backendId, runId, true);
     place(true);
   };
 
@@ -393,7 +427,13 @@ export function RunView({
     // A fling reports where it will stop; judge by that rather than by where
     // the finger left, or a flick up from the end would be chased straight back.
     const y = targetContentOffset?.y ?? contentOffset.y;
-    pinned.current = contentSize.height - layoutMeasurement.height - y < PIN_DISTANCE;
+    pinned.current = contentSize.height - layoutMeasurement.height - y < PIN_DISTANCE && !history.hasNewer;
+    setHistoryFollowing(backendId, runId, pinned.current);
+    if (!paging.current && !pageAnchor.current) {
+      if (y < restOffset + 200 && history.hasOlder) void pageHistory("older");
+      else if (contentSize.height - layoutMeasurement.height - y < 100 && history.hasNewer) void pageHistory("newer");
+    }
+    dragging.current = false;
   };
 
   // The composer rides the keyboard itself, as the workspace screen's bar does:
@@ -417,13 +457,7 @@ export function RunView({
         : "Continue this run…";
   return (
     <View ref={rootRef} collapsable={false} style={{ flex: 1 }}>
-      {/*
-        A ScrollView rather than a FlatList. The rows are whole turns, of which
-        a run has a few dozen at most, and a virtualized list sizes what it has
-        not rendered yet by estimate — an "end" that keeps moving as the tail
-        fills in, which is no place to land a chat. Rendered whole, a fold also
-        keeps its open state when it scrolls out of view.
-      */}
+      {/* Whole turns keep their fold state within a bounded 30-turn window. */}
       <ScrollView
         ref={listRef}
         contentInsetAdjustmentBehavior="automatic"
@@ -446,7 +480,7 @@ export function RunView({
           // Existing rows and the outgoing phrase move as one continuous
           // transition. The phrase projects its destination through whatever
           // distance remains in this native scroll.
-          place(placed.current || continuationPresentation !== null);
+          if (!pageAnchor.current) place(placed.current || continuationPresentation !== null);
           // The first rows land in one piece and without animation; from a
           // beat later on, growth — a streaming answer, the keyboard's room —
           // is followed with one.
@@ -459,13 +493,27 @@ export function RunView({
         onScroll={(event) => {
           metrics.current.offset = event.nativeEvent.contentOffset.y;
           reviewJump();
+          if (dragging.current && !paging.current && !pageAnchor.current) {
+            const y = event.nativeEvent.contentOffset.y;
+            if (y < restOffset + 200 && history.hasOlder) void pageHistory("older");
+            else if (event.nativeEvent.contentSize.height - event.nativeEvent.layoutMeasurement.height - y < 100 && history.hasNewer) void pageHistory("newer");
+          }
         }}
         onScrollBeginDrag={() => {
           pinned.current = false;
+          dragging.current = true;
+          setHistoryFollowing(backendId, runId, false);
         }}
         onScrollEndDrag={(event) => settle(event.nativeEvent)}
         onMomentumScrollEnd={(event) => settle(event.nativeEvent)}
       >
+        {(history.hasOlder || history.error) && (
+          <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory(history.error ? "refresh" : "older")}>
+            <ThemedText variant="subhead" style={{ textAlign: "center", paddingVertical: spacing.sm }}>
+              {history.loading ? "Loading earlier messages…" : history.error ? "Retry loading messages" : "Load earlier messages"}
+            </ThemedText>
+          </Pressable>
+        )}
         {initialPresentation ? (
           <TranscriptRow
             item={initialPresentation.item}
@@ -483,17 +531,28 @@ export function RunView({
           </ThemedText>
         ) : (
           rows.map((row, index) => (
+            <View key={row.key} onLayout={(event) => {
+              const layout = event.nativeEvent.layout;
+              rowLayouts.current.set(row.key, { y: layout.y, height: layout.height });
+              const anchor = pageAnchor.current;
+              if (anchor?.key === row.key && anchor.items !== items) {
+                const y = layout.y - anchor.offset;
+                pageAnchor.current = null;
+                metrics.current.offset = y;
+                listRef.current?.scrollTo({ y, animated: false });
+              }
+            }}>
             <TranscriptTurn
-              key={row.key}
               row={row}
               providerId={providerId}
               // A local continuation already owns the new turn. Do not mark
               // the previous persisted turn live while that prompt flies in.
               isRunInProgress={
-                Boolean(runIsLive) && !continuationPresentation && index === rows.length - 1
+                Boolean(runIsLive) && !history.end && !continuationPresentation && index === rows.length - 1
               }
               actions={actions}
             />
+            </View>
           ))
         )}
         {continuationPresentation ? (
@@ -516,8 +575,18 @@ export function RunView({
             actions={actions}
           />
         ))}
+        {history.end && (
+          <View style={{ gap: spacing.sm }}>
+            {history.hasNewer && <Pressable disabled={history.loading || !connected} onPress={() => void pageHistory("newer")}>
+              <ThemedText variant="subhead" style={{ textAlign: "center" }}>Load newer messages</ThemedText>
+            </Pressable>}
+            <Pressable disabled={history.loading || !connected} onPress={jumpToEnd}>
+              <ThemedText variant="subhead" style={{ textAlign: "center" }}>Jump to latest</ThemedText>
+            </Pressable>
+          </View>
+        )}
         <View style={{ gap: spacing.md }}>
-          {runIsLive || starting || continuationPresentation ? (
+          {(runIsLive && !history.end) || starting || continuationPresentation ? (
             <AsciiLoader mode={mode} thinkingText={thinking} />
           ) : null}
           {waiting.map((approval) => (

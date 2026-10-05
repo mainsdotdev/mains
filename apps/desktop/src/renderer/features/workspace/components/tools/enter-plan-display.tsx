@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Text } from "@/components/ui";
 import { EnterPlan } from "@/components/ui/icons";
 import { ToolCollapse, ToolHeader, ToolOutputBody, useToolStatus } from "./_shared";
@@ -21,7 +21,7 @@ export function EnterPlanDisplay({
   output?: unknown;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const status = useToolStatus();
 
   const result = toolOutputText(output);

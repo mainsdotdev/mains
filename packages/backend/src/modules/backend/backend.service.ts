@@ -33,6 +33,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.runs.listArchived,
   CHANNELS.runs.getById,
   CHANNELS.runs.getDetails,
+  CHANNELS.runs.getHistory,
   CHANNELS.runs.getByWorkspace,
   // A single Markdown link, resolved and contained inside that Work/Chat run's
   // managed directory. This deliberately does not expose fileExplorer:*.
@@ -40,6 +41,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.runs.listPendingApprovals,
   CHANNELS.runTurns.getByRun,
   CHANNELS.runToolCalls.getByRun,
+  CHANNELS.runToolCalls.getOutput,
   CHANNELS.runArtifacts.getByRun,
   // The pixels behind an image artifact, scaled down on the way — the one
   // thing a transcript needs that its rows don't carry.

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Bash } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
 import { coerceToolOutput } from "../../lib/parse-tool-content";
@@ -9,10 +9,9 @@ export interface BashParams {
 }
 
 export function BashDisplay({ params, output, isCompact = false }: { params: BashParams; output?: unknown; isCompact?: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
-  const stdout = parseStdout(output);
-  const hasDetails = !!params.command || !!stdout;
+  const hasDetails = !!params.command || (output != null && output !== "");
 
   return (
     <div>
@@ -29,11 +28,9 @@ export function BashDisplay({ params, output, isCompact = false }: { params: Bas
         </span>
       </ToolHeader>
 
-      {hasDetails && stdout && (
+      {hasDetails && output != null && (
         <ToolCollapse isExpanded={isExpanded}>
-          <ToolOutputBody className="text-s font-sans whitespace-pre-wrap">
-            {stdout}
-          </ToolOutputBody>
+          <BashOutput output={output} />
         </ToolCollapse>
       )}
     </div>
@@ -64,4 +61,8 @@ function stripAnsi(input: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function BashOutput({ output }: { output: unknown }) {
+  return <ToolOutputBody className="text-s font-sans whitespace-pre-wrap">{parseStdout(output)}</ToolOutputBody>;
 }

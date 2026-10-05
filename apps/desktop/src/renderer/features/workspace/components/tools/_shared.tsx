@@ -3,6 +3,7 @@ import {
   lazy,
   Suspense,
   useContext,
+  useEffect,
   useState,
   type ReactNode,
 } from "react";
@@ -333,11 +334,14 @@ export function ToolCollapse({
   /** Extra classes applied inside the clipper (e.g. border/rounded for diffs). */
   className?: string;
 }) {
-  // Do not mount expensive output bodies for the hundreds of historical rows
-  // a transcript can keep collapsed. Once opened, retain the body so closing
-  // still animates and local state survives subsequent toggles.
+  // Keep the closing animation, then release the output tree and its caches.
   const [hasOpened, setHasOpened] = useState(isExpanded);
   if (isExpanded && !hasOpened) setHasOpened(true);
+  useEffect(() => {
+    if (isExpanded || !hasOpened) return;
+    const timer = setTimeout(() => setHasOpened(false), 200);
+    return () => clearTimeout(timer);
+  }, [isExpanded, hasOpened]);
 
   return (
     <div

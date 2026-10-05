@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Search } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
 import { coerceToolOutput } from "../../lib/parse-tool-content";
@@ -9,7 +9,7 @@ export interface ToolSearchParams {
 }
 
 export function ToolSearchDisplay({ output, isCompact = false }: { params: ToolSearchParams; output?: unknown; isCompact?: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   const { matches, total } = parseToolSearchOutput(output);
   const hasMatches = matches.length > 0;

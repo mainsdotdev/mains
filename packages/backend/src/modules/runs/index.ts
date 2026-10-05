@@ -43,6 +43,7 @@ export type {
   StartRunPayload,
   StartRunResponse,
   RunDetailsResponse,
+  RunHistoryPage,
   PendingApproval,
   ActiveRunResponse,
   ToolApprovalRequest,
