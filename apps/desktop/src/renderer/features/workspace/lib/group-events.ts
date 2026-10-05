@@ -238,8 +238,13 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
           });
         }
       } else {
+        // A persisted report replaces its live event. Keep the display group
+        // mounted so that handoff does not discard the text reveal's buffer.
+        const streamId = event.metadata?.kind === "report" ? event.metadata.streamId : undefined;
+        const displayId = typeof streamId === "string" && streamId.length > 0
+          ? `stream-${streamId}` : event.id;
         groups.push({
-          id: `${isUserPrompt ? "user" : "response"}-${event.id}`,
+          id: `${isUserPrompt ? "user" : "response"}-${displayId}`,
           type: isUserPrompt ? "info" : "response",
           events: [event],
           startTime: event.timestamp,

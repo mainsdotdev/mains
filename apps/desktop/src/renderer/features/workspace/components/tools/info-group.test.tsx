@@ -2,7 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
-import type { EventGroup } from "../../lib/group-events";
+import { groupEvents, type EventGroup } from "../../lib/group-events";
+import { mapArtifactToEvent } from "../../lib/run-event-mappers";
 
 vi.hoisted(() => {
   Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => ({
@@ -48,6 +49,38 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
   }] };
 }
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+describe("streaming assistant equations", () => {
+  it("waits for the equation while the report streams and while its final buffer drains", async () => {
+    const group: EventGroup = {
+      id: "response-stream-native-report", type: "response", startTime: new Date(), endTime: new Date(),
+      events: [{
+        id: "stream-native-report", type: "artifact", timestamp: new Date(),
+        content: String.raw`Energy decreases:\[\frac{d}{dt}\left(\frac12\int |u|^`,
+        metadata: { kind: "report", streamId: "native-report", streaming: true },
+      }],
+    };
+    const view = render(<InfoGroup key={group.id} group={group} />);
+
+    await waitFor(() => expect(view.container.textContent).toContain("Energy decreases:"));
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+    expect(view.container.querySelector(".katex-display")).toBeNull();
+
+    const beforePersistence = view.container.textContent;
+    const persisted = mapArtifactToEvent({
+      id: 42, runId: "run", kind: "report", createdAt: new Date(),
+      content: group.events[0].content + String.raw`2\right)=-\nu\int |\nabla u|^2\]`,
+      metadata: { streamId: "native-report" },
+    });
+    const settledGroup = groupEvents([persisted])[0];
+    view.rerender(<InfoGroup key={settledGroup.id} group={settledGroup} />);
+
+    expect(view.container.textContent).toBe(beforePersistence);
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+    await waitFor(() => expect(view.container.querySelector(".katex-display")).not.toBeNull(), { timeout: 4000 });
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+  });
+});
 
 describe("prompt browser annotations", () => {
   it("opens the bounded expanded preview from a compact attachment reference", () => {

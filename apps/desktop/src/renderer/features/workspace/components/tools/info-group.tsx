@@ -818,8 +818,9 @@ function ArtifactBody({
   workspaceRootPath?: string;
 }) {
   // Bursty SDK chunks are revealed a few characters per frame so the text
-  // flows instead of popping in chunk-sized jumps. Instant when not streaming.
+  // flows instead of popping in chunk-sized jumps, including the final buffer.
   const displayContent = useSmoothText(content, isStreaming);
+  const isRevealing = isStreaming || displayContent !== content;
 
   const resolvedImages = useMemo(() => {
     const out: Array<{ key: string; raw: string; abs: string; name: string }> =
@@ -848,7 +849,10 @@ function ArtifactBody({
   return (
     <div className="overflow-hidden">
       <div className="prose prose-sm dark:prose-invert max-w-none relative">
-        <AgentMarkdown className={isStreaming ? "streaming-text" : undefined}>
+        <AgentMarkdown
+          className={isRevealing ? "streaming-text" : undefined}
+          isStreaming={isRevealing}
+        >
           {displayContent}
         </AgentMarkdown>
       </div>

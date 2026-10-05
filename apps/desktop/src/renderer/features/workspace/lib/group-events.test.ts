@@ -21,6 +21,18 @@ function baseEvents(): RunEvent[] {
 }
 
 describe("groupEvents", () => {
+  it("keeps the report group mounted when a native stream becomes a persisted artifact", () => {
+    const metadata = { kind: "report", streamId: "native-message-1" };
+    const live = groupEvents([ev({ id: "stream-native-message-1", metadata: { ...metadata, streaming: true } })]);
+    const final = groupEvents([ev({ id: "artifact-42", metadata })]);
+    expect(final[0].id).toBe(live[0].id);
+    expect(final[0].events[0].id).toBe("artifact-42");
+    expect(groupEvents([ev({ id: "artifact-43", metadata: { ...metadata, streamId: "native-message-2" } })])[0].id)
+      .not.toBe(final[0].id);
+    expect(groupEvents([ev({ id: "artifact-44", metadata: { kind: "document", streamId: "native-message-1" } })])[0].id)
+      .toBe("response-artifact-44");
+  });
+
   it("restores legacy imageView logs as tool calls and hides their large preview artifacts", () => {
     const firstPage = "/runs/work/tmp/pdfs/page-1.png";
     const secondPage = "/runs/work/tmp/pdfs/page-2.png";

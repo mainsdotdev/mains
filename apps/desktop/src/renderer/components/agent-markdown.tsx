@@ -7,7 +7,8 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 
 import { Text } from "@/components/ui";
-import { normalizeMathMarkdown } from "@/lib/math-markdown";
+import { normalizeMathMarkdown, remarkStreamingMath } from "@/lib/math-markdown";
+import { rehypeStreamingText } from "@/lib/streaming-text";
 
 import { agentMarkdownComponents } from "./markdown-components";
 
@@ -15,9 +16,11 @@ import { agentMarkdownComponents } from "./markdown-components";
 export function AgentMarkdown({
   children,
   className,
+  isStreaming = false,
 }: {
   children: string;
   className?: string;
+  isStreaming?: boolean;
 }): ReactNode {
   return (
     // KaTeX display nodes are direct Markdown children, unlike paragraphs and
@@ -26,8 +29,15 @@ export function AgentMarkdown({
     <Text as="div" size="sm" className={className}>
       <ReactMarkdown
         components={agentMarkdownComponents}
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        remarkPlugins={[
+          remarkGfm,
+          remarkMath,
+          ...(isStreaming ? [remarkStreamingMath] : []),
+        ]}
+        rehypePlugins={[
+          ...(isStreaming ? [rehypeStreamingText] : []),
+          rehypeKatex,
+        ]}
       >
         {normalizeMathMarkdown(children)}
       </ReactMarkdown>

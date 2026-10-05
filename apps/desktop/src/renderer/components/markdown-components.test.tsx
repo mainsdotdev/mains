@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 
-import { createElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 
@@ -36,8 +35,8 @@ beforeEach(() => {
   });
 });
 
-function renderMarkdown(source: string) {
-  return render(createElement(AgentMarkdown, null, source));
+function renderMarkdown(source: string, isStreaming = false) {
+  return render(<AgentMarkdown isStreaming={isStreaming}>{source}</AgentMarkdown>);
 }
 
 // Only network URLs can act as exfiltration beacons — everything else
@@ -156,6 +155,61 @@ describe("markdownComponents / code", () => {
 });
 
 describe("assistant markdown / math", () => {
+  it.each([
+    ["bracket", String.raw`\[`, String.raw`\]`],
+    ["dollar", "$$\n", "\n$$"],
+  ])("waits for the closing %s delimiter at every streamed character", (_format, open, close) => {
+    const prose = String.raw`Energy decreases; velocity is \(u\).` + "\n\n";
+    const equation = open + String.raw`\frac{d}{dt}\left(\frac12\int |u|^2\right)=-\nu\int |\nabla u|^2` + close;
+    const view = renderMarkdown(prose, true);
+
+    for (let end = open.length; end < equation.length; end++) {
+      view.rerender(<AgentMarkdown isStreaming>{prose + equation.slice(0, end)}</AgentMarkdown>);
+
+      expect(view.container.textContent).toContain("Energy decreases; velocity is");
+      expect(view.container.querySelectorAll(".katex")).toHaveLength(1);
+      expect(view.container.querySelector(".katex-error")).toBeNull();
+    }
+
+    view.rerender(<AgentMarkdown isStreaming>{prose + equation}</AgentMarkdown>);
+    expect(view.container.querySelector(".katex-display")).not.toBeNull();
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+
+    view.rerender(<AgentMarkdown>{prose + equation}</AgentMarkdown>);
+    expect(view.container.querySelector(".katex-display")).not.toBeNull();
+  });
+
+  it("keeps completed equations visible while the next equation streams", () => {
+    const { container } = renderMarkdown("$$\nx^2\n$$\n\nNext equation:\n\n$$\nx^3", true);
+
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(container.textContent).toContain("Next equation:");
+  });
+
+  it.each([
+    ["> $$\n> \\frac{1}{", "\n> 2}\n> $$"],
+    ["- $$\n  \\frac{1}{", "\n  2}\n  $$"],
+    ["$$$\n\\frac{1}{2}\n$$", "$"],
+    ["$$\nx^2\n    $$", "\n$$"],
+  ])("uses the actual closing math fence inside Markdown containers: %s", (partial, remainder) => {
+    const view = renderMarkdown(partial, true);
+    expect(view.container.querySelector(".katex")).toBeNull();
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+
+    view.rerender(<AgentMarkdown isStreaming>{partial + remainder}</AgentMarkdown>);
+    // Some pending bodies contain literal dollars; a real fence still ends
+    // the wait and lets KaTeX report any error in the completed expression.
+    expect(view.container.querySelector(".katex, .katex-error")).not.toBeNull();
+  });
+
+  it("preserves the usual rendering after a stream ends without a closing fence", () => {
+    const view = renderMarkdown("$$\nx^2", true);
+    expect(view.container.querySelector(".katex")).toBeNull();
+
+    view.rerender(<AgentMarkdown>{"$$\nx^2"}</AgentMarkdown>);
+    expect(view.container.querySelector(".katex-display")).not.toBeNull();
+  });
+
   it("typesets bracket-delimited display LaTeX instead of exposing its source", () => {
     const { container } = renderMarkdown(
       String.raw`\[\rho\left(\frac{\partial \mathbf{u}}{\partial t}\right)=-\nabla p\]`,
@@ -190,6 +244,35 @@ describe("assistant markdown / math", () => {
 
     expect(container.querySelector(".katex")).toBeNull();
     expect(container.querySelector("pre code")?.textContent).toContain("\\[y\\]");
+  });
+});
+
+describe("assistant markdown / streaming fade", () => {
+  it("retains previous word spans while new words arrive and removes them when settled", () => {
+    const view = renderMarkdown("Hello wo", true);
+    const words = [...view.container.querySelectorAll(".stream-word")];
+    expect(words.map((word) => word.textContent)).toEqual(["Hello ", "wo"]);
+
+    view.rerender(<AgentMarkdown isStreaming>{"Hello world again"}</AgentMarkdown>);
+    const updatedWords = [...view.container.querySelectorAll(".stream-word")];
+    expect(updatedWords[0]).toBe(words[0]);
+    expect(updatedWords[1]).toBe(words[1]);
+    expect(updatedWords[1].textContent).toBe("world ");
+    expect(updatedWords[2].textContent).toBe("again");
+
+    view.rerender(<AgentMarkdown>{"Hello world again"}</AgentMarkdown>);
+    expect(view.container.querySelector(".stream-word")).toBeNull();
+    expect(view.container.textContent).toBe("Hello world again");
+  });
+
+  it("preserves Markdown styling and leaves code and typeset math outside the word fade", () => {
+    const view = renderMarkdown(String.raw`Hello **bold text**, \(x^2\), and ` + "`literal code`.", true);
+    expect(view.container.querySelector("strong")?.textContent).toBe("bold text");
+    expect(view.container.querySelector("strong .stream-word")).not.toBeNull();
+    expect(view.container.querySelector("code")?.textContent).toBe("literal code");
+    expect(view.container.querySelector("code .stream-word")).toBeNull();
+    expect(view.container.querySelector(".katex")).not.toBeNull();
+    expect(view.container.querySelector(".katex .stream-word")).toBeNull();
   });
 });
 
