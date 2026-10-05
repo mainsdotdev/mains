@@ -194,7 +194,7 @@ export function InputToolbar({
 
   if (layout === "floating") {
     return (
-      <div className="pointer-events-none absolute inset-x-1.5 bottom-1.5 flex items-center justify-between">
+      <div className="pointer-events-none absolute inset-x-2.5 bottom-1.5 flex items-center justify-between">
         <div className="pointer-events-auto flex items-center">
           <FileUploadDropdown
             isOpen={showFileDropdown}
