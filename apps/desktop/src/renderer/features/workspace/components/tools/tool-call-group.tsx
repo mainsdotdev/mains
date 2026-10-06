@@ -36,6 +36,10 @@ function ToolCallGroupImpl({
     group.events.every((event) => event.metadata?.codexItemType === "imageView");
   const isExpanded = expandedOverride ?? (isImageViewGroup || defaultExpanded);
   const pluginLogos = usePluginLogoMap();
+  // Fade the content itself so every host surface shows through unchanged.
+  const scrollMask = `linear-gradient(to bottom, ${
+    showTopFade ? "transparent, black 3rem" : "black"
+  }, ${showBottomFade ? "black calc(100% - 3rem), transparent" : "black"})`;
 
   const updateScrollFades = useCallback(() => {
     const element = scrollContainerRef.current;
@@ -143,7 +147,10 @@ function ToolCallGroupImpl({
             <div
               ref={scrollContainerRef}
               onScroll={updateScrollFades}
-              className="noscrollbar max-h-80 overflow-y-auto overscroll-contain"
+              // Let wheel/trackpad scrolling reach the transcript at either
+              // boundary, even when this list fills the floating chat.
+              className="noscrollbar max-h-80 overflow-y-auto"
+              style={{ maskImage: scrollMask, WebkitMaskImage: scrollMask }}
             >
               <div ref={scrollContentRef} className="space-y-0.5">
                 {isExpanded && toolEvents.map((event) => (
@@ -151,14 +158,6 @@ function ToolCallGroupImpl({
                 ))}
               </div>
             </div>
-            <div
-              aria-hidden="true"
-              className={`pointer-events-none absolute inset-x-0 top-0 h-12 bg-linear-to-b from-primary to-transparent transition-opacity duration-150 dark:from-primary-950 ${isExpanded && showTopFade ? "opacity-100" : "opacity-0"}`}
-            />
-            <div
-              aria-hidden="true"
-              className={`pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-linear-to-t from-primary to-transparent transition-opacity duration-150 dark:from-primary-950 ${isExpanded && showBottomFade ? "opacity-100" : "opacity-0"}`}
-            />
           </div>
         </div>
       </div>

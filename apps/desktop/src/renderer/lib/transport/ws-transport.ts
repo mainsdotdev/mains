@@ -5,6 +5,8 @@ import {
   encodeWsMessage,
 } from "../../../shared/ipc-kit/ws-protocol";
 import type { Transport, TransportStatus } from "./types";
+import { CHANNELS } from "@mains/contracts/channels";
+import { PR_MEDIA_CREATE_TIMEOUT_MS } from "@mains/contracts/pr-attachments";
 
 /** Minimal subset of the browser `WebSocket` API that {@link WsTransport} uses. */
 export interface WebSocketLike {
@@ -175,18 +177,23 @@ export class WsTransport implements Transport {
       return Promise.reject(new Error("WsTransport has been disposed"));
     }
     const id = this.nextId++;
+    const hasPrMedia = channel === CHANNELS.gitFlow.createPr &&
+      Array.isArray((args[0] as { attachmentIds?: unknown } | undefined)?.attachmentIds) &&
+      ((args[0] as { attachmentIds: unknown[] }).attachmentIds.length > 0);
+    const timeoutMs = hasPrMedia && this.invokeTimeoutMs > 0
+      ? Math.max(this.invokeTimeoutMs, PR_MEDIA_CREATE_TIMEOUT_MS) : this.invokeTimeoutMs;
     return new Promise<ServiceResponse<unknown>>((resolve, reject) => {
       const timer =
-        this.invokeTimeoutMs > 0
+        timeoutMs > 0
           ? setTimeout(() => {
               this.pending.delete(id);
               this.outbox.delete(id);
               reject(
                 new Error(
-                  `Invoke "${channel}" timed out after ${this.invokeTimeoutMs}ms`,
+                  `Invoke "${channel}" timed out after ${timeoutMs}ms`,
                 ),
               );
-            }, this.invokeTimeoutMs)
+            }, timeoutMs)
           : null;
       this.pending.set(id, { resolve, reject, timer });
       this.sendFrame(

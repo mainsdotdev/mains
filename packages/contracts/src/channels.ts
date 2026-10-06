@@ -179,6 +179,8 @@ export const CHANNELS = {
     push: "gitFlow:push",
     pull: "gitFlow:pull",
     createPr: "gitFlow:createPr",
+    stagePrAttachment: "gitFlow:stagePrAttachment",
+    discardPrAttachments: "gitFlow:discardPrAttachments",
     generateCommitMessage: "gitFlow:generateCommitMessage",
     generatePrBody: "gitFlow:generatePrBody",
     getPublishPreflight: "gitFlow:getPublishPreflight",

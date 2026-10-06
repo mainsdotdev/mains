@@ -824,7 +824,7 @@ export function WorkspaceEvents({
             ref={transcriptRef}
             onScroll={onTranscriptScroll}
             style={{ overflowAnchor: "none" }}
-            className={`h-full overflow-y-auto noscrollbar ${isRunTabActive ? "" : "hidden"}`}
+            className={`h-full overflow-y-auto noscrollbar ${floatingChat ? "overscroll-contain" : ""} ${isRunTabActive ? "" : "hidden"}`}
           >
             {/* The main transcript shares its gutter with the composer. Floating
                 chat uses 16px sides and omits the turn rail so text stays clear. */}

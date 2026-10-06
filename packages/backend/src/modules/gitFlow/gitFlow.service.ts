@@ -16,7 +16,9 @@
 // ─────────────────────────────────────────────────────────────
 
 import { execFile } from "node:child_process";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import {
   workspaceService,
@@ -28,10 +30,21 @@ import { runSessionRegistry } from "../runs/run-session-registry";
 import { gitService, parsePerFileDiffStats } from "../git";
 import { projectsService } from "../projects";
 import { appSettingsService } from "../appSettings";
+import { prAttachmentStorage } from "./pr-attachment-storage";
+import { PR_ATTACHMENT_LIMIT, mapPrAttachmentUrls, type CreatePrPayload, type CreatePrResult, type PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 // `createWorkAdapter` is imported lazily inside the generation methods to break
 // the gitFlow ↔ providers/adapters (mains-tools) require cycle.
 
 const execFileAsync = promisify(execFile);
+
+async function assertGhMediaSupport(rootPath: string) {
+  const { stdout } = await execFileAsync("gh", ["pr", "create", "--help"], { cwd: rootPath, timeout: 10_000 });
+  if (!/--attach\b/.test(stdout)) throw new Error("Update GitHub CLI to version 2.99 or newer to attach images and videos.");
+}
+
+function createdPrUrl(stdout: string): string | undefined {
+  return stdout.match(/https:\/\/[a-zA-Z0-9.-]+(?::\d+)?\/[^\s/]+\/[^\s/]+\/pull\/\d+\b/)?.[0];
+}
 
 // ~25k tokens — comfortably within the one-shot model's context while keeping
 // the generate call fast. Diffs beyond this are cut with an explicit marker so
@@ -337,7 +350,8 @@ export const gitFlowService = {
     head?: string;
     draft?: boolean;
     labels?: string[];
-  }): Promise<{ url: string; stdout: string; stderr?: string }> {
+    attachmentPaths?: string[];
+  }): Promise<CreatePrResult & { stdout: string; stderr?: string }> {
     const { workspaceId, rootPath } = params;
 
     // Never create a PR against a drifted remote.
@@ -356,18 +370,39 @@ export const gitFlowService = {
 
     const ghArgs = ["pr", "create", "--title", params.title];
     if (currentBranch) ghArgs.push("--head", currentBranch);
-    if (params.body) ghArgs.push("--body", params.body);
     if (params.base) ghArgs.push("--base", params.base);
     if (params.draft) ghArgs.push("--draft");
     for (const label of params.labels ?? []) ghArgs.push("--label", label);
+    for (const path of params.attachmentPaths ?? []) ghArgs.push("--attach", path);
 
-    const { stdout, stderr } = await execFileAsync("gh", ghArgs, {
-      cwd: rootPath,
-      timeout: 30_000,
-    });
+    const bodyDirectory = await mkdtemp(join(tmpdir(), "mains-pr-body-"));
+    let stdout = "";
+    let stderr = "";
+    let warning: string | undefined;
+    try {
+      const bodyPath = join(bodyDirectory, "body.md");
+      await writeFile(bodyPath, params.body ?? "", { mode: 0o600 });
+      ghArgs.push("--body-file", bodyPath);
+      try {
+        ({ stdout, stderr } = await execFileAsync("gh", ghArgs, {
+          cwd: rootPath,
+          timeout: params.attachmentPaths?.length ? 5 * 60_000 : 30_000,
+          maxBuffer: 1024 * 1024,
+        }));
+      } catch (error) {
+        const failure = error as { stdout?: string; stderr?: string };
+        // gh may create the PR before reporting partial attachment failures.
+        // Its URL is the proof of creation; closing the form prevents a duplicate.
+        if (!params.attachmentPaths?.length || !createdPrUrl(failure.stdout ?? "")) throw error;
+        stdout = failure.stdout ?? "";
+        stderr = failure.stderr ?? "";
+        warning = stderr.trim().slice(0, 2000) || "The pull request was created, but some attachments could not be uploaded.";
+      }
+    } finally { await rm(bodyDirectory, { recursive: true, force: true }).catch(() => undefined); }
 
     const output = stdout.trim();
-    const prUrl = output.match(/https:\/\/github\.com\/[^\s]+/)?.[0];
+    const prUrl = createdPrUrl(output);
+    if (!prUrl) throw new Error("GitHub CLI did not return the created pull request URL.");
 
     if (workspaceId) {
       logWorkspaceActivity({
@@ -384,7 +419,7 @@ export const gitFlowService = {
       });
     }
 
-    return { url: prUrl ?? output, stdout: output, stderr: stderr?.trim() || undefined };
+    return { url: prUrl, stdout: output, stderr: stderr?.trim() || undefined, ...(warning ? { warning } : {}) };
   },
 
   // ───────────────────────────────────────────────────────────
@@ -910,20 +945,25 @@ export const gitFlowService = {
    * Push (idempotent) then create a PR with `gh`, generating title/body when
    * not supplied. Deterministic replacement for the "Create a PR" chat goal.
    */
-  async createPr(params: {
-    workspaceId: string;
-    title?: string;
-    body?: string;
-    base?: string;
-    draft?: boolean;
-    providerId?: string;
-    model?: string;
-  }): Promise<{ url: string }> {
+  async createPr(params: CreatePrPayload): Promise<CreatePrResult> {
+    let attachments: ReturnType<typeof prAttachmentStorage.claim> | undefined;
     try {
       const { rootPath } = await this.resolveRoot(params.workspaceId);
+      if (params.attachmentIds !== undefined) {
+        attachments = prAttachmentStorage.claim(params.workspaceId, params.attachmentIds);
+        if (attachments.paths.length) await assertGhMediaSupport(rootPath);
+      }
 
       let title = params.title?.trim() || "";
       let body = params.body ?? "";
+      // gh rewrites Markdown destinations, including table cells; raw HTML is not scanned by gh.
+      if (/<[a-z][a-z0-9-]*\s[^>]*mains-pr-attachment:/i.test(body)) throw new Error("Use Markdown image or video links for local PR attachments.");
+      body = mapPrAttachmentUrls(body, (id) => {
+        const path = attachments?.references.get(id);
+        if (!path) throw new Error("A referenced PR attachment is missing. Add the file again or remove its reference.");
+        // Encoding spaces, parentheses and table separators keeps the destination intact.
+        return encodeURI(path).replace(/[()'!]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+      });
       if (!title) {
         if (!params.providerId) {
           throw new Error("Provide a PR title or a provider to generate one");
@@ -968,13 +1008,25 @@ export const gitFlowService = {
         base,
         head,
         draft: params.draft,
+        attachmentPaths: attachments?.paths,
       });
-      return { url: result.url };
+      return { url: result.url, ...(result.warning ? { warning: result.warning } : {}) };
     } catch (error) {
       // `gh` failures carry the useful message on stderr; surface it.
       const stderr = (error as any)?.stderr?.trim?.();
       if (stderr) throw new Error(stderr);
       throw error;
-    }
+    } finally { await attachments?.release().catch(() => undefined); }
+  },
+
+  async stagePrAttachment(payload: PrAttachmentChunk): Promise<{ uploadId: string }> {
+    const { rootPath } = await this.resolveRoot(payload.workspaceId);
+    if (!payload.uploadId) await assertGhMediaSupport(rootPath);
+    return prAttachmentStorage.write(payload);
+  },
+
+  async discardPrAttachments(workspaceId: string, ids: string[]): Promise<void> {
+    if (!Array.isArray(ids) || ids.length > PR_ATTACHMENT_LIMIT || ids.some((id) => typeof id !== "string")) throw new Error("Invalid PR attachments.");
+    await prAttachmentStorage.discard(workspaceId, ids);
   },
 };

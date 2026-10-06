@@ -16,6 +16,7 @@ import type {
 import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
+import type { CreatePrPayload, CreatePrResult, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
 import type {
   BrowserChatAction,
@@ -1003,15 +1004,12 @@ const api = {
     pull: (workspaceId: string) =>
       ipcRenderer.invoke(CHANNELS.gitFlow.pull, workspaceId),
     /** Push (idempotent) then create a PR via gh, generating title/body if blank */
-    createPr: (payload: {
-      workspaceId: string;
-      title?: string;
-      body?: string;
-      base?: string;
-      draft?: boolean;
-      providerId?: string;
-      model?: string;
-    }) => ipcRenderer.invoke(CHANNELS.gitFlow.createPr, payload),
+    createPr: (payload: CreatePrPayload): Promise<ServiceResponse<CreatePrResult>> =>
+      ipcRenderer.invoke(CHANNELS.gitFlow.createPr, payload),
+    stagePrAttachment: (payload: PrAttachmentChunk): Promise<ServiceResponse<{ uploadId: string }>> =>
+      ipcRenderer.invoke(CHANNELS.gitFlow.stagePrAttachment, payload),
+    discardPrAttachments: (workspaceId: string, ids: string[]): Promise<ServiceResponse<void>> =>
+      ipcRenderer.invoke(CHANNELS.gitFlow.discardPrAttachments, workspaceId, ids),
     /** Headless one-shot commit-message generation */
     generateCommitMessage: (payload: {
       workspaceId: string;

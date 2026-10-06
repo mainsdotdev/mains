@@ -7,6 +7,7 @@ import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { gitFlowService } from "./gitFlow.service";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { CreatePrPayload, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 
 export function registerGitFlowIpc(): void {
   ipcMain.handle(
@@ -41,17 +42,14 @@ export function registerGitFlowIpc(): void {
   ipcMain.handle(
     CHANNELS.gitFlow.createPr,
     handle(
-      (payload: {
-        workspaceId: string;
-        title?: string;
-        body?: string;
-        base?: string;
-        draft?: boolean;
-        providerId?: string;
-        model?: string;
-      }) => gitFlowService.createPr(payload),
+      (payload: CreatePrPayload) => gitFlowService.createPr(payload),
     ),
   );
+
+  ipcMain.handle(CHANNELS.gitFlow.stagePrAttachment,
+    handle((payload: PrAttachmentChunk) => gitFlowService.stagePrAttachment(payload)));
+  ipcMain.handle(CHANNELS.gitFlow.discardPrAttachments,
+    handle((workspaceId: string, ids: string[]) => gitFlowService.discardPrAttachments(workspaceId, ids)));
 
   ipcMain.handle(
     CHANNELS.gitFlow.generateCommitMessage,
@@ -106,6 +104,8 @@ export function unregisterGitFlowIpc(): void {
     CHANNELS.gitFlow.push,
     CHANNELS.gitFlow.pull,
     CHANNELS.gitFlow.createPr,
+    CHANNELS.gitFlow.stagePrAttachment,
+    CHANNELS.gitFlow.discardPrAttachments,
     CHANNELS.gitFlow.generateCommitMessage,
     CHANNELS.gitFlow.generatePrBody,
     CHANNELS.gitFlow.getPublishPreflight,

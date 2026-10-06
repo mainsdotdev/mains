@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { prAttachmentStorage } from "./pr-attachment-storage";
+import { prAttachmentUrl } from "@mains/contracts/pr-attachments";
 
 const { execFileMock } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
@@ -124,7 +127,7 @@ describe("gitFlowService — live branch invariants", () => {
         ) => void,
       ) =>
         callback(null, {
-          stdout: "https://github.com/acme/repo/pull/1\n",
+          stdout: _args.includes("--help") ? "--attach file" : "https://github.com/acme/repo/pull/1\n",
           stderr: "",
         }),
     );
@@ -169,14 +172,15 @@ describe("gitFlowService — live branch invariants", () => {
         "Live branch PR",
         "--head",
         "feature/live",
-        "--body",
-        "Body",
         "--base",
         "main",
+        "--body-file",
+        expect.stringMatching(/mains-pr-body-.*\/body\.md$/),
       ],
       {
         cwd: "/repo",
         timeout: 30_000,
+        maxBuffer: 1024 * 1024,
       },
       expect.any(Function),
     );
@@ -199,14 +203,15 @@ describe("gitFlowService — live branch invariants", () => {
         "Live branch PR",
         "--head",
         "feature/live",
-        "--body",
-        "Body",
         "--base",
         "release/2026-08",
+        "--body-file",
+        expect.stringMatching(/mains-pr-body-.*\/body\.md$/),
       ],
       {
         cwd: "/repo",
         timeout: 30_000,
+        maxBuffer: 1024 * 1024,
       },
       expect.any(Function),
     );
@@ -224,6 +229,85 @@ describe("gitFlowService — live branch invariants", () => {
 
     expect(gitMock.push).not.toHaveBeenCalled();
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  describe("PR media", () => {
+    const stage = () => prAttachmentStorage.write({ workspaceId: "ws-1", name: "demo.png", size: 3, offset: 0, data: "YWJj" });
+
+    it("keeps comparison positions and points every reference at the actual staged file", async () => {
+      const { uploadId } = await prAttachmentStorage.write({ workspaceId: "ws-1", name: "before (1) | final.png", size: 3, offset: 0, data: "YWJj" });
+      const body = `| Before | After |\n| --- | --- |\n| ![Before](${prAttachmentUrl(uploadId)}) | [Again](<${prAttachmentUrl(uploadId)}>) |`;
+      let stagedPath = "";
+      execFileMock.mockImplementation((_command, args: string[], _options, callback) => {
+        if (args.includes("--help")) { callback(null, { stdout: "--attach", stderr: "" }); return; }
+        stagedPath = args[args.indexOf("--attach") + 1];
+        const sentBody = readFileSync(args[args.indexOf("--body-file") + 1], "utf8");
+        const destination = sentBody.match(/!\[Before\]\(([^)]+)\)/)![1];
+        expect(decodeURI(destination)).toBe(stagedPath);
+        expect(destination).not.toMatch(/[ |()]/);
+        expect(sentBody).toBe(body.split(prAttachmentUrl(uploadId)).join(destination));
+        callback(null, { stdout: "https://github.com/acme/repo/pull/1", stderr: "" });
+      });
+      await gitFlowService.createPr({ workspaceId: "ws-1", title: "Compare", body, attachmentIds: [uploadId] });
+      expect(existsSync(stagedPath)).toBe(false);
+    });
+
+    it("rejects missing or foreign references before pushing", async () => {
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Compare", body: `![Missing](${prAttachmentUrl("missing")})` })).rejects.toThrow("missing");
+      expect(gitMock.push).not.toHaveBeenCalled();
+    });
+
+    it("rejects local HTML media references that gh cannot rewrite", async () => {
+      const { uploadId } = await stage();
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Compare", body: `<img src="${prAttachmentUrl(uploadId)}" />`, attachmentIds: [uploadId] })).rejects.toThrow("Use Markdown");
+      expect(gitMock.push).not.toHaveBeenCalled();
+      expect(() => prAttachmentStorage.claim("ws-1", [uploadId])).toThrow("unavailable");
+    });
+
+    it("passes attachments and the full Markdown body as files, then removes both", async () => {
+      const { uploadId } = await stage();
+      let bodyPath = ""; let mediaPath = ""; let body = "";
+      execFileMock.mockImplementation((_command, args: string[], _options, callback) => {
+        if (args.includes("--help")) { callback(null, { stdout: "--attach", stderr: "" }); return; }
+        bodyPath = args[args.indexOf("--body-file") + 1];
+        mediaPath = args[args.indexOf("--attach") + 1];
+        body = readFileSync(bodyPath, "utf8");
+        expect(readFileSync(mediaPath, "utf8")).toBe("abc");
+        callback(null, { stdout: "https://github.com/acme/repo/pull/1", stderr: "" });
+      });
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Media", body: "## Summary\n- [x] Done", attachmentIds: [uploadId] })).resolves.toEqual({ url: "https://github.com/acme/repo/pull/1" });
+      expect(body).toBe("## Summary\n- [x] Done");
+      expect(existsSync(bodyPath)).toBe(false);
+      expect(existsSync(mediaPath)).toBe(false);
+    });
+
+    it("rejects an older CLI before pushing and releases the attachment", async () => {
+      const { uploadId } = await stage();
+      execFileMock.mockImplementation((_command, _args, _options, callback) => callback(null, { stdout: "no media option", stderr: "" }));
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Media", attachmentIds: [uploadId] })).rejects.toThrow("2.99");
+      expect(gitMock.push).not.toHaveBeenCalled();
+      expect(() => prAttachmentStorage.claim("ws-1", [uploadId])).toThrow("unavailable");
+    });
+
+    it("returns the created PR with a warning when gh exits nonzero after a partial upload", async () => {
+      const { uploadId } = await stage();
+      execFileMock.mockImplementation((_command, args: string[], _options, callback) => {
+        if (args.includes("--help")) callback(null, { stdout: "--attach", stderr: "" });
+        else callback(Object.assign(new Error("exit 1"), { stdout: "https://github.com/acme/repo/pull/7\n", stderr: "One video could not be uploaded." }));
+      });
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Media", attachmentIds: [uploadId] })).resolves.toEqual({ url: "https://github.com/acme/repo/pull/7", warning: "One video could not be uploaded." });
+      expect(logWorkspaceActivity).toHaveBeenCalledWith(expect.objectContaining({ type: "pr", refId: "https://github.com/acme/repo/pull/7" }));
+    });
+
+    it("keeps a failure without a created URL as an error", async () => {
+      const { uploadId } = await stage();
+      execFileMock.mockImplementation((_command, args: string[], _options, callback) => {
+        if (args.includes("--help")) callback(null, { stdout: "--attach", stderr: "" });
+        else callback(Object.assign(new Error("exit 1"), { stdout: "", stderr: "Authentication failed." }));
+      });
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Media", attachmentIds: [uploadId] })).rejects.toThrow("Authentication failed");
+      expect(logWorkspaceActivity).not.toHaveBeenCalled();
+    });
   });
 
   describe("pull", () => {
