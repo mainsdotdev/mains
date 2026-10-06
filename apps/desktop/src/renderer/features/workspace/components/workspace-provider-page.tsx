@@ -66,7 +66,7 @@ import { getTransientUploadsForOwner } from "@/features/workspace/hooks/use-tran
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import type { ConversationQueue } from "@/lib/redux/slices/runQueueSlice";
 import { queueForBrowserChat } from "../lib/run-queue-preview";
-import type { RunSettingConfig } from "@mains/contracts/run-settings";
+import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
 
 interface WorkspaceProviderPageProps {
   providerId: string;
@@ -293,10 +293,10 @@ export function WorkspaceProviderPage({
           if (action.ownerKey === browserOwnerKey) setChatDraft(action.draft);
           break;
         case "model":
-          if (action.providerId === providerId && (!action.ownerKey || action.ownerKey === browserOwnerKey)) void changeChatModel(action.model);
+          if (action.providerId === providerId && (!action.ownerKey || action.ownerKey === browserOwnerKey)) void changeChatModel(action.model, action.source);
           break;
         case "conversationSettings":
-          if (action.ownerKey === browserOwnerKey) void changeConversationSettings(action.settings);
+          if (action.ownerKey === browserOwnerKey) void changeConversationSettings(action.settings, action.source);
           break;
         case "directories":
           if (action.ownerKey === browserOwnerKey) setChatDirectories(action.directories);
@@ -565,23 +565,23 @@ export function WorkspaceProviderPage({
       });
     }
   }, [browserChatOnly, browserOwnerKey, setChatDraft]);
-  const handleBrowserModelChange = useCallback((model: string) => {
+  const handleBrowserModelChange = useCallback((model: string, source?: SettingsChangeSource) => {
     if (!ws.conversationSettingsReady) return;
-    changeChatModel(model);
+    changeChatModel(model, source);
     if (browserChatOnly) {
-      void window.api.browserChat.postAction({ type: "model", providerId, ownerKey: browserOwnerKey, model });
+      void window.api.browserChat.postAction({ type: "model", providerId, ownerKey: browserOwnerKey, model, source });
     }
   }, [browserChatOnly, browserOwnerKey, providerId, changeChatModel, ws.conversationSettingsReady]);
-  const handleBrowserSettingsChange = useCallback((patch: RunSettingConfig) => {
+  const handleBrowserSettingsChange = useCallback((patch: RunSettingConfig, source?: SettingsChangeSource) => {
     if (!ws.conversationSettingsReady) return false;
     const current = store.getState().workspace.conversationSettingsByKey[browserOwnerKey] ?? ws.conversationSettings;
     const next = { ...current, config: { ...current.config, ...patch } };
     if (browserChatOnly) {
-      void ws.setConversationSettings(next);
-      void window.api.browserChat.postAction({ type: "conversationSettings", ownerKey: browserOwnerKey, settings: next });
+      void ws.setConversationSettings(next, source);
+      void window.api.browserChat.postAction({ type: "conversationSettings", ownerKey: browserOwnerKey, settings: next, source });
       return;
     }
-    return ws.handleSettingsConfigChange(patch);
+    return ws.handleSettingsConfigChange(patch, source);
   }, [browserChatOnly, browserOwnerKey, ws]);
   const handleBrowserUploadsChange = useCallback((files: UploadedFile[]) => {
     setChatUploads(files);

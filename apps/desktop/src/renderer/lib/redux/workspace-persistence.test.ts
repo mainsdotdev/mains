@@ -6,6 +6,8 @@ import workspaceReducer, {
   forgetWorkspaceUiState,
   setDraftText,
   setConversationSettings,
+  rememberRunSettings,
+  beginRunSettingsIntent,
   setSelectedFile,
 } from "./slices/workspaceSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
@@ -112,6 +114,24 @@ describe("workspace persistence — removed UI state", () => {
 });
 
 describe("workspace persistence — conversation settings", () => {
+  it("restores last-used preferences for each provider/backend with Plan and Goal off", async () => {
+    const storage = memoryStorage();
+    const { store, persistor } = await persistedWorkspace(storage);
+    const settings = { model: "model-a", config: { sandboxMode: "read-only", modelReasoningEffort: "", thinkingMode: false, serviceTier: "", planMode: true, goalMode: true } };
+    store.dispatch(rememberRunSettings({ backendId: null, providerId: "codex", settings }));
+    store.dispatch(beginRunSettingsIntent({ backendId: null, providerId: "codex", ownerKey: "in-flight-run" }));
+    store.dispatch(rememberRunSettings({ backendId: "remote", providerId: "codex", settings: { ...settings, model: "remote-model" } }));
+    await persistor.flush();
+    persistor.pause();
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().runSettingsIntentByProvider).toEqual({});
+    expect(restored.store.getState().lastRunSettingsRevisionByProvider).toEqual({});
+    expect(restored.store.getState().lastRunSettingsByProvider).toMatchObject({
+      '["local","codex"]': { model: "model-a", config: { modelReasoningEffort: "", thinkingMode: false, serviceTier: "", planMode: false, goalMode: false } },
+      '["remote","codex"]': { model: "remote-model", config: { planMode: false, goalMode: false } },
+    });
+    restored.persistor.pause();
+  });
   it("restores draft selections and reloads existing chat preferences from the backend", async () => {
     const storage = memoryStorage();
     const draft = JSON.stringify(["local", "draft", "space", "codex", "developer", "ws-a", null]);

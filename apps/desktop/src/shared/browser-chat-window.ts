@@ -1,7 +1,7 @@
 import type { Space } from "./space";
 import type { FloatingChatMode } from "./floating-chat";
 import type { McpAppToolOpen } from "@mains/contracts/mcp-apps";
-import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { ConversationSettings, SettingsChangeSource } from "@mains/contracts/run-settings";
 
 export interface BrowserChatUpload {
   name: string;
@@ -51,8 +51,8 @@ export type BrowserChatAction =
   | { type: "pagePointerDown" }
   | { type: "composerHeight"; height: number }
   | { type: "draft"; ownerKey: string; draft: string }
-  | { type: "model"; providerId: string; ownerKey?: string; model: string }
-  | { type: "conversationSettings"; ownerKey: string; settings: ConversationSettings }
+  | { type: "model"; providerId: string; ownerKey?: string; model: string; source?: SettingsChangeSource }
+  | { type: "conversationSettings"; ownerKey: string; settings: ConversationSettings; source?: SettingsChangeSource }
   | { type: "directories"; ownerKey: string; directories: string[] }
   | { type: "selectRun"; ownerKey: string; runId: string }
   | { type: "openMcpApp"; ownerKey: string; result: McpAppToolOpen; automatic: boolean }

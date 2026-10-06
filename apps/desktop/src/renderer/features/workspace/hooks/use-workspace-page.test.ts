@@ -15,6 +15,7 @@ import workspaceReducer, {
   addContextItem,
   setContextItemsForKey,
   replaceMcpAppContext,
+  setPendingReviewTarget,
 } from "@/lib/redux/slices/workspaceSlice";
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import type { ContextBrowserItem, ContextMcpAppItem, ContextReviewItem } from "../lib/composer-context";
@@ -30,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   getTurns: vi.fn(),
   getByWorkspace: vi.fn(),
   executeRun: vi.fn(),
+  executeReview: vi.fn(),
   createVoiceConversation: vi.fn(),
   continueRun: vi.fn(),
   checkCanResume: vi.fn(),
@@ -116,7 +118,7 @@ vi.mock("./use-run-operations", () => ({
     },
     continueRun: mocks.continueRun,
     forkRun: vi.fn(),
-    executeReview: vi.fn(),
+    executeReview: mocks.executeReview,
     checkCanResume: mocks.checkCanResume,
   }),
 }));
@@ -350,6 +352,59 @@ describe("submitted prompt feedback", () => {
 });
 
 describe("new conversation context", () => {
+  it.each(["manual", "auto", "voice", "review"])("remembers controls after a successful %s start and resets new-run Plan/Goal", async (startVia) => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    const settings = { model: "chosen-model", config: {
+      modelReasoningEffort: "ultra", thinkingMode: true, sandboxMode: "danger-full-access",
+      serviceTier: "fast", goalMode: true, planMode: false,
+    } };
+    const created = { ...run, id: "remembered-run", providerId: "codex", workspaceId: "ws-1", mode: "developer", configSnapshot: { conversationSettings: settings } };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [] });
+    mocks.getById.mockResolvedValue({ success: true, data: created });
+    mocks.executeRun.mockResolvedValue(created.id);
+    mocks.createVoiceConversation.mockResolvedValue(created.id);
+    mocks.executeReview.mockResolvedValue(created.id);
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.showEmptyState).toBe(true));
+    await act(async () => { await page.result.current.setConversationSettings(settings); });
+    expect(page.store.getState().workspace.lastRunSettingsByProvider).toEqual({});
+    if (startVia === "voice") {
+      await act(async () => { await page.result.current.handleCreateVoiceConversation(); });
+    } else if (startVia === "review") {
+      act(() => page.store.dispatch(setPendingReviewTarget({ type: "uncommittedChanges" })));
+      await waitFor(() => expect(page.result.current.activeTab).toBe(created.id));
+    } else {
+      act(() => { page.result.current.setGoal("Use these settings"); if (startVia === "auto") page.result.current.setAutoExecute(true); });
+      if (startVia === "manual") await act(async () => { await page.result.current.handleExecute(); });
+      await waitFor(() => expect(page.result.current.activeTab).toBe(created.id));
+    }
+    expect(page.store.getState().workspace.lastRunSettingsByProvider['["local","codex"]']).toMatchObject({
+      ...settings, config: { ...settings.config, goalMode: false, planMode: false },
+    });
+    act(() => page.store.dispatch(openNewRunTab()));
+    expect(page.result.current.conversationSettings).toMatchObject({
+      ...settings, config: { ...settings.config, goalMode: false, planMode: false },
+    });
+    page.unmount();
+  });
+
+  it("does not remember selections when a new run fails to start", async () => {
+    mocks.mode = "developer";
+    mocks.workspaceId = "ws-1";
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [] });
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.showEmptyState).toBe(true));
+    await act(async () => {
+      await page.result.current.handleModelChange("unsent-model");
+      await page.result.current.handleSettingsConfigChange({ serviceTier: "fast", planMode: true });
+    });
+    act(() => page.result.current.setGoal("Fail this start"));
+    await act(async () => { expect(await page.result.current.handleExecute()).toBeNull(); });
+    expect(page.store.getState().workspace.lastRunSettingsByProvider).toEqual({});
+    page.unmount();
+  });
+
   it.each(["empty", "new-run"])("prepares fresh voice from %s and preserves the unsent draft in the new conversation", async (startAt) => {
     mocks.mode = "developer";
     mocks.workspaceId = "ws-1";
@@ -593,6 +648,58 @@ describe("workspace additional directory payload", () => {
 });
 
 describe("workspace conversations across renderers", () => {
+  it.each(["goalMode", "planMode"] as const)("starts an app-requested new chat with %s off and preserves the previous chat's settings", async (toggle) => {
+    mocks.mode = "developer"; mocks.workspaceId = "ws-1";
+    const settings = { model: "chosen-model", config: {
+      sandboxMode: "workspace-write", modelReasoningEffort: "", thinkingMode: false, serviceTier: "fast",
+      goalMode: toggle === "goalMode", planMode: toggle === "planMode",
+    } };
+    const existing = { ...run, providerId: "codex", workspaceId: "ws-1", mode: "developer", configSnapshot: { conversationSettings: settings } };
+    const created = { ...existing, id: "new-app-run" };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
+    mocks.getById.mockImplementation(async (id) => ({ success: true, data: id === created.id ? created : existing }));
+    mocks.executeRun.mockResolvedValue(created.id);
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(existing.id));
+    await waitFor(() => expect(page.result.current.conversationSettingsReady).toBe(true));
+    const previousOwner = page.result.current.ownerKey;
+    await act(async () => { expect(await page.result.current.handleExecute("New app chat", { target: "new" })).toBe(created.id); });
+    const expected = { ...settings, config: { ...settings.config, goalMode: false, planMode: false } };
+    expect(mocks.executeRun.mock.calls[0][8]).toEqual(expected);
+    expect(page.result.current.conversationSettings).toEqual(expected);
+    expect(page.store.getState().workspace.conversationSettingsByKey[previousOwner]).toEqual(settings);
+    page.unmount();
+  });
+
+  it("keeps a newer tab's permission and model after an older continuation finishes", async () => {
+    mocks.mode = "developer"; mocks.workspaceId = "ws-1";
+    const settingsA = { model: "model-a", config: { sandboxMode: "danger-full-access", modelReasoningEffort: "high" } };
+    const settingsB = { model: "model-b", config: { sandboxMode: "read-only", modelReasoningEffort: "low" } };
+    const a = { ...run, id: "pending-a", providerId: "codex", workspaceId: "ws-1", mode: "developer", configSnapshot: { conversationSettings: settingsA } };
+    const b = { ...a, id: "newer-b", configSnapshot: { conversationSettings: settingsB } };
+    mocks.getByWorkspace.mockResolvedValue({ success: true, data: [a, b] });
+    mocks.getById.mockImplementation(async (id) => ({ success: true, data: id === b.id ? b : a }));
+    mocks.checkCanResume.mockResolvedValue(true);
+    let finish!: (success: boolean) => void;
+    mocks.continueRun.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const page = workspacePage("codex");
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(a.id));
+    await waitFor(() => expect(page.result.current.canResume).toBe(true));
+    let sending!: Promise<string | null>;
+    act(() => { sending = page.result.current.handleExecute("Continue A"); });
+    await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    act(() => page.store.dispatch(setActiveTab(b.id)));
+    await waitFor(() => expect(page.result.current.composerRun?.id).toBe(b.id));
+    await act(async () => { await page.result.current.handleSettingsConfigChange({ serviceTier: "fast" }); });
+    await act(async () => { finish(true); await sending; });
+    expect(page.store.getState().workspace.lastRunSettingsByProvider['["local","codex"]'])
+      .toMatchObject({ model: "model-b", config: { sandboxMode: "read-only", serviceTier: "fast" } });
+    act(() => page.store.dispatch(openNewRunTab()));
+    expect(page.result.current.conversationSettings)
+      .toMatchObject({ model: "model-b", config: { sandboxMode: "read-only", serviceTier: "fast" } });
+    page.unmount();
+  });
+
   it("sends reviewed app text through the normal run and preserves newer selections and draft edits", async () => {
     mocks.mode = "developer"; mocks.workspaceId = "ws-1"; mocks.panel = true;
     const existing = { ...run, providerId: "codex", workspaceId: "ws-1", mode: "developer" };

@@ -14,16 +14,16 @@ import {
   type ProviderVariant,
 } from "@/lib/provider-variants";
 import { resolveEffortSelection } from "@/features/workspace/lib/resolve-effort";
-import type { RunSettingConfig } from "@mains/contracts/run-settings";
+import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
 
 export function useProviderModels(
   activeProviderId: string,
   variant: ProviderVariant,
   externalSelectedModel?: string,
-  externalOnModelChange?: (model: string) => void,
+  externalOnModelChange?: (model: string, source?: SettingsChangeSource) => void,
   workspacePath?: string,
   conversationConfig?: RunSettingConfig,
-  onConfigChange?: (patch: RunSettingConfig) => unknown,
+  onConfigChange?: (patch: RunSettingConfig, source?: SettingsChangeSource) => unknown,
   settingsReady = true,
 ) {
   const dispatch = useAppDispatch();
@@ -108,7 +108,7 @@ export function useProviderModels(
     await onConfigChange?.(patch);
   }, [fastMode, onConfigChange, caps]);
 
-  const handleEffortLevelChange = useCallback(async (level: string) => {
+  const handleEffortLevelChange = useCallback(async (level: string, source: SettingsChangeSource = "user") => {
     let patch: RunSettingConfig;
     if (caps.thinkingCoupledToEffort) {
       // Codex/Copilot store the effort directly; thinking is inferred from it.
@@ -126,7 +126,7 @@ export function useProviderModels(
       // selection (including "Off") turns ultracode back off.
       patch = { thinkingMode: !!level, effortLevel: level, ultracode: false };
     }
-    await onConfigChange?.(patch);
+    await onConfigChange?.(patch, source);
   }, [onConfigChange, caps]);
 
   const selectableModels = useMemo(
@@ -152,8 +152,8 @@ export function useProviderModels(
 
   const selectedModel = externalSelectedModel ?? persistedModel ?? "";
   const setSelectedModel = useCallback(
-    (model: string) => {
-      if (externalOnModelChange) externalOnModelChange(model);
+    (model: string, source: SettingsChangeSource = "user") => {
+      if (externalOnModelChange) externalOnModelChange(model, source);
       else dispatch(setWorkspaceModel({ providerId: activeProviderId, model }));
     },
     [externalOnModelChange, dispatch, activeProviderId],
@@ -179,7 +179,7 @@ export function useProviderModels(
     const selectCatalogDefault = () => {
       const defaultModel =
         providerModels.find((m) => m.isDefault) ?? providerModels[0];
-      setSelectedModel(defaultModel.id);
+      setSelectedModel(defaultModel.id, "automatic");
     };
     if (!selectedModel) {
       selectCatalogDefault();
@@ -223,7 +223,7 @@ export function useProviderModels(
       thinkingDisabled: config.thinkingMode === false,
       effortDefault: caps.effortDefault,
     });
-    if (resolution) handleEffortLevelChange(resolution.effortLevel);
+    if (resolution) handleEffortLevelChange(resolution.effortLevel, "automatic");
   }, [
     settingsReady,
     selectedModelInfo,

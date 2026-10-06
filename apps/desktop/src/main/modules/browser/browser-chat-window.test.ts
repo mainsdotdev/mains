@@ -149,6 +149,26 @@ describe("native browser chat window", () => {
     }
   });
 
+  it("preserves user versus automatic settings changes when relaying the floating composer", () => {
+    registerBrowserChatWindowIpc();
+    browserChatWindow.update({ visible: true, bounds: { x: 0, y: 0, width: 800, height: 600 }, card: { x: 250, y: 300, width: 540, height: 280 } });
+    const post = harness.handlers.get(CHANNELS.browser.chatPostAction)!;
+    for (const source of ["user", "automatic", undefined]) {
+      for (const action of [
+        { type: "model", providerId: "codex", ownerKey: "run", model: "model-a", source },
+        { type: "conversationSettings", ownerKey: "run", settings: { model: "model-a", config: { sandboxMode: "read-only" } }, source },
+      ]) {
+        expect((post({ sender: harness.child!.webContents }, action) as { success: boolean }).success).toBe(true);
+        expect(harness.parent.webContents.send).toHaveBeenCalledWith(CHANNELS.browser.chatAction, action);
+      }
+    }
+    for (const action of [
+      { type: "model", providerId: "codex", model: "model-a", source: "invalid" },
+      { type: "conversationSettings", ownerKey: "run", settings: { model: "model-a", config: {} }, source: "invalid" },
+      { type: "conversationSettings", ownerKey: "run", settings: null },
+    ]) expect((post({ sender: harness.child!.webContents }, action) as { success: boolean }).success).toBe(false);
+  });
+
   it("relays MCP app results only from the floating chat and rejects malformed app requests", () => {
     registerBrowserChatWindowIpc();
     browserChatWindow.update({ visible: true,

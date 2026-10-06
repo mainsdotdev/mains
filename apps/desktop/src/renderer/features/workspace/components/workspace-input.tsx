@@ -65,7 +65,7 @@ import {
   useKeyboardShortcutBinding,
 } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
-import type { RunSettingConfig } from "@mains/contracts/run-settings";
+import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
 import type { ComposerSendTarget } from "../lib/composer-send-target";
 import { ComposerSendTargetSelect } from "./composer-send-target-select";
 
@@ -171,9 +171,9 @@ interface WorkspaceInputProps {
   canResume?: boolean;
   providerId?: string;
   selectedModel?: string;
-  onModelChange?: (model: string) => void;
+  onModelChange?: (model: string, source?: SettingsChangeSource) => void;
   settingsConfig?: RunSettingConfig;
-  onSettingsConfigChange?: (patch: RunSettingConfig) => unknown;
+  onSettingsConfigChange?: (patch: RunSettingConfig, source?: SettingsChangeSource) => unknown;
   settingsReady?: boolean;
   /** When set, shows the send-target pill (editor tab): which chat the next send continues. */
   sendTarget?: ComposerSendTarget | null;
