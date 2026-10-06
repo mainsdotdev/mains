@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   setChatMode: vi.fn(),
   setChatHost: vi.fn(),
   expanded: false,
+  canExpand: true,
   chatVisible: true,
   chatMode: "input",
   sidebarCollapsed: false,
@@ -34,6 +35,7 @@ vi.mock("@/hooks/use-browser-panel", () => ({
   useBrowserPanel: () => ({
     isOpen: true,
     isExpanded: mocks.expanded,
+    canExpand: mocks.canExpand,
     chatMode: mocks.chatMode,
     setChatMode: mocks.setChatMode,
     chatVisible: mocks.chatVisible,
@@ -144,6 +146,7 @@ describe("BrowserPanel browser menu", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);
     mocks.expanded = false;
+    mocks.canExpand = true;
     mocks.chatVisible = true;
     mocks.chatMode = "input";
     mocks.sidebarCollapsed = false;
@@ -174,6 +177,20 @@ describe("BrowserPanel browser menu", () => {
     act(() => modeChanged({ enabled: false }));
     fireEvent.keyDown(annotate, { key: "Escape" });
     expect(api.setSelectMode).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a docked-only browser closable without an expansion control", async () => {
+    mocks.canExpand = false;
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { browser: createBrowserApi() },
+    });
+    render(createElement(BrowserPanel));
+    await screen.findByRole("tab", { name: "New tab" });
+    expect(screen.queryByRole("button", { name: "Expand browser" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close browser" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "Embedded browser" }).style.width)
+      .toBe("var(--browser-panel-width)");
   });
 
   it("places expand beside close and fills the workspace on expansion", async () => {

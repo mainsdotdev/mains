@@ -23,7 +23,7 @@ const CTX: MainsToolContext = {
 
 /** Tools the registry marks available to a given provider. */
 function expectedFor(provider: string): string[] {
-  return MAINS_TOOLS.filter((t) => !t.scope && t.providers.includes(provider as any))
+  return MAINS_TOOLS.filter((t) => !t.scope && (!t.modes || t.modes.includes("developer")) && t.providers.includes(provider as any))
     .map((t) => t.name)
     .sort();
 }
@@ -124,18 +124,18 @@ describe("mains tool registry — mode dimension", () => {
     );
   });
 
-  it("work exposes no mains tools on any provider", () => {
-    expect(toClaudeTools(CTX, "work")).toHaveLength(0);
+  it("work exposes Atlas Page tools to Work-capable providers", () => {
+    expect(toClaudeTools(CTX, "work").map((tool) => tool.name)).toEqual(["AtlasReadPage", "AtlasCreatePage", "AtlasUpdatePage"]);
     expect(toCopilotTools(CTX, "work")).toHaveLength(0);
     expect(toMcpToolDefs("work")).toHaveLength(0);
-    expect(toCodexDynamicTools("work")).toHaveLength(0);
+    expect(toCodexDynamicTools("work").map((tool) => tool.name)).toEqual(["AtlasReadPage", "AtlasCreatePage", "AtlasUpdatePage"]);
   });
 
-  it("chat exposes no mains tools on any provider", () => {
-    expect(toClaudeTools(CTX, "chat")).toHaveLength(0);
+  it("chat exposes only read-only Atlas access", () => {
+    expect(toClaudeTools(CTX, "chat").map((tool) => tool.name)).toEqual(["AtlasReadPage"]);
     expect(toCopilotTools(CTX, "chat")).toHaveLength(0);
     expect(toMcpToolDefs("chat")).toHaveLength(0);
-    expect(toCodexDynamicTools("chat")).toHaveLength(0);
+    expect(toCodexDynamicTools("chat").map((tool) => tool.name)).toEqual(["AtlasReadPage"]);
   });
 
   it("every tool's modes list (when present) only names known modes", () => {

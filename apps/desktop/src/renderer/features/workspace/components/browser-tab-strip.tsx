@@ -51,7 +51,7 @@ interface BrowserTabStripProps {
   onClosePanel: () => void;
   isExpanded: boolean;
   sidebarCollapsed?: boolean;
-  onToggleExpanded: () => void;
+  onToggleExpanded?: () => void;
   reserveLayoutControls?: boolean;
   newTabShortcutLabel?: string;
   closeTabShortcutLabel?: string;

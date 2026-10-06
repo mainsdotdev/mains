@@ -182,9 +182,13 @@ export { default as Review} from "./review"
 export { default as JumpToFile} from "./jump-to-file"
 export { default as Activity} from "./activity"
 export { default as Compact} from "./compact"
-
-
-
+export { default as Passport} from "./passport"
+export { default as Page} from "./page"
+export { default as Library} from "./library"
+export { default as LibrarySquare} from "./library-square"
+export { default as List} from "./list"
+export { default as Grid} from "./grid"
+export { default as Generate} from "./generate"
 
 
 

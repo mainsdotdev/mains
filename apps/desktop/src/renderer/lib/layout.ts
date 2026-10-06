@@ -9,15 +9,24 @@ export function isSettingsRoute(pathname: string): boolean {
   return pathname === "/settings" || pathname.startsWith("/settings/");
 }
 
-/** The list panel belongs to conversations and settings; other pages use the rail alone. */
+export function isAtlasRoute(pathname: string): boolean {
+  return pathname === "/atlas" || pathname.startsWith("/atlas/");
+}
+
+/** Conversations, settings and Atlas each own the shared sidebar panel. */
 export function hasSidebarPanel(pathname: string): boolean {
-  return isWorkspaceRoute(pathname) || isSettingsRoute(pathname);
+  return isWorkspaceRoute(pathname) || isSettingsRoute(pathname) || isAtlasRoute(pathname);
 }
 
 export function shouldHideRightPanel(pathname: string): boolean {
   return ROUTES_WITHOUT_RIGHT_PANEL.some(
     (route) => pathname === route || pathname.startsWith(`${route}/`)
   );
+}
+
+/** Atlas keeps document/browser previews, but never workspace tool panels. */
+export function shouldHideWorkspacePanels(pathname: string): boolean {
+  return isAtlasRoute(pathname) || shouldHideRightPanel(pathname);
 }
 
 /**

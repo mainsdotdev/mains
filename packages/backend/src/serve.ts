@@ -42,6 +42,7 @@ import {
   registerCollectionsIpc,
   unregisterCollectionsIpc,
 } from "./modules/collections";
+import { registerAtlasIpc, unregisterAtlasIpc } from "./modules/atlas";
 import { registerRunsIpc, unregisterRunsIpc, startAttachmentMaintenance, stopAttachmentMaintenance } from "./modules/runs";
 import { runSessionRegistry } from "./modules/runs/run-session-registry";
 import {
@@ -145,6 +146,7 @@ const BACKEND_REGISTRATIONS: readonly BackendRegistration[] = [
   { register: registerWorkspaceIpc, unregister: unregisterWorkspaceIpc },
   { register: registerProjectsIpc, unregister: unregisterProjectsIpc },
   { register: registerCollectionsIpc, unregister: unregisterCollectionsIpc },
+  { register: registerAtlasIpc, unregister: unregisterAtlasIpc },
   { register: registerRunsIpc, unregister: unregisterRunsIpc },
   { register: registerFileExplorerIpc, unregister: unregisterFileExplorerIpc },
   { register: registerGitFlowIpc, unregister: unregisterGitFlowIpc },

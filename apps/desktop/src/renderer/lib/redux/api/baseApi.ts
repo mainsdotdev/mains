@@ -51,6 +51,8 @@ export const baseApi = createApi({
   tagTypes: [
     'ConnectionState',
     'Connection',
+    'Atlas',
+    'AtlasPage',
     'Collections',
     'CollectionSources',
     'Entity',

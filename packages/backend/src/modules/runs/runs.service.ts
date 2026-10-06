@@ -18,7 +18,7 @@ import { workspaceService, assertWorkspacePathExists } from "../workspace";
 import { gitService } from "../git";
 import { spaceService } from "../space";
 import { appSettingsService } from "../appSettings";
-import { DEFAULT_MODE_ID, type ModeId } from "@mains/contracts/modes";
+import { DEFAULT_MODE_ID, isModeId, providerSupportsMode, type ModeId } from "@mains/contracts/modes";
 import type {
   ArtifactImage,
   AttachmentFile,
@@ -57,7 +57,7 @@ import {
   syncCollectionSourceDirectory,
 } from "./run-collection-sources";
 import { sanitizeRunAttachments } from "./run-attachments";
-import { prepareRunAttachments, pruneUnreferencedAttachments, resolveRunAttachment } from "./run-attachment-storage";
+import { listRunAttachmentFiles, prepareRunAttachments, pruneUnreferencedAttachments, resolveRunAttachment } from "./run-attachment-storage";
 import { readAttachmentImage } from "./run-attachment-images";
 import { resolveConversationSettings, validateConversationSettings } from "./conversation-settings";
 import { emit } from "../../ipc-kit";
@@ -1319,6 +1319,8 @@ export const runsService = {
     return (await resolveRunAttachment(payload.runId, payload.attachmentId)).path;
   },
 
+  listRunAttachmentFiles,
+
   async readAttachmentFile(payload: ResolveAttachmentPathPayload): Promise<AttachmentFile> {
     const { attachment, path: sourcePath } = await resolveRunAttachment(payload.runId, payload.attachmentId);
     return { attachmentId: attachment.id, name: attachment.name, type: attachment.type, mimeType: attachment.mimeType,
@@ -1390,7 +1392,7 @@ export const runsService = {
         );
       }
 
-      const { spaceId: resolvedSpaceId, mode, space } = await resolveRunMode(payload.spaceId);
+      const { spaceId: resolvedSpaceId, mode: spaceMode, space } = await resolveRunMode(payload.spaceId);
       if (!resolvedSpaceId || !space) {
         throw new Error("A valid space is required to start a run");
       }
@@ -1399,6 +1401,11 @@ export const runsService = {
       }
       if (space.providerId !== payload.providerId) {
         throw new Error("Space does not use the selected provider");
+      }
+      const mode = payload.mode === undefined ? spaceMode : payload.mode;
+      if (!isModeId(mode)) throw new Error("Invalid run mode");
+      if (!providerSupportsMode(payload.providerId, mode)) {
+        throw new Error(`Provider "${provider.displayName}" does not support ${mode} mode`);
       }
       let workspace: Awaited<ReturnType<typeof workspaceService.get>> = null;
       if (mode === "developer") {

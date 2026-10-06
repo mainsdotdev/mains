@@ -19,6 +19,7 @@ const LOCALIMG_EXT_MIME: Record<string, string> = {
   ".webp": "image/webp",
   ".gif": "image/gif",
   ".svg": "image/svg+xml",
+  ".avif": "image/avif",
 };
 
 const LOCALDOC_EXT_MIME: Record<string, string> = {
@@ -26,6 +27,10 @@ const LOCALDOC_EXT_MIME: Record<string, string> = {
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   ".pdf": "application/pdf",
+  ".md": "text/markdown",
+  ".markdown": "text/markdown",
+  ".txt": "text/plain",
+  ".csv": "text/csv",
 };
 
 export async function serveLocalImage(requestUrl: URL): Promise<Response> {

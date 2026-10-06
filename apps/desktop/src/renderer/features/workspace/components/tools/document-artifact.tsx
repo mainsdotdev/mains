@@ -1,3 +1,4 @@
+import { useSaveToAtlas } from "@/features/atlas/hooks/use-save-to-atlas";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Button, DropdownMenu, DropdownMenuItem, Text, toast } from "@/components/ui";
 import { ArrowUp, Download, Finder, Mains } from "@/components/ui/icons";
@@ -11,15 +12,18 @@ import { DOC_TYPE_ICONS } from "../document-viewer/doc-type-icons";
 /** Artifact card for a generated Office document. Mirrors `ImageArtifact` but
  * opens in the in-app document viewer panel instead of an image preview modal. */
 export function DocumentArtifact({
+  runId,
   absPath,
   fileName,
   docType,
 }: {
+  runId?: string;
   absPath: string;
   fileName: string;
   docType: DocType;
 }) {
   const { open } = useDocumentViewer();
+  const atlas = useSaveToAtlas();
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const openBtnRef = useRef<HTMLButtonElement>(null);
@@ -125,6 +129,9 @@ export function DocumentArtifact({
           <Mains className="size-4 shrink-0" />
           Open in Mains
         </DropdownMenuItem>
+        {runId && <DropdownMenuItem disabled={atlas.saving} onClick={() => { setMenuOpen(false); void atlas.save(runId, absPath); }}>
+          <Mains className="size-4 shrink-0" />Save to Atlas
+        </DropdownMenuItem>}
         <DropdownMenuItem onClick={() => void saveCopy()}>
           <Download className="size-4 shrink-0" />
           Save a copy…

@@ -2,15 +2,13 @@
 
 import { createElement } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MODE_CONFIGS } from "@/lib/mode-config";
+
+const mocks = vi.hoisted(() => ({ mode: "developer" as "developer" | "work" | "chat" }));
 
 vi.mock("@/hooks/use-mode-config", () => ({
-  useModeConfig: () => ({
-    showPermissionControls: true,
-    showPlanControls: true,
-    showGoalControls: false,
-    showPluginsButton: false,
-  }),
+  useModeConfig: () => MODE_CONFIGS[mocks.mode],
 }));
 
 import { InputToolbar } from "./input-toolbar";
@@ -29,7 +27,19 @@ function nativeToolbarProps(): Parameters<typeof InputToolbar>[0] {
   };
 }
 
+beforeEach(() => { mocks.mode = "developer"; });
+
 describe("floating composer controls", () => {
+  it.each(["work", "chat"] as const)("retains Fast and model controls while hiding permissions in %s mode", (mode) => {
+    mocks.mode = mode;
+    const props = { ...nativeToolbarProps(), layout: "floating" as const, supportsFastMode: true, fastMode: true };
+    render(createElement(InputToolbar, props));
+    expect(screen.getByRole("button", { name: "Model and effort" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Permission mode" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Fast/ }));
+    expect(props.onFastModeToggle).toHaveBeenCalledOnce();
+  });
+
   it("keeps attachment, model and effort, permissions, and send in one row", () => {
     const onSubmit = vi.fn();
     const props: Parameters<typeof InputToolbar>[0] = {

@@ -18,6 +18,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { z } from "zod";
+import { handleAtlasReadPage, handleAtlasCreatePage, handleAtlasUpdatePage } from "./atlas-tools";
 import type { Tool as CopilotTool } from "@github/copilot-sdk";
 import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
 import type { JsonValue } from "./codex-app-server-protocol/generated/serde_json/JsonValue";
@@ -34,6 +35,7 @@ import {
   type MainsToolContext,
 } from "./mains-tools.core";
 import {
+  AtlasReadPageSchema, AtlasCreatePageSchema, AtlasUpdatePageSchema,
   SaveReviewSchema,
   SaveFindingSchema,
   SaveFindingsSchema,
@@ -79,6 +81,24 @@ const PACKAGE_GUARD: ProviderId[] = [PROVIDER_IDS.codex, PROVIDER_IDS.cursor];
 const DEVELOPER_ONLY: ModeId[] = ["developer"];
 
 export const MAINS_TOOLS: MainsToolDef[] = [
+  {
+    name: "AtlasReadPage",
+    description: "Read an Atlas Page's title, canonical BlockNote blocks, Markdown projection and current version. Page IDs are provided by the user or AtlasCreatePage. Markdown is lossy for some block formats.",
+    schema: AtlasReadPageSchema, handler: handleAtlasReadPage,
+    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude],
+  },
+  {
+    name: "AtlasCreatePage",
+    description: "Create a permanent Atlas Page in the current account and project. Use for user-requested notes, knowledge pages or checklists. Returns the Page ID and version; Pages survive conversation deletion.",
+    schema: AtlasCreatePageSchema, handler: handleAtlasCreatePage,
+    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
+  },
+  {
+    name: "AtlasUpdatePage",
+    description: "Update an Atlas Page after AtlasReadPage. Preserve existing block formatting, IDs and atlas-file:// references. Supply expectedVersion; stale updates fail without overwriting user changes. Creates a Page revision attributed to this conversation.",
+    schema: AtlasUpdatePageSchema, handler: handleAtlasUpdatePage,
+    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
+  },
   ...[
     { name: "StartVoiceTask", schema: StartVoiceTaskSchema, handler: handleStartVoiceTask },
     { name: "ListVoiceTasks", schema: ListVoiceTasksSchema, handler: handleListVoiceTasks },

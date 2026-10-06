@@ -122,6 +122,7 @@ import { prepareRunAttachments } from "./run-attachment-storage";
 import { createWorkAdapter, emitUserPromptArtifact } from "../providers/adapters";
 import { collectionsService } from "../collections";
 import { workspaceService } from "../workspace";
+import { spaceService } from "../space";
 import { gitService } from "../git/git.service";
 
 describe("runsService", () => {
@@ -938,11 +939,48 @@ describe("runsService", () => {
   // to the adapter; continueRun re-applies the stored snapshot.
   // ─────────────────────────────────────────────────────────────
   describe("executeRun mode snapshot", () => {
+    beforeEach(() => {
+      vi.mocked(gitService.getHeadSha).mockClear();
+    });
     function mockStartAdapter() {
       const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
       vi.mocked(createWorkAdapter).mockReturnValue({ startRun } as any);
       return startRun;
     }
+
+    it.each([
+      ["claude_code", "chat"], ["claude_code", "developer"],
+      ["codex", "chat"], ["codex", "developer"],
+    ] as const)("runs Work locally from %s/%s without changing the Space's next ordinary run", async (providerId, savedMode) => {
+      if (providerId === "codex") createProvider(db, { id: providerId });
+      const space = createSpace(db, { providerId, mode: savedMode });
+      const startRun = mockStartAdapter();
+      const payload = { accountId: "default", spaceId: space.id, providerId, goal: "Edit an Atlas page" };
+      const { runId } = await runsService.executeRun({ ...payload, mode: "work" });
+      await flushBackground();
+      expect(await runsService.getRunById(runId)).toMatchObject({ mode: "work", spaceId: space.id, workspaceId: null });
+      expect(startRun.mock.calls[0][0]).toMatchObject({ mode: "work", execution: { workspaceId: null } });
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain("non-technical");
+      expect((await spaceService.getById(space.id))?.mode).toBe(savedMode);
+
+      const workspace = savedMode === "developer" ? createWorkspace(db) : undefined;
+      const ordinary = await runsService.executeRun({ ...payload, workspaceId: workspace?.id });
+      await flushBackground();
+      expect((await runsService.getRunById(ordinary.runId))?.mode).toBe(savedMode);
+      expect(startRun.mock.calls[1][0].mode).toBe(savedMode);
+    });
+
+    it.each([
+      { providerId: "claude_code", mode: "invalid", error: "Invalid run mode" },
+      { providerId: "copilot_cli", mode: "work", error: "does not support work mode" },
+    ] as const)("rejects unsupported explicit mode $mode for $providerId before starting a run", async ({ providerId, mode, error }) => {
+      const space = createSpace(db, { providerId, mode: "developer" });
+      const startRun = mockStartAdapter();
+      await expect(runsService.executeRun({ accountId: "default", providerId, spaceId: space.id,
+        goal: "Edit a page", mode: mode as "work" })).rejects.toThrow(error);
+      expect(startRun).not.toHaveBeenCalled();
+      expect(await runsService.getRunsByAccount("default")).toEqual([]);
+    });
 
     it("snapshots work mode from the space and passes the delta to the adapter", async () => {
       createSpace(db, {

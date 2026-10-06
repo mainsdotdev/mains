@@ -151,6 +151,7 @@ export function BrowserPanel({
   const {
     isOpen,
     isExpanded,
+    canExpand,
     chatMode,
     setChatMode,
     chatVisible,
@@ -1424,7 +1425,7 @@ export function BrowserPanel({
       onClosePanel={() => void closePanel()}
       isExpanded={isExpanded}
       sidebarCollapsed={sidebarCollapsed}
-      onToggleExpanded={toggleExpanded}
+      onToggleExpanded={canExpand ? toggleExpanded : undefined}
       reserveLayoutControls={reserveLayoutControls}
       newTabShortcutLabel={keyboardShortcutLabel(newTabShortcut)}
       closeTabShortcutLabel={keyboardShortcutLabel(closeTabShortcut)}

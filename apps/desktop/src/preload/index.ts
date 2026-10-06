@@ -1,3 +1,4 @@
+import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import { contextBridge, ipcRenderer } from "electron";
 import type { RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
@@ -322,6 +323,19 @@ const api = {
       ipcRenderer.invoke(CHANNELS.projects.listIssues, projectId),
   },
   // Non-developer Projects: organizational Collections for Work/Chat runs.
+  atlas: {
+    list: (options: AtlasListOptions) => ipcRenderer.invoke(CHANNELS.atlas.list, options),
+    generated: (options: AtlasGeneratedOptions) => ipcRenderer.invoke(CHANNELS.atlas.generated, options),
+    get: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.get, options),
+    createPage: (input: AtlasCreatePage) => ipcRenderer.invoke(CHANNELS.atlas.createPage, input),
+    savePage: (input: AtlasSavePage) => ipcRenderer.invoke(CHANNELS.atlas.savePage, input),
+    revisions: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.revisions, options),
+    restore: (input: AtlasIdentity & { version: number; expectedVersion: number }) => ipcRenderer.invoke(CHANNELS.atlas.restore, input),
+    saveFile: (input: AtlasSaveFile) => ipcRenderer.invoke(CHANNELS.atlas.saveFile, input),
+    uploadFile: (input: AtlasUploadFile) => ipcRenderer.invoke(CHANNELS.atlas.uploadFile, input),
+    update: (input: AtlasUpdateItem) => ipcRenderer.invoke(CHANNELS.atlas.update, input),
+    remove: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.remove, options),
+  },
   collections: {
     list: (options: {
       accountId: string;
@@ -709,6 +723,8 @@ const api = {
       workspaceId?: string;
       collectionId?: string;
       spaceId?: string;
+      /** Run-local experience; omitting it uses the Space's saved mode. */
+      mode?: ModeId;
       providerId: string;
       goal: string;
       model?: string;

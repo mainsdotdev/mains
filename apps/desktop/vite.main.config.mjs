@@ -2,6 +2,55 @@
 import { defineConfig } from 'vite';
 import path from 'path';
 import { copyFileSync, mkdirSync, readdirSync, existsSync, cpSync } from 'fs';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+
+// JSDOM resolves its worker file at runtime. Keep the server converter as real
+// packages rather than flattening it into main.js, including nested versions.
+function copyPageConverterDependencies(destinationRoot) {
+  const sourceRoot = path.resolve('node_modules');
+  const visited = new Set();
+  function copyPackage(name, fromFile, optional = false) {
+    const require = createRequire(fromFile);
+    let entry;
+    try { entry = require.resolve(`${name}/package.json`); }
+    catch {
+      try { entry = require.resolve(name); }
+      catch {
+        // Packages such as @tiptap/pm export only subpaths, so neither their
+        // root nor package.json is resolvable through the exports map.
+        entry = (require.resolve.paths(name) ?? []).map(root => path.join(root, name, 'package.json'))
+          .find(manifest => existsSync(manifest));
+        if (!entry) {
+          if (optional) return;
+          throw new Error(`Missing Page converter dependency: ${name}`);
+        }
+      }
+    }
+    let directory = path.dirname(entry);
+    while (directory.startsWith(sourceRoot)) {
+      const manifest = path.join(directory, 'package.json');
+      if (existsSync(manifest)) {
+        const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
+        if (pkg.name === name) {
+          if (visited.has(directory)) return;
+          visited.add(directory);
+          const destination = path.join(destinationRoot, path.relative(sourceRoot, directory));
+          mkdirSync(path.dirname(destination), { recursive: true });
+          cpSync(directory, destination, { recursive: true });
+          for (const dependency of Object.keys({ ...pkg.dependencies, ...pkg.peerDependencies }))
+            copyPackage(dependency, manifest, !pkg.dependencies?.[dependency] && !!pkg.peerDependenciesMeta?.[dependency]?.optional);
+          return;
+        }
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory) return;
+      directory = parent;
+    }
+  }
+  for (const name of ['@blocknote/server-util', 'y-prosemirror'])
+    copyPackage(name, path.resolve('package.json'));
+}
 
 // https://vitejs.dev/config
 export default defineConfig(({ command }) => {
@@ -61,6 +110,7 @@ export default defineConfig(({ command }) => {
         '@vscode/ripgrep-darwin-x64',
         'vscode-jsonrpc',
         'zod',
+        '@blocknote/server-util',
       ],
     },
   },
@@ -70,6 +120,7 @@ export default defineConfig(({ command }) => {
       closeBundle() {
         const destNodeModules = '.vite/build/node_modules';
         mkdirSync(destNodeModules, { recursive: true });
+        copyPageConverterDependencies(destNodeModules);
 
         // Native modules and their dependencies that must be available at runtime
         const modulesToCopy = [

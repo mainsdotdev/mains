@@ -137,6 +137,7 @@ export function useRunOperations({
               ? undefined
               : collectionId || undefined,
           spaceId: activeSpaceId || undefined,
+          mode: activeSpace?.mode,
           providerId: selectedProvider,
           goal: goal.trim(),
           clientPromptId,

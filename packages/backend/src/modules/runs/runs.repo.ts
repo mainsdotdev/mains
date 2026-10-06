@@ -90,6 +90,12 @@ export const runsRepo = {
     return row ? { output: safeJsonParse(row.output) } : null;
   },
   // Originals have run-owned references, independent of transcript row deletion.
+  listAttachments(runId: string) {
+    return getDb().select({ attachment: runAttachments }).from(runAttachments)
+      .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))
+      .where(eq(runAttachmentRefs.runId, runId)).all().map((row) => row.attachment);
+  },
+
   findAttachment(runId: string, attachmentId: string) {
     return getDb().select({ attachment: runAttachments }).from(runAttachments)
       .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))

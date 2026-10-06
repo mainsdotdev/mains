@@ -28,8 +28,9 @@ interface ToggleButtonProps {
   browserExpanded?: boolean;
   onBrowserExpandToggle?: () => void;
   showChatActions?: boolean;
-  /** Hide chat controls while an expanded app owns the workspace. */
+  /** Hide chat controls outside the workspace or while an expanded app owns it. */
   hideChatControls?: boolean;
+  showRightPanelToggle?: boolean;
   /** Right edge of the chat header when a preview shares the workspace. */
   sessionPanelRight?: string;
 }
@@ -45,6 +46,7 @@ export function ToggleButton({
   onBrowserExpandToggle,
   showChatActions = true,
   hideChatControls = false,
+  showRightPanelToggle = true,
   sessionPanelRight,
 }: ToggleButtonProps) {
   const chatControlsHidden = hideChatControls || (!!browserOpen && browserExpanded);
@@ -190,7 +192,7 @@ export function ToggleButton({
             <Web className="size-3.75" filled={browserOpen} />
           </Button>
         )}
-        {showRightPanel && (
+        {showRightPanelToggle && showRightPanel && (
           <Button
             variant="icon"
             tooltip={isOpen ? "Close right panel" : "Open right panel"}

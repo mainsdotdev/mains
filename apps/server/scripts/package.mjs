@@ -25,6 +25,8 @@ const dynamicRuntimeDependencies = [
   // needed for device login. Both bring their platform packages into installs.
   "@github/copilot",
   "@github/copilot-sdk",
+  // BlockNote's server converter loads this optional core peer at runtime.
+  "y-prosemirror",
 ];
 
 function assertDirectory(directory, label) {

@@ -15,9 +15,9 @@ const GITHUB_DOMAINS = ["githubusercontent.com", "github.com"];
 /** GitHub hosts that serve data, never images — the token is not sent there. */
 const GITHUB_API_HOSTS = new Set(["api.github.com", "uploads.github.com"]);
 
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif"]);
 
-const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf"]);
+const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf", ".md", ".markdown", ".txt", ".csv"]);
 
 function expandTilde(p: string): string {
   if (p === "~") return os.homedir();

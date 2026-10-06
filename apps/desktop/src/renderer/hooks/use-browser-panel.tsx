@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation } from "react-router-dom";
-import { shouldHideRightPanel } from "@/lib/layout";
+import { isAtlasRoute, shouldHideRightPanel } from "@/lib/layout";
 import { isElectron } from "@/lib/platform";
 import type { BrowserChatContext } from "../../shared/browser-chat-window";
 import type { FloatingChatMode } from "../../shared/floating-chat";
@@ -24,6 +24,7 @@ import {
 interface BrowserPanelContextValue {
   isOpen: boolean;
   isExpanded: boolean;
+  canExpand: boolean;
   chatMode: FloatingChatMode;
   chatVisible: boolean;
   chatHost: HTMLDivElement | null;
@@ -51,6 +52,7 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
   const ownerReady = useAppSelector((state) => state.workspace.composerContextReady);
   const { pathname } = useLocation();
   const isOpen = persistedOpen && ownerReady && !shouldHideRightPanel(pathname);
+  const canExpand = !isAtlasRoute(pathname);
   const [chatMode, setChatMode] = useState<FloatingChatMode>("input");
   const [chatVisible, setChatVisible] = useState(true);
   const [chatHost, setChatHost] = useState<HTMLDivElement | null>(null);
@@ -102,17 +104,19 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
     dispatch(setBrowserPanelOpen(!persistedOpen));
   }, [dispatch, persistedOpen]);
   const toggleExpanded = useCallback(() => {
+    if (!canExpand) return;
     if (!expanded) {
       setChatMode("input");
       setChatVisible(true);
     }
     dispatch(setBrowserPanelExpanded(!expanded));
-  }, [dispatch, expanded]);
+  }, [dispatch, expanded, canExpand]);
 
   const value = useMemo(
     () => ({
       isOpen,
-      isExpanded: isOpen && expanded,
+      isExpanded: isOpen && expanded && canExpand,
+      canExpand,
       chatMode,
       chatVisible,
       chatHost,
@@ -128,7 +132,7 @@ export function BrowserPanelProvider({ children }: { children: ReactNode }) {
       setChatVisible,
       setChatHost,
     }),
-    [isOpen, expanded, chatMode, chatVisible, chatHost, ownerKey, open, openUrl, openHtmlFile, close, toggle, toggleExpanded],
+    [isOpen, expanded, canExpand, chatMode, chatVisible, chatHost, ownerKey, open, openUrl, openHtmlFile, close, toggle, toggleExpanded],
   );
 
   return (
@@ -144,6 +148,7 @@ export function useBrowserPanel(): BrowserPanelContextValue {
     return {
       isOpen: false,
       isExpanded: false,
+      canExpand: false,
       chatMode: "input",
       chatVisible: false,
       chatHost: null,
@@ -178,6 +183,7 @@ export function BrowserChatWindowProvider({
   const value = useMemo<BrowserPanelContextValue>(() => ({
     isOpen: true,
     isExpanded: true,
+    canExpand: true,
     chatMode: context.mode,
     chatVisible: true,
     chatHost,

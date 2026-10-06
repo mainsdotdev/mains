@@ -31,16 +31,18 @@ import { NavigationRail } from "./navigation-rail";
 import McpAppPage from "@/routes/McpApp";
 import { mcpAppPinKey } from "@/lib/mcp-app-extensions";
 import appSettingsReducer, { setMcpAppPinned } from "@/lib/redux/slices/appSettingsSlice";
+import { getProviderVariantById } from "@/lib/provider-variants";
 
 function railStore() { return configureStore({ reducer: { appSettings: appSettingsReducer } }); }
 function tree(state: ReturnType<typeof railStore>) {
   return <Provider store={state}><MemoryRouter initialEntries={["/code/ws-1"]}>
-    <NavigationRail showTasks={false} pluginsAvailable spaces={[]} activeSpaceId={null}
+    <NavigationRail showTasks={false} pluginsAvailable atlasAvailable={!!getProviderVariantById(mocks.providerId)?.supportsAtlas} spaces={[]} activeSpaceId={null}
       onHomeClick={mocks.homeClick} onSpaceChange={vi.fn()} onSettingsClick={vi.fn()} onHelpClick={vi.fn()} helpMenuOpen={false} />
     <Routes>
       <Route path="/code/:workspaceId" element={<div>Conversation</div>} />
       <Route path="/apps/:appId" element={<McpAppPage />} />
       <Route path="/plugins" element={<div>Plugins page</div>} />
+      <Route path="/atlas" element={<div>Atlas page</div>} />
     </Routes>
   </MemoryRouter></Provider>;
 }
@@ -60,6 +62,25 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("rail app navigation", () => {
+  it.each(["copilot_cli", "cursor"])("disables Atlas for %s", (providerId) => {
+    mocks.providerId = providerId;
+    renderRail();
+    const button = screen.getByRole("button", { name: "Atlas" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(screen.queryByText("Atlas page")).toBeNull();
+    expect(screen.getByText("Conversation")).toBeTruthy();
+  });
+
+  it.each(["claude_code", "codex"])("opens Atlas for %s", (providerId) => {
+    mocks.providerId = providerId;
+    renderRail();
+    const button = screen.getByRole("button", { name: "Atlas" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect(screen.getByText("Atlas page")).toBeTruthy();
+  });
+
   it.each([false, true])("closes the app before the Home action on the same conversation route (expanded: %s)", (expanded) => {
     mocks.panelOpen = true; mocks.expanded = expanded;
     renderRail();

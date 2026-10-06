@@ -29,6 +29,7 @@ import { useLazyGetAppsForFileQuery } from "@/lib/redux/api";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useCapabilities } from "@/lib/platform";
+import { useSaveToAtlas } from "@/features/atlas/hooks/use-save-to-atlas";
 import { DocumentArtifact } from "@/features/workspace/components/tools/document-artifact";
 import { ImageGenerationLoader } from "@/features/workspace/components/tools/image-generation-loader";
 import { VisualizationArtifact } from "@/features/workspace/components/tools/visualization-artifact";
@@ -345,12 +346,13 @@ function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }
         {images.length === 1 ? (
           <ImageArtifact
             key={images[0].absPath}
+            runId={runId}
             absPath={images[0].absPath}
             fileName={images[0].fileName}
             onPreview={setPreviewAtt}
           />
         ) : (
-          <ImageArtifactGallery images={images} onPreview={setPreviewAtt} />
+          <ImageArtifactGallery runId={runId} images={images} onPreview={setPreviewAtt} />
         )}
         {previewAtt && (
           <PromptPreviewModal preview={previewAtt} onClose={() => setPreviewAtt(null)} />
@@ -380,6 +382,7 @@ function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }
     return (
       <div className="overflow-hidden">
         <DocumentArtifact
+          runId={runId}
           absPath={absPath}
           fileName={fileName}
           docType={docType}
@@ -510,9 +513,11 @@ function AttachmentDocumentCard({
 }
 
 function ImageArtifactGallery({
+  runId,
   images,
   onPreview,
 }: {
+  runId?: string;
   images: Array<{ absPath: string; fileName: string }>;
   onPreview: (att: { name: string; dataUrl: string }) => void;
 }) {
@@ -551,6 +556,7 @@ function ImageArtifactGallery({
       <div className="mr-17 min-w-0 sm:mr-21">
         <ImageArtifact
           key={selected.absPath}
+          runId={runId}
           absPath={selected.absPath}
           fileName={selected.fileName}
           onPreview={onPreview}
@@ -628,6 +634,7 @@ function ImageGalleryThumbnail({
 }
 
 function ImageArtifact({
+  runId,
   absPath,
   fileName,
   onPreview,
@@ -636,9 +643,11 @@ function ImageArtifact({
   absPath: string;
   fileName: string;
   onPreview: (att: { name: string; dataUrl: string }) => void;
+  runId?: string;
   /** `gallery` fills the selected-image stage; `preview` keeps the single-image size. */
   variant?: "preview" | "gallery";
 }) {
+  const atlas = useSaveToAtlas();
   const url = useLocalImageUrl(absPath);
   const { revealInFolder } = useCapabilities();
   const [thumbFailed, setThumbFailed] = useState(false);
@@ -696,6 +705,9 @@ function ImageArtifact({
         <Mains className="size-4 shrink-0" />
         Show Image
       </DropdownMenuItem>
+      {runId && <DropdownMenuItem disabled={atlas.saving} onClick={() => { setMenuOpen(false); void atlas.save(runId, absPath); }}>
+        <Mains className="size-4 shrink-0" />Save to Atlas
+      </DropdownMenuItem>}
       {revealInFolder && (
         <DropdownMenuItem onClick={showInFinder}>
           <Finder className="size-4 shrink-0" />

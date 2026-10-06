@@ -1,5 +1,6 @@
 @import "@xterm/xterm/css/xterm.css";
 @import "tailwindcss";
+@import "./features/atlas/atlas-editor.css";
 
 /* Inter ships as one variable font per style rather than eighteen static
    instances. Same 4.001 build and the same metrics (2048 upem, 1984 ascender,
@@ -171,6 +172,10 @@ html:not(.app-ready) *::after {
   --color-accent: #2563eb;
   /* Text on an accent fill. A theme with a light accent switches it to dark. */
   --color-accent-foreground: #ffffff;
+
+  /* Fixed Atlas artwork colors. */
+  --color-atlas-ocean: #2196f3;
+  --color-atlas-land: #cddc39;
 
   /* Voice artwork, derived from tokens so custom palettes still apply. */
   --color-voice-orb-deep: color-mix(in srgb, var(--color-accent) 86%, var(--color-primary-950));

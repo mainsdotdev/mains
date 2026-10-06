@@ -173,7 +173,14 @@ describe("useRunOperations collection payload", () => {
     });
 
     expect(mocks.execute).toHaveBeenCalledWith(
-      expect.objectContaining({ collectionId: "collection-1" }),
+      expect.objectContaining({ collectionId: "collection-1", mode: "work" }),
     );
+  });
+
+  it("sends the current experience while leaving an ordinary Chat run in Chat", async () => {
+    mocks.mode = "chat";
+    const { result } = renderOperations();
+    await act(async () => result.current.executeRun("Hello", undefined, "codex"));
+    expect(mocks.execute).toHaveBeenCalledWith(expect.objectContaining({ spaceId: "space-1", mode: "chat" }));
   });
 });

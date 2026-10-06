@@ -64,6 +64,7 @@ import {
   registerWorkspaceDialogIpc,
   unregisterWorkspaceDialogIpc,
 } from "./modules/workspace/workspace.dialog.ipc";
+import { registerAtlasIpc, unregisterAtlasIpc } from "@mains/backend/modules/atlas";
 import { registerRunsIpc, unregisterRunsIpc, configureRunNotificationSink, startAttachmentMaintenance, stopAttachmentMaintenance } from "@mains/backend/modules/runs";
 import { createElectronRunNotificationSink } from "./modules/runs/run-notifications";
 import { runSessionRegistry } from "@mains/backend/modules/runs";
@@ -841,6 +842,7 @@ async function initializeApp() {
     registerWorkspaceDialogIpc();
     registerProjectsIpc();
     registerCollectionsIpc();
+    registerAtlasIpc();
     registerRunsIpc();
     startAttachmentMaintenance();
     registerFileExplorerIpc();
@@ -1194,6 +1196,7 @@ async function cleanupApp() {
     unregisterWorkspaceDialogIpc();
     unregisterProjectsIpc();
     unregisterCollectionsIpc();
+    unregisterAtlasIpc();
     await stopAttachmentMaintenance();
     unregisterRunsIpc();
     unregisterFileExplorerIpc();

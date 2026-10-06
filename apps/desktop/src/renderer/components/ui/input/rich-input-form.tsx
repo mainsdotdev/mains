@@ -53,7 +53,8 @@ export interface RichCodeChipData {
 export type RichTriggerChar = "/" | "@" | "#" | "$";
 
 export interface RichInputFormHandle {
-  focus: () => void;
+  /** Optionally place the caret at the end when acquiring focus; retain an active editor's selection. */
+  focus: (options?: { caret?: "end" }) => void;
   /** Replace a leading "<trigger><filter>" token at the caret with an inline skill chip + trailing space. */
   replaceTokenWithSkillChip: (
     triggerChar: "$" | "@" | "/",
@@ -78,6 +79,8 @@ interface RichInputFormProps {
    * as it does when the toolbar's send button has become Stop.
    */
   submitDisabled?: boolean;
+  disabled?: boolean;
+  ariaLabel?: string;
   onSkillChipsChange?: (names: string[]) => void;
   onFileChipsChange?: (paths: string[]) => void;
   onCodeChipsChange?: (keys: string[]) => void;
@@ -91,6 +94,7 @@ interface RichInputFormProps {
   placeholderIcon?: ReactNode;
   focusShortcutLabel?: string;
   compact?: boolean;
+  dense?: boolean;
   /** Maps serialized token → display data so selected skills and apps survive external query changes. */
   skillChipMap?: ReadonlyMap<string, RichSkillChipData>;
   /** Maps file path → display data so `@<path>` tokens can be rebuilt as chips when query changes externally. */
@@ -810,6 +814,8 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onQueryChange,
       onSubmit,
       submitDisabled = false,
+      disabled = false,
+      ariaLabel = "Workspace prompt input",
       onSkillChipsChange,
       onFileChipsChange,
       onCodeChipsChange,
@@ -821,6 +827,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       placeholderIcon,
       focusShortcutLabel,
       compact = false,
+      dense = false,
       skillChipMap,
       fileChipMap,
       codeChipMap,
@@ -932,7 +939,15 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
     useImperativeHandle(
       ref,
       () => ({
-        focus: () => editorRef.current?.focus(),
+        focus: (options) => {
+          const root = editorRef.current;
+          if (!root) return;
+          const alreadyFocused = document.activeElement === root;
+          root.focus();
+          if (options?.caret === "end" && !alreadyFocused && document.activeElement === root) {
+            placeCaretAtEnd(root);
+          }
+        },
         replaceTokenWithSkillChip: (triggerChar, skill, appendIfNoToken = true) => {
           const root = editorRef.current;
           if (!root) return false;
@@ -1010,6 +1025,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (disabled) return;
         if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
         if ((e.key === "Enter" || e.key === " ") && activateChip(e.target)) {
           e.preventDefault();
@@ -1021,10 +1037,11 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           if (!submitDisabled) onSubmit();
         }
       },
-      [activateChip, onSubmit, submitDisabled],
+      [activateChip, disabled, onSubmit, submitDisabled],
     );
 
     const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+      if (disabled) { e.preventDefault(); return; }
       const files = Array.from(e.clipboardData.files ?? []);
       if (files.length === 0) {
         for (const item of Array.from(e.clipboardData.items ?? [])) {
@@ -1064,7 +1081,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       sel.removeAllRanges();
       sel.addRange(after);
       fireChange();
-    }, [fireChange, onPasteFiles]);
+    }, [disabled, fireChange, onPasteFiles]);
 
     return (
       <div className="relative">
@@ -1072,8 +1089,9 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           ref={editorRef}
           role="textbox"
           aria-multiline="true"
-          aria-label="Workspace prompt input"
-          contentEditable
+          aria-label={ariaLabel}
+          aria-disabled={disabled || undefined}
+          contentEditable={!disabled}
           suppressContentEditableWarning
           onInput={fireChange}
           onClick={(e) => {
@@ -1085,14 +1103,16 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           className={`w-full text-sm outline-none whitespace-pre-wrap wrap-break-word [&>p]:my-2 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 overflow-y-auto noscrollbar dark:text-primary-300 text-primary-700 ${compact
-            ? "min-h-12 max-h-40 rounded-[28px] py-3 pl-12 pr-28"
-            : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1 @max-[480px]/composer:pr-5"}`}
+            ? "min-h-12 max-h-40 rounded-[28px] py-3 pl-12 pr-44"
+            : dense
+              ? "min-h-9 max-h-40 rounded-2xl px-5 pt-3"
+              : "min-h-12 max-h-80 rounded-2xl pl-5 pr-24 pt-4 pb-1 @max-[480px]/composer:pr-5"}`}
         />
         {isEmpty && placeholder && (
           <Text
             as="div"
             tone="faint"
-            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-36 top-3.5" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20 @max-[480px]/composer:pr-0" : "right-5"}`}`}
+            className={`pointer-events-none absolute flex items-start gap-1.5 opacity-75 ${compact ? "left-12 right-44 top-3.5" : dense ? "left-5 right-5 top-3" : `left-5 top-4 ${showFocusHint ? "right-5 pr-20 @max-[480px]/composer:pr-0" : "right-5"}`}`}
           >
             {placeholderIcon ? (
               <span

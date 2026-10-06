@@ -11,6 +11,16 @@
 
 import { z } from "zod";
 
+const atlasContentFields = {
+  blocksJson: z.string().max(2 * 1024 * 1024).optional().describe("Lossless BlockNote block array encoded as JSON; preserve unchanged IDs, properties and atlas-file:// references from AtlasReadPage"),
+  markdown: z.string().max(2 * 1024 * 1024).optional().describe("Alternative Markdown input. Lossy for advanced formatting; prefer blocksJson when updating rich content. Supply exactly one content field."),
+};
+export const AtlasReadPageSchema = z.object({ pageId: z.string().trim().min(1).max(100) });
+export const AtlasCreatePageSchema = z.object({ title: z.string().trim().min(1).max(240), ...atlasContentFields });
+export const AtlasUpdatePageSchema = z.object({ pageId: z.string().trim().min(1).max(100),
+  expectedVersion: z.number().int().min(1).describe("Version returned by AtlasReadPage. A stale write is rejected; read again and reconcile."),
+  title: z.string().trim().min(1).max(240).optional(), ...atlasContentFields });
+
 const voiceRunId = z.string().trim().min(1).max(100).describe("Working chat ID returned by StartVoiceTask or ListVoiceTasks");
 export const StartVoiceTaskSchema = z.object({
   taskKey: z.string().regex(/^[a-z0-9_-]{1,80}$/).describe("Stable task key; reuse the same key for the same task, a new key for independent work"),

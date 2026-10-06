@@ -4,6 +4,9 @@ import { useAppSelector } from "@/lib/redux/hooks";
 
 
 interface BaseTabProps {
+  id?: string;
+  ariaControls?: string;
+  tabIndex?: number;
   isActive: boolean;
   isFirst?: boolean;
   /** Override the leading curve when a tab strip has its own panel edge. */
@@ -29,6 +32,9 @@ const COLORS = {
 };
 
 export function BaseTab({
+  id,
+  ariaControls,
+  tabIndex = 0,
   isActive,
   isFirst,
   showLeadingCorner,
@@ -60,10 +66,12 @@ export function BaseTab({
 
   return (
     <div
+      id={id}
       role={role}
+      aria-controls={ariaControls}
       aria-label={ariaLabel}
       aria-selected={role === "tab" ? isActive : undefined}
-      tabIndex={0}
+      tabIndex={tabIndex}
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;

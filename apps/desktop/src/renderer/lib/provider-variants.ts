@@ -91,6 +91,8 @@ export interface ProviderVariantDescriptor {
   supportsAdditionalDirectories: boolean;
   /** Whether the provider's driver implements the plugin API (gates the Plugins page). */
   supportsPlugins: boolean;
+  /** Whether the provider can use the Atlas library and Page tools. */
+  supportsAtlas: boolean;
   /** Global plugin UIs opened without an agent turn. */
   supportsMcpAppExtensions: boolean;
   supportsTurnSteer: boolean;
@@ -128,6 +130,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsSkills: true,
     supportsAdditionalDirectories: true,
     supportsPlugins: true,
+    supportsAtlas: true,
     supportsMcpAppExtensions: false,
     supportsTurnSteer: false,
     supportsRealtime: false,
@@ -153,6 +156,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsSkills: false,
     supportsAdditionalDirectories: false,
     supportsPlugins: false,
+    supportsAtlas: false,
     supportsMcpAppExtensions: false,
     supportsTurnSteer: false,
     supportsRealtime: false,
@@ -178,6 +182,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsSkills: true,
     supportsAdditionalDirectories: true,
     supportsPlugins: true,
+    supportsAtlas: true,
     supportsMcpAppExtensions: true,
     supportsTurnSteer: true,
     supportsRealtime: true,
@@ -203,6 +208,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsSkills: false,
     supportsAdditionalDirectories: false,
     supportsPlugins: false,
+    supportsAtlas: false,
     supportsMcpAppExtensions: false,
     supportsTurnSteer: false,
     supportsRealtime: false,

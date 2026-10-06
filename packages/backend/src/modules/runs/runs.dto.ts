@@ -371,6 +371,8 @@ export interface StartRunPayload {
   workspaceId?: string;
   collectionId?: string;
   spaceId?: string;
+  /** Run-local experience; omitting it uses the Space's saved mode. */
+  mode?: ModeId;
   providerId: string; // e.g., "copilot_cli"
   goal: string;
   model?: string;

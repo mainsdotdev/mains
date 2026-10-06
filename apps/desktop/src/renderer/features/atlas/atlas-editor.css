@@ -1,0 +1,80 @@
+@source "../../../../node_modules/@blocknote/shadcn/src";
+
+/* Imported by index.css so Tailwind scans BlockNote and emits its utilities.
+   Shadcn's semantic colors are scoped below to the editor and its portals. */
+@theme static {
+  --color-popover: var(--color-primary);
+  --color-popover-foreground: var(--color-primary-800);
+  --color-card: var(--color-primary);
+  --color-card-foreground: var(--color-primary-800);
+  --color-muted: var(--color-primary-100);
+  --color-muted-foreground: var(--color-primary-500);
+  --color-secondary: var(--color-primary-100);
+  --color-secondary-foreground: var(--color-primary-800);
+  --color-primary-foreground: var(--color-accent-foreground);
+  --color-border: var(--color-primary-200);
+  --color-input: var(--color-primary-200);
+  --color-ring: var(--color-accent);
+  --color-destructive: var(--color-danger);
+}
+
+.bn-root.bn-shadcn[data-color-scheme] {
+  --background: var(--bn-colors-menu-background);
+  --foreground: var(--bn-colors-menu-text);
+  --secondary: var(--bn-colors-hovered-background);
+  --color-popover: var(--bn-colors-menu-background);
+  --color-popover-foreground: var(--bn-colors-menu-text);
+  --color-card: var(--bn-colors-menu-background);
+  --color-card-foreground: var(--bn-colors-menu-text);
+  --color-muted: var(--bn-colors-hovered-background);
+  --color-muted-foreground: var(--bn-colors-side-menu);
+  --color-secondary: var(--bn-colors-hovered-background);
+  --color-secondary-foreground: var(--bn-colors-hovered-text);
+  --color-border: var(--bn-colors-border);
+  --color-input: var(--bn-colors-border);
+  --bn-colors-editor-text: var(--color-primary-800);
+  --bn-colors-editor-background: var(--color-primary);
+  --bn-colors-menu-text: var(--color-primary-800);
+  --bn-colors-menu-background: var(--color-primary);
+  --bn-colors-hovered-background: var(--color-primary-100);
+  --bn-colors-hovered-text: var(--color-primary-800);
+  --bn-colors-selected-background: var(--color-accent);
+  --bn-colors-selected-text: var(--color-accent-foreground);
+  --bn-colors-disabled-background: var(--color-primary-100);
+  --bn-colors-disabled-text: var(--color-primary-400);
+  --bn-colors-border: var(--color-primary-200);
+  --bn-colors-side-menu: var(--color-primary-500);
+  --bn-colors-tooltip-text: var(--bn-colors-menu-text);
+  --bn-colors-tooltip-background: var(--bn-colors-menu-background);
+  --bn-colors-shadow: color-mix(in srgb, var(--color-primary-950) 20%, transparent);
+  --bn-font-family: inherit;
+  --bn-border-radius: 8px;
+  font-family: inherit;
+}
+.bn-root.bn-shadcn[data-color-scheme="dark"] {
+  --bn-colors-editor-text: var(--color-primary-100);
+  --bn-colors-editor-background: var(--color-primary-950);
+  --bn-colors-menu-text: var(--color-primary-100);
+  --bn-colors-menu-background: var(--color-primary-900);
+  --bn-colors-hovered-background: var(--color-primary-800);
+  --bn-colors-hovered-text: var(--color-primary-100);
+  --bn-colors-disabled-background: var(--color-primary-900);
+  --bn-colors-border: var(--color-primary-700);
+  --bn-colors-side-menu: var(--color-primary-400);
+}
+/* Shadcn calls its filled action color "primary"; Mains reserves that name
+   for the neutral scale. Keep the adapter local instead of changing it. */
+.bn-root.bn-shadcn .bg-primary { background-color: var(--bn-colors-selected-background); }
+.bn-root.bn-shadcn .hover\:bg-primary\/80:hover {
+  background-color: color-mix(in srgb, var(--bn-colors-selected-background) 80%, transparent);
+}
+.bn-root.bn-shadcn .text-primary { color: var(--color-accent); }
+.bn-root.bn-shadcn .bn-suggestion-menu-label { color: var(--bn-colors-side-menu); }
+.bn-root.bn-shadcn .bn-suggestion-menu-item:is(:hover, [aria-selected="true"]) svg { color: inherit; }
+.atlas-page .bn-editor { padding-inline: 0; background: transparent; }
+.dark .bn-shadcn input[type="checkbox"] { color-scheme: dark; }
+.atlas-page .bn-block-content[data-content-type="heading"] { --level: 1.8em; }
+.atlas-page .bn-block-content[data-content-type="heading"][data-level="2"] { --level: 1.4em; }
+.atlas-page .bn-block-content[data-content-type="heading"][data-level="3"] { --level: 1.15em; }
+.atlas-page .bn-block-content { padding-block: 5px; }
+.atlas-page .atlas-title { font-size: 2.25rem; line-height: 1.25; }

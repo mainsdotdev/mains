@@ -154,6 +154,7 @@ export const MODE_HARNESSES: Record<ModeId, ModeHarnessDescriptor> = {
         "WebFetch",
         "WebSearch",
         "ToolSearch",
+        "mcp__mains__AtlasReadPage",
       ],
       disallowedTools: ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Task"],
     },
