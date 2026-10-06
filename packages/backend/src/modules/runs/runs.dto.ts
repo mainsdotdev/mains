@@ -4,6 +4,7 @@
 
 import type { ModeId } from "@mains/contracts/modes";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { FileAttachment } from "@mains/contracts/runs";
 import type { TreeDiffFile } from "../git";
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
@@ -276,6 +277,8 @@ export interface UpdateRunTurnPayload {
   metadata?: Record<string, unknown>;
 }
 
+export type RunHistoryPage = import("@mains/contracts/runs").RunHistoryPage<RunArtifactResponse, ToolCallResponse, RunTurnResponse>;
+
 export interface RunTurnResponse {
   id: number;
   runId: string;
@@ -343,20 +346,9 @@ export interface CreateRunTurnChangesPayload {
  *
  * Memory optimization: prefer `sourcePath` over inline base64 `data` whenever the
  * attachment already lives on disk (e.g. trusted browser/Appshot captures). Providing `sourcePath`
- * lets the adapter copy the file byte-for-byte instead of roundtripping base64
+ * lets the run service persist the file byte-for-byte instead of roundtripping base64
  * through IPC and Redux. Provide `data` only for in-memory payloads. */
-export interface FileAttachment {
-  /** Original file name */
-  name: string;
-  /** Attachment category */
-  type: "image" | "document";
-  /** Base64-encoded file data — optional when `sourcePath` is set. */
-  data?: string;
-  /** Absolute path to an existing file on disk. Read directly by the adapter. */
-  sourcePath?: string;
-  /** MIME type (e.g. "image/png", "application/pdf") */
-  mimeType: string;
-}
+export type { FileAttachment } from "@mains/contracts/runs";
 
 // ─────────────────────────────────────────────────────────────
 // Execute Run DTOs (for starting work runs)
@@ -372,6 +364,8 @@ export interface StartRunContextItem {
 
 /** Payload for starting a new work run */
 export interface StartRunPayload {
+  /** Correlates immediate local feedback with the persisted prompt. */
+  clientPromptId?: string;
   conversationSettings?: ConversationSettings;
   accountId: string;
   workspaceId?: string;
@@ -416,6 +410,7 @@ export interface StartRunResponse {
 
 /** Payload for continuing an existing run (resume session) */
 export interface ContinueRunPayload {
+  clientPromptId?: string;
   conversationSettings?: ConversationSettings;
   clientUserMessageId?: string;
   runId: string;

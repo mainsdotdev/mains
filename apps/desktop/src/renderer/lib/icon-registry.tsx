@@ -1,6 +1,6 @@
 import { ComponentType, SVGProps } from "react";
 import * as Icons from "@/components/ui/icons/space";
-import { Codex, Cursor, MainsColor } from "@/components/ui/icons";
+import { Codex, Cursor, MainsOutline } from "@/components/ui/icons";
 
 export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -72,7 +72,7 @@ export const iconRegistry: Record<string, IconComponent> = {
   telescope: Icons.Telescope,
   "text-italic-square": Icons.TextItalicSquare,
 
-  mains:MainsColor,
+  mains:MainsOutline,
 
 
 
@@ -138,6 +138,12 @@ export const ICON_COLORS: IconColorOption[] = [
     className: "text-rose-600 dark:text-rose-400",
   },
   {
+    name: "red",
+    label: "Red",
+    swatch: "bg-red-400",
+    className: "text-red-600 dark:text-red-400",
+  },
+  {
     name: "orange",
     label: "Orange",
     swatch: "bg-orange-400",
@@ -160,6 +166,12 @@ export const ICON_COLORS: IconColorOption[] = [
     label: "Sky",
     swatch: "bg-sky-400",
     className: "text-sky-600 dark:text-sky-500",
+  },
+  {
+    name: "blue",
+    label: "Blue",
+    swatch: "bg-blue-400",
+    className: "text-blue-600 dark:text-blue-400",
   },
   {
     name: "olive",

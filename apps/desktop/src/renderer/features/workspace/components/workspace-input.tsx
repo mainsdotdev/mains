@@ -12,6 +12,9 @@ import type { Run } from "../types";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { ContextCodeSelection } from "@/features/workspace/lib/composer-context";
 import { useComposerContext } from "../hooks/use-composer-context";
+import { useOpenFileInEditor } from "../hooks/use-open-file-in-editor";
+import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
+import { composerSkillDestination } from "../lib/composer-mention";
 import {
   AsciiSpinner,
   Button,
@@ -62,7 +65,7 @@ import {
   useKeyboardShortcutBinding,
 } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
-import type { RunSettingConfig } from "@mains/contracts/run-settings";
+import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
 import type { ComposerSendTarget } from "../lib/composer-send-target";
 import { ComposerSendTargetSelect } from "./composer-send-target-select";
 
@@ -168,9 +171,9 @@ interface WorkspaceInputProps {
   canResume?: boolean;
   providerId?: string;
   selectedModel?: string;
-  onModelChange?: (model: string) => void;
+  onModelChange?: (model: string, source?: SettingsChangeSource) => void;
   settingsConfig?: RunSettingConfig;
-  onSettingsConfigChange?: (patch: RunSettingConfig) => unknown;
+  onSettingsConfigChange?: (patch: RunSettingConfig, source?: SettingsChangeSource) => unknown;
   settingsReady?: boolean;
   /** When set, shows the send-target pill (editor tab): which chat the next send continues. */
   sendTarget?: ComposerSendTarget | null;
@@ -246,6 +249,8 @@ export function WorkspaceInput({
   const spaceProvider = useSpaceProviderVariant();
   const providerVariant = spaceProvider.variant;
   const activeProviderId = providerId ?? spaceProvider.providerId;
+  const openFile = useOpenFileInEditor();
+  const openSkillMention = useOpenComposerMention(contextSkills, activeProviderId);
   // Empty-state backlight: the centered composer glows in the accent.
   const { composerPlaceholder } = useModeConfig();
   // Built outside the JSX on purpose: calling the helper inline in `style`
@@ -502,6 +507,7 @@ export function WorkspaceInput({
       const token = skillMentionToken(skill);
       const replaced = inputRef.current?.replaceTokenWithSkillChip(trigger, {
         name: skill.name,
+        clickable: composerSkillDestination(skill) !== null,
         displayName: skill.displayName,
         iconSmall: skill.iconSmall,
         iconLarge: skill.iconLarge,
@@ -582,6 +588,7 @@ export function WorkspaceInput({
     for (const s of contextSkills) {
       m.set(skillMentionToken(s), {
         name: s.name,
+        clickable: composerSkillDestination(s) !== null,
         displayName: s.displayName,
         iconSmall: s.iconSmall,
         iconLarge: s.iconLarge,
@@ -599,6 +606,7 @@ export function WorkspaceInput({
         path: f.fullPath,
         basename: f.name,
         isDirectory: f.type === "directory",
+        clickable: f.type === "file",
       });
     }
     return m;
@@ -664,6 +672,7 @@ export function WorkspaceInput({
           path: node.fullPath,
           basename: node.name,
           isDirectory: node.type === "directory",
+          clickable: node.type === "file",
         }) ?? false;
       if (!ok) {
         const next = replaceMentionInGoal(
@@ -1070,6 +1079,8 @@ export function WorkspaceInput({
             onSkillChipsChange={handleSkillChipsChange}
             onFileChipsChange={handleFileChipsChange}
             onCodeChipsChange={handleCodeChipsChange}
+            onFileChipClick={openFile}
+            onSkillChipClick={openSkillMention}
             onCaretContextChange={handleCaretContext}
             onPasteFiles={handlePasteFiles}
             skillChipMap={skillChipMap}

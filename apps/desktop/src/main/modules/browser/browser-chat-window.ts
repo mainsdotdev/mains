@@ -9,6 +9,7 @@ import type {
 } from "../../../shared/browser-chat-window";
 import { getMainWindow } from "../../windows/mainWindow";
 import { isModeId } from "@mains/contracts/modes";
+import { conversationSettingsFrom } from "@mains/contracts/run-settings";
 
 function finiteRect(value: unknown): value is BrowserChatWindowState["bounds"] {
   if (!value || typeof value !== "object") return false;
@@ -48,6 +49,7 @@ function validContext(value: unknown): value is BrowserChatContext {
 function validAction(value: unknown): value is BrowserChatAction {
   if (!value || typeof value !== "object") return false;
   const action = value as Record<string, unknown>;
+  const validSource = action.source === undefined || action.source === "user" || action.source === "automatic";
   switch (action.type) {
     case "queueReorder": return typeof action.ownerKey === "string" && Array.isArray(action.orderedIds) &&
       action.orderedIds.every((id) => typeof id === "string" && id.length > 0) && new Set(action.orderedIds).size === action.orderedIds.length;
@@ -63,7 +65,9 @@ function validAction(value: unknown): value is BrowserChatAction {
     case "pagePointerDown": return true;
     case "composerHeight": return typeof action.height === "number" && Number.isFinite(action.height) && action.height >= 48 && action.height <= 1024;
     case "draft": return typeof action.ownerKey === "string" && typeof action.draft === "string";
-    case "model": return typeof action.providerId === "string" && typeof action.model === "string";
+    case "model": return typeof action.providerId === "string" && typeof action.model === "string" && validSource;
+    case "conversationSettings": return typeof action.ownerKey === "string" && validSource &&
+      conversationSettingsFrom({ conversationSettings: action.settings }) !== null;
     case "directories": return typeof action.ownerKey === "string" && Array.isArray(action.directories) && action.directories.every((dir) => typeof dir === "string");
     case "selectRun": return typeof action.ownerKey === "string" && typeof action.runId === "string" && action.runId.length > 0;
     case "openMcpApp": {

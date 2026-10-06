@@ -47,6 +47,12 @@ export interface UpdateToolCallPayload {
 
 export const toolsApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    // The always-mounted subagent navigator needs spawn identities, never the
+    // complete history of tool inputs/outputs that the transcript pages.
+    getSubagentToolCalls: builder.query<ToolCall[], string>({
+      query: (runId) => ({ handler: CHANNELS.toolCalls.getByRun, args: [runId, true] }),
+      providesTags: (_result, _error, runId) => [{ type: "ToolCalls", id: runId }],
+    }),
     getToolCallsByRun: builder.query<ToolCall[], string>({
       query: (runId) => ({
         handler: CHANNELS.toolCalls.getByRun,
@@ -118,6 +124,7 @@ export const toolsApi = baseApi.injectEndpoints({
 });
 
 export const {
+  useGetSubagentToolCallsQuery,
   useGetToolCallsByRunQuery,
   useLazyGetToolCallsByRunQuery,
   useGetToolCallsByAccountQuery,

@@ -340,6 +340,9 @@ export interface CodexEventRunState {
   emittedAgentMessageItemIds: Set<string>;
   /** Questions can arrive after a message's text was flushed by a competing item. */
   emittedAsyncQuestionItemIds: Set<string>;
+  /** Completed compaction items may be replayed by app-server. */
+  emittedContextCompactionItemIds: Set<string>;
+  startedContextCompactionItemIds: Set<string>;
   pendingFlush: WorkRunEvent[];
   mainsCtx: MainsToolContext;
   fileChangeBuffers: Map<string, string>;
@@ -407,6 +410,8 @@ export function createCodexEventRunState(
     agentMessageBuffer: "",
     emittedAgentMessageItemIds: new Set(),
     emittedAsyncQuestionItemIds: new Set(),
+    emittedContextCompactionItemIds: new Set(),
+    startedContextCompactionItemIds: new Set(),
     pendingFlush: [],
     mainsCtx,
     fileChangeBuffers: new Map(),
@@ -2475,6 +2480,32 @@ export function createCodexEventMapper(
       eventMethod.endsWith("/completed") ? "complete" : "update";
 
     switch (item.type) {
+      case "contextCompaction":
+      case "context_compaction": {
+        if (phase === "update") return events;
+        const rs = getRunState(runId);
+        if (rs?.emittedContextCompactionItemIds.has(item.id)) return events;
+        if (phase === "start") {
+          if (rs?.startedContextCompactionItemIds.has(item.id)) return events;
+          rs?.startedContextCompactionItemIds.add(item.id);
+        } else {
+          rs?.emittedContextCompactionItemIds.add(item.id);
+        }
+        events.push({
+          type: "log",
+          message: phase === "start" ? "Compacting context…" : "Context compacted",
+          level: "info",
+          ts,
+          metadata: {
+            source: "context_compaction",
+            itemId: item.id,
+            codexItemType: item.type,
+            phase,
+          },
+        });
+        return events;
+      }
+
       case "agent_message":
       case "agentMessage": {
         // Deltas accumulate into runState.agentMessageBuffer; flush here on

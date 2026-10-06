@@ -1,6 +1,6 @@
 import {
-  At,
   Bash,
+  Box,
   BrowserCursor,
   Check,
   Edit,
@@ -263,7 +263,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     displayName: "Skill",
     groupKey: "skill",
     category: "Skill",
-    icon: <At className="size-4" />,
+    icon: <Box className="size-4" />,
     aliases: ["skill"],
   },
   {

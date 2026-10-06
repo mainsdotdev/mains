@@ -238,6 +238,31 @@ describe("WorkspaceProviderPage while changing spaces", () => {
     expect(reorder).toHaveBeenCalledOnce();
   });
 
+  it("preserves automatic versus user settings intent from the native floating composer", () => {
+    const changeModel = vi.fn();
+    const changeSettings = vi.fn();
+    page.state = {
+      runs: [], activeTab: "run-1", activeRunId: "run-1", composerRun: { id: "run-1", status: "succeeded" },
+      activeRun: { id: "run-1", status: "succeeded" }, currentEvents: [], currentTurns: [],
+      goal: "", contextItems: [], uploadedFiles: [], currentWorkspace: null,
+      openIssueTabs: [], openSignalTabs: [], openNoteTabs: [], showEmptyState: false, showInput: true,
+      handleModelChange: changeModel, setConversationSettings: changeSettings,
+    };
+    browser.isExpanded = true; browser.nativeOverlay = true;
+    let onAction: ((action: BrowserChatAction) => void) | undefined;
+    vi.stubGlobal("api", { browserChat: { publishContext: vi.fn(), onAction: (callback: typeof onAction) => { onAction = callback; return vi.fn(); } } });
+    renderPage();
+    const settings = { model: "model-a", config: { modelReasoningEffort: "high" } };
+    for (const source of ["automatic", "user"] as const) {
+      act(() => onAction?.({ type: "model", ownerKey: "draft", providerId: "codex", model: "model-a", source }));
+      expect(changeModel).toHaveBeenLastCalledWith("model-a", source);
+      act(() => onAction?.({ type: "conversationSettings", ownerKey: "draft", settings, source }));
+      expect(changeSettings).toHaveBeenLastCalledWith(settings, source);
+    }
+    act(() => onAction?.({ type: "conversationSettings", ownerKey: "another-owner", settings, source: "automatic" }));
+    expect(changeSettings).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["editor", "new-run"])("keeps the actual run tabs mounted while loading a workspace with a saved %s tab", async (activeTab) => {
     page.realTabs = true;
     const run = { id: "run-1", title: "Existing run", goal: "Existing run", status: "succeeded" };

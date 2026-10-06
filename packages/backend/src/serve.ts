@@ -42,7 +42,7 @@ import {
   registerCollectionsIpc,
   unregisterCollectionsIpc,
 } from "./modules/collections";
-import { registerRunsIpc, unregisterRunsIpc } from "./modules/runs";
+import { registerRunsIpc, unregisterRunsIpc, startAttachmentMaintenance, stopAttachmentMaintenance } from "./modules/runs";
 import { runSessionRegistry } from "./modules/runs/run-session-registry";
 import {
   registerFileExplorerIpc,
@@ -300,12 +300,14 @@ export async function startBackendServer(
       runSessionRegistry.shutdownAll("Standalone server stopped during run");
       destroyAllTerminals();
       await shutdownAllWorkAdapters();
+      await stopAttachmentMaintenance();
       unregisterBackendRegistrations(registered);
       await closeDatabase();
     })();
     return stopPromise;
   };
 
+  startAttachmentMaintenance();
   return {
     sink: wsHost.sink,
     port: wsHost.port,

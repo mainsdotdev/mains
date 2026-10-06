@@ -36,6 +36,18 @@ describe("toolsRepo", () => {
       expect(result).toEqual([]);
     });
 
+    it("loads only subagent navigation fields without full tool outputs", async () => {
+      createRun(db, { id: "run-1" });
+      createToolCall(db, { runId: "run-1", toolName: "Read", output: JSON.stringify({ text: "large file" }) });
+      createToolCall(db, { runId: "run-1", toolName: "Agent", input: JSON.stringify({ description: "Review", prompt: "large context", subagent_type: "Explore" }), output: JSON.stringify({ text: "large agent output" }) });
+      createToolCall(db, { runId: "run-1", toolName: "SendMessage", input: JSON.stringify({ to: "agent-1" }), metadata: JSON.stringify({ task: { taskType: "local_agent" } }) });
+      const calls = await toolsRepo.findToolCallsByRun("run-1", true);
+      expect(calls.map((call) => call.toolName)).toEqual(["Agent", "SendMessage"]);
+      expect(calls[0].input).toEqual({ description: "Review", subagent_type: "Explore", to: null });
+      expect(calls.every((call) => call.output === null)).toBe(true);
+      expect((await toolsRepo.findToolCallsByRun("run-1"))[1].output).toEqual({ text: "large agent output" });
+    });
+
     it("returns tool calls for run", async () => {
       const run = createRun(db, { id: "run-1" });
       createToolCall(db, { runId: run.id, toolName: "Bash" });

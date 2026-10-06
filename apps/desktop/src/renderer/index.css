@@ -1241,18 +1241,27 @@ html.mains-web.dark #root {
 }
 
 /* ── Streaming text ── */
-/* Soft fade for blocks as they mount; the per-character reveal that makes
-   appended text flow lives in useSmoothText. Children must keep their
+/* Word spans stay mounted as their text grows, so only newly arriving words
+   fade. The per-character reveal lives in useSmoothText. Children keep their
    natural display so the streaming layout matches the final layout —
    forcing them inline made paragraphs run together and the whole message
    reflow when the stream completed. */
 @keyframes stream-block-in {
-  from { opacity: 0; filter: blur(2px); }
-  to { opacity: 1; filter: blur(0); }
+  from { opacity: 0.4; }
+  to { opacity: 1; }
 }
 
 .streaming-text > * {
-  animation: stream-block-in 0.3s ease-out both;
+  animation: stream-block-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes stream-word-in {
+  from { opacity: 0.15; }
+  to { opacity: 1; }
+}
+
+.streaming-text .stream-word {
+  animation: stream-word-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* Keep long display equations inside the transcript column. KaTeX remains
@@ -1307,7 +1316,8 @@ html.mains-web.dark #root {
     animation: fade 120ms ease-out both !important;
   }
 
-  .streaming-text > * {
+  .streaming-text > *,
+  .streaming-text .stream-word {
     animation: none;
   }
 

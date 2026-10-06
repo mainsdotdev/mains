@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { At } from "@/components/ui/icons";
+import { Box } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolHeader } from "./_shared";
 
 export interface SkillParams {
@@ -23,7 +23,7 @@ export function SkillDisplay({
   return (
     <div>
       <ToolHeader
-        icon={icon ?? <At className="size-4" />}
+        icon={icon ?? <Box className="size-4" />}
         verb="Skill"
         hasDetails={false}
         isExpanded={false}

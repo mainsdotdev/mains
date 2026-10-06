@@ -39,6 +39,7 @@
     "clean": "rm -rf .vite dist out .webpack node_modules/.vite node_modules/.cache",
     "codex:protocol:generate": "node scripts/generate-codex-app-server-protocol.mjs",
     "codex:protocol:smoke": "node scripts/smoke-codex-app-server-protocol.mjs",
+    "icons:generate": "node scripts/generate-app-icons.cjs",
     "licenses:generate": "node scripts/generate-third-party-notices.mjs"
   },
   "keywords": [
@@ -140,6 +141,7 @@
     "exceljs": "^4.4.0",
     "frimousse": "^0.3.0",
     "fuzzysort": "^4.0.2",
+    "js-yaml": "^4.3.2",
     "jszip": "^3.10.2",
     "katex": "^0.18.7",
     "motion": "^13.2.0",

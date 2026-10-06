@@ -90,6 +90,58 @@ afterAll(() => {
 // captureDiffSnapshot
 // ─────────────────────────────────────────────────────────────
 
+describe("getCommitPreviewDiff", () => {
+  it("includes new files and net tracked changes without modifying the index", async () => {
+    const repo = makeRepo();
+    write(repo, "README.md", "# staged\n");
+    git(repo, "add", "README.md");
+    write(repo, "README.md", "# working\n");
+    write(repo, "özet.md", "new file contents\n");
+    write(repo, ".gitignore", "ignored.txt\n");
+    write(repo, "ignored.txt", "ignored contents\n");
+    const indexBefore = fs.readFileSync(path.join(repo, ".git/index"));
+    const statusBefore = git(repo, "--no-optional-locks", "status", "--porcelain");
+
+    const diff = await gitService.getCommitPreviewDiff(repo);
+
+    expect(diff).toContain("+# working");
+    expect(diff).not.toContain("+# staged");
+    expect(diff).toContain("özet.md");
+    expect(diff).toContain("+new file contents");
+    expect(diff).not.toContain("ignored contents");
+    expect(fs.readFileSync(path.join(repo, ".git/index"))).toEqual(indexBefore);
+    expect(git(repo, "--no-optional-locks", "status", "--porcelain")).toBe(statusBefore);
+    expect(git(repo, "diff", "--cached")).toContain("+# staged");
+  });
+
+  it("excludes unstaged edits and untracked files when staged-only is requested", async () => {
+    const repo = makeRepo();
+    write(repo, "README.md", "# staged\n");
+    git(repo, "add", "README.md");
+    write(repo, "README.md", "# working\n");
+    write(repo, "new.txt", "new file\n");
+
+    const diff = await gitService.getCommitPreviewDiff(repo, false);
+
+    expect(diff).toContain("+# staged");
+    expect(diff).not.toContain("+# working");
+    expect(diff).not.toContain("new.txt");
+  });
+
+  it.each(["sha1", "sha256"])("previews the first commit in a %s repository without creating an index", async (format) => {
+    const repo = path.join(sandbox, `repo-${++repoCounter}`);
+    fs.mkdirSync(repo);
+    git(repo, "init", "-b", "main", `--object-format=${format}`);
+    write(repo, "new.txt", "first commit contents\n");
+
+    const diff = await gitService.getCommitPreviewDiff(repo);
+
+    expect(diff).toContain("+first commit contents");
+    expect(fs.existsSync(path.join(repo, ".git/index"))).toBe(false);
+    expect(git(repo, "status", "--porcelain")).toBe("?? new.txt");
+  });
+});
+
 describe("captureDiffSnapshot", () => {
   it("returns an empty snapshot for a clean tree", async () => {
     const repo = makeRepo();
@@ -518,6 +570,19 @@ describe("getBranchLog", () => {
     const log = await gitService.getBranchLog(repo, "main");
 
     expect(log).toEqual(["feat commit"]);
+  });
+
+  it("returns more than 20 branch commits by default and honours an explicit limit", async () => {
+    const repo = makeRepo();
+    git(repo, "checkout", "-b", "feat");
+    const subjects = Array.from({ length: 25 }, (_, i) => `feature change ${i + 1}`);
+    for (const subject of subjects) git(repo, "commit", "--allow-empty", "-m", subject);
+    git(repo, "checkout", "main");
+    git(repo, "commit", "--allow-empty", "-m", "unrelated base change");
+    git(repo, "checkout", "feat");
+
+    expect(await gitService.getBranchLog(repo, "main")).toEqual([...subjects].reverse());
+    expect(await gitService.getBranchLog(repo, "main", 3)).toEqual(subjects.slice(-3).reverse());
   });
 });
 

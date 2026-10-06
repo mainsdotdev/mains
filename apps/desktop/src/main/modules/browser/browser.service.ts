@@ -1,3 +1,4 @@
+import { CAPTURE_PAGE_STATE, restorePageStateScript, type BrowserPageState } from "./browser-page-state";
 import {
   app,
   BrowserWindow,
@@ -83,6 +84,8 @@ export const BROWSER_PARTITION = "persist:mains-browser";
 const VIEW_BORDER_RADIUS_PX = 0;
 const CAPTURE_CACHE_MAX_BYTES = 100 * 1024 * 1024;
 const IDLE_HIBERNATE_MS = 2 * 60 * 1000;
+const MAX_LIVE_TABS = 3;
+const MAX_SUSPENDED_STATE_BYTES = 8 * 1024 * 1024;
 const MAX_TABS_PER_CONTEXT = 20;
 const MAX_PERSISTED_TABS = 400;
 const MAX_HISTORY_ENTRIES = 100;
@@ -121,6 +124,11 @@ interface BrowserTabRecord {
   zoomFactor: number;
   deviceEmulation: BrowserDeviceEmulation;
   history: BrowserHistorySnapshot | null;
+  /** Includes Chromium page state for this session only; never written to disk. */
+  suspendedHistory: BrowserHistorySnapshot | null;
+  suspendedPageState: BrowserPageState | null;
+  hibernatePromise: Promise<boolean> | null;
+  lastUsedAt: number;
   view: WebContentsView | null;
   viewPromise: Promise<WebContentsView> | null;
   deviceEmulationQueue: BrowserDeviceEmulationQueue;
@@ -188,6 +196,10 @@ function createTabRecord(
     zoomFactor: 1,
     deviceEmulation: { ...DEFAULT_BROWSER_DEVICE_EMULATION },
     history: null,
+    suspendedHistory: null,
+    suspendedPageState: null,
+    hibernatePromise: null,
+    lastUsedAt: 0,
     view: null,
     viewPromise: null,
     deviceEmulationQueue: createBrowserDeviceEmulationQueue(),
@@ -1038,6 +1050,7 @@ export const browserService = {
   },
 
   async _ensureTabView(record: BrowserTabRecord): Promise<WebContentsView> {
+    if (record.hibernatePromise) await record.hibernatePromise;
     if (record.isClosing) throw new Error("Browser tab is closing");
     if (record.view && !record.view.webContents.isDestroyed()) return record.view;
     if (record.viewPromise) return record.viewPromise;
@@ -1068,8 +1081,9 @@ export const browserService = {
       }
 
       try {
-        if (record.history?.entries.length) {
-          await view.webContents.navigationHistory.restore(record.history);
+        const history = record.suspendedHistory ?? record.history;
+        if (history?.entries.length) {
+          await view.webContents.navigationHistory.restore(history);
         } else if (record.url !== BLANK_URL) {
           await view.webContents.loadURL(record.url);
         }
@@ -1092,6 +1106,12 @@ export const browserService = {
       }
 
       view.webContents.setZoomFactor(record.zoomFactor);
+      record.suspendedHistory = null;
+      if (record.suspendedPageState) {
+        try {
+          if (await view.webContents.executeJavaScript(restorePageStateScript(record.suspendedPageState))) record.suspendedPageState = null;
+        } catch { /* Retain the small draft for another restore attempt. */ }
+      }
       this._syncRecord(record);
       return view;
     })().finally(() => {
@@ -1291,17 +1311,79 @@ export const browserService = {
         }
       }
       if (this.visible) return;
-      record.deviceEmulationQueue.reset();
       if (!view || view.webContents.isDestroyed()) continue;
-      if (this.host && !this.host.isDestroyed()) {
-        try {
-          this.host.contentView.removeChildView(view);
-        } catch {
-          // It may already be detached.
-        }
-      }
-      view.webContents.close();
-      record.view = null;
+      await this._hibernateTab(record);
+    }
+  },
+
+  _hibernateTab(record: BrowserTabRecord): Promise<boolean> {
+    if (record.hibernatePromise) return record.hibernatePromise;
+    const view = record.view;
+    const contents = view?.webContents;
+    const protectedPage = () => !contents || contents.isDestroyed() || record.viewPromise ||
+      (this.visible && record.id === this.activeTabId) || contents.isCurrentlyAudible() || contents.isLoading();
+    if (!contents || protectedPage()) return Promise.resolve(false);
+    const task = (async () => {
+      let pageState: BrowserPageState;
+      let captureTimer: NodeJS.Timeout | undefined;
+      try {
+        pageState = await Promise.race([
+          contents.executeJavaScript(CAPTURE_PAGE_STATE) as Promise<BrowserPageState>,
+          new Promise<never>((_resolve, reject) => {
+            captureTimer = setTimeout(() => reject(new Error("Page state timed out")), 1_000);
+          }),
+        ]);
+      } catch { return false; }
+      finally { clearTimeout(captureTimer); }
+      if (!pageState || pageState.overflow || protectedPage()) return false;
+      this._snapshotRecord(record);
+      const entries = contents.navigationHistory.getAllEntries();
+      const index = contents.navigationHistory.getActiveIndex();
+      // Opaque page state and form values stay in this session, never on disk.
+      const start = Math.max(0, index - Math.floor(MAX_HISTORY_ENTRIES / 2));
+      const snapshot = { entries: entries.slice(start, start + MAX_HISTORY_ENTRIES)
+        .map((entry, i) => i + start === index ? entry : { url: entry.url, title: entry.title }), index: index - start };
+      const used = [...this.tabs.values()].reduce((bytes, tab) => bytes +
+        Buffer.byteLength(JSON.stringify([tab.suspendedHistory, tab.suspendedPageState])), 0);
+      if (used + Buffer.byteLength(JSON.stringify([snapshot, pageState])) > MAX_SUSPENDED_STATE_BYTES) return false;
+      record.suspendedHistory = snapshot;
+      record.suspendedPageState = pageState;
+      record.deviceEmulationQueue.reset();
+      return new Promise<boolean>((resolve) => {
+        const finish = (closed: boolean, retainSnapshot = false) => {
+          clearTimeout(timer);
+          contents.removeListener("destroyed", onDestroyed);
+          contents.removeListener("will-prevent-unload", onPrevented);
+          if (!closed && !retainSnapshot) { record.suspendedHistory = null; record.suspendedPageState = null; }
+          else if (closed) {
+            if (record.view?.webContents === contents) record.view = null;
+            if (this.host && !this.host.isDestroyed() && view) {
+              try { this.host.contentView.removeChildView(view); } catch { /* Already detached. */ }
+            }
+          }
+          resolve(closed);
+        };
+        const onDestroyed = () => finish(true);
+        // A page with unsaved work may veto hibernation. Never force that unload.
+        const onPrevented = () => finish(false);
+        // A delayed beforeunload can finish after our deadline. Keep the draft
+        // backup in that case so a later wake can still recover it.
+        const timer = setTimeout(() => finish(contents.isDestroyed(), true), 2_000);
+        contents.once("destroyed", onDestroyed);
+        contents.once("will-prevent-unload", onPrevented);
+        try { contents.close({ waitForBeforeUnload: true }); } catch { finish(false); }
+      });
+    })().finally(() => { record.hibernatePromise = null; });
+    record.hibernatePromise = task;
+    return task;
+  },
+
+  async _trimLiveViews() {
+    const live = [...this.tabs.values()].filter((tab) => tab.view && !tab.view.webContents.isDestroyed());
+    let excess = live.length - MAX_LIVE_TABS;
+    for (const record of live.sort((a, b) => a.lastUsedAt - b.lastUsedAt)) {
+      if (excess <= 0 || !this.visible) break;
+      if (record.id !== this.activeTabId && await this._hibernateTab(record)) excess--;
     }
   },
 
@@ -1318,6 +1400,7 @@ export const browserService = {
       this.activeTabId !== expectedTabId
     ) {
       view.setVisible(false);
+      if (this.visible) await this._trimLiveViews();
       return;
     }
     if (!this.host.contentView.children.includes(view)) {
@@ -1333,6 +1416,8 @@ export const browserService = {
     if (record.url !== BLANK_URL && BrowserWindow.getFocusedWindow() === this.host) {
       view.webContents.focus();
     }
+    record.lastUsedAt = Date.now();
+    await this._trimLiveViews();
   },
 
   async _handleSelection(payload: Omit<BrowserSelectionPayload, "id">, record: BrowserTabRecord) {
@@ -1817,6 +1902,7 @@ export const browserService = {
   async _clearTabNavigationHistory(): Promise<void> {
     this._loadPersistedTabs();
     for (const record of this.tabs.values()) {
+      if (record.hibernatePromise) await record.hibernatePromise;
       // A view may still be restoring its saved history. Wait for it before
       // clearing Chromium's stack, or the next snapshot would write it back.
       if (record.viewPromise) {
@@ -1831,6 +1917,8 @@ export const browserService = {
         contents.navigationHistory.clear();
       }
       record.history = null;
+      record.suspendedHistory = null;
+      record.suspendedPageState = null;
       record.canGoBack = false;
       record.canGoForward = false;
     }

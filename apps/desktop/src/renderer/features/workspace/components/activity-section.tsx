@@ -3,7 +3,15 @@ import { useAppDispatch } from "@/lib/redux/hooks";
 import { useListWorkspaceActivityQuery } from "@/lib/redux/api";
 import type { WorkspaceActivity } from "@/lib/redux/api";
 import { openNoteTab } from "@/lib/redux/slices/workspaceSlice";
-import { Note, PullRequest, Diff, Commit, CircleDot, ArrowUp } from "@/components/ui/icons";
+import {
+  Note,
+  PullRequest,
+  Diff,
+  Commit,
+  CircleDot,
+  ArrowUp,
+  Activity,
+} from "@/components/ui/icons";
 import { Button, Caption, Text } from "@/components/ui";
 import { formatDate } from "@/lib/format-date";
 
@@ -14,17 +22,29 @@ interface ActivitySectionProps {
 function ActivityIcon({ type }: { type: WorkspaceActivity["type"] }) {
   switch (type) {
     case "diff":
-      return <Diff className="size-4 text-primary-700 dark:text-primary-300  shrink-0" />;
+      return (
+        <Diff className="size-4 text-primary-700 dark:text-primary-300  shrink-0" />
+      );
     case "review":
-      return <Note className="size-4 text-primary-700 dark:text-primary-300 shrink-0" />;
+      return (
+        <Note className="size-4 text-primary-700 dark:text-primary-300 shrink-0" />
+      );
     case "finding":
-      return <CircleDot className="size-4 text-primary-700 dark:text-primary-300  shrink-0" />;
+      return (
+        <CircleDot className="size-4 text-primary-700 dark:text-primary-300  shrink-0" />
+      );
     case "commit":
-      return <Commit className="size-5 text-primary-700 dark:text-primary-300  shrink-0" />;
+      return (
+        <Commit className="size-5 text-primary-700 dark:text-primary-300  shrink-0" />
+      );
     case "pr":
-      return <PullRequest className="size-4 text-primary-700 dark:text-primary-300  shrink-0" />;
+      return (
+        <PullRequest className="size-4 text-primary-700 dark:text-primary-300  shrink-0" />
+      );
     case "push":
-      return <ArrowUp className="size-4 text-primary-700 dark:text-primary-300  shrink-0" />;
+      return (
+        <ArrowUp className="size-4 text-primary-700 dark:text-primary-300  shrink-0" />
+      );
     // Same glyph as push, flipped — the pair reads as one axis.
     case "pull":
       return (
@@ -82,7 +102,9 @@ export function ActivitySection({ workspaceId }: ActivitySectionProps) {
   if (isLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <Text as="span" size="xs" tone="muted">Loading...</Text>
+        <Text as="span" size="xs" tone="muted">
+          Loading...
+        </Text>
       </div>
     );
   }
@@ -91,10 +113,8 @@ export function ActivitySection({ workspaceId }: ActivitySectionProps) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="flex flex-col items-center gap-2 px-4 text-center">
-          <Note className="w-4 h-4 dark:text-primary-300 text-primary-700" />
-          <Caption>
-            No activity yet.
-          </Caption>
+          <Activity className="w-4 h-4 dark:text-primary-300 text-primary-700" />
+          <Caption>No activity yet.</Caption>
         </div>
       </div>
     );
@@ -148,25 +168,42 @@ export function ActivitySection({ workspaceId }: ActivitySectionProps) {
                 }`}
               >
                 <div className="flex-1 min-w-0">
-                  <Text as="span" size="s" tone="default" align="left" className="truncate max-w-full block">
+                  <Text
+                    as="span"
+                    size="s"
+                    tone="default"
+                    align="left"
+                    className="truncate max-w-full block"
+                  >
                     {activity.type === "commit" ? (
                       <>
                         You committed changes
                         {activity.refId && (
-                          <Text as="span" size="xxs" tone="subtle" className="ml-1 font-mono">
+                          <Text
+                            as="span"
+                            size="xxs"
+                            tone="subtle"
+                            className="ml-1 font-mono"
+                          >
                             {activity.refId.slice(0, 7)}
                           </Text>
                         )}
                       </>
-                    ) : activity.type === "diff" && (activity.metadata as any)?.undoneAt ? (
+                    ) : activity.type === "diff" &&
+                      (activity.metadata as any)?.undoneAt ? (
                       <>{activity.title} (undone)</>
-                    ) : activity.type === "finding" && (activity.metadata as any)?.count ? (
-                      <>Mains added {(activity.metadata as any).count} finding{(activity.metadata as any).count === 1 ? "" : "s"}</>
+                    ) : activity.type === "finding" &&
+                      (activity.metadata as any)?.count ? (
+                      <>
+                        Mains added {(activity.metadata as any).count} finding
+                        {(activity.metadata as any).count === 1 ? "" : "s"}
+                      </>
                     ) : (
                       activity.title
                     )}
                     <Text as="span" size="xxs" tone="muted" weight="normal">
-                      {" "}&middot; {formatDate(activity.createdAt)}
+                      {" "}
+                      &middot; {formatDate(activity.createdAt)}
                     </Text>
                   </Text>
                   {detail && (
@@ -176,7 +213,13 @@ export function ActivitySection({ workspaceId }: ActivitySectionProps) {
                       }`}
                     >
                       <div className="overflow-hidden">
-                        <Text as="span" size="t" tone="muted" align="left" className="block mt-1 whitespace-pre-wrap">
+                        <Text
+                          as="span"
+                          size="t"
+                          tone="muted"
+                          align="left"
+                          className="block mt-1 whitespace-pre-wrap"
+                        >
                           {detail}
                         </Text>
                       </div>

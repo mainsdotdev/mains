@@ -11,30 +11,22 @@
  * Both reach back through the same three seams (`registerNewRun`,
  * `loadRunDetails`, `onRunUpdated`), which is the whole contract between them
  * and this hook. Bookkeeping that isn't React state at all — the retained-run
- * LRU, incremental cursors, in-flight dedup — lives in `lib/run-cache.ts`.
+ * LRU, loaded flags, in-flight dedup — lives in `lib/run-cache.ts`.
  */
 
 import { useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { appApi, appEvents } from "@/lib/transport";
-import type { Run, RunEvent, RunArtifact, ToolCall } from "../types";
-import type { RunTurn } from "@/lib/redux/api";
+import type { Run, RunEvent } from "../types";
 import type { ModeId } from "../../../../shared/modes";
 import { toast } from "@/components/ui";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { workspaceApi, useArchiveRunMutation } from "@/lib/redux/api";
 import { clearPendingRunId, setActiveTab } from "@/lib/redux/slices/workspaceSlice";
-import { mergeRunEvents } from "../lib/run-event-mappers";
-import { createRunCache, pruneRunMap } from "../lib/run-cache";
+import { createRunCache } from "../lib/run-cache";
 import { useRunOperations } from "./use-run-operations";
 import { useRunSync } from "./use-run-sync";
 import { useStreamingEvents } from "./use-streaming-events";
-
-/**
- * Hard cap on the per-run event list. A runaway agent can easily emit tens of
- * thousands of artifacts; we only need enough history to render, so we drop
- * the oldest entries once we exceed this threshold.
- */
-const MAX_EVENTS_PER_RUN = 5000;
+import { useRunHistory } from "./use-run-history";
 
 const NO_WORKSPACE_IDS: readonly string[] = [];
 
@@ -51,8 +43,8 @@ export function useWorkspaceRuns(
   const publishSelection = options.selection !== "local";
   const [runs, setRuns] = useState<Run[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [runEvents, setRunEvents] = useState<Record<string, RunEvent[]>>({});
-  const [runTurns, setRunTurns] = useState<Record<string, RunTurn[]>>({});
+  const [cache] = useState(createRunCache);
+  const { runEvents, runTurns, load: loadHistory, clear: clearHistory, forget: forgetHistory, history } = useRunHistory(cache, activeRunId);
   const persistedStreamIds = useMemo(() => new Set(
     (activeRunId ? runEvents[activeRunId] ?? [] : [])
       .map((event) => event.metadata?.streamId).filter((id): id is string => typeof id === "string"),
@@ -70,13 +62,6 @@ export function useWorkspaceRuns(
   useEffect(() => {
     pendingRunIdRef.current = pendingRunId;
   }, [pendingRunId]);
-  // All run bookkeeping — LRU, incremental cursors, in-flight dedup, finalized
-  // set — lives in this framework-free state machine (see lib/run-cache.ts).
-  // A lazy `useState` rather than a ref: the box is never reassigned (only the
-  // object inside mutates), and it has to be readable during render to be
-  // handed to `useRunSync`.
-  const [cache] = useState(createRunCache);
-
   // Each workspace's last known run list, so switching back to one shows its
   // tabs in the same frame instead of an empty page while the list reloads.
   // Held like `cache`: never reassigned, and read during render.
@@ -116,105 +101,23 @@ export function useWorkspaceRuns(
   const clearState = useCallback(() => {
     setRuns([]);
     setActiveRunId(null);
-    setRunEvents({});
-    setRunTurns({});
+    clearHistory();
     cache.clear();
-  }, [cache]);
+  }, [cache, clearHistory]);
 
   /** Swap in a newer copy of one run, leaving the rest of the list untouched. */
   const onRunUpdated = useCallback((run: Run) => {
     setRuns((prev) => prev.map((r) => (r.id === run.id ? run : r)));
   }, []);
 
-  /** Fetch a newly created run, add it to state, and return its ID */
-  const registerNewRun = useCallback(async (runId: string): Promise<string | null> => {
-    const runResult = await appApi.runs.getById(runId);
-    if (runResult.success && runResult.data) {
-      const newId = runResult.data.id;
-      setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
-      setActiveRunId(newId);
-      dispatch(workspaceApi.util.invalidateTags(["Workspaces"]));
-      const allowed = cache.touch(newId);
-      setRunEvents((prev) =>
-        pruneRunMap({ ...prev, [newId]: [] }, allowed),
-      );
-      setRunTurns((prev) => pruneRunMap(prev, allowed));
-      return newId;
-    }
-    return null;
-  }, [dispatch, cache]);
-
   // --- Data loading ---
 
-  const loadRunDetailsOnce = useCallback(async (runId: string) => {
-    try {
-      // Full fetch the first time we load a run (or after it was evicted);
-      // delta fetches afterwards. Artifacts are insert-only (cursor = max id);
-      // tool calls update in place (cursor = max updatedAt). Turns are few, so
-      // they stay a full fetch — always correct, no staleness.
-      const { isIncremental, artifactSince, toolSinceMs } =
-        cache.getDeltaCursors(runId);
-
-      const [artifactsRes, toolCallsRes, turnsRes] = await Promise.all([
-        appApi.runArtifacts.getByRun(runId, artifactSince),
-        appApi.runs.getToolCalls(
-          runId,
-          toolSinceMs != null ? new Date(toolSinceMs) : undefined,
-        ),
-        appApi.runTurns.getByRun(runId),
-      ]);
-
-      const artifactDeltas: RunArtifact[] =
-        artifactsRes.success && artifactsRes.data ? artifactsRes.data : [];
-      const toolDeltas: ToolCall[] =
-        toolCallsRes.success && toolCallsRes.data ? toolCallsRes.data : [];
-
-      // Advance cursors from whatever we just fetched.
-      if (artifactDeltas.length > 0) {
-        const maxId = artifactDeltas.reduce((m, a) => (a.id > m ? a.id : m), 0);
-        cache.advanceCursors(runId, { artifactMaxId: maxId });
-      }
-      if (toolDeltas.length > 0) {
-        const maxUpdated = toolDeltas.reduce((m, tc) => {
-          const t = new Date(tc.updatedAt).getTime();
-          return t > m ? t : m;
-        }, 0);
-        cache.advanceCursors(runId, { toolMaxMs: maxUpdated });
-      }
-      cache.markLoaded(runId);
-
-      const allowed = cache.touch(runId);
-
-      setRunEvents((prev) => {
-        const existing = isIncremental ? prev[runId] ?? [] : [];
-        const merged = mergeRunEvents(existing, artifactDeltas, toolDeltas);
-        // Cap event list per run — unbounded histories dominate renderer RAM.
-        const capped =
-          merged.length > MAX_EVENTS_PER_RUN
-            ? merged.slice(merged.length - MAX_EVENTS_PER_RUN)
-            : merged;
-        // No change for this run (e.g. an idle poll): keep its reference so React
-        // can bail; still prune any runs evicted from the LRU.
-        if (capped === prev[runId]) return pruneRunMap(prev, allowed);
-        return pruneRunMap({ ...prev, [runId]: capped }, allowed);
-      });
-
-      if (turnsRes.success && turnsRes.data) {
-        setRunTurns((prev) =>
-          pruneRunMap({ ...prev, [runId]: turnsRes.data }, allowed),
-        );
-      } else {
-        setRunTurns((prev) => pruneRunMap(prev, allowed));
-      }
-    } catch (err) {
-      console.error("Failed to load run details:", err);
-    }
-  }, [cache]);
+  const loadRunDetailsOnce = loadHistory;
 
   /** Public entry point: runs at most one `loadRunDetailsOnce` per run at a time,
    *  with a single trailing refresh if another request arrived while it ran. This
-   *  keeps the cursor advance and the committed event base consistent — two
-   *  concurrent loads can no longer interleave into a partial history. */
+   *  keeps the selected window and its committed event base consistent — concurrent refreshes coalesce while paging is serialized
+   *  by useRunHistory. */
   const loadRunDetails = useCallback(
     async (runId: string) => {
       // Admit one load per run; a request mid-load queues a single trailing reload.
@@ -230,6 +133,21 @@ export function useWorkspaceRuns(
     },
     [loadRunDetailsOnce, cache],
   );
+
+  /** Select a newly created run and catch up even if its first push already fired. */
+  const registerNewRun = useCallback(async (runId: string): Promise<string | null> => {
+    const runResult = await appApi.runs.getById(runId);
+    if (runResult.success && runResult.data) {
+      const newId = runResult.data.id;
+      setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
+      setActiveRunId(newId);
+      dispatch(workspaceApi.util.invalidateTags(["Workspaces"]));
+      cache.touch(newId);
+      void loadRunDetails(newId);
+      return newId;
+    }
+    return null;
+  }, [dispatch, cache, loadRunDetails]);
 
   const loadWorkspaceRuns = useCallback(
     async (wsId: string, isCurrent: () => boolean) => {
@@ -421,17 +339,23 @@ export function useWorkspaceRuns(
     error,
     createVoiceConversation,
     executeRun,
-    continueRun,
+    continueRun: continueRunOperation,
     forkRun,
     executeReview,
     checkCanResume,
   } = useRunOperations({ registerNewRun, loadRunDetails, onRunUpdated });
 
+  const continueRun = useCallback(async (...args: Parameters<typeof continueRunOperation>) => {
+    const succeeded = await continueRunOperation(...args);
+    if (succeeded) await loadHistory(args[0], "latest");
+    return succeeded;
+  }, [continueRunOperation, loadHistory]);
+
   // --- Derived transcript ---
 
   const combinedEvents = useMemo(() => {
     const dbEvents = activeRunId ? runEvents[activeRunId] || [] : [];
-    if (streamingEvents.length === 0) return dbEvents;
+    if (history.historical || streamingEvents.length === 0) return dbEvents;
 
     // Prefer a native stream identity when the provider persists one. The final
     // text can differ from the last delta, or repeat a previous turn's text.
@@ -485,26 +409,8 @@ export function useWorkspaceRuns(
       merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
     }
     return merged;
-  }, [activeRunId, runEvents, streamingEvents]);
+  }, [activeRunId, runEvents, streamingEvents, history.historical]);
   const currentEvents = combinedEvents;
-
-  // Auto-scroll to bottom. Landing on a run jumps straight to its last message:
-  // a smooth scroll from the top of a long transcript is a seconds-long glide
-  // that fights the user's own scrolling. Only growth of the run already in
-  // view animates.
-  const landedRunIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const end = eventsEndRef.current;
-    // No transcript on screen (events not loaded yet, or the run tab is
-    // hidden): whenever it shows next, that counts as a fresh landing.
-    if (!end || end.getClientRects().length === 0) {
-      landedRunIdRef.current = null;
-      return;
-    }
-    const isLanding = landedRunIdRef.current !== activeRunId;
-    landedRunIdRef.current = activeRunId;
-    end.scrollIntoView({ behavior: isLanding ? "instant" : "smooth" });
-  }, [activeRunId, currentEvents]);
 
   // --- Tab operations ---
 
@@ -532,20 +438,9 @@ export function useWorkspaceRuns(
       });
       // Drop from the LRU + incremental bookkeeping so reopening re-fetches fresh.
       cache.forget(runId);
-      setRunEvents((prev) => {
-        if (!(runId in prev)) return prev;
-        const next = { ...prev };
-        delete next[runId];
-        return next;
-      });
-      setRunTurns((prev) => {
-        if (!(runId in prev)) return prev;
-        const next = { ...prev };
-        delete next[runId];
-        return next;
-      });
+      forgetHistory(runId);
     },
-    [activeRunId, archiveRun, loadRunDetails, cache],
+    [activeRunId, archiveRun, loadRunDetails, cache, forgetHistory],
   );
 
   const selectTab = useCallback(
@@ -607,6 +502,7 @@ export function useWorkspaceRuns(
     isLoading,
     error,
     eventsEndRef,
+    history,
     setActiveRunId,
     createVoiceConversation,
     executeRun,

@@ -6,6 +6,7 @@
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
+import type { StoredAttachment } from "@mains/contracts/runs";
 import type { ProviderCliInfo } from "@mains/contracts/provider-cli";
 import type { RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
@@ -35,18 +36,9 @@ export interface WorkRunContextItem {
   metadata?: Record<string, unknown>;
 }
 
-/**
- * A file attachment serialized for IPC transport (base64-encoded data).
- * Re-exported from runs.dto for adapter-level use.
- */
-export interface FileAttachment {
-  name: string;
-  type: "image" | "document";
-  /** Base64-encoded data — optional when `sourcePath` is provided. */
-  data?: string;
-  /** Absolute path to an existing on-disk file. Preferred over `data` to avoid base64 in memory. */
-  sourcePath?: string;
-  mimeType: string;
+/** Backend-prepared input. Providers receive original files, never upload bytes. */
+export interface FileAttachment extends StoredAttachment {
+  sourcePath: string;
 }
 
 /**
@@ -62,6 +54,8 @@ export interface RunExecutionContext {
  * Request to start a work run
  */
 export interface WorkRunRequest {
+  /** Display correlation only; does not alter provider input acceptance. */
+  clientPromptId?: string;
   runId: string;
   accountId: string;
   execution: RunExecutionContext;
@@ -409,6 +403,7 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
  * Request to continue an existing run (resume session)
  */
 export interface WorkRunContinueRequest {
+  clientPromptId?: string;
   /** Correlates a locally queued input with Codex's accepted userMessage. */
   clientUserMessageId?: string;
   /** Backend-only callback; never serialized onto the wire. */

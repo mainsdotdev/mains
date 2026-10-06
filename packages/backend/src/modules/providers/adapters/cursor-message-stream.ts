@@ -1,11 +1,11 @@
-const closedIterable = "Error: RetriableError: WritableIterable is closed";
+export const CURSOR_CLOSED_ITERABLE_DIAGNOSTIC = "Error: RetriableError: WritableIterable is closed";
 const connectPrefix = "Error: ConnectError: [";
 const serverDiagnostic = "Something went wrong communicating with the server. Please try again.";
 
 function diagnosticFor(text: string): string | undefined {
   const lines = text.replace(/\r\n/g, "\n").replace(/^\n+/, "").trimEnd().split("\n");
   const first = lines.shift() ?? "";
-  if (first !== closedIterable && first !== serverDiagnostic &&
+  if (first !== CURSOR_CLOSED_ITERABLE_DIAGNOSTIC && first !== serverDiagnostic &&
       !/^Error: ConnectError: \[(unavailable|aborted|deadline_exceeded)\].+$/.test(first)) return undefined;
   if (lines.every((line) => !line.trim() || /^\s+at\s/.test(line))) return first;
   return undefined;
@@ -13,7 +13,7 @@ function diagnosticFor(text: string): string | undefined {
 
 function couldBeDiagnostic(text: string): boolean {
   const [first, ...tail] = text.replace(/\r\n/g, "\n").replace(/^\n+/, "").split("\n");
-  const prefixes = [closedIterable, serverDiagnostic,
+  const prefixes = [CURSOR_CLOSED_ITERABLE_DIAGNOSTIC, serverDiagnostic,
     ...["unavailable", "aborted", "deadline_exceeded"].map((code) => `${connectPrefix}${code}] `)];
   return (prefixes.some((prefix) => prefix.startsWith(first)) || !!diagnosticFor(first)) &&
     tail.every((line) => !line.trim() || /^\s+a(?:t(?:\s.*)?)?$/.test(line));

@@ -4,6 +4,7 @@
 
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
+import type { CreatePrPayload, CreatePrResult } from "@mains/contracts/pr-attachments";
 
 export interface GitFlowStatus {
   branch: string;
@@ -74,15 +75,7 @@ export interface CommitGitFlowPayload {
   push?: boolean;
 }
 
-export interface CreatePrGitFlowPayload {
-  workspaceId: string;
-  title?: string;
-  body?: string;
-  base?: string;
-  draft?: boolean;
-  providerId?: string;
-  model?: string;
-}
+export type CreatePrGitFlowPayload = CreatePrPayload;
 
 export const gitFlowApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
@@ -135,7 +128,7 @@ export const gitFlowApi = baseApi.injectEndpoints({
       ],
     }),
 
-    createPrGitFlow: builder.mutation<{ url: string }, CreatePrGitFlowPayload>({
+    createPrGitFlow: builder.mutation<CreatePrResult, CreatePrGitFlowPayload>({
       query: (payload) => ({
         handler: CHANNELS.gitFlow.createPr,
         args: [payload],

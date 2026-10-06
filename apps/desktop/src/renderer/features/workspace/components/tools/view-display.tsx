@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { ViewFile } from "@/components/ui/icons";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { FileIconComponent } from "@/components/ui/icons";
@@ -10,7 +10,7 @@ export interface ViewParams {
 }
 
 export function ViewDisplay({ params, output, isCompact = false }: { params: ViewParams; output?: unknown; isCompact?: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const openFile = useOpenFileInEditor();
 
   const { content, numLines } = parseViewOutput(output);

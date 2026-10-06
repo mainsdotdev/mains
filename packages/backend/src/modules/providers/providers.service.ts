@@ -1,4 +1,5 @@
 import { providersRepo } from "./providers.repo";
+import { rememberSkillDocuments } from "./skill-document-paths";
 import { detectInstalledClis } from "./providers.utils";
 import type {
   CreateProviderPayload,
@@ -225,7 +226,9 @@ export const providersService = {
 
   async getSkills(id: string, workspacePath?: string): Promise<SkillInfo[]> {
     const provider = await requireEnabledProvider(id);
-    return listSkillsForProvider(provider, workspacePath);
+    const skills = await listSkillsForProvider(provider, workspacePath);
+    await rememberSkillDocuments(id, workspacePath, skills);
+    return skills;
   },
 
   async getRateLimits(id: string): Promise<RateLimitInfo | null> {

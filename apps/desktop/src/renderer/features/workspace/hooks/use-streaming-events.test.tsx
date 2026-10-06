@@ -56,7 +56,10 @@ describe("live voice chat streams", () => {
     snapshot("speech", "Still speaking");
     frame();
     act(() => view.result.current.clearTurnStreams());
-    expect(view.result.current.streamingEvents.map((event) => event.content)).toEqual(["Still speaking"]);
+    expect(view.result.current.streamingEvents).toMatchObject([
+      { content: "Work in progress", metadata: { streaming: false } },
+      { content: "Still speaking", metadata: { streaming: true } },
+    ]);
   });
 
   it("holds final text through voice closure and drops only that connection's unfinished speech", () => {
@@ -80,6 +83,30 @@ describe("live voice chat streams", () => {
     snapshot("speech", "Late partial");
     frame();
     expect(view.result.current.streamingEvents).toHaveLength(0);
+  });
+
+  it("keeps an interrupted answer while persistence loads, clears status, and ignores late chunks", () => {
+    const view = renderHook(({ persisted }) => useStreamingEvents("run", persisted), {
+      initialProps: { persisted: new Set<string>() },
+    });
+    snapshot("answer", "Received answer ".repeat(100), false);
+    emit(CHANNELS.runs.ephemeralEvent, { runId: "run", ts: 1000, event: {
+      type: "artifact", kind: "report", streamId: "thinking", content: "Thinking",
+      metadata: { source: "agent_thinking_streaming" },
+    } });
+    frame();
+    act(() => view.result.current.clearTurnStreams(true));
+    expect(view.result.current.streamingEvents).toMatchObject([{
+      content: "Received answer ".repeat(100), metadata: { streaming: false, interrupted: true },
+    }]);
+    snapshot("answer", "Late replacement", false);
+    frame();
+    expect(view.result.current.streamingEvents[0].content).toBe("Received answer ".repeat(100));
+    view.rerender({ persisted: new Set(["answer"]) });
+    expect(view.result.current.streamingEvents).toEqual([]);
+    snapshot("next-answer", "Next turn", false);
+    frame();
+    expect(view.result.current.streamingEvents[0].content).toBe("Next turn");
   });
 
   it("clears pending work and speech when the selected conversation changes", () => {

@@ -7,11 +7,10 @@ describe("advanceReveal", () => {
     expect(advanceReveal("", "")).toBe("");
   });
 
-  it("advances by ceil(backlog / 10) characters per step", () => {
+  it("reveals a burst gradually instead of showing a large first jump", () => {
     const target = "a".repeat(100);
-    // backlog 100 → step 10
-    expect(advanceReveal(target, "")).toBe("a".repeat(10));
-    // backlog 5 → step 1
+    expect(advanceReveal(target, "").length).toBeGreaterThan(0);
+    expect(advanceReveal(target, "").length).toBeLessThan(10);
     expect(advanceReveal(target, target.slice(0, 95))).toBe(
       target.slice(0, 96),
     );
@@ -41,8 +40,7 @@ describe("advanceReveal", () => {
   });
 
   it("never splits a surrogate pair", () => {
-    // 9 plain chars then an emoji: backlog 11 → step 2 would cut the
-    // emoji's surrogate pair in half; the step must extend past it.
+    // Every intermediate prefix must keep the emoji intact.
     const target = "abcdefghi\u{1F600}";
     let displayed = "";
     while (displayed !== target) {

@@ -1,11 +1,9 @@
-import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { describe, it, expect, vi } from "vitest";
 import {
-  saveAttachments,
-  attachmentUploadDir,
+  attachmentPromptParts,
   adoptConfig,
   createLogger,
   safeJson,
@@ -21,25 +19,17 @@ import {
   toolWrites,
 } from "./adapter.shared";
 
-describe("saveAttachments", () => {
-  it("never writes outside the run's upload directory", () => {
-    const runId = `test-${randomUUID()}`;
-    const uploadDir = path.join(os.tmpdir(), "mains-uploads", runId);
-    const escaped = path.join(os.tmpdir(), "mains-uploads", `${runId}-escaped.png`);
+describe("attachmentPromptParts", () => {
+  it("reads prepared text without changing the durable original", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mains-prepared-"));
+    const sourcePath = path.join(directory, "notes.txt");
     try {
-      const { savedPaths } = saveAttachments(
-        [
-          { name: `../${runId}-escaped.png`, type: "image", mimeType: "image/png", data: "eA==" },
-          { name: "..", type: "image", mimeType: "image/png", data: "eA==" },
-        ],
-        runId,
-      );
-      expect(savedPaths).toEqual([path.join(uploadDir, `${runId}-escaped.png`)]);
-      expect(fs.existsSync(escaped)).toBe(false);
-    } finally {
-      fs.rmSync(uploadDir, { recursive: true, force: true });
-      fs.rmSync(escaped, { force: true });
-    }
+      fs.writeFileSync(sourcePath, "Important note");
+      const result = attachmentPromptParts([{ attachmentId: "text-id", sourcePath, name: "notes.txt", type: "document", mimeType: "text/plain", byteSize: 14 }]);
+      expect(result.savedPaths).toEqual([]);
+      expect(result.inlineTexts).toEqual(["[Attached document: notes.txt]\nImportant note"]);
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe("Important note");
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
   });
 });
 
@@ -382,45 +372,18 @@ describe("emitUserPromptArtifact", () => {
     expect(event.content).toBe("Hello world");
   });
 
-  it("includes attachment metadata", async () => {
+  it("persists compact descriptors for images, documents and inline text", async () => {
     const onEvent = vi.fn().mockResolvedValue(undefined);
-    await emitUserPromptArtifact(onEvent, "content", {
-      attachments: [{ name: "img.png", type: "image", data: "", mimeType: "image/png" }],
-    });
-    const event = onEvent.mock.calls[0][0];
-    expect(event.metadata.attachments).toHaveLength(1);
-    expect(event.metadata.attachments[0].name).toBe("img.png");
-  });
-
-  it("points each written document at the copy saveAttachments made", async () => {
-    const runId = `test-${randomUUID()}`;
     const attachments = [
-      { name: "Blueprint.pdf", type: "document" as const, data: "eA==", mimeType: "application/pdf" },
-      { name: "notes.txt", type: "document" as const, data: "eA==", mimeType: "text/plain" },
-      { name: "img.png", type: "image" as const, data: "eA==", mimeType: "image/png" },
-    ];
-    try {
-      const { savedPaths } = saveAttachments(attachments, runId);
-      const onEvent = vi.fn().mockResolvedValue(undefined);
-      await emitUserPromptArtifact(onEvent, "content", { attachments, runId });
-      const [pdf, txt, img] = onEvent.mock.calls[0][0].metadata.attachments;
-      expect(savedPaths).toContain(pdf.path);
-      expect(fs.existsSync(pdf.path)).toBe(true);
-      // .txt is inlined; image previews also retain the durable uploaded copy.
-      expect(txt.path).toBeUndefined();
-      expect(savedPaths).toContain(img.path);
-      expect(fs.existsSync(img.path)).toBe(true);
-    } finally {
-      fs.rmSync(path.join(os.tmpdir(), "mains-uploads", runId), { recursive: true, force: true });
-    }
-  });
-
-  it("omits document paths when the run is unknown", async () => {
-    const onEvent = vi.fn().mockResolvedValue(undefined);
-    await emitUserPromptArtifact(onEvent, "content", {
-      attachments: [{ name: "a.pdf", type: "document", data: "", mimeType: "application/pdf" }],
-    });
-    expect(onEvent.mock.calls[0][0].metadata.attachments[0].path).toBeUndefined();
+      { name: "Blueprint.pdf", type: "document" as const, mimeType: "application/pdf" },
+      { name: "notes.txt", type: "document" as const, mimeType: "text/plain" },
+      { name: "img.png", type: "image" as const, mimeType: "image/png" },
+    ].map((value, index) => ({ ...value, attachmentId: `attachment-${index}`, sourcePath: `/durable/${index}/${value.name}`, byteSize: 100 }));
+    await emitUserPromptArtifact(onEvent, "content", { attachments, runId: "run" });
+    expect(onEvent.mock.calls[0][0].metadata.attachments).toEqual(attachments.map(({ sourcePath: _path, ...descriptor }) => descriptor));
+    const encoded = JSON.stringify(onEvent.mock.calls[0][0]);
+    expect(encoded).not.toContain("/durable/");
+    expect(encoded).not.toContain("dataUrl");
   });
 
   it("persists per-prompt browser annotation groups without unrelated context or DOM styling", async () => {
@@ -520,21 +483,5 @@ describe("toolWrites", () => {
     expect(toolWrites("Read", { file_path: "a.ts" })).toEqual(none);
     expect(toolWrites("Grep", { pattern: "x" })).toEqual(none);
     expect(toolWrites("str_replace_editor", { command: "view", path: "a.ts" })).toEqual(none);
-  });
-});
-
-
-describe("queued input attachment ownership", () => {
-  it("keeps equal filenames in distinct message directories without changing display names", () => {
-    const runId = `queue-attachments-${Date.now()}`;
-    try {
-      const attachment = { name: "image.png", type: "image" as const, data: Buffer.from("first").toString("base64"), mimeType: "image/png" };
-      const first = saveAttachments([attachment], runId, "first-input").savedPaths[0];
-      const second = saveAttachments([{ ...attachment, data: Buffer.from("second").toString("base64") }], runId, "second-input").savedPaths[0];
-      expect(first).not.toBe(second);
-      expect(path.basename(first)).toBe("image.png");
-      expect(fs.readFileSync(first, "utf8")).toBe("first");
-      expect(fs.readFileSync(second, "utf8")).toBe("second");
-    } finally { fs.rmSync(attachmentUploadDir(runId), { recursive: true, force: true }); }
   });
 });

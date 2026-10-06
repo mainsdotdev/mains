@@ -1,7 +1,10 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { isDeferredToolOutput, type DeferredToolOutput } from "@mains/contracts/runs";
+import { appApi } from "@/lib/transport";
+import { TranscriptItemScope, useToolExpansion } from "../../lib/transcript-view-state";
 import { Text } from "@/components/ui";
 import type { RunEvent } from "../../types";
-import { parseToolContent, type ParsedToolContent } from "../../lib/parse-tool-content";
+import { parseToolContent, previewParams } from "../../lib/parse-tool-content";
 import { resolveTool } from "../../lib/resolve-tool";
 import { usePluginLogoMap, renderPluginIcon, normalizeSlug } from "../../hooks";
 import { TaskDisplay, type TaskParams } from "./task-display";
@@ -277,12 +280,60 @@ const DISPATCH: Renderer[] = [
   },
 ];
 
-export function ToolCallItem({ event, isCompact = true }: ToolCallItemProps) {
-  // Mapper memoizes the parse on metadata.parsed; fall back for legacy events
-  // (e.g. streaming artifacts that never went through `mapToolCallToEvent`).
-  const { toolName, params, summary } =
-    (event.metadata?.parsed as ParsedToolContent | undefined) ??
-    parseToolContent(event.content);
+export function ToolCallItem(props: ToolCallItemProps) {
+  return <TranscriptItemScope id={props.event.id}>
+    {isDeferredToolOutput(props.event.metadata?.output)
+      ? <DeferredOutputRow {...props} deferred={props.event.metadata.output} />
+      : <ToolCallBody {...props} />}
+  </TranscriptItemScope>;
+}
+
+function DeferredOutputRow({ event, deferred, isCompact = true }: ToolCallItemProps & { deferred: DeferredToolOutput }) {
+  const [expanded] = useToolExpansion();
+  const [loaded, setLoaded] = useState<{ key: string; output: unknown } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const key = `${event.id}/${deferred.chars}/${deferred.preview}`;
+  const runId = event.metadata?.runId;
+  useEffect(() => {
+    if (!expanded) {
+      const timer = setTimeout(() => setLoaded(null), 200);
+      return () => clearTimeout(timer);
+    }
+    if (loaded?.key === key) return;
+    let canceled = false;
+    void (async () => {
+      try {
+        if (typeof runId !== "string") throw new Error("Conversation not found");
+        const response = await appApi.runs.getToolOutput(runId, Number(event.id.slice(5)));
+        if (!response.success) throw new Error(response.error);
+        if (!canceled) { setLoaded({ key, output: response.data.output }); setError(null); }
+      } catch (reason) {
+        if (!canceled) setError(reason instanceof Error ? reason.message : "Could not load output");
+      }
+    })();
+    return () => { canceled = true; };
+  }, [expanded, runId, event.id, key, loaded?.key, attempt]);
+
+  if (loaded?.key === key) return <ToolCallBody event={{ ...event, metadata: { ...event.metadata, output: loaded.output } }} isCompact={isCompact} />;
+  const resolved = resolveTool(event.content);
+  return <ToolStatusProvider value={eventToolStatus(event)}>
+    <GenericToolDisplay icon={resolved.icon} displayName={resolved.displayName}
+      params={event.metadata?.input as Record<string, unknown> | null}
+      output={`${deferred.preview}\n… (${deferred.chars.toLocaleString()} characters)`} isCompact={isCompact} />
+    {expanded && <Text as="div" size="xs" tone="subtle">
+      {error ? <button onClick={() => { setError(null); setAttempt((value) => value + 1); }}>Retry loading output: {error}</button> : "Loading full output…"}
+    </Text>}
+  </ToolStatusProvider>;
+}
+
+function ToolCallBody({ event, isCompact = true }: ToolCallItemProps) {
+  const input = event.metadata?.input;
+  const { toolName, params, summary } = typeof event.metadata?.toolName === "string"
+    ? { toolName: event.metadata.toolName,
+      params: input && typeof input === "object" ? input as Record<string, unknown> : null,
+      summary: previewParams(input && typeof input === "object" ? input as Record<string, unknown> : null) || event.content.slice(event.content.indexOf(":") + 1).trim() }
+    : parseToolContent(event.content);
   const metadataInput = event.metadata?.input as
     | Record<string, unknown>
     | undefined;
@@ -330,12 +381,12 @@ export function ToolCallItem({ event, isCompact = true }: ToolCallItemProps) {
   const task = event.metadata?.task as TaskMetadata | undefined;
   const subagent = event.metadata?.subagent as SubagentMetadata | undefined;
   const wrap = (node: ReactNode) => (
-    <ToolStatusProvider value={status}>
+    <TranscriptItemScope id={event.id}><ToolStatusProvider value={status}>
       {node}
       {(task || subagent) && (
-        <TaskProgressStrip task={task} subagent={subagent} isCompact={isCompact} />
+        <TranscriptItemScope id={`${event.id}/task`}><TaskProgressStrip task={task} subagent={subagent} isCompact={isCompact} /></TranscriptItemScope>
       )}
-    </ToolStatusProvider>
+    </ToolStatusProvider></TranscriptItemScope>
   );
 
   if (isEmptyTool) {

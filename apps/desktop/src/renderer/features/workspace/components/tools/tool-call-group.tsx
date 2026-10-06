@@ -12,6 +12,7 @@ import {
 import { ToolCallItem } from "./tool-call-item";
 import type { EventGroup } from "../../lib/group-events";
 import { Button } from "@/components/ui";
+import { useTranscriptValue } from "../../lib/transcript-view-state";
 
 const TOOL_GROUP_LABEL_TEXT =
   "text-primary-600 dark:text-primary-600 group-hover:text-primary-600 group-hover:dark:text-primary-200";
@@ -26,7 +27,7 @@ function ToolCallGroupImpl({
   group,
   defaultExpanded = false,
 }: ToolCallGroupProps) {
-  const [expandedOverride, setExpandedOverride] = useState<boolean | null>(null);
+  const [expandedOverride, setExpandedOverride] = useTranscriptValue<boolean | null>("group-expanded", null);
   const [showTopFade, setShowTopFade] = useState(false);
   const [showBottomFade, setShowBottomFade] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -35,6 +36,10 @@ function ToolCallGroupImpl({
     group.events.every((event) => event.metadata?.codexItemType === "imageView");
   const isExpanded = expandedOverride ?? (isImageViewGroup || defaultExpanded);
   const pluginLogos = usePluginLogoMap();
+  // Fade the content itself so every host surface shows through unchanged.
+  const scrollMask = `linear-gradient(to bottom, ${
+    showTopFade ? "transparent, black 3rem" : "black"
+  }, ${showBottomFade ? "black calc(100% - 3rem), transparent" : "black"})`;
 
   const updateScrollFades = useCallback(() => {
     const element = scrollContainerRef.current;
@@ -142,22 +147,17 @@ function ToolCallGroupImpl({
             <div
               ref={scrollContainerRef}
               onScroll={updateScrollFades}
-              className="noscrollbar max-h-80 overflow-y-auto overscroll-contain"
+              // Let wheel/trackpad scrolling reach the transcript at either
+              // boundary, even when this list fills the floating chat.
+              className="noscrollbar max-h-80 overflow-y-auto"
+              style={{ maskImage: scrollMask, WebkitMaskImage: scrollMask }}
             >
               <div ref={scrollContentRef} className="space-y-0.5">
-                {toolEvents.map((event) => (
+                {isExpanded && toolEvents.map((event) => (
                   <ToolCallItem key={event.id} event={event} isCompact={false} />
                 ))}
               </div>
             </div>
-            <div
-              aria-hidden="true"
-              className={`pointer-events-none absolute inset-x-0 top-0 h-12 bg-linear-to-b from-primary to-transparent transition-opacity duration-150 dark:from-primary-950 ${isExpanded && showTopFade ? "opacity-100" : "opacity-0"}`}
-            />
-            <div
-              aria-hidden="true"
-              className={`pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-linear-to-t from-primary to-transparent transition-opacity duration-150 dark:from-primary-950 ${isExpanded && showBottomFade ? "opacity-100" : "opacity-0"}`}
-            />
           </div>
         </div>
       </div>

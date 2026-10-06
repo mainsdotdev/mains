@@ -162,9 +162,9 @@ export function WorkspaceTabs({
   }
 
   return (
-    <div className="-ml-3 flex items-end">
+    <div className="-ml-3 flex min-w-0 items-end">
       {/* The first tab starts at the content edge; later tabs can curve over the sidebar. */}
-      <div className="relative flex-1 flex items-end overflow-x-auto pl-3 noscrollbar">
+      <div className="relative flex min-w-0 items-end overflow-x-auto px-3 noscrollbar">
         {hasSelectedFile && (
           <EditorTab
             isActive={activeTab === "editor"}
@@ -237,7 +237,7 @@ export function WorkspaceTabs({
           />
         ))}
         {showNewRunTab && (
-          <div className="animate-slide-in-left min-w-0">
+          <div className="animate-slide-in-left flex w-44 min-w-28">
             <NewRunTab
               variant={variant!}
               isActive={activeTab === "new-run"}
@@ -247,15 +247,15 @@ export function WorkspaceTabs({
             />
           </div>
         )}
-        <Button
-          variant="icon"
-          onClick={onNewRun}
-          className="ml-0.5 mb-0.5 mr-8"
-          title="New run"
-        >
-          <Plus className="size-4" />
-        </Button>
       </div>
+      <Button
+        variant="icon"
+        onClick={onNewRun}
+        className="mb-1.5 mr-8 p-1! -ml-2 rounded-lg hover:bg-primary/5!"
+        title="New run"
+      >
+        <Plus className="size-4.5" />
+      </Button>
     </div>
   );
 }

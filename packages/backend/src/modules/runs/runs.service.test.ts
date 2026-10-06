@@ -118,6 +118,7 @@ import { runsService } from "./runs.service";
 import { runsRepo } from "./runs.repo";
 import { managedRunDir, managedRunImageDir } from "./run-execution";
 import { runSessionRegistry } from "./run-session-registry";
+import { prepareRunAttachments } from "./run-attachment-storage";
 import { createWorkAdapter, emitUserPromptArtifact } from "../providers/adapters";
 import { collectionsService } from "../collections";
 import { workspaceService } from "../workspace";
@@ -516,16 +517,17 @@ describe("runsService", () => {
       const created = await runsService.executeRun({
         accountId: "default", providerId: "codex", spaceId: "codex-settings-space",
         workspaceId: "codex-settings-workspace", goal: "hello", conversationSettings: settings,
+        clientPromptId: "local-start",
       });
       await flushBackground();
-      expect(startRun.mock.calls[0][0]).toMatchObject({ model: settings.model, configSnapshot: settings.config });
+      expect(startRun.mock.calls[0][0]).toMatchObject({ model: settings.model, configSnapshot: settings.config, clientPromptId: "local-start" });
       expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(settings);
 
       const next = { ...settings, config: { ...settings.config, modelReasoningEffort: effort === "ultra" ? "FutureEffort" : "ultra" } };
       await runsService.updateRun(created.runId, { conversationSettings: next });
-      await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Queued", conversationSettings: settings });
+      await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Queued", conversationSettings: settings, clientPromptId: "local-continue" });
       await flushBackground();
-      expect(continueRun.mock.calls[0][0]).toMatchObject({ configSnapshot: settings.config });
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ configSnapshot: settings.config, clientPromptId: "local-continue" });
       expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(next);
       await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Use saved settings" });
       await flushBackground();
@@ -1632,12 +1634,13 @@ describe("runsService", () => {
   // refused before anything runs — an existing run is left as it was.
   // ─────────────────────────────────────────────────────────────
   describe("run attachments", () => {
-    it("hands the adapter filenames, not paths", async () => {
+    it.each(["chat", "work", "developer"] as const)("prepares originals before the adapter starts in %s", async (mode) => {
+      const workspace = mode === "developer" ? createWorkspace(db) : undefined;
       createSpace(db, {
         id: "sp-attach",
         accountId: "default",
         providerId: "claude_code",
-        mode: "work",
+        mode,
       });
       const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
       vi.mocked(createWorkAdapter).mockReturnValue({ startRun } as any);
@@ -1646,6 +1649,7 @@ describe("runsService", () => {
         accountId: "default",
         spaceId: "sp-attach",
         providerId: "claude_code",
+        workspaceId: workspace?.id,
         goal: "read this",
         attachments: [
           {
@@ -1659,8 +1663,18 @@ describe("runsService", () => {
       await flushBackground();
 
       expect(startRun.mock.calls[0][0].attachments).toEqual([
-        { name: ".zshrc", type: "document", mimeType: "text/plain", data: "eA==" },
+        { name: ".zshrc", type: "document", mimeType: "text/plain", attachmentId: expect.any(String), byteSize: 1, sourcePath: expect.stringContaining("/attachments/") },
       ]);
+    });
+
+    it("downloads exact original bytes only through the owning conversation", async () => {
+      const run = createRun(db, { providerId: "claude_code" });
+      const unrelated = createRun(db, { providerId: "claude_code" });
+      const data = Buffer.from([0, 255, 1, 2]).toString("base64");
+      const [item] = (await prepareRunAttachments(run.id, [{ name: "screen.png", type: "image", mimeType: "image/png", data }]))!;
+      expect(await runsService.readAttachmentFile({ runId: run.id, attachmentId: item.attachmentId })).toMatchObject({ base64: data, byteSize: 4, name: "screen.png" });
+      await expect(runsService.readAttachmentFile({ runId: unrelated.id, attachmentId: item.attachmentId })).rejects.toThrow("not found");
+      await runsService.deleteRun(run.id);
     });
 
     it("refuses a sourcePath outside trusted captures before the adapter runs", async () => {

@@ -16,8 +16,8 @@ export const toolsService = {
   // ─────────────────────────────────────────────────────────────
   // Tool Call Operations
   // ─────────────────────────────────────────────────────────────
-  async getToolCallsByRun(runId: string): Promise<ToolCallResponse[]> {
-    return toolsRepo.findToolCallsByRun(runId);
+  async getToolCallsByRun(runId: string, subagentsOnly = false): Promise<ToolCallResponse[]> {
+    return toolsRepo.findToolCallsByRun(runId, subagentsOnly);
   },
 
   async getToolCallsByAccount(

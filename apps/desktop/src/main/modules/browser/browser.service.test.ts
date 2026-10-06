@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { EventEmitter } from "node:events";
 
 const harness = vi.hoisted(() => ({ userData: "" }));
 
@@ -51,6 +52,86 @@ describe("browserService — tabs by chat", () => {
   afterEach(() => {
     resetInMemory();
     rmSync(harness.userData, { recursive: true, force: true });
+  });
+
+  function liveView(record: NonNullable<ReturnType<typeof browserService.tabs.get>>, options: { audible?: boolean; dirty?: boolean } = {}) {
+    const contents = Object.assign(new EventEmitter(), {
+      isDestroyed: vi.fn(() => false), isCurrentlyAudible: () => !!options.audible,
+      executeJavaScript: vi.fn(async () => ({ url: record.url, x: 0, y: 500, fields: [{ selector: "#draft", value: "unsent-draft" }] })),
+      isLoading: () => false, getURL: () => record.url, getTitle: () => "Page", getZoomFactor: () => 1,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false, getActiveIndex: () => 0,
+        getAllEntries: () => [{ url: record.url, title: "Page", pageState: "opaque-form-and-scroll-state" }] },
+      close: vi.fn((_options: unknown) => {
+        if (options.dirty) contents.emit("will-prevent-unload", {});
+        else { contents.isDestroyed.mockReturnValue(true); contents.emit("destroyed"); }
+      }),
+    });
+    record.view = { webContents: contents, setVisible: vi.fn() } as unknown as typeof record.view;
+    return contents;
+  }
+
+  it("hibernates the oldest inactive page over the live-tab budget and keeps form state only in memory", async () => {
+    const records = [];
+    for (let i = 0; i < 4; i++) {
+      await browserService.createTab(`https://example.com/${i}`);
+      const record = browserService.tabs.get(browserService.activeTabId!)!;
+      record.lastUsedAt = i;
+      records.push(record);
+      liveView(record);
+    }
+    browserService.visible = true;
+    await browserService._trimLiveViews();
+    expect(records[0].view).toBeNull();
+    expect(records[0].suspendedHistory?.entries[0].pageState).toBe("opaque-form-and-scroll-state");
+    expect(records[0].suspendedPageState?.fields[0].value).toBe("unsent-draft");
+    expect(records.slice(1).every((record) => record.view)).toBe(true);
+    browserService._persistNow();
+    expect(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8")).not.toContain("opaque-form");
+    expect(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8")).not.toContain("unsent-draft");
+  });
+
+  it("does not force pages with unsaved work or audio to unload", async () => {
+    await browserService.createTab("https://example.com/draft");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const dirty = liveView(record, { dirty: true });
+    expect(await browserService._hibernateTab(record)).toBe(false);
+    expect(dirty.close).toHaveBeenCalledWith({ waitForBeforeUnload: true });
+    expect(record.view).not.toBeNull();
+    expect(record.suspendedHistory).toBeNull();
+    const audio = liveView(record, { audible: true });
+    expect(await browserService._hibernateTab(record)).toBe(false);
+    expect(audio.close).not.toHaveBeenCalled();
+  });
+
+  it("keeps an oversized draft alive and cancels sleep if its tab reactivates during capture", async () => {
+    await browserService.createTab("https://example.com/draft");
+    const record = browserService.tabs.get(browserService.activeTabId!)!;
+    const contents = liveView(record);
+    contents.executeJavaScript.mockResolvedValueOnce({ overflow: true } as never);
+    expect(await browserService._hibernateTab(record)).toBe(false);
+    expect(contents.close).not.toHaveBeenCalled();
+    let captured!: (state: unknown) => void;
+    contents.executeJavaScript.mockImplementationOnce(() => new Promise((resolve) => { captured = resolve as typeof captured; }));
+    const sleeping = browserService._hibernateTab(record);
+    browserService.visible = true;
+    captured({ url: record.url, x: 0, y: 0, fields: [] });
+    expect(await sleeping).toBe(false);
+    expect(contents.close).not.toHaveBeenCalled();
+  });
+
+  it("retains the live view and its draft backup when beforeunload times out", async () => {
+    vi.useFakeTimers();
+    try {
+      await browserService.createTab("https://example.com/draft");
+      const record = browserService.tabs.get(browserService.activeTabId!)!;
+      const contents = liveView(record);
+      contents.close.mockImplementation(() => {});
+      const pending = browserService._hibernateTab(record);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await pending).toBe(false);
+      expect(record.view).not.toBeNull();
+      expect(record.suspendedPageState?.fields[0].value).toBe("unsent-draft");
+    } finally { vi.useRealTimers(); }
   });
 
   it("does not create blank tabs while browsing chats with the panel closed", async () => {

@@ -12,15 +12,17 @@ import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { markdownComponents } from "@/components/markdown-components";
-import { At, FileIconComponent } from "@/components/ui/icons";
+import { Box, FileIconComponent } from "@/components/ui/icons";
 import { applySignedSrc } from "@/lib/local-image-url";
 import { useIsMobile, isWeb } from "@/lib/platform";
 import Text from "../text";
 
-const sparklesIconMarkup = renderToStaticMarkup(<At className="w-3 h-3 shrink-0" />);
+const sparklesIconMarkup = renderToStaticMarkup(<Box className="size-3.5 shrink-0" />);
 
 export interface RichSkillChipData {
   name: string;
+  /** Whether this mention has a destination supplied by the caller. */
+  clickable?: boolean;
   displayName?: string;
   iconSmall?: string;
   iconLarge?: string;
@@ -36,6 +38,7 @@ export interface RichFileChipData {
   basename: string;
   /** Render a folder icon while keeping the same path-token semantics. */
   isDirectory?: boolean;
+  clickable?: boolean;
 }
 
 export interface RichCodeChipData {
@@ -78,7 +81,9 @@ interface RichInputFormProps {
   onSkillChipsChange?: (names: string[]) => void;
   onFileChipsChange?: (paths: string[]) => void;
   onCodeChipsChange?: (keys: string[]) => void;
-  /** Fires whenever the caret moves or content changes; receives the serialized text from start to caret. */
+  onSkillChipClick?: (name: string) => void;
+  onFileChipClick?: (path: string) => void;
+  /** Fires whenever the caret moves or content changes; receives visible text up to the caret, with chips treated as boundaries. */
   onCaretContextChange?: (textBeforeCaret: string) => void;
   /** Return true when pasted files were added as attachments. */
   onPasteFiles?: (files: File[]) => boolean;
@@ -150,11 +155,17 @@ function buildMarkdownFragment(text: string): DocumentFragment {
   const template = document.createElement("template");
   template.innerHTML = markup;
   removeRendererWhitespace(template.content);
+  // A caret just after a list/pre/heading can be pulled back into its last
+  // formatted node by the browser. Give continued typing an ordinary line.
+  const continuation = document.createElement("div");
+  continuation.appendChild(document.createElement("br"));
+  template.content.appendChild(continuation);
   return template.content;
 }
 
 const MARKDOWN_BLOCK_TAGS = new Set([
   "BLOCKQUOTE",
+  "DIV",
   "H1",
   "H2",
   "H3",
@@ -164,6 +175,7 @@ const MARKDOWN_BLOCK_TAGS = new Set([
   "LI",
   "OL",
   "P",
+  "PRE",
   "TABLE",
   "TBODY",
   "TD",
@@ -251,7 +263,16 @@ function buildChip(skill: RichSkillChipData): HTMLSpanElement {
   label.textContent = skill.displayName || skill.name;
   chip.appendChild(label);
 
+  if (skill.clickable) makeChipLink(chip);
+
   return chip;
+}
+
+function makeChipLink(chip: HTMLSpanElement) {
+  chip.setAttribute("role", "link");
+  chip.tabIndex = 0;
+  chip.classList.replace("cursor-default", "cursor-pointer");
+  chip.classList.add("focus-visible:outline", "focus-visible:outline-accent");
 }
 
 const fileIconMarkupCache = new Map<string, string>();
@@ -293,6 +314,8 @@ function buildFileChip(file: RichFileChipData): HTMLSpanElement {
   label.className = "leading-none";
   label.textContent = file.basename;
   chip.appendChild(label);
+
+  if (file.clickable && !file.isDirectory) makeChipLink(chip);
 
   return chip;
 }
@@ -667,10 +690,25 @@ function hasUnrenderedFileToken(
   return false;
 }
 
-function serializeFragment(node: Node): string {
-  return node instanceof HTMLElement
-    ? serializeEditorNode(node, null)
-    : serializeChildren(node, null);
+/** Suggestion detection reads the edited text, not Markdown source. In
+ * particular, a partially selected block has no closing syntax or newline. */
+function caretText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  if (node instanceof HTMLElement) {
+    if (node.matches(`[${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}], code, [data-markdown-link], [data-markdown-image-src]`)) {
+      return " ";
+    }
+    if (node.tagName === "BR") return "\n";
+  }
+  let text = "";
+  let previousWasBlock = false;
+  for (const child of Array.from(node.childNodes)) {
+    const isBlock = child instanceof HTMLElement && MARKDOWN_BLOCK_TAGS.has(child.tagName);
+    if ((isBlock || previousWasBlock) && text && !text.endsWith("\n")) text += "\n";
+    text += caretText(child);
+    previousWasBlock = isBlock;
+  }
+  return text;
 }
 
 function getTextBeforeCaret(root: HTMLElement): string | null {
@@ -678,19 +716,16 @@ function getTextBeforeCaret(root: HTMLElement): string | null {
   if (!sel || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
   if (!root.contains(range.endContainer)) return null;
+  const caretElement = range.endContainer instanceof Element
+    ? range.endContainer : range.endContainer.parentElement;
+  if (caretElement?.closest("code, [data-markdown-link], [data-markdown-image-src]")) return "";
   const before = document.createRange();
   before.setStart(root, 0);
   before.setEnd(range.endContainer, range.endOffset);
-  const fragment = before.cloneContents();
   // A completed chip serializes to its @/$ token for the prompt, but it is a
   // boundary for suggestion detection. Otherwise moving the caret beside a
   // file chip turns its absolute path back into an active @ search.
-  for (const chip of Array.from(fragment.querySelectorAll(
-    `[${CHIP_ATTR}], [${FILE_CHIP_ATTR}], [${CODE_CHIP_ATTR}]`,
-  ))) {
-    chip.replaceWith(document.createTextNode(" "));
-  }
-  return serializeFragment(fragment);
+  return caretText(before.cloneContents());
 }
 
 /**
@@ -778,6 +813,8 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       onSkillChipsChange,
       onFileChipsChange,
       onCodeChipsChange,
+      onSkillChipClick,
+      onFileChipClick,
       onCaretContextChange,
       onPasteFiles,
       placeholder,
@@ -954,15 +991,37 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       [fireChange],
     );
 
+    const activateChip = useCallback((target: EventTarget | null): boolean => {
+      if (!(target instanceof Element)) return false;
+      const chip = target.closest<HTMLElement>(`[${CHIP_ATTR}], [${FILE_CHIP_ATTR}]`);
+      if (!chip || !editorRef.current?.contains(chip) || chip.getAttribute("role") !== "link") return false;
+      const name = chip.getAttribute(CHIP_NAME_ATTR);
+      const path = chip.getAttribute(FILE_PATH_ATTR);
+      if (name && onSkillChipClick) {
+        onSkillChipClick(name);
+        return true;
+      }
+      if (path && onFileChipClick) {
+        onFileChipClick(path);
+        return true;
+      }
+      return false;
+    }, [onSkillChipClick, onFileChipClick]);
+
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLDivElement>) => {
         if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+        if ((e.key === "Enter" || e.key === " ") && activateChip(e.target)) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
           if (!submitDisabled) onSubmit();
         }
       },
-      [onSubmit, submitDisabled],
+      [activateChip, onSubmit, submitDisabled],
     );
 
     const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
@@ -984,6 +1043,7 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0) return;
       const range = sel.getRangeAt(0);
+      if (!editorRef.current?.contains(range.commonAncestorContainer)) return;
       range.deleteContents();
 
       const isMarkdown = looksLikeMarkdownSource(text);
@@ -998,7 +1058,8 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
 
       range.insertNode(fragment);
       const after = document.createRange();
-      after.setStartAfter(lastInsertedNode);
+      if (isMarkdown) after.setStart(lastInsertedNode, 0);
+      else after.setStartAfter(lastInsertedNode);
       after.collapse(true);
       sel.removeAllRanges();
       sel.addRange(after);
@@ -1015,6 +1076,12 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
           contentEditable
           suppressContentEditableWarning
           onInput={fireChange}
+          onClick={(e) => {
+            if (activateChip(e.target)) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           className={`w-full text-sm outline-none whitespace-pre-wrap wrap-break-word [&>p]:my-2 [&>p:first-child]:mt-0 [&>p:last-child]:mb-0 overflow-y-auto noscrollbar dark:text-primary-300 text-primary-700 ${compact
@@ -1055,8 +1122,13 @@ export const RichInputForm = forwardRef<RichInputFormHandle, RichInputFormProps>
 
 function placeCaretAtEnd(el: HTMLElement) {
   const range = document.createRange();
-  range.selectNodeContents(el);
-  range.collapse(false);
+  const leaf = lastLeaf(el);
+  if (leaf instanceof HTMLBRElement) {
+    range.setStartBefore(leaf);
+  } else {
+    range.selectNodeContents(el);
+    range.collapse(false);
+  }
   const sel = window.getSelection();
   if (!sel) return;
   sel.removeAllRanges();

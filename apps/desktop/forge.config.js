@@ -4,6 +4,16 @@ const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 const { AutoUnpackNativesPlugin } = require('@electron-forge/plugin-auto-unpack-natives');
 
+// Make a standalone Icon Composer visible to actool. A fresh compiler worker
+// is needed because pooled workers can retain the previous tool search path.
+const iconComposerTools = '/Applications/Icon Composer.app/Contents/Executables';
+if (process.platform === 'darwin' && require('fs').existsSync(`${iconComposerTools}/ictool`)) {
+  process.env.IB_TOOL_SEARCH_PATHS = [process.env.IB_TOOL_SEARCH_PATHS, iconComposerTools]
+    .filter(Boolean).join(':');
+  process.env.IBToolNeverDeque = 'YES';
+  process.env.IBCLIServerNeverDequeue = 'YES';
+}
+
 // Mach-O magic numbers: 32/64-bit thin binaries in both byte orders, plus
 // universal (fat) binaries.
 const MACH_O_MAGICS = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]);
@@ -214,7 +224,11 @@ module.exports = {
       unpack: '{**/*.node,**/claude,**/copilot,**/copilot-runtime,**/spawn-helper,**/rg,**/*.wasm}',
       unpackDir: '.vite/build/node_modules/{node-pty,@github/copilot-sdk-darwin-arm64,@github/copilot-sdk-darwin-x64,@github/copilot-darwin-arm64,@github/copilot-darwin-x64,@anthropic-ai/claude-agent-sdk-darwin-arm64,@anthropic-ai/claude-agent-sdk-darwin-x64,@vscode/ripgrep-darwin-arm64,@vscode/ripgrep-darwin-x64}',
     },
-    icon: 'src/renderer/public/icon',
+    // Native appearances on macOS 26+, with ICNS for older macOS and the DMG.
+    icon: [
+      'src/renderer/public/icon.icns',
+      'src/renderer/public/icons/mains-default.icon',
+    ],
     extraResource: [
       '../../packages/backend/src/db/migrations',
       'src/renderer/public/icon.png',

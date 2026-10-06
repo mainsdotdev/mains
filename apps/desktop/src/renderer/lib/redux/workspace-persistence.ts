@@ -3,7 +3,8 @@ import storage from "redux-persist/lib/storage";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 
-// Run preferences are canonical backend data. Only unsent drafts need local persistence.
+// Conversation preferences are canonical backend data; drafts and the last-used
+// new-run defaults also survive renderer restarts locally.
 function draftSettingsOnly(settings: Record<string, ConversationSettings>) {
   return Object.fromEntries(Object.entries(settings).filter(([key]) => {
     try { return JSON.parse(key)?.[1] === "draft"; } catch { return false; }
@@ -42,6 +43,7 @@ export const workspacePersistConfig = {
   whitelist: [
     "selectedModelByProvider",
     "conversationSettingsByKey",
+    "lastRunSettingsByProvider",
     "selectedProviderId",
     "thinkingEnabled",
     "activeWorkspaceIdByProvider",
