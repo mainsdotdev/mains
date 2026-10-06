@@ -25,6 +25,8 @@ function createRunState(
     agentMessageBuffer: "",
     emittedAgentMessageItemIds: new Set(),
     emittedAsyncQuestionItemIds: new Set(),
+    emittedContextCompactionItemIds: new Set(),
+    startedContextCompactionItemIds: new Set(),
     pendingFlush: [],
     mainsCtx: {
       workspaceId: "workspace-1",
@@ -71,6 +73,43 @@ afterEach(() => {
 });
 
 describe("Codex event mapper", () => {
+  it.each(["contextCompaction", "context_compaction"])("persists %s lifecycle once per phase", (type) => {
+    const { mapper } = createHarness();
+    const params = { threadId: "thread-parent", item: { type, id: "compact-1" } };
+    expect(mapper.mapNotification("item/started", params, "run-1")).toEqual([
+      expect.objectContaining({
+        type: "log", message: "Compacting context…", level: "info",
+        metadata: { source: "context_compaction", itemId: "compact-1", codexItemType: type, phase: "start" },
+      }),
+    ]);
+    expect(mapper.mapNotification("item/started", params, "run-1")).toEqual([]);
+    expect(mapper.mapNotification("item/updated", params, "run-1")).toEqual([]);
+    expect(mapper.mapNotification("item/completed", params, "run-1")).toEqual([
+      expect.objectContaining({
+        type: "log", message: "Context compacted", level: "info",
+        metadata: { source: "context_compaction", itemId: "compact-1", codexItemType: type, phase: "complete" },
+      }),
+    ]);
+    expect(mapper.mapNotification("item/completed", params, "run-1")).toEqual([]);
+    expect(mapper.mapNotification("item/started", params, "run-1")).toEqual([]);
+    expect(mapper.mapNotification("item/completed", {
+      ...params, item: { type, id: "compact-2" },
+    }, "run-1")).toHaveLength(1);
+  });
+
+  it("keeps a subagent's compaction out of the parent transcript", () => {
+    const { mapper } = createHarness();
+    const events = mapper.mapNotification("item/completed", {
+      threadId: "thread-child", item: { type: "contextCompaction", id: "compact-1" },
+    }, "run-1");
+    expect(events.some((event) => event.type === "log" && event.metadata?.source === "context_compaction")).toBe(false);
+    expect(mapper.mapNotification("item/completed", {
+      threadId: "thread-parent", item: { type: "contextCompaction", id: "compact-1" },
+    }, "run-1")).toContainEqual(expect.objectContaining({
+      type: "log", metadata: expect.objectContaining({ source: "context_compaction" }),
+    }));
+  });
+
   it("records imageView as a view tool call without publishing the inspected image", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-image-view-"));
     tempDirs.push(root);

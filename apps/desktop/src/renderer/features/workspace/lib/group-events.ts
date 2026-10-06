@@ -7,7 +7,7 @@ import { eventsValueEqual } from "./run-event-mappers";
 
 export interface EventGroup {
   id: string;
-  type: "tool_calls" | "mcp_app" | "info" | "response" | "prompt_suggestion";
+  type: "tool_calls" | "mcp_app" | "info" | "response" | "prompt_suggestion" | "context_compaction";
   events: RunEvent[];
   startTime: Date;
   endTime: Date;
@@ -125,6 +125,7 @@ export function isPlanToolCallGroup(group: EventGroup): boolean {
 
 export function groupEvents(events: RunEvent[]): EventGroup[] {
   const groups: EventGroup[] = [];
+  const compactionGroups = new Map<string, EventGroup>();
   let currentToolGroup: RunEvent[] = [];
 
   const flushToolGroup = () => {
@@ -252,6 +253,33 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
         });
       }
     } else if (event.type === "log") {
+      if (event.metadata?.source === "context_compaction") {
+        flushToolGroup();
+        const itemId = typeof event.metadata.itemId === "string" ? event.metadata.itemId : event.id;
+        const running = event.metadata.phase === "start";
+        const existing = compactionGroups.get(itemId);
+        if (existing) {
+          // Keep the start row's identity and position when completion arrives.
+          if (!running) {
+            existing.events = [event];
+            existing.endTime = event.timestamp;
+            existing.isRunning = false;
+          }
+          continue;
+        }
+        const group: EventGroup = {
+          id: `compaction-${itemId}`,
+          type: "context_compaction",
+          events: [event],
+          startTime: event.timestamp,
+          endTime: event.timestamp,
+          isRunning: running,
+        };
+        compactionGroups.set(itemId, group);
+        groups.push(group);
+        continue;
+      }
+
       // Skip start/resume level logs (internal system messages)
       const level = event.metadata?.level as string | undefined;
       if (level === "start" || level === "resume") {

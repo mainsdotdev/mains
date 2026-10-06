@@ -9,6 +9,7 @@ import {
   type EventGroup,
 } from "./tools/tool-call-group";
 import { ToolCallItem } from "./tools/tool-call-item";
+import { ContextCompactionActivity, ContextCompactionSeparator } from "./context-compaction-separator";
 import { PlanDisplay } from "./tools/plan-display";
 import { demoteStaleRunningTools } from "./tools/_shared";
 import { EditorContent } from "./editor-content";
@@ -43,6 +44,7 @@ const EMPTY_TURNS: RunTurn[] = [];
 import { isIssueTab, getIssueEntityId, isSignalTab, getSignalEntityId, isNoteTab, getNoteId, isNewRunTab } from "../lib/repo-utils";
 import { AsciiLoader } from "./ascii-loader";
 import { selectActiveTool } from "../lib/select-active-tool";
+import { selectActiveCompaction } from "../lib/select-active-compaction";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
 import { ArrowUp, Brain, Fork } from "@/components/ui/icons";
@@ -632,6 +634,9 @@ export function WorkspaceEvents({
     return turns.length > userPromptGroupCount;
   }, [isRunning, turns.length, userPromptGroupCount]);
 
+  const activeCompaction = useMemo(() => isRunning && !history?.historical
+    ? selectActiveCompaction(displayEvents) : undefined, [isRunning, history?.historical, displayEvents]);
+
   const renderGroupAt = useCallback(
     (index: number) => {
       const group = eventGroups[index];
@@ -696,6 +701,10 @@ export function WorkspaceEvents({
                 />
               ) : null}
             </>
+          ) : group.type === "context_compaction" ? (
+            group.isRunning ? (
+              <ContextCompactionActivity active={activeCompaction?.id === group.events[0].id} />
+            ) : <ContextCompactionSeparator />
           ) : group.type === "mcp_app" ? (
             <ToolCallItem event={group.events[0]} isCompact={false} />
           ) : group.type === "tool_calls" ? (
@@ -754,6 +763,7 @@ export function WorkspaceEvents({
       currentWorkspace?.rootPath,
       modelChanges,
       providerModels,
+      activeCompaction,
     ],
   );
 
@@ -837,7 +847,7 @@ export function WorkspaceEvents({
                   message={activeRun?.lastError}
                 />
               )}
-              {isRunning && !history?.historical && !hasActiveImageGeneration && (
+              {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction && (
                 <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />
               )}
               {history?.historical && (

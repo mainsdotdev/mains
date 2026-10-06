@@ -181,6 +181,7 @@ export { default as FolderGit} from "./folder-git"
 export { default as Review} from "./review"
 export { default as JumpToFile} from "./jump-to-file"
 export { default as Activity} from "./activity"
+export { default as Compact} from "./compact"
 
 
 

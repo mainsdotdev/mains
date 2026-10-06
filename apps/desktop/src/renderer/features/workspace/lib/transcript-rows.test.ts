@@ -63,6 +63,26 @@ function turn(turnIndex: number, model: string | null): RunTurn {
 }
 
 describe("buildTurnRenderRows — deliverable breakout", () => {
+  it("leaves compaction visible in chronological order between collapsed activity on both sides", () => {
+    const groups = groupEvents([
+      ev({ id: "u", metadata: { kind: "user-prompt" } }),
+      ev({ id: "r1", content: "Before", metadata: { kind: "report" } }),
+      ev({ id: "t1", type: "tool_call", metadata: { status: "done" } }),
+      ev({ id: "r2", content: "Before again", metadata: { kind: "report" } }),
+      ev({ id: "c", type: "log", content: "Context compacted", metadata: { source: "context_compaction", level: "info" } }),
+      ev({ id: "r3", content: "After", metadata: { kind: "report" } }),
+      ev({ id: "t2", type: "tool_call", metadata: { status: "done" } }),
+      ev({ id: "r4", content: "After again", metadata: { kind: "report" } }),
+    ]);
+    const rows = buildTurnRenderRows(groups);
+    expect(rows.map((row) => row.kind)).toEqual(["flat", "accordion", "flat", "accordion"]);
+    expect(rows[2]).toEqual({ kind: "flat", indices: [4] });
+    const before = rows[1];
+    const after = rows[3];
+    expect(before.kind === "accordion" && [...before.previousSegments.flat(), ...before.lastSegment]).toEqual([1, 2, 3]);
+    expect(after.kind === "accordion" && [...after.previousSegments.flat(), ...after.lastSegment]).toEqual([5, 6, 7]);
+  });
+
   // Every mode now: the file is reachable from its artifact card and from
   // the agent's own prose link, so the write row has nothing left to offer
   // that would justify a place outside the accordion.
