@@ -39,6 +39,7 @@
     "clean": "rm -rf .vite dist out .webpack node_modules/.vite node_modules/.cache",
     "codex:protocol:generate": "node scripts/generate-codex-app-server-protocol.mjs",
     "codex:protocol:smoke": "node scripts/smoke-codex-app-server-protocol.mjs",
+    "icons:generate": "node scripts/generate-app-icons.cjs",
     "licenses:generate": "node scripts/generate-third-party-notices.mjs"
   },
   "keywords": [

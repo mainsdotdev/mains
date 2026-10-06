@@ -139,11 +139,14 @@ export default tseslint.config(
   // a directory-level environment prevents every .mjs utility from having to
   // redeclare process, Buffer, timers, and console individually.
   {
-    files: ['scripts/**/*.mjs'],
+    files: ['scripts/**/*.{mjs,cjs}'],
     languageOptions: {
       globals: {
         ...globals.node,
       },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
     },
   },
 

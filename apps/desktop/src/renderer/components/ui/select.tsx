@@ -387,7 +387,7 @@ export default function Select<T extends string = string>({
             onMouseDown={(event) => event.stopPropagation()}
             className={`fixed z-(--z-modal-critical)
               overflow-hidden rounded-b-xl border border-t-0 border-primary-950/10 shadow-lg dark:border-primary/10
-              ${animateIn ? "animate-dropdown-vertical-in" : "dropdown-prewarm"}
+              ${animateIn ? "animate-dropdown-in" : "dropdown-prewarm"}
               origin-top
                bg-primary-50  dark:bg-primary-950`}
             style={{
