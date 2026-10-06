@@ -15,7 +15,8 @@ describe("PR attachment storage", () => {
     const bytes = Buffer.alloc(PR_ATTACHMENT_CHUNK_BYTES, 42);
     const { uploadId } = await store.write(chunk({ size: bytes.length, data: bytes.toString("base64") }));
     const claim = store.claim("ws", [uploadId]);
-    expect(await readFile(claim.paths[0])).toEqual(bytes);
+    // Buffer#equals, not toEqual: a deep compare of 1 MB takes seconds and times out on CI.
+    expect((await readFile(claim.paths[0])).equals(bytes)).toBe(true);
     await claim.release();
   });
   it("assembles ordered chunks, locks them during creation, and removes temporary files", async () => {
