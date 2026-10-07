@@ -67,6 +67,10 @@ describe("streaming assistant equations", () => {
     const liveGroup = groupEvents([live])[0];
     const view = render(<InfoGroup key={liveGroup.id} group={liveGroup} />);
     await waitFor(() => expect(view.container.textContent?.length).toBeGreaterThan(content.length - 180));
+    // A reveal frame can have queued a state update that is not on screen yet;
+    // the next rerender would commit it and the prefix would look like it
+    // grew. Commit it first, then snapshot and replace with no frame between.
+    view.rerender(<InfoGroup key={liveGroup.id} group={liveGroup} />);
     const visible = view.container.textContent ?? "";
     expect(visible.length).toBeLessThan(content.length);
     const stoppedGroup = groupEvents([{ ...live, metadata: { ...live.metadata, streaming: false, interrupted: true } }])[0];
