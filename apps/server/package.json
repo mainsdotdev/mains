@@ -1,6 +1,6 @@
 {
   "name": "@mains/server",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Standalone Mains backend and web UI",
   "type": "commonjs",
   "license": "MIT",
@@ -43,6 +43,7 @@
     "nanoid": "6.0.1",
     "node-pty": "1.1.0",
     "qrcode-terminal": "0.12.0",
+    "sharp": "0.35.5",
     "simple-git": "3.36.0",
     "ws": "8.21.3",
     "zod": "4.5.4"

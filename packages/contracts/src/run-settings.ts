@@ -69,6 +69,9 @@ export interface ConversationSettings {
   config: RunSettingConfig;
 }
 
+/** Automatic catalog corrections must not become a user's new-chat defaults. */
+export type SettingsChangeSource = "user" | "automatic";
+
 export function pickRunSettingConfig(config: Record<string, unknown> = {}): RunSettingConfig {
   return Object.fromEntries(RUN_SETTING_CONFIG_KEYS.flatMap((key) => {
     const value = config[key];

@@ -90,6 +90,16 @@ describe("mapArtifactToEvent", () => {
   });
 });
 
+it("keeps raw tool payloads once and bounds the header preview before formatting", () => {
+  const input = { path: "/tmp/file", description: "d".repeat(1_000_000), content: "i".repeat(100_000) };
+  const output = { stdout: "o".repeat(1_000_000) };
+  const event = mapToolCallToEvent({ id: 1, toolName: "Bash", status: "done", input, output })!;
+  expect(event.content.length).toBeLessThan(100);
+  expect(event.metadata?.input).toBe(input);
+  expect(event.metadata?.output).toBe(output);
+  expect(event.metadata).not.toHaveProperty("parsed");
+});
+
 describe("mergeRunEvents", () => {
   it("returns the same array reference when there are no deltas", () => {
     const existing = [mapArtifactToEvent(artifact(1, "hi", 10))];

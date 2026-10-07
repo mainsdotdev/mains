@@ -1,3 +1,43 @@
+import type { Parent, Root } from "mdast";
+import type { Extension } from "mdast-util-from-markdown";
+import type {} from "remark-parse";
+import type { Processor } from "unified";
+
+/**
+ * remark-math accepts EOF as the end of a display equation. During streaming
+ * that only means the next chunk has not arrived yet, so wait for a real fence
+ * before sending its unfinished TeX to KaTeX. Inline math already needs a close.
+ */
+export function remarkStreamingMath(this: Processor) {
+  const openedMath = new WeakSet<object>();
+  const closedMath = new WeakSet<object>();
+  const extension: Extension = {
+    exit: {
+      mathFlowFenceSequence() {
+        // The parser emits this token for both fences, including inside lists
+        // and quotes. Its buffer can be on top of the math node on the stack.
+        const math = this.stack.find((node) => node.type === "math");
+        if (!math) return;
+        if (openedMath.has(math)) closedMath.add(math);
+        else openedMath.add(math);
+      },
+    },
+  };
+  const data = this.data();
+  (data.fromMarkdownExtensions ??= []).push(extension);
+
+  function removeOpenMath(parent: Parent): void {
+    parent.children = parent.children.filter(
+      (node) => node.type !== "math" || closedMath.has(node),
+    );
+    for (const child of parent.children) {
+      if ("children" in child) removeOpenMath(child);
+    }
+  }
+
+  return (tree: Root) => removeOpenMath(tree);
+}
+
 /**
  * Models commonly emit TeX's `\(...\)` / `\[...\]` delimiters while
  * remark-math understands dollar delimiters. Translate only outside Markdown

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WsTransport, type WebSocketLike } from "./ws-transport";
 import type { TransportStatus } from "./types";
+import { CHANNELS } from "@mains/contracts/channels";
 
 class FakeSocket implements WebSocketLike {
   readyState = 0; // CONNECTING
@@ -102,6 +103,19 @@ describe("WsTransport", () => {
 
     sockets[0].emit(responseFrame(1, "ok"));
     await expect(pending).resolves.toEqual({ success: true, data: "ok" });
+  });
+
+  it("waits beyond the ordinary timeout for PR media uploads", async () => {
+    vi.useFakeTimers();
+    const { transport, sockets } = harness({ invokeTimeoutMs: 30_000 });
+    transport.connect(); sockets[0].open();
+    const pending = transport.invoke(CHANNELS.gitFlow.createPr, [{ attachmentIds: ["media"] }]);
+    const result = vi.fn(); void pending.then(result);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(result).not.toHaveBeenCalled();
+    sockets[0].emit(responseFrame(1, { url: "pr" }));
+    await expect(pending).resolves.toEqual({ success: true, data: { url: "pr" } });
+    transport.dispose();
   });
 
   it("queues invokes sent before the socket opens, then flushes", () => {

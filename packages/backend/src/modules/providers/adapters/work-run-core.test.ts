@@ -99,6 +99,32 @@ describe("createWorkRunAdapter", () => {
   });
 
   describe("startRun lifecycle", () => {
+    it.each(["start", "continue"])("preserves local prompt identity after delayed %s acquisition without opting into provider acceptance", async (operation) => {
+      const fake = createFakeDriver({ model: "resolved-model" });
+      fake.enable("resumeSession");
+      const acquire = operation === "start" ? fake.driver.createSession : fake.driver.resumeSession!;
+      let ready!: () => void;
+      const gate = new Promise<void>((resolve) => { ready = resolve; });
+      const delayedAcquire = async (request: WorkRunRequest | WorkRunContinueRequest) => {
+        await gate;
+        return acquire(request as WorkRunRequest & WorkRunContinueRequest);
+      };
+      if (operation === "start") fake.driver.createSession = delayedAcquire;
+      else fake.driver.resumeSession = delayedAcquire;
+      const adapter = createWorkRunAdapter(fake.driver);
+      const events: WorkRunEvent[] = [];
+      const done = operation === "start"
+        ? adapter.startRun(makeStartReq({ clientPromptId: "local-1" }), (event) => { events.push(event); })
+        : adapter.continueRun!(makeContinueReq({ clientPromptId: "local-1" }), (event) => { events.push(event); });
+      expect(events.some((event) => event.type === "artifact")).toBe(false);
+      ready();
+      await done;
+      const prompts = events.filter((event) => event.type === "artifact" && event.kind === "user-prompt");
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toMatchObject({ metadata: { clientPromptId: "local-1", model: "resolved-model" } });
+      expect(prompts[0]).not.toHaveProperty("metadata.clientUserMessageId");
+    });
+
     it("emits running before driver.createSession and final status after executePrompt", async () => {
       const fake = createFakeDriver({
         outcome: { status: "succeeded", stopReason: "end_turn" },

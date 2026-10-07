@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { prAttachmentStorage } from "./pr-attachment-storage";
+import { prAttachmentUrl } from "@mains/contracts/pr-attachments";
 
 const { execFileMock } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
@@ -27,6 +30,7 @@ vi.mock("../git", () => ({
     stageFiles: vi.fn(),
     getStagedDiff: vi.fn(),
     getDiff: vi.fn(),
+    getCommitPreviewDiff: vi.fn(),
     getBranchDiff: vi.fn(),
     getBranchLog: vi.fn(),
     pullFastForward: vi.fn(),
@@ -100,6 +104,7 @@ describe("gitFlowService — live branch invariants", () => {
       updatedAt: new Date(),
     });
     gitMock.getCurrentBranch.mockResolvedValue("feature/live");
+    gitMock.getCommitPreviewDiff.mockResolvedValue("");
     gitMock.getRemotes.mockResolvedValue([
       {
         name: "origin",
@@ -122,7 +127,7 @@ describe("gitFlowService — live branch invariants", () => {
         ) => void,
       ) =>
         callback(null, {
-          stdout: "https://github.com/acme/repo/pull/1\n",
+          stdout: _args.includes("--help") ? "--attach file" : "https://github.com/acme/repo/pull/1\n",
           stderr: "",
         }),
     );
@@ -167,14 +172,15 @@ describe("gitFlowService — live branch invariants", () => {
         "Live branch PR",
         "--head",
         "feature/live",
-        "--body",
-        "Body",
         "--base",
         "main",
+        "--body-file",
+        expect.stringMatching(/mains-pr-body-.*\/body\.md$/),
       ],
       {
         cwd: "/repo",
         timeout: 30_000,
+        maxBuffer: 1024 * 1024,
       },
       expect.any(Function),
     );
@@ -197,14 +203,15 @@ describe("gitFlowService — live branch invariants", () => {
         "Live branch PR",
         "--head",
         "feature/live",
-        "--body",
-        "Body",
         "--base",
         "release/2026-08",
+        "--body-file",
+        expect.stringMatching(/mains-pr-body-.*\/body\.md$/),
       ],
       {
         cwd: "/repo",
         timeout: 30_000,
+        maxBuffer: 1024 * 1024,
       },
       expect.any(Function),
     );
@@ -222,6 +229,85 @@ describe("gitFlowService — live branch invariants", () => {
 
     expect(gitMock.push).not.toHaveBeenCalled();
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  describe("PR media", () => {
+    const stage = () => prAttachmentStorage.write({ workspaceId: "ws-1", name: "demo.png", size: 3, offset: 0, data: "YWJj" });
+
+    it("keeps comparison positions and points every reference at the actual staged file", async () => {
+      const { uploadId } = await prAttachmentStorage.write({ workspaceId: "ws-1", name: "before (1) | final.png", size: 3, offset: 0, data: "YWJj" });
+      const body = `| Before | After |\n| --- | --- |\n| ![Before](${prAttachmentUrl(uploadId)}) | [Again](<${prAttachmentUrl(uploadId)}>) |`;
+      let stagedPath = "";
+      execFileMock.mockImplementation((_command, args: string[], _options, callback) => {
+        if (args.includes("--help")) { callback(null, { stdout: "--attach", stderr: "" }); return; }
+        stagedPath = args[args.indexOf("--attach") + 1];
+        const sentBody = readFileSync(args[args.indexOf("--body-file") + 1], "utf8");
+        const destination = sentBody.match(/!\[Before\]\(([^)]+)\)/)![1];
+        expect(decodeURI(destination)).toBe(stagedPath);
+        expect(destination).not.toMatch(/[ |()]/);
+        expect(sentBody).toBe(body.split(prAttachmentUrl(uploadId)).join(destination));
+        callback(null, { stdout: "https://github.com/acme/repo/pull/1", stderr: "" });
+      });
+      await gitFlowService.createPr({ workspaceId: "ws-1", title: "Compare", body, attachmentIds: [uploadId] });
+      expect(existsSync(stagedPath)).toBe(false);
+    });
+
+    it("rejects missing or foreign references before pushing", async () => {
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Compare", body: `![Missing](${prAttachmentUrl("missing")})` })).rejects.toThrow("missing");
+      expect(gitMock.push).not.toHaveBeenCalled();
+    });
+
+    it("rejects local HTML media references that gh cannot rewrite", async () => {
+      const { uploadId } = await stage();
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Compare", body: `<img src="${prAttachmentUrl(uploadId)}" />`, attachmentIds: [uploadId] })).rejects.toThrow("Use Markdown");
+      expect(gitMock.push).not.toHaveBeenCalled();
+      expect(() => prAttachmentStorage.claim("ws-1", [uploadId])).toThrow("unavailable");
+    });
+
+    it("passes attachments and the full Markdown body as files, then removes both", async () => {
+      const { uploadId } = await stage();
+      let bodyPath = ""; let mediaPath = ""; let body = "";
+      execFileMock.mockImplementation((_command, args: string[], _options, callback) => {
+        if (args.includes("--help")) { callback(null, { stdout: "--attach", stderr: "" }); return; }
+        bodyPath = args[args.indexOf("--body-file") + 1];
+        mediaPath = args[args.indexOf("--attach") + 1];
+        body = readFileSync(bodyPath, "utf8");
+        expect(readFileSync(mediaPath, "utf8")).toBe("abc");
+        callback(null, { stdout: "https://github.com/acme/repo/pull/1", stderr: "" });
+      });
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Media", body: "## Summary\n- [x] Done", attachmentIds: [uploadId] })).resolves.toEqual({ url: "https://github.com/acme/repo/pull/1" });
+      expect(body).toBe("## Summary\n- [x] Done");
+      expect(existsSync(bodyPath)).toBe(false);
+      expect(existsSync(mediaPath)).toBe(false);
+    });
+
+    it("rejects an older CLI before pushing and releases the attachment", async () => {
+      const { uploadId } = await stage();
+      execFileMock.mockImplementation((_command, _args, _options, callback) => callback(null, { stdout: "no media option", stderr: "" }));
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Media", attachmentIds: [uploadId] })).rejects.toThrow("2.99");
+      expect(gitMock.push).not.toHaveBeenCalled();
+      expect(() => prAttachmentStorage.claim("ws-1", [uploadId])).toThrow("unavailable");
+    });
+
+    it("returns the created PR with a warning when gh exits nonzero after a partial upload", async () => {
+      const { uploadId } = await stage();
+      execFileMock.mockImplementation((_command, args: string[], _options, callback) => {
+        if (args.includes("--help")) callback(null, { stdout: "--attach", stderr: "" });
+        else callback(Object.assign(new Error("exit 1"), { stdout: "https://github.com/acme/repo/pull/7\n", stderr: "One video could not be uploaded." }));
+      });
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Media", attachmentIds: [uploadId] })).resolves.toEqual({ url: "https://github.com/acme/repo/pull/7", warning: "One video could not be uploaded." });
+      expect(logWorkspaceActivity).toHaveBeenCalledWith(expect.objectContaining({ type: "pr", refId: "https://github.com/acme/repo/pull/7" }));
+    });
+
+    it("keeps a failure without a created URL as an error", async () => {
+      const { uploadId } = await stage();
+      execFileMock.mockImplementation((_command, args: string[], _options, callback) => {
+        if (args.includes("--help")) callback(null, { stdout: "--attach", stderr: "" });
+        else callback(Object.assign(new Error("exit 1"), { stdout: "", stderr: "Authentication failed." }));
+      });
+      await expect(gitFlowService.createPr({ workspaceId: "ws-1", title: "Media", attachmentIds: [uploadId] })).rejects.toThrow("Authentication failed");
+      expect(logWorkspaceActivity).not.toHaveBeenCalled();
+    });
   });
 
   describe("pull", () => {
@@ -302,9 +388,8 @@ describe("gitFlowService — live branch invariants", () => {
   });
 
   describe("generateCommitMessage", () => {
-    it("preview mode reads the diffs without staging and omits the model", async () => {
-      gitMock.getStagedDiff.mockResolvedValue("staged-hunk");
-      gitMock.getDiff.mockResolvedValue("working-hunk");
+    it("preview mode includes the full commit preview without staging and omits the model", async () => {
+      gitMock.getCommitPreviewDiff.mockResolvedValue("tracked-hunk\nnew-file-hunk");
       generateTextMock.mockResolvedValue("feat: do the thing");
 
       const message = await gitFlowService.generateCommitMessage({
@@ -316,11 +401,41 @@ describe("gitFlowService — live branch invariants", () => {
       expect(message).toBe("feat: do the thing");
       // Prefill must not mutate the index as a read side effect.
       expect(gitMock.stageFiles).not.toHaveBeenCalled();
+      expect(gitMock.getCommitPreviewDiff).toHaveBeenCalledWith("/repo", true);
       const [prompt, opts] = generateTextMock.mock.calls[0];
-      expect(prompt).toContain("staged-hunk");
-      expect(prompt).toContain("working-hunk");
+      expect(prompt).toContain("tracked-hunk");
+      expect(prompt).toContain("new-file-hunk");
       // No model → the driver's cheap one-shot default, not the chat model.
       expect(opts.model).toBeUndefined();
+    });
+
+    it("respects the staged-only choice when generating a preview", async () => {
+      gitMock.getCommitPreviewDiff.mockResolvedValue("staged-only-hunk");
+      generateTextMock.mockResolvedValue("fix: staged changes");
+
+      await gitFlowService.generateCommitMessage({
+        workspaceId: "ws-1",
+        providerId: "claude_code",
+        includeUnstaged: false,
+        preview: true,
+      });
+
+      expect(gitMock.getCommitPreviewDiff).toHaveBeenCalledWith("/repo", false);
+      expect(generateTextMock.mock.calls[0][0]).toContain("staged-only-hunk");
+      expect(gitMock.stageFiles).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a failed preview rather than generating from partial changes", async () => {
+      gitMock.getCommitPreviewDiff.mockRejectedValue(new Error("Cannot read repository"));
+
+      await expect(gitFlowService.generateCommitMessage({
+        workspaceId: "ws-1",
+        providerId: "claude_code",
+        preview: true,
+      })).rejects.toThrow("Cannot read repository");
+
+      expect(generateTextMock).not.toHaveBeenCalled();
+      expect(gitMock.stageFiles).not.toHaveBeenCalled();
     });
 
     it("non-preview mode stages before reading the staged diff", async () => {
@@ -379,6 +494,55 @@ describe("gitFlowService — live branch invariants", () => {
       });
 
       expect(gitMock.getBranchDiff).toHaveBeenCalledWith("/repo", "origin/main");
+    });
+
+    it("includes all branch commit subjects, including those beyond the old 20-commit cutoff", async () => {
+      gitMock.getBranchDiff.mockResolvedValue("branch-diff");
+      const subjects = Array.from({ length: 35 }, (_, i) => `change ${i + 1}`);
+      gitMock.getBranchLog.mockResolvedValue(subjects);
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      expect(gitMock.getBranchLog).toHaveBeenCalledWith("/repo", "origin/main");
+      const prompt = generateTextMock.mock.calls[0][0];
+      for (const subject of subjects) expect(prompt).toContain(`- ${subject}\n`);
+      expect(gitMock.getLog).not.toHaveBeenCalled();
+    });
+
+    it("uses the complete working-tree preview without unrelated commit history when no base can be read", async () => {
+      gitMock.getBranchDiff.mockRejectedValue(new Error("Unknown base"));
+      gitMock.getCommitPreviewDiff.mockResolvedValue("new-file-hunk");
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      expect(generateTextMock.mock.calls[0][0]).toContain("new-file-hunk");
+      expect(gitMock.getLog).not.toHaveBeenCalled();
+      expect(gitMock.getBranchLog).not.toHaveBeenCalled();
+      expect(gitMock.stageFiles).not.toHaveBeenCalled();
+    });
+
+    it("retains branch commit history even when the commits produce an empty net diff", async () => {
+      gitMock.getBranchDiff.mockResolvedValue("");
+      gitMock.getBranchLog.mockResolvedValue(["Revert feature", "Add feature"]);
+      generateTextMock.mockResolvedValue("PR title\n\nPR body");
+
+      await gitFlowService.generatePrBody({ workspaceId: "ws-1", providerId: "claude_code" });
+
+      expect(gitMock.getBranchLog).toHaveBeenCalledWith("/repo", "origin/main");
+      expect(generateTextMock.mock.calls[0][0]).toContain("- Add feature");
+      expect(gitMock.getBranchDiff).not.toHaveBeenCalledWith("/repo", "main");
+    });
+
+    it("surfaces a branch-log failure rather than silently omitting commits", async () => {
+      gitMock.getBranchDiff.mockResolvedValue("branch-diff");
+      gitMock.getBranchLog.mockRejectedValue(new Error("Cannot read branch history"));
+
+      await expect(gitFlowService.generatePrBody({
+        workspaceId: "ws-1", providerId: "claude_code",
+      })).rejects.toThrow("Cannot read branch history");
+      expect(generateTextMock).not.toHaveBeenCalled();
     });
   });
 });

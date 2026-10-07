@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Button, SquareSpinner, Text } from "@/components/ui";
 import {
   subagentStateOf,
@@ -154,7 +154,7 @@ export function TaskProgressStrip({
   subagent?: SubagentMetadata;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   const view = selectTaskPresentation(task, subagent);
   if (!view) return null;

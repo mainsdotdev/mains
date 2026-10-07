@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
+import { useMemo } from "react";
 import { Read } from "@/components/ui/icons";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
 import { FileIconComponent } from "@/components/ui/icons";
@@ -24,10 +25,10 @@ export function ReadDisplay({
   output?: unknown;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const openFile = useOpenFileInEditor();
 
-  const { content, numLines } = parseReadOutput(output);
+  const { content, numLines } = useMemo(() => parseReadOutput(output), [output]);
   const hasContent = !!content;
   const fullFilePath =
     params.file_path ||
@@ -101,7 +102,7 @@ function parseReadOutput(output: unknown): {
   if (typeof parsed === "string") {
     return {
       content: parsed,
-      numLines: parsed.split("\n").length,
+      numLines: countLines(parsed),
     };
   }
 
@@ -122,10 +123,16 @@ function parseReadOutput(output: unknown): {
       typeof obj.numLines === "number"
         ? obj.numLines
         : content
-          ? content.split("\n").filter((l) => l.length > 0).length
+          ? countLines(content)
           : 0;
     return { content, numLines };
   }
 
   return { content: null, numLines: 0 };
+}
+
+function countLines(content: string) {
+  let count = content ? 1 : 0;
+  for (let index = 0; index < content.length; index++) if (content.charCodeAt(index) === 10) count++;
+  return count;
 }

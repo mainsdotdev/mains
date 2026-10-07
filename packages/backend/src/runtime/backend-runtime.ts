@@ -35,7 +35,7 @@ export interface ImagePreview {
 
 export interface ImagePreviewAdapter {
   /** Returns null when the host cannot decode the supplied bytes. */
-  resizeToJpeg(bytes: Buffer, maxSide: number): ImagePreview | null;
+  resizeToJpeg(bytes: Buffer, maxSide: number): Promise<ImagePreview | null>;
 }
 
 export interface BackendRuntime {

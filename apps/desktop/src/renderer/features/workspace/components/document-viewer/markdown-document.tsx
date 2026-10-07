@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Text } from "@/components/ui";
 import { appApi } from "@/lib/transport";
 import { markdownComponents } from "@/components/markdown-components";
+import { splitMarkdownFrontmatter } from "../../lib/markdown-frontmatter";
 
 /**
  * Markdown in the viewer panel: React all the way down, unlike the Office
@@ -22,6 +23,7 @@ import { markdownComponents } from "@/components/markdown-components";
 export function MarkdownDocument({ path }: { path: string }) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const document = useMemo(() => content === null ? null : splitMarkdownFrontmatter(content), [content]);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,7 +64,7 @@ export function MarkdownDocument({ path }: { path: string }) {
     );
   }
 
-  if (content === null) {
+  if (document === null) {
     return (
       <Text
         as="div"
@@ -77,8 +79,25 @@ export function MarkdownDocument({ path }: { path: string }) {
 
   return (
     <div className="flex-1 overflow-auto px-7 py-5">
+      {document.frontmatter && (
+        <section aria-label="Metadata" className="@container/metadata mb-6 rounded-2xl  bg-primary-100/50 p-3 glass-surface dark:bg-primary-900/50">
+          <Text as="h2" size="xs" tone="subtle" weight="medium" className="mb-3">Metadata</Text>
+          {document.frontmatter.entries ? (
+            <dl className="space-y-2">
+              {document.frontmatter.entries.map(({ key, value }) => (
+                <div key={key} className="grid gap-x-4 gap-y-1 @[360px]/metadata:grid-cols-[minmax(0,8rem)_minmax(0,1fr)]">
+                  <Text as="dt" size="s" tone="subtle" className="min-w-0 wrap-anywhere font-mono">{key}</Text>
+                  <Text as="dd" size="s" className="min-w-0 whitespace-pre-wrap wrap-anywhere font-mono">{value}</Text>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <Text as="pre" size="s" className="whitespace-pre-wrap wrap-anywhere font-mono">{document.frontmatter.source}</Text>
+          )}
+        </section>
+      )}
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {content}
+        {document.body}
       </ReactMarkdown>
     </div>
   );

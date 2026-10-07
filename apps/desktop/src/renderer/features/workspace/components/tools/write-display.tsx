@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
+import { useMemo } from "react";
 import { Write } from "@/components/ui/icons";
 import { normalizePatchForPatchDiff } from "../../lib/patch-utils";
 import { useOpenFileInEditor } from "../../hooks/use-open-file-in-editor";
@@ -134,7 +135,7 @@ export function WriteDisplay({
   params: WriteParams;
   output?: unknown;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const openFile = useOpenFileInEditor();
 
   const parsedPatch = useMemo(

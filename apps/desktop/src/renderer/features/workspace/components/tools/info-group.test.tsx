@@ -2,7 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
-import type { EventGroup } from "../../lib/group-events";
+import { groupEvents, type EventGroup } from "../../lib/group-events";
+import { mapArtifactToEvent } from "../../lib/run-event-mappers";
 
 vi.hoisted(() => {
   Object.defineProperty(window, "matchMedia", { configurable: true, value: vi.fn(() => ({
@@ -16,6 +17,11 @@ vi.mock("../prompt-markdown", () => ({
 }));
 vi.mock("@/hooks/use-local-image-url", () => ({
   useLocalImageUrl: (src: string | undefined) => src?.startsWith("/") ? `mains-localimg://signed?path=${encodeURIComponent(src)}` : src,
+}));
+vi.mock("../../lib/attachment-image", () => ({
+  useAttachmentImage: (_runId?: string, attachmentId?: string, maxSide = 256) => ({
+    observe: () => {}, src: attachmentId ? `blob:${attachmentId}:${maxSide}` : undefined,
+  }),
 }));
 vi.mock("../image-preview-modal", () => ({
   ImagePreviewModal: ({ name, src }: { name: string; src: string }) => <div role="dialog" aria-label={name}>{src}</div>,
@@ -44,7 +50,73 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
 }
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+describe("streaming assistant equations", () => {
+  it("keeps incomplete math hidden in a persisted interrupted report", () => {
+    const event = mapArtifactToEvent({ id: 1, runId: "run", kind: "report",
+      content: "Received text\n" + String.raw`\[\frac{1}{`,
+      metadata: { interrupted: true, streaming: false, streamId: "stopped-report" } });
+    const group = groupEvents([event])[0];
+    const view = render(<InfoGroup group={group} />);
+    expect(view.container.textContent).toContain("Received text");
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+  });
+  it("retains the visible prefix when a long stopped answer replaces its live preview", async () => {
+    const content = "Received answer ".repeat(100);
+    const live = { id: "stream-stopped", type: "artifact" as const, timestamp: new Date(), content,
+      metadata: { kind: "report", streamId: "stopped", streaming: true } };
+    const liveGroup = groupEvents([live])[0];
+    const view = render(<InfoGroup key={liveGroup.id} group={liveGroup} />);
+    await waitFor(() => expect(view.container.textContent?.length).toBeGreaterThan(content.length - 180));
+    const visible = view.container.textContent ?? "";
+    expect(visible.length).toBeLessThan(content.length);
+    const stoppedGroup = groupEvents([{ ...live, metadata: { ...live.metadata, streaming: false, interrupted: true } }])[0];
+    view.rerender(<InfoGroup key={stoppedGroup.id} group={stoppedGroup} />);
+    expect(view.container.textContent).toBe(visible);
+    const savedGroup = groupEvents([mapArtifactToEvent({ id: 42, runId: "run", kind: "report", content,
+      metadata: { streamId: "stopped", streaming: false, interrupted: true } })])[0];
+    view.rerender(<InfoGroup key={savedGroup.id} group={savedGroup} />);
+    expect(view.container.textContent).toBe(visible);
+    await waitFor(() => expect(view.container.textContent).toBe(content.trimEnd()), { timeout: 4000 });
+  });
+
+  it("waits for the equation while the report streams and while its final buffer drains", async () => {
+    const group: EventGroup = {
+      id: "response-stream-native-report", type: "response", startTime: new Date(), endTime: new Date(),
+      events: [{
+        id: "stream-native-report", type: "artifact", timestamp: new Date(),
+        content: String.raw`Energy decreases:\[\frac{d}{dt}\left(\frac12\int |u|^`,
+        metadata: { kind: "report", streamId: "native-report", streaming: true },
+      }],
+    };
+    const view = render(<InfoGroup key={group.id} group={group} />);
+
+    await waitFor(() => expect(view.container.textContent).toContain("Energy decreases:"));
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+    expect(view.container.querySelector(".katex-display")).toBeNull();
+
+    const beforePersistence = view.container.textContent;
+    const persisted = mapArtifactToEvent({
+      id: 42, runId: "run", kind: "report", createdAt: new Date(),
+      content: group.events[0].content + String.raw`2\right)=-\nu\int |\nabla u|^2\]`,
+      metadata: { streamId: "native-report" },
+    });
+    const settledGroup = groupEvents([persisted])[0];
+    view.rerender(<InfoGroup key={settledGroup.id} group={settledGroup} />);
+
+    expect(view.container.textContent).toBe(beforePersistence);
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+    await waitFor(() => expect(view.container.querySelector(".katex-display")).not.toBeNull(), { timeout: 4000 });
+    expect(view.container.querySelector(".katex-error")).toBeNull();
+  });
+});
+
 describe("prompt browser annotations", () => {
+  it("opens the bounded expanded preview from a compact attachment reference", () => {
+    render(<InfoGroup runId="run" group={prompt({ attachments: [{ name: "screen.png", type: "image", attachmentId: "image-id", mimeType: "image/png", byteSize: 100 }] })} />);
+    expect(screen.getByRole("img").getAttribute("src")).toBe("blob:image-id:256");
+    fireEvent.click(screen.getByRole("button", { name: "Preview screen.png" }));
+    expect(screen.getByRole("dialog", { name: "screen.png" }).textContent).toBe("blob:image-id:1600");
+  });
   it("shows screenshots, one annotation chip and the message, with read-only grouped details", async () => {
     render(<InfoGroup group={prompt()} />);
     const chip = screen.getByRole("button", { name: "2 annotations" });

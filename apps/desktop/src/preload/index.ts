@@ -16,6 +16,7 @@ import type {
 import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
+import type { CreatePrPayload, CreatePrResult, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
 import type {
   BrowserChatAction,
@@ -700,7 +701,10 @@ const api = {
       ipcRenderer.invoke(CHANNELS.runs.unarchive, id),
     // New methods for executing work runs
     getDetails: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.getDetails, runId),
+    getHistory: (payload: import("@mains/contracts/runs").ReadRunHistoryPayload): Promise<ServiceResponse<import("@mains/backend/modules/runs").RunHistoryPage>> =>
+      ipcRenderer.invoke(CHANNELS.runs.getHistory, payload),
     execute: (payload: {
+      clientPromptId?: string;
       accountId: string;
       workspaceId?: string;
       collectionId?: string;
@@ -728,9 +732,12 @@ const api = {
     abort: (runId: string) => ipcRenderer.invoke(CHANNELS.runs.abort, runId),
     getToolCalls: (runId: string, sinceUpdatedAt?: Date) =>
       ipcRenderer.invoke(CHANNELS.runToolCalls.getByRun, runId, sinceUpdatedAt),
+    getToolOutput: (runId: string, toolId: number): Promise<ServiceResponse<{ output: unknown }>> =>
+      ipcRenderer.invoke(CHANNELS.runToolCalls.getOutput, runId, toolId),
     // Session resume methods
     continue: (payload: {
       clientUserMessageId?: string;
+      clientPromptId?: string;
       runId: string;
       accountId: string;
       message: string;
@@ -887,6 +894,12 @@ const api = {
   runArtifacts: {
     getByRun: (runId: string, sinceId?: number) =>
       ipcRenderer.invoke(CHANNELS.runArtifacts.getByRun, runId, sinceId),
+    readAttachmentImage: (payload: import("@mains/contracts/runs").ReadAttachmentImagePayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.readAttachmentImage, payload),
+    resolveAttachmentPath: (payload: import("@mains/contracts/runs").ResolveAttachmentPathPayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.resolveAttachmentPath, payload),
+    readAttachmentFile: (payload: import("@mains/contracts/runs").ResolveAttachmentPathPayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.readAttachmentFile, payload),
     add: (payload: unknown) => ipcRenderer.invoke(CHANNELS.runArtifacts.add, payload),
     remove: (id: number) => ipcRenderer.invoke(CHANNELS.runArtifacts.remove, id),
   },
@@ -991,15 +1004,12 @@ const api = {
     pull: (workspaceId: string) =>
       ipcRenderer.invoke(CHANNELS.gitFlow.pull, workspaceId),
     /** Push (idempotent) then create a PR via gh, generating title/body if blank */
-    createPr: (payload: {
-      workspaceId: string;
-      title?: string;
-      body?: string;
-      base?: string;
-      draft?: boolean;
-      providerId?: string;
-      model?: string;
-    }) => ipcRenderer.invoke(CHANNELS.gitFlow.createPr, payload),
+    createPr: (payload: CreatePrPayload): Promise<ServiceResponse<CreatePrResult>> =>
+      ipcRenderer.invoke(CHANNELS.gitFlow.createPr, payload),
+    stagePrAttachment: (payload: PrAttachmentChunk): Promise<ServiceResponse<{ uploadId: string }>> =>
+      ipcRenderer.invoke(CHANNELS.gitFlow.stagePrAttachment, payload),
+    discardPrAttachments: (workspaceId: string, ids: string[]): Promise<ServiceResponse<void>> =>
+      ipcRenderer.invoke(CHANNELS.gitFlow.discardPrAttachments, workspaceId, ids),
     /** Headless one-shot commit-message generation */
     generateCommitMessage: (payload: {
       workspaceId: string;

@@ -21,6 +21,41 @@ function baseEvents(): RunEvent[] {
 }
 
 describe("groupEvents", () => {
+  it("replaces the running compaction row with its completed separator at the same position", () => {
+    const start = ev({ id: "start", type: "log", timestamp: new Date(1000), metadata: { source: "context_compaction", itemId: "compact-1", phase: "start" } });
+    const complete = ev({ id: "complete", type: "log", timestamp: new Date(2000), metadata: { ...start.metadata, phase: "complete" } });
+    const before = ev({ id: "before", type: "tool_call", metadata: { status: "done" } });
+    const live = groupEvents([before, start]);
+    const settled = groupEvents([before, start, complete]);
+    expect(live[1].isRunning).toBe(true);
+    expect(settled).toHaveLength(2);
+    expect(settled[1]).toMatchObject({ id: live[1].id, isRunning: false, events: [complete], startTime: start.timestamp, endTime: complete.timestamp });
+    expect(groupEvents([complete, start])[0]).toMatchObject({ isRunning: false, events: [complete] });
+  });
+
+  it("keeps a persisted compaction boundary between separate tool groups", () => {
+    const groups = groupEvents([
+      ev({ id: "before", type: "tool_call", content: "Read: a.ts", metadata: { status: "done" } }),
+      ev({ id: "compacted", type: "log", content: "Context compacted", metadata: { source: "context_compaction", level: "info", itemId: "compact-1" } }),
+      ev({ id: "after", type: "tool_call", content: "Read: b.ts", metadata: { status: "done" } }),
+    ]);
+    expect(groups.map((group) => group.type)).toEqual(["tool_calls", "context_compaction", "tool_calls"]);
+    expect(groups.map((group) => group.events.map((event) => event.id))).toEqual([["before"], ["compacted"], ["after"]]);
+    expect(groups[0].isRunning).toBeFalsy();
+  });
+
+  it("keeps the report group mounted when a native stream becomes a persisted artifact", () => {
+    const metadata = { kind: "report", streamId: "native-message-1" };
+    const live = groupEvents([ev({ id: "stream-native-message-1", metadata: { ...metadata, streaming: true } })]);
+    const final = groupEvents([ev({ id: "artifact-42", metadata })]);
+    expect(final[0].id).toBe(live[0].id);
+    expect(final[0].events[0].id).toBe("artifact-42");
+    expect(groupEvents([ev({ id: "artifact-43", metadata: { ...metadata, streamId: "native-message-2" } })])[0].id)
+      .not.toBe(final[0].id);
+    expect(groupEvents([ev({ id: "artifact-44", metadata: { kind: "document", streamId: "native-message-1" } })])[0].id)
+      .toBe("response-artifact-44");
+  });
+
   it("restores legacy imageView logs as tool calls and hides their large preview artifacts", () => {
     const firstPage = "/runs/work/tmp/pdfs/page-1.png";
     const secondPage = "/runs/work/tmp/pdfs/page-2.png";

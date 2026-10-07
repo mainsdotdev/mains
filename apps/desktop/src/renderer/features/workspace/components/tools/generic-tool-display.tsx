@@ -1,5 +1,6 @@
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { useState, type ReactNode } from "react";
-import { Text } from "@/components/ui";
+import { Button, Text } from "@/components/ui";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody, useToolStatus } from "./_shared";
 import { toolOutputText, previewParams } from "../../lib/parse-tool-content";
 
@@ -11,11 +12,11 @@ function toOneLine(value: string, max = 80): string {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
-function prettyJson(value: unknown): string {
+function prettyJson(value: unknown, full: boolean): string {
   try {
     const text = JSON.stringify(value, null, 2);
     if (!text) return "";
-    return text.length > MAX_BODY_CHARS
+    return !full && text.length > MAX_BODY_CHARS
       ? `${text.slice(0, MAX_BODY_CHARS)}\n… (${text.length - MAX_BODY_CHARS} more chars)`
       : text;
   } catch {
@@ -23,8 +24,8 @@ function prettyJson(value: unknown): string {
   }
 }
 
-function clamp(text: string): string {
-  return text.length > MAX_BODY_CHARS
+function clamp(text: string, full: boolean): string {
+  return !full && text.length > MAX_BODY_CHARS
     ? `${text.slice(0, MAX_BODY_CHARS)}\n… (${text.length - MAX_BODY_CHARS} more chars)`
     : text;
 }
@@ -56,11 +57,7 @@ export function GenericToolDisplay({
   summary,
   isCompact = false,
 }: GenericToolDisplayProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const status = useToolStatus();
-
-  const inputJson = params && Object.keys(params).length > 0 ? prettyJson(params) : "";
-  const outputText = clamp(toolOutputText(output));
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   // Params are the richer source; `summary` is the parsed-content fallback for
   // events whose input never survived as an object.
@@ -70,7 +67,7 @@ export function GenericToolDisplay({
   // the row would render empty — fall back to the tool's own name.
   const headerText = preview || (isCompact ? displayName : "");
 
-  const hasDetails = !!inputJson || !!outputText;
+  const hasDetails = (!!params && Object.keys(params).length > 0) || (output != null && output !== "");
 
   return (
     <div>
@@ -91,7 +88,21 @@ export function GenericToolDisplay({
 
       {hasDetails && (
         <ToolCollapse isExpanded={isExpanded}>
-          <ToolOutputBody as="div" className="text-s font-sans space-y-2 max-h-64">
+          <GenericToolBody params={params} output={output} />
+        </ToolCollapse>
+      )}
+    </div>
+  );
+}
+
+function GenericToolBody({ params, output }: Pick<GenericToolDisplayProps, "params" | "output">) {
+  const status = useToolStatus();
+  const [full, setFull] = useState(false);
+  const inputJson = params && Object.keys(params).length > 0 ? prettyJson(params, full) : "";
+  const rawOutput = toolOutputText(output);
+  const outputText = clamp(rawOutput, full);
+  return <>
+    <ToolOutputBody as="div" className="text-s font-sans space-y-2 max-h-64">
             {inputJson && (
               <div className="space-y-1">
                 <Text as="div" size="t" tone="subtle" weight="medium">
@@ -122,8 +133,7 @@ export function GenericToolDisplay({
               </div>
             )}
           </ToolOutputBody>
-        </ToolCollapse>
-      )}
-    </div>
-  );
+    {!full && (rawOutput.length > MAX_BODY_CHARS || inputJson.includes("more chars)")) &&
+      <Button variant="ghost" onClick={() => setFull(true)}>Show full content</Button>}
+  </>;
 }

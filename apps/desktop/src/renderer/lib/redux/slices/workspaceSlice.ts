@@ -10,11 +10,12 @@ import {
 } from "@/features/workspace/lib/composer-context";
 import { isRunTab } from "@/features/workspace/lib/repo-utils";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
-import type { ConversationSettings } from "@mains/contracts/run-settings";
+import { snapshotRunSettingConfig, type ConversationSettings } from "@mains/contracts/run-settings";
 import {
   isWorkspaceDraftOwnerKey,
   isWorkspaceViewKey,
   runOwnerKey,
+  providerSettingsKey,
   viewKeyBelongsToBackend,
 } from "../../../../shared/ui-state-keys";
 
@@ -64,6 +65,10 @@ export interface WorkspaceState {
   activeWorkspaceIdByProvider: Record<string, string>;
   selectedModelByProvider: Record<string, string>;
   conversationSettingsByKey: Record<string, ConversationSettings>;
+  lastRunSettingsByProvider: Record<string, ConversationSettings>;
+  /** In-flight settings intent is renderer-local and is never persisted. */
+  runSettingsIntentByProvider: Record<string, { revision: number; ownerKey: string }>;
+  lastRunSettingsRevisionByProvider: Record<string, number>;
   selectedProviderId: string;
   thinkingEnabled: boolean;
   selectedFile: FileNode | null;
@@ -137,6 +142,9 @@ const initialState: WorkspaceState = {
   activeWorkspaceIdByProvider: {},
   selectedModelByProvider: {},
   conversationSettingsByKey: {},
+  lastRunSettingsByProvider: {},
+  runSettingsIntentByProvider: {},
+  lastRunSettingsRevisionByProvider: {},
   selectedProviderId: PROVIDER_IDS.claude,
   thinkingEnabled: false,
   selectedFile: null,
@@ -325,6 +333,24 @@ const workspaceSlice = createSlice({
     },
     setConversationSettings: (state, action: PayloadAction<{ key: string; settings: ConversationSettings }>) => {
       state.conversationSettingsByKey[action.payload.key] = action.payload.settings;
+    },
+    beginRunSettingsIntent: (state, action: PayloadAction<{ backendId: string | null; providerId: string; ownerKey: string }>) => {
+      const { backendId, providerId, ownerKey } = action.payload;
+      const key = providerSettingsKey(backendId, providerId);
+      state.runSettingsIntentByProvider[key] = { revision: (state.runSettingsIntentByProvider[key]?.revision ?? 0) + 1, ownerKey };
+    },
+    rememberRunSettings: (state, action: PayloadAction<{ backendId: string | null; providerId: string; settings: ConversationSettings; revision?: number }>) => {
+      const { backendId, providerId, settings } = action.payload;
+      const key = providerSettingsKey(backendId, providerId);
+      const revision = action.payload.revision ?? state.runSettingsIntentByProvider[key]?.revision ?? 0;
+      // Order by the request/selection, not by response arrival. A newer
+      // pending or rejected start must not discard a successful fallback.
+      if (revision < (state.lastRunSettingsRevisionByProvider[key] ?? 0)) return;
+      state.lastRunSettingsRevisionByProvider[key] = revision;
+      state.lastRunSettingsByProvider[key] = {
+        model: settings.model,
+        config: { ...snapshotRunSettingConfig(providerId, { ...settings.config }), goalMode: false, planMode: false },
+      };
     },
     transferConversationSettings: (state, action: PayloadAction<{ fromKey: string; toKey: string }>) => {
       if (action.payload.fromKey === action.payload.toKey) return;
@@ -597,6 +623,8 @@ export const {
   setWorkspaceSidebarTab,
   setWorkspaceModel,
   setConversationSettings,
+  rememberRunSettings,
+  beginRunSettingsIntent,
   transferConversationSettings,
   setWorkspaceThinkingEnabled,
   setSelectedFile,

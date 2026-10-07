@@ -137,6 +137,128 @@ describe("RichInputForm Markdown editing", () => {
     ).not.toBeNull();
     expect(onQueryChange).toHaveBeenLastCalledWith(markdown + "\n\n");
   });
+
+  it.each(["@", "/"])("detects %s at the caret while editing a pasted list item", (trigger) => {
+    const inputRef = createRef<RichInputFormHandle>();
+    const onQueryChange = vi.fn();
+    const onCaretContextChange = vi.fn();
+    render(createElement(RichInputForm, {
+      ref: inputRef,
+      query: "",
+      onQueryChange,
+      onSubmit: vi.fn(),
+      onCaretContextChange,
+    }));
+    const editor = screen.getByRole("textbox");
+    pastePlainText(editor, "- First item\n- Last item");
+    editor.focus();
+    const item = editor.querySelectorAll("li")[1];
+    const text = item.firstChild as Text;
+    text.appendData(` ${trigger}hero`);
+    const range = document.createRange();
+    range.setStart(text, text.length);
+    range.collapse(true);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.input(editor);
+
+    const before = onCaretContextChange.mock.lastCall?.[0] as string;
+    act(() => {
+      expect(inputRef.current?.replaceTokenWithFileChip(trigger as "@" | "/", {
+        path: "/repo/hero.tsx", basename: "hero.tsx",
+      })).toBe(true);
+    });
+    expect(item.querySelector('[data-file-chip="true"]')).not.toBeNull();
+    expect(onQueryChange).toHaveBeenLastCalledWith("- First item\n- Last item @/repo/hero.tsx\n\n");
+    expect(before).toBe(`First item\nLast item ${trigger}hero`);
+  });
+
+  it.each([
+    ["list", "- Last item"],
+    ["heading", "## Title"],
+    ["quote", "> Quoted text"],
+    ["bold text", "**Bold text**"],
+    ["inline code", "`example`"],
+    ["code block", "```\nconst value = 1;\n```"],
+  ])("continues outside the pasted %s with a working mention", (_kind, markdown) => {
+    const inputRef = createRef<RichInputFormHandle>();
+    const onQueryChange = vi.fn();
+    const onCaretContextChange = vi.fn();
+    render(createElement(RichInputForm, {
+      ref: inputRef, query: "", onQueryChange, onSubmit: vi.fn(), onCaretContextChange,
+    }));
+    const editor = screen.getByRole("textbox");
+    editor.focus();
+    pastePlainText(editor, markdown);
+    const selection = window.getSelection()!;
+    const continuation = selection.anchorNode as HTMLElement;
+    expect(continuation.parentElement).toBe(editor);
+    expect(continuation.tagName).toBe("DIV");
+    expect(selection.anchorOffset).toBe(0);
+
+    const text = document.createTextNode("@hero");
+    const range = selection.getRangeAt(0);
+    range.insertNode(text);
+    range.setStart(text, text.length);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.input(editor);
+    expect(onCaretContextChange.mock.lastCall?.[0].match(/(?:^|\s)@(\S*)$/)?.[1]).toBe("hero");
+    expect(onQueryChange).toHaveBeenLastCalledWith(`${markdown}\n\n@hero`);
+    act(() => {
+      expect(inputRef.current?.replaceTokenWithFileChip("@", {
+        path: "/repo/hero.tsx", basename: "hero.tsx",
+      })).toBe(true);
+    });
+    expect(continuation.querySelector('[data-file-chip="true"]')).not.toBeNull();
+    expect(onQueryChange).toHaveBeenLastCalledWith(`${markdown}\n\n@/repo/hero.tsx `);
+  });
+
+  it("restores a focused Markdown draft with the caret on its ordinary continuation line", () => {
+    const props = { onQueryChange: vi.fn(), onSubmit: vi.fn() };
+    const view = render(createElement(RichInputForm, { ...props, query: "Draft" }));
+    const editor = screen.getByRole("textbox");
+    editor.focus();
+    view.rerender(createElement(RichInputForm, { ...props, query: "- Restored item" }));
+    expect(window.getSelection()?.anchorNode?.parentElement).toBe(editor);
+    expect(window.getSelection()?.anchorNode).toBe(editor.lastChild);
+    expect(window.getSelection()?.anchorOffset).toBe(0);
+  });
+
+  it("does not reopen a mention copied in the preceding block on the empty continuation line", () => {
+    const onCaretContextChange = vi.fn();
+    render(createElement(RichInputForm, {
+      query: "", onQueryChange: vi.fn(), onSubmit: vi.fn(), onCaretContextChange,
+    }));
+    const editor = screen.getByRole("textbox");
+    editor.focus();
+    pastePlainText(editor, "- Message to @someone");
+    expect(onCaretContextChange.mock.lastCall?.[0].match(/(?:^|\s)([/@#$])(\S*)$/)).toBeNull();
+  });
+
+  it.each([
+    ["paragraph", "Paragraph **bold** @hero", "p"],
+    ["heading", "## Title /hero", "h2"],
+    ["quote", "> Quote @hero", "blockquote p"],
+    ["bold text", "**Bold /hero**", "strong"],
+    ["italic text", "## Note\n\n*Italic @hero*", "em"],
+  ])("uses visible text for suggestions inside a %s", (_kind, markdown, selector) => {
+    const onCaretContextChange = vi.fn();
+    render(createElement(RichInputForm, {
+      query: markdown, onQueryChange: vi.fn(), onSubmit: vi.fn(), onCaretContextChange,
+    }));
+    const editor = screen.getByRole("textbox");
+    editor.focus();
+    const text = editor.querySelector(selector)!.lastChild as Text;
+    const range = document.createRange();
+    range.setStart(text, text.length);
+    range.collapse(true);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    act(() => document.dispatchEvent(new Event("selectionchange")));
+    expect(onCaretContextChange.mock.lastCall?.[0].match(/(?:^|\s)([/@#$])(\S*)$/)?.[2]).toBe("hero");
+  });
 });
 
 describe("RichInputForm file pasting", () => {
@@ -344,5 +466,75 @@ describe("RichInputForm Mac app mentions", () => {
 
     pastePlainText(editor, " open settings");
     expect(onQueryChange).toHaveBeenLastCalledWith("@Raycast open settings");
+  });
+});
+
+describe("RichInputForm mention navigation", () => {
+  it("activates nested file and skill labels without changing or submitting the draft", () => {
+    const onFileChipClick = vi.fn();
+    const onSkillChipClick = vi.fn();
+    const onQueryChange = vi.fn();
+    const onSubmit = vi.fn();
+    const path = "/repo/hero-section.tsx";
+    const query = `refactor @${path} $gmail $apple-design`;
+    render(createElement(RichInputForm, {
+      query, onQueryChange, onSubmit, onFileChipClick, onSkillChipClick,
+      fileChipMap: new Map([[path, { path, basename: "hero-section.tsx", clickable: true }]]),
+      skillChipMap: new Map([
+        ["$gmail", { name: "gmail", displayName: "Gmail", clickable: true }],
+        ["$apple-design", { name: "apple-design", clickable: true }],
+      ]),
+    }));
+
+    fireEvent.click(screen.getByText("hero-section.tsx"));
+    fireEvent.click(screen.getByText("Gmail"));
+    fireEvent.keyDown(screen.getByRole("link", { name: "apple-design" }), { key: "Enter" });
+    expect(onFileChipClick).toHaveBeenCalledWith(path);
+    expect(onSkillChipClick.mock.calls).toEqual([["gmail"], ["apple-design"]]);
+    expect(onQueryChange).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.input(screen.getByRole("textbox"));
+    expect(onQueryChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
+  it("keeps directories and mentions without a destination inert", () => {
+    const onFileChipClick = vi.fn();
+    const onSkillChipClick = vi.fn();
+    render(createElement(RichInputForm, {
+      query: "@/repo/apps $missing @Raycast",
+      onQueryChange: vi.fn(), onSubmit: vi.fn(), onFileChipClick, onSkillChipClick,
+      fileChipMap: new Map([["/repo/apps", {
+        path: "/repo/apps", basename: "apps", isDirectory: true, clickable: true,
+      }]]),
+      skillChipMap: new Map([
+        ["$missing", { name: "missing" }],
+        ["@Raycast", { name: "mac-app:raycast", displayName: "Raycast", token: "@Raycast" }],
+      ]),
+    }));
+    fireEvent.click(screen.getByText("apps"));
+    fireEvent.click(screen.getByText("missing"));
+    fireEvent.click(screen.getByText("Raycast"));
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(onFileChipClick).not.toHaveBeenCalled();
+    expect(onSkillChipClick).not.toHaveBeenCalled();
+  });
+
+  it("also activates a mention inserted at the caret", () => {
+    const ref = createRef<RichInputFormHandle>();
+    const onSkillChipClick = vi.fn();
+    render(createElement(RichInputForm, {
+      ref, query: "@apple", onQueryChange: vi.fn(), onSubmit: vi.fn(), onSkillChipClick,
+    }));
+    const editor = screen.getByRole("textbox");
+    editor.focus();
+    placeCaretAtEnd(editor);
+    act(() => {
+      ref.current!.replaceTokenWithSkillChip("@", { name: "apple-design", clickable: true });
+    });
+    fireEvent.keyDown(screen.getByRole("link", { name: "apple-design" }), { key: " " });
+    expect(onSkillChipClick).toHaveBeenCalledWith("apple-design");
   });
 });

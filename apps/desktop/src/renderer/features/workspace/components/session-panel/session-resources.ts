@@ -29,9 +29,7 @@ export type SessionResourceKind =
   | "visualization";
 
 export type SessionResourceTarget =
-  | { type: "file"; value: string }
-  | { type: "url"; value: string }
-  | { type: "image"; value: string };
+  { type: "file" | "url" | "image"; value: string; attachmentId?: string; runId?: string };
 
 export interface SessionResource {
   id: string;
@@ -74,6 +72,7 @@ export interface SessionSourceContextRow {
 
 export interface SessionSourceArtifactRow {
   id: number;
+  runId?: string;
   kind: string;
   content: string | null;
   metadata: Record<string, unknown> | null;
@@ -273,6 +272,7 @@ function promptResources(artifacts: readonly SessionSourceArtifactRow[]): Sessio
       const mime = text(attachment.mimeType);
       const isImage = type === "image" || mime?.startsWith("image/") === true;
       const captureName = text(attachment.captureName);
+      const attachmentId = text(attachment.attachmentId);
       const path = text(attachment.path) ?? text(attachment.sourcePath);
       const imageSrc =
         (captureName
@@ -280,7 +280,9 @@ function promptResources(artifacts: readonly SessionSourceArtifactRow[]): Sessio
           : undefined) ??
         text(attachment.dataUrl) ??
         path;
-      const target: SessionResourceTarget | undefined = isImage
+      const target: SessionResourceTarget | undefined = attachmentId
+        ? { type: isImage ? "image" : "file", value: `attachment:${attachmentId}`, attachmentId, runId: artifact.runId }
+        : isImage
         ? imageSrc
           ? { type: "image", value: imageSrc }
           : undefined

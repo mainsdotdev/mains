@@ -6,8 +6,6 @@ import { readReviewComments } from "@mains/contracts/review-comments";
 
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { createHash } from "node:crypto";
 import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import type {
   WorkRunEvent,
@@ -260,75 +258,29 @@ export function safeJson(value: unknown): string {
 // File attachments
 // ─────────────────────────────────────────────────────────────
 
-/** Where a run's attachments are written: `<tmp>/mains-uploads/<runId>`. */
-export function attachmentUploadDir(runId: string, clientUserMessageId?: string): string {
-  const root = path.join(os.tmpdir(), "mains-uploads", runId);
-  // Two queued/steered images with the same name must keep independent bytes.
-  return clientUserMessageId ? path.join(root, createHash("sha256").update(clientUserMessageId).digest("hex").slice(0, 24)) : root;
-}
-
-export function saveAttachments(
+/** Original paths were prepared by runs.service before any provider starts. */
+export function attachmentPromptParts(
   attachments: FileAttachment[],
-  runId: string,
-  clientUserMessageId?: string,
 ): { savedPaths: string[]; inlineTexts: string[] } {
-  const uploadDir = attachmentUploadDir(runId, clientUserMessageId);
-  fs.mkdirSync(uploadDir, { recursive: true });
-
   const savedPaths: string[] = [];
   const inlineTexts: string[] = [];
-
   for (const attachment of attachments) {
-    // runs.service validates attachments before a run starts; this is the
-    // write itself refusing to leave the upload directory regardless.
-    const filePath = path.join(uploadDir, path.basename(attachment.name));
-    if (path.dirname(filePath) !== uploadDir) {
-      console.warn("[adapter.shared] skipped attachment with an unusable name:", attachment.name);
-      continue;
-    }
-    const ext = path.extname(attachment.name).toLowerCase();
-    const hasSource = typeof attachment.sourcePath === "string" && attachment.sourcePath.length > 0;
-
-    // Inline text documents are read into the prompt regardless of source.
-    if (attachment.type !== "image" && ext === ".txt") {
-      let text = "";
-      if (hasSource) {
-        try {
-          text = fs.readFileSync(attachment.sourcePath!, "utf-8");
-        } catch {
-          text = "";
-        }
-      } else if (attachment.data) {
-        text = Buffer.from(attachment.data, "base64").toString("utf-8");
-      }
-      inlineTexts.push(`[Attached document: ${attachment.name}]\n${text}`);
-      continue;
-    }
-
-    if (hasSource) {
-      // Copy from disk directly — avoids holding base64 in memory.
-      try {
-        fs.copyFileSync(attachment.sourcePath!, filePath);
-        savedPaths.push(filePath);
-      } catch (err) {
-        console.warn("[adapter.shared] failed to copy attachment from sourcePath:", err);
-      }
-    } else if (attachment.data) {
-      fs.writeFileSync(filePath, Buffer.from(attachment.data, "base64"));
-      savedPaths.push(filePath);
+    if (!attachment.attachmentId || !attachment.sourcePath) throw new Error("Attachment was not prepared");
+    if (attachment.type === "document" && path.extname(attachment.name).toLowerCase() === ".txt") {
+      inlineTexts.push(`[Attached document: ${attachment.name}]\n${fs.readFileSync(attachment.sourcePath, "utf8")}`);
+    } else {
+      savedPaths.push(attachment.sourcePath);
     }
   }
-
   return { savedPaths, inlineTexts };
 }
 
 function buildAttachmentPrompt(
   attachments: FileAttachment[],
-  runId: string,
 ): string {
   if (!attachments || attachments.length === 0) return "";
 
-  const { savedPaths, inlineTexts } = saveAttachments(attachments, runId);
+  const { savedPaths, inlineTexts } = attachmentPromptParts(attachments);
   const parts: string[] = [];
 
   for (const filePath of savedPaths) {
@@ -554,7 +506,6 @@ export function appendPromptSections(
   ) {
     const attachmentSection = buildAttachmentPrompt(
       options.attachments,
-      options.runId,
     );
     if (attachmentSection) {
       result = `${result}\n\n---\n\nAttached files:\n${attachmentSection}`;
@@ -605,6 +556,7 @@ export async function emitUserPromptArtifact(
     /** The run the attachments were saved under — locates their on-disk copies. */
     runId?: string;
     clientUserMessageId?: string;
+    clientPromptId?: string;
     providerTurnId?: string;
     delivery?: "steer";
     /** Resolved model for the turn this prompt starts. */
@@ -642,35 +594,14 @@ export async function emitUserPromptArtifact(
         ? { voiceDelegation: options.context.find((item) => item.metadata?.voiceDelegation)!.metadata!.voiceDelegation }
         : {}),
       ...(options?.clientUserMessageId ? { clientUserMessageId: options.clientUserMessageId } : {}),
+      ...(options?.clientPromptId ? { clientPromptId: options.clientPromptId } : {}),
       ...(options?.providerTurnId ? { providerTurnId: options.providerTurnId } : {}),
       ...(options?.delivery ? { delivery: options.delivery } : {}),
       ...(browserAnnotations.length ? { browserAnnotations } : {}),
       ...(reviewComments.length ? { reviewComments } : {}),
-      attachments: options?.attachments?.map((a) => {
-        const captureName =
-          a.sourcePath && a.sourcePath.replace(/\\/g, "/").includes("/browser-captures/")
-            ? path.basename(a.sourcePath)
-            : undefined;
-        // Images and documents land in the run's upload dir (see `saveAttachments`),
-        // except inline .txt files. Historical previews use the copy the agent
-        // read rather than relying on the bounded browser capture cache.
-        const uploadedPath =
-          options?.runId &&
-          (a.type === "image" || (a.type === "document" && path.extname(a.name).toLowerCase() !== ".txt"))
-            ? path.join(attachmentUploadDir(options.runId, options.clientUserMessageId), path.basename(a.name))
-            : undefined;
-        return {
-          name: a.name,
-          type: a.type,
-          mimeType: a.mimeType,
-          ...(a.type === "image" && a.data
-            ? { dataUrl: `data:${a.mimeType};base64,${a.data}` }
-            : {}),
-          ...(a.sourcePath ? { sourcePath: a.sourcePath } : {}),
-          ...(captureName ? { captureName } : {}),
-          ...(uploadedPath ? { path: uploadedPath } : {}),
-        };
-      }),
+      attachments: options?.attachments?.map(({ attachmentId, name, type, mimeType, byteSize }) => ({
+        attachmentId, name, type, mimeType, byteSize,
+      })),
       issues: options?.contextIssues,
       signals: options?.contextSignals,
       files: options?.contextFiles,

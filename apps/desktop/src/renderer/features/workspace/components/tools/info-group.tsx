@@ -21,7 +21,10 @@ import {
 } from "@/components/ui/icons";
 import { ProviderIcon } from "../provider-icon";
 import { ImagePreviewModal } from "../image-preview-modal";
-import { Button, DropdownMenu, DropdownMenuItem, Text } from "@/components/ui";
+import { Button, DropdownMenu, DropdownMenuItem, Text, toast } from "@/components/ui";
+import { appApi } from "@/lib/transport";
+import { useAttachmentImage } from "../../lib/attachment-image";
+import { AttachmentImagePreview } from "../attachment-image-preview";
 import { useLazyGetAppsForFileQuery } from "@/lib/redux/api";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
@@ -44,6 +47,7 @@ import { VoiceTaskCard } from "../voice-task-card";
 import type { VoiceTaskLink } from "@mains/contracts/realtime";
 
 interface PromptAttachment {
+  attachmentId?: string;
   name: string;
   type: "image" | "document";
   mimeType: string;
@@ -54,24 +58,37 @@ interface PromptAttachment {
   path?: string;
 }
 
-function PromptImageAttachment({ attachment, onPreview }: {
+type PromptPreview = { name: string; dataUrl: string; attachmentId?: string; runId?: string };
+
+function PromptPreviewModal({ preview, onClose }: { preview: PromptPreview; onClose: () => void }) {
+  return preview.attachmentId && preview.runId
+    ? <AttachmentImagePreview runId={preview.runId} attachmentId={preview.attachmentId} name={preview.name} fallbackSrc={preview.dataUrl} onClose={onClose} />
+    : <ImagePreviewModal name={preview.name} src={preview.dataUrl} onClose={onClose} />;
+}
+
+function PromptImageAttachment({ attachment, runId, onPreview }: {
   attachment: PromptAttachment;
-  onPreview: (image: { name: string; dataUrl: string }) => void;
+  runId?: string;
+  onPreview: (image: PromptPreview) => void;
 }) {
-  const src = useLocalImageUrl(attachment.dataUrl || attachment.path ||
-    (attachment.captureName ? `mains-capture://cap/${encodeURIComponent(attachment.captureName)}` : attachment.sourcePath));
-  return src ? (
+  const { observe, src: storedSrc, error: storedError } = useAttachmentImage(runId, attachment.attachmentId);
+  const legacy = useLocalImageUrl(attachment.attachmentId ? undefined : (attachment.dataUrl || attachment.path ||
+    (attachment.captureName ? `mains-capture://cap/${encodeURIComponent(attachment.captureName)}` : attachment.sourcePath)));
+  const src = attachment.attachmentId ? storedSrc : legacy;
+  return src || (attachment.attachmentId && runId) ? (
     <Button
+      ref={observe}
       type="button"
-      onClick={() => onPreview({ name: attachment.name, dataUrl: src })}
+      onClick={() => onPreview({ name: attachment.name, dataUrl: src ?? "", attachmentId: attachment.attachmentId, runId })}
       className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent"
       title={`Click to preview · ${attachment.name}`}
       aria-label={`Preview ${attachment.name}`}
     >
-      <img src={src} alt={attachment.name} draggable={false} className="size-full object-cover" />
+      {src ? <img src={src} alt={attachment.name} draggable={false} className="size-full object-cover" />
+        : <span className="flex size-full items-center justify-center bg-primary-50 dark:bg-primary-900" title={storedError}><Picture className="size-5 text-primary-500" /></span>}
     </Button>
   ) : (
-    <div className="flex size-20 shrink-0 items-center justify-center rounded-2xl border border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900" title={attachment.name}>
+    <div ref={observe} className="flex size-20 shrink-0 items-center justify-center rounded-2xl border border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900" title={storedError ?? attachment.name}>
       <Picture className="size-5 text-primary-500" />
     </div>
   );
@@ -110,16 +127,14 @@ function resolveImagePath(
 
 interface InfoGroupProps {
   group: EventGroup;
+  runId?: string;
   workspaceRootPath?: string;
   floatingChat?: boolean;
 }
 
-function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoGroupProps) {
+function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }: InfoGroupProps) {
   const event = group.events[0];
-  const [previewAtt, setPreviewAtt] = useState<{
-    name: string;
-    dataUrl: string;
-  } | null>(null);
+  const [previewAtt, setPreviewAtt] = useState<PromptPreview | null>(null);
   if (!event) return null;
   if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
     const task = event.metadata.voiceTask as VoiceTaskLink | undefined;
@@ -220,7 +235,7 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
             {imageAttachments.length > 0 && (
               <div className="flex flex-wrap justify-end gap-2">
                 {imageAttachments.map((attachment, index) => (
-                  <PromptImageAttachment key={`${attachment.name}-${index}`} attachment={attachment} onPreview={setPreviewAtt} />
+                  <PromptImageAttachment key={`${attachment.name}-${index}`} attachment={attachment} runId={runId} onPreview={setPreviewAtt} />
                 ))}
               </div>
             )}
@@ -229,6 +244,8 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
                 key={`${att.name}-${index}`}
                 name={att.name}
                 filePath={att.path}
+                runId={runId}
+                attachmentId={att.attachmentId}
               />
             ))}
             {annotations.length > 0 && <PromptBrowserAnnotations annotations={annotations} />}
@@ -242,12 +259,11 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
                 </div>
               </div>
             )}
+            {typeof event.metadata?.sendError === "string" && (
+              <Text size="xs" tone="secondary">{event.metadata.sendError}</Text>
+            )}
             {previewAtt && (
-              <ImagePreviewModal
-                name={previewAtt.name}
-                src={previewAtt.dataUrl}
-                onClose={() => setPreviewAtt(null)}
-              />
+              <PromptPreviewModal preview={previewAtt} onClose={() => setPreviewAtt(null)} />
             )}
             {(externalFiles.length > 0 ||
               issues.length > 0 ||
@@ -337,11 +353,7 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
           <ImageArtifactGallery images={images} onPreview={setPreviewAtt} />
         )}
         {previewAtt && (
-          <ImagePreviewModal
-            name={previewAtt.name}
-            src={previewAtt.dataUrl}
-            onClose={() => setPreviewAtt(null)}
-          />
+          <PromptPreviewModal preview={previewAtt} onClose={() => setPreviewAtt(null)} />
         )}
       </div>
     );
@@ -398,6 +410,7 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
       <ArtifactBody
         content={content}
         isStreaming={isStreaming}
+        interrupted={event.metadata?.interrupted === true}
         previewAtt={previewAtt}
         onPreview={setPreviewAtt}
         workspaceRootPath={workspaceRootPath}
@@ -432,14 +445,18 @@ function InfoGroupImpl({ group, workspaceRootPath, floatingChat = false }: InfoG
 function AttachmentDocumentCard({
   name,
   filePath,
+  runId,
+  attachmentId,
 }: {
   name: string;
   filePath?: string;
+  runId?: string;
+  attachmentId?: string;
 }) {
   const { open } = useDocumentViewer();
   const dot = name.lastIndexOf(".");
   const extension = dot > 0 ? name.slice(dot + 1) : undefined;
-  const docType = filePath ? classifyDocType(name) : null;
+  const docType = filePath || (runId && attachmentId) ? classifyDocType(name) : null;
   const className =
     "flex w-60 max-w-full glass-card items-center gap-3 rounded-2xl  p-1.5 pr-3  ";
   const content = (
@@ -462,7 +479,7 @@ function AttachmentDocumentCard({
     </>
   );
 
-  if (!filePath || !docType) {
+  if ((!filePath && !(runId && attachmentId)) || !docType) {
     return (
       <div className={className} title={name}>
         {content}
@@ -472,7 +489,17 @@ function AttachmentDocumentCard({
   return (
     <Button
       type="button"
-      onClick={() => open({ path: filePath, fileName: name, docType })}
+      onClick={async () => {
+        try {
+          let resolved = filePath;
+          if (!resolved && runId && attachmentId) {
+            const result = await appApi.runArtifacts.resolveAttachmentPath({ runId, attachmentId });
+            if (!result.success) throw new Error(result.error);
+            resolved = result.data;
+          }
+          if (resolved) open({ path: resolved, fileName: name, docType });
+        } catch (error) { toast.error(error instanceof Error ? error.message : "Could not open attachment"); }
+      }}
       className={`${className} cursor-pointer outline-none transition-colors hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary-800/60`}
       title={`Open ${name}`}
       aria-label={`Open ${name}`}
@@ -781,19 +808,22 @@ function InlineMarkdownImage({
 function ArtifactBody({
   content,
   isStreaming,
+  interrupted,
   previewAtt,
   onPreview,
   workspaceRootPath,
 }: {
   content: string;
   isStreaming: boolean;
+  interrupted: boolean;
   previewAtt: { name: string; dataUrl: string } | null;
   onPreview: (att: { name: string; dataUrl: string } | null) => void;
   workspaceRootPath?: string;
 }) {
   // Bursty SDK chunks are revealed a few characters per frame so the text
-  // flows instead of popping in chunk-sized jumps. Instant when not streaming.
+  // flows instead of popping in chunk-sized jumps, including the final buffer.
   const displayContent = useSmoothText(content, isStreaming);
+  const isRevealing = isStreaming || displayContent !== content;
 
   const resolvedImages = useMemo(() => {
     const out: Array<{ key: string; raw: string; abs: string; name: string }> =
@@ -822,7 +852,10 @@ function ArtifactBody({
   return (
     <div className="overflow-hidden">
       <div className="prose prose-sm dark:prose-invert max-w-none relative">
-        <AgentMarkdown className={isStreaming ? "streaming-text" : undefined}>
+        <AgentMarkdown
+          className={isRevealing ? "streaming-text" : undefined}
+          isStreaming={isRevealing || interrupted}
+        >
           {displayContent}
         </AgentMarkdown>
       </div>

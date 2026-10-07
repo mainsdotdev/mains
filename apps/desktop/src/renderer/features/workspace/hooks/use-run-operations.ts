@@ -112,6 +112,7 @@ export function useRunOperations({
       collectionId?: string | null,
       additionalDirectories?: string[],
       conversationSettings?: ConversationSettings,
+      clientPromptId?: string,
     ) => {
       if (
         !hasComposerMessage(goal, uploads?.length ?? 0, context ?? []) ||
@@ -138,6 +139,7 @@ export function useRunOperations({
           spaceId: activeSpaceId || undefined,
           providerId: selectedProvider,
           goal: goal.trim(),
+          clientPromptId,
           model: model || undefined,
           conversationSettings,
           ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
@@ -163,6 +165,7 @@ export function useRunOperations({
     context?: readonly ContextItem[],
     additionalDirectories?: string[],
     conversationSettings?: ConversationSettings,
+    clientPromptId?: string,
   ) => {
     if (!hasComposerMessage(message, uploads?.length ?? 0, context ?? [])) {
       setError("Please enter a message");
@@ -183,6 +186,7 @@ export function useRunOperations({
         runId,
         accountId,
         message: message.trim(),
+        clientPromptId,
         model: model || undefined,
         conversationSettings,
         ...(additionalDirectories !== undefined ? { additionalDirectories } : {}),

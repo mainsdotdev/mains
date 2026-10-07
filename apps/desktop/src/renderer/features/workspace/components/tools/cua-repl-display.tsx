@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { BrowserCursor } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
 import { coerceToolOutput } from "../../lib/parse-tool-content";
@@ -69,7 +69,7 @@ export function CuaReplDisplay({
   output?: unknown;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   const title = params.title?.trim() ?? "";
   const code = params.code?.trim() ?? "";

@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { useLiveQuery } from "drizzle-orm/expo-sqlite";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo } from "react";
@@ -10,6 +10,7 @@ import {
   useStreamingMessages,
 } from "@/backend/streaming-messages";
 import { db } from "@/db/client";
+import { useRunHistory } from "@/backend/run-history";
 import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { buildTranscript } from "@/lib/transcript";
@@ -30,6 +31,7 @@ import { projectStreamingTranscript } from "../lib/run-transcript-projection";
 export function useRunData(runId: string, expectedProviderId: string | null) {
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
+  const history = useRunHistory(backendId, runId);
 
   // While this transcript is on screen its backend events trigger refetches.
   useFocusEffect(
@@ -44,23 +46,22 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     db.select().from(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).limit(1),
     [backendId, runId],
   );
+  // Before the first remote page arrives, even an old/offline phone cache
+  // must not materialize a whole conversation. Once synced, SQLite contains
+  // only the selected backend window for this run.
+  const cachedArtifacts = db.select().from(runArtifacts)
+    .where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId)))
+    .orderBy(desc(runArtifacts.createdAt), desc(runArtifacts.id));
   const artifactQuery = useCoalescedLiveQuery(
-    db
-      .select()
-      .from(runArtifacts)
-      .where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId)))
-      .orderBy(asc(runArtifacts.createdAt), asc(runArtifacts.id)),
-    runArtifacts,
-    [backendId, runId],
+    history.loaded ? cachedArtifacts : cachedArtifacts.limit(200), runArtifacts,
+    [backendId, runId, history.loaded],
   );
+  const cachedCalls = db.select().from(toolCalls)
+    .where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId)))
+    .orderBy(desc(toolCalls.createdAt), desc(toolCalls.id));
   const callQuery = useCoalescedLiveQuery(
-    db
-      .select()
-      .from(toolCalls)
-      .where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId)))
-      .orderBy(asc(toolCalls.createdAt), asc(toolCalls.id)),
-    toolCalls,
-    [backendId, runId],
+    history.loaded ? cachedCalls : cachedCalls.limit(200), toolCalls,
+    [backendId, runId, history.loaded],
   );
   const approvalQuery = useLiveQuery(
     db
@@ -111,7 +112,7 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     () => approvalQuery.data.filter((approval) => approval.expiresAt.getTime() > now),
     [approvalQuery.data, now],
   );
-  const thinking = useMemo(() => latestThinking(artifactQuery.data), [artifactQuery.data]);
+  const thinking = useMemo(() => latestThinking([...artifactQuery.data].reverse()), [artifactQuery.data]);
   const modelSelection = useModelSelection(backendId, providerId);
 
   return {
@@ -128,9 +129,10 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     },
     transcript: {
       items,
-      streamingItems,
+      streamingItems: history.end ? [] : streamingItems,
       promptCount,
       thinking,
+      history,
     },
     approvals: {
       waiting: waitingApprovals,

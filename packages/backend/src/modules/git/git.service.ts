@@ -283,19 +283,19 @@ export const gitService = {
 
   /**
    * Commit subject lines unique to the current branch (`git log base..HEAD`),
-   * i.e. excluding the base branch's own history. Used to summarize a PR.
+   * i.e. excluding the base branch's own history. Used to summarize a PR;
+   * all subjects are returned unless the caller explicitly supplies a limit.
    */
   async getBranchLog(
     rootPath: string,
     baseRef: string,
-    limit = 20,
+    limit?: number,
   ): Promise<string[]> {
     const raw = await getGit(rootPath).raw([
       "log",
       `${baseRef}..HEAD`,
       "--pretty=%s",
-      "-n",
-      String(limit),
+      ...(limit === undefined ? [] : ["-n", String(limit)]),
     ]);
     return raw
       .split("\n")
@@ -310,6 +310,27 @@ export const gitService = {
    */
   async getStagedDiff(rootPath: string): Promise<string> {
     return getGit(rootPath).diff(["--cached"]);
+  },
+
+  /** What a commit would contain, including untracked files, without staging. */
+  async getCommitPreviewDiff(
+    rootPath: string,
+    includeUnstaged = true,
+  ): Promise<string> {
+    if (!includeUnstaged) return this.getStagedDiff(rootPath);
+
+    // Before the first commit, compare against the repo's empty tree. Hashing
+    // it is read-only and honours the repo's object format (SHA-1 or SHA-256).
+    const head = await this.getHeadSha(rootPath).catch(() => null);
+    const base = head ?? (
+      await getGit(rootPath).raw([
+        "hash-object",
+        "-t",
+        "tree",
+        process.platform === "win32" ? "NUL" : "/dev/null",
+      ])
+    ).trim();
+    return (await this.captureDiffSnapshot(rootPath, base)).diffText;
   },
 
   /** HEAD commit sha. */

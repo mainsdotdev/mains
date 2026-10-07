@@ -8,7 +8,6 @@ import {
   ModalHeader,
   Select,
   Text,
-  Textarea,
   toast,
   type SelectOption,
 } from "@/components/ui";
@@ -20,7 +19,11 @@ import {
 } from "@/lib/redux/api";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { PanelItem, PanelCollapse, PANEL_ROW_X } from "../panel-item";
-import { CheckboxOption, GenerateButton, ShinePlaceholder } from "./controls";
+import { CheckboxOption, ShinePlaceholder } from "./controls";
+import { PrDescriptionEditor } from "./pr-description-editor";
+import { usePrAttachments } from "../../../hooks/use-pr-attachments";
+import { withPrAttachments } from "../../../lib/pr-attachment-upload";
+import { removePrMedia, stagePrMediaReferences, type PrEditorSelection } from "../../../lib/pr-media-markdown";
 import type { GitActionsPanel } from "./use-git-actions-panel";
 
 const PR_VIEW_TRANSITION_NAME = "pr-editor";
@@ -59,6 +62,15 @@ export function PrSection({
   const [prBody, setPrBody] = useState("");
   const [prDraft, setPrDraft] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [descriptionMode, setDescriptionMode] = useState<"write" | "preview">("write");
+  const discardMediaReferences = useCallback((ids: string[]) => {
+    setPrBody((body) => ids.reduce((next, id) => removePrMedia(next, id), body));
+  }, []);
+  const media = usePrAttachments(workspaceId, discardMediaReferences);
+  const descriptionSelection = useRef<PrEditorSelection>({ value: "", start: 0, end: 0 });
+  const sendingRef = useRef(false);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => uploadAbortRef.current?.abort(), [workspaceId]);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const expandButtonRef = useRef<HTMLButtonElement>(null);
   const viewTransitionRef = useRef<ViewTransition | null>(null);
@@ -126,7 +138,7 @@ export function PrSection({
 
   /** Explicit generation for the PR form — fills title + body. */
   const handleGeneratePr = useCallback(() => {
-    if (!providerId || generatingPr) return;
+    if (!providerId || generatingPr || busy || sendingRef.current) return;
     // Against the chosen base, so the description matches the PR's own diff.
     generatePrBody({ workspaceId, providerId, base: base || undefined })
       .unwrap()
@@ -137,37 +149,47 @@ export function PrSection({
       .catch((err) =>
         toast.error(extractErrorMessage(err, "Failed to generate the PR description.")),
       );
-  }, [workspaceId, providerId, generatingPr, generatePrBody, base]);
+  }, [workspaceId, providerId, generatingPr, generatePrBody, base, busy]);
 
   const handleCreatePr = useCallback(async () => {
-    if (pending) return;
+    if (busy || generatingPr || sendingRef.current) return;
+    sendingRef.current = true;
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
     setPending("pr");
     const toastId = toast.loading("Creating pull request…");
     try {
-      const result = await createPrGitFlow({
+      const result = await withPrAttachments(workspaceId, media.assets.map((asset) => asset.file), (attachmentIds) => createPrGitFlow({
         workspaceId,
         title: prTitle.trim() || undefined,
-        body: prBody.trim() || undefined,
+        body: stagePrMediaReferences(prBody, media.assets.map((asset) => asset.id), attachmentIds).trim() || undefined,
         base: base || undefined,
         draft: prDraft,
         providerId,
-      }).unwrap();
-      toast.success("Pull request created", { id: toastId });
+        ...(attachmentIds.length ? { attachmentIds } : {}),
+      }).unwrap(), (message) => toast.loading(message, { id: toastId }), controller.signal);
+      if (result.warning) toast(`Pull request created. ${result.warning}`, { id: toastId, duration: 12_000 });
+      else toast.success("Pull request created", { id: toastId });
+      media.clear();
       if (result.url) window.api.shell.openExternal(result.url);
       viewTransitionRef.current?.skipTransition();
       editorRestoredRef.current = true;
       setEditorOpen(false);
       onClose();
     } catch (err) {
-      toast.error(typeof err === "string" ? err : "Failed to create PR", {
+      toast.error(extractErrorMessage(err, "Failed to create PR"), {
         id: toastId,
       });
     } finally {
+      sendingRef.current = false;
+      uploadAbortRef.current = null;
       setPending(null);
     }
   }, [
     workspaceId,
-    pending,
+    busy,
+    generatingPr,
+    media,
     setPending,
     createPrGitFlow,
     prTitle,
@@ -258,7 +280,7 @@ export function PrSection({
           value={base}
           options={baseOptions}
           onChange={setPickedBase}
-          disabled={busy}
+          disabled={busy || generatingPr}
           size={expanded ? "md" : "sm"}
           placeholder="Repository default"
           aria-label="Base branch"
@@ -276,6 +298,7 @@ export function PrSection({
             type="text"
             aria-label="Pull request title"
             value={prTitle}
+            disabled={busy || generatingPr}
             onChange={(e) => setPrTitle(e.target.value)}
             placeholder={generatingPr ? "" : "PR title (leave blank to generate)…"}
             className={expanded ? "w-full text-sm" : "w-full text-xs"}
@@ -293,33 +316,11 @@ export function PrSection({
             Description
           </Text>
         )}
-        <div className={expanded ? "relative flex min-h-56 flex-1" : "relative"}>
-          <Textarea
-            aria-label="Pull request description"
-            value={prBody}
-            onChange={(e) => setPrBody(e.target.value)}
-            rows={expanded ? 12 : 4}
-            placeholder={
-              generatingPr ? "" : "Description (optional, leave blank to generate)…"
-            }
-            className={
-              expanded
-                ? "h-full min-h-56 w-full resize-none pb-12 text-sm leading-relaxed"
-                : "w-full text-xs pb-8"
-            }
-          />
-          {generatingPr && !prBody && (
-            <ShinePlaceholder size={expanded ? "sm" : "xs"}>
-              Generating description…
-            </ShinePlaceholder>
-          )}
-          <GenerateButton
-            onClick={handleGeneratePr}
-            disabled={busy || generatingPr}
-            generating={generatingPr}
-            tooltip="Generate the title and description from the branch"
-          />
-        </div>
+        <PrDescriptionEditor value={prBody} onChange={setPrBody} expanded={expanded}
+          disabled={busy || generatingPr} generating={generatingPr} onGenerate={handleGeneratePr}
+          assets={media.assets} onAddFiles={media.add} selectionRef={descriptionSelection}
+          onRemoveFile={media.remove}
+          mode={descriptionMode} onModeChange={setDescriptionMode} />
       </div>
     </div>
   );
@@ -352,6 +353,7 @@ export function PrSection({
         <div className={PANEL_ROW_X}>
           <CheckboxOption
             checked={prDraft}
+            disabled={busy || generatingPr}
             onChange={() => setPrDraft((v) => !v)}
             className="mb-1"
           >
@@ -362,7 +364,7 @@ export function PrSection({
           icon={<PullRequest className="size-4" />}
           label="Create pull request"
           onClick={handleCreatePr}
-          disabled={busy}
+            disabled={busy || generatingPr}
           loading={pending === "pr"}
         />
       </PanelCollapse>
@@ -394,6 +396,7 @@ export function PrSection({
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-6 py-4 ">
           <CheckboxOption
             checked={prDraft}
+            disabled={busy || generatingPr}
             onChange={() => setPrDraft((v) => !v)}
           >
             Create as draft
@@ -403,7 +406,7 @@ export function PrSection({
             <Button
               variant="submit"
               onClick={handleCreatePr}
-              disabled={busy}
+              disabled={busy || generatingPr}
               isLoading={pending === "pr"}
             >
               Create pull request

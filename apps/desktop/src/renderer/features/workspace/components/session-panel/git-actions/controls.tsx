@@ -11,11 +11,13 @@ export function CheckboxOption({
   checked,
   onChange,
   className,
+  disabled = false,
   children,
 }: {
   checked: boolean;
   onChange: () => void;
   className?: string;
+  disabled?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -25,7 +27,7 @@ export function CheckboxOption({
       tone="subtle"
       className={`flex cursor-pointer select-none items-center gap-2 ${className ?? ""}`}
     >
-      <Checkbox checked={checked} onChange={onChange} />
+      <Checkbox checked={checked} onChange={onChange} disabled={disabled} />
       {children}
     </Text>
   );

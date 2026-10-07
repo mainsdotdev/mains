@@ -343,8 +343,11 @@ describe("codex.driver / app-server protocol", () => {
     const logPath = path.join(tempDir, "protocol.jsonl");
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
     const runId = "run-file-attachments";
-    const uploadDir = path.join(os.tmpdir(), "mains-uploads", runId);
-    tempDirs.push(uploadDir);
+    const uploadDir = path.join(tempDir, "attachments");
+    fs.mkdirSync(uploadDir);
+    fs.writeFileSync(path.join(uploadDir, "spec.pdf"), "%PDF-1.4\nfixture");
+    fs.writeFileSync(path.join(uploadDir, "notes.txt"), "Important note");
+    fs.writeFileSync(path.join(uploadDir, "screen.png"), "fixture-image");
 
     const driver = createCodexDriver({
       binary: fixtureBinary,
@@ -360,19 +363,25 @@ describe("codex.driver / app-server protocol", () => {
           name: "spec.pdf",
           type: "document",
           mimeType: "application/pdf",
-          data: Buffer.from("%PDF-1.4\nfixture").toString("base64"),
+          attachmentId: "spec.pdf-id",
+          sourcePath: path.join(uploadDir, "spec.pdf"),
+          byteSize: fs.statSync(path.join(uploadDir, "spec.pdf")).size,
         },
         {
           name: "notes.txt",
           type: "document",
           mimeType: "text/plain",
-          data: Buffer.from("Important note").toString("base64"),
+          attachmentId: "notes.txt-id",
+          sourcePath: path.join(uploadDir, "notes.txt"),
+          byteSize: fs.statSync(path.join(uploadDir, "notes.txt")).size,
         },
         {
           name: "screen.png",
           type: "image",
           mimeType: "image/png",
-          data: Buffer.from("fixture-image").toString("base64"),
+          attachmentId: "screen.png-id",
+          sourcePath: path.join(uploadDir, "screen.png"),
+          byteSize: fs.statSync(path.join(uploadDir, "screen.png")).size,
         },
       ],
     });

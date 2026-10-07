@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Text } from "@/components/ui";
 import { ExitPlan } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader } from "./_shared";
@@ -9,7 +9,7 @@ export interface ExitPlanParams {
 }
 
 export function ExitPlanDisplay({ params }: { params: ExitPlanParams }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   const plan = params.plan || "";
   const charCount = plan.length;

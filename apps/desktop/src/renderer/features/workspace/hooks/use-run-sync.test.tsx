@@ -26,6 +26,51 @@ afterEach(() => {
 });
 
 describe("native voice transcript and work sync", () => {
+  it("settles previews only at a terminal status, marking stopped answers interrupted", () => {
+    const current: Run = { id: "run", status: "running", goal: "Stream", providerId: "codex" };
+    setTransport({ kind: "test", invoke: async () => ok(current),
+      subscribe: () => () => {}, status: () => "connected", onStatusChange: () => () => {} });
+    const store = configureStore({ reducer: { [baseApi.reducerPath]: baseApi.reducer },
+      middleware: (defaults) => defaults().concat(baseApi.middleware) });
+    const clearTurnStreams = vi.fn();
+    const cache = createRunCache();
+    const view = renderHook(({ status }: { status: Run["status"] | undefined }) => useRunSync({
+      runs: status ? [{ ...current, status }] : [], activeRunId: "run", cache,
+      loadRunDetails: vi.fn().mockResolvedValue(undefined), onRunUpdated: vi.fn(), clearTurnStreams,
+    }), { initialProps: { status: undefined as Run["status"] | undefined },
+      wrapper: ({ children }: { children: ReactNode }) => <Provider store={store}>{children}</Provider> });
+    try {
+      view.rerender({ status: "queued" });
+      view.rerender({ status: "running" });
+      expect(clearTurnStreams).not.toHaveBeenCalled();
+      view.rerender({ status: "canceled" });
+      expect(clearTurnStreams).toHaveBeenLastCalledWith(true);
+      view.rerender({ status: "succeeded" });
+      expect(clearTurnStreams).toHaveBeenLastCalledWith(false);
+    } finally { view.unmount(); store.dispatch(baseApi.util.resetApiState()); }
+  });
+
+  it("catches up immediately after subscribing when the first persisted push preceded run selection", async () => {
+    const listeners = new Map<string, (payload: unknown) => void>();
+    const current: Run = { id: "new-run-id", status: "running", goal: "Hello", providerId: "cursor" };
+    setTransport({ kind: "test", invoke: async () => ok(current),
+      subscribe: (channel, listener) => { listeners.set(channel, listener); return () => { listeners.delete(channel); }; },
+      status: () => "connected", onStatusChange: () => () => undefined });
+    const store = configureStore({ reducer: { [baseApi.reducerPath]: baseApi.reducer }, middleware: (defaults) => defaults().concat(baseApi.middleware) });
+    const cache = createRunCache();
+    const loadRunDetails = vi.fn().mockResolvedValue(undefined);
+    const view = renderHook(({ selected }: { selected: boolean }) => useRunSync({ runs: selected ? [current] : [],
+      activeRunId: selected ? current.id : null, cache, loadRunDetails, onRunUpdated: vi.fn(), clearTurnStreams: vi.fn() }),
+    { initialProps: { selected: false }, wrapper: ({ children }: { children: ReactNode }) => <Provider store={store}>{children}</Provider> });
+    try {
+      act(() => { listeners.get(CHANNELS.runs.eventPersisted)?.({ runId: current.id }); });
+      expect(loadRunDetails).not.toHaveBeenCalled();
+      view.rerender({ selected: true });
+      expect(loadRunDetails).toHaveBeenCalledExactlyOnceWith(current.id);
+      expect(listeners.has(CHANNELS.runs.eventPersisted)).toBe(true);
+    } finally { view.unmount(); store.dispatch(baseApi.util.resetApiState()); }
+  });
+
   it("refreshes idle speech and handles each successive work completion once", async () => {
     const listeners = new Map<string, (payload: unknown) => void>();
     let current: Run = { id: "voice", status: "succeeded", goal: "Existing chat", providerId: "codex" };
@@ -47,6 +92,8 @@ describe("native voice transcript and work sync", () => {
         onRunUpdated: (run) => setRuns([run]), clearTurnStreams: vi.fn() });
     }, { wrapper: ({ children }: { children: ReactNode }) => <Provider store={store}>{children}</Provider> });
     try {
+      expect(loadRunDetails).toHaveBeenCalledExactlyOnceWith("voice");
+      loadRunDetails.mockClear();
       act(() => { listeners.get(CHANNELS.runs.eventPersisted)?.({ runId: "another" }); });
       expect(loadRunDetails).not.toHaveBeenCalled();
       act(() => { listeners.get(CHANNELS.runs.eventPersisted)?.({ runId: "voice" }); });
@@ -195,7 +242,7 @@ describe("workspace diff updates after turn undo", () => {
         expect(invoke.mock.calls.filter(([channel, args]) =>
           channel === CHANNELS.workspace.getLatestDiffSummary && args[0] === "ws-b",
         )).toHaveLength(1);
-        expect(loadRunDetails).not.toHaveBeenCalled();
+        expect(loadRunDetails).toHaveBeenCalledExactlyOnceWith(activeRunId);
       } finally {
         view.unmount();
         subscriptions.forEach((subscription) => subscription.unsubscribe());

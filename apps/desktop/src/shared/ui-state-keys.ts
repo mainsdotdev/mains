@@ -3,6 +3,11 @@ export function runOwnerKey(backendId: string | null, runId: string): string {
   return JSON.stringify([backendId ?? "local", "run", runId]);
 }
 
+/** New conversations inherit preferences only from the same backend and provider. */
+export function providerSettingsKey(backendId: string | null, providerId: string): string {
+  return JSON.stringify([backendId ?? "local", providerId]);
+}
+
 /** Browser expansion in Code mode is shared by chats in one workspace. */
 export function workspaceBrowserExpansionKey(backendId: string | null, workspaceId: string): string {
   return JSON.stringify([backendId ?? "local", "browser-workspace", workspaceId]);

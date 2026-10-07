@@ -142,7 +142,7 @@ export function IconPickerPanel({
           ) : (
             <>
               {onSelectColor && (
-                <div className="flex items-center justify-between gap-1 pb-3 mb-3 border-b border-primary-950/10 dark:border-primary/10">
+                <div className="flex items-center justify-between gap-0.5 pb-3 mb-3 border-b border-primary-950/10 dark:border-primary/10">
                   {ICON_COLORS.map(({ name, label, swatch }) => {
                     const isSelected =
                       (iconColor || DEFAULT_ICON_COLOR) === name;
@@ -154,7 +154,7 @@ export function IconPickerPanel({
                         title={label}
                         aria-label={label}
                         aria-pressed={isSelected}
-                        className={`flex items-center justify-center size-6 rounded-full cursor-pointer transition-colors ${
+                        className={`flex items-center justify-center size-6 shrink-0 rounded-full cursor-pointer transition-colors ${
                           isSelected
                             ? "bg-primary-950/10 dark:bg-primary/10"
                             : "hover:bg-primary-950/10 dark:hover:bg-primary/10"

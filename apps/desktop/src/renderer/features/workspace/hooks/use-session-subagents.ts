@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useGetToolCallsByRunQuery } from "@/lib/redux/api";
+import { useGetSubagentToolCallsQuery } from "@/lib/redux/api";
 import {
   selectSessionSubagents,
   type SessionSubagent,
@@ -12,7 +12,7 @@ import { useRunEventRefetch } from "./use-run-event-refetch";
  * layout (content inset) and the box itself can never disagree.
  */
 export function useSessionSubagents(runId: string | null): SessionSubagent[] {
-  const { data: toolCalls, refetch } = useGetToolCallsByRunQuery(runId!, {
+  const { data: toolCalls, refetch } = useGetSubagentToolCallsQuery(runId!, {
     skip: !runId,
     refetchOnMountOrArgChange: true,
   });
@@ -28,7 +28,7 @@ export function useSessionSubagents(runId: string | null): SessionSubagent[] {
  * the answer FLIPS — not on every subagent tool-call update mid-run.
  */
 export function useHasSessionSubagents(runId: string | null): boolean {
-  const { hasSubagents } = useGetToolCallsByRunQuery(runId!, {
+  const { hasSubagents } = useGetSubagentToolCallsQuery(runId!, {
     skip: !runId,
     selectFromResult: ({ data }) => ({
       hasSubagents: selectSessionSubagents(data ?? []).length > 0,

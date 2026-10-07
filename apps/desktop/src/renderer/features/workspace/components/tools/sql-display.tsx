@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Layers } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
 import { coerceToolOutput } from "../../lib/parse-tool-content";
@@ -17,7 +17,7 @@ export function SqlDisplay({
   params: SqlParams;
   isCompact?: boolean;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   const { query, description } = normalize(params);
   const hasDetails = !!query;

@@ -11,8 +11,8 @@ import {
 } from "../../shared/app-icons";
 
 const ICON_CANVAS_SIZE = 1024;
-// Match the bundled app icon's 72px transparent inset for every Dock choice.
-const ICON_CONTENT_SIZE = 880;
+// PNG exports fill their canvas; leave the same margin as native macOS icons.
+const ICON_CONTENT_SIZE = 832;
 const ICON_INSET = (ICON_CANVAS_SIZE - ICON_CONTENT_SIZE) / 2;
 
 function statePath(): string {
@@ -44,6 +44,10 @@ export function getAppIconPath(id: AppIconId): string {
 }
 
 function loadDockImage(id: AppIconId): NativeImage {
+  if (app.isPackaged && id === DEFAULT_APP_ICON_ID) {
+    // Reset to the bundle icon so macOS can select its native appearances.
+    return nativeImage.createEmpty();
+  }
   const image = nativeImage.createFromPath(getAppIconPath(id));
   if (image.isEmpty()) throw new Error("That app icon is unavailable");
 
@@ -83,6 +87,7 @@ function setDockImage(id: AppIconId): void {
 export function applySavedDockIcon(): void {
   if (!app.dock) return;
   const selected = getSavedDockIcon();
+  if (app.isPackaged && selected === DEFAULT_APP_ICON_ID) return;
   try {
     setDockImage(selected);
   } catch (error) {

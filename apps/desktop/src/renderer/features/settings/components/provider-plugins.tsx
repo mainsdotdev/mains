@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, Fragment } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Heading2,
   Heading3,
@@ -1036,9 +1037,13 @@ const FEATURED_PLUGIN_NAMES = [
 
 function ProviderPluginCatalog({
   providerId = PROVIDER_IDS.codex,
+  selectedPluginId,
+  onSelectPlugin,
 }: {
   providerId?: string;
-} = {}) {
+  selectedPluginId: string | null;
+  onSelectPlugin: (pluginId: string | null) => void;
+}) {
   const {
     data: pluginData,
     isLoading,
@@ -1056,7 +1061,6 @@ function ProviderPluginCatalog({
   const [updatePlugin, { isLoading: isUpdating }] =
     useUpdateProviderPluginMutation();
 
-  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [installScope, setInstallScope] = useState<PluginScope>("user");
@@ -1249,7 +1253,7 @@ function ProviderPluginCatalog({
         <InstalledPluginShelf
           plugins={installedPlugins}
           isLoading={isLoading}
-          onSelect={setSelectedPluginId}
+          onSelect={onSelectPlugin}
         />
         <Muted>Loading plugins... This may take a moment on first load.</Muted>
       </div>
@@ -1262,7 +1266,7 @@ function ProviderPluginCatalog({
         <InstalledPluginShelf
           plugins={installedPlugins}
           isLoading={isLoading}
-          onSelect={setSelectedPluginId}
+          onSelect={onSelectPlugin}
         />
         <Muted>Failed to load plugins: {extractErrorMessage(error, "Unknown error")}</Muted>
       </div>
@@ -1276,7 +1280,7 @@ function ProviderPluginCatalog({
         plugin={selectedPlugin}
         providerId={providerId}
         marketplacePath={selectedPluginMarketplacePath}
-        onBack={() => setSelectedPluginId(null)}
+        onBack={() => onSelectPlugin(null)}
         onInstall={() => handleInstall(selectedPlugin.id)}
         onUninstall={() => handleUninstall(selectedPlugin.id)}
         onToggleEnabled={() => handleToggleEnabled(selectedPlugin.id, !selectedPlugin.enabled)}
@@ -1299,7 +1303,7 @@ function ProviderPluginCatalog({
       <InstalledPluginShelf
         plugins={installedPlugins}
         isLoading={isLoading}
-        onSelect={setSelectedPluginId}
+        onSelect={onSelectPlugin}
       />
 
       {/* Category filter + search */}
@@ -1361,7 +1365,7 @@ function ProviderPluginCatalog({
                 <PluginCard
                   compact
                   plugin={p}
-                  onSelect={() => setSelectedPluginId(p.id)}
+                  onSelect={() => onSelectPlugin(p.id)}
                   onInstall={() => handleInstall(p.id)}
                   onUninstall={() => handleUninstall(p.id)}
                   isInstalling={
@@ -1385,7 +1389,7 @@ function ProviderPluginCatalog({
               <PluginCard
                 key={p.id}
                 plugin={p}
-                onSelect={() => setSelectedPluginId(p.id)}
+                onSelect={() => onSelectPlugin(p.id)}
                 onInstall={() => handleInstall(p.id)}
                 onUninstall={() => handleUninstall(p.id)}
                 isInstalling={
@@ -1411,5 +1415,18 @@ export default function ProviderPlugins({
 }: {
   providerId?: string;
 } = {}) {
-  return <ProviderPluginCatalog providerId={providerId} />;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const onSelectPlugin = useCallback((pluginId: string | null) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (pluginId) next.set("plugin", pluginId);
+      else next.delete("plugin");
+      return next;
+    });
+  }, [setSearchParams]);
+  return <ProviderPluginCatalog
+    providerId={providerId}
+    selectedPluginId={searchParams.get("plugin")}
+    onSelectPlugin={onSelectPlugin}
+  />;
 }

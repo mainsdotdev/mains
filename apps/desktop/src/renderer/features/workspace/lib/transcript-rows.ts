@@ -502,7 +502,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
   return rows;
 }
 
-/** Speech and native voice tools stay in chronological chat flow. Typed turns
+/** Compaction boundaries, speech and native voice tools stay in chronological chat flow. Typed turns
  * keep the existing layout; voice work never adds a separate work disclosure. */
 export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
   const rows: TurnRenderRow[] = [];
@@ -525,7 +525,7 @@ export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
     const metadata = group.events[0]?.metadata;
     const workId = typeof metadata?.voiceWorkId === "string" ? metadata.voiceWorkId : null;
     const speech = group.events.some((event) => event.metadata?.voice === true || event.metadata?.kind === "voice-task");
-    if (!workId && !speech) continue;
+    if (group.type !== "context_compaction" && !workId && !speech) continue;
     flushRegular(regularStart, index);
     regularStart = index + 1;
     rows.push({ kind: "flat", indices: [index] });

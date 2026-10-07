@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { appEvents } from "@/lib/transport";
+import { isAssistantReportStream } from "../../../../shared/report-stream";
 
 export interface StreamingEvent {
   id: string;
@@ -84,7 +85,7 @@ export function useStreamingEvents(activeRunId: string | null, persistedStreamId
       const streamId = event.streamId;
       if (!streamId || persistedRef.current.has(streamId)) return;
       const previous = streamsRef.current.get(streamId);
-      if (previous?.metadata?.voice === true && previous.metadata.streaming === false) return;
+      if (previous?.metadata?.streaming === false) return;
 
       streamsRef.current.set(streamId, {
         kind: event.kind,
@@ -130,12 +131,22 @@ export function useStreamingEvents(activeRunId: string | null, persistedStreamId
 
   const streamingEvents = useSyncExternalStore(subscribe, getSnapshot);
 
-  const clearTurnStreams = useCallback(() => {
+  const clearTurnStreams = useCallback((interrupted = false) => {
     // A work turn finishing does not end its conversation's voice call.
+    // Keep assistant prose until its persisted identity is acknowledged;
+    // stopping work must never remove an answer while history is loading.
+    let changed = false;
     for (const [id, stream] of streamsRef.current) {
-      if (stream.metadata?.voice !== true) streamsRef.current.delete(id);
+      if (stream.metadata?.voice === true) continue;
+      if (isAssistantReportStream(stream)) {
+        if (stream.metadata?.streaming === false) continue;
+        streamsRef.current.set(id, { ...stream, metadata: { ...stream.metadata, streaming: false, interrupted } });
+      } else {
+        streamsRef.current.delete(id);
+      }
+      changed = true;
     }
-    notify();
+    if (changed) notify();
   }, [notify]);
 
   return { streamingEvents, clearTurnStreams };

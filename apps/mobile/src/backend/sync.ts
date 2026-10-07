@@ -20,6 +20,8 @@ import {
   type RunResponse,
   type RunStatusChangedEvent,
   type RunTurnResponse,
+  type RunHistoryPage,
+  type ReadRunHistoryPayload,
   type RunUpdatedEvent,
   type SkillSummary,
   type ToolApprovalRequest,
@@ -59,6 +61,7 @@ import { runSettingsFromConfig } from "@/lib/models";
 
 import { ProtocolMismatchError } from "./connection-supervisor";
 import type { WsTransport } from "./ws-transport";
+import { historyRequest, historyLoaded, historyLoading, forgetHistory } from "./run-history";
 
 /**
  * The sync layer: the only writer of the projection tables. It pulls snapshots
@@ -292,6 +295,7 @@ export async function syncPendingApprovals(transport: WsTransport, backendId: st
 }
 
 function deleteRunLocally(backendId: string, runId: string): void {
+  forgetHistory(backendId, runId);
   db.delete(pendingApprovals)
     .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId)))
     .run();
@@ -771,6 +775,10 @@ export function readArtifactImage(transport: WsTransport, artifactId: number): P
   ]);
 }
 
+export function readAttachmentImage(transport: WsTransport, runId: string, attachmentId: string): Promise<ArtifactImage> {
+  return invoke<ArtifactImage>(transport, CHANNELS.runArtifacts.readAttachmentImage, [{ runId, attachmentId, maxSide: 256 }]);
+}
+
 /** One Markdown file, resolved and guarded by its Work/Chat run on the Mac. */
 export function readRunTextFile(
   transport: WsTransport,
@@ -787,72 +795,36 @@ export function readRunTextFile(
 const inFlight = new Map<string, Promise<void>>();
 const pendingAgain = new Set<string>();
 
-async function syncRunOnce(transport: WsTransport, backendId: string, runId: string): Promise<void> {
-  const run = await invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]);
-  if (!run) {
-    deleteRunLocally(backendId, runId);
-    return;
+async function syncRunOnce(transport: WsTransport, backendId: string, runId: string, direction: ReadRunHistoryPayload["direction"]): Promise<void> {
+  historyLoading(backendId, runId, true);
+  try {
+    const run = await invoke<RunResponse | null>(transport, CHANNELS.runs.getById, [runId]);
+    if (!run) {
+      deleteRunLocally(backendId, runId);
+      return;
+    }
+    const [page, approvals] = await Promise.all([
+      invoke<RunHistoryPage>(transport, CHANNELS.runs.getHistory, [historyRequest(backendId, runId, direction)]),
+      invoke<PendingApproval[]>(transport, CHANNELS.runs.listPendingApprovals, [runId]),
+    ]);
+    // These are disposable phone projections. Complete history remains on the
+    // backend; replace only this run's local window in one SQLite transaction.
+    db.transaction(() => {
+      upsertRun(backendId, run);
+      db.delete(runArtifacts).where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId))).run();
+      db.delete(toolCalls).where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId))).run();
+      db.delete(runTurns).where(and(eq(runTurns.backendId, backendId), eq(runTurns.runId, runId))).run();
+      for (const artifact of page.artifacts) upsertArtifact(backendId, runId, artifact);
+      for (const call of page.toolCalls) upsertToolCall(backendId, runId, call);
+      for (const turn of page.turns) upsertTurn(backendId, turn);
+      db.delete(pendingApprovals).where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId))).run();
+      for (const request of approvals) upsertApproval(backendId, request, request.expiresAt);
+    });
+    historyLoaded(backendId, runId, page);
+  } catch (error) {
+    historyLoading(backendId, runId, false, error instanceof Error ? error.message : "Could not load conversation history");
+    throw error;
   }
-
-  // Turns are few and edit in place: always a full fetch (always correct).
-  // Artifacts are insert-only (cursor = max id) and tool calls update in
-  // place (cursor = max updatedAt): fetch only what's newer, exactly like
-  // the desktop's run cache.
-  const cursor = db
-    .select({
-      toolUpdatedAt: syncCursors.toolUpdatedAt,
-      artifactId: syncCursors.artifactId,
-    })
-    .from(syncCursors)
-    .where(and(eq(syncCursors.backendId, backendId), eq(syncCursors.runId, runId)))
-    .get();
-  const toolSince = cursor?.toolUpdatedAt ?? undefined;
-  const artifactSince = cursor?.artifactId ?? undefined;
-
-  const [turns, calls, artifacts, approvals] = await Promise.all([
-    invoke<RunTurnResponse[]>(transport, CHANNELS.runTurns.getByRun, [runId]),
-    invoke<ToolCallResponse[]>(transport, CHANNELS.runToolCalls.getByRun, [runId, toolSince]),
-    invoke<RunArtifactResponse[]>(transport, CHANNELS.runArtifacts.getByRun, [
-      runId,
-      artifactSince,
-    ]),
-    // Authoritative per run, so a missed request/resolved push heals on the
-    // next refetch instead of leaving a stale card.
-    invoke<PendingApproval[]>(transport, CHANNELS.runs.listPendingApprovals, [runId]),
-  ]);
-
-  db.transaction(() => {
-    upsertRun(backendId, run);
-    for (const turn of turns) upsertTurn(backendId, turn);
-    for (const call of calls) upsertToolCall(backendId, runId, call);
-    for (const artifact of artifacts) upsertArtifact(backendId, runId, artifact);
-    db.delete(pendingApprovals)
-      .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId)))
-      .run();
-    for (const request of approvals) upsertApproval(backendId, request, request.expiresAt);
-
-    let maxUpdated = toolSince?.getTime() ?? 0;
-    for (const call of calls) {
-      const updated = toDate(call.updatedAt)?.getTime() ?? 0;
-      if (updated > maxUpdated) maxUpdated = updated;
-    }
-    let maxArtifactId = artifactSince ?? 0;
-    for (const artifact of artifacts) {
-      if (artifact.id > maxArtifactId) maxArtifactId = artifact.id;
-    }
-    const cursorRow = {
-      toolUpdatedAt: maxUpdated > 0 ? new Date(maxUpdated) : null,
-      artifactId: maxArtifactId > 0 ? maxArtifactId : null,
-      fullSyncedAt: new Date(),
-    };
-    db.insert(syncCursors)
-      .values({ backendId, runId, ...cursorRow })
-      .onConflictDoUpdate({
-        target: [syncCursors.backendId, syncCursors.runId],
-        set: cursorRow,
-      })
-      .run();
-  });
 }
 
 /**
@@ -860,10 +832,11 @@ async function syncRunOnce(transport: WsTransport, backendId: string, runId: str
  * request that lands mid-load queues a single trailing reload, so two
  * concurrent syncs can't interleave into a partial transcript.
  */
-export function syncRun(transport: WsTransport, backendId: string, runId: string): Promise<void> {
+export function syncRun(transport: WsTransport, backendId: string, runId: string, direction: ReadRunHistoryPayload["direction"] = "refresh"): Promise<void> {
   const key = `${backendId}:${runId}`;
   const running = inFlight.get(key);
   if (running) {
+    if (direction !== "refresh") return running.catch(() => {}).then(() => syncRun(transport, backendId, runId, direction));
     pendingAgain.add(key);
     return running;
   }
@@ -871,7 +844,8 @@ export function syncRun(transport: WsTransport, backendId: string, runId: string
     try {
       do {
         pendingAgain.delete(key);
-        await syncRunOnce(transport, backendId, runId);
+        await syncRunOnce(transport, backendId, runId, direction);
+        direction = "refresh";
       } while (pendingAgain.has(key));
     } finally {
       inFlight.delete(key);

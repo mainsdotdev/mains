@@ -24,6 +24,46 @@ export function modeLabel(mode: ModeId): string {
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type RunTurnStatus = "active" | "completed";
 
+/** Chronological position; artifacts precede tools when timestamps tie. */
+export interface RunHistoryCursor {
+  timestamp: number;
+  source: "artifact" | "tool";
+  id: number;
+}
+
+export interface ReadRunHistoryPayload {
+  runId: string;
+  direction?: "latest" | "older" | "newer" | "refresh";
+  /** Inclusive beginning of the current window, or the boundary being crossed. */
+  cursor?: RunHistoryCursor;
+  /** Exclusive end of a historical window; omitted/null follows live history. */
+  end?: RunHistoryCursor | null;
+  /** Desktop transcript may fetch large command/read outputs on expansion. */
+  deferToolOutput?: boolean;
+}
+
+export interface DeferredToolOutput {
+  type: "mains/deferred-tool-output";
+  preview: string;
+  chars: number;
+}
+
+export function isDeferredToolOutput(value: unknown): value is DeferredToolOutput {
+  return !!value && typeof value === "object" &&
+    (value as DeferredToolOutput).type === "mains/deferred-tool-output";
+}
+
+export interface RunHistoryPage<A = RunArtifactResponse, C = ToolCallResponse, T = RunTurnResponse> {
+  artifacts: A[];
+  toolCalls: C[];
+  turns: T[];
+  start: RunHistoryCursor | null;
+  end: RunHistoryCursor | null;
+  last: RunHistoryCursor | null;
+  hasOlder: boolean;
+  hasNewer: boolean;
+}
+
 /** Explicit input for an active turn. Settings stay owned by that turn. */
 export interface RunSteerPayload {
   runId: string;
@@ -155,6 +195,41 @@ export interface ArtifactImage {
    */
   width: number | null;
   height: number | null;
+}
+
+/** Compact, durable prompt attachment. Bytes and host paths never live in history. */
+export interface StoredAttachment {
+  attachmentId: string;
+  name: string;
+  type: "image" | "document";
+  mimeType: string;
+  byteSize: number;
+}
+
+/** Upload input; sourcePath is restricted to backend-owned captures. */
+export interface FileAttachment {
+  name: string;
+  type: "image" | "document";
+  mimeType: string;
+  data?: string;
+  sourcePath?: string;
+}
+
+export interface ReadAttachmentImagePayload {
+  runId: string;
+  attachmentId: string;
+  /** 256 for transcript tiles; capped at 1600 for an expanded preview. */
+  maxSide?: number;
+}
+
+export interface ResolveAttachmentPathPayload {
+  runId: string;
+  attachmentId: string;
+}
+
+/** Fetched only when the user downloads an original, never with history. */
+export interface AttachmentFile extends StoredAttachment {
+  base64: string;
 }
 
 /**
@@ -292,15 +367,6 @@ export interface CommandSummary {
   argumentHint?: string;
   /** False for internal commands; those never list. */
   userFacing?: boolean;
-}
-
-/** A phone-local file serialized for the Mac's existing attachment pipeline. */
-export interface FileAttachment {
-  name: string;
-  type: "image" | "document";
-  /** Base64-encoded bytes without a data-URL prefix. */
-  data: string;
-  mimeType: string;
 }
 
 export interface StartRunPayload {

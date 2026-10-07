@@ -9,6 +9,7 @@ import {
 } from "@mains/backend/serve";
 import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime";
 import { createNodeBackendRuntime } from "@mains/backend/runtime/node-backend-runtime";
+import { serverImagePreview } from "./image-preview";
 
 export interface StandaloneServerOptions extends ServeOptions {
   dataDir: string;
@@ -37,6 +38,7 @@ export async function startStandaloneServer(
       appVersion: options.appVersion,
       appRoot: options.appRoot,
       resourcesPath: options.resourcesPath,
+      imagePreview: serverImagePreview,
     }),
   );
   const restoreIpc = configureIpcMainAdapter(null);

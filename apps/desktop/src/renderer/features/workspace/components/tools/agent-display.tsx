@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Text } from "@/components/ui";
 import { Bot } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader } from "./_shared";
@@ -10,7 +10,7 @@ export interface AgentParams {
 }
 
 export function AgentDisplay({ params, isCompact = false }: { params: AgentParams; isCompact?: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
   const hasPrompt = !!params.prompt;
 
   return (

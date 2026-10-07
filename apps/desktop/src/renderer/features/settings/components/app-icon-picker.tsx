@@ -1,18 +1,11 @@
 import { useEffect, useState } from "react";
-import {
-  Button,
-  getSegmentedTabId,
-  SegmentedTabs,
-  Text,
-  toast,
-} from "@/components/ui";
+import { Button, Text, toast } from "@/components/ui";
 import { Check } from "@/components/ui/icons";
 import { cn } from "@/lib/cn";
 import {
   appIconAssetPath,
   DARK_APP_ICON_ID,
   DEFAULT_APP_ICON_ID,
-  JAPANESE_GRADIENTS,
   LIGHT_APP_ICON_ID,
   BLUE_APP_ICON_ID,
   YELLOW_APP_ICON_ID,
@@ -20,36 +13,15 @@ import {
   PURPLE_APP_ICON_ID,
   GREEN_APP_ICON_ID,
   RISOGRAPH_ICONS,
-  UPDATES,
   type AppIconId,
 } from "../../../../shared/app-icons";
 import { SettingsSection } from "./settings-layout";
 
-type GradientVariant = "inside" | "outside";
-
-const GRADIENT_TABS: { value: GradientVariant; label: string }[] = [
-  { value: "inside", label: "Inside" },
-  { value: "outside", label: "Outside" },
-];
-const GRADIENT_TABS_ID = "app-icon-gradient-tabs";
-const GRADIENT_PANEL_ID = "app-icon-gradient-panel";
 const gridClassName = "grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-8";
-// Temporarily hide Japanese and Updates choices, including their placement tabs.
-const SHOW_GRADIENT_ICONS = false;
-const GRADIENT_GROUPS = [
-  {
-    id: "app-icon-japanese",
-    name: "Japanese gradients",
-    gradients: JAPANESE_GRADIENTS,
-  },
-  { id: "app-icon-updates", name: "Updates", gradients: UPDATES },
-] as const;
 
 /** The app icon is a local Mac preference, independent of provider themes. */
 export function AppIconPicker() {
   const [selected, setSelected] = useState<AppIconId | null>(null);
-  const [gradientVariant, setGradientVariant] =
-    useState<GradientVariant>("inside");
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
 
@@ -61,13 +33,6 @@ export function AppIconPicker() {
         if (!active) return;
         if (response.success) {
           setSelected(response.data);
-          if (
-            GRADIENT_GROUPS.some(({ gradients }) =>
-              gradients.some(({ outside }) => outside === response.data),
-            )
-          ) {
-            setGradientVariant("outside");
-          }
         } else toast.error(response.error);
       })
       .catch(() => {
@@ -95,17 +60,13 @@ export function AppIconPicker() {
     }
   };
 
-  const renderChoice = (
-    id: AppIconId,
-    name: string,
-    variant?: GradientVariant,
-  ) => {
+  const renderChoice = (id: AppIconId, name: string) => {
     const active = selected === id;
     return (
       <Button
         key={id}
         variant="bare"
-        aria-label={variant ? `${name}, color ${variant}` : name}
+        aria-label={name}
         aria-pressed={active}
         disabled={loading || pending}
         onClick={() => void selectIcon(id)}
@@ -180,10 +141,7 @@ export function AppIconPicker() {
           </div>
         </section>
 
-        <section
-          aria-labelledby="app-icon-risograph"
-          className={SHOW_GRADIENT_ICONS ? "mb-6" : undefined}
-        >
+        <section aria-labelledby="app-icon-risograph">
           <Text
             as="h3"
             id="app-icon-risograph"
@@ -197,57 +155,6 @@ export function AppIconPicker() {
             {RISOGRAPH_ICONS.map(({ id, name }) => renderChoice(id, name))}
           </div>
         </section>
-
-        {SHOW_GRADIENT_ICONS && (
-          <section aria-labelledby="app-icon-gradients">
-            <div className="mb-4 flex flex-wrap items-end justify-end gap-3">
-              {/* <Text as="h3" id="app-icon-gradients" size="sm" weight="semibold">
-                Alternative icons
-              </Text> */}
-              <SegmentedTabs
-                id={GRADIENT_TABS_ID}
-                value={gradientVariant}
-                onChange={setGradientVariant}
-                options={GRADIENT_TABS}
-                panelId={GRADIENT_PANEL_ID}
-                aria-label="Gradient color placement"
-                disabled={loading}
-                className="w-40"
-              />
-            </div>
-            <div
-              id={GRADIENT_PANEL_ID}
-              role="tabpanel"
-              aria-labelledby={getSegmentedTabId(
-                GRADIENT_TABS_ID,
-                gradientVariant,
-              )}
-            >
-              {GRADIENT_GROUPS.map(({ id, name, gradients }) => (
-                <section key={id} aria-labelledby={id} className="mb-6 last:mb-0">
-                  <Text
-                    as="h4"
-                    id={id}
-                    size="sm"
-                    weight="semibold"
-                    className="mb-2"
-                  >
-                    {name}
-                  </Text>
-                  <div className={gridClassName}>
-                    {gradients.map(({ name: gradientName, inside, outside }) =>
-                      renderChoice(
-                        gradientVariant === "inside" ? inside : outside,
-                        gradientName,
-                        gradientVariant,
-                      ),
-                    )}
-                  </div>
-                </section>
-              ))}
-            </div>
-          </section>
-        )}
       </div>
     </SettingsSection>
   );

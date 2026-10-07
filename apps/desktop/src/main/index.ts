@@ -64,7 +64,7 @@ import {
   registerWorkspaceDialogIpc,
   unregisterWorkspaceDialogIpc,
 } from "./modules/workspace/workspace.dialog.ipc";
-import { registerRunsIpc, unregisterRunsIpc, configureRunNotificationSink } from "@mains/backend/modules/runs";
+import { registerRunsIpc, unregisterRunsIpc, configureRunNotificationSink, startAttachmentMaintenance, stopAttachmentMaintenance } from "@mains/backend/modules/runs";
 import { createElectronRunNotificationSink } from "./modules/runs/run-notifications";
 import { runSessionRegistry } from "@mains/backend/modules/runs";
 import { registerProjectsIpc, unregisterProjectsIpc } from "@mains/backend/modules/projects";
@@ -842,6 +842,7 @@ async function initializeApp() {
     registerProjectsIpc();
     registerCollectionsIpc();
     registerRunsIpc();
+    startAttachmentMaintenance();
     registerFileExplorerIpc();
     registerFileExplorerDialogIpc();
     registerGitFlowIpc();
@@ -1193,6 +1194,7 @@ async function cleanupApp() {
     unregisterWorkspaceDialogIpc();
     unregisterProjectsIpc();
     unregisterCollectionsIpc();
+    await stopAttachmentMaintenance();
     unregisterRunsIpc();
     unregisterFileExplorerIpc();
     unregisterFileExplorerDialogIpc();

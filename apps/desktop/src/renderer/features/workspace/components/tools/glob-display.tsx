@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useToolExpansion } from "../../lib/transcript-view-state";
 import { Glob } from "@/components/ui/icons";
 import { TOOL_ROW_TEXT, ToolCollapse, ToolHeader, ToolOutputBody } from "./_shared";
 import { coerceToolOutput } from "../../lib/parse-tool-content";
@@ -10,7 +10,7 @@ export interface GlobParams {
 }
 
 export function GlobDisplay({ params, output, isCompact = false }: { params: GlobParams; output?: unknown; isCompact?: boolean }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useToolExpansion(false);
 
   const { filenames, numFiles } = parseGlobOutput(output);
   const hasFiles = filenames.length > 0;

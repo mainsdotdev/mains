@@ -5,14 +5,12 @@ import type { useVirtualizer } from "@pierre/diffs/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useReviewFileNavigation, type ReviewFileNavigation } from "./use-review-file-navigation";
 
-const motion = vi.hoisted(() => ({ reduced: false }));
-vi.mock("motion/react", () => ({ useReducedMotion: () => motion.reduced }));
-afterEach(() => { cleanup(); motion.reduced = false; });
+afterEach(cleanup);
 
 function setup() {
   const getOffsetInScrollContainer = vi.fn(() => 12000);
   const scrollTo = vi.fn();
-  const virtualizer = { getOffsetInScrollContainer, scrollTo } as unknown as ReturnType<typeof useVirtualizer>;
+  const virtualizer = { getOffsetInScrollContainer, scrollTo, markDOMDirty: vi.fn() } as unknown as ReturnType<typeof useVirtualizer>;
   const navigation = createRef<ReviewFileNavigation>();
   const hook = renderHook(() => useReviewFileNavigation(virtualizer, navigation));
   const target = { element: document.createElement("section"), expand: vi.fn(), focus: vi.fn() };
@@ -26,7 +24,7 @@ describe("review file navigation", () => {
     expect(target.expand).toHaveBeenCalledOnce();
     expect(target.focus).toHaveBeenCalledOnce();
     expect(getOffsetInScrollContainer).toHaveBeenCalledWith(target.element);
-    expect(scrollTo).toHaveBeenCalledWith({ top: 12000, behavior: "smooth" });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 12000, behavior: "instant" });
   });
 
   it("keeps a replacement target when an old registration cleans up, and ignores removed files", () => {
@@ -42,12 +40,11 @@ describe("review file navigation", () => {
     expect(scrollTo).toHaveBeenCalledOnce();
   });
 
-  it("uses an immediate jump for reduced motion and clamps offsets above the scroll root", () => {
-    motion.reduced = true;
+  it("uses an immediate jump and clamps offsets above the scroll root", () => {
     const { result, navigation, target, getOffsetInScrollContainer, scrollTo } = setup();
     getOffsetInScrollContainer.mockReturnValue(-4);
     result.current("a.ts", target);
     navigation.current!.jumpToFile("a.ts");
-    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "auto" });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "instant" });
   });
 });

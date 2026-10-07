@@ -20,8 +20,12 @@ vi.mock("../projects", () => ({
 vi.mock("../runs", () => ({
   managedExecutionRoots: () => rows.managedRoots,
 }));
+vi.mock("../collections", () => ({
+  collectionsService: { isStoredSourceFile: async () => false },
+}));
 
-import { assertWithinContentRoots } from "./fileExplorer.roots";
+import { assertWithinContentRoots, assertWithinReadableContentRoots } from "./fileExplorer.roots";
+import { rememberSkillDocuments } from "../providers/skill-document-paths";
 
 let tmpDir: string;
 
@@ -39,6 +43,7 @@ describe("assertWithinContentRoots", () => {
   });
 
   afterEach(async () => {
+    await rememberSkillDocuments("test-provider", undefined, []);
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -129,5 +134,36 @@ describe("assertWithinContentRoots", () => {
     await expect(
       assertWithinContentRoots(path.join(tmpDir, "a.ts")),
     ).resolves.toBeUndefined();
+  });
+
+  it("admits only discovered global skill documents for reading, with no write access", async () => {
+    const skillPath = path.join(tmpDir, "SKILL.md");
+    const otherPath = path.join(tmpDir, "notes.md");
+    await fs.writeFile(skillPath, "# Skill");
+    await fs.writeFile(otherPath, "# Private notes");
+    await rememberSkillDocuments("test-provider", undefined, [
+      { path: skillPath }, { path: otherPath }, { path: path.join(tmpDir, "missing", "SKILL.md") },
+    ]);
+
+    await expect(assertWithinReadableContentRoots(skillPath)).resolves.toBeUndefined();
+    await expect(assertWithinReadableContentRoots(otherPath)).rejects.toThrow("Path is outside your workspaces");
+    await expect(assertWithinContentRoots(skillPath)).rejects.toThrow("Path is outside your workspaces");
+    await rememberSkillDocuments("test-provider", undefined, []);
+    await expect(assertWithinReadableContentRoots(skillPath)).rejects.toThrow("Path is outside your workspaces");
+  });
+
+  it("records symlink targets exactly, without following a later replacement", async () => {
+    const skillPath = path.join(tmpDir, "source.md");
+    const otherPath = path.join(tmpDir, "private.md");
+    const linkedPath = path.join(tmpDir, "SKILL.md");
+    await fs.writeFile(skillPath, "# Skill");
+    await fs.writeFile(otherPath, "# Private");
+    await fs.symlink(skillPath, linkedPath);
+    await rememberSkillDocuments("test-provider", undefined, [{ path: linkedPath }]);
+    await expect(assertWithinReadableContentRoots(await fs.realpath(linkedPath))).resolves.toBeUndefined();
+    await fs.unlink(linkedPath);
+    await fs.symlink(otherPath, linkedPath);
+    await expect(assertWithinReadableContentRoots(await fs.realpath(linkedPath)))
+      .rejects.toThrow("Path is outside your workspaces");
   });
 });

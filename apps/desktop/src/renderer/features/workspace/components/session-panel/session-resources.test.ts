@@ -64,6 +64,16 @@ const outputFile = (overrides: Partial<RunOutputFile>): RunOutputFile => ({
 });
 
 describe("buildSessionResources", () => {
+  it("retains the run identity of durable image and document references", () => {
+    const result = buildSessionResources({ context: [], toolCalls: [], artifacts: [artifact({ kind: "user-prompt" as RunArtifact["kind"], metadata: { attachments: [
+      { attachmentId: "image-id", name: "screen.png", type: "image", mimeType: "image/png", byteSize: 100 },
+      { attachmentId: "document-id", name: "notes.txt", type: "document", mimeType: "text/plain", byteSize: 10 },
+    ] } })] });
+    expect(result.sources.map((row) => row.target)).toEqual([
+      { type: "image", value: "attachment:image-id", attachmentId: "image-id", runId: "run-1" },
+      { type: "file", value: "attachment:document-id", attachmentId: "document-id", runId: "run-1" },
+    ]);
+  });
   it("projects collection, editor, and browser context with provenance", () => {
     const result = buildSessionResources({
       context: [
