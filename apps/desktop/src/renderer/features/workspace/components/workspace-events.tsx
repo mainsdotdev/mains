@@ -47,7 +47,7 @@ import { selectActiveTool } from "../lib/select-active-tool";
 import { selectActiveCompaction } from "../lib/select-active-compaction";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
-import { ArrowUp, Brain, Fork } from "@/components/ui/icons";
+import { ArrowUp, Brain, ChevronDown, Fork } from "@/components/ui/icons";
 import {
   useGetAppSettingsQuery,
   useGetProviderAccountInfoQuery,
@@ -850,14 +850,6 @@ export function WorkspaceEvents({
               {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction && (
                 <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />
               )}
-              {history?.historical && (
-                <div className="flex justify-center gap-4 text-xs text-secondary py-2">
-                  {history.hasNewer && <button type="button" disabled={history.loading}
-                    onClick={() => void pageHistory("newer")}>Load newer messages</button>}
-                  <button type="button" disabled={history.loading}
-                    onClick={() => void pageHistory("latest")}>Jump to latest</button>
-                </div>
-              )}
               <div ref={eventsEndRef} />
             </div>
             </div>
@@ -869,6 +861,19 @@ export function WorkspaceEvents({
             onSelect={scrollToTurn}
             transcriptRef={transcriptRef}
           />
+        )}
+        {hasRunContent && history?.historical && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 z-(--z-base) flex justify-center group-has-data-voice-orb-overlay/voice-chat:bottom-52 sm:group-has-data-voice-orb-overlay/voice-chat:bottom-68">
+            <Button
+              aria-label="Jump to latest"
+              tooltip="Jump to latest"
+              disabled={history.loading}
+              onClick={() => void pageHistory("latest")}
+              className="pointer-events-auto flex size-8 items-center justify-center rounded-full border border-primary-200 bg-primary text-primary-700 shadow-sm enabled:hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/40 dark:border-primary-800 dark:bg-primary-950 dark:text-primary-200 dark:enabled:hover:bg-primary-900"
+            >
+              <ChevronDown className="size-5" aria-hidden="true" />
+            </Button>
+          </div>
         )}
       </div>
       {/* Anchor fades to the chat surface beneath the floating voice orb. */}

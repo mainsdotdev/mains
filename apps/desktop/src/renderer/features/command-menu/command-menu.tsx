@@ -19,7 +19,7 @@ import {
   Connect,
   Document,
   Enter,
-  Mains,
+  MainsStroke,
   Plus,
   Project,
   ProjectFolder,
@@ -710,7 +710,7 @@ export function CommandMenu() {
         className="flex min-h-0 flex-col gap-3 bg-transparent"
       >
         <div className="glass-command flex h-14 shrink-0 items-center gap-3 rounded-3xl px-4 backdrop-blur-sm ">
-          <Mains className="size-5 shrink-0 text-primary-500 dark:text-primary-400" />
+          <MainsStroke className="size-5 shrink-0 text-primary-500 dark:text-primary-400" />
           <Command.Input
             ref={inputRef}
             value={query}
