@@ -98,9 +98,14 @@ async function generatedForRun(runId: string, accountId: string): Promise<AtlasG
     try { metadata = artifact.metadata ? JSON.parse(artifact.metadata) : {}; } catch { /* Legacy metadata. */ }
     if (metadata.working || metadata.viewed) continue;
     const file = typeof metadata.path === "string" ? metadata.path : artifact.path;
-    if (file) candidates.add(path.isAbsolute(file) ? file : path.resolve(roots[0], file));
+    if (!file) continue;
+    const resolved = path.isAbsolute(file) ? file : path.resolve(roots[0], file);
+    // Mentioned paths belong to the transcript, not the image library. Keep
+    // native generation results, including Codex's inline-image fallback.
+    if (classify(resolved)?.kind === "image" && metadata.source !== "codex_image_generation") continue;
+    candidates.add(resolved);
   }
-  // Folder discovery supplies documents; images need explicit output provenance.
+  // Run-folder discovery supplies documents; native image discovery is below.
   for (const file of await runsService.listRunOutputFiles(runId)) {
     if (classify(file.absolutePath)?.kind === "file") candidates.add(file.absolutePath);
   }

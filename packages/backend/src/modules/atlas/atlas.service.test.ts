@@ -102,7 +102,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(atlasService.list({ accountId: "default" })).toEqual([]);
     expect(fs.existsSync(path.join(directory, "atlas"))).toBe(false);
   });
-  it.each(["work", "chat"] as const)("excludes images discovered only in a %s folder while retaining documents and registered images", async (mode) => {
+  it.each(["work", "chat"] as const)("excludes scanned and artifact-registered images in a %s folder while retaining documents", async (mode) => {
     const runId = `folder-${mode}`;
     createRun(db, { id: runId, mode });
     const files = ["screenshot.PNG", "nested/chart.svg", "export.webp", "report.pdf", "summary.txt", "registered.png"]
@@ -118,8 +118,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     vi.mocked(runsService.listRunOutputFiles).mockResolvedValueOnce(files);
 
     const result = await atlasService.generated({ accountId: "default" });
-    expect(result.items.map((item) => item.fileName).sort()).toEqual(["registered.png", "report.pdf", "summary.txt"]);
-    expect(result.items.find((item) => item.fileName === "registered.png")?.origin).toBe("generated");
+    expect(result.items.map((item) => item.fileName).sort()).toEqual(["report.pdf", "summary.txt"]);
   });
   it("projects and saves Codex images from the run's native thread folder", async () => {
     vi.spyOn(os, "homedir").mockReturnValue(directory);
@@ -132,6 +131,10 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     fs.writeFileSync(unregistered, "older image");
     createRunArtifact(db, { runId: "codex-run", kind: "image", path: registered,
       metadata: JSON.stringify({ path: registered, source: "codex_image_generation" }) });
+    const copy = path.join(root("codex-run"), "generated-copy.png");
+    fs.mkdirSync(path.dirname(copy), { recursive: true });
+    fs.copyFileSync(registered, copy);
+    createRunArtifact(db, { runId: "codex-run", kind: "image", metadata: JSON.stringify({ path: copy }) });
     const unrelated = path.join(directory, ".codex", "generated_images", "other-thread", "private.png");
     fs.mkdirSync(path.dirname(unrelated));
     fs.writeFileSync(unrelated, "another thread");
@@ -142,6 +145,15 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     const saved = await atlasService.saveFile({ accountId: "default", runId: "codex-run", path: registered });
     expect(fs.readFileSync(saved.path!, "utf8")).toBe("generated image");
     await expect(atlasService.saveFile({ accountId: "default", runId: "codex-run", path: unrelated })).rejects.toThrow("outside");
+  });
+  it("retains explicit native image-generation results when Codex returns inline pixels", async () => {
+    createRun(db, { id: "inline-image", providerId: "codex", mode: "work" });
+    const image = path.join(directory, "generated-images", "inline-image", "generated.png");
+    fs.mkdirSync(path.dirname(image), { recursive: true });
+    fs.writeFileSync(image, "native image output");
+    createRunArtifact(db, { runId: "inline-image", kind: "image", path: image,
+      metadata: JSON.stringify({ path: image, source: "codex_image_generation" }) });
+    expect((await atlasService.generated({ accountId: "default" })).items.map((item) => item.path)).toEqual([fs.realpathSync(image)]);
   });
   it("projects durable image attachments separately from creations and can save their originals", async () => {
     createRun(db, { id: "uploads", mode: "chat" });
@@ -200,7 +212,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     await expect(atlasService.saveFile({ accountId: "default", runId: "conversation", path: escape })).rejects.toThrow("outside");
   });
   it("paginates conversations including older generated files", async () => {
-    output("one.pdf", "first"); output("two.png", "second");
+    output("one.pdf", "first"); output("two.pdf", "second");
     const first = await atlasService.generated({ accountId: "default", limit: 1 });
     const second = await atlasService.generated({ accountId: "default", limit: 1, offset: first.nextOffset! });
     expect(first.items).toHaveLength(1); expect(second.items).toHaveLength(1);

@@ -140,7 +140,8 @@ describe("Atlas image creator", () => {
     expect(mocks.execute).not.toHaveBeenCalled(); expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it("replaces the previous template and draft, keeps the skill attached and leaves artwork empty", () => {
+  // Re-enable with the temporarily hidden templates section.
+  it.skip("replaces the previous template and draft, keeps the skill attached and leaves artwork empty", () => {
     const { store, owner } = setup(); typePrompt("My old idea");
     fireEvent.click(screen.getByRole("button", { name: "Poster template" }));
     expect(store.getState().workspace.draftTextByKey[owner]).toContain("$imagegen Create a poster");
@@ -178,13 +179,12 @@ describe("Atlas image creator", () => {
     expect(mocks.refreshSkills).toHaveBeenCalledOnce();
   });
 
-  it("uses a direct image-only picker for plus and Upload a photo", () => {
+  it("uses a direct image-only picker for plus", () => {
     setup();
     const input = screen.getByLabelText("Upload images") as HTMLInputElement;
     const click = vi.spyOn(input, "click");
     fireEvent.click(screen.getByRole("button", { name: "Upload image" }));
     expect(input.accept).toBe("image/*"); expect(click).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole("button", { name: "Upload a photo" })); expect(click).toHaveBeenCalledTimes(2);
     const file = new File(["pixels"], "photo.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file, new File(["pdf"], "report.pdf", { type: "application/pdf" })] } });
     expect(screen.getByRole("img", { name: "photo.png" })).toBeTruthy();

@@ -9,7 +9,7 @@ import {
 } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Heading3, Muted, Text, toast } from "@/components/ui";
-import { Plus } from "@/components/ui/icons";
+// import { Plus } from "@/components/ui/icons";
 import { PageShell } from "@/components/layout/page-shell";
 import {
   ActiveSpaceOverrideProvider,
@@ -53,7 +53,7 @@ import {
   findImageGenSkill,
   isImageGenAvailable,
   hasImageInstruction,
-  IMAGE_TEMPLATES,
+  // IMAGE_TEMPLATES,
   imageGenContext,
   imagePrompt,
 } from "../lib/image-creation";
@@ -532,6 +532,7 @@ function ImageComposer({
                 </Text>
               )}
               {composer}
+              {/* Templates are temporarily hidden until this section is revisited.
               <section className="mt-10" aria-label="Image templates">
                 <Text className="mb-4" weight="medium">
                   Templates
@@ -561,6 +562,7 @@ function ImageComposer({
                   ))}
                 </div>
               </section>
+              */}
             </div>
           </div>
         )}

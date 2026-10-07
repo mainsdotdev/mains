@@ -20,7 +20,7 @@ import type { Run, RunEvent } from "../types";
 import type { ModeId } from "../../../../shared/modes";
 import { toast } from "@/components/ui";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { workspaceApi, useArchiveRunMutation } from "@/lib/redux/api";
+import { runsApi, useArchiveRunMutation } from "@/lib/redux/api";
 import { clearPendingRunId, setActiveTab } from "@/lib/redux/slices/workspaceSlice";
 import { createRunCache } from "../lib/run-cache";
 import { useRunOperations } from "./use-run-operations";
@@ -141,7 +141,9 @@ export function useWorkspaceRuns(
       const newId = runResult.data.id;
       setRuns((prev) => [runResult.data, ...prev.filter((run) => run.id !== newId)]);
       setActiveRunId(newId);
-      dispatch(workspaceApi.util.invalidateTags(["Workspaces"]));
+      // Embedded conversations can start while the chat sidebar is unmounted.
+      // Refresh its retained list without depending on a title/status push.
+      dispatch(runsApi.util.invalidateTags(["Runs", "Workspaces"]));
       cache.touch(newId);
       void loadRunDetails(newId);
       return newId;

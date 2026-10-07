@@ -43,7 +43,7 @@ vi.mock("@/lib/redux/hooks", () => ({
     selector({ workspace: { pendingRunId: null } }),
 }));
 vi.mock("@/lib/redux/api", () => ({
-  workspaceApi: { util: { invalidateTags: vi.fn() } },
+  runsApi: { util: { invalidateTags: vi.fn() } },
   useArchiveRunMutation: () => [vi.fn()],
 }));
 vi.mock("@/components/ui", () => ({ toast: { error: vi.fn() } }));
