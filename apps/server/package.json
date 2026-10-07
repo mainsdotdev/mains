@@ -1,6 +1,6 @@
 {
   "name": "@mains/server",
-  "version": "0.16.0-preview.20261006",
+  "version": "0.16.0",
   "description": "Standalone Mains backend and web UI",
   "type": "commonjs",
   "license": "MIT",
