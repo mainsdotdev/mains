@@ -32,12 +32,12 @@ export function AtlasPageCard({ item, activity, menu, imagePaths, onOpen, fitCon
       <Button
         aria-label={`Open ${item.title}`}
         onClick={onOpen}
-        className={`relative block w-full overflow-hidden p-5 text-left focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${fitContent && rows.length ? "min-h-32 max-h-120" : "aspect-square"}`}
+        className={`relative block w-full overflow-hidden p-5 text-left focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${fitContent && rows.length ? "min-h-32 max-h-80" : "aspect-square"}`}
       >
         {rows.length ? (
           <span aria-hidden="true" className={`pointer-events-none block overflow-hidden text-xxs leading-relaxed text-primary-800 dark:text-primary-200 ${fitContent ? "relative" : "absolute inset-5"}`}>
             {rows.map((row, index) => (
-              <span key={index} style={row.depth ? { paddingLeft: row.depth * 10 } : undefined} className={`mb-1.5 block break-words ${
+              <span key={index} style={row.depth ? { paddingLeft: row.depth * 10 } : undefined} className={`mb-1.5 block wrap-break-word ${
                 row.kind === "heading" ? `mt-3 font-semibold first:mt-0 ${row.level === 1 ? "text-sm" : "text-xs"}`
                   : row.kind === "quote" ? "border-l-2 border-primary-400/40 pl-2 italic"
                     : row.kind === "code" ? "font-mono text-t"

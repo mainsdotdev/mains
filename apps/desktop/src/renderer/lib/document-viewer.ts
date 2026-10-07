@@ -10,7 +10,7 @@ export type OfficeDocType = "docx" | "xlsx" | "pptx";
  * and typography instead of living behind a shadow boundary. PDFs are drawn
  * page by page onto canvases by pdf.js.
  */
-export type DocType = OfficeDocType | "md" | "pdf";
+export type DocType = OfficeDocType | "md" | "pdf" | "txt";
 
 /** Renderer module key dispatched on by the render host. */
 export type RendererKey = OfficeDocType;
@@ -22,6 +22,7 @@ const EXT_TO_DOC_TYPE: Record<string, DocType> = {
   ".md": "md",
   ".markdown": "md",
   ".pdf": "pdf",
+  ".txt": "txt",
 };
 
 /**
@@ -45,6 +46,7 @@ export const DOC_VIEWER_LABELS: Record<DocType, string> = {
   pptx: "Presentation",
   md: "Markdown",
   pdf: "PDF Document",
+  txt: "Text Document",
 };
 
 /** Text formats render as React, not as bytes through the shadow-DOM host. */

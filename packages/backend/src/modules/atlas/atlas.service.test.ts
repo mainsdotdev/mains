@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
+import type { RunOutputFile } from "@mains/contracts/runs";
 import { createTestDb } from "../../../test/setup-db";
 import { createAccount, createRun, createRunArtifact } from "../../../test/factories";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
@@ -13,19 +14,23 @@ let db: DatabaseInstance;
 let directory: string;
 let cleanup: () => void;
 let restoreRuntime: () => void;
-const root = (id: string) => path.join(directory, "runs", id, "work");
+const root = (id: string, mode = "work") => path.join(directory, "runs", id, mode);
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 // Keep the integration focused on Atlas' real SQLite/storage boundary.
 vi.mock("../runs", () => ({ runsService: {
   getRunById: async (id: string) => db.select().from(runs).where(eq(runs.id, id)).get() ?? null,
-  getRunExecutionRoot: async (id: string) => root(id),
-  listRunOutputFiles: async () => [],
+  getRunExecutionRoot: async (id: string) => {
+    const run = db.select().from(runs).where(eq(runs.id, id)).get();
+    return root(id, run?.mode ?? "work");
+  },
+  listRunOutputFiles: vi.fn(async (_id: string): Promise<RunOutputFile[]> => []),
   listRunAttachmentFiles: async (id: string) => {
     const { listRunAttachmentFiles } = await import("../runs/run-attachment-storage");
     return listRunAttachmentFiles(id);
   },
 } }));
 import { atlasService } from "./atlas.service";
+import { runsService } from "../runs";
 import { prepareRunAttachments } from "../runs/run-attachment-storage";
 import { handleAtlasCreatePage, handleAtlasReadPage, handleAtlasUpdatePage } from "../providers/adapters/atlas-tools";
 
@@ -96,6 +101,25 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(result.items.map((item) => item.path)).toEqual([fs.realpathSync(file)]);
     expect(atlasService.list({ accountId: "default" })).toEqual([]);
     expect(fs.existsSync(path.join(directory, "atlas"))).toBe(false);
+  });
+  it.each(["work", "chat"] as const)("excludes images discovered only in a %s folder while retaining documents and registered images", async (mode) => {
+    const runId = `folder-${mode}`;
+    createRun(db, { id: runId, mode });
+    const files = ["screenshot.PNG", "nested/chart.svg", "export.webp", "report.pdf", "summary.txt", "registered.png"]
+      .map((relativePath): RunOutputFile => {
+        const absolutePath = path.join(root(runId, mode), relativePath);
+        fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+        fs.writeFileSync(absolutePath, "output contents");
+        const stats = fs.statSync(absolutePath);
+        return { fileName: path.basename(absolutePath), relativePath, absolutePath,
+          size: stats.size, modifiedAt: stats.mtimeMs };
+      });
+    createRunArtifact(db, { runId, kind: "image", path: path.join(root(runId, mode), "registered.png") });
+    vi.mocked(runsService.listRunOutputFiles).mockResolvedValueOnce(files);
+
+    const result = await atlasService.generated({ accountId: "default" });
+    expect(result.items.map((item) => item.fileName).sort()).toEqual(["registered.png", "report.pdf", "summary.txt"]);
+    expect(result.items.find((item) => item.fileName === "registered.png")?.origin).toBe("generated");
   });
   it("projects and saves Codex images from the run's native thread folder", async () => {
     vi.spyOn(os, "homedir").mockReturnValue(directory);

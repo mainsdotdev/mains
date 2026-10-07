@@ -1127,9 +1127,19 @@ const api = {
       return () => ipcRenderer.removeListener(CHANNELS.app.flushAndQuit, listener);
     },
     onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
-      const listener = (_: any, isFullscreen: boolean) => callback(isFullscreen);
+      let acceptSnapshot = true;
+      const listener = (_: unknown, isFullscreen: boolean) => {
+        acceptSnapshot = false;
+        callback(isFullscreen);
+      };
       ipcRenderer.on(CHANNELS.app.fullscreenChange, listener);
+      // A remounted shell or a reload can miss the enter/leave event. Subscribe
+      // first, then seed the current state without overwriting a newer event.
+      void ipcRenderer.invoke(CHANNELS.app.getFullscreen).then((result: ServiceResponse<boolean>) => {
+        if (acceptSnapshot && result.success && typeof result.data === "boolean") callback(result.data);
+      }).catch(() => { /* Native changes remain available if the window closes during the read. */ });
       return () => {
+        acceptSnapshot = false;
         ipcRenderer.removeListener(CHANNELS.app.fullscreenChange, listener);
       };
     },

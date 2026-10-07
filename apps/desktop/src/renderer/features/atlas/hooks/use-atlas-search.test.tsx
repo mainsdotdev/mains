@@ -26,8 +26,8 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("Atlas search navigation", () => {
-  it("keeps fast typing intact and preserves active filters in the search URL", async () => {
-    const input = setup(["/atlas?type=file&view=saved&project=mains&focus=search"]);
+  it.each(["saved", "uploads"])("keeps fast typing intact and preserves the %s filter in the search URL", async (scope) => {
+    const input = setup([`/atlas?type=file&view=${scope}&project=mains&focus=search`]);
     let value = "";
     for (const character of "missing-result") {
       value += character;
@@ -37,7 +37,7 @@ describe("Atlas search navigation", () => {
     await act(async () => vi.advanceTimersByTime(300));
     expect(input.value).toBe("missing-result");
     const url = new URL(screen.getByTestId("url").textContent!, "http://localhost");
-    expect(Object.fromEntries(url.searchParams)).toEqual({ type: "file", view: "saved", project: "mains", q: "missing-result" });
+    expect(Object.fromEntries(url.searchParams)).toEqual({ type: "file", view: scope, project: "mains", q: "missing-result" });
   });
 
   it("cancels an unfinished search when the user changes categories", async () => {

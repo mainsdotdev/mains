@@ -59,15 +59,22 @@ describe("Atlas Page presentation", () => {
     const cover = screen.getByRole("img", { name: "Page cover" });
     expect(cover.style.objectPosition).toBe("50% 25%");
     fireEvent.click(screen.getByRole("button", { name: "Reposition" }));
-    fireEvent.change(screen.getByRole("slider", { name: "Cover vertical position" }), { target: { value: "80" } });
+    const slider = screen.getByRole("slider", { name: "Cover vertical position" });
+    expect(slider.getAttribute("aria-orientation")).toBe("vertical");
+    expect(document.activeElement).toBe(slider);
+    for (const name of ["Change cover", "Reposition", "Remove"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    fireEvent.change(slider, { target: { value: "80" } });
     expect(cover.style.objectPosition).toBe("50% 80%");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(slider, { key: "Escape" });
     expect(cover.style.objectPosition).toBe("50% 25%");
     fireEvent.click(screen.getByRole("button", { name: "Reposition" }));
     fireEvent.change(screen.getByRole("slider", { name: "Cover vertical position" }), { target: { value: "70" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save position" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(store.getState().atlas.coverPositions[ownerKey].page).toEqual({ coverFileId: "cover", coverPositionY: 70 });
     expect(cover.style.objectPosition).toBe("50% 70%");
+    expect(screen.queryByRole("slider")).toBeNull();
+    expect(screen.getByRole("button", { name: "Reposition" })).toBeTruthy();
     expect(mocks.update).not.toHaveBeenCalled();
   });
   it("centers a changed cover instead of applying the previous image's framing", () => {

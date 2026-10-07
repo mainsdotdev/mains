@@ -2,6 +2,8 @@ import { CHANNELS } from "@mains/contracts/channels";
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedPage, AtlasIdentity, AtlasItem, AtlasListItem, AtlasListOptions,
   AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import { baseApi } from "./baseApi";
+import type { RootState } from "../index";
+import { closeAtlasPageTab } from "../slices/atlasSlice";
 
 export const atlasApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
@@ -44,10 +46,25 @@ export const atlasApi = baseApi.injectEndpoints({
     updateAtlasItem: builder.mutation<AtlasItem, AtlasUpdateItem>({
       query: (input) => ({ handler: CHANNELS.atlas.update, args: [input] }),
       invalidatesTags: (_r, e, { id }) => e ? [] : ["Atlas", { type: "AtlasPage", id }],
+      async onQueryStarted({ accountId, id, trashed }, { dispatch, getState, queryFulfilled }) {
+        if (!trashed) return;
+        const ownerKey = JSON.stringify([(getState() as RootState).backends.activeBackendId ?? "local", accountId]);
+        try {
+          const { data } = await queryFulfilled;
+          if (data.kind === "page" && data.trashedAt) dispatch(closeAtlasPageTab({ ownerKey, id }));
+        } catch { /* Keep the tab open when moving to Trash fails. */ }
+      },
     }),
     removeAtlasItem: builder.mutation<void, AtlasIdentity>({
       query: (input) => ({ handler: CHANNELS.atlas.remove, args: [input] }),
-      invalidatesTags: ["Atlas"],
+      invalidatesTags: (_r, e, { id }) => e ? [] : ["Atlas", { type: "AtlasPage", id }],
+      async onQueryStarted({ accountId, id }, { dispatch, getState, queryFulfilled }) {
+        const ownerKey = JSON.stringify([(getState() as RootState).backends.activeBackendId ?? "local", accountId]);
+        try {
+          await queryFulfilled;
+          dispatch(closeAtlasPageTab({ ownerKey, id }));
+        } catch { /* Keep the tab open when permanent deletion fails. */ }
+      },
     }),
   }),
 });

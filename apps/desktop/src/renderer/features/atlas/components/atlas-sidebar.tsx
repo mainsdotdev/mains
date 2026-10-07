@@ -29,12 +29,12 @@ import {
   atlasView,
 } from "../lib/atlas-navigation";
 
-const typeIcons = { all: Passport, page: Page, file: Library, image: Picture };
+const typeIcons = { all: Library, page: Page, file: Passport, image: Picture };
 const itemClass = (active: boolean) =>
   `flex py-1.5 w-full items-center gap-2 text-s text-primary-950 dark:text-primary rounded-[10px] px-2 text-left text-s cursor-pointer transition-colors ${
     active
-            ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5"
-            : "hover:bg-primary/50 dark:hover:bg-primary/5"
+      ? "bg-primary/50 glass-outline-soft glass-outline dark:bg-primary/5"
+      : "hover:bg-primary/50 dark:hover:bg-primary/5"
   }`;
 
 export function AtlasSidebar() {
@@ -75,14 +75,16 @@ export function AtlasSidebar() {
   };
 
   return (
-    <div
-      className="flex h-full flex-col "
-
-    >
+    <div className="flex h-full flex-col ">
       <div className="flex flex-col items-start pt-12 px-5 md:pt-2">
-        <Text size="base" weight="medium" align="left">Atlas</Text>
+        <Text size="base" weight="medium" align="left">
+          Atlas
+        </Text>
       </div>
-      <nav className="shrink-0 space-y-0.5 py-3 px-3" aria-label="Atlas content">
+      <nav
+        className="shrink-0 space-y-0.5 py-3 px-3"
+        aria-label="Atlas content"
+      >
         <Button
           className={`${itemClass(false)} mb-3`}
           aria-label="New Atlas page"
@@ -126,8 +128,18 @@ export function AtlasSidebar() {
                     aria-current={active ? "page" : undefined}
                     onClick={() => requestAtlasPage({ ownerKey, id: item.id })}
                   >
-                    <AtlasPageIcon icon={item.metadata?.icon} className="size-3.5 shrink-0 text-s text-primary-950 dark:text-primary" />
-                    <Text as="span" size="s" weight="normal" className="truncate">{item.title}</Text>
+                    <AtlasPageIcon
+                      icon={item.metadata?.icon}
+                      className="size-3.5 shrink-0 text-s text-primary-950 dark:text-primary"
+                    />
+                    <Text
+                      as="span"
+                      size="s"
+                      weight="normal"
+                      className="truncate"
+                    >
+                      {item.title}
+                    </Text>
                   </Button>
                   <AtlasPageMenu
                     label={`Page options for ${item.title}`}
@@ -137,7 +149,9 @@ export function AtlasSidebar() {
                     side="right"
                     trigger={<Option className="size-3.5" />}
                     className="absolute right-1 top-1/2 size-6 -translate-y-1/2 rounded-lg text-primary-500 opacity-0 transition-opacity hover:bg-primary/5 group-hover/recent:opacity-100 group-focus-within/recent:opacity-100 aria-expanded:opacity-100"
-                    onAction={(action) => requestAtlasPage({ ownerKey, id: item.id, action })}
+                    onAction={(action) =>
+                      requestAtlasPage({ ownerKey, id: item.id, action })
+                    }
                   />
                 </div>
               );
@@ -176,10 +190,18 @@ export function AtlasSidebar() {
                 )
               }
             >
-              <span aria-hidden="true" className="inline-flex size-4 shrink-0 items-center justify-center">
-                {collection.icon
-                  ? <ProjectIcon icon={collection.icon} projectName={collection.name} />
-                  : <Layers className="size-4" />}
+              <span
+                aria-hidden="true"
+                className="inline-flex size-4 shrink-0 items-center justify-center"
+              >
+                {collection.icon ? (
+                  <ProjectIcon
+                    icon={collection.icon}
+                    projectName={collection.name}
+                  />
+                ) : (
+                  <Layers className="size-4" />
+                )}
               </span>
               <span className="truncate">{collection.name}</span>
             </Button>
@@ -192,7 +214,14 @@ export function AtlasSidebar() {
         </nav>
       </div>
       <div className="shrink-0 px-3 pb-3 pt-4">
-        {account && <AtlasTrashMenu key={ownerKey} accountId={account.id} collections={collections} className={itemClass(false)} />}
+        {account && (
+          <AtlasTrashMenu
+            key={ownerKey}
+            accountId={account.id}
+            collections={collections}
+            className={itemClass(false)}
+          />
+        )}
       </div>
     </div>
   );

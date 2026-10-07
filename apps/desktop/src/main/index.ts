@@ -1022,6 +1022,11 @@ async function initializeApp() {
     ipcMain.handle(CHANNELS.app.quit, () => {
       app.quit();
     });
+    // Read this renderer's native window; chrome state stays on the local shell.
+    ipcMain.handle(CHANNELS.app.getFullscreen, (event) => ({
+      success: true,
+      data: BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false,
+    }));
     registerWindowRequestIpc();
     registerThemeSourceIpc();
     registerOnboardingWindowIpc();
@@ -1237,6 +1242,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.app.setUnsavedChanges);
     ipcMain.removeHandler(CHANNELS.app.setMenuBarIconVisible);
     ipcMain.removeHandler(CHANNELS.app.quit);
+    ipcMain.removeHandler(CHANNELS.app.getFullscreen);
     unregisterWindowRequestIpc();
     unregisterThemeSourceIpc();
     unregisterOnboardingWindowIpc();

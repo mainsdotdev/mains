@@ -5,7 +5,7 @@ import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import atlasReducer from "@/lib/redux/slices/atlasSlice";
+import atlasReducer, { closeAtlasPageTab, openAtlasPageTab } from "@/lib/redux/slices/atlasSlice";
 import { MainHeaderProvider, useMainHeader } from "@/hooks/use-main-header";
 import type { AtlasPageEditorHandle } from "@/features/atlas/components/atlas-page-editor";
 import Atlas from "./Atlas";
@@ -19,7 +19,9 @@ const mocks = vi.hoisted(() => ({
   spaceMode: "chat" as "chat" | "work" | "developer",
   readAccount: vi.fn(),
   transport: "backend-a",
-  items: [{ id: "one", title: "Page One" }, { id: "two", title: "Page Two" }],
+  items: [] as { id: string; title: string; kind: "page"; trashedAt: string | null }[],
+  fetching: false,
+  listError: false,
 }));
 vi.mock("@/lib/redux/api", () => ({
   useGetAppSettingsQuery: () => ({ data: { activeSpaceId: "active-space" }, isLoading: false }),
@@ -33,7 +35,7 @@ vi.mock("@/hooks/use-space-provider-variant", async () => {
   return { useSpaceProviderVariant: () => getProviderVariant(mocks.providerVariant) };
 });
 vi.mock("@/lib/redux/api/atlasApi", () => ({
-  useListAtlasQuery: () => ({ data: mocks.items }),
+  useListAtlasQuery: () => ({ data: mocks.items, currentData: mocks.items, isFetching: mocks.fetching, isError: mocks.listError }),
   useCreateAtlasPageMutation: () => [mocks.create, {}],
 }));
 vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport }));
@@ -96,9 +98,15 @@ beforeEach(() => {
   mocks.providerVariant = "codex";
   mocks.spaceMode = "chat";
   mocks.transport = "backend-a";
+  mocks.items = [{ id: "one", title: "Page One", kind: "page", trashedAt: null }, { id: "two", title: "Page Two", kind: "page", trashedAt: null }];
+  mocks.fetching = false;
+  mocks.listError = false;
   mocks.performAction.mockResolvedValue(undefined);
   mocks.flush.mockResolvedValue(true);
-  mocks.create.mockImplementation(() => ({ unwrap: async () => ({ item: { id: "new-page" } }) }));
+  mocks.create.mockImplementation(() => ({ unwrap: async () => {
+    mocks.items = [...mocks.items, { id: "new-page", title: "Untitled page", kind: "page", trashedAt: null }];
+    return { item: { id: "new-page" } };
+  } }));
 });
 afterEach(cleanup);
 
@@ -174,6 +182,70 @@ describe("Atlas page tabs", () => {
     await screen.findByText("Library");
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
     expect(store.getState().atlas.byOwner['["local","account-1"]'].tabs).toEqual([]);
+  });
+
+  it("removes stale trashed and permanently deleted tabs while keeping other owners intact", async () => {
+    mocks.items = [...mocks.items, { id: "trashed", title: "Deleted page", kind: "page", trashedAt: "2026-10-07" }];
+    const store = setup();
+    await screen.findByRole("tab", { name: "Page One" });
+    act(() => {
+      for (const id of ["trashed", "missing", "two"]) store.dispatch(openAtlasPageTab({ ownerKey: '["local","account-1"]', id }));
+      store.dispatch(openAtlasPageTab({ ownerKey: '["remote","account-1"]', id: "missing" }));
+    });
+
+    await waitFor(() => expect(store.getState().atlas.byOwner['["local","account-1"]'].tabs.map((tab) => tab.id)).toEqual(["one", "two"]));
+    expect(store.getState().atlas.byOwner['["remote","account-1"]'].tabs).toEqual([{ id: "missing" }]);
+    expect(screen.getByTestId("editor").textContent).toBe("one");
+  });
+
+  it("selects a remaining tab when a mutation removes the active Page tab", async () => {
+    const store = setup();
+    await screen.findByRole("tab", { name: "Page One" });
+    fireEvent.click(screen.getByRole("button", { name: "New Atlas page tab" }));
+    await screen.findByRole("tab", { name: "Untitled page" });
+
+    act(() => {
+      mocks.items = mocks.items.map((item) => item.id === "new-page" ? { ...item, trashedAt: "2026-10-07" } : item);
+      store.dispatch(closeAtlasPageTab({ ownerKey: '["local","account-1"]', id: "new-page" }));
+    });
+
+    await waitFor(() => expect(screen.getByTestId("route").textContent).toBe("/atlas/one"));
+    expect(screen.queryByRole("tab", { name: "Untitled page" })).toBeNull();
+  });
+
+  it("returns to Pages when the final Page is trashed and can still open it from Trash without a tab", async () => {
+    const store = setup();
+    await screen.findByRole("tab", { name: "Page One" });
+    act(() => {
+      mocks.items = mocks.items.map((item) => item.id === "one" ? { ...item, trashedAt: "2026-10-07" } : item);
+      store.dispatch(closeAtlasPageTab({ ownerKey: '["local","account-1"]', id: "one" }));
+    });
+    await waitFor(() => expect(screen.getByTestId("route").textContent).toBe("/atlas?type=page"));
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+
+    act(() => requestAtlasPage({ ownerKey: '["local","account-1"]', id: "one" }));
+    await waitFor(() => expect(screen.getByTestId("editor").textContent).toBe("one"));
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+  });
+
+  it("selects a remaining tab when a refreshed library no longer contains the active Page", async () => {
+    const store = setup();
+    await screen.findByRole("tab", { name: "Page One" });
+    act(() => {
+      mocks.items = mocks.items.filter((item) => item.id !== "one");
+      store.dispatch(openAtlasPageTab({ ownerKey: '["local","account-1"]', id: "two" }));
+    });
+    await waitFor(() => expect(screen.getByTestId("route").textContent).toBe("/atlas/two"));
+    expect(store.getState().atlas.byOwner['["local","account-1"]'].tabs.map((tab) => tab.id)).toEqual(["two"]);
+  });
+
+  it.each(["fetching", "listError"] as const)("retains unknown tabs when the library is %s", async (state) => {
+    mocks[state] = true;
+    const store = setup();
+    await screen.findByRole("tab", { name: "Page One" });
+    act(() => store.dispatch(openAtlasPageTab({ ownerKey: '["local","account-1"]', id: "not-loaded-yet" })));
+    expect(store.getState().atlas.byOwner['["local","account-1"]'].tabs.map((tab) => tab.id)).toEqual(["one", "not-loaded-yet"]);
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
   });
 
   it("waits for saving before switching and keeps the page open if saving fails", async () => {

@@ -2130,24 +2130,22 @@ export const browserService = {
     }
     this.tabs.delete(tabId);
 
-    if (!Array.from(this.tabs.values()).some((tab) => tab.ownerKey === record.ownerKey)) {
-      const replacement = createTabRecord(BLANK_URL, "New tab", randomUUID(), record.ownerKey);
-      this.tabs.set(replacement.id, replacement);
-    }
+    const remaining = Array.from(this.tabs.values())
+      .filter((tab) => tab.ownerKey === record.ownerKey)
+      .map((tab) => tab.id);
 
     if (this.activeTabId === tabId) {
-      const remaining = Array.from(this.tabs.values())
-        .filter((tab) => tab.ownerKey === record.ownerKey)
-        .map((tab) => tab.id);
       this.activeTabId =
-        remaining[Math.min(closingIndex, remaining.length - 1)] ?? remaining[0];
-      this.activeTabIdsByOwner[record.ownerKey] = this.activeTabId;
+        remaining[Math.min(closingIndex, remaining.length - 1)] ?? remaining[0] ?? null;
+      if (this.activeTabId) this.activeTabIdsByOwner[record.ownerKey] = this.activeTabId;
+      else delete this.activeTabIdsByOwner[record.ownerKey];
       this.selectMode = false;
       this._sendToRenderer(CHANNELS.browser.selectModeChanged, {
         enabled: false,
       });
-      await this._mountActiveView();
+      if (remaining.length) await this._mountActiveView();
     }
+    if (!remaining.length) this.detach();
 
     this._schedulePersist();
     this._emitState();
@@ -2204,10 +2202,13 @@ export const browserService = {
       height: Math.max(1, Math.floor(bounds.height)),
     };
     this.bounds = rect;
-    const view = this._activeTab().view;
-    if (view && !view.webContents.isDestroyed()) {
+    // Bounds may arrive during the panel's closing transition. Updating its
+    // geometry must not recreate the final tab that was just closed.
+    const record = this.activeTabId ? this.tabs.get(this.activeTabId) : null;
+    const view = record?.view;
+    if (record && view && !view.webContents.isDestroyed()) {
       view.setBounds(rect);
-      this._scheduleDeviceEmulation(this._activeTab());
+      this._scheduleDeviceEmulation(record);
     }
     return null;
   },

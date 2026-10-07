@@ -1,6 +1,12 @@
 import { useSaveToAtlas } from "@/features/atlas/hooks/use-save-to-atlas";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { Button, DropdownMenu, DropdownMenuItem, Text, toast } from "@/components/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuItem,
+  Text,
+  toast,
+} from "@/components/ui";
 import { ArrowUp, Download, Finder, Mains } from "@/components/ui/icons";
 import { appApi } from "@/lib/transport";
 import { useLazyGetAppsForFileQuery } from "@/lib/redux/api";
@@ -8,6 +14,7 @@ import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useCapabilities } from "@/lib/platform";
 import { DOC_VIEWER_LABELS, type DocType } from "@/lib/document-viewer";
 import { DOC_TYPE_ICONS } from "../document-viewer/doc-type-icons";
+import { Globe } from "@/components/ui/icons/space";
 
 /** Artifact card for a generated Office document. Mirrors `ImageArtifact` but
  * opens in the in-app document viewer panel instead of an image preview modal. */
@@ -27,10 +34,13 @@ export function DocumentArtifact({
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const openBtnRef = useRef<HTMLButtonElement>(null);
-  const [fetchApps, { data: handlerApps = [], isFetching }] = useLazyGetAppsForFileQuery();
+  const [fetchApps, { data: handlerApps = [], isFetching }] =
+    useLazyGetAppsForFileQuery();
   const { revealInFolder } = useCapabilities();
 
-  const ext = fileName.includes(".") ? (fileName.split(".").pop() ?? "").toUpperCase() : "";
+  const ext = fileName.includes(".")
+    ? (fileName.split(".").pop() ?? "").toUpperCase()
+    : "";
   const DocIcon = DOC_TYPE_ICONS[docType];
 
   useEffect(() => {
@@ -98,7 +108,13 @@ export function DocumentArtifact({
         onClick={openInMains}
         className="flex-1 min-w-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-md"
       >
-        <Text as="div" size="sm" tone="contrast" weight="medium" className="truncate">
+        <Text
+          as="div"
+          size="sm"
+          tone="contrast"
+          weight="medium"
+          className="truncate"
+        >
           {fileName}
         </Text>
         <Text as="div" size="xs" tone="subtle" className="mt-0.5">
@@ -129,9 +145,18 @@ export function DocumentArtifact({
           <Mains className="size-4 shrink-0" />
           Open in Mains
         </DropdownMenuItem>
-        {runId && <DropdownMenuItem disabled={atlas.saving} onClick={() => { setMenuOpen(false); void atlas.save(runId, absPath); }}>
-          <Mains className="size-4 shrink-0" />Save to Atlas
-        </DropdownMenuItem>}
+        {runId && (
+          <DropdownMenuItem
+            disabled={atlas.saving}
+            onClick={() => {
+              setMenuOpen(false);
+              void atlas.save(runId, absPath);
+            }}
+          >
+            <Globe className="size-4 shrink-0" />
+            Save to Atlas
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onClick={() => void saveCopy()}>
           <Download className="size-4 shrink-0" />
           Save a copy…
@@ -148,7 +173,10 @@ export function DocumentArtifact({
           </Text>
         ) : (
           handlerApps.map((app) => (
-            <DropdownMenuItem key={app.bundleId} onClick={() => openWithBundle(app.bundleId)}>
+            <DropdownMenuItem
+              key={app.bundleId}
+              onClick={() => openWithBundle(app.bundleId)}
+            >
               {app.icon ? (
                 <img
                   src={app.icon}

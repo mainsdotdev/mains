@@ -176,10 +176,9 @@ function PageEditor({ page, reload, handleRef, onTitleChange, requestedAction, o
       case "trash":
         if (page.item.trashedAt || !(await queue.flush())) return;
         await updateItem({ accountId, id, trashed: true }).unwrap();
-        if (getTransport() === mountedTransport) navigate("/atlas?type=page");
         break;
     }
-  }, [mountedTransport, copy, name, editor, page.item.trashedAt, updateItem, accountId, id, queue, navigate]);
+  }, [mountedTransport, copy, name, editor, page.item.trashedAt, updateItem, accountId, id, queue]);
   useImperativeHandle(handleRef, () => ({ flush: queue.flush, collectionId: page.item.collectionId, performAction }),
     [queue, page.item.collectionId, performAction]);
   const handledAction = useRef<string | null>(null);

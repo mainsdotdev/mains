@@ -12,6 +12,7 @@ export const CHANNELS = {
     consumeWindowRequest: "app:consumeWindowRequest",
     flushAndQuit: "app:flushAndQuit",
     fullscreenChange: "app:fullscreenChange",
+    getFullscreen: "app:getFullscreen",
     getDockIcon: "app:getDockIcon",
     quit: "app:quit",
     setDockIcon: "app:setDockIcon",

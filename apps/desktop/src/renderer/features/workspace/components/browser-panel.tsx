@@ -167,6 +167,7 @@ export function BrowserPanel({
   const locationInputRef = useRef<HTMLInputElement>(null);
   const browserMenuButtonRef = useRef<HTMLButtonElement>(null);
   const activeTabIdRef = useRef("");
+  const browserStateOwnerRef = useRef(ownerKey);
   const browserMenuOperationRef = useRef(0);
   const browserMenuOpeningRef = useRef(false);
   const browserMenuPreviewNameRef = useRef<string | null>(null);
@@ -268,6 +269,8 @@ export function BrowserPanel({
 
   const applyBrowserState = useCallback((state: BrowserState) => {
     if (state.ownerKey && state.ownerKey !== ownerKey) return;
+    const lastTabClosed = browserStateOwnerRef.current === ownerKey &&
+      !!activeTabIdRef.current && state.tabs.length === 0;
     if (
       activeTabIdRef.current &&
       activeTabIdRef.current !== state.activeTabId
@@ -275,7 +278,9 @@ export function BrowserPanel({
       setFindState(EMPTY_FIND_STATE);
     }
     activeTabIdRef.current = state.activeTabId;
+    browserStateOwnerRef.current = ownerKey;
     setBrowserState(state);
+    if (lastTabClosed) close();
     const active = state.tabs.find((tab) => tab.tabId === state.activeTabId);
     if (
       active &&
@@ -283,7 +288,7 @@ export function BrowserPanel({
     ) {
       setUrlInput(active.url === BLANK_URL ? "" : active.url);
     }
-  }, [ownerKey, setUrlInput]);
+  }, [ownerKey, setUrlInput, close]);
 
   const applyResponseState = useCallback(
     (response: any, fallbackError: string) => {

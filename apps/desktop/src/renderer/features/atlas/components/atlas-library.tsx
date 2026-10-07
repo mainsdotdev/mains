@@ -22,20 +22,20 @@ import {
   Document,
   Download,
   Ellipsis,
-  Feed,
   Generate,
   LibrarySquare,
   List,
   Grid,
   Page,
+  Plan,
   Picture,
-  Plus,
   Refresh,
   Search,
-  Task,
   Trash,
+  Filter,
+  ArrowUp,
 } from "@/components/ui/icons";
-import { Academy, Filters, Star } from "@/components/ui/icons/space";
+import { Dna, Globe, Lightbulb, Rocket, Star } from "@/components/ui/icons/space";
 import { useListCollectionsQuery } from "@/lib/redux/api";
 import {
   useAtlasGeneratedQuery,
@@ -62,6 +62,7 @@ import {
 } from "../lib/atlas-navigation";
 import { ATLAS_TEMPLATES } from "../lib/atlas-templates";
 import { AtlasMenu } from "./atlas-menu";
+import { AtlasFileIcon } from "./atlas-file-icon";
 import { AtlasPageIcon } from "./atlas-page-icon";
 import { AtlasPageCard } from "./atlas-page-card";
 import { AtlasImagePreview } from "./atlas-image-preview";
@@ -77,11 +78,15 @@ type Entry = {
   saved?: AtlasListItem;
   generated?: AtlasGeneratedFile;
 };
-const templateIcons = [Academy, Task, Filters, Feed, Chat];
+const templateIcons = [
+  { Icon: Document, color: "text-blue-600 dark:text-blue-400" },
+  { Icon: Dna, color: "text-emerald-600 dark:text-emerald-400" },
+  { Icon: Plan, color: "text-violet-600 dark:text-violet-400" },
+  { Icon: Rocket, color: "text-orange-600 dark:text-orange-400" },
+  { Icon: Lightbulb, color: "text-red-600 dark:text-red-400" },
+];
 const templateCardClass =
   "glass-surface flex min-h-24 min-w-48 flex-1 flex-col items-start justify-center gap-3 rounded-3xl px-4 py-2 text-left focus-visible:ring-2 focus-visible:ring-accent/40";
-const newButtonClass =
-  "h-8 gap-2 rounded-full bg-primary-900 px-4 text-xs font-medium text-primary-100 hover:bg-primary-800 dark:bg-primary-100 dark:text-primary-900 dark:hover:bg-primary-200";
 
 function activity(date: string) {
   const seconds = Math.max(0, (Date.now() - new Date(date).getTime()) / 1000);
@@ -145,7 +150,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const grid = type === "image" || params.get("layout") === "grid";
   const needGenerated =
-    type !== "page" && (scope === "all" || scope === "generated");
+    type !== "page" && (scope === "all" || scope === "generated" || scope === "uploads");
   const saved = useListAtlasQuery({
     accountId,
     ...(grid && (type === "page" || type === "all") ? { includePagePreview: true } : {}),
@@ -186,7 +191,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
         .map((item) => [item.sourceKey, item]),
     );
     const results: Entry[] = [];
-    if (scope !== "generated")
+    if (scope !== "generated" && scope !== "uploads")
       for (const item of persistent) {
         if (
           item.trashedAt ||
@@ -203,7 +208,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           saved: item,
         });
       }
-    if (scope === "all" || scope === "generated") {
+    if (scope === "all" || scope === "generated" || scope === "uploads") {
       const files = [
         ...new Map(
           [...older, ...(generated.currentData?.items ?? [])].map((item) => [
@@ -214,6 +219,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       ];
       for (const file of files) {
         if (scope === "generated" && file.origin === "attachment") continue;
+        if (scope === "uploads" && file.origin !== "attachment") continue;
         if (scope === "all" && bySource.has(file.sourceKey)) continue;
         results.push({
           key: file.sourceKey,
@@ -224,7 +230,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           path: file.path,
           generated: file,
           saved:
-            scope === "generated" ? bySource.get(file.sourceKey) : undefined,
+            scope !== "all" ? bySource.get(file.sourceKey) : undefined,
         });
       }
     }
@@ -329,11 +335,6 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       toast.error(atlasError(error));
     }
   };
-  const loadOlder = () => {
-    if (generated.currentData?.nextOffset == null) return;
-    setOlder((current) => [...current, ...generated.currentData!.items]);
-    setOffset(generated.currentData.nextOffset);
-  };
   const itemMenu = (entry: Entry, image = false) => (
     <AtlasMenu
       label={`Actions for ${entry.title}`}
@@ -359,7 +360,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                 void save(entry.generated!.runId, entry.path!);
               }}
             >
-              <Plus className="size-4" />
+              <Globe className="size-4" />
               Save to Atlas
             </DropdownMenuItem>
           )}
@@ -382,7 +383,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               }}
             >
               <Chat className="size-4" />
-              Open source chat
+              Open chat
             </DropdownMenuItem>
           )}
           {entry.saved && (
@@ -421,6 +422,9 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
     { value: "all", label: "All" },
     ...(type === "image"
       ? [{ value: "generated" as const, label: "Your creations" }]
+      : []),
+    ...(type !== "page"
+      ? [{ value: "uploads" as const, label: "Uploads" }]
       : []),
     { value: "favorites", label: "Favorites" },
     ...(type !== "page"
@@ -486,21 +490,21 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           {type === "image" ? (
             <Button
               aria-label="New image"
-              className={`inline-flex items-center justify-center focus-visible:ring-2 focus-visible:ring-accent/40 ${newButtonClass}`}
+              className="text-primary-700 dark:text-primary-300 glass-primary px-3 py-1.5 text-s rounded-xl gap-1"
               onClick={() => navigate(atlasImageCreatorHref(collectionId))}
             >
               New
-              <Plus className="size-3" />
+
             </Button>
           ) : (
             <AtlasMenu
               label="New Atlas item"
               disabled={creating.isLoading}
-              className={newButtonClass}
+              className="text-primary-700 dark:text-primary-300 glass-primary px-3 py-1.5 text-s rounded-xl gap-1"
               trigger={
                 <>
                   New
-                  <Plus className="size-3" />
+                  <ArrowUp className="size-3 rotate-180" />
                 </>
               }
             >
@@ -516,11 +520,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                       void newPage();
                     }}
                   >
-                    <Plus className="size-4" />
+                    <Page className="size-4" />
                     Blank page
                   </DropdownMenuItem>
                   {ATLAS_TEMPLATES.map((template, index) => {
-                    const Icon = templateIcons[index];
+                    const { Icon, color } = templateIcons[index];
                     return (
                       <DropdownMenuItem
                         key={template.title}
@@ -529,7 +533,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                           void newPage(template);
                         }}
                       >
-                        <Icon className="size-4" />
+                        <Icon className={`size-4 ${color}`} />
                         {template.title}
                       </DropdownMenuItem>
                     );
@@ -555,7 +559,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
         <AtlasMenu
           label="Filter Atlas"
           className={`ml-auto size-8 rounded-full ${project ? "text-accent" : "text-primary-500 hover:bg-primary-100 dark:hover:bg-primary-900"}`}
-          trigger={<Filters className="size-4" />}
+          trigger={<Filter className="size-4" />}
         >
           {(close) => (
             <>
@@ -621,8 +625,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                 Create page with {provider.label}
               </span>
             </Button>
-            {ATLAS_TEMPLATES.slice(1).map((template, index) => {
-              const Icon = templateIcons[index + 1];
+            {ATLAS_TEMPLATES.map((template, index) => {
+              const { Icon, color } = templateIcons[index];
               return (
                 <Button
                   key={template.title}
@@ -630,7 +634,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                   onClick={() => void newPage(template)}
                   className={templateCardClass}
                 >
-                  <Icon className="size-5 text-accent" />
+                  <Icon className={`size-5 ${color}`} />
                   <span className="whitespace-nowrap text-s text-primary-800 dark:text-primary-200">
                     {template.title}
                   </span>
@@ -653,6 +657,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
             <Star className="mb-5 size-10 text-primary-400" />
           ) : !searchValue && scope === "generated" ? (
             <Generate className="mb-5 size-10 text-primary-400" />
+          ) : !searchValue && scope === "uploads" ? (
+            <ArrowUp className="mb-5 size-10 text-primary-400" />
           ) : type === "image" ? (
             <Picture className="mb-5 size-10 text-primary-400" />
           ) : (
@@ -663,6 +669,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               ? "No matching items"
               : scope === "favorites"
                   ? "No favorites yet"
+                  : scope === "uploads"
+                    ? "No uploads yet"
                   : `No ${type === "all" ? "items" : title.toLowerCase()} yet`}
           </Text>
           <Muted className="mt-2 max-w-sm px-4">
@@ -670,6 +678,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               ? "Try a different search or project."
               : scope === "favorites"
                   ? "Add an item to favorites from its menu."
+                  : scope === "uploads"
+                    ? "Files attached to your conversations will appear here."
                   : type === "page" || type === "all"
                     ? "Create a page to start collecting your work."
                     : "Files from your conversations will appear here. Save to Atlas to keep a permanent copy."}
@@ -702,7 +712,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                   {entry.title}
                 </p>
                 <p className="mt-1 text-xxs text-primary-300">
-                  {entry.saved ? "Saved to Atlas" : "Generated"}
+                  {entry.saved ? "Saved to Atlas" : entry.generated?.origin === "attachment" ? "Uploaded" : "Generated"}
                 </p>
               </div>
             </div>
@@ -739,12 +749,12 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
             return (
               <div
                 key={entry.key}
-                className="group rounded-xl border border-primary-200/70 dark:border-primary-800"
+                className="group rounded-3xl glass-surface"
               >
                 <Button
                   aria-label={`Open ${entry.title}`}
                   onClick={() => show(entry)}
-                  className="flex aspect-4/3 w-full items-center justify-center rounded-t-xl bg-primary-100/70 focus-visible:ring-2 focus-visible:ring-accent/40 dark:bg-primary-900/70"
+                  className="flex aspect-4/3 w-full items-center justify-center rounded-t-3xl bg-primary-100/70 focus-visible:ring-2 focus-visible:ring-accent/40 dark:bg-primary-900/70"
                 >
                   {entry.kind === "page" ? (
                     <AtlasPageIcon
@@ -752,7 +762,12 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                       className="size-10 text-4xl text-accent/70"
                     />
                   ) : (
-                    <Document className="size-10 text-accent/70" />
+                    <AtlasFileIcon
+                      kind={entry.kind}
+                      fileName={entry.saved?.fileName ?? entry.generated?.fileName ?? entry.title}
+                      path={entry.path}
+                      className="size-10 text-accent/70"
+                    />
                   )}
                 </Button>
                 <div className="flex items-center gap-2 p-3">
@@ -789,7 +804,6 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           </thead>
           <tbody>
             {entries.map((entry) => {
-              const Icon = entry.kind === "image" ? Picture : Document;
               const runId = entry.generated?.runId ?? entry.saved?.sourceRunId;
               return (
                 <tr
@@ -810,7 +824,12 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                         {entry.kind === "page" ? (
                           <AtlasPageIcon icon={entry.saved?.metadata?.icon} />
                         ) : (
-                          <Icon className="size-4" />
+                          <AtlasFileIcon
+                            kind={entry.kind}
+                            fileName={entry.saved?.fileName ?? entry.generated?.fileName ?? entry.title}
+                            path={entry.path}
+                            className="size-4"
+                          />
                         )}
                       </span>
                       <span className="truncate text-primary-800 dark:text-primary-200">
@@ -849,7 +868,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           </tbody>
         </table>
       )}
-      {needGenerated && generated.currentData?.nextOffset != null && (
+      {/* {needGenerated && generated.currentData?.nextOffset != null && (
         <div className="mt-8 text-center">
           <Button
             variant="ghost"
@@ -859,7 +878,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
             Load older conversations
           </Button>
         </div>
-      )}
+      )} */}
       {preview && (
         <AtlasImagePreview title={preview.title} path={preview.path} onClose={() => setPreview(null)} />
       )}

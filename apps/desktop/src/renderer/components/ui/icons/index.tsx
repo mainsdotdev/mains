@@ -189,7 +189,8 @@ export { default as LibrarySquare} from "./library-square"
 export { default as List} from "./list"
 export { default as Grid} from "./grid"
 export { default as Generate} from "./generate"
-
+export { default as Filter} from "./filter"
+export { default as Txt} from "./txt"
 
 
 

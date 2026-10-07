@@ -79,7 +79,7 @@ export function MarkdownLink({
             ?.scrollIntoView({ behavior: "smooth", block: "center" });
         }}
         title={href}
-        className="inline whitespace-normal wrap-break-word text-left text-accent hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent "
+        className="document-link inline whitespace-normal wrap-break-word text-left"
       >
         {children}
       </a>
@@ -133,7 +133,7 @@ export function MarkdownLink({
           }
         }
       }}
-      className="inline whitespace-normal wrap-break-word text-left text-accent hover:underline cursor-pointer  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent "
+      className="document-link inline whitespace-normal wrap-break-word text-left"
     >
       {showFavicon && <LinkFavicon key={href} href={href} />}
       {children}
@@ -235,7 +235,7 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
       src={imageSrc}
       alt={alt || ""}
       onError={() => setFailedSrc(src ?? "")}
-      className="max-w-full h-auto rounded-lg my-2 border border-primary-200 dark:border-primary-700"
+      className="document-image"
     />
   );
 }
@@ -257,7 +257,7 @@ function MarkdownCode({ children, colorSwatches = false }: { children?: ReactNod
       <Text
         as="code"
         size="inherit"
-        className="px-1 py-0.5 rounded text-[0.9em] bg-primary-200/40 dark:bg-primary/10"
+        className="document-inline-code rounded"
       >
         {children}
       </Text>
@@ -295,46 +295,45 @@ function MarkdownCode({ children, colorSwatches = false }: { children?: ReactNod
  * Custom ReactMarkdown component overrides for consistent styling.
  *
  * Every prose node routes through {@link Text}, whose default tone is the prose
- * tone — so no entry below names a colour, and none of them can drift apart the
- * way `th` and `td` once had. `className` is left holding layout only: margins,
- * list decoration, table rules, and the `font-sans` that pulls prose out of a
- * monospace ancestor.
+ * tone. Content presentation lives in document-content.css, also applied to
+ * BlockNote's editable nodes by the Atlas adapter. Text keeps its semantic
+ * elements and tones, while shared utilities own document sizing and layout.
  */
 export const markdownComponents: Components = {
   h1: ({ children }) => (
-    <Text as="h1" size="lg" weight="bold" className="mt-4 mb-2 font-sans">
+    <Text as="h1" size="inherit" className="document-h1">
       {children}
     </Text>
   ),
   h2: ({ children }) => (
-    <Text as="h2" size="base" weight="semibold" className="mt-2 mb-1 font-sans">
+    <Text as="h2" size="inherit" className="document-h2">
       {children}
     </Text>
   ),
   h3: ({ children }) => (
-    <Text as="h3" weight="semibold" className="mt-2 mb-1 font-sans">
+    <Text as="h3" size="inherit" className="document-h3">
       {children}
     </Text>
   ),
   h4: ({ children }) => (
-    <Text as="h4" size="xs" weight="semibold" className="mt-1 mb-0.5 font-sans">
+    <Text as="h4" size="inherit" className="document-h4">
       {children}
     </Text>
   ),
   p: ({ children }) => (
-    <Text as="p" className="leading-7 font-sans">
+    <Text as="p" size="inherit" className="document-paragraph">
       {children}
     </Text>
   ),
   ul: ({ children }) => (
-    <Text as="ul" className="list-disc list-outside pl-4 font-sans mb-2 space-y-0.5">
+    <Text as="ul" className="document-list list-disc">
       {children}
     </Text>
   ),
   ol: ({ children }) => (
     <Text
       as="ol"
-      className="list-decimal list-outside pl-4 font-sans mb-2 space-y-0.5"
+      className="document-list list-decimal"
     >
       {children}
     </Text>
@@ -348,10 +347,11 @@ export const markdownComponents: Components = {
     return (
       <Text
         as="li"
+        size="inherit"
         id={id}
         // Tighter than a paragraph on purpose: list items are usually one
         // short line, and prose leading spreads them into unrelated rows.
-        className={`font-sans leading-6 [&>p]:my-0 [&>p:not(:last-child)]:mb-1 ${
+        className={`document-list-item ${
           isTask ? "list-none -ml-4 flex items-start gap-2" : ""
         }`}
       >
@@ -368,27 +368,28 @@ export const markdownComponents: Components = {
       <Checkbox checked={!!checked} disabled className="mt-1 shrink-0" />
     ) : null,
   table: ({ children }) => (
-    <div className="overflow-x-auto my-4 rounded-lg border border-primary-300 dark:border-primary-700">
-      <table className="min-w-full border-collapse">{children}</table>
+    <div className="document-table-frame overflow-x-auto">
+      <table className="document-table">{children}</table>
     </div>
   ),
   thead: ({ children }) => (
-    <thead className="bg-primary-50 dark:bg-primary/10">{children}</thead>
+    <thead className="document-table-head">{children}</thead>
   ),
   tbody: ({ children }) => (
-    <tbody className="bg-primary dark:bg-primary/5">{children}</tbody>
+    <tbody className="document-table-body">{children}</tbody>
   ),
   tr: ({ children }) => (
-    <tr className="border-b border-primary-200 dark:border-primary-700 hover:bg-primary-200/20 dark:hover:bg-primary/5 transition-colors duration-150">
+    <tr className="document-table-row">
       {children}
     </tr>
   ),
   th: ({ children }) => (
     <Text
       as="th"
+      size="inherit"
       weight="semibold"
       align="left"
-      className="px-4 py-3 font-sans border-r border-primary-200 dark:border-primary-700 last:border-r-0"
+      className="document-table-cell"
     >
       {children}
     </Text>
@@ -396,7 +397,8 @@ export const markdownComponents: Components = {
   td: ({ children }) => (
     <Text
       as="td"
-      className="px-4 py-3 font-sans border-r border-primary-200 dark:border-primary-700 last:border-r-0"
+      size="inherit"
+      className="document-table-cell"
     >
       {children}
     </Text>
@@ -406,7 +408,7 @@ export const markdownComponents: Components = {
   // than the column has to slide inside the box rather than out of it.
   pre: ({ children }) => (
     <InCodeBlock.Provider value={true}>
-      <pre className="my-2 p-4 rounded-xl overflow-x-auto bg-primary-50 dark:bg-primary/10">
+      <pre className="document-code-block overflow-x-auto">
         {children}
       </pre>
     </InCodeBlock.Provider>
@@ -418,7 +420,7 @@ export const markdownComponents: Components = {
       as="blockquote"
       size="inherit"
       tone="muted"
-      className="border-l-4 border-primary-400 dark:border-primary-600 pl-4 py-1 my-2 italic"
+      className="document-quote"
     >
       {children}
     </Text>
@@ -433,7 +435,7 @@ export const markdownComponents: Components = {
       {children}
     </Text>
   ),
-  hr: () => <hr className="my-4 border-primary-300 dark:border-primary-700" />,
+  hr: () => <hr className="document-divider" />,
   img: ({ src, alt }) => (
     <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />
   ),

@@ -100,7 +100,10 @@ async function generatedForRun(runId: string, accountId: string): Promise<AtlasG
     const file = typeof metadata.path === "string" ? metadata.path : artifact.path;
     if (file) candidates.add(path.isAbsolute(file) ? file : path.resolve(roots[0], file));
   }
-  for (const file of await runsService.listRunOutputFiles(runId)) candidates.add(file.absolutePath);
+  // Folder discovery supplies documents; images need explicit output provenance.
+  for (const file of await runsService.listRunOutputFiles(runId)) {
+    if (classify(file.absolutePath)?.kind === "file") candidates.add(file.absolutePath);
+  }
   if (codexImages) {
     try {
       const stat = await fs.lstat(codexImages);

@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo } from "react";
 import type { AtlasItem } from "@mains/contracts/atlas";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { useListAtlasQuery } from "@/lib/redux/api/atlasApi";
-import { openAtlasPageTab, type AtlasPageTab } from "@/lib/redux/slices/atlasSlice";
+import { closeAtlasPageTab, openAtlasPageTab, type AtlasPageTab } from "@/lib/redux/slices/atlasSlice";
 
 const EMPTY_TABS: AtlasPageTab[] = [];
 const EMPTY_ITEMS: AtlasItem[] = [];
@@ -16,18 +16,30 @@ export function useAtlasTabs(accountId: string, activeId?: string) {
   const ownerKey = useAtlasOwnerKey(accountId);
   const dispatch = useAppDispatch();
   const stored = useAppSelector((state) => state.atlas.byOwner[ownerKey]?.tabs ?? EMPTY_TABS);
-  const { data: items = EMPTY_ITEMS } = useListAtlasQuery({ accountId });
+  const { currentData, isFetching, isError } = useListAtlasQuery({ accountId });
+  const items = currentData ?? EMPTY_ITEMS;
+  const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
+  const complete = currentData !== undefined && !isFetching && !isError;
+  const unavailable = useMemo(() => new Set([...stored.map((tab) => tab.id), ...(activeId ? [activeId] : [])].filter((id) => {
+    const item = itemsById.get(id);
+    return item ? item.kind !== "page" || !!item.trashedAt : complete;
+  })), [stored, activeId, itemsById, complete]);
+  const activeUnavailable = !!activeId && unavailable.has(activeId);
   useLayoutEffect(() => {
-    if (activeId) dispatch(openAtlasPageTab({ ownerKey, id: activeId }));
-  }, [activeId, ownerKey, dispatch]);
+    if (activeId && !activeUnavailable) dispatch(openAtlasPageTab({ ownerKey, id: activeId }));
+  }, [activeId, activeUnavailable, ownerKey, dispatch]);
+  useLayoutEffect(() => {
+    for (const tab of stored) {
+      if (unavailable.has(tab.id)) dispatch(closeAtlasPageTab({ ownerKey, id: tab.id }));
+    }
+  }, [stored, unavailable, ownerKey, dispatch]);
 
   const tabs = useMemo(() => {
-    const opened = activeId && !stored.some((tab) => tab.id === activeId) ? [...stored, { id: activeId }] : stored;
-    return opened.map((tab) => ({
+    return stored.filter((tab) => !unavailable.has(tab.id)).map((tab) => ({
       id: tab.id,
-      title: (tab.id === activeId ? tab.title : undefined) ?? items.find((item) => item.id === tab.id)?.title ?? tab.title ?? "Untitled page",
-      icon: items.find((item) => item.id === tab.id)?.metadata?.icon,
+      title: (tab.id === activeId ? tab.title : undefined) ?? itemsById.get(tab.id)?.title ?? tab.title ?? "Untitled page",
+      icon: itemsById.get(tab.id)?.metadata?.icon,
     }));
-  }, [activeId, stored, items]);
+  }, [activeId, stored, unavailable, itemsById]);
   return { ownerKey, tabs };
 }

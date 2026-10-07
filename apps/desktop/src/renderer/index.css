@@ -1,5 +1,6 @@
 @import "@xterm/xterm/css/xterm.css";
 @import "tailwindcss";
+@import "./components/document-content.css";
 @import "./features/atlas/atlas-editor.css";
 
 /* Inter ships as one variable font per style rather than eighteen static

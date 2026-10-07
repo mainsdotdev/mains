@@ -69,12 +69,292 @@
   background-color: color-mix(in srgb, var(--bn-colors-selected-background) 80%, transparent);
 }
 .bn-root.bn-shadcn .text-primary { color: var(--color-accent); }
-.bn-root.bn-shadcn .bn-suggestion-menu-label { color: var(--bn-colors-side-menu); }
+
+/* Content stays in BlockNote's native editable nodes. Specificity here also
+   wins when the editor's lazily imported upstream stylesheet loads later. */
+.atlas-page .bn-root.bn-shadcn .bn-editor {
+  @apply font-sans text-sm text-primary-900 dark:text-primary-100;
+  padding-inline: 0;
+  background: transparent;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content { padding-block: 2px; }
+.atlas-page .bn-root.bn-shadcn .bn-editor .bn-block-content[data-content-type="paragraph"] {
+  @apply document-paragraph;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor .bn-block-content[data-content-type="heading"] {
+  @apply document-h1;
+  padding-block: 0;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor .bn-block-content[data-content-type="heading"][data-level="2"] {
+  @apply document-h2;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor .bn-block-content[data-content-type="heading"][data-level="3"] {
+  @apply document-h3;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor .bn-block-content[data-content-type="heading"]:is([data-level="4"], [data-level="5"], [data-level="6"]) {
+  @apply document-h4;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content:is(
+  [data-content-type="bulletListItem"],
+  [data-content-type="numberedListItem"],
+  [data-content-type="checkListItem"],
+  [data-content-type="toggleListItem"]
+) {
+  @apply document-list-item;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor a {
+  @apply document-link;
+  overflow-wrap: anywhere;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content:not([data-content-type="codeBlock"]) .bn-inline-content code {
+  @apply document-inline-code;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="codeBlock"] {
+  @apply document-code-block;
+  color: inherit;
+  padding: 0;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="codeBlock"] > pre {
+  @apply overflow-x-auto p-4 font-mono;
+  font-size: inherit;
+  line-height: inherit;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="codeBlock"] > div > select {
+  @apply font-sans text-xs text-primary-500;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="quote"] blockquote {
+  @apply document-quote;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="divider"] hr {
+  @apply document-divider;
+}
+.atlas-page .bn-root.bn-shadcn .bn-inline-content strong { font-weight: 600; }
+
+/* Keep tableWrapper's native padding and cell/column geometry: resize handles
+   and the add-row/add-column controls live in that reserved space. */
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] table {
+  @apply document-table document-table-frame;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin-block: 0;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] tbody {
+  @apply document-table-body;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] tr {
+  @apply document-table-row;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] :is(th, td) {
+  @apply document-table-cell;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] th {
+  @apply document-table-head font-semibold;
+}
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] tr:first-child > :first-child { border-top-left-radius: 7px; }
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] tr:first-child > :last-child { border-top-right-radius: 7px; }
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] tr:last-child > :first-child { border-bottom-left-radius: 7px; }
+.atlas-page .bn-root.bn-shadcn .bn-editor [data-content-type="table"] tr:last-child > :last-child { border-bottom-right-radius: 7px; }
+
+/* Skin the existing checkbox rather than replacing its editable block. */
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input {
+  @apply glass-outline rounded-md;
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  margin: 0.25rem 0.5rem 0.25rem 0;
+  background-color: var(--color-primary-100);
+  color: var(--color-primary);
+  cursor: pointer;
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input:checked {
+  background-color: var(--color-primary-800);
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input:checked::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 6px;
+  width: 4px;
+  height: 8px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-primary), 0 0 0 4px var(--color-accent);
+}
+.atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.dark .atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input {
+  background-color: var(--color-primary-800);
+  color: var(--color-primary-900);
+}
+.dark .atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input:checked {
+  background-color: var(--color-primary-200);
+}
+@media (forced-colors: active) {
+  .atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input {
+    appearance: auto;
+  }
+  .atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input::before,
+  .atlas-page .bn-root.bn-shadcn .bn-block-content[data-content-type="checkListItem"] > div > input::after { display: none; }
+}
+
+.atlas-page .bn-root.bn-shadcn .bn-visual-media {
+  @apply rounded-lg;
+}
+.atlas-page .bn-root.bn-shadcn :is(.bn-add-file-button, .bn-file-name-with-icon) {
+  @apply rounded-xl text-sm text-primary-700 dark:text-primary-300;
+}
+.atlas-page .bn-root.bn-shadcn .bn-add-file-button {
+  @apply glass-card gap-3 p-3;
+}
+.atlas-page .bn-root.bn-shadcn :is(.bn-add-file-button, .bn-file-name-with-icon):hover {
+  background-color: var(--bn-colors-hovered-background);
+}
+.atlas-page .bn-root.bn-shadcn :is(.bn-add-file-button-icon, .bn-file-icon) {
+  width: 1rem;
+  height: 1rem;
+}
+.atlas-page .bn-root.bn-shadcn .bn-file-caption {
+  @apply text-xs text-primary-500;
+}
+.atlas-page .bn-root.bn-shadcn :is(.bn-toggle-button, .bn-toggle-add-block-button) {
+  @apply rounded-lg text-primary-500;
+}
+
+/* Menus, toolbars and file panels are portalled into their own themed bn-root.
+   Do not scope them to .atlas-page or their skin disappears outside the editor. */
+.bn-root.bn-shadcn :is(
+  .bn-suggestion-menu, .bn-toolbar, .bn-panel,
+  [data-slot="dropdown-menu-content"], [data-slot="dropdown-menu-sub-content"],
+  [data-slot="select-content"], [data-slot="popover-content"]
+) {
+  @apply glass-surface rounded-2xl p-1.5 font-sans text-s;
+  color: var(--bn-colors-menu-text);
+  box-shadow: none;
+}
+.bn-root.bn-shadcn .bn-suggestion-menu {
+  min-width: min(20rem, calc(100vw - 2rem));
+  max-width: min(24rem, calc(100vw - 2rem));
+  max-height: min(24rem, var(--available-height, 60vh));
+}
+.bn-root.bn-shadcn :is(
+  .bn-suggestion-menu-item,
+  [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-sub-trigger"],
+  [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"],
+  [data-slot="select-item"]
+) {
+  @apply gap-3 rounded-[10px] px-2 py-1.5 text-s;
+  color: var(--bn-colors-menu-text);
+}
+.bn-root.bn-shadcn :is(
+  .bn-suggestion-menu-item,
+  [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-sub-trigger"],
+  [data-slot="dropdown-menu-checkbox-item"], [data-slot="dropdown-menu-radio-item"],
+  [data-slot="select-item"]
+):is(:hover, :focus-visible, [aria-selected="true"], [data-highlighted]:not(.bn-suggestion-menu-item), [data-open]) {
+  background-color: var(--bn-colors-hovered-background);
+  color: var(--bn-colors-hovered-text);
+}
+.bn-root.bn-shadcn [data-slot][data-variant="destructive"] {
+  color: var(--color-danger);
+}
+.bn-root.bn-shadcn [data-slot][data-variant="destructive"]:is(:hover, :focus-visible, [data-highlighted]) {
+  color: var(--color-danger);
+  background-color: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+.bn-root.bn-shadcn .bn-suggestion-menu-item > [data-position="left"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 1.25rem;
+  padding: 0;
+}
+.bn-root.bn-shadcn .bn-suggestion-menu-item > .flex-1 { min-width: 0; }
+.bn-root.bn-shadcn .bn-suggestion-menu-item > .flex-1 > :first-child {
+  font-size: var(--text-s);
+  line-height: 1.5;
+}
+.bn-root.bn-shadcn .bn-suggestion-menu-item > .flex-1 > :nth-child(2) {
+  font-size: var(--text-xxs);
+  line-height: 1.5;
+  color: var(--bn-colors-side-menu);
+}
+.bn-root.bn-shadcn .bn-suggestion-menu-item [data-position="right"] > * {
+  @apply rounded-md px-1.5 py-0.5 text-xxs font-normal;
+  background-color: var(--bn-colors-hovered-background);
+  color: var(--bn-colors-side-menu);
+}
+.bn-root.bn-shadcn :is(.bn-suggestion-menu-label, [data-slot="dropdown-menu-label"], [data-slot="select-label"]) {
+  @apply px-2 py-1.5 text-xs font-medium;
+  color: var(--bn-colors-side-menu);
+}
 .bn-root.bn-shadcn .bn-suggestion-menu-item:is(:hover, [aria-selected="true"]) svg { color: inherit; }
-.atlas-page .bn-editor { padding-inline: 0; background: transparent; }
-.dark .bn-shadcn input[type="checkbox"] { color-scheme: dark; }
-.atlas-page .bn-block-content[data-content-type="heading"] { --level: 1.8em; }
-.atlas-page .bn-block-content[data-content-type="heading"][data-level="2"] { --level: 1.4em; }
-.atlas-page .bn-block-content[data-content-type="heading"][data-level="3"] { --level: 1.15em; }
-.atlas-page .bn-block-content { padding-block: 5px; }
+.bn-root.bn-shadcn :is(
+  .bn-suggestion-menu-item, .bn-toolbar, .bn-side-menu,
+  [data-slot="dropdown-menu-item"], [data-slot="dropdown-menu-sub-trigger"],
+  [data-slot="select-item"]
+) svg {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+.bn-root.bn-shadcn :is(.bn-toolbar, .bn-side-menu) :is(button, [data-slot="select-trigger"]) {
+  @apply h-7 min-w-7 rounded-lg px-1.5 py-0 text-s;
+  border: 0;
+  box-shadow: none;
+  color: var(--bn-colors-menu-text);
+}
+.bn-root.bn-shadcn :is(.bn-toolbar, .bn-side-menu) :is(button, [data-slot="select-trigger"]):is(:hover, [data-pressed], [aria-expanded="true"]) {
+  background-color: var(--bn-colors-hovered-background);
+  color: var(--bn-colors-hovered-text);
+}
+.bn-root.bn-shadcn :is(.bn-table-handle, .bn-table-cell-handle) {
+  @apply rounded-md;
+  color: var(--bn-colors-side-menu);
+}
+.bn-root.bn-shadcn :is(.bn-table-handle, .bn-table-cell-handle):is(:hover, [aria-expanded="true"]) {
+  background-color: var(--bn-colors-hovered-background);
+  color: var(--bn-colors-hovered-text);
+}
+.bn-root.bn-shadcn :is(button, [data-slot="select-trigger"]):focus-visible {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+.bn-root.bn-shadcn [data-slot="input"] {
+  @apply glass-input h-9 rounded-xl px-3 font-sans text-s;
+  color: var(--bn-colors-menu-text);
+  box-shadow: none;
+}
+.bn-root.bn-shadcn [data-slot="input"]:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+.bn-root.bn-shadcn .bn-panel { padding: 0.5rem; }
+.bn-root.bn-shadcn .bn-panel [data-slot="card"] {
+  padding-block: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bn-root.bn-shadcn .bn-panel [data-slot="card-content"] { padding: 0.75rem 0.25rem 0.25rem; }
+.bn-root.bn-shadcn .bn-panel [data-slot="tabs-list"] {
+  @apply rounded-xl p-1;
+  background-color: var(--bn-colors-hovered-background);
+}
+.bn-root.bn-shadcn .bn-panel [data-slot="tabs-trigger"] {
+  @apply rounded-lg text-s;
+  color: var(--bn-colors-side-menu);
+}
+.bn-root.bn-shadcn .bn-panel [data-slot="tabs-trigger"][data-active] {
+  @apply glass-button;
+  color: var(--bn-colors-menu-text);
+}
+.bn-root.bn-shadcn [data-slot="tooltip-content"] {
+  @apply glass-surface rounded-xl px-2 py-1 text-xs;
+  color: var(--bn-colors-menu-text);
+}
+.bn-root.bn-shadcn [data-slot="tooltip-content"] > svg { display: none; }
 .atlas-page .atlas-title { font-size: 2.25rem; line-height: 1.25; }

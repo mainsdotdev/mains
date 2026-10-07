@@ -9,7 +9,7 @@ import {
 } from "react";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import type { EventGroup } from "../../lib/group-events";
-import { Code } from "@/components/ui/icons/space";
+import { Code, Globe } from "@/components/ui/icons/space";
 import {
   Picture,
   FileIconComponent,
@@ -706,7 +706,7 @@ function ImageArtifact({
         Show Image
       </DropdownMenuItem>
       {runId && <DropdownMenuItem disabled={atlas.saving} onClick={() => { setMenuOpen(false); void atlas.save(runId, absPath); }}>
-        <Mains className="size-4 shrink-0" />Save to Atlas
+        <Globe className="size-4 shrink-0" />Save to Atlas
       </DropdownMenuItem>}
       {revealInFolder && (
         <DropdownMenuItem onClick={showInFinder}>

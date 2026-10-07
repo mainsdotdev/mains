@@ -1,22 +1,187 @@
 export const ATLAS_TEMPLATES = [
   {
-    title: "Your guide to pages",
-    markdown: "## Make room for your ideas\n\nPages keep your notes, plans and research in Atlas.\n\n## Start writing\n\nType / to insert a heading, checklist, table or image. Drag the handle beside a block to move it.\n\n## Keep working\n\nChanges save automatically. Open Page history to restore an earlier version, or ask an agent to work with this page.\n\n## Bring your work together\n\nAdd a page to a project, import Markdown or export a copy. Save generated documents and images to Atlas when you want to keep them.",
+    title: "Project brief",
+    markdown: `## Problem
+
+What problem are we solving, and who experiences it?
+
+## Desired outcome
+
+Describe what should be different when this project is done.
+
+## Scope
+
+### In scope
+
+- What we will deliver
+
+### Out of scope
+
+- What we are intentionally leaving for later
+
+## Success criteria
+
+| Measure | Current state | Target |
+| --- | --- | --- |
+| | | |
+
+## Plan
+
+| Milestone | Owner | Target date |
+| --- | --- | --- |
+| Define the approach | | |
+| Deliver a first version | | |
+| Review the outcome | | |
+
+## Risks and dependencies
+
+What could block progress? What needs to happen first?
+
+## Next steps
+
+- [ ] Confirm the scope and owner
+- [ ] Agree on the first milestone`,
   },
   {
-    title: "To-do list",
-    markdown: "## Today\n\n### Top priorities\n\n- [ ] Choose the most important task\n- [ ] Make progress on the project\n- [ ] Review the next steps\n\n### If time allows\n\n- [ ] Clear the small things\n- [ ] Prepare for tomorrow\n\n## Later\n\n- [ ] Ideas to come back to",
+    title: "Research notes",
+    markdown: `## Research question
+
+What do we need to learn, and which decision will it inform?
+
+## Starting assumptions
+
+- What we believe so far, before reviewing the evidence
+
+## Findings
+
+| Finding | Evidence or source | Confidence |
+| --- | --- | --- |
+| | | |
+
+## Open questions
+
+- What is still uncertain or contradicted by the evidence?
+
+## Synthesis
+
+What patterns emerged? Separate supported conclusions from assumptions.
+
+## Recommendation
+
+What should we do next, and why?
+
+## Follow-up
+
+- [ ] Check the most important unresolved assumption
+- [ ] Share the findings and sources`,
   },
   {
-    title: "Project tracker",
-    markdown: "## Overview\n\nDescribe the goal and what success looks like.\n\n## Milestones\n\n| Milestone | Owner | Status | Target date |\n| --- | --- | --- | --- |\n| Plan | | To do | |\n| Build | | To do | |\n| Review | | To do | |\n\n## Decisions\n\nRecord important decisions and the reasons behind them.\n\n## Next steps\n\n- [ ] Agree on the first milestone",
+    title: "Decision log",
+    markdown: `## Decision to make
+
+State the question in one sentence.
+
+Status: Proposed
+
+Owner:
+
+Date:
+
+## Context
+
+Why does this decision matter now? Include constraints and relevant evidence.
+
+## Options
+
+| Option | Benefits | Trade-offs |
+| --- | --- | --- |
+| Keep the current approach | | |
+| Alternative A | | |
+| Alternative B | | |
+
+## Decision and rationale
+
+Record the chosen option and why it best meets the criteria.
+
+## Consequences
+
+What changes as a result? What risks or compromises are we accepting?
+
+## Revisit when
+
+What new evidence or change would make us reconsider?
+
+## Actions
+
+| Action | Owner | Due date |
+| --- | --- | --- |
+| | | |`,
   },
   {
-    title: "Weekly update",
-    markdown: "## This week\n\nSummarize what moved forward.\n\n## Highlights\n\n- Progress worth sharing\n\n## Challenges\n\nWhat needs attention or a decision?\n\n## Next week\n\n- [ ] First priority\n- [ ] Second priority",
+    title: "Launch checklist",
+    markdown: `## Launch overview
+
+What are we releasing, and who is it for?
+
+Owner:
+
+Launch window:
+
+## Ready to launch
+
+- [ ] Agree on the launch scope and success criteria
+- [ ] Test the main user journeys
+- [ ] Resolve blocking issues and review known limitations
+- [ ] Prepare documentation and support guidance
+- [ ] Review the announcement and notify stakeholders
+
+## Rollout plan
+
+Describe the release steps, who owns each step, and how we will confirm they worked.
+
+## Recovery plan
+
+What would make us pause or roll back? Who makes that call, and how do we restore the previous state?
+
+## After launch
+
+- [ ] Confirm the release is working for users
+- [ ] Monitor errors, feedback and success criteria
+- [ ] Assign follow-up fixes
+- [ ] Capture lessons for the next launch`,
   },
   {
-    title: "Meeting notes",
-    markdown: "## Agenda\n\n- Topic to discuss\n\n## Notes\n\nCapture the discussion here.\n\n## Decisions\n\n- What was agreed\n\n## Action items\n\n| Action | Owner | Due date |\n| --- | --- | --- |\n| | | |",
+    title: "Brainstorm",
+    markdown: `## Challenge
+
+How might we improve the situation for the people involved?
+
+## Constraints
+
+List the time, budget or other boundaries that ideas must respect.
+
+## Ideas
+
+Capture possibilities before evaluating them.
+
+- A small improvement we could try quickly
+- A different approach to the underlying problem
+- An ambitious idea worth exploring
+
+## Shortlist
+
+| Idea | Expected impact | Effort | Biggest unknown |
+| --- | --- | --- | --- |
+| | | | |
+
+## First experiment
+
+Choose one idea. What is the smallest way to test it, and what result would justify continuing?
+
+## Next steps
+
+- [ ] Choose an experiment and owner
+- [ ] Set a review date
+- [ ] Record what we learn`,
   },
 ] as const;

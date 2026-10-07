@@ -48,6 +48,16 @@ function AtlasSurface({ accountId, imageCreation }: { accountId: string; imageCr
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
   const { ownerKey, tabs } = useAtlasTabs(accountId, itemId);
+  const previousTabs = useRef({ ownerKey, itemId, tabs });
+  useEffect(() => {
+    const previous = previousTabs.current;
+    previousTabs.current = { ownerKey, itemId, tabs };
+    if (!itemId || previous.ownerKey !== ownerKey || previous.itemId !== itemId || tabs.some((tab) => tab.id === itemId)) return;
+    const index = previous.tabs.findIndex((tab) => tab.id === itemId);
+    if (index < 0) return;
+    const next = tabs[Math.min(index, tabs.length - 1)];
+    navigate(next ? `/atlas/${next.id}` : "/atlas?type=page", { replace: true });
+  }, [ownerKey, itemId, tabs, navigate]);
   const editorRef = useRef<AtlasPageEditorHandle>(null);
   const [createPage] = useCreateAtlasPageMutation();
   const [busy, setBusy] = useState(false);

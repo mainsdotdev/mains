@@ -49,7 +49,7 @@ function CoverChoice({
       disabled={disabled}
       onClick={onSelect}
       aria-label={`Use ${item.title} as cover`}
-      className="group overflow-hidden rounded-xl border border-primary-200 text-left dark:border-primary-800 hover:border-accent focus-visible:ring-2 focus-visible:ring-accent"
+      className="group overflow-hidden rounded-2xl border border-primary-200 text-left dark:border-primary-800 focus-visible:ring-2 "
     >
       <div className="aspect-video bg-primary-100 dark:bg-primary-900">
         {url && (
@@ -68,7 +68,13 @@ function CoverChoice({
   );
 }
 
-export function AtlasPageHeader({ item, children }: { item: AtlasItem; children?: ReactNode }) {
+export function AtlasPageHeader({
+  item,
+  children,
+}: {
+  item: AtlasItem;
+  children?: ReactNode;
+}) {
   const { accountId, id, metadata } = item;
   const dispatch = useAppDispatch();
   const ownerKey = useAtlasOwnerKey(accountId);
@@ -158,22 +164,45 @@ export function AtlasPageHeader({ item, children }: { item: AtlasItem; children?
   };
 
   const iconPicker = iconOpen && (
-    <div role="dialog" aria-label="Page icon" aria-busy={updating.isLoading}
-      className={disabled ? "pointer-events-none opacity-70" : undefined}>
-      <IconPickerPanel icon={iconParts.value} iconMode={iconMode} isOpen iconColor={iconColor}
-        onSwitchMode={setIconMode} onSelectEmoji={(emoji) => selectIcon(formatIcon("emoji", emoji))}
+    <div
+      role="dialog"
+      aria-label="Page icon"
+      aria-busy={updating.isLoading}
+      className={disabled ? "pointer-events-none opacity-70" : undefined}
+    >
+      <IconPickerPanel
+        icon={iconParts.value}
+        iconMode={iconMode}
+        isOpen
+        iconColor={iconColor}
+        onSwitchMode={setIconMode}
+        onSelectEmoji={(emoji) => selectIcon(formatIcon("emoji", emoji))}
         onSelectIcon={(icon) => selectIcon(formatIcon("icon", icon, iconColor))}
         onSelectColor={(color) => {
           setIconColor(color);
-          if (iconParts.mode === "icon" && iconParts.value) selectIcon(formatIcon("icon", iconParts.value, color));
-        }} onClear={() => selectIcon(null)} className="absolute left-0 top-full mt-2 w-72 rounded-xl" />
+          if (iconParts.mode === "icon" && iconParts.value)
+            selectIcon(formatIcon("icon", iconParts.value, color));
+        }}
+        onClear={() => selectIcon(null)}
+        className="absolute left-0 top-full mt-2 w-72 rounded-xl"
+      />
     </div>
   );
 
   return (
     <>
       {coverId && (
-        <div className="group/cover relative">
+        <div
+          className="group/cover relative"
+          onKeyDown={(event) => {
+            if (repositioning && event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              drag.current = null;
+              setDraftPosition(null);
+            }
+          }}
+        >
           <div
             className={cn(
               "h-52 w-full overflow-hidden bg-primary-100 dark:bg-primary-900 md:h-64",
@@ -210,61 +239,15 @@ export function AtlasPageHeader({ item, children }: { item: AtlasItem; children?
             )}
           </div>
           {!item.trashedAt && (
-            <div className="absolute right-4 top-4 flex items-center gap-1 rounded-2xl glass-surface p-0.5 opacity-0 pointer-events-none transition-opacity duration-150 group-hover/cover:opacity-100 group-hover/cover:pointer-events-auto group-focus-within/cover:opacity-100 group-focus-within/cover:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto md:right-6">
-              <Button
-                variant="ghost"
-                disabled={disabled || repositioning}
-                onClick={() => setChoosingCover(true)}
-              >
-                Change cover
-              </Button>
-              <Button
-                variant="ghost"
-                disabled={disabled || !coverUrl || repositioning}
-                onClick={() =>
-                  setDraftPosition({
-                    coverFileId: coverId,
-                    coverPositionY: position,
-                  })
-                }
-              >
-                Reposition
-              </Button>
-              <Button
-                variant="ghost"
-                disabled={disabled || repositioning}
-                onClick={() => {
-                  void saveMetadata({ coverFileId: null }).catch(
-                    (error: unknown) => toast.error(atlasError(error)),
-                  );
-                }}
-              >
-                Remove
-              </Button>
-            </div>
-          )}
-          {repositioning && (
-            <div className="absolute inset-x-4 bottom-4 mx-auto max-w-md rounded-xl border border-primary-200 bg-primary-50/95 p-3 dark:border-primary-800 dark:bg-primary-950/95">
-              <Muted className="mb-2 text-xs">
-                Drag the image to reposition
-              </Muted>
-              <Slider
-                aria-label="Cover vertical position"
-                value={positionY}
-                onChange={(coverPositionY) =>
-                  setDraftPosition({ coverFileId: coverId, coverPositionY })
-                }
-                minLabel="Top"
-                maxLabel="Bottom"
-                showValue={false}
-                disabled={disabled}
-              />
-              <div className="mt-3 flex justify-end gap-2">
-                <Button variant="ghost" onClick={() => setDraftPosition(null)}>
-                  Cancel
-                </Button>
+            <div
+              className={cn(
+                "absolute right-4 top-4 flex items-center gap-1 rounded-2xl glass-surface p-0.5 opacity-0 pointer-events-none transition-opacity duration-150 group-hover/cover:opacity-100 group-hover/cover:pointer-events-auto group-focus-within/cover:opacity-100 group-focus-within/cover:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto md:right-6",
+                repositioning && "opacity-100 pointer-events-auto",
+              )}
+            >
+              {repositioning ? (
                 <Button
-                  variant="primary"
+                  variant="ghost"
                   disabled={disabled}
                   onClick={() => {
                     dispatch(
@@ -275,13 +258,68 @@ export function AtlasPageHeader({ item, children }: { item: AtlasItem; children?
                         coverPositionY: positionY,
                       }),
                     );
+                    drag.current = null;
                     setDraftPosition(null);
                   }}
                 >
-                  Save position
+                  Save
                 </Button>
-              </div>
+              ) : (
+                <>
+                  <Button
+                    variant="ghost"
+                    disabled={disabled}
+                    onClick={() => setChoosingCover(true)}
+                  >
+                    Change cover
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    disabled={disabled || !coverUrl}
+                    onClick={() =>
+                      setDraftPosition({
+                        coverFileId: coverId,
+                        coverPositionY: position,
+                      })
+                    }
+                  >
+                    Reposition
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    disabled={disabled}
+                    onClick={() => {
+                      void saveMetadata({ coverFileId: null }).catch(
+                        (error: unknown) => toast.error(atlasError(error)),
+                      );
+                    }}
+                  >
+                    Remove
+                  </Button>
+                </>
+              )}
             </div>
+          )}
+          {repositioning && (
+            <>
+              <div className="absolute bottom-4 right-4 top-16 rounded-xl glass-surface p-0.5 md:right-6">
+                <Slider
+                  aria-label="Cover vertical position"
+                  orientation="vertical"
+                  className="h-full"
+                  autoFocus
+                  value={positionY}
+                  onChange={(coverPositionY) =>
+                    setDraftPosition({ coverFileId: coverId, coverPositionY })
+                  }
+                  showValue={false}
+                  disabled={disabled}
+                />
+              </div>
+              <Muted className="pointer-events-none absolute left-4 top-4 max-w-[calc(100%-7rem)] rounded-xl glass-surface px-3 py-1.5 text-xs md:left-6">
+                Drag to reposition · Esc to cancel
+              </Muted>
+            </>
           )}
         </div>
       )}
@@ -292,24 +330,25 @@ export function AtlasPageHeader({ item, children }: { item: AtlasItem; children?
             coverId ? "pt-12" : "pt-10",
           )}
         >
-          {metadata?.icon && <div
-            ref={iconRef}
-            className={cn(
-              "relative mb-5 w-fit",
-              coverId && metadata?.icon && "-mt-21",
-            )}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.stopPropagation();
-                setIconOpen(false);
-              }
-            }}
-          >
-            <Button
+          {metadata?.icon && (
+            <div
+              ref={iconRef}
+              className={cn(
+                "relative mb-5 w-fit",
+                coverId && metadata?.icon && "-mt-21",
+              )}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.stopPropagation();
+                  setIconOpen(false);
+                }
+              }}
+            >
+              <Button
                 disabled={disabled}
                 aria-label="Change page icon"
                 aria-expanded={iconOpen}
-                className="flex size-20 items-center justify-center rounded-2xl bg-primary-50 shadow-sm hover:bg-primary-100 dark:bg-primary-950 dark:hover:bg-primary-900 focus-visible:ring-2 focus-visible:ring-accent"
+                className="flex size-20 items-center justify-center rounded-3xl bg-primary-50 shadow-sm hover:bg-primary-100 dark:bg-primary-950 dark:hover:bg-primary-900 focus-visible:ring-2 focus-visible:ring-accent"
                 onClick={() => {
                   setIconMode(iconParts.mode);
                   setIconColor(iconParts.color);
@@ -320,28 +359,61 @@ export function AtlasPageHeader({ item, children }: { item: AtlasItem; children?
                   icon={metadata.icon}
                   className="size-17 text-6xl"
                 />
-            </Button>
-            {iconPicker}
-          </div>}
+              </Button>
+              {iconPicker}
+            </div>
+          )}
           {!item.trashedAt && (!metadata?.icon || !coverId) && (
-            <div className={cn(
-              "-ml-2 mb-2 flex min-h-8 w-fit items-center gap-1 opacity-0 pointer-events-none transition-opacity duration-150 group-hover/page-heading:opacity-100 group-hover/page-heading:pointer-events-auto group-focus-within/page-heading:opacity-100 group-focus-within/page-heading:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto",
-              (iconOpen || choosingCover) && "opacity-100 pointer-events-auto",
-            )}>
-              {!metadata?.icon && <div ref={iconRef} className="relative flex"
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") { event.stopPropagation(); setIconOpen(false); }
-                }}>
-                <Button variant="bare" disabled={disabled} aria-label="Add page icon" aria-expanded={iconOpen}
+            <div
+              className={cn(
+                "-ml-2 mb-2 flex min-h-8 w-fit items-center gap-1 opacity-0 pointer-events-none transition-opacity duration-150 group-hover/page-heading:opacity-100 group-hover/page-heading:pointer-events-auto group-focus-within/page-heading:opacity-100 group-focus-within/page-heading:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto",
+                (iconOpen || choosingCover) &&
+                  "opacity-100 pointer-events-auto",
+              )}
+            >
+              {!metadata?.icon && (
+                <div
+                  ref={iconRef}
+                  className="relative flex"
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.stopPropagation();
+                      setIconOpen(false);
+                    }
+                  }}
+                >
+                  <Button
+                    variant="bare"
+                    disabled={disabled}
+                    aria-label="Add page icon"
+                    aria-expanded={iconOpen}
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-s text-primary-500 hover:bg-primary-100 hover:text-primary-700 dark:hover:bg-primary-900 dark:hover:text-primary-300 focus-visible:ring-2 focus-visible:ring-accent/40"
+                    onClick={() => {
+                      setIconMode("emoji");
+                      setIconColor(DEFAULT_ICON_COLOR);
+                      setIconOpen(!iconOpen);
+                    }}
+                  >
+                    <Plus className="size-4 shrink-0" />
+                    Add icon
+                  </Button>
+                  {iconPicker}
+                </div>
+              )}
+              {!coverId && (
+                <Button
+                  variant="bare"
+                  disabled={disabled}
                   className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-s text-primary-500 hover:bg-primary-100 hover:text-primary-700 dark:hover:bg-primary-900 dark:hover:text-primary-300 focus-visible:ring-2 focus-visible:ring-accent/40"
                   onClick={() => {
-                    setIconMode("emoji"); setIconColor(DEFAULT_ICON_COLOR); setIconOpen(!iconOpen);
-                  }}><Plus className="size-4 shrink-0" />Add icon</Button>
-                {iconPicker}
-              </div>}
-              {!coverId && <Button variant="bare" disabled={disabled}
-                className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-s text-primary-500 hover:bg-primary-100 hover:text-primary-700 dark:hover:bg-primary-900 dark:hover:text-primary-300 focus-visible:ring-2 focus-visible:ring-accent/40"
-                onClick={() => { setIconOpen(false); setChoosingCover(true); }}><Picture className="size-4 shrink-0" />Add cover</Button>}
+                    setIconOpen(false);
+                    setChoosingCover(true);
+                  }}
+                >
+                  <Picture className="size-4 shrink-0" />
+                  Add cover
+                </Button>
+              )}
             </div>
           )}
           {children}

@@ -120,7 +120,8 @@ describe("Atlas Page menu actions", () => {
     });
     expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ title: "New title", expectedVersion: 1 }));
     expect(mocks.update).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "page", trashed: true });
-    expect(screen.getByTestId("route").textContent).toBe("/atlas?type=page");
+    // Atlas owns navigation after the mutation closes the Page's tab.
+    expect(screen.getByTestId("route").textContent).toBe("/atlas/page");
   });
 
   it("keeps the draft when saving fails and skips the Trash mutation", async () => {

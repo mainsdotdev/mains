@@ -1,7 +1,7 @@
 import type { AtlasKind } from "@mains/contracts/atlas";
 
 export type AtlasType = "all" | AtlasKind;
-export type AtlasScope = "all" | "generated" | "saved" | "favorites";
+export type AtlasScope = "all" | "generated" | "uploads" | "saved" | "favorites";
 
 export const ATLAS_TYPES = [
   { value: "all", label: "All" },
@@ -15,7 +15,7 @@ export function atlasView(params: URLSearchParams) {
   const rawScope = params.get("view");
   return {
     type: (ATLAS_TYPES.some((item) => item.value === rawType) ? rawType : "all") as AtlasType,
-    scope: (["generated", "saved", "favorites"].includes(rawScope ?? "") ? rawScope : "all") as AtlasScope,
+    scope: (["generated", "uploads", "saved", "favorites"].includes(rawScope ?? "") ? rawScope : "all") as AtlasScope,
     collectionId: params.get("project") ?? "",
     query: params.get("q") ?? "",
   };

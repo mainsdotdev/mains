@@ -27,7 +27,9 @@ vi.mock("@/lib/redux/api/atlasApi", () => ({
     mocks.list(options);
     return { data: mocks.items, isLoading: false };
   },
-  useAtlasGeneratedQuery: () => ({ currentData: { items: mocks.generated }, isLoading: false }),
+  useAtlasGeneratedQuery: (_options: unknown, { skip }: { skip: boolean }) => ({
+    currentData: skip ? undefined : { items: mocks.generated }, isLoading: false,
+  }),
   useCreateAtlasPageMutation: () => [mocks.create, { isLoading: false }],
   useUpdateAtlasItemMutation: () => [vi.fn(), {}],
   useRemoveAtlasItemMutation: () => [vi.fn(), {}],
@@ -100,7 +102,23 @@ describe("Atlas image creation navigation", () => {
 });
 
 describe("Atlas image sources", () => {
-  it("shows uploads in All while keeping Your creations limited to generated images", () => {
+  it.each(["/atlas?layout=grid", "/atlas?type=image"])("opens images in the shared zoomable preview from %s", (route) => {
+    mocks.generated = [{ sourceKey: "generated", runId: "run", runTitle: "Images",
+      collectionId: null, kind: "image", path: "/generated.png", fileName: "generated.png",
+      mimeType: "image/png", byteSize: 1, modifiedAt: "2026-10-07" }];
+    setup(route);
+    fireEvent.click(screen.getByRole("button", { name: "Open generated.png" }));
+    const preview = within(screen.getByRole("dialog", { name: "generated.png" }));
+    expect(preview.getByRole("img", { name: "generated.png" }).getAttribute("src")).toBe("mains-localimg://preview");
+    expect(preview.getByRole("button", { name: "Download image" })).toBeTruthy();
+    fireEvent.click(preview.getByRole("button", { name: "Zoom in" }));
+    expect(preview.getByRole("button", { name: "Reset zoom" }).textContent).toBe("125%");
+    fireEvent.click(preview.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByTestId("url").textContent).toBe(route);
+  });
+
+  it("separates uploaded images from Your creations while showing both in All", () => {
     const image: AtlasGeneratedFile = { sourceKey: "generated", runId: "run", runTitle: "Images",
       collectionId: null, kind: "image", path: "/generated.png", fileName: "generated.png",
       mimeType: "image/png", byteSize: 1, modifiedAt: "2026-10-07" };
@@ -108,9 +126,47 @@ describe("Atlas image sources", () => {
     setup("/atlas?type=image");
     expect(screen.getByRole("button", { name: "Open generated.png" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open screen.png" })).toBeTruthy();
+    expect(screen.getByText("Uploaded")).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: "Your creations" }));
     expect(screen.getByRole("button", { name: "Open generated.png" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open screen.png" })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Uploads" }));
+    expect(screen.getByTestId("url").textContent).toBe("/atlas?type=image&view=uploads");
+    expect(screen.getByRole("button", { name: "Open screen.png" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open generated.png" })).toBeNull();
+  });
+
+  it.each(["all", "file"])("loads only attachments for a direct Uploads URL in %s, preserving project and saved-copy actions", (type) => {
+    const upload: AtlasGeneratedFile = { sourceKey: "upload", origin: "attachment", runId: "run", runTitle: "Research",
+      collectionId: "project", kind: "file", path: "/report.pdf", fileName: "report.pdf",
+      mimeType: "application/pdf", byteSize: 1, modifiedAt: "2026-10-07" };
+    mocks.generated = [upload,
+      { ...upload, sourceKey: "generated", origin: "generated", fileName: "summary.pdf" },
+      { ...upload, sourceKey: "other-project", collectionId: "other", fileName: "other-project.pdf" },
+      { ...upload, sourceKey: "image", kind: "image", path: "/screen.png", fileName: "screen.png", mimeType: "image/png" },
+    ];
+    const savedCopy: AtlasListItem = { id: "saved-upload", title: "report.pdf", accountId: "account", kind: "file",
+      metadata: null, collectionId: "project", sourceRunId: "run", sourceKey: "upload", path: "/atlas/report.pdf",
+      fileName: "report.pdf", mimeType: "application/pdf", byteSize: 1, isFavorite: false, trashedAt: null,
+      version: 1, createdAt: "2026-10-07", updatedAt: "2026-10-07" };
+    mocks.items = [savedCopy, { ...savedCopy, id: "saved-other", sourceKey: null, title: "saved-only.pdf" }];
+    setup(`/atlas?type=${type}&view=uploads&project=project`);
+    expect(screen.getByRole("radio", { name: "Uploads" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getAllByRole("button", { name: "report.pdf" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "summary.pdf" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "saved-only.pdf" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "other-project.pdf" })).toBeNull();
+    expect(Boolean(screen.queryByRole("button", { name: "screen.png" }))).toBe(type === "all");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for report.pdf" }));
+    expect(screen.getByRole("menuitem", { name: "Add to favorites" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Save to Atlas" })).toBeNull();
+  });
+
+  it("explains an empty Uploads view without offering Page creation", () => {
+    setup("/atlas?view=uploads");
+    expect(screen.getByText("No uploads yet")).toBeTruthy();
+    expect(screen.getByText("Files attached to your conversations will appear here.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Create a page" })).toBeNull();
   });
 });
 
@@ -150,6 +206,7 @@ describe("Atlas Page grid previews", () => {
 
   it("requests excerpts only for a grid that can display Pages", () => {
     setup("/atlas?type=page&layout=grid");
+    expect(screen.queryByRole("radio", { name: "Uploads" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "List view" }));
     expect(mocks.list).toHaveBeenLastCalledWith({ accountId: "account" });
   });
@@ -202,11 +259,14 @@ describe("Atlas page starters", () => {
     expect(store.getState().atlas.byOwner['["backend-a","account"]'].chats["existing-page"].draft).toBe("Keep my draft");
   });
 
-  it("keeps the other template cards as direct Page creation", async () => {
+  it.each(["starter", "menu"])("creates a populated Page directly from the first template in the %s", async (entryPoint) => {
     const store = setup();
-    fireEvent.click(screen.getByRole("button", { name: "To-do list" }));
+    if (entryPoint === "menu") {
+      fireEvent.click(screen.getByRole("button", { name: "New Atlas item" }));
+    }
+    fireEvent.click(screen.getByRole(entryPoint === "menu" ? "menuitem" : "button", { name: "Project brief" }));
     await screen.findByTestId("page-draft");
-    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ title: "To-do list", markdown: expect.stringContaining("Top priorities") }));
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ title: "Project brief", markdown: expect.stringContaining("Success criteria"), collectionId: "project" }));
     expect(store.getState().atlas.byOwner['["backend-a","account"]'].chats["new-page"]).toBeUndefined();
   });
 

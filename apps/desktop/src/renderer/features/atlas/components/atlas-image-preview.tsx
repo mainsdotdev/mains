@@ -1,5 +1,5 @@
-import { Button, Modal, Muted, Text } from "@/components/ui";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
+import { ImagePreviewModal } from "@/features/workspace/components/image-preview-modal";
 
 export function AtlasImagePreview({ title, path, onClose }: {
   title: string;
@@ -7,11 +7,12 @@ export function AtlasImagePreview({ title, path, onClose }: {
   onClose: () => void;
 }) {
   const src = useLocalImageUrl(path ?? "");
-  return <Modal isOpen onClose={onClose} aria-label={title} className="max-w-5xl p-4">
-    <div className="mb-4 flex items-center justify-between gap-4">
-      <Text weight="medium">{title}</Text>
-      <Button variant="ghost" onClick={onClose}>Close</Button>
-    </div>
-    {src ? <img src={src} alt={title} className="max-h-[75vh] w-full object-contain" /> : <Muted>Opening image…</Muted>}
-  </Modal>;
+  return (
+    <ImagePreviewModal
+      name={title}
+      src={src ?? ""}
+      onClose={onClose}
+      status={!src ? "Opening image…" : undefined}
+    />
+  );
 }
