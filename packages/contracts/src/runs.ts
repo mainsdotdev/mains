@@ -374,6 +374,8 @@ export interface StartRunPayload {
   spaceId: string;
   providerId: string;
   goal: string;
+  /** Optional native Page context, separate from the visible user message. */
+  atlasPageId?: string;
   workspaceId?: string;
   collectionId?: string;
   model?: string;
@@ -531,6 +533,8 @@ export interface ContinueRunPayload {
   accountId: string;
   /** The follow-up message to send. */
   message: string;
+  /** Optional Page identity for a page-chat continuation. */
+  atlasPageId?: string;
   /** Model for this continuation; omitted = the provider's default. */
   model?: string | null;
   /** Images/documents picked on the phone. */

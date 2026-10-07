@@ -1,3 +1,4 @@
+import { DEFAULT_MODE_ID, MODE_IDS, type ModeId } from "@mains/contracts/modes";
 import type {
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -29,6 +30,7 @@ export interface CodexServerResponder {
 }
 
 export interface CodexRequestRunState {
+  mode?: ModeId;
   fileChangeItems: Map<
     string,
     Array<{ path: string; kind: string; diff?: string }>
@@ -88,8 +90,11 @@ export function createCodexRequestBroker(
   const logger =
     options.logger ?? createLogger("[CodexRequestBroker]");
   const now = options.now ?? Date.now;
-  const mainsToolNames = new Set(
-    toCodexDynamicTools().map((tool) => tool.name),
+  const mainsToolNames = new Map(
+    MODE_IDS.map((mode) => [
+      mode,
+      new Set(toCodexDynamicTools(mode).map((tool) => tool.name)),
+    ]),
   );
 
   function parseToolArguments(
@@ -441,7 +446,8 @@ export function createCodexRequestBroker(
       const toolArgs = parseToolArguments(
         toolParams?.arguments,
       );
-      if (toolName && mainsToolNames.has(toolName)) {
+      const mode = getRunState(runId)?.mode ?? DEFAULT_MODE_ID;
+      if (toolName && mainsToolNames.get(mode)?.has(toolName)) {
         const ctx =
           getMainsToolContext(runId) ?? {
             workspaceId: null,

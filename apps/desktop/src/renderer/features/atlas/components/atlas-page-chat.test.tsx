@@ -12,10 +12,13 @@ import { AtlasPageChat } from "./atlas-page-chat";
 import { useActiveSpace } from "@/hooks/use-active-space";
 
 const mocks = vi.hoisted(() => ({
-  execute: vi.fn(), continue: vi.fn(), abort: vi.fn(), prepare: vi.fn(), jump: vi.fn(),
+  execute: vi.fn(), continue: vi.fn(), abort: vi.fn(), beforeSend: vi.fn(), jump: vi.fn(),
   spaces: [{ id: "work-space", accountId: "account", name: "Codex Work", mode: "work", providerId: "codex", model: "test-model" }],
   runId: null as string | null,
   runMode: "work",
+  runProviderId: "codex",
+  runSpaceId: "work-space",
+  activeSpaceId: undefined as string | undefined,
   selection: undefined as unknown,
   getState: vi.fn(), invoke: vi.fn(),
   chatProvider: vi.fn(),
@@ -34,9 +37,10 @@ vi.mock("@/features/workspace/hooks/use-workspace-runs", () => ({
     mocks.chatProvider(_provider);
     mocks.chatMode(_mode);
     mocks.selection = selection;
-    const activeRun = mocks.runId ? { id: mocks.runId, mode: mocks.runMode, providerId: "codex", spaceId: "work-space", status: "succeeded", goal: "Edit page",
+    const runId = _run === mocks.runId ? mocks.runId : null;
+    const activeRun = runId ? { id: runId, mode: mocks.runMode, providerId: mocks.runProviderId, spaceId: mocks.runSpaceId, status: "succeeded", goal: "Edit page",
       model: mocks.settings.model, configSnapshot: { conversationSettings: mocks.settings } } : undefined;
-    return { runsLoaded: true, runs: activeRun ? [activeRun] : [], activeRunId: mocks.runId, activeRun,
+    return { runsLoaded: true, runs: activeRun ? [activeRun] : [], activeRunId: runId, activeRun,
       currentEvents: [], currentTurns: [], eventsEndRef: { current: null }, history: undefined,
       isLoading: false, error: null, executeRun: mocks.execute, continueRun: mocks.continue };
   },
@@ -47,7 +51,7 @@ vi.mock("@/features/workspace/hooks/use-plugin-logos", () => ({ PluginLogoProvid
 vi.mock("@/features/workspace/components/workspace-events", () => ({ WorkspaceEvents: () => <div>Page conversation</div> }));
 vi.mock("@/features/workspace/components/tools/tool-approval-dialog", () => ({ ToolApprovalDialog: () => null }));
 vi.mock("@/lib/redux/api", () => ({
-  useGetAppSettingsQuery: () => ({ data: { activeSpaceId: mocks.spaces[0]?.id }, isLoading: false }),
+  useGetAppSettingsQuery: () => ({ data: { activeSpaceId: mocks.activeSpaceId ?? mocks.spaces[0]?.id }, isLoading: false }),
   useGetSpacesQuery: () => ({ data: mocks.spaces, isLoading: false }),
   useAbortRunMutation: () => [mocks.abort],
   useGetProviderAccountInfoQuery: () => ({ data: undefined }),
@@ -87,7 +91,7 @@ function setup(starter = false) {
   mocks.getState.mockImplementation(() => store.getState());
   const tree = (id: string) => <Provider store={store}><MemoryRouter>
     <SpaceMode />
-    <AtlasPageChat accountId="account" id={id} title={`Page ${id}`} collectionId="project" disabled={false} prepareMessage={mocks.prepare} />
+    <AtlasPageChat accountId="account" id={id} title={`Page ${id}`} collectionId="project" disabled={false} beforeSend={mocks.beforeSend} />
   </MemoryRouter></Provider>;
   const result = render(tree("one"));
   return { store, switchPage: (id: string) => result.rerender(tree(id)) };
@@ -97,14 +101,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.runId = null;
   mocks.runMode = "work";
+  mocks.runProviderId = "codex";
+  mocks.runSpaceId = "work-space";
+  mocks.activeSpaceId = undefined;
   mocks.spaces = [{ id: "work-space", accountId: "account", name: "Codex Work", mode: "work", providerId: "codex", model: "test-model" }];
   mocks.settings = { model: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } };
   mocks.invoke.mockResolvedValue(undefined);
-  mocks.prepare.mockResolvedValue("Atlas instruction with the saved page version");
+  mocks.beforeSend.mockResolvedValue(true);
   mocks.execute.mockImplementation(async (...args: unknown[]) => {
     mocks.settings = args[8] as typeof mocks.settings;
     mocks.runId = "page-run";
     mocks.runMode = "work";
+    mocks.runProviderId = args[2] as string;
+    mocks.runSpaceId = mocks.activeSpaceId ?? mocks.spaces[0].id;
     return mocks.runId;
   });
   mocks.continue.mockResolvedValue(true);
@@ -127,7 +136,7 @@ describe("Atlas floating page chat", () => {
     expect(selection.isCollapsed).toBe(true);
     expect(beforeCaret.toString()).toBe("Create a page about ");
     expect(screen.getByTestId("floating-chat-surface").getAttribute("data-state")).toBe("details");
-    expect(mocks.prepare).not.toHaveBeenCalled();
+    expect(mocks.beforeSend).not.toHaveBeenCalled();
     expect(mocks.execute).not.toHaveBeenCalled();
     typeInstruction("Create a page about our launch plan");
     expect(view.store.getState().atlas.byOwner['["local","account"]'].chats.one.draft).toBe("Create a page about our launch plan");
@@ -205,18 +214,88 @@ describe("Atlas floating page chat", () => {
     typeInstruction("Edit this page");
     fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
     await screen.findByText("Page conversation");
-    expect(mocks.prepare).toHaveBeenCalledWith("Edit this page");
-    expect(mocks.execute).toHaveBeenCalledWith("Atlas instruction with the saved page version", undefined, "codex", "test-model", undefined, [], "project", undefined, mocks.settings);
+    expect(mocks.beforeSend).toHaveBeenCalledOnce();
+    expect(mocks.execute).toHaveBeenCalledWith("Edit this page", undefined, "codex", "test-model", undefined, [], "project", undefined, mocks.settings, undefined, "one");
     expect(mocks.selection).toEqual({ selection: "local" });
     expect(mocks.jump).not.toHaveBeenCalled();
     typeInstruction("Expand the summary");
     fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
-    await waitFor(() => expect(mocks.continue).toHaveBeenCalledWith("page-run", "Atlas instruction with the saved page version", "test-model", undefined, [], undefined, mocks.settings));
+    await waitFor(() => expect(mocks.continue).toHaveBeenCalledWith("page-run", "Expand the summary", "test-model", undefined, [], undefined, mocks.settings, undefined, "one"));
     expect(mocks.execute).toHaveBeenCalledOnce();
   });
 
+  it("starts a fresh page conversation from the header menu without reopening or deleting the old chat", async () => {
+    const { store } = setup(true);
+    typeInstruction("Edit this page");
+    fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
+    await screen.findByText("Page conversation");
+    fireEvent.click(screen.getByRole("button", { name: "Page chat options" }));
+    expect(screen.queryByRole("button", { name: "Open chat" })).toBeNull();
+    expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
+    expect(screen.queryByText("Codex Work")).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "New page chat" }));
+    expect(store.getState().atlas.byOwner['["local","account"]'].chats.one).toMatchObject({
+      runId: null, spaceId: "work-space", mode: "details",
+    });
+    expect(screen.queryByText("Page conversation")).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(mocks.abort).not.toHaveBeenCalled();
+    expect(mocks.jump).not.toHaveBeenCalled();
+    typeInstruction("A fresh request");
+    fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
+    await waitFor(() => expect(mocks.execute).toHaveBeenCalledTimes(2));
+    expect(mocks.continue).not.toHaveBeenCalled();
+  });
+
+  it("uses the active Space's provider instead of a remembered page-specific Space", async () => {
+    mocks.spaces.push({ ...mocks.spaces[0], id: "claude-work", name: "Claude Work", providerId: "claude_code" });
+    mocks.runId = "old-claude-run";
+    mocks.runProviderId = "claude_code";
+    mocks.runSpaceId = "claude-work";
+    const { store } = setup(true);
+    act(() => store.dispatch(updateAtlasPageChat({ ownerKey: '["local","account"]', id: "one",
+      patch: { spaceId: "claude-work", runId: "old-claude-run" } })));
+    expect(mocks.chatProvider).toHaveBeenLastCalledWith("codex");
+    expect(screen.queryByText("Page conversation")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Page chat options" })).toBeNull();
+    typeInstruction("Keep this instruction");
+    fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
+    await waitFor(() => expect(mocks.execute).toHaveBeenCalledOnce());
+    expect(mocks.execute.mock.calls[0][2]).toBe("codex");
+    expect(mocks.continue).not.toHaveBeenCalled();
+    expect(store.getState().atlas.byOwner['["local","account"]'].chats.one.spaceId).toBe("work-space");
+    fireEvent.click(screen.getByRole("button", { name: "Page chat options" }));
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: "New page chat" })).toBeTruthy();
+    expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
+    expect(screen.queryByText("Claude Work")).toBeNull();
+  });
+
+  it("follows active Space changes without continuing the previous provider's run or losing the draft", async () => {
+    mocks.spaces.push({ ...mocks.spaces[0], id: "claude-work", name: "Claude Work", providerId: "claude_code" });
+    const view = setup(true);
+    typeInstruction("Start in Codex");
+    fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
+    await screen.findByText("Page conversation");
+    typeInstruction("Keep this instruction");
+    mocks.activeSpaceId = "claude-work";
+    view.switchPage("one");
+    expect(mocks.chatProvider).toHaveBeenLastCalledWith("claude_code");
+    expect(screen.queryByText("Page conversation")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Page instruction" }).textContent).toBe("Keep this instruction");
+    fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
+    await waitFor(() => expect(mocks.execute).toHaveBeenCalledTimes(2));
+    expect(mocks.execute.mock.calls[1][2]).toBe("claude_code");
+    expect(mocks.continue).not.toHaveBeenCalled();
+    expect(mocks.abort).not.toHaveBeenCalled();
+    const store = view.store;
+    expect(store.getState().atlas.byOwner['["local","account"]'].chats.one).toMatchObject({
+      runId: "page-run", spaceId: "claude-work", mode: "details",
+    });
+  });
+
   it("keeps the draft and does not start a run when the page cannot be saved", async () => {
-    mocks.prepare.mockResolvedValue(null);
+    mocks.beforeSend.mockResolvedValue(false);
     const { store } = setup();
     typeInstruction("Do not lose this");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send page instruction" })); });
@@ -240,7 +319,7 @@ describe("Atlas floating page chat", () => {
     expect(screen.getByText("notes.txt")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
     await waitFor(() => expect(mocks.execute).toHaveBeenCalledOnce());
-    expect(mocks.prepare).toHaveBeenCalledWith("Use the attached context to work on this page.");
+    expect(mocks.beforeSend).toHaveBeenCalledOnce();
     expect(mocks.execute.mock.calls[0][4]).toEqual([{ name: "notes.txt", type: "document", mimeType: "text/plain", data: btoa("page context") }]);
     await waitFor(() => expect(screen.queryByText("notes.txt")).toBeNull());
   });

@@ -60,6 +60,7 @@ import { sanitizeRunAttachments } from "./run-attachments";
 import { listRunAttachmentFiles, prepareRunAttachments, pruneUnreferencedAttachments, resolveRunAttachment } from "./run-attachment-storage";
 import { readAttachmentImage } from "./run-attachment-images";
 import { resolveConversationSettings, validateConversationSettings } from "./conversation-settings";
+import { resolveAtlasPageContext } from "./run-atlas-page";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
 import { withImageContentHashes } from "./run-image-content-hashes";
@@ -159,11 +160,8 @@ const RUN_OUTPUT_EXCLUDES = new Set([
   "Thumbs.db",
 ]);
 
-function withProjectResources(
-  baseInstructions: string | null,
-  projectInstructions: string | null,
-): string | null {
-  const parts = [baseInstructions, projectInstructions].filter(
+function joinInstructions(...instructions: (string | null)[]): string | null {
+  const parts = instructions.filter(
     (part): part is string => Boolean(part),
   );
   return parts.length > 0 ? parts.join("\n\n") : null;
@@ -795,7 +793,8 @@ export const runsService = {
         configSnapshot, toolPolicy,
         voiceTools: coordinator.tools,
         voiceInstructions: `${VOICE_COORDINATOR_INSTRUCTIONS}\nPreviously linked working chats (use ListVoiceTasks for all): ${JSON.stringify(links.slice(-16).map(({ id, taskKey, title }) => ({ runId: id, taskKey, title })))}`,
-        extraInstructions: withProjectResources(composeExtraInstructions(run.mode, space?.systemPrompt), projectInstructions),
+        extraInstructions: joinInstructions(composeExtraInstructions(run.mode, space?.systemPrompt), projectInstructions,
+          resolveAtlasPageContext(run.accountId, run.mode, undefined, run.configSnapshot?.atlasPageId)?.instructions ?? null),
       }, onRealtimeEvent, {
         async onTurnStarted(providerTurnId, message, model) {
           await runSessionRegistry.whenIdle(run.id);
@@ -1407,6 +1406,7 @@ export const runsService = {
       if (!providerSupportsMode(payload.providerId, mode)) {
         throw new Error(`Provider "${provider.displayName}" does not support ${mode} mode`);
       }
+      const atlasPage = resolveAtlasPageContext(payload.accountId, mode, payload.atlasPageId, payload.configSnapshot?.atlasPageId);
       let workspace: Awaited<ReturnType<typeof workspaceService.get>> = null;
       if (mode === "developer") {
         if (!payload.workspaceId) {
@@ -1448,6 +1448,7 @@ export const runsService = {
           ...(payload.configSnapshot ?? {}),
           ...conversationSettings.config,
           conversationSettings,
+          ...(atlasPage ? { atlasPageId: atlasPage.id } : {}),
           ...(payload.additionalDirectories !== undefined
             ? { additionalDirectories: payload.additionalDirectories }
             : {}),
@@ -1484,7 +1485,7 @@ export const runsService = {
         collectionId,
         cwd: execution.workspaceId ? null : execution.cwd,
       });
-      const extraInstructions = withProjectResources(baseInstructions, projectInstructions);
+      const extraInstructions = joinInstructions(baseInstructions, projectInstructions, atlasPage?.instructions ?? null);
 
       if (payload.initialContext && payload.initialContext.length > 0) {
         for (const ctx of payload.initialContext) {
@@ -1695,6 +1696,7 @@ export const runsService = {
         throw new Error("This conversation already has an active response.");
       }
       const uploads = sanitizeRunAttachments(payload.attachments, await browserCaptureDir());
+      const atlasPage = resolveAtlasPageContext(accountId, existing.mode, payload.atlasPageId, existing.configSnapshot?.atlasPageId);
       let continuationStarted = false;
       try {
         const run = await runsRepo.findRunById(runId);
@@ -1763,6 +1765,7 @@ export const runsService = {
             ...(run.configSnapshot ?? {}),
             ...conversationSettings.config,
             conversationSettings,
+            ...(atlasPage ? { atlasPageId: atlasPage.id } : {}),
             ...(payload.additionalDirectories !== undefined
               ? { additionalDirectories: payload.additionalDirectories }
               : {}),
@@ -1835,9 +1838,10 @@ export const runsService = {
             model: conversationSettings.model || undefined,
             systemPrompt: run.systemPrompt,
             mode: run.mode,
-            extraInstructions: withProjectResources(
+            extraInstructions: joinInstructions(
               composeExtraInstructions(run.mode, space?.systemPrompt),
               projectInstructions,
+              atlasPage?.instructions ?? null,
             ),
             toolPolicy,
             configSnapshot,
@@ -1954,6 +1958,7 @@ export const runsService = {
         throw new Error(`Provider "${provider.displayName}" is not enabled`);
       }
 
+      const atlasPage = resolveAtlasPageContext(accountId, sourceRun.mode, undefined, sourceRun.configSnapshot?.atlasPageId);
       const workspace = sourceRun.workspaceId
         ? await workspaceService.get(sourceRun.workspaceId)
         : null;
@@ -2069,9 +2074,10 @@ export const runsService = {
           // model the source happened to start with.
           model: sourceModel,
           mode: sourceRun.mode,
-          extraInstructions: withProjectResources(
+          extraInstructions: joinInstructions(
             composeExtraInstructions(sourceRun.mode, sourceSpace?.systemPrompt),
             projectInstructions,
+            atlasPage?.instructions ?? null,
           ),
           toolPolicy,
           configSnapshot,

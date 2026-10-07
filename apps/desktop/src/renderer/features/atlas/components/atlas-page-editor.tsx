@@ -205,10 +205,10 @@ function PageEditor({ page, reload, handleRef, onTitleChange, requestedAction, o
       navigate(`/atlas/${next.item.id}`);
     } catch (error) { toast.error(atlasError(error)); }
   };
-  const prepareMessage = useCallback(async (instruction: string) => {
-    if (page.item.trashedAt || saveState.error || !instruction.trim() || !(await queue.flush())) return null;
-    return `Work on Atlas page "${name}" (pageId: ${id}, current version: ${queue.version}).\n\nUser request:\n${instruction.trim()}\n\nUse AtlasReadPage before editing. Apply changes with AtlasUpdatePage using the version returned by the read. Preserve the user's existing blocks, file references and formatting. If the version changed, read again and reconcile before saving. The page is stored in Atlas; do not write a separate Markdown file as the result.`;
-  }, [page.item.trashedAt, saveState.error, queue, name, id]);
+  const beforeSend = useCallback(async () => {
+    if (page.item.trashedAt || saveState.error) return false;
+    return queue.flush();
+  }, [page.item.trashedAt, saveState.error, queue]);
   const backToPages = () => { void queue.flush().then((saved) => { if (saved) navigate("/atlas?type=page"); }); };
 
   return <div className="atlas-page relative flex h-full min-h-0 flex-col" id={`atlas-panel-${id}`} role="tabpanel" aria-labelledby={`atlas-tab-${id}`}>
@@ -273,6 +273,6 @@ function PageEditor({ page, reload, handleRef, onTitleChange, requestedAction, o
       </div>
     </Modal>
     <AtlasPageChat accountId={accountId} id={id} title={name} collectionId={page.item.collectionId}
-      disabled={!!page.item.trashedAt || !!saveState.error} prepareMessage={prepareMessage} />
+      disabled={!!page.item.trashedAt || !!saveState.error} beforeSend={beforeSend} />
   </div>;
 }

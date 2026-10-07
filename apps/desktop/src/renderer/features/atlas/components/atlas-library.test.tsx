@@ -102,12 +102,12 @@ describe("Atlas image creation navigation", () => {
 });
 
 describe("Atlas image sources", () => {
-  it.each(["/atlas?layout=grid", "/atlas?type=image"])("opens images in the shared zoomable preview from %s", (route) => {
+  it.each(["/atlas", "/atlas?layout=grid", "/atlas?type=image"])("opens images in the shared zoomable preview from %s", (route) => {
     mocks.generated = [{ sourceKey: "generated", runId: "run", runTitle: "Images",
       collectionId: null, kind: "image", path: "/generated.png", fileName: "generated.png",
       mimeType: "image/png", byteSize: 1, modifiedAt: "2026-10-07" }];
     setup(route);
-    fireEvent.click(screen.getByRole("button", { name: "Open generated.png" }));
+    fireEvent.click(screen.getByRole("button", { name: route === "/atlas" ? "generated.png" : "Open generated.png" }));
     const preview = within(screen.getByRole("dialog", { name: "generated.png" }));
     expect(preview.getByRole("img", { name: "generated.png" }).getAttribute("src")).toBe("mains-localimg://preview");
     expect(preview.getByRole("button", { name: "Download image" })).toBeTruthy();
@@ -116,6 +116,34 @@ describe("Atlas image sources", () => {
     fireEvent.click(preview.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByTestId("url").textContent).toBe(route);
+  });
+
+  it("shows local thumbnails for saved, generated and uploaded images in All and keeps failed images openable", () => {
+    mocks.items = [{ id: "saved", title: "saved.png", accountId: "account", kind: "image",
+      metadata: null, collectionId: null, sourceRunId: null, sourceKey: null, path: "/atlas/saved.png",
+      fileName: "saved.png", mimeType: "image/png", byteSize: 1, isFavorite: false, trashedAt: null,
+      version: 1, createdAt: "2026-10-07", updatedAt: "2026-10-07" }];
+    const generated: AtlasGeneratedFile = { sourceKey: "generated", runId: "run", runTitle: "Images",
+      collectionId: null, kind: "image", path: "/generated.png", fileName: "generated.png",
+      mimeType: "image/png", byteSize: 1, modifiedAt: "2026-10-07" };
+    mocks.generated = [generated, { ...generated, sourceKey: "upload", origin: "attachment",
+      path: "/upload.png", fileName: "upload.png" }];
+    setup("/atlas");
+    for (const name of ["saved.png", "generated.png", "upload.png"]) {
+      const row = screen.getByRole("button", { name });
+      const thumbnail = row.querySelector("img");
+      expect(thumbnail?.getAttribute("src")).toBe("mains-localimg://preview");
+      expect(thumbnail?.getAttribute("loading")).toBe("lazy");
+      expect(thumbnail?.getAttribute("decoding")).toBe("async");
+      expect(thumbnail?.getAttribute("alt")).toBe("");
+    }
+    const savedRow = screen.getByRole("button", { name: "saved.png" });
+    fireEvent.error(savedRow.querySelector("img")!);
+    expect(savedRow.querySelector("img")).toBeNull();
+    expect(savedRow.querySelector("svg")).toBeTruthy();
+    fireEvent.click(savedRow);
+    expect(screen.getByRole("dialog", { name: "saved.png" })).toBeTruthy();
+    expect(screen.getByTestId("url").textContent).toBe("/atlas");
   });
 
   it("separates uploaded images from Your creations while showing both in All", () => {

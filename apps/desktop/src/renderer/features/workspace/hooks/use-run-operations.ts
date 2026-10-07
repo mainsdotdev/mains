@@ -113,6 +113,7 @@ export function useRunOperations({
       additionalDirectories?: string[],
       conversationSettings?: ConversationSettings,
       clientPromptId?: string,
+      atlasPageId?: string,
     ) => {
       if (
         !hasComposerMessage(goal, uploads?.length ?? 0, context ?? []) ||
@@ -140,6 +141,7 @@ export function useRunOperations({
           mode: activeSpace?.mode,
           providerId: selectedProvider,
           goal: goal.trim(),
+          ...(atlasPageId ? { atlasPageId } : {}),
           clientPromptId,
           model: model || undefined,
           conversationSettings,
@@ -167,6 +169,7 @@ export function useRunOperations({
     additionalDirectories?: string[],
     conversationSettings?: ConversationSettings,
     clientPromptId?: string,
+    atlasPageId?: string,
   ) => {
     if (!hasComposerMessage(message, uploads?.length ?? 0, context ?? [])) {
       setError("Please enter a message");
@@ -187,6 +190,7 @@ export function useRunOperations({
         runId,
         accountId,
         message: message.trim(),
+        ...(atlasPageId ? { atlasPageId } : {}),
         clientPromptId,
         model: model || undefined,
         conversationSettings,

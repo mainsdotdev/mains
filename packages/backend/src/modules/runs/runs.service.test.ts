@@ -123,6 +123,7 @@ import { createWorkAdapter, emitUserPromptArtifact } from "../providers/adapters
 import { collectionsService } from "../collections";
 import { workspaceService } from "../workspace";
 import { spaceService } from "../space";
+import { atlasService } from "../atlas";
 import { gitService } from "../git/git.service";
 
 describe("runsService", () => {
@@ -947,6 +948,81 @@ describe("runsService", () => {
       vi.mocked(createWorkAdapter).mockReturnValue({ startRun } as any);
       return startRun;
     }
+
+    it.each(["claude_code", "codex"] as const)("keeps Atlas instructions separate from %s user prompts on start, continue and fork", async (providerId) => {
+      if (providerId === "codex") createProvider(db, { id: providerId });
+      const space = createSpace(db, { providerId, mode: "work", systemPrompt: "Answer in Turkish." });
+      const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "Existing content" });
+      const startRun = vi.fn(async (request, onEvent) => {
+        await emitUserPromptArtifact(onEvent, request.goal);
+        return { status: "succeeded" };
+      });
+      const continueRun = vi.fn(async (request, onEvent) => {
+        await emitUserPromptArtifact(onEvent, request.message);
+        return { status: "succeeded" };
+      });
+      const forkRun = vi.fn(async (request, onEvent) => {
+        await emitUserPromptArtifact(onEvent, request.message);
+        return { status: "succeeded" };
+      });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun, continueRun, forkRun } as never);
+      const { runId } = await runsService.executeRun({ accountId: "default", spaceId: space.id, providerId,
+        goal: "hi", atlasPageId: page.item.id });
+      await flushBackground();
+      expect(startRun.mock.calls[0][0]).toMatchObject({ goal: "hi", configSnapshot: { atlasPageId: page.item.id } });
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain(`pageId: ${page.item.id}`);
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain("Answer in Turkish.");
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain("AtlasReadPage");
+      expect((await runsService.getRunById(runId))?.goal).toBe("hi");
+
+      await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 1,
+        title: "Renamed notes", markdown: "Updated content" });
+      await runsService.continueRun({ runId, accountId: "default", message: "expand this" });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0].message).toBe("expand this");
+      expect(continueRun.mock.calls[0][0].extraInstructions).toContain('"Renamed notes"');
+      expect(continueRun.mock.calls[0][0].extraInstructions).toContain("current version: 2");
+      expect((await runsRepo.findArtifactsByRun(runId)).filter((row) => row.metadata?.source === "user")
+        .map((row) => row.content)).toEqual(["hi", "expand this"]);
+
+      const fork = await runsService.forkRun({ sourceRunId: runId, accountId: "default", message: "try another approach" });
+      await flushBackground();
+      expect(forkRun.mock.calls[0][0]).toMatchObject({ message: "try another approach", configSnapshot: { atlasPageId: page.item.id } });
+      expect(forkRun.mock.calls[0][0].extraInstructions).toContain(`pageId: ${page.item.id}`);
+      expect((await runsRepo.findArtifactsByRun(fork.runId)).filter((row) => row.metadata?.source === "user")
+        .map((row) => row.content)).toEqual(["try another approach"]);
+    });
+
+    it("validates Atlas page ownership before opening a run and cannot retarget an existing page chat", async () => {
+      const space = createSpace(db, { providerId: "claude_code", mode: "work" });
+      const page = await atlasService.createPage({ accountId: "default", title: "First" });
+      const other = await atlasService.createPage({ accountId: "default", title: "Second" });
+      createAccount(db, { id: "other" });
+      const foreign = await atlasService.createPage({ accountId: "other", title: "Private" });
+      const startRun = mockStartAdapter();
+      const payload = { accountId: "default", spaceId: space.id, providerId: "claude_code", goal: "hi" };
+      await expect(runsService.executeRun({ ...payload, atlasPageId: foreign.item.id })).rejects.toThrow("Page unavailable");
+      expect(startRun).not.toHaveBeenCalled();
+      expect(await runsService.getRunsByAccount("default")).toEqual([]);
+      const { runId } = await runsService.executeRun({ ...payload, atlasPageId: page.item.id });
+      await flushBackground();
+      await expect(runsService.continueRun({ runId, accountId: "default", message: "hi", atlasPageId: other.item.id }))
+        .rejects.toThrow("Conversation belongs to another Atlas page");
+      expect((await runsService.getRunById(runId))?.status).toBe("succeeded");
+    });
+
+    it("adds separate page instructions when continuing a page chat created before page identity was stored", async () => {
+      const space = createSpace(db, { providerId: "claude_code", mode: "work" });
+      const page = await atlasService.createPage({ accountId: "default", title: "Existing page" });
+      const run = createRun(db, { providerId: "claude_code", spaceId: space.id, mode: "work", status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ continueRun } as never);
+      await runsService.continueRun({ runId: run.id, accountId: "default", message: "only my message", atlasPageId: page.item.id });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ message: "only my message", configSnapshot: { atlasPageId: page.item.id } });
+      expect(continueRun.mock.calls[0][0].extraInstructions).toContain(`pageId: ${page.item.id}`);
+      expect((await runsService.getRunById(run.id))?.configSnapshot?.atlasPageId).toBe(page.item.id);
+    });
 
     it.each([
       ["claude_code", "chat"], ["claude_code", "developer"],

@@ -124,6 +124,23 @@ function ImageTile({ entry, onOpen, fill = false }: { entry: Entry; onOpen: () =
   );
 }
 
+function ImageThumbnail({ path }: { path: string | null }) {
+  const src = useLocalImageUrl(path);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  return src && src !== failedSrc ? (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailedSrc(src)}
+      className="size-full object-cover"
+    />
+  ) : (
+    <Picture className="size-4" />
+  );
+}
+
 export function AtlasLibrary({ accountId }: { accountId: string }) {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
@@ -820,9 +837,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                       className="relative z-10 flex h-9 w-full items-center gap-3 text-left focus-visible:ring-2 focus-visible:ring-accent/40"
                       onClick={() => show(entry)}
                     >
-                      <span className="flex size-8 shrink-0 glass-outline glass-outline-soft items-center justify-center rounded-xl  text-accent ">
+                      <span aria-hidden="true" className="flex size-8 shrink-0 overflow-hidden glass-outline glass-outline-soft items-center justify-center rounded-xl text-accent">
                         {entry.kind === "page" ? (
                           <AtlasPageIcon icon={entry.saved?.metadata?.icon} />
+                        ) : entry.kind === "image" ? (
+                          <ImageThumbnail path={entry.path} />
                         ) : (
                           <AtlasFileIcon
                             kind={entry.kind}

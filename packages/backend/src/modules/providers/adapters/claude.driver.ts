@@ -3025,15 +3025,13 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       options.hooks.PostToolUse.push(buildPostToolUseHook(onEvent, runId));
     }
 
-    // Recorded once per session (the SDK default since 0.3.267, pinned here on
-    // purpose): resume and continue reuse the first rendering, which keeps the
-    // prompt cache and earlier thinking intact. The trade-off — an edited space
-    // prompt reaches new runs, not ones already in progress — is accepted.
+    // Ordinary chats retain their initial system rendering. Page chats refresh
+    // their title/version after the editor saves, including on resumed sessions.
     options.systemPrompt = {
       type: "preset",
       preset: "claude_code",
       ...(extraInstructions ? { append: extraInstructions } : {}),
-      snapshot: true,
+      snapshot: typeof args.configSnapshot?.atlasPageId !== "string",
     };
 
     if (runId && options.settings && typeof options.settings !== "string") {

@@ -9,7 +9,6 @@ import {
   type RefObject,
 } from "react";
 import {
-  Button,
   DropdownMenuItem,
   Muted,
   SendButton,
@@ -48,7 +47,6 @@ import {
 } from "@/features/workspace/hooks/use-transient-uploads";
 import { useWorkspaceRuns } from "@/features/workspace/hooks/use-workspace-runs";
 import { useToolApproval } from "@/features/workspace/hooks/use-tool-approval";
-import { useJumpToRun } from "@/features/workspace/hooks/use-jump-to-run";
 import {
   composerAnnotationPrompt,
   hasComposerMessage,
@@ -76,7 +74,7 @@ interface AtlasPageChatProps {
   title: string;
   collectionId: string | null;
   disabled: boolean;
-  prepareMessage: (instruction: string) => Promise<string | null>;
+  beforeSend: () => Promise<boolean>;
 }
 interface ChatPanelProps {
   title: string;
@@ -94,16 +92,12 @@ export function AtlasPageChat(props: AtlasPageChatProps) {
   const state = useAppSelector(
     (store) => store.atlas.byOwner[ownerKey]?.chats[props.id] ?? EMPTY_CHAT,
   );
-  const { activeSpace, spaces } = useActiveSpace();
+  const { activeSpace } = useActiveSpace();
   // Atlas owns a Work experience without changing any saved Space preference.
-  const workSpaces = useMemo(() => spaces
-    .filter((space) => space.accountId === props.accountId && getProviderVariantById(space.providerId)?.supportsAtlas)
-    .map((space) => ({ ...space, mode: "work" as const })), [spaces, props.accountId]);
-  const space =
-    workSpaces.find((item) => item.id === state.spaceId) ??
-    workSpaces.find((item) => item.id === activeSpace?.id) ??
-    workSpaces.find((item) => item.providerId === activeSpace?.providerId) ??
-    (!activeSpace ? workSpaces[0] : undefined);
+  const space = useMemo(() =>
+    activeSpace?.accountId === props.accountId && getProviderVariantById(activeSpace.providerId)?.supportsAtlas
+      ? { ...activeSpace, mode: "work" as const }
+      : undefined, [activeSpace, props.accountId]);
   const update = useCallback(
     (patch: Partial<AtlasPageChatState>) => {
       dispatch(updateAtlasPageChat({ ownerKey, id: props.id, patch }));
@@ -150,7 +144,6 @@ export function AtlasPageChat(props: AtlasPageChatProps) {
         state={state}
         update={update}
         space={space}
-        workSpaces={workSpaces}
       />
     </ActiveSpaceOverrideProvider>
   );
@@ -161,14 +154,12 @@ function AtlasWorkingChat({
   state,
   update,
   space,
-  workSpaces,
   ...page
 }: AtlasPageChatProps & {
   ownerKey: string;
   state: AtlasPageChatState;
   update: ChatPanelProps["update"];
   space: Space;
-  workSpaces: Space[];
 }) {
   const dispatch = useAppDispatch();
   const backendId = useAppSelector((state) => state.backends.activeBackendId);
@@ -205,7 +196,8 @@ function AtlasWorkingChat({
     LOCAL_SELECTION,
   );
   // A remembered Chat/Developer run cannot become this Page's Work session.
-  const runId = ws.activeRun?.id === requestedRunId && ws.activeRun?.mode === "work" ? requestedRunId : null;
+  const runId = ws.activeRun?.id === requestedRunId && ws.activeRun?.mode === "work"
+    && ws.activeRun.providerId === space.providerId && ws.activeRun.spaceId === space.id ? requestedRunId : null;
   const conversation = useConversationSettings({
     backendId,
     providerId: space.providerId,
@@ -221,7 +213,6 @@ function AtlasWorkingChat({
     (item) => item.runId === ws.activeRunId,
   );
   const [abortRun] = useAbortRunMutation();
-  const jumpToRun = useJumpToRun();
   const [preparing, setPreparing] = useState(false);
   const [stopping, setStopping] = useState(false);
   const pending = useRef(false);
@@ -260,8 +251,7 @@ function AtlasWorkingChat({
         state.draft.trim() ||
         composerAnnotationPrompt(submittedContext) ||
         "Use the attached context to work on this page.";
-      const message = await page.prepareMessage(instruction);
-      if (!message || getTransport() !== transport) return;
+      if (!(await page.beforeSend()) || getTransport() !== transport) return;
       const uploads = submittedFiles.length
         ? await serializeAttachments(submittedFiles)
         : undefined;
@@ -270,15 +260,17 @@ function AtlasWorkingChat({
       const accepted = runId
         ? await ws.continueRun(
             runId,
-            message,
+            instruction,
             settings.model,
             uploads,
             submittedContext,
             undefined,
             settings,
+            undefined,
+            page.id,
           )
         : await ws.executeRun(
-            message,
+            instruction,
             undefined,
             space.providerId,
             settings.model,
@@ -287,6 +279,8 @@ function AtlasWorkingChat({
             page.collectionId,
             undefined,
             settings,
+            undefined,
+            page.id,
           );
       if (!accepted) return;
       conversation.rememberSettings(settings, intent);
@@ -367,7 +361,7 @@ function AtlasWorkingChat({
             projectId={page.collectionId ?? undefined}
             layout="floating"
             floatingChatMode={state.mode}
-            expandFloatingToolbar
+            showPluginsButton={false}
             floatingAutoFocus={!runId && state.mode === "details"}
             onFloatingFocus={() => {
               if (state.mode === "input") update({ mode: "details" });
@@ -377,66 +371,25 @@ function AtlasWorkingChat({
             sendLabel="Send page instruction"
           />
         }
-        actions={
-          <>
-            {activeRun && (
-              <Button
-                variant="ghost"
-                className="text-xs"
-                onClick={() =>
-                  void jumpToRun({
-                    id: activeRun.id,
-                    spaceId: activeRun.spaceId ?? space.id,
-                    providerId: activeRun.providerId,
-                    mode: "work",
-                    workspaceId: null,
-                    collectionId: activeRun.collectionId ?? null,
-                  })
-                }
+        actions={runId ? (
+          <AtlasMenu
+            label="Page chat options"
+            disabled={submitting}
+            className="size-7 rounded-full text-primary-500 hover:bg-primary/5"
+            trigger={<Ellipsis className="size-4" />}
+          >
+            {(close) => (
+              <DropdownMenuItem
+                onClick={() => {
+                  close();
+                  update({ runId: null, mode: "details" });
+                }}
               >
-                Open chat
-              </Button>
+                New page chat
+              </DropdownMenuItem>
             )}
-            <AtlasMenu
-              label="Page chat options"
-              disabled={submitting}
-              className="size-7 rounded-full text-primary-500 hover:bg-primary/5"
-              trigger={<Ellipsis className="size-4" />}
-            >
-              {(close) => (
-                <>
-                  {state.runId && (
-                    <DropdownMenuItem
-                      onClick={() => {
-                        close();
-                        update({ runId: null, mode: "details" });
-                      }}
-                    >
-                      New page chat
-                    </DropdownMenuItem>
-                  )}
-                  {workSpaces.map((item) => (
-                    <DropdownMenuItem
-                      key={item.id}
-                      selected={space.id === item.id}
-                      onClick={() => {
-                        close();
-                        if (item.id !== space.id)
-                          update({
-                            spaceId: item.id,
-                            runId: null,
-                            mode: "details",
-                          });
-                      }}
-                    >
-                      {item.name}
-                    </DropdownMenuItem>
-                  ))}
-                </>
-              )}
-            </AtlasMenu>
-          </>
-        }
+          </AtlasMenu>
+        ) : undefined}
       >
         {ws.error && (
           <Text role="alert" size="xs" className="px-4 pt-3">
@@ -481,6 +434,7 @@ function AtlasChatPanel({
   update,
   activity = null,
   composer,
+  actions,
   children,
 }: ChatPanelProps) {
   return (
@@ -492,7 +446,7 @@ function AtlasChatPanel({
         mode={state.mode}
         onShowDetails={() => update({ mode: "details" })}
         onMinimize={() => update({ mode: "icon" })}
-
+        actions={actions}
         composer={composer}
       >
         {children}

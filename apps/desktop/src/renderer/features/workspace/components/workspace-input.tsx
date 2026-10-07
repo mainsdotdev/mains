@@ -954,8 +954,10 @@ export function WorkspaceInput({
   const sendDisabled = externalSendDisabled || !settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0);
   const controls = composerControls({
     state: voice.state, runId: activeRun?.id, isNewRun: !activeRun || isNewRunTabActive,
-    isRunning, voiceEnabled, sendDisabled,
-    sendLabel: runQueue?.editing ? "Save queued message" : sendLabel,
+    isRunning, canSendDuringRun, voiceEnabled, sendDisabled,
+    sendLabel: runQueue?.editing ? "Save queued message"
+      : isRunning && canSendDuringRun ? runQueue?.queue?.mode === "steer" ? "Steer active turn" : "Queue message"
+      : sendLabel,
     hasMessage, preparing: voiceStarting,
     startDisabled: ((!activeRun || isNewRunTabActive) && !onCreateVoiceConversation) || !settingsReady || isLoading ||
       !!runQueue?.queue?.messages.length || !!providerSignedOut || cliUnsupported || !!authErrorMessage,

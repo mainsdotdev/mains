@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   executeReview: vi.fn(),
   createVoiceConversation: vi.fn(),
   continueRun: vi.fn(),
+  steer: vi.fn(),
   checkCanResume: vi.fn(),
   appContext: vi.fn(),
   moveUploads: vi.fn(),
@@ -102,7 +103,7 @@ vi.mock("./use-transient-uploads", () => ({
 vi.mock("../lib/run-helpers", async (importOriginal) => ({
   ...await importOriginal<typeof import("../lib/run-helpers")>(), serializeAttachments: mocks.serializeAttachments,
 }));
-vi.mock("../lib/run-message-queue", () => ({ runMessageQueue: { send: vi.fn(), remove: vi.fn(), resume: vi.fn() } }));
+vi.mock("../lib/run-message-queue", () => ({ runMessageQueue: { send: mocks.steer, remove: vi.fn(), resume: vi.fn() } }));
 vi.mock("./use-file-content-loader", () => ({ useFileContentLoader: () => {} }));
 vi.mock("./use-run-operations", () => ({
   useRunOperations: ({ registerNewRun }: { registerNewRun: (id: string) => Promise<string | null> }) => ({
@@ -213,6 +214,34 @@ function workspacePage(providerId = "claude_code") {
     pathname: useLocation().pathname,
   }), { wrapper }) };
 }
+
+describe("messages submitted during a run", () => {
+  it.each(["running", "queued"] as const)("queues a Codex follow-up with its attachments while the run is %s", async (status) => {
+    const active = { ...run, providerId: "codex", spaceId: "codex-space", status };
+    mocks.getById.mockResolvedValue({ success: true, data: active });
+    mocks.checkCanResume.mockResolvedValue(true);
+    const page = workspacePage("codex");
+    act(() => page.store.dispatch(setActiveTab(active.id)));
+    await waitFor(() => expect(page.result.current.composerRun?.status).toBe(status));
+    await waitFor(() => expect(page.result.current.conversationSettingsReady).toBe(true));
+    mocks.files = [{ file: new File(["reference"], "reference.png", { type: "image/png" }), type: "image" }];
+    act(() => page.result.current.setGoal("Use the reference in the next response"));
+    const ownerKey = page.result.current.ownerKey;
+    await act(async () => { expect(await page.result.current.handleExecute()).toBe(active.id); });
+    const queue = page.store.getState().runQueue.byOwner[ownerKey];
+    expect(queue.mode).toBe("queue");
+    expect(queue.messages).toHaveLength(1);
+    expect(queue.messages[0]).toMatchObject({
+      text: "Use the reference in the next response", status: "queued", attachmentNames: ["reference.png"],
+    });
+    expect(mocks.moveUploads).toHaveBeenCalledWith(ownerKey, queue.messages[0].uploadOwnerKey);
+    expect(page.result.current.goal).toBe("");
+    expect(page.result.current.composerRun?.status).toBe(status);
+    expect(mocks.executeRun).not.toHaveBeenCalled();
+    expect(mocks.continueRun).not.toHaveBeenCalled();
+    expect(mocks.steer).not.toHaveBeenCalled();
+  });
+});
 
 describe("submitted prompt feedback", () => {
   it("shows feedback while an unresumable conversation starts a fresh run", async () => {

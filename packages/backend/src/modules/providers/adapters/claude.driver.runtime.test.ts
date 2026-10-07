@@ -169,6 +169,27 @@ esac
     await Promise.all([first, resumed, second].map((acquired) => driver.cleanup?.(acquired.session)));
   });
 
+  it("refreshes Atlas system instructions on resume while keeping user prompts clean", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const request = { runId: "atlas-chat", accountId: "account-1", execution: { workspaceId: null, cwd: fixture },
+      goal: "hi", configSnapshot: { atlasPageId: "page-1" }, extraInstructions: "Atlas page version: 1" };
+    const first = await driver.createSession(request);
+    const resumed = await driver.resumeSession!({ ...request, message: "expand this", extraInstructions: "Atlas page version: 2" });
+    const ordinary = await driver.createSession({ ...request, runId: "ordinary-chat", configSnapshot: {} });
+    try {
+      expect(first.prompt).toBe("hi");
+      expect(resumed.prompt).toBe("expand this");
+      expect((first.session as { options: Record<string, unknown> }).options.systemPrompt)
+        .toEqual({ type: "preset", preset: "claude_code", append: "Atlas page version: 1", snapshot: false });
+      expect((resumed.session as { options: Record<string, unknown> }).options.systemPrompt)
+        .toEqual({ type: "preset", preset: "claude_code", append: "Atlas page version: 2", snapshot: false });
+      expect((ordinary.session as { options: Record<string, unknown> }).options.systemPrompt)
+        .toMatchObject({ snapshot: true });
+    } finally {
+      await Promise.all([first, resumed, ordinary].map((acquired) => driver.cleanup?.(acquired.session)));
+    }
+  });
+
   it("uses the bundled process for legacy account queries and closes it", async () => {
     fs.writeFileSync(statusFile, '{}');
     const info = await createClaudeDriver({}).getAccountInfo!();

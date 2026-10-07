@@ -148,7 +148,7 @@ describe("floating composer controls", () => {
 
 const idleComposer = {
   state: { phase: "idle" as const, runId: null, muted: false }, runId: "chat", isNewRun: false,
-  isRunning: false, voiceEnabled: true, hasMessage: false, preparing: false, startDisabled: false, sendDisabled: false,
+  isRunning: false, canSendDuringRun: false, voiceEnabled: true, hasMessage: false, preparing: false, startDisabled: false, sendDisabled: false,
 };
 
 describe("single primary composer button", () => {
@@ -221,18 +221,27 @@ describe("single primary composer button", () => {
     expect(onMute).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["default", "floating"] as const)("keeps Stop while work is running in the %s composer, even with a draft", (layout) => {
+  it.each(["default", "floating"] as const)("switches running work from Stop to queued Send and back in the %s composer", (layout) => {
     const props = nativeToolbarProps();
     const onStop = vi.fn();
-    const controls = (hasMessage: boolean) => ({ ...composerControls({ ...idleComposer, isRunning: true, hasMessage,
-      sendLabel: "Save queued message", sendDisabled: true }).primary, onClick: onStop });
-    const { rerender } = render(createElement(InputToolbar, { ...props, layout, primaryAction: controls(false) }));
-    for (const hasMessage of [false, true]) {
-      rerender(createElement(InputToolbar, { ...props, layout, primaryAction: controls(hasMessage) }));
-      fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
-      expect(screen.queryByRole("button", { name: /Send prompt|Save queued message|Start voice chat/ })).toBeNull();
+    const onSubmit = vi.fn();
+    const controls = (text: string, attachments = 0, sendLabel = "Queue message") => {
+      const { primary } = composerControls({ ...idleComposer, isRunning: true, canSendDuringRun: true,
+        hasMessage: hasComposerMessage(text, attachments, []), sendLabel });
+      return { ...primary, onClick: primary.kind === "stop" ? onStop : onSubmit };
+    };
+    const { rerender } = render(createElement(InputToolbar, { ...props, layout, primaryAction: controls("") }));
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeTruthy();
+    for (const [text, attachments, label] of [["next message", 0, "Queue message"], ["", 1, "Queue message"], ["edited", 0, "Save queued message"]] as const) {
+      rerender(createElement(InputToolbar, { ...props, layout, primaryAction: controls(text, attachments, label) }));
+      expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: label }));
     }
-    expect(onStop).toHaveBeenCalledTimes(2);
+    expect(onSubmit).toHaveBeenCalledTimes(3);
+    expect(onStop).not.toHaveBeenCalled();
+    rerender(createElement(InputToolbar, { ...props, layout, primaryAction: controls("  ") }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(onStop).toHaveBeenCalledOnce();
   });
 
   it("uses the same Stop to close voice and stop work without submitting draft text", () => {

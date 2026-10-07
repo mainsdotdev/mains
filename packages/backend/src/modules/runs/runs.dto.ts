@@ -375,6 +375,8 @@ export interface StartRunPayload {
   mode?: ModeId;
   providerId: string; // e.g., "copilot_cli"
   goal: string;
+  /** Page being worked on; its instructions stay outside the user prompt. */
+  atlasPageId?: string;
   model?: string;
   systemPrompt?: string;
   initialContext?: StartRunContextItem[];
@@ -419,6 +421,8 @@ export interface ContinueRunPayload {
   accountId: string;
   /** The follow-up message to send */
   message: string;
+  /** Binds older Page chats; a conversation cannot switch to another Page. */
+  atlasPageId?: string;
   /** Model to use for this continuation (overrides provider default) */
   model?: string | null;
   /** Replaces this conversation's extra folder grants for the next turn. */

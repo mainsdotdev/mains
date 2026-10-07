@@ -16,6 +16,8 @@ if (process.argv.includes("--version")) {
 const logPath = process.env.MAINS_CODEX_FIXTURE_LOG;
 let nextThreadId = 1;
 const activeThreads = new Set();
+let nextDynamicToolId = 1000;
+const pendingDynamicTools = new Map();
 
 function log(message) {
   if (!logPath) return;
@@ -119,7 +121,17 @@ input.on("line", (line) => {
   const message = JSON.parse(line);
   log(message);
 
-  if (!("method" in message) || !("id" in message)) return;
+  if (!("method" in message) || !("id" in message)) {
+    const pending = pendingDynamicTools.get(message.id);
+    if (pending) {
+      pendingDynamicTools.delete(message.id);
+      notify("turn/completed", {
+        threadId: pending.threadId,
+        turn: { id: pending.turnId, items: [], status: "completed", error: null },
+      });
+    }
+    return;
+  }
 
   const { id, method, params = {} } = message;
   if (process.env.MAINS_CODEX_FIXTURE_HANG_METHOD === method) return;
@@ -253,6 +265,19 @@ input.on("line", (line) => {
           threadId: params.threadId,
           turn: { id: turnId, items: [], status: "inProgress", error: null },
         });
+        if (prompt.startsWith("dynamic tool ")) {
+          const toolId = nextDynamicToolId++;
+          pendingDynamicTools.set(toolId, { threadId: params.threadId, turnId });
+          send({
+            jsonrpc: "2.0", id: toolId, method: "item/tool/call",
+            params: {
+              threadId: params.threadId, turnId, callId: `call-${toolId}`,
+              tool: prompt.slice("dynamic tool ".length),
+              arguments: { pageId: "page-1", expectedVersion: 3, markdown: "Updated page" },
+            },
+          });
+          return;
+        }
         if (prompt.includes("active subagent")) {
           const childThreadId = `${params.threadId}-child`;
           notify("thread/started", {

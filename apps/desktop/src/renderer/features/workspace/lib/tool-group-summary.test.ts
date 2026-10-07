@@ -13,6 +13,27 @@ function call(id: string, content: string): RunEvent {
 }
 
 describe("summarizeToolCalls", () => {
+  it("names Atlas page actions consistently across providers", () => {
+    for (const prefix of ["", "mcp__mains__"]) {
+      expect(summarizeToolCalls([
+        call("r", `${prefix}AtlasReadPage: {}`),
+        call("u", `${prefix}AtlasUpdatePage: {}`),
+      ])).toBe("Updated an Atlas page, read an Atlas page");
+    }
+  });
+
+  it("does not describe a failed Atlas update as saved", () => {
+    const failed = call("u", "mcp__mains__AtlasUpdatePage: {}");
+    failed.metadata = { ...failed.metadata, status: "error" };
+    expect(summarizeToolCalls([failed])).toBe("Tried to update an Atlas page");
+  });
+
+  it("honors MCP error results even when the tool lifecycle completed", () => {
+    const failed = call("u", "mcp__mains__AtlasUpdatePage: {}");
+    failed.metadata = { ...failed.metadata, status: "done", output: JSON.stringify({ isError: true,
+      content: [{ type: "text", text: "Page changed elsewhere" }] }) };
+    expect(summarizeToolCalls([failed])).toBe("Tried to update an Atlas page");
+  });
   it("counts inspected images in their own tool group", () => {
     const first = { ...call("v1", "ImageView: {}"), metadata: { codexItemType: "imageView" } };
     const second = { ...call("v2", "ImageView: {}"), metadata: { codexItemType: "imageView" } };

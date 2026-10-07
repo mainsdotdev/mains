@@ -10,6 +10,7 @@ import AtlasPageEditor, { type AtlasPageEditorHandle } from "./atlas-page-editor
 const mocks = vi.hoisted(() => ({
   page: null as AtlasPage | null, save: vi.fn(), update: vi.fn(), download: vi.fn(), copy: vi.fn(),
   error: vi.fn(), transport: "backend", acknowledged: vi.fn(),
+  beforeSend: null as (() => Promise<boolean>) | null,
   editor: {
     document: [{ id: "original", type: "paragraph", content: "Existing content" }] as unknown[],
     blocksToMarkdownLossy: vi.fn(), replaceBlocks: vi.fn(), insertBlocks: vi.fn(), tryParseMarkdownToBlocks: vi.fn(),
@@ -31,7 +32,10 @@ vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport, appApi:
 vi.mock("@/hooks/use-copy-to-clipboard", () => ({ useCopyToClipboard: () => ({ copy: mocks.copy }) }));
 vi.mock("../lib/download", () => ({ downloadAtlasText: mocks.download }));
 vi.mock("./atlas-page-header", () => ({ AtlasPageHeader: ({ children }: { children: ReactNode }) => <>{children}</> }));
-vi.mock("./atlas-page-chat", () => ({ AtlasPageChat: () => null }));
+vi.mock("./atlas-page-chat", () => ({ AtlasPageChat: ({ beforeSend }: { beforeSend: () => Promise<boolean> }) => {
+  mocks.beforeSend = beforeSend;
+  return null;
+} }));
 vi.mock("@/components/ui", async (original) => ({
   ...await original<typeof import("@/components/ui")>(), toast: { error: mocks.error },
 }));
@@ -67,6 +71,22 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("Atlas Page menu actions", () => {
+  it("waits for the latest editor draft to save before allowing a page-chat message", async () => {
+    setup();
+    let finish!: (page: AtlasPage) => void;
+    mocks.save.mockImplementationOnce(() => new Promise<AtlasPage>((resolve) => { finish = resolve; }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Current title" } });
+    let operation!: Promise<boolean>;
+    let ready = false;
+    act(() => { operation = mocks.beforeSend!().then((result) => { ready = true; return result; }); });
+    expect(ready).toBe(false);
+    await act(async () => {
+      finish({ ...mocks.page!, item: { ...mocks.page!.item, title: "Current title", version: 2 } });
+      expect(await operation).toBe(true);
+    });
+    expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ title: "Current title", expectedVersion: 1 }));
+  });
+
   it("copies and exports the editor's current draft, including an unsaved title", async () => {
     const { ref } = setup();
     fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Draft title" } });
