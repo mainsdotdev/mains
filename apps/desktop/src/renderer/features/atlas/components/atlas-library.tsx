@@ -22,7 +22,6 @@ import {
   Document,
   Download,
   Ellipsis,
-  Generate,
   LibrarySquare,
   List,
   Grid,
@@ -34,6 +33,7 @@ import {
   Trash,
   Filter,
   ArrowUp,
+  Generate,
 } from "@/components/ui/icons";
 import { Dna, Globe, Lightbulb, Rocket, Star } from "@/components/ui/icons/space";
 import { useListCollectionsQuery } from "@/lib/redux/api";
