@@ -48,7 +48,7 @@ export default function ProjectDetail({ id }: ProjectDetailProps) {
     }
   }, [branchNames]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (importedPrInstructions?: string) => {
     if (saving || !project) return;
     try {
       // `iconMode` is the picker's open tab, not what was picked — read the
@@ -63,16 +63,21 @@ export default function ProjectDetail({ id }: ProjectDetailProps) {
           runScript: runScript || undefined,
           archiveScript: archiveScript || undefined,
           commitInstructions: commitInstructions || undefined,
-          prInstructions: prInstructions || undefined,
+          prInstructions: (importedPrInstructions ?? prInstructions) || undefined,
           icon: iconValue,
         },
       }).unwrap();
       dispatch({ type: "MARK_CLEAN" });
-      toast.success("Project settings saved");
+      toast.success(importedPrInstructions === undefined ? "Project settings saved" : "PR template imported and saved");
     } catch (err: any) {
       toast.error(extractErrorMessage(err, "Failed to save project settings"));
     }
   }, [saving, project, icon, iconColor, defaultBranch, setupScript, runScript, archiveScript, commitInstructions, prInstructions, updateProject]);
+
+  const handleImportedPrTemplate = useCallback(async (value: string) => {
+    dispatch({ type: "SET_FIELD", field: "prInstructions", value });
+    return handleSave(value);
+  }, [handleSave]);
 
   // Auto-save when the icon or its tint changes (skip syncs from project
   // load/switch via isDirty)
@@ -212,6 +217,8 @@ export default function ProjectDetail({ id }: ProjectDetailProps) {
         prInstructions={prInstructions}
         rootPath={project.rootPath}
         onFieldChange={setField}
+        onImport={handleImportedPrTemplate}
+        saving={saving}
       />
 
       <SettingsSection title="Danger Zone">
@@ -237,7 +244,7 @@ export default function ProjectDetail({ id }: ProjectDetailProps) {
         saving={saving}
         isLoading={isLoading}
         onRefresh={refetch}
-        onSave={handleSave}
+        onSave={() => { void handleSave(); }}
       />
 
       <Alert

@@ -52,12 +52,7 @@ export const runsRepo = {
       const last = db.get<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) ORDER BY timestamp DESC, source DESC, id DESC LIMIT 1`);
       const anchors = db.all<RunHistoryCursor>(sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id
         FROM run_artifacts WHERE run_id = ${request.runId} AND kind = 'user-prompt' ORDER BY timestamp, id`);
-      if (!anchors.length && first) {
-        // Imported/log-only runs still have bounded, navigable pages.
-        anchors.push(...db.all<RunHistoryCursor>(sql`SELECT timestamp, source, id FROM (
-          SELECT *, ROW_NUMBER() OVER (ORDER BY timestamp, source, id) AS position FROM (${timeline})
-        ) WHERE (position - 1) % 20 = 0 ORDER BY timestamp, source, id`));
-      } else if (first && (!anchors[0] || compareCursor(first, anchors[0]) < 0)) anchors.unshift(first);
+      if (first && (!anchors[0] || compareCursor(first, anchors[0]) < 0)) anchors.unshift(first);
       const range = historyWindow(anchors, request);
       const artifacts = range.start ? db.select().from(runArtifacts).where(and(eq(runArtifacts.runId, request.runId),
         historyCut(artifactHistoryTime, "artifact", runArtifacts.id, range.start, false),
