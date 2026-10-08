@@ -523,7 +523,7 @@ function ImageComposer({
           <div className="min-h-0 flex-1 overflow-y-auto noscrollbar px-5 pb-12">
             <div className="mx-auto w-full max-w-210 pt-[min(24dvh,240px)]">
               <Heading3 className="mb-8 text-center text-3xl font-normal">
-                Where should we begin?
+                What do you want to create?
               </Heading3>
               {skillNotice}
               {ws.error && (
