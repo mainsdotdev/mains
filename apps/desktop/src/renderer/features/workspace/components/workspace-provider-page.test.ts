@@ -179,6 +179,48 @@ afterEach(() => {
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
+  it("shows the chat-wide file overlay and adds dropped files to the composer", () => {
+    const existing = { file: new File(["old"], "old.txt", { type: "text/plain" }), type: "document" as const };
+    const setUploadedFiles = vi.fn();
+    page.mode = "chat";
+    page.state = {
+      runs: [{ id: "chat-1", goal: "Chat", status: "succeeded" }], runsLoaded: true,
+      activeTab: "chat-1", activeRunId: "chat-1", activeRun: { id: "chat-1", status: "succeeded" },
+      composerRun: { id: "chat-1", status: "succeeded" },
+      openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false,
+      currentWorkspace: null, currentEvents: [], currentTurns: [], goal: "",
+      uploadedFiles: [existing], setUploadedFiles,
+    };
+    const NativeURL = URL;
+    vi.stubGlobal("URL", class extends NativeURL {
+      static createObjectURL = vi.fn(() => "blob:image");
+    });
+    renderPage();
+    const transcript = screen.getByTestId("events");
+    const chat = transcript.parentElement!.parentElement!;
+    const image = new File(["image"], "photo.png", { type: "image/png" });
+
+    fireEvent.dragEnter(transcript, { dataTransfer: { types: ["text/plain"], files: [] } });
+    expect(screen.queryByText("Add files")).toBeNull();
+
+    fireEvent.dragEnter(transcript, { dataTransfer: { types: ["Files"], files: [image] } });
+    expect(screen.getByText("Add files")).toBeTruthy();
+    expect(screen.getByText("Drop a file here to attach it to the conversation")).toBeTruthy();
+    fireEvent.drop(transcript, { dataTransfer: { types: ["Files"], files: [image] } });
+    expect(screen.queryByText("Add files")).toBeNull();
+    expect(setUploadedFiles).toHaveBeenCalledExactlyOnceWith([
+      existing, { file: image, type: "image", preview: "blob:image" },
+    ]);
+
+    fireEvent.dragEnter(chat, { dataTransfer: { types: ["Files"], files: [image] } });
+    fireEvent.dragEnter(screen.getByTestId("pinned-input"), { dataTransfer: { types: ["Files"], files: [image] } });
+    fireEvent.dragLeave(transcript, { relatedTarget: screen.getByTestId("pinned-input"), dataTransfer: { types: ["Files"] } });
+    expect(screen.getByText("Add files")).toBeTruthy();
+    fireEvent.dragLeave(chat, { relatedTarget: document.body, dataTransfer: { types: ["Files"] } });
+    expect(screen.queryByText("Add files")).toBeNull();
+  });
+
   it("registers only its visible main transcript, never the editor's composer target or floating child", () => {
     const run = { id: "voice", goal: "Voice chat", status: "succeeded" };
     page.state = { runs: [run], runsLoaded: true, activeTab: run.id, activeRunId: run.id, activeRun: run,

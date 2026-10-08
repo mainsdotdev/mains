@@ -69,36 +69,13 @@ import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
 import type { ComposerSendTarget } from "../lib/composer-send-target";
 import { ComposerSendTargetSelect } from "./composer-send-target-select";
+import { addComposerUploads } from "../lib/composer-uploads";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 const EMPTY_DIRECTORIES: string[] = [];
 
 function directoryName(folderPath: string): string {
   return folderPath.replace(/\/+$/, "").split("/").pop() || folderPath;
-}
-
-function looksLikeImageFile(file: File): boolean {
-  if (file.type.startsWith("image/")) return true;
-  return /\.(png|jpe?g|gif|webp|bmp|heic|svg)$/i.test(file.name);
-}
-
-/** Matches toolbar document picker: pdf, doc, docx, txt */
-function looksLikeDocumentFile(file: File): boolean {
-  const mime = file.type.toLowerCase();
-  if (
-    mime === "application/pdf" ||
-    mime === "application/msword" ||
-    mime ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    mime === "text/plain"
-  ) {
-    return true;
-  }
-  return /\.(pdf|doc|docx|txt)$/i.test(file.name);
-}
-
-function isAttachableUpload(file: File): boolean {
-  return looksLikeImageFile(file) || looksLikeDocumentFile(file);
 }
 
 /**
@@ -134,15 +111,6 @@ function codeSelectionChipLabel(sel: ContextCodeSelection): string {
   return sel.startLine === sel.endLine
     ? `${sel.fileName}:${sel.startLine}`
     : `${sel.fileName}:${sel.startLine}-${sel.endLine}`;
-}
-
-function fileToUploadedFile(file: File): UploadedFile {
-  const isImage = looksLikeImageFile(file);
-  return {
-    file,
-    type: isImage ? "image" : "document",
-    preview: isImage ? URL.createObjectURL(file) : undefined,
-  };
 }
 
 function skillMentionToken(skill: { name: string; displayName?: string; scope?: string }): string {
@@ -820,23 +788,14 @@ export function WorkspaceInput({
       e.preventDefault();
       e.stopPropagation();
       setIsFileDragOver(false);
-      const merge = onUploadedFilesChange;
-      if (!merge) return;
-      const files = Array.from(e.dataTransfer.files).filter(attachmentMode === "images" ? looksLikeImageFile : isAttachableUpload);
-      if (files.length === 0) return;
-      const newFiles: UploadedFile[] = files.map(fileToUploadedFile);
-      merge([...uploadedFiles, ...newFiles]);
+      addComposerUploads(e.dataTransfer.files, uploadedFiles, onUploadedFilesChange, attachmentMode);
     },
     [uploadedFiles, onUploadedFilesChange, attachmentMode],
   );
 
   const handlePasteFiles = useCallback(
     (clipboardFiles: File[]): boolean => {
-      if (!onUploadedFilesChange) return false;
-      const files = clipboardFiles.filter(attachmentMode === "images" ? looksLikeImageFile : isAttachableUpload);
-      if (files.length === 0) return false;
-      onUploadedFilesChange([...uploadedFiles, ...files.map(fileToUploadedFile)]);
-      return true;
+      return addComposerUploads(clipboardFiles, uploadedFiles, onUploadedFilesChange, attachmentMode);
     },
     [uploadedFiles, onUploadedFilesChange, attachmentMode],
   );
