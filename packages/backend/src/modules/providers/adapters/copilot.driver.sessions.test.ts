@@ -14,7 +14,12 @@ const sdk = vi.hoisted(() => ({
   activatingTier: undefined as string | undefined,
   events: [] as any[], tierError: null as Error | null,
   result: undefined as any,
+  catalogue: [] as any[],
 }));
+const CATALOGUE = [
+  { id: "auto", name: "Auto" },
+  { id: "fixed-model", name: "Fixed model", capabilities: { supports: { reasoningEffort: true } } },
+];
 const approvals = vi.hoisted(() => ({ request: vi.fn(), guard: vi.fn() }));
 
 vi.mock("../../runs/user-input-broker", () => ({ requestToolApproval: approvals.request }));
@@ -53,10 +58,7 @@ vi.mock("@github/copilot-sdk", () => {
       ping = vi.fn().mockResolvedValue({ message: "ok" });
       createSession = vi.fn(async (config) => session(config));
       resumeSession = vi.fn(async (_id, config) => session(config));
-      rpc = { models: { list: vi.fn().mockResolvedValue({ models: [
-        { id: "auto", name: "Auto" },
-        { id: "fixed-model", name: "Fixed model", capabilities: { supports: { reasoningEffort: true } } },
-      ] }) } };
+      rpc = { models: { list: vi.fn(async () => ({ models: sdk.catalogue })) } };
       constructor(public options: CopilotClientOptions) { sdk.clients.push(this); }
     },
   };
@@ -88,6 +90,7 @@ describe("Copilot session settings and SDK callbacks", () => {
     sdk.events = [];
     sdk.tierError = null;
     sdk.result = undefined;
+    sdk.catalogue = CATALOGUE;
     approvals.request.mockReset().mockImplementation(async (request) => ({ requestId: request.requestId, approved: true }));
     approvals.guard.mockReset().mockResolvedValue(null);
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "mains-copilot-sessions-"));
@@ -197,6 +200,12 @@ describe("Copilot session settings and SDK callbacks", () => {
       expect.objectContaining({ id: "auto", supportsFastMode: true }),
       expect.objectContaining({ id: "fixed-model", supportsFastMode: false, supportsEffort: true }),
     ]);
+  });
+
+  it("lists each model once when the runtime repeats its catalogue", async () => {
+    sdk.catalogue = [...CATALOGUE, ...CATALOGUE];
+    const models = await driver().listModels!();
+    expect(models.map((model) => model.id)).toEqual(["auto", "fixed-model"]);
   });
 
   it("releases the acquired session and propagates an unsupported runtime's reset error", async () => {

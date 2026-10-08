@@ -1789,16 +1789,25 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           return modelsCache?.models ?? [];
         }
 
+        // The runtime can list every model twice. Ids key the catalogue — a
+        // paired phone stores it under them — so keep the first of each.
+        const seen = new Set<string>();
+        const unique = raw.filter((model) => {
+          if (seen.has(model.id)) return false;
+          seen.add(model.id);
+          return true;
+        });
+
         // "auto" is the CLI's own synthetic entry: available on every plan and
         // never retired, so it is the stable fallback when the configured
         // default has aged out of the catalogue.
         const defaultId = resolveCatalogDefaultId(
-          raw.map((model) => model.id),
+          unique.map((model) => model.id),
           config.defaultModel,
           ["auto"],
         );
 
-        const models = raw.map(
+        const models = unique.map(
           (model): ModelInfo => ({
             id: model.id,
             displayName: model.name || model.id,

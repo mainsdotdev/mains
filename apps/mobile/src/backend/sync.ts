@@ -448,6 +448,9 @@ export async function syncModels(
             supportsFastMode: model.supportsFastMode === true,
             sortOrder: index,
           })
+          // Macs up to 0.16 pass on Copilot's catalogue with every model twice;
+          // the first copy wins.
+          .onConflictDoNothing()
           .run();
       });
     }
