@@ -265,9 +265,9 @@ export function buildRunContextPayload(
     ...codeSelectionsToContext(codeSelections),
     ...reviewComments.map(({ kind: _kind, ...comment }) => ({
       kind: "selection" as const,
-      ref: `${comment.absolutePath}#${comment.side === "deletions" ? "L" : "R"}${comment.lineNumber}`,
+      ref: `${comment.absolutePath}#${comment.side === "deletions" ? "L" : "R"}${comment.lineNumber}${comment.endLineNumber && comment.endLineNumber !== comment.lineNumber ? `-${comment.endLineNumber}` : ""}`,
       content: [
-        `Review comment on ${comment.filePath} (${comment.side === "deletions" ? "old" : "new"} version, line ${comment.lineNumber}):`,
+        `Review comment on ${comment.filePath} (${comment.side === "deletions" ? "old" : "new"} version, ${comment.endLineNumber && comment.endLineNumber !== comment.lineNumber ? `lines ${comment.lineNumber}-${comment.endLineNumber}` : `line ${comment.lineNumber}`}):`,
         `Code: ${comment.lineText}`,
         `User comment: ${comment.comment}`,
       ].join("\n"),

@@ -15,9 +15,13 @@ export type TooltipPosition =
 
 export interface TooltipProps {
   content: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
+  /** Existing DOM trigger, for controls rendered outside React (for example, in a shadow root). */
+  target?: HTMLElement | null;
   position?: TooltipPosition;
   delay?: number;
+  /** Hide after this many milliseconds, even while the trigger remains hovered. */
+  autoHideAfter?: number;
   className?: string;
   disabled?: boolean;
   /** Keyboard shortcut to display (e.g., "⌘," or "Ctrl+S") */
@@ -29,8 +33,10 @@ export interface TooltipProps {
 export default function Tooltip({
   content,
   children,
+  target,
   position = "top",
   delay = 20,
+  autoHideAfter,
   className,
   disabled = false,
   shortcut,
@@ -41,13 +47,13 @@ export default function Tooltip({
   const [coords, setCoords] = useState({ top: 0, left: 0 });
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const autoHideTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const frameRef = useRef<number | null>(null);
   const triggerRef = useRef<HTMLSpanElement>(null);
 
   const updatePosition = () => {
-    if (!triggerRef.current) return;
-    // Get the first child element for positioning
-    const element = triggerRef.current.firstElementChild as HTMLElement;
+    // Wrapped children and externally created controls share the same positioning.
+    const element = target ?? (triggerRef.current?.firstElementChild as HTMLElement | null);
     if (!element) return;
 
     const rect = element.getBoundingClientRect();
@@ -106,6 +112,10 @@ export default function Tooltip({
       clearTimeout(hideTimeoutRef.current);
       hideTimeoutRef.current = null;
     }
+    if (autoHideTimeoutRef.current) {
+      clearTimeout(autoHideTimeoutRef.current);
+      autoHideTimeoutRef.current = null;
+    }
     if (frameRef.current !== null) {
       cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
@@ -124,6 +134,12 @@ export default function Tooltip({
         frameRef.current = null;
         setIsVisible(true);
       });
+      if (autoHideAfter !== undefined) {
+        autoHideTimeoutRef.current = setTimeout(() => {
+          autoHideTimeoutRef.current = null;
+          hideTooltip();
+        }, autoHideAfter);
+      }
     }, delay);
   };
 
@@ -137,6 +153,30 @@ export default function Tooltip({
   };
 
   useEffect(() => cancelPending, []);
+
+  const showRef = useRef(showTooltip);
+  const hideRef = useRef(hideTooltip);
+  useEffect(() => {
+    showRef.current = showTooltip;
+    hideRef.current = hideTooltip;
+  });
+  useEffect(() => {
+    if (!target || disabled) return;
+    const show = () => showRef.current();
+    const hide = () => hideRef.current();
+    target.addEventListener("mouseenter", show);
+    target.addEventListener("mouseleave", hide);
+    target.addEventListener("focus", show);
+    target.addEventListener("blur", hide);
+    if (hideOnClick) target.addEventListener("click", hide);
+    return () => {
+      target.removeEventListener("mouseenter", show);
+      target.removeEventListener("mouseleave", hide);
+      target.removeEventListener("focus", show);
+      target.removeEventListener("blur", hide);
+      if (hideOnClick) target.removeEventListener("click", hide);
+    };
+  }, [target, disabled, hideOnClick]);
 
   if (disabled) {
     return <>{children}</>;
@@ -197,7 +237,7 @@ export default function Tooltip({
       )
     : null;
 
-  return (
+  return target ? tooltipElement : (
     <>
       <span
         ref={triggerRef}

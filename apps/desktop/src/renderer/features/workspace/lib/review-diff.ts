@@ -57,8 +57,19 @@ export function reviewLineText(diff: FileDiffMetadata, side: ReviewComment["side
   return undefined;
 }
 
+export function reviewLineRangeText(diff: FileDiffMetadata, side: ReviewComment["side"], start: number, end: number): string | undefined {
+  if (start < 1 || end < start || end - start >= diff[side === "additions" ? "additionLines" : "deletionLines"].length) return undefined;
+  const lines: string[] = [];
+  for (let line = start; line <= end; line++) {
+    const text = reviewLineText(diff, side, line);
+    if (text === undefined) return undefined;
+    lines.push(text);
+  }
+  return lines.join("\n");
+}
+
 export function reviewCommentMatches(comment: ReviewComment, workspaceId: string, file: ReviewFile): boolean {
   return comment.workspaceId === workspaceId && comment.filePath === file.path &&
     comment.patchId === file.patchId && !!file.diff &&
-    reviewLineText(file.diff, comment.side, comment.lineNumber) === comment.lineText;
+    reviewLineRangeText(file.diff, comment.side, comment.lineNumber, comment.endLineNumber ?? comment.lineNumber) === comment.lineText;
 }
