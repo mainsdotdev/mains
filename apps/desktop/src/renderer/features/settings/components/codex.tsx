@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { appEvents } from "@/lib/transport";
-import { Alert, Button, Select, Text, Toggle, toast } from "@/components/ui";
+import { Alert, Button, FullAccessConfirmationModal, Select, Text, Toggle, toast } from "@/components/ui";
 import {
   SettingsSection,
   SettingsRow,
@@ -103,6 +103,8 @@ export default function CodexSettings() {
   const cli = accountInfo?.cli;
 
   const [isStructuredOutputsModalOpen, setIsStructuredOutputsModalOpen] =
+    useState(false);
+  const [isFullAccessConfirmationOpen, setIsFullAccessConfirmationOpen] =
     useState(false);
   const [resetAttempt, setResetAttempt] = useState<{
     idempotencyKey: string;
@@ -299,6 +301,10 @@ export default function CodexSettings() {
             aria-label="Sandbox mode"
             options={SANDBOX_OPTIONS}
             onChange={(value) => {
+              if (value === "danger-full-access") {
+                setIsFullAccessConfirmationOpen(true);
+                return;
+              }
               updateConfig({ sandboxMode: value });
               const label =
                 SANDBOX_OPTIONS.find((o) => o.value === value)?.label ?? value;
@@ -377,6 +383,16 @@ export default function CodexSettings() {
         isOpen={isStructuredOutputsModalOpen}
         onClose={() => setIsStructuredOutputsModalOpen(false)}
         providerId={PROVIDER_IDS.codex}
+      />
+
+      <FullAccessConfirmationModal
+        isOpen={isFullAccessConfirmationOpen}
+        onCancel={() => setIsFullAccessConfirmationOpen(false)}
+        onConfirm={() => {
+          setIsFullAccessConfirmationOpen(false);
+          updateConfig({ sandboxMode: "danger-full-access" });
+          toast.success("Sandbox: Full Access");
+        }}
       />
 
       <Alert

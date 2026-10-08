@@ -30,6 +30,30 @@ function nativeToolbarProps(): Parameters<typeof InputToolbar>[0] {
 beforeEach(() => { mocks.mode = "developer"; });
 
 describe("floating composer controls", () => {
+  it("confirms every Codex Full Access selection before changing the mode", () => {
+    const props = nativeToolbarProps();
+    const { rerender } = render(createElement(InputToolbar, props));
+    const chooseFullAccess = () => {
+      fireEvent.click(screen.getByRole("button", { name: "Permission mode" }));
+      fireEvent.click(screen.getByRole("menuitemradio", { name: /Full Access/ }));
+    };
+
+    chooseFullAccess();
+    expect(props.onPermissionModeChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Turn on Full Access?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onPermissionModeChange).not.toHaveBeenCalled();
+
+    chooseFullAccess();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(props.onPermissionModeChange).toHaveBeenCalledExactlyOnceWith("danger-full-access");
+
+    rerender(createElement(InputToolbar, { ...props, permissionMode: "danger-full-access" }));
+    chooseFullAccess();
+    expect(screen.getByRole("dialog", { name: "Turn on Full Access?" })).toBeTruthy();
+    expect(props.onPermissionModeChange).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["work", "chat"] as const)("retains Fast and model controls while hiding permissions in %s mode", (mode) => {
     mocks.mode = mode;
     const props = { ...nativeToolbarProps(), layout: "floating" as const, supportsFastMode: true, fastMode: true };

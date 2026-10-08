@@ -11,6 +11,7 @@ import {
   Button,
   DropdownMenuItem,
   DropdownMenuSub,
+  HorizontalFadeScroller,
   Input,
   Muted,
   SegmentedTabs,
@@ -626,7 +627,11 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           <Text size="sm" weight="medium" className="mb-4">
             Start a page
           </Text>
-          <div className="flex gap-3 overflow-x-auto noscrollbar pb-2">
+          <HorizontalFadeScroller
+            arrows
+            className="pb-2"
+            contentClassName="flex min-w-full w-max gap-3"
+          >
             <Button
               disabled={creating.isLoading}
               onClick={() =>
@@ -658,7 +663,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                 </Button>
               );
             })}
-          </div>
+          </HorizontalFadeScroller>
         </section>
       )}
       {!!error && (
@@ -837,7 +842,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                       className="relative z-10 flex h-9 w-full items-center gap-3 text-left focus-visible:ring-2 focus-visible:ring-accent/40"
                       onClick={() => show(entry)}
                     >
-                      <span aria-hidden="true" className="flex size-8 shrink-0 overflow-hidden glass-outline glass-outline-soft items-center justify-center rounded-xl text-accent">
+                      <span aria-hidden="true" className="flex size-8 shrink-0 overflow-hidden glass-outline glass-outline-soft items-center justify-center rounded-lg text-accent">
                         {entry.kind === "page" ? (
                           <AtlasPageIcon icon={entry.saved?.metadata?.icon} />
                         ) : entry.kind === "image" ? (

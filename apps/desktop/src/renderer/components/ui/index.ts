@@ -101,6 +101,7 @@ export type { AlertProps } from "./alert";
 
 // Modal
 export { Modal, ModalHeader } from "./modal";
+export { FullAccessConfirmationModal } from "./full-access-confirmation-modal";
 export type { ModalHeaderProps, ModalProps } from "./modal";
 export { useDialogFocus } from "./dialog-focus";
 
