@@ -25,11 +25,15 @@ function readProtocolLog(
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
-async function startServer(logPath: string): Promise<CodexAppServer> {
+async function startServer(
+  logPath: string,
+  extraEnv: Record<string, string> = {},
+): Promise<CodexAppServer> {
   const server = new CodexAppServer();
   servers.push(server);
   await server.start(fixtureBinary, process.cwd(), {
     MAINS_CODEX_FIXTURE_LOG: logPath,
+    ...extraEnv,
   });
   await server.sendRequest("initialize", {
     clientInfo: {
@@ -56,6 +60,69 @@ afterEach(async () => {
 });
 
 describe("Codex capabilities", () => {
+  it("reads memory values, inverts the tool-assisted setting, and resets through App Server", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-memory-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    const server = await startServer(logPath);
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server,
+      getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.161.0", channel: null, outdated: false, compatibility: "supported" }),
+    });
+
+    await expect(capabilities.getCodexMemorySettings()).resolves.toEqual({
+      supported: true,
+      memoriesEnabled: false,
+      allowToolAssistedChats: null,
+    });
+    await capabilities.setCodexMemorySetting("memoriesEnabled", true);
+    await capabilities.setCodexMemorySetting("allowToolAssistedChats", false);
+    await expect(capabilities.getCodexMemorySettings()).resolves.toEqual({
+      supported: true,
+      memoriesEnabled: true,
+      allowToolAssistedChats: false,
+    });
+    await capabilities.resetCodexMemories();
+
+    const requests = readProtocolLog(logPath).filter((message) =>
+      ["config/read", "config/value/write", "memory/reset"].includes(String(message.method)));
+    expect(requests).toMatchObject([
+      { method: "config/read" },
+      { method: "config/value/write", params: { keyPath: "features.memories", value: true } },
+      { method: "config/value/write", params: { keyPath: "memories.disable_on_external_context", value: true } },
+      { method: "config/read" },
+      { method: "memory/reset" },
+    ]);
+  });
+
+  it("reports unsupported memory RPCs without inventing configuration values", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-memory-"));
+    tempDirs.push(tempDir);
+    const server = await startServer(path.join(tempDir, "protocol.jsonl"), {
+      MAINS_CODEX_FIXTURE_MEMORY_READ_UNSUPPORTED: "1",
+      MAINS_CODEX_FIXTURE_MEMORY_RESET_UNSUPPORTED: "1",
+      MAINS_CODEX_FIXTURE_MEMORY_WRITE_UNSUPPORTED: "1",
+    });
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server,
+      getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.161.0", channel: null, outdated: false, compatibility: "supported" }),
+    });
+
+    await expect(capabilities.getCodexMemorySettings()).resolves.toEqual({
+      supported: false,
+      memoriesEnabled: null,
+      allowToolAssistedChats: null,
+    });
+    await expect(capabilities.resetCodexMemories()).rejects.toThrow(
+      "cannot delete memories through App Server",
+    );
+    await expect(capabilities.setCodexMemorySetting("memoriesEnabled", true)).rejects.toThrow(
+      "cannot update memory settings",
+    );
+  });
+
   it("maps model, account, rate-limit, and skill RPCs through the real transport", async () => {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "mains-codex-capabilities-"),

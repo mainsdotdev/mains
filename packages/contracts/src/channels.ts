@@ -299,6 +299,9 @@ export const CHANNELS = {
     connectorsUpdated: "providers:connectorsUpdated",
     getRateLimits: "providers:getRateLimits",
     getRealtimeVoices: "providers:getRealtimeVoices",
+    getCodexMemorySettings: "providers:getCodexMemorySettings",
+    setCodexMemorySetting: "providers:setCodexMemorySetting",
+    resetCodexMemories: "providers:resetCodexMemories",
     consumeRateLimitResetCredit: "providers:consumeRateLimitResetCredit",
     /** Push: emitted when the provider streams a fresh rate-limit snapshot mid-run. */
     rateLimitsUpdated: "providers:rateLimitsUpdated",

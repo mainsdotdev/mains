@@ -11,6 +11,9 @@ import {
   useGetProviderAccountInfoQuery,
   useConsumeProviderRateLimitResetCreditMutation,
   useGetProviderRealtimeVoicesQuery,
+  useGetCodexMemorySettingsQuery,
+  useSetCodexMemorySettingMutation,
+  useResetCodexMemoriesMutation,
 } from "@/lib/redux/api";
 import { providersApi } from "@/lib/redux/api/providersApi";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -18,6 +21,7 @@ import type { RateLimitInfo } from "../../../../shared/adapter.types";
 import { StructuredOutputsModal } from "./structured-outputs-modal";
 import { CodexVoiceSettings } from "./codex-voice-settings";
 import type { CodexAdapterConfig } from "../../../../shared/adapter.types";
+import type { CodexMemorySetting } from "../../../../shared/adapter.types";
 
 type CodexApprovalMode = NonNullable<CodexAdapterConfig["approvalMode"]>;
 import {
@@ -66,6 +70,149 @@ const SANDBOX_OPTIONS = CODEX_SANDBOX_MODES.map((m) => ({
   label: m.label,
   description: m.description,
 }));
+
+function CodexMemorySection({ providerEnabled }: { providerEnabled: boolean }) {
+  const settings = useGetCodexMemorySettingsQuery(PROVIDER_IDS.codex, {
+    skip: !providerEnabled,
+  });
+  const [setSetting, { isLoading: isUpdating }] =
+    useSetCodexMemorySettingMutation();
+  const [resetMemories, { isLoading: isResetting }] =
+    useResetCodexMemoriesMutation();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const memory = settings.data;
+  const busy = isUpdating || settings.isFetching;
+  const canEdit = providerEnabled && memory?.supported === true;
+
+  const update = async (setting: CodexMemorySetting, enabled: boolean) => {
+    try {
+      await setSetting({ providerId: PROVIDER_IDS.codex, setting, enabled }).unwrap();
+      toast.success("Memory preference saved.");
+    } catch (error) {
+      toast.error(extractErrorMessage(error, "Could not save memory preference"));
+    }
+  };
+
+  const deleteMemories = async () => {
+    try {
+      await resetMemories(PROVIDER_IDS.codex).unwrap();
+      setConfirmDelete(false);
+      toast.success("Saved memories cleared.");
+    } catch (error) {
+      toast.error(extractErrorMessage(error, "Could not clear saved memories"));
+    }
+  };
+
+  return (
+    <SettingsSection
+      title="Conversation memory"
+      titleActions={<Text as="span" size="xs" tone="subtle" className="self-end">Local</Text>}
+    >
+      {!providerEnabled ? (
+        <div className="py-4">
+          <Text tone="subtle">Turn on Codex to manage its saved memories.</Text>
+        </div>
+      ) : settings.isLoading ? (
+        <div className="py-4">
+          <Text tone="subtle">Loading memory preferences…</Text>
+        </div>
+      ) : settings.error ? (
+        <div className="flex items-center justify-between gap-4 py-4">
+          <Text tone="subtle">{extractErrorMessage(settings.error, "Could not load memory preferences")}</Text>
+          <Button variant="secondary" onClick={() => { void settings.refetch(); }}>
+            Retry
+          </Button>
+        </div>
+      ) : !memory?.supported ? (
+        <div className="py-4">
+          <Text tone="subtle">This Codex version cannot manage memory preferences here.</Text>
+        </div>
+      ) : (
+        <>
+          <SettingsRow
+            title="Use saved memories"
+            description="Save useful details from your chats for Codex to use in future conversations"
+          >
+            {memory.memoriesEnabled === null ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Text as="span" size="xs" tone="subtle">Not reported by Codex</Text>
+                <Button variant="secondary" disabled={busy} onClick={() => { void update("memoriesEnabled", true); }}>
+                  Enable
+                </Button>
+                <Button variant="secondary" disabled={busy} onClick={() => { void update("memoriesEnabled", false); }}>
+                  Disable
+                </Button>
+              </div>
+            ) : (
+              <Toggle
+                enabled={memory.memoriesEnabled}
+                aria-label="Use saved memories"
+                disabled={busy}
+                onChange={(enabled) => { void update("memoriesEnabled", enabled); }}
+              />
+            )}
+          </SettingsRow>
+          <SettingsDivider />
+          <SettingsRow
+            title="Include chats that use tools"
+            description="Let Codex remember details from chats that used MCP tools or web search"
+          >
+            {memory.allowToolAssistedChats === null ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Text as="span" size="xs" tone="subtle">Using Codex default</Text>
+                <Button
+                  variant="secondary"
+                  disabled={busy || !memory.memoriesEnabled}
+                  onClick={() => { void update("allowToolAssistedChats", true); }}
+                >
+                  Allow
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={busy || !memory.memoriesEnabled}
+                  onClick={() => { void update("allowToolAssistedChats", false); }}
+                >
+                  Block
+                </Button>
+              </div>
+            ) : (
+              <Toggle
+                enabled={memory.allowToolAssistedChats}
+                aria-label="Include chats that use tools"
+                disabled={busy || !memory.memoriesEnabled}
+                onChange={(enabled) => { void update("allowToolAssistedChats", enabled); }}
+              />
+            )}
+          </SettingsRow>
+          <SettingsDivider />
+          <SettingsRow
+            title="Clear saved memories"
+            description="Remove every memory Codex has stored on this device"
+          >
+            <Button
+              variant="danger"
+              disabled={!canEdit || isResetting}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Clear
+            </Button>
+          </SettingsRow>
+        </>
+      )}
+      <Alert
+        isOpen={confirmDelete}
+        title="Clear saved memories?"
+        description="Codex will forget the memories saved on this device. You can't undo this."
+        primaryButtonText="Clear memories"
+        primaryButtonVariant="danger"
+        secondaryButtonText="Cancel"
+        onPrimary={() => { void deleteMemories(); }}
+        onSecondary={() => setConfirmDelete(false)}
+        isPrimaryLoading={isResetting}
+      />
+    </SettingsSection>
+  );
+}
 
 export default function CodexSettings() {
   const { provider, isLoading, error, config, updateConfig, updating } =
@@ -273,6 +420,8 @@ export default function CodexSettings() {
         onUpdate={updateConfig}
         onRetry={() => { void voices.refetch(); }}
       />
+
+      <CodexMemorySection providerEnabled={provider?.isEnabled === true} />
 
       <SettingsSection title="Configuration">
         <SettingsRow

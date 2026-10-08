@@ -18,6 +18,7 @@ let nextThreadId = 1;
 const activeThreads = new Set();
 let nextDynamicToolId = 1000;
 const pendingDynamicTools = new Map();
+const memoryConfig = { features: { memories: false }, memories: null };
 
 function log(message) {
   if (!logPath) return;
@@ -924,13 +925,39 @@ input.on("line", (line) => {
       respond(id, {});
       break;
 
+    case "config/read":
+      if (process.env.MAINS_CODEX_FIXTURE_MEMORY_READ_UNSUPPORTED === "1") {
+        respondError(id, -32601, "Method not found: config/read");
+        break;
+      }
+      respond(id, { config: memoryConfig, origins: {} });
+      break;
+
     case "config/value/write":
+      if (process.env.MAINS_CODEX_FIXTURE_MEMORY_WRITE_UNSUPPORTED === "1" &&
+          (params.keyPath === "features.memories" || params.keyPath === "memories.disable_on_external_context")) {
+        respondError(id, -32601, "Method not found: config/value/write");
+        break;
+      }
+      if (params.keyPath === "features.memories") {
+        memoryConfig.features.memories = params.value;
+      } else if (params.keyPath === "memories.disable_on_external_context") {
+        memoryConfig.memories = { disable_on_external_context: params.value };
+      }
       respond(id, {
         status: "ok",
         version: "1",
         filePath: "/tmp/mains-test-codex-home/config.toml",
         overriddenMetadata: null,
       });
+      break;
+
+    case "memory/reset":
+      if (process.env.MAINS_CODEX_FIXTURE_MEMORY_RESET_UNSUPPORTED === "1") {
+        respondError(id, -32601, "Method not found: memory/reset");
+        break;
+      }
+      respond(id, {});
       break;
 
     case "mcpServer/resource/read":

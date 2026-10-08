@@ -426,6 +426,28 @@ export async function setPluginEnabledForProvider(provider: ProviderResponse, pl
   return adapter.setPluginEnabled(pluginId, enabled);
 }
 
+export async function getCodexMemorySettingsForProvider(provider: ProviderResponse) {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.getCodexMemorySettings) throw new Error("Codex memory settings are unavailable.");
+  return adapter.getCodexMemorySettings();
+}
+
+export async function setCodexMemorySettingForProvider(
+  provider: ProviderResponse,
+  setting: import("../../../../shared/adapter.types").CodexMemorySetting,
+  enabled: boolean,
+): Promise<void> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.setCodexMemorySetting) throw new Error("Codex memory settings are unavailable.");
+  await adapter.setCodexMemorySetting(setting, enabled);
+}
+
+export async function resetCodexMemoriesForProvider(provider: ProviderResponse): Promise<void> {
+  const adapter = createWorkAdapter(provider);
+  if (!adapter.resetCodexMemories) throw new Error("Codex memory reset is unavailable.");
+  await adapter.resetCodexMemories();
+}
+
 export async function updatePluginForProvider(provider: ProviderResponse, pluginId: string): Promise<void> {
   const adapter = createWorkAdapter(provider);
   if (!adapter.updatePlugin) {

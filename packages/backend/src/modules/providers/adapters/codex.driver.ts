@@ -1066,6 +1066,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     getRateLimits: capabilities.getRateLimits,
+    getCodexMemorySettings: capabilities.getCodexMemorySettings,
+    setCodexMemorySetting: capabilities.setCodexMemorySetting,
+    resetCodexMemories: capabilities.resetCodexMemories,
 
     consumeRateLimitResetCredit:
       capabilities.consumeRateLimitResetCredit,

@@ -11,6 +11,7 @@ import type {
 } from "./providers.dto";
 import type {
   ConsumeRateLimitResetCreditParams,
+  CodexMemorySetting,
   PluginScope,
 } from "../../../shared/adapter.types";
 import { CHANNELS } from "@mains/contracts/channels";
@@ -110,6 +111,22 @@ export function registerProvidersIpc(): void {
   ipcMain.handle(
     CHANNELS.providers.getRealtimeVoices,
     handle((id: string) => providersService.getRealtimeVoices(id)),
+  );
+
+  ipcMain.handle(
+    CHANNELS.providers.getCodexMemorySettings,
+    handle((id: string) => providersService.getCodexMemorySettings(id)),
+  );
+
+  ipcMain.handle(
+    CHANNELS.providers.setCodexMemorySetting,
+    handle((id: string, setting: CodexMemorySetting, enabled: boolean) =>
+      providersService.setCodexMemorySetting(id, setting, enabled)),
+  );
+
+  ipcMain.handle(
+    CHANNELS.providers.resetCodexMemories,
+    handle((id: string) => providersService.resetCodexMemories(id)),
   );
 
   ipcMain.handle(
@@ -217,6 +234,9 @@ export function unregisterProvidersIpc(): void {
     CHANNELS.providers.getRateLimits,
     CHANNELS.providers.consumeRateLimitResetCredit,
     CHANNELS.providers.getRealtimeVoices,
+    CHANNELS.providers.getCodexMemorySettings,
+    CHANNELS.providers.setCodexMemorySetting,
+    CHANNELS.providers.resetCodexMemories,
     CHANNELS.providers.setGoal,
     CHANNELS.providers.getGoal,
     CHANNELS.providers.clearGoal,

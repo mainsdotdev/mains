@@ -475,6 +475,10 @@ const api = {
     getSkills: (id: string, workspacePath?: string) => ipcRenderer.invoke(CHANNELS.providers.getSkills, id, workspacePath),
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
     getRealtimeVoices: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRealtimeVoices, id),
+    getCodexMemorySettings: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getCodexMemorySettings, id),
+    setCodexMemorySetting: (id: string, setting: "memoriesEnabled" | "allowToolAssistedChats", enabled: boolean) =>
+      ipcRenderer.invoke(CHANNELS.providers.setCodexMemorySetting, id, setting, enabled),
+    resetCodexMemories: (id: string) => ipcRenderer.invoke(CHANNELS.providers.resetCodexMemories, id),
     consumeRateLimitResetCredit: (id: string, params: unknown) =>
       ipcRenderer.invoke(CHANNELS.providers.consumeRateLimitResetCredit, id, params),
     // Fired when the provider streams a fresh rate-limit snapshot during a run
