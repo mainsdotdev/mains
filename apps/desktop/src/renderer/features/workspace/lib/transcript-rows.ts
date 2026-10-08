@@ -24,6 +24,7 @@ import { voiceWorkTurnIdentity } from "./voice-transcript-view";
 export interface SessionInfo {
   elapsed: number;
   responseContent: string;
+  receivedAt?: Date;
   turn?: RunTurn;
 }
 
@@ -43,6 +44,13 @@ function collectResponseContent(
     }
   }
   return parts.join("\n\n");
+}
+
+function lastResponseReceivedAt(groups: EventGroup[], fromIdx: number, toIdx: number): Date | undefined {
+  for (let index = Math.min(toIdx, groups.length - 1); index >= fromIdx; index--) {
+    if (groups[index]?.type === "response") return groups[index].endTime;
+  }
+  return undefined;
 }
 
 /**
@@ -78,6 +86,7 @@ export function matchTurnsToGroups(
         result.set(last, {
           elapsed: turn.elapsedMs,
           responseContent: turn.responseContent || collectResponseContent(workGroups, 0, workGroups.length - 1),
+          receivedAt: lastResponseReceivedAt(workGroups, 0, workGroups.length - 1),
           turn,
         });
         lastGroupIdx = Math.max(lastGroupIdx, last + 1);
@@ -139,6 +148,7 @@ export function matchTurnsToGroups(
       elapsed: turn.elapsedMs,
       responseContent:
         turn.responseContent || collectResponseContent(normalGroups, 0, normalGroups.length - 1),
+      receivedAt: lastResponseReceivedAt(normalGroups, 0, normalGroups.length - 1),
       turn,
     });
 
@@ -181,6 +191,7 @@ function computeSessionTimesFromEvents(
           result.set(i - 1, {
             elapsed,
             responseContent: collectResponseContent(groups, turnStartIdx, i - 1),
+            receivedAt: lastResponseReceivedAt(groups, turnStartIdx, i - 1),
           });
         }
       }
@@ -205,6 +216,7 @@ function computeSessionTimesFromEvents(
         result.set(lastIdx, {
           elapsed,
           responseContent: collectResponseContent(groups, turnStartIdx, lastIdx),
+          receivedAt: lastResponseReceivedAt(groups, turnStartIdx, lastIdx),
         });
       }
     }

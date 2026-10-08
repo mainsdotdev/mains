@@ -12,6 +12,7 @@
   },
   "scripts": {
     "test": "npm rebuild better-sqlite3 && vitest run",
+    "test:build": "node --test scripts/vite-main-assets.test.mjs",
     "test:watch": "npm rebuild better-sqlite3 && vitest",
     "test:coverage": "npm rebuild better-sqlite3 && vitest run --coverage",
     "start": "ulimit -n 65536 && electron-forge start",

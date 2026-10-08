@@ -453,11 +453,11 @@ export const agentMarkdownComponents: Components = {
     </div>
   ),
   thead: ({ children }) => (
-    <thead className="border-b border-primary-300 dark:border-primary-700">{children}</thead>
+    <thead className="border-b border-primary-300/50 dark:border-primary-700/50">{children}</thead>
   ),
   tbody: ({ children }) => <tbody>{children}</tbody>,
   tr: ({ children }) => (
-    <tr className="border-b border-primary-200/70 last:border-b-0 dark:border-primary-700/70">
+    <tr className="border-b border-primary-200/40 last:border-b-0 dark:border-primary-700/35">
       {children}
     </tr>
   ),

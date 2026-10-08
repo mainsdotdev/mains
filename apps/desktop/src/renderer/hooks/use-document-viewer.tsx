@@ -7,13 +7,14 @@ import {
 } from "react";
 import { useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { shouldHideRightPanel } from "@/lib/layout";
+import { isAtlasRoute, shouldHideRightPanel } from "@/lib/layout";
 import {
   setDocumentViewerOpen,
   setDocumentViewerDoc,
   setBrowserPanelOpen,
   setRightPanelOpen,
   setSessionPanelOpen,
+  setRightPaneContextKey,
   type DocumentViewerDoc,
 } from "@/lib/redux/slices/appSettingsSlice";
 
@@ -35,6 +36,11 @@ export function DocumentViewerProvider({ children }: { children: ReactNode }) {
 
   const open = useCallback(
     (doc: DocumentViewerDoc) => {
+      // A chat with no open preview may still own the active pane context.
+      // Atlas documents belong to the existing non-workspace context instead.
+      if (isAtlasRoute(pathname)) {
+        dispatch(setRightPaneContextKey({ ownerKey: "default", browserExpansionKey: "default" }));
+      }
       // The doc viewer, browser panel and right panel are mutually exclusive —
       // they all occupy the right edge. Close the others when opening a doc,
       // along with the session box that sits against that edge.
@@ -44,7 +50,7 @@ export function DocumentViewerProvider({ children }: { children: ReactNode }) {
       dispatch(setDocumentViewerDoc(doc));
       dispatch(setDocumentViewerOpen(true));
     },
-    [dispatch],
+    [dispatch, pathname],
   );
 
   const close = useCallback(() => {

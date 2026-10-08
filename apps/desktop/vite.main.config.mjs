@@ -114,10 +114,12 @@ export default defineConfig(({ command }) => {
       ],
     },
   },
+  // Forge resolves its initial watched build in closeBundle. Runtime files
+  // must be ready in writeBundle, before that hook can launch Electron.
   plugins: [
     {
       name: 'copy-native-modules',
-      closeBundle() {
+      writeBundle() {
         const destNodeModules = '.vite/build/node_modules';
         mkdirSync(destNodeModules, { recursive: true });
         copyPageConverterDependencies(destNodeModules);
@@ -125,8 +127,6 @@ export default defineConfig(({ command }) => {
         // Native modules and their dependencies that must be available at runtime
         const modulesToCopy = [
           'better-sqlite3',
-          'bindings',
-          'file-uri-to-path',
           'node-addon-api',
           'node-pty',
           'vscode-jsonrpc',
@@ -182,7 +182,7 @@ export default defineConfig(({ command }) => {
     },
     {
       name: 'copy-migrations',
-      closeBundle() {
+      writeBundle() {
         const srcDir = '../../packages/backend/src/db/migrations';
         const destDir = '.vite/build/db/migrations';
 

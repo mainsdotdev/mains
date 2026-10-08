@@ -290,7 +290,16 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
     if (activeViewKey !== viewKey) return;
     dispatch(setComposerContextKey(ownerKey));
     dispatch(setRightPaneContextKey({ ownerKey, browserExpansionKey }));
-  }, [activeViewKey, viewKey, ownerKey, browserExpansionKey, dispatch]);
+    return () => {
+      if (mirrorOnly) return;
+      const settings = store.getState().appSettings;
+      if (settings.activeRightPaneContextKey !== ownerKey) return;
+      if (!settings.documentViewerOpen && settings.rightPaneByContext.default !== "document") return;
+      // Park this chat's document in its existing snapshot before leaving.
+      // Atlas can then own its preview without replacing the chat's document.
+      dispatch(setRightPaneContextKey({ ownerKey: "default", browserExpansionKey: "default" }));
+    };
+  }, [activeViewKey, viewKey, ownerKey, browserExpansionKey, dispatch, mirrorOnly]);
 
   // Quick actions target the currently visible composer, even after it was
   // unmounted while visiting Settings.

@@ -82,7 +82,7 @@ export function AppIconPicker() {
   };
 
   return (
-    <SettingsSection>
+    <SettingsSection title="App icon">
       <SettingsRow
         title="Dock icon"
         description="Customize how Mains appears in your Dock"

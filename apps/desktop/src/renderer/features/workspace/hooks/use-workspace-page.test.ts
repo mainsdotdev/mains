@@ -2,9 +2,9 @@ import runQueueReducer from "@/lib/redux/slices/runQueueSlice";
 // @vitest-environment jsdom
 
 import { configureStore } from "@reduxjs/toolkit";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { Provider, useDispatch, useSelector } from "react-redux";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ComponentProps, type ReactNode } from "react";
 import workspaceReducer, {
@@ -20,6 +20,8 @@ import workspaceReducer, {
 import { composerOwnerKey, workspaceViewKey } from "../lib/ui-context";
 import type { ContextBrowserItem, ContextMcpAppItem, ContextReviewItem } from "../lib/composer-context";
 import type { UploadedFile } from "@/components/ui";
+import appSettingsReducer from "@/lib/redux/slices/appSettingsSlice";
+import { DocumentViewerProvider, useDocumentViewer } from "@/hooks/use-document-viewer";
 
 const mocks = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -74,6 +76,7 @@ vi.mock("@/lib/redux/api/providersApi", () => ({
 }));
 vi.mock("@/lib/redux/api", () => ({
   workspaceApi: { util: { invalidateTags: () => ({ type: "test/invalidateWorkspaces" }) } },
+  runsApi: { util: { invalidateTags: () => ({ type: "test/invalidateRuns" }) } },
   useArchiveRunMutation: () => [vi.fn()],
   useUpdateRunMutation: () => [vi.fn()],
 }));
@@ -214,6 +217,72 @@ function workspacePage(providerId = "claude_code") {
     pathname: useLocation().pathname,
   }), { wrapper }) };
 }
+
+describe("document previews across routes", () => {
+  it("parks the chat's PDF on leaving and restores it without replacing Atlas's own preview", () => {
+    const store = configureStore({
+      reducer: {
+        workspace: workspaceReducer,
+        runQueue: runQueueReducer,
+        appSettings: appSettingsReducer,
+        backends: () => ({ activeBackendId: null }),
+      },
+    });
+    mocks.getState.mockImplementation(() => store.getState());
+    let panel!: ReturnType<typeof useDocumentViewer>;
+    let page!: ReturnType<typeof useWorkspacePage>;
+    let navigate!: ReturnType<typeof useNavigate>;
+    function Workspace() {
+      page = useWorkspacePage("claude_code");
+      return null;
+    }
+    function Navigation() {
+      panel = useDocumentViewer();
+      navigate = useNavigate();
+      return createElement(Routes, null,
+        createElement(Route, { path: "/code", element: createElement(Workspace) }),
+        createElement(Route, { path: "/atlas", element: null }),
+      );
+    }
+    render(createElement(Provider, { store } as ComponentProps<typeof Provider>,
+      createElement(MemoryRouter, { initialEntries: ["/code"] },
+        createElement(DocumentViewerProvider, null, createElement(Navigation)),
+      ),
+    ));
+    const chatDoc = { path: "/tmp/chat.pdf", fileName: "chat.pdf", docType: "pdf" as const };
+    const atlasDoc = { path: "/tmp/atlas.pdf", fileName: "atlas.pdf", docType: "pdf" as const };
+    const chatOwner = page.ownerKey;
+    act(() => panel.open(chatDoc));
+    expect(panel.isOpen).toBe(true);
+
+    act(() => navigate("/atlas"));
+    expect(panel.isOpen).toBe(false);
+    expect(panel.currentDoc).toBeNull();
+    expect(store.getState().appSettings.documentViewerDocByContext[chatOwner]).toEqual(chatDoc);
+
+    act(() => panel.open(atlasDoc));
+    expect(panel.currentDoc).toEqual(atlasDoc);
+    act(() => navigate("/code"));
+    expect(panel.isOpen).toBe(true);
+    expect(panel.currentDoc).toEqual(chatDoc);
+    act(() => navigate("/atlas"));
+    expect(panel.isOpen).toBe(true);
+    expect(panel.currentDoc).toEqual(atlasDoc);
+
+    act(() => navigate("/code"));
+    act(() => panel.close());
+    act(() => navigate("/atlas"));
+    expect(panel.currentDoc).toEqual(atlasDoc);
+    act(() => panel.close());
+    act(() => navigate("/code"));
+    act(() => navigate("/atlas"));
+    expect(panel.isOpen).toBe(false);
+    act(() => panel.open(atlasDoc));
+    act(() => navigate("/code"));
+    expect(panel.isOpen).toBe(false);
+    expect(panel.currentDoc).toBeNull();
+  });
+});
 
 describe("messages submitted during a run", () => {
   it.each(["running", "queued"] as const)("queues a Codex follow-up with its attachments while the run is %s", async (status) => {

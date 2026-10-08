@@ -83,6 +83,10 @@ import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
 import { APP_WRITER, worktreeWrites } from "../git";
 import { registerEventSink } from "../../ipc-kit/event-bus";
+import {
+  createCodexEventMapper,
+  type CodexEventRunState,
+} from "../providers/adapters/codex-event-mapper";
 
 describe("RunSession", () => {
   beforeEach(() => {
@@ -1175,6 +1179,48 @@ describe("RunSession", () => {
   // finalize
   // ─────────────────────────────────────────────────────────────
   describe("finalize", () => {
+    it.each([false, true])("does not recover raw Codex follow-ups after their completed message (suggestions only: %s)", async (suggestionsOnly) => {
+      const session = makeSession();
+      await flushBackground();
+      const state: CodexEventRunState = {
+        threadId: "thread-parent", turnId: null, currentMessageItemId: null,
+        agentMessageBuffer: "", emittedAgentMessageItemIds: new Set(),
+        emittedAsyncQuestionItemIds: new Set(), emittedContextCompactionItemIds: new Set(),
+        startedContextCompactionItemIds: new Set(), pendingFlush: [],
+        mainsCtx: { workspaceId: "w1", rootPath: null, runId: "r1" },
+        fileChangeBuffers: new Map(), fileChangeItems: new Map(), commandOutputBuffers: new Map(),
+        emittedImagePaths: new Set(), emittedDocPaths: new Set(), emittedVisualizationKeys: new Set(),
+        runStartedAt: Date.now(), planBuffers: new Map(), lastPlanSnapshot: null, subAgents: new Map(),
+      };
+      const mapper = createCodexEventMapper({
+        getRunState: () => state, onReviewCompleted: vi.fn(),
+        onParentThreadStarted: vi.fn(), getDefaultModel: () => "gpt-fixture",
+      });
+      const directives = [
+        '- :codex-followup[Metni güçlendir]{prompt="CV’min metnini daha kısa ve güçlü şekilde yeniden yaz."}',
+        '- :codex-followup[Mobil role uyarla]{prompt="CV’mi mobil rol için düzenle."}',
+        '- :codex-followup[Etkiyi ortaya çıkar]{prompt="Deneyimlerim hakkında hedefli sorular sor."}',
+      ].join("\n");
+      const text = suggestionsOnly ? directives :
+        `CV için önerilerim.\n:codex-file-citation{purpose="source" path="/tmp/cv.pdf"}\n\n${directives}`;
+      for (const event of mapper.mapNotification("item/agentMessage/delta", {
+        threadId: "thread-parent", itemId: "message-final", delta: text,
+      }, "r1")) await session.project(event);
+      for (const event of mapper.mapNotification("item/completed", {
+        threadId: "thread-parent", item: { id: "message-final", type: "agentMessage", text },
+      }, "r1")) await session.project(event);
+      await session.finalize({ status: "succeeded" });
+
+      const artifacts = await runsRepo.findArtifactsByRun("r1");
+      expect(artifacts.filter((artifact) => artifact.kind === "report").map((artifact) => artifact.content))
+        .toEqual(suggestionsOnly ? [] : ["CV için önerilerim. [cv.pdf](/tmp/cv.pdf)"]);
+      expect(artifacts.slice(-3).map((artifact) => [artifact.kind, artifact.metadata?.label]))
+        .toEqual(["Metni güçlendir", "Mobil role uyarla", "Etkiyi ortaya çıkar"].map((label) => ["prompt_suggestion", label]));
+      if (!suggestionsOnly) {
+        expect(artifacts[0].metadata?.streamId).toEqual(expect.stringContaining("codex-msg-r1-message-final-"));
+      }
+    });
+
     it.each(["canceled", "failed", "succeeded"] as const)("preserves the latest streamed answer before publishing %s", async (status) => {
       const session = makeSession();
       await flushBackground();

@@ -354,7 +354,13 @@
 }
 .bn-root.bn-shadcn [data-slot="tooltip-content"] {
   @apply glass-surface rounded-xl px-2 py-1 text-xs;
+  /* Nested tooltips portal into a zero-width anchor. fit-content would shrink
+     to the longest word there, even when the viewport has room for the label. */
+  width: max-content;
+  max-width: min(20rem, var(--available-width, calc(100vw - 1rem)));
+  overflow-wrap: anywhere;
   color: var(--bn-colors-menu-text);
 }
-.bn-root.bn-shadcn [data-slot="tooltip-content"] > svg { display: none; }
+/* Base UI renders its decorative arrow as a div; older skins used an SVG. */
+.bn-root.bn-shadcn [data-slot="tooltip-content"] > :is(svg, [aria-hidden="true"]) { display: none; }
 .atlas-page .atlas-title { font-size: 2.25rem; line-height: 1.25; }

@@ -59,6 +59,7 @@ import { dedupeGeneratedImageCopies } from "../lib/dedupe-generated-images";
 import { resolveModelDisplayName } from "@/lib/model-display";
 import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
+import { formatAbsoluteDate } from "@/lib/format-date";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
 import { TurnChangesCard } from "./turn-changes-card";
 import { TranscriptWindow, type TranscriptWindowRow } from "./transcript-window";
@@ -67,6 +68,11 @@ import { createTranscriptViewCache, TranscriptItemScope, TranscriptViewProvider,
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
 }
+
+const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
 
 /**
  * Assistant-error codes an auth notice already speaks for. Anything else the
@@ -276,6 +282,13 @@ function SessionTimeBar({
             <Fork className="size-3.5 rotate-90" />
           </Button>
         </>
+      )}
+      {info.receivedAt && Number.isFinite(info.receivedAt.getTime()) && (
+        <Text as="span" size="xs" tone="faint" className="ml-1 shrink-0 select-none whitespace-nowrap tabular-nums opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none">
+          <time dateTime={info.receivedAt.toISOString()} title={formatAbsoluteDate(info.receivedAt)}>
+            {messageTimeFormatter.format(info.receivedAt)}
+          </time>
+        </Text>
       )}
     </Text>
   );
@@ -773,10 +786,10 @@ export function WorkspaceEvents({
     const indices = row.kind === "flat" ? row.indices : row.lastSegment;
     const estimate = Math.min(1400, 64 + indices.reduce((total, index) => total + eventGroups[index].events.reduce((sum, event) => sum + Math.min(1000, 32 + Math.ceil(event.content.length / 90) * 20), 0), 0));
     return { id, groupIndex: row.kind === "flat" ? first : undefined, estimate,
-      render: () => <TranscriptItemScope id={id}>{row.kind === "flat"
+      render: () => <TranscriptItemScope id={id}><div className="group/agent-turn space-y-4">{row.kind === "flat"
         ? row.indices.map(renderGroupAt)
         : <AgentTurnMessagesAccordion {...row} renderGroup={renderGroupAt}
-          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}</TranscriptItemScope> };
+          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}</div></TranscriptItemScope> };
   }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
 
   const activeTool = useMemo(() => selectActiveTool(currentEvents), [currentEvents]);

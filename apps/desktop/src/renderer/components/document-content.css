@@ -65,7 +65,7 @@
   @apply hover:bg-primary-200/20 dark:hover:bg-primary/5 transition-colors duration-150;
 }
 @utility document-table-cell {
-  @apply px-4 py-3 font-sans text-sm text-left border-0 border-r border-b border-primary-200 dark:border-primary-700 last:border-r-0;
+  @apply px-4 py-3 font-sans text-sm text-left border-0 border-r border-b border-primary-200/40 dark:border-primary-700/35 last:border-r-0;
 
   &:is(tbody > tr:last-child > *) { border-bottom-width: 0; }
 }

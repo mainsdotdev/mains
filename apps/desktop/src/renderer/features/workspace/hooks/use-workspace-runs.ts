@@ -23,6 +23,7 @@ import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { runsApi, useArchiveRunMutation } from "@/lib/redux/api";
 import { clearPendingRunId, setActiveTab } from "@/lib/redux/slices/workspaceSlice";
 import { createRunCache } from "../lib/run-cache";
+import { omitCompletedCodexPreviews } from "../lib/run-event-mappers";
 import { useRunOperations } from "./use-run-operations";
 import { useRunSync } from "./use-run-sync";
 import { useStreamingEvents } from "./use-streaming-events";
@@ -356,7 +357,8 @@ export function useWorkspaceRuns(
   // --- Derived transcript ---
 
   const combinedEvents = useMemo(() => {
-    const dbEvents = activeRunId ? runEvents[activeRunId] || [] : [];
+    const dbEvents = activeRunId
+      ? omitCompletedCodexPreviews(runEvents[activeRunId] || [], activeRunId) : [];
     if (history.historical || streamingEvents.length === 0) return dbEvents;
 
     // Prefer a native stream identity when the provider persists one. The final

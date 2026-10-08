@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import {
   Button,
   getSegmentedTabId,
@@ -91,11 +91,13 @@ function AppearanceCard({
   appearance,
   onAppearanceChange,
   provider,
+  scopePicker,
 }: {
   appearance: ThemeAppearance;
   onAppearanceChange: (appearance: ThemeAppearance) => void;
   /** The scope's provider; `null` edits the default. */
   provider: ProviderVariantDescriptor | null;
+  scopePicker: ReactNode;
 }) {
   const [settings, change] = useAppThemeSettings();
   const providerId = provider?.providerId ?? null;
@@ -149,6 +151,7 @@ function AppearanceCard({
   return (
     <SettingsSection
       title="Colors"
+      titleActions={scopePicker}
       actions={
         <SegmentedTabs
           id={APPEARANCE_TABS_ID}
@@ -410,17 +413,20 @@ export default function AppearanceSettings() {
             <ThemePicker onChange={handleModeChange} />
           )}
         </SettingsRow>
-        <SettingsDivider />
-        <SettingsRow
-          title="Customize for"
-          description="Every provider uses the default unless it sets its own"
-        >
-          {isMobile ? (
+      </SettingsSection>
+
+      <AppearanceCard
+        appearance={appearance}
+        onAppearanceChange={setAppearance}
+        provider={provider}
+        scopePicker={
+          isMobile ? (
             <Select
               value={selectedScope}
               aria-label="Customize theme for"
               options={scopeOptions}
               onChange={setScope}
+              size="s"
             />
           ) : (
             <SegmentedTabs
@@ -430,14 +436,8 @@ export default function AppearanceSettings() {
               semantics="radiogroup"
               aria-label="Customize theme for"
             />
-          )}
-        </SettingsRow>
-      </SettingsSection>
-
-      <AppearanceCard
-        appearance={appearance}
-        onAppearanceChange={setAppearance}
-        provider={provider}
+          )
+        }
       />
 
       <SettingsSection title="Fonts">

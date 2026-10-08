@@ -105,6 +105,8 @@ export interface IconColorOption {
   swatch: string;
   /** Class applied to the rendered icon; empty means "inherit the call site". */
   className: string;
+  /** Fill for surfaces that display a registry icon inside a colored badge. */
+  backgroundClassName: string;
 }
 
 /**
@@ -124,60 +126,70 @@ export const ICON_COLORS: IconColorOption[] = [
     label: "Default",
     swatch: "bg-primary-950 dark:bg-primary-50",
     className: "",
+    backgroundClassName: "bg-primary-950 dark:bg-primary-50",
   },
   {
     name: "violet",
     label: "Violet",
     swatch: "bg-violet-400",
     className: "text-violet-600 dark:text-violet-400",
+    backgroundClassName: "bg-violet-600 dark:bg-violet-400",
   },
   {
     name: "rose",
     label: "Rose",
     swatch: "bg-rose-400",
     className: "text-rose-600 dark:text-rose-400",
+    backgroundClassName: "bg-rose-600 dark:bg-rose-400",
   },
   {
     name: "red",
     label: "Red",
     swatch: "bg-red-400",
     className: "text-red-600 dark:text-red-400",
+    backgroundClassName: "bg-red-600 dark:bg-red-400",
   },
   {
     name: "orange",
     label: "Orange",
     swatch: "bg-orange-400",
     className: "text-orange-600 dark:text-orange-400",
+    backgroundClassName: "bg-orange-600 dark:bg-orange-400",
   },
   {
     name: "amber",
     label: "Amber",
     swatch: "bg-amber-400",
     className: "text-amber-600 dark:text-amber-400",
+    backgroundClassName: "bg-amber-600 dark:bg-amber-400",
   },
   {
     name: "green",
     label: "Green",
     swatch: "bg-green-400",
     className: "text-green-600 dark:text-green-500",
+    backgroundClassName: "bg-green-600 dark:bg-green-500",
   },
   {
     name: "sky",
     label: "Sky",
     swatch: "bg-sky-400",
     className: "text-sky-600 dark:text-sky-500",
+    backgroundClassName: "bg-sky-500 dark:bg-sky-500",
   },
   {
     name: "blue",
     label: "Blue",
     swatch: "bg-blue-400",
     className: "text-blue-600 dark:text-blue-400",
+    backgroundClassName: "bg-blue-600 dark:bg-blue-400",
   },
   {
     name: "olive",
     label: "Olive",
     swatch: "bg-olive-400",
     className: "text-olive-600 dark:text-olive-400",
+    backgroundClassName: "bg-olive-600 dark:bg-olive-400",
   }
 ];
 
@@ -187,6 +199,15 @@ export const DEFAULT_ICON_COLOR = "default";
 export function iconColorClass(color: string | null | undefined): string {
   if (!color) return "";
   return ICON_COLORS.find((c) => c.name === color)?.className ?? "";
+}
+
+/** Badge fill and contrasting glyph color, with the same palette as the picker. */
+export function iconBadgeClass(color: string | null | undefined): string {
+  const option = ICON_COLORS.find((c) => c.name === color) ?? ICON_COLORS[0];
+  const foreground = option.name === DEFAULT_ICON_COLOR
+    ? "text-primary-50 dark:text-primary-950"
+    : "text-primary";
+  return `${option.backgroundClassName} ${foreground}`;
 }
 
 /** What an untinted registry icon is drawn in. */

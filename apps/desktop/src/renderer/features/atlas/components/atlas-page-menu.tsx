@@ -3,8 +3,9 @@ import { DropdownMenuItem, DropdownMenuSub } from "@/components/ui";
 import {
   Clipboard,
   Clock,
-  Download,
   Ellipsis,
+  Export,
+  Import,
   ProjectFolder,
   Trash,
 } from "@/components/ui/icons";
@@ -52,7 +53,7 @@ export function AtlasPageMenu({
             <DropdownMenuSub
               label={
                 <>
-                  <Download className="size-4 rotate-180" />
+                  <Export className="size-4 " />
                   Export
                 </>
               }
@@ -72,7 +73,7 @@ export function AtlasPageMenu({
               disabled={trashed}
               onClick={() => act({ type: "import" })}
             >
-              <Download className="size-4" />
+              <Import className="size-4" />
               Import
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => act({ type: "history" })}>

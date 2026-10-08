@@ -1,6 +1,28 @@
 import type { RunEvent } from "../types";
 import { previewParams } from "./parse-tool-content";
 
+/** Older Codex sessions could save a raw preview after its transformed answer. */
+export function omitCompletedCodexPreviews(events: RunEvent[], runId: string): RunEvent[] {
+  const isRecoveredPreview = (event: RunEvent) => event.type === "artifact" &&
+    event.metadata?.kind === "report" && event.metadata.source === "agent_message_streaming" &&
+    event.metadata.streaming === false && event.metadata.interrupted === false;
+  if (!events.some(isRecoveredPreview)) return events;
+
+  const completedStreams = new Set(events.flatMap((event) =>
+    event.type === "artifact" && event.metadata?.kind === "report" &&
+    event.metadata.source === "agent_message" && typeof event.metadata.itemId === "string"
+      ? [`codex-msg-${runId}-${event.metadata.itemId}`] : [],
+  ));
+  return events.filter((event) => {
+    if (!isRecoveredPreview(event)) return true;
+    const streamId = event.metadata?.streamId;
+    if (typeof streamId !== "string") return true;
+    // RunSession appends its UUID and message sequence to the provider id.
+    const nativeId = streamId.replace(/-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}-\d+$/i, "");
+    return !completedStreams.has(nativeId);
+  });
+}
+
 function parseMetadata(metadata: unknown): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
   if (typeof metadata === "string") {
