@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs, constants } from "node:fs";
 import path from "node:path";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
+import { removeImagePreviews } from "../imageProxy";
 
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 export const atlasRoot = () => path.join(getBackendRuntime().getPath("userData"), "atlas", "files");
@@ -68,5 +69,9 @@ export async function writeFile(id: string, name: string, bytes: Buffer) {
   } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
 export async function removeFiles(id: string) {
-  await fs.rm(path.join(atlasRoot(), id), { recursive: true, force: true });
+  const directory = path.join(atlasRoot(), id);
+  for (const file of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
+    if (file.isFile()) await removeImagePreviews(path.join(directory, file.name)).catch(() => {});
+  }
+  await fs.rm(directory, { recursive: true, force: true });
 }

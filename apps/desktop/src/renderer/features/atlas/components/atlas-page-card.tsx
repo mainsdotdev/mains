@@ -18,7 +18,7 @@ export function AtlasPageCard({ item, activity, menu, imagePaths, onOpen, fitCon
   const imageIndex = rows.findIndex((row) => row.kind === "image" && row.url && imagePaths.has(row.url));
   const imageUrl = rows[imageIndex]?.url;
   const imagePath = imageUrl ? imagePaths.get(imageUrl) : undefined;
-  const src = useLocalImageUrl(imagePath);
+  const src = useLocalImageUrl(imagePath, 768);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return (
     <article className="group flex min-w-0 flex-col overflow-hidden rounded-3xl glass-card">

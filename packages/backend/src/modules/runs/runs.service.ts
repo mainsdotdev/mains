@@ -1289,13 +1289,13 @@ export const runsService = {
       Math.max(payload.maxSide ?? ARTIFACT_IMAGE_MAX_SIDE, 128),
       ARTIFACT_IMAGE_MAX_SIDE,
     );
-    const preview = await getBackendRuntime().imagePreview?.resizeToJpeg(
+    const preview = await getBackendRuntime().imagePreview?.resize(
       bytes,
       maxSide,
     );
     if (!preview) {
-      // The Node server intentionally has no image codec. Phones can decode
-      // these formats themselves, so send bounded original bytes instead.
+      // If the host cannot decode this format, phones can still receive
+      // bounded original bytes for formats they decode themselves.
       const ext = (filePath ?? "").split(".").pop()?.toLowerCase() ?? "";
       const mime = RAW_IMAGE_MIMES[ext];
       if (!mime) throw new Error("Unsupported image format");
@@ -1303,8 +1303,8 @@ export const runsService = {
       return { mime, base64: bytes.toString("base64"), width: null, height: null };
     }
     return {
-      mime: "image/jpeg",
-      base64: preview.jpeg.toString("base64"),
+      mime: preview.mime,
+      base64: preview.bytes.toString("base64"),
       width: preview.width,
       height: preview.height,
     };

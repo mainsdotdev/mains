@@ -9,6 +9,8 @@
 
 import { isWeb } from "./platform/platform";
 import { proxiedImageSrc } from "./proxied-image-src";
+import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
+import { onTransportChange } from "./transport/registry";
 
 const PASS_THROUGH = /^(data:|blob:|https?:|mains-localimg:|mains-capture:|mains-img:|mains-appicon:|\/__localimg|\/__img)/;
 
@@ -23,8 +25,27 @@ function toWebLocalImageUrl(signed: string): string {
   }
 }
 
-const urlCache = new Map<string, string>();
+const urlCache = new Map<string, { url: string; expires: number }>();
 const inflight = new Map<string, Promise<string | null>>();
+const listeners = new Set<() => void>();
+let revision = 0;
+
+onTransportChange(() => {
+  revision++;
+  urlCache.clear();
+  inflight.clear();
+  for (const listener of listeners) listener();
+});
+
+export const localImageUrlRevision = () => revision;
+export function subscribeLocalImageUrls(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+function cacheKey(absPath: string, maxSide?: LocalImagePreviewSize): string {
+  return JSON.stringify([absPath, maxSide]);
+}
 
 export function isPassThroughSrc(src: string): boolean {
   return PASS_THROUGH.test(src);
@@ -39,31 +60,39 @@ export function resolvePassThroughSrc(src: string): string {
   return proxiedImageSrc(src) ?? src;
 }
 
-export function getCachedSignedUrl(absPath: string): string | undefined {
-  return urlCache.get(absPath);
+export function getCachedSignedUrl(absPath: string, maxSide?: LocalImagePreviewSize): string | undefined {
+  const key = cacheKey(absPath, maxSide);
+  const entry = urlCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expires <= Date.now() + 30_000) { urlCache.delete(key); return undefined; }
+  return entry.url;
 }
 
-export async function signLocalImage(absPath: string): Promise<string | null> {
+export async function signLocalImage(absPath: string, maxSide?: LocalImagePreviewSize): Promise<string | null> {
   if (!absPath) return null;
-  const cached = urlCache.get(absPath);
+  const key = cacheKey(absPath, maxSide);
+  const startedRevision = revision;
+  const cached = getCachedSignedUrl(absPath, maxSide);
   if (cached) return cached;
 
-  const existing = inflight.get(absPath);
+  const existing = inflight.get(key);
   if (existing) return existing;
 
-  const promise = window.api.imageProxy
-    .sign(absPath)
+  const request = maxSide === undefined ? window.api.imageProxy.sign(absPath) : window.api.imageProxy.sign(absPath, maxSide);
+  const promise = request
     .then((res: { success: true; data: string } | { success: false; error: string }) => {
-      if (!res.success) return null;
+      if (!res.success || startedRevision !== revision) return null;
       const url = isWeb ? toWebLocalImageUrl(res.data) : res.data;
-      urlCache.set(absPath, url);
+      const expires = Number(new URL(res.data).searchParams.get("exp")) || Date.now() + 60 * 60 * 1000;
+      urlCache.set(key, { url, expires });
+      if (urlCache.size > 512) urlCache.delete(urlCache.keys().next().value!);
       return url;
     })
     .catch(() => null)
     .finally(() => {
-      inflight.delete(absPath);
+      if (inflight.get(key) === promise) inflight.delete(key);
     });
-  inflight.set(absPath, promise);
+  inflight.set(key, promise);
   return promise;
 }
 
@@ -77,7 +106,7 @@ export function applySignedSrc(img: HTMLImageElement, src: string): () => void {
     img.src = resolvePassThroughSrc(src);
     return () => {};
   }
-  const cached = urlCache.get(src);
+  const cached = getCachedSignedUrl(src);
   if (cached) {
     img.src = cached;
     return () => {};

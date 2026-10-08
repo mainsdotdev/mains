@@ -1,5 +1,6 @@
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
 import { contextBridge, ipcRenderer } from "electron";
 import type { RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
 import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
@@ -1061,7 +1062,7 @@ const api = {
     homedir: os.homedir(),
   },
   imageProxy: {
-    sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.imageProxy.sign, absPath),
+    sign: (absPath: string, maxSide?: LocalImagePreviewSize) => ipcRenderer.invoke(CHANNELS.imageProxy.sign, absPath, maxSide),
   },
   documents: {
     sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.documents.sign, absPath),

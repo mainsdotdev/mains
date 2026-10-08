@@ -43,7 +43,7 @@ function CoverChoice({
   disabled: boolean;
   onSelect: () => void;
 }) {
-  const url = useLocalImageUrl(item.path);
+  const url = useLocalImageUrl(item.path, 768);
   return (
     <Button
       disabled={disabled}
@@ -57,6 +57,7 @@ function CoverChoice({
             src={url}
             alt=""
             loading="lazy"
+            decoding="async"
             className="size-full object-cover"
           />
         )}
@@ -92,7 +93,7 @@ export function AtlasPageHeader({
     uploading.isLoading;
   const coverId = metadata?.coverFileId;
   const cover = images.data?.find((image) => image.id === coverId);
-  const coverUrl = useLocalImageUrl(cover?.path);
+  const coverUrl = useLocalImageUrl(cover?.path, 2048);
   const position =
     coverId && storedPosition?.coverFileId === coverId
       ? storedPosition.coverPositionY
@@ -222,6 +223,7 @@ export function AtlasPageHeader({
                 ref={imageRef}
                 src={coverUrl}
                 alt="Page cover"
+                decoding="async"
                 draggable={false}
                 className="size-full select-none object-cover"
                 style={{ objectPosition: `50% ${positionY}%` }}

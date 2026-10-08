@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { verifySignedPath } from "./imageProxy.signing";
+import { isLocalImagePreviewSize } from "@mains/contracts/image-preview";
+import { MAX_PREVIEW_SOURCE_BYTES, readImagePreview, UnsupportedImagePreviewError } from "./image-previews";
 
 // Serving signed local files (`mains-localimg://` / `mains-localdoc://` in
 // Electron; `GET /__localimg` / `/__localdoc` in web mode). Electron-free so the
@@ -37,8 +39,11 @@ export async function serveLocalImage(requestUrl: URL): Promise<Response> {
   const rawPath = requestUrl.searchParams.get("path");
   const rawExp = requestUrl.searchParams.get("exp");
   const rawSig = requestUrl.searchParams.get("sig");
+  const rawSize = requestUrl.searchParams.get("size");
+  const maxSide = rawSize === null ? undefined : Number(rawSize);
+  if (maxSide !== undefined && !isLocalImagePreviewSize(maxSide)) return new Response("Invalid preview size", { status: 400 });
 
-  const verified = verifySignedPath(rawPath, rawExp, rawSig);
+  const verified = verifySignedPath(rawPath, rawExp, rawSig, maxSide);
   if (!verified.ok) {
     return new Response(`Forbidden (${verified.reason})`, { status: 403 });
   }
@@ -62,10 +67,25 @@ export async function serveLocalImage(requestUrl: URL): Promise<Response> {
   if (!stat.isFile()) {
     return new Response("Not a file", { status: 404 });
   }
-  if (stat.size > MAX_IMAGE_SIZE) {
+  if (stat.size > (maxSide ? MAX_PREVIEW_SOURCE_BYTES : MAX_IMAGE_SIZE)) {
     return new Response("Image too large", { status: 413 });
   }
 
+  // SVGs are already resolution-independent. Other local image previews share
+  // the attachment codec/cache, and are generated only when the <img> loads.
+  if (maxSide && ext !== ".svg") {
+    try {
+      const preview = await readImagePreview(resolved, maxSide, { preserveAlpha: true });
+      return new Response(new Uint8Array(preview.bytes), {
+        headers: { "Content-Type": preview.mime, "Cache-Control": "private, max-age=60" },
+      });
+    } catch (error) {
+      // Keep formats unsupported by a host codec displayable, within the
+      // existing original-file limit (e.g. animated GIFs on Electron).
+      if (!(error instanceof UnsupportedImagePreviewError)) throw error;
+    }
+  }
+  if (stat.size > MAX_IMAGE_SIZE) return new Response("Image too large", { status: 413 });
   const data = fs.readFileSync(resolved);
   return new Response(data, {
     status: 200,

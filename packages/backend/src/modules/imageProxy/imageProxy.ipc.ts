@@ -2,10 +2,11 @@ import { ok, fail } from "@mains/contracts/service-response";
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { imageProxyService } from "./imageProxy.service";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
 
 export function registerImageProxyIpc() {
-  ipcMain.handle(CHANNELS.imageProxy.sign, (_, rawPath: string) => {
-    const url = imageProxyService.signLocalImageUrl(rawPath);
+  ipcMain.handle(CHANNELS.imageProxy.sign, (_, rawPath: string, maxSide?: LocalImagePreviewSize) => {
+    const url = imageProxyService.signLocalImageUrl(rawPath, undefined, maxSide);
     if (!url) {
       return fail("Invalid path");
     }

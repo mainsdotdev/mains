@@ -12,7 +12,8 @@ import { configureBackendRuntime, getBackendRuntime } from "../../runtime/backen
 import { runsRepo } from "./runs.repo";
 import { startAttachmentMaintenance, stopAttachmentMaintenance } from "./run-attachment-maintenance";
 import { attachmentDescriptor, prepareRunAttachments, pruneAttachmentOrphans, pruneUnreferencedAttachments, resolveRunAttachment } from "./run-attachment-storage";
-import { pruneAttachmentThumbnails, readAttachmentImage } from "./run-attachment-images";
+import { readAttachmentImage } from "./run-attachment-images";
+import { pruneImagePreviews } from "../imageProxy";
 
 let db: DatabaseInstance;
 let sqlite: Database.Database;
@@ -169,9 +170,9 @@ describe("bounded attachment previews", () => {
       peak = Math.max(peak, ++decoding);
       await new Promise<void>((resolve) => setImmediate(resolve));
       decoding--;
-      return { jpeg: Buffer.alloc(100), width: maxSide, height: Math.max(1, maxSide / 2) };
+      return { bytes: Buffer.alloc(100), mime: "image/jpeg" as const, width: maxSide, height: Math.max(1, maxSide / 2) };
     });
-    const restore = configureBackendRuntime({ ...getBackendRuntime(), imagePreview: { resizeToJpeg: codec } });
+    const restore = configureBackendRuntime({ ...getBackendRuntime(), imagePreview: { resize: codec } });
     try {
       const request = (id: string, maxSide?: number) => readAttachmentImage({ runId: run.id, attachmentId: id, maxSide });
       const [first, duplicate, second] = await Promise.all([request(items[0].attachmentId), request(items[0].attachmentId), request(items[1].attachmentId)]);
@@ -182,7 +183,7 @@ describe("bounded attachment previews", () => {
       expect((await request(items[0].attachmentId, 9999)).width).toBe(1600);
       const unrelated = createRun(db);
       await expect(readAttachmentImage({ runId: unrelated.id, attachmentId: items[0].attachmentId })).rejects.toThrow("not found");
-      await pruneAttachmentThumbnails(0);
+      await pruneImagePreviews(0);
       for (const item of items) expect(await fs.readFile(item.sourcePath, "utf8")).toBe("original");
       await request(items[0].attachmentId);
       expect(codec).toHaveBeenCalledTimes(4);
@@ -192,7 +193,7 @@ describe("bounded attachment previews", () => {
   it("never returns original bytes if an image cannot be decoded", async () => {
     const run = createRun(db);
     const [item] = (await prepareRunAttachments(run.id, [upload()]))!;
-    const restore = configureBackendRuntime({ ...getBackendRuntime(), imagePreview: { resizeToJpeg: async () => null } });
+    const restore = configureBackendRuntime({ ...getBackendRuntime(), imagePreview: { resize: async () => null } });
     try {
       await expect(readAttachmentImage({ runId: run.id, attachmentId: item.attachmentId })).rejects.toThrow("cannot be previewed");
       expect(await fs.readFile(item.sourcePath, "utf8")).toBe("original");

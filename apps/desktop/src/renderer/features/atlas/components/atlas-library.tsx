@@ -98,18 +98,18 @@ function activity(date: string) {
 }
 
 function ImageTile({ entry, onOpen, fill = false }: { entry: Entry; onOpen: () => void; fill?: boolean }) {
-  const src = useLocalImageUrl(entry.path ?? "");
-  const [failed, setFailed] = useState(false);
+  const src = useLocalImageUrl(entry.path ?? "", 768, entry.date);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return (
     <Button
       onClick={onOpen}
       aria-label={`Open ${entry.title}`}
       className={`block w-full overflow-hidden bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/60 dark:bg-primary-900 ${fill ? "relative aspect-square h-full focus-visible:ring-inset" : "rounded-xl"}`}
     >
-      {src && !failed ? (
+      {src && src !== failedSrc ? (
         <img
           src={src}
-          onError={() => setFailed(true)}
+          onError={() => setFailedSrc(src)}
           alt={entry.title}
           loading="lazy"
           decoding="async"
@@ -124,8 +124,8 @@ function ImageTile({ entry, onOpen, fill = false }: { entry: Entry; onOpen: () =
   );
 }
 
-function ImageThumbnail({ path }: { path: string | null }) {
-  const src = useLocalImageUrl(path);
+function ImageThumbnail({ path, version }: { path: string | null; version: string }) {
+  const src = useLocalImageUrl(path, 256, version);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return src && src !== failedSrc ? (
     <img
@@ -841,7 +841,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                         {entry.kind === "page" ? (
                           <AtlasPageIcon icon={entry.saved?.metadata?.icon} />
                         ) : entry.kind === "image" ? (
-                          <ImageThumbnail path={entry.path} />
+                          <ImageThumbnail path={entry.path} version={entry.date} />
                         ) : (
                           <AtlasFileIcon
                             kind={entry.kind}
