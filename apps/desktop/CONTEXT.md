@@ -315,6 +315,10 @@ The app shell that hosts whatever route is active: `main/` (route table), `sideb
 Plugins and MCP App route shells render immediately after rail navigation. The Plugins page loads its feature content within its own Suspense boundary, keeping the page heading visible while the code and data load.
 _Avoid_: adding a panel to `components/layout/` because that's where panels used to go — ask whether it renders anything outside its feature's state.
 
+**status bar**:
+App-shell chrome in `MainContent`'s footer slot, below and outside the clipped route surface, with no background of its own. `AppStatusBar` describes the current route: workspace and live checked-out branch in Code, the selected conversation's reported context on workspace routes, installed/enabled plugins on Plugins, and the current Page or library view in Atlas. Remaining limits follow the relevant provider, including an explicit Plugins provider and Atlas's Codex image creator. Unknown usage stays unavailable; reported usage is converted to remaining allowance, with reset times in the details. Narrow content hides the branch and secondary limit before squeezing the workspace name. `appSettings.statusBarVisible` is an app-wide, locally persisted preference; the bar's close control, command menu, Appearance toggle and configurable `app.toggleStatusBar` shortcut share it. Hiding the footer reserves no space and retains the shell's live context subscription.
+_Avoid_: placing status chrome inside the chat or composer; carrying another route's conversation context into Plugins or Atlas; displaying a workspace's base branch as its live checkout; treating unavailable limits as zero usage or unlimited allowance.
+
 ## MCP App extensions
 
 **app entrypoint**:

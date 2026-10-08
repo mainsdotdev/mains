@@ -42,6 +42,8 @@ export const isThemePreference = (value: unknown): value is ThemePreference =>
 
 export interface AppSettingsState {
   sidebarCollapsed: boolean;
+  /** App-wide shell preference, shared by every route and persisted locally. */
+  statusBarVisible: boolean;
   rightPanelOpen: boolean;
   browserPanelOpen: boolean;
   /** Temporary browser takeover of the workspace content. */
@@ -106,6 +108,7 @@ export interface AppSettingsState {
 
 const initialState: AppSettingsState = {
   sidebarCollapsed: false,
+  statusBarVisible: true,
   rightPanelOpen: false,
   browserPanelOpen: false,
   browserPanelExpanded: false,
@@ -241,6 +244,9 @@ const appSettingsSlice = createSlice({
     },
     setSidebarCollapsed: (state, action: PayloadAction<boolean>) => {
       state.sidebarCollapsed = action.payload;
+    },
+    setStatusBarVisible: (state, action: PayloadAction<boolean>) => {
+      state.statusBarVisible = action.payload;
     },
     setBrowserPanelOpen: (state, action: PayloadAction<boolean>) => {
       state.browserPanelOpen = action.payload;
@@ -380,6 +386,7 @@ export const {
   forgetRunRightPane,
   forgetWorkspaceRightPanes,
   setSidebarCollapsed,
+  setStatusBarVisible,
   setBrowserPanelOpen,
   setBrowserPanelExpanded,
   setRightPanelOpen,

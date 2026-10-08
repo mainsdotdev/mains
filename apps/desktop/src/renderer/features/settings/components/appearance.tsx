@@ -15,6 +15,7 @@ import {
   setCodeFontSize,
   setFontFamily,
   setInterfaceFontSize,
+  setStatusBarVisible,
 } from "@/lib/redux/slices/appSettingsSlice";
 import {
   CODE_FONT_OPTIONS,
@@ -367,6 +368,8 @@ function CodeFontSizeSlider() {
  * would reflow the layout on every switch.
  */
 export default function AppearanceSettings() {
+  const dispatch = useAppDispatch();
+  const statusBarVisible = useAppSelector((state) => state.appSettings.statusBarVisible);
   const isMobile = useIsMobile();
   const { windowChrome } = useCapabilities();
   const { spaces } = useActiveSpace();
@@ -439,6 +442,12 @@ export default function AppearanceSettings() {
         onAppearanceChange={setAppearance}
         provider={provider}
       />
+
+      <SettingsSection title="Layout">
+        <SettingsRow title="Status bar" description="Show workspace, context, and remaining limits below the main surface">
+          <Toggle enabled={statusBarVisible} onChange={(visible) => dispatch(setStatusBarVisible(visible))} aria-label="Show status bar" />
+        </SettingsRow>
+      </SettingsSection>
 
       <SettingsSection title="Fonts">
         <SettingsRow title="UI font" description="Menus, labels, and messages">

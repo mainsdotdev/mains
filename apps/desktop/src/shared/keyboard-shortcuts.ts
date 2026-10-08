@@ -65,6 +65,14 @@ export const KEYBOARD_SHORTCUTS = [
     defaultBinding: "Command+J",
   },
   {
+    id: "app.toggleStatusBar",
+    title: "Toggle status bar",
+    description: "Show or hide workspace, context, and remaining limits",
+    category: "Navigation",
+    scope: "app",
+    defaultBinding: "Command+Option+Shift+S",
+  },
+  {
     id: "app.toggleBrowser",
     title: "Toggle browser",
     description: "Show or hide the in-app browser",

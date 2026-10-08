@@ -43,6 +43,7 @@ import {
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import {
   setBottomTerminalOpen,
+  setStatusBarVisible,
 } from "@/lib/redux/slices/appSettingsSlice";
 import { isElectron, useCapabilities } from "@/lib/platform";
 import { useActiveSpace } from "@/hooks/use-active-space";
@@ -272,6 +273,7 @@ export function CommandMenu() {
   const bottomTerminalOpen = useAppSelector(
     (state) => state.appSettings.bottomTerminalOpen,
   );
+  const statusBarVisible = useAppSelector((state) => state.appSettings.statusBarVisible);
   const { data: account } = useGetAccountQuery();
   const { data: recentRuns = [] } = useGetRunsQuery(10, { skip: !open });
   const { data: projects = [] } = useListProjectsQuery(undefined, {
@@ -348,6 +350,13 @@ export function CommandMenu() {
   const commands = useMemo<MenuItemModel[]>(() => {
     const items: MenuItemModel[] = [
       {
+        id: "command:status-bar",
+        title: statusBarVisible ? "Hide status bar" : "Show status bar",
+        keywords: "status bar layout view toggle durum çubuğu görünüm",
+        icon: Terminal,
+        onSelect: runAndClose(() => dispatch(setStatusBarVisible(!statusBarVisible))),
+      },
+      {
         id: "command:pulse",
         title: "Open Pulse",
         subtitle: "Automations",
@@ -405,7 +414,7 @@ export function CommandMenu() {
       });
     }
     return items;
-  }, [activeSpace, bottomTerminalOpen, darkMode, dispatch, mode, navigate, runAndClose, switchMode, toggleDarkMode]);
+  }, [activeSpace, bottomTerminalOpen, statusBarVisible, darkMode, dispatch, mode, navigate, runAndClose, switchMode, toggleDarkMode]);
 
   const quickActions = useMemo<MenuItemModel[]>(() => {
     const items: MenuItemModel[] = [

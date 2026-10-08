@@ -5,6 +5,8 @@ import { LAYOUT_PANEL_ANIM_MS } from "@/lib/layout";
 
 interface MainContentProps {
   children: ReactNode;
+  /** Shell chrome below the route surface, on the transparent window frame. */
+  footer?: ReactNode;
   marginLeft: string;
   marginRight: string;
   transparentSurface?: boolean;
@@ -40,6 +42,7 @@ export function getCollapsedHeaderPaddingLeft(
 
 export function MainContent({
   children,
+  footer,
   marginLeft,
   marginRight,
   transparentSurface,
@@ -134,6 +137,7 @@ export function MainContent({
           {children}
         </div>
       </div>
+      {footer}
     </main>
   );
 }

@@ -44,8 +44,10 @@ import {
   setRightPanelOpen,
   setSessionPanelOpen,
   setOnboardingCompleted,
+  setStatusBarVisible,
 } from "./lib/redux/slices/appSettingsSlice";
 import { SidebarToggleButton } from "./components/layout/sidebar/sidebar-toggle-button";
+import { AppStatusBar } from "./components/layout/main/app-status-bar";
 import { MainHeaderProvider } from "./hooks/use-main-header";
 import { useLayoutWidthVars } from "./hooks/use-layout-width-vars";
 import { useAppearanceFonts } from "./hooks/use-appearance-fonts";
@@ -140,6 +142,7 @@ function AppContent() {
   const sidebarCollapsed = useAppSelector(
     (state) => state.appSettings.sidebarCollapsed,
   );
+  const statusBarVisible = useAppSelector((state) => state.appSettings.statusBarVisible);
   const isRightPanelOpen = useAppSelector((state) => state.appSettings.rightPanelOpen);
   const rightPaneReady = useAppSelector((state) => state.workspace.composerContextReady);
   const isSessionPanelOpen = useAppSelector(
@@ -246,6 +249,9 @@ function AppContent() {
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
   }, { enabled: !appExpanded && (isMobile || workspaceRoute || atlasRoute), allowInEditable: true });
+  useKeyboardShortcut("app.toggleStatusBar", () => {
+    dispatch(setStatusBarVisible(!statusBarVisible));
+  }, { allowInEditable: true });
   useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
     enabled:
       showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
@@ -389,6 +395,7 @@ function AppContent() {
         )}
         <Sidebar collapsed={sidebarCollapsed} />
         <MainContent
+          footer={<AppStatusBar />}
           marginLeft={contentLeft}
           marginRight={contentRight}
           transparentSurface={workspaceRoute}

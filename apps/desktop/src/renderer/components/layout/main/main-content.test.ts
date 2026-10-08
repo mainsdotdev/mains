@@ -109,3 +109,21 @@ describe("getCollapsedHeaderPaddingLeft", () => {
     expect(getCollapsedHeaderPaddingLeft(false, true, false)).toBeUndefined();
   });
 });
+
+describe("MainContent status bar placement", () => {
+  it("keeps the footer outside the clipped route surface and removes its space when hidden", () => {
+    const content = (visible: boolean) => createElement(MainContent, {
+      marginLeft: "22rem", marginRight: "0",
+      footer: visible ? createElement("footer", { "aria-label": "Application status" }, "Context 42%") : null,
+    } as MainContentProps, createElement("div", null, "Chat panel"));
+    const view = render(content(true));
+    const surface = document.querySelector("[data-main-content-surface]")!;
+    const footer = screen.getByRole("contentinfo", { name: "Application status" });
+    expect(surface.contains(footer)).toBe(false);
+    expect(surface.nextElementSibling).toBe(footer);
+    expect(footer.parentElement).toBe(surface.parentElement);
+    view.rerender(content(false));
+    expect(screen.queryByRole("contentinfo")).toBeNull();
+    expect(surface.nextElementSibling).toBeNull();
+  });
+});

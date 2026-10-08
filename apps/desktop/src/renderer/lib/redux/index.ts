@@ -52,6 +52,7 @@ const appSettingsPersistConfig = {
   migrate: createMigrate(appSettingsMigrations),
   whitelist: [
     "sidebarCollapsed",
+    "statusBarVisible",
     "rightPanelOpen",
     "browserPanelOpen",
     "activeRightPaneContextKey",
