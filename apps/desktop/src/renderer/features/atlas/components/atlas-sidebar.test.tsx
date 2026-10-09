@@ -155,7 +155,8 @@ describe("Atlas Trash dropdown", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(mocks.remove).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "deleted" });
     expect(store.getState().atlas.byOwner['["backend","account"]'].tabs).toEqual([]);
-    expect(screen.getByTestId("route").textContent).toBe("/atlas");
+    // Navigation commits as a transition, after the dialog has closed.
+    await waitFor(() => expect(screen.getByTestId("route").textContent).toBe("/atlas"));
   });
 
   it("keeps the item and confirmation open if deletion fails", async () => {
