@@ -50,6 +50,34 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
 }
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+describe("assistant image previews", () => {
+  it("shows each screenshot once when the final answer embeds two Markdown images", () => {
+    const content = "İki çizgili ikon artık tıklayınca animasyonla çarpıya dönüşüyor. Menü de 300 ms’lik yumuşak bir hareketle aşağı açılıyor.\n\nMobil ve klavye kontrolleri, lint ve TypeScript geçti.\n\n![Kapalı menü ikonu](/private/tmp/header-menu-closed.jpg)\n![Açık menü ve çarpı ikonu](/private/tmp/header-menu-open.jpg)";
+    const group = groupEvents([mapArtifactToEvent({ id: 487, runId: "run", kind: "report", content,
+      metadata: { source: "agent_message", messagePhase: "final_answer" } })])[0];
+
+    render(<InfoGroup group={group} />);
+
+    expect(screen.getAllByRole("img")).toHaveLength(2);
+    expect(screen.getByRole("img", { name: "Kapalı menü ikonu" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Açık menü ve çarpı ikonu" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Preview Kapalı menü ikonu" }));
+    expect(screen.getByRole("dialog", { name: "Kapalı menü ikonu" }).textContent)
+      .toBe("mains-localimg://signed?path=%2Fprivate%2Ftmp%2Fheader-menu-closed.jpg");
+  });
+
+  it("shows only the reference-style Markdown image and leaves a plain path as text", () => {
+    const content = "![Menu][screenshot]\n\n[screenshot]: /tmp/menu.jpg\n\nOther screenshot: `/tmp/other.jpg`";
+    const group = groupEvents([mapArtifactToEvent({ id: 1, runId: "run", kind: "report", content })])[0];
+    render(<InfoGroup group={group} />);
+
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(screen.getByRole("img", { name: "Menu" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "other.jpg" })).toBeNull();
+    expect(screen.getByText("/tmp/other.jpg").tagName).toBe("CODE");
+  });
+});
+
 describe("streaming assistant equations", () => {
   it("keeps incomplete math hidden in a persisted interrupted report", () => {
     const event = mapArtifactToEvent({ id: 1, runId: "run", kind: "report",

@@ -284,7 +284,7 @@ describe("buildSessionResources", () => {
     ]);
   });
 
-  it("keeps outputs separate, dedupes paths, and hides document render previews", () => {
+  it("dedupes exact paths and keeps the backend's selected files without filename filtering", () => {
     const result = buildSessionResources({
       context: [],
       toolCalls: [],
@@ -301,17 +301,20 @@ describe("buildSessionResources", () => {
 
     expect(result.sources).toEqual([]);
     expect(result.deliverables.map((item) => item.title)).toEqual([
+      "summary.pdf.png",
+      "summary.pdf",
       "summary.pdf",
       "data.csv",
       "report.docx",
+      "report.docx.png",
     ]);
     expect(result.deliverables[0]?.target).toEqual({
-      type: "file",
-      value: "/final/summary.pdf",
+      type: "image",
+      value: "/final/summary.pdf.png",
     });
   });
 
-  it("adds visible execution files as deliverables and keeps explicit artifacts authoritative", () => {
+  it("combines selected file rows and artifacts by path", () => {
     const result = buildSessionResources({
       context: [],
       toolCalls: [],
@@ -353,17 +356,19 @@ describe("buildSessionResources", () => {
 
     expect(result.deliverables.map((item) => item.title)).toEqual([
       "report.md",
+      "report.md",
       "chart.png",
+      "slides.pptx.png",
       "slides.pptx",
     ]);
     expect(result.deliverables[0]?.target).toEqual({
       type: "file",
-      value: "/artifacts/report.md",
+      value: "/runs/run-1/work/report.md",
     });
-    expect(result.deliverables[1]?.target?.type).toBe("image");
+    expect(result.deliverables[2]?.target?.type).toBe("image");
   });
 
-  it("collapses document revisions and hides generated sidecars from a presentation bundle", () => {
+  it("does not merge different selected files by similar filenames", () => {
     const result = buildSessionResources({
       context: [],
       toolCalls: [],
@@ -417,6 +422,11 @@ describe("buildSessionResources", () => {
     expect(result.deliverables.map((item) => item.title)).toEqual([
       "mains-pitch-deck.pptx",
       "mains-pitch-deck.pdf",
+      "mains-pitch-deck.html",
+      "mains-pitch-deck.svg",
+      "mains_pitch_deck.fodp",
+      "mains_pitch_deck.pdf",
+      "mains_pitch_deck.pptx",
     ]);
   });
 });

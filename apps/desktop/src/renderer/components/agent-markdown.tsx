@@ -11,37 +11,45 @@ import { normalizeMathMarkdown, remarkStreamingMath } from "@/lib/math-markdown"
 import { remarkStreamingLinks } from "@/lib/streaming-links";
 import { rehypeStreamingText } from "@/lib/streaming-text";
 
-import { agentMarkdownComponents } from "./markdown-components";
+import {
+  agentMarkdownComponents,
+  MarkdownImagePreviewContext,
+  type MarkdownImagePreview,
+} from "./markdown-components";
 
 /** The assistant renderer shared by settled and streaming report artifacts. */
 export function AgentMarkdown({
   children,
   className,
   isStreaming = false,
+  onImagePreview,
 }: {
   children: string;
   className?: string;
   isStreaming?: boolean;
+  onImagePreview?: (image: MarkdownImagePreview) => void;
 }): ReactNode {
   return (
     // KaTeX display nodes are direct Markdown children, unlike paragraphs and
     // list items that already route through Text. Own the base tone here so
     // those generated spans inherit the correct light/dark foreground.
     <Text as="div" size="sm" className={className}>
-      <ReactMarkdown
-        components={agentMarkdownComponents}
-        remarkPlugins={[
-          remarkGfm,
-          remarkMath,
-          ...(isStreaming ? [remarkStreamingLinks, remarkStreamingMath] : []),
-        ]}
-        rehypePlugins={[
-          ...(isStreaming ? [rehypeStreamingText] : []),
-          rehypeKatex,
-        ]}
-      >
-        {normalizeMathMarkdown(children)}
-      </ReactMarkdown>
+      <MarkdownImagePreviewContext.Provider value={onImagePreview}>
+        <ReactMarkdown
+          components={agentMarkdownComponents}
+          remarkPlugins={[
+            remarkGfm,
+            remarkMath,
+            ...(isStreaming ? [remarkStreamingLinks, remarkStreamingMath] : []),
+          ]}
+          rehypePlugins={[
+            ...(isStreaming ? [rehypeStreamingText] : []),
+            rehypeKatex,
+          ]}
+        >
+          {normalizeMathMarkdown(children)}
+        </ReactMarkdown>
+      </MarkdownImagePreviewContext.Provider>
     </Text>
   );
 }

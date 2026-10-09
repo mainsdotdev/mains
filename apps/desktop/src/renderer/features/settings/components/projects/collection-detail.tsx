@@ -153,7 +153,7 @@ function CollectionDetailForm({
             className="text-primary-900 dark:text-primary-100"
             onClick={() => setShowProjectSettings(true)}
           >
-            Open project settings
+            Open sources
           </Button>
         </SettingsRow>
       </SettingsSection>

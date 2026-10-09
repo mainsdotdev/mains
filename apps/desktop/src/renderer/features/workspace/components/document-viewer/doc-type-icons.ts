@@ -1,6 +1,6 @@
 import type { ComponentType, SVGProps } from "react";
-import { Word, Excel, Powerpoint } from "@/components/ui/icons";
-import { MarkdownFileIcon, PdfFileIcon } from "@/components/ui/icons/file-icons";
+import { Word, Excel, Powerpoint  } from "@/components/ui/icons";
+import { MarkdownFileIcon, PdfFileIcon, TextFileIcon } from "@/components/ui/icons/file-icons";
 import type { DocType } from "@/lib/document-viewer";
 
 /** Brand icon per viewer DocType. Lives outside `lib/document-viewer.ts` so
@@ -14,4 +14,5 @@ export const DOC_TYPE_ICONS: Record<
   pptx: Powerpoint,
   md: MarkdownFileIcon,
   pdf: PdfFileIcon,
+  txt: TextFileIcon,
 };

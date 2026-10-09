@@ -1,6 +1,25 @@
 import { describe, it, expect } from "vitest";
 import { resolveTool } from "./resolve-tool";
 
+describe("resolveTool — Atlas Page tools", () => {
+  it.each([
+    ["AtlasReadPage", "Read Atlas page", "atlasreadpage"],
+    ["AtlasUpdatePage", "Updated Atlas page", "atlasupdatepage"],
+    ["AtlasCreatePage", "Created Atlas page", "atlascreatepage"],
+  ])("resolves %s identically for dynamic tools and MCP", (name, displayName, groupKey) => {
+    for (const wireName of [name, `mcp__mains__${name}`, `mcp__mains__${name.toLowerCase()}`]) {
+      expect(resolveTool(`${wireName}: pageId: page-1`)).toMatchObject({
+        displayName, groupKey, category: "Atlas", isBuiltin: true,
+      });
+      expect(resolveTool(wireName).vendorId).toBeUndefined();
+    }
+  });
+
+  it("keeps other servers' Atlas-named tools in their own integration", () => {
+    expect(resolveTool("mcp__other__AtlasReadPage").vendorId).toBe("other");
+  });
+});
+
 describe("resolveTool — legacy Copilot permission labels", () => {
   it.each([["write", "Edit"], ["shell", "Bash"], ["read", "Read"], ["url", "WebFetch"]])("recognizes %s with and without a JSON payload", (kind, displayName) => {
       for (const name of [`[permission:${kind}]`, `[permission:${kind}]: {"toolCallId":"internal"}`]) {

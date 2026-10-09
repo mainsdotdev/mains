@@ -53,4 +53,44 @@ describe("Tooltip", () => {
 
     expect(screen.queryByText("Hint")).not.toBeNull();
   });
+
+  it("hides after the configured time and opens again on the next hover", () => {
+    vi.useFakeTimers();
+    render(createElement(Tooltip, { content: "Hint", delay: 0, autoHideAfter: 3000 } as TooltipProps,
+      createElement("button", null, "Trigger")));
+    const trigger = screen.getByRole("presentation");
+    fireEvent.mouseEnter(trigger);
+    act(() => vi.advanceTimersByTime(0));
+    expect(screen.queryByRole("tooltip")).not.toBeNull();
+
+    act(() => vi.advanceTimersByTime(3000));
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.mouseLeave(trigger);
+    fireEvent.mouseEnter(trigger);
+    act(() => vi.advanceTimersByTime(0));
+    expect(screen.queryByRole("tooltip")).not.toBeNull();
+  });
+
+  it("can attach to an existing DOM button", () => {
+    vi.useFakeTimers();
+    const host = document.createElement("div");
+    const button = document.createElement("button");
+    host.attachShadow({ mode: "open" }).appendChild(button);
+    document.body.appendChild(host);
+    const { unmount } = render(createElement(Tooltip, { content: "External hint", target: button, delay: 0,
+      autoHideAfter: 3000, hideOnClick: true } as TooltipProps));
+
+    fireEvent.mouseEnter(button);
+    act(() => vi.advanceTimersByTime(0));
+    expect(screen.queryByText("External hint")).not.toBeNull();
+    fireEvent.click(button);
+    act(() => vi.advanceTimersByTime(100));
+    expect(screen.queryByText("External hint")).toBeNull();
+
+    unmount();
+    host.remove();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

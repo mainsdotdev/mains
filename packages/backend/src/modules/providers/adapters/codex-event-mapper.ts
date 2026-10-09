@@ -1283,6 +1283,7 @@ export function createCodexEventMapper(
     const parts = parseAgentMessageParts(projectFileCitations(messageText, true));
     const textWithoutCitations = projectFileCitations(messageText, false);
     const documentText: string[] = [];
+    const streamId = `codex-msg-${runId}-${itemId ?? "default"}`;
     let emitted = false;
     const metadata = {
       source: "agent_message",
@@ -1297,6 +1298,9 @@ export function createCodexEventMapper(
           type: "artifact",
           kind: "report",
           content: part.text,
+          // Directive extraction and rich content can change the final text.
+          // Retire the original preview by identity, rather than its prefix.
+          ...(documentText.length === 1 ? { streamId } : {}),
           metadata,
           ts,
         });
@@ -1319,6 +1323,19 @@ export function createCodexEventMapper(
         stripAnnotationMarkers(textWithoutCitations),
         ts,
       );
+    }
+
+    if (documentText.length === 0) {
+      // A message containing only suggestions or rich content has no report
+      // to replace its preview. Clear it so run-end recovery cannot save it.
+      events.push({
+        type: "artifact",
+        kind: "report",
+        content: "",
+        metadata: { source: "agent_message_streaming" },
+        ephemeral: true,
+        streamId,
+      });
     }
 
     // After the message: the chips belong under the answer they follow.

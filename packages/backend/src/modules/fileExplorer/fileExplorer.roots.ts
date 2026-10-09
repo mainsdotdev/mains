@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import * as path from "path";
 
+import { atlasService } from "../atlas";
 import { projectsService } from "../projects";
 import { collectionsService } from "../collections";
 import { managedExecutionRoots } from "../runs";
@@ -95,5 +96,6 @@ export async function assertWithinReadableContentRoots(realPath: string): Promis
     }
   }
   if (await collectionsService.isStoredSourceFile(realPath)) return;
+  if (await atlasService.isStoredFile(realPath)) return;
   throw new Error("Path is outside your workspaces");
 }

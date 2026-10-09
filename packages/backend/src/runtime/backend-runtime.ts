@@ -28,14 +28,15 @@ export interface PowerInhibitorAdapter {
 }
 
 export interface ImagePreview {
-  jpeg: Buffer;
+  bytes: Buffer;
+  mime: "image/jpeg" | "image/png";
   width: number;
   height: number;
 }
 
 export interface ImagePreviewAdapter {
   /** Returns null when the host cannot decode the supplied bytes. */
-  resizeToJpeg(bytes: Buffer, maxSide: number): Promise<ImagePreview | null>;
+  resize(bytes: Buffer, maxSide: number, preserveAlpha?: boolean): Promise<ImagePreview | null>;
 }
 
 export interface BackendRuntime {

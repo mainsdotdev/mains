@@ -1,0 +1,71 @@
+/* Shared presentation for rendered Markdown and editable BlockNote content.
+   Editor adapters apply these utilities to native nodes, keeping their DOM,
+   selection, authored colors and block behavior intact. */
+@utility document-h1 {
+  @apply mt-4 mb-2 font-sans text-lg font-bold;
+}
+@utility document-h2 {
+  @apply mt-2 mb-1 font-sans text-base font-semibold;
+}
+@utility document-h3 {
+  @apply mt-2 mb-1 font-sans text-sm font-semibold;
+}
+@utility document-h4 {
+  @apply mt-1 mb-0.5 font-sans text-xs font-semibold;
+}
+@utility document-paragraph {
+  @apply font-sans text-sm leading-7;
+}
+@utility document-list {
+  @apply list-outside pl-4 font-sans mb-2 space-y-0.5;
+}
+@utility document-list-item {
+  @apply font-sans text-sm leading-6;
+
+  & > p { margin-block: 0; }
+  & > p:not(:last-child) { margin-bottom: 0.25rem; }
+}
+@utility document-link {
+  @apply text-accent cursor-pointer hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
+}
+@utility document-inline-code {
+  @apply px-1 py-0.5 rounded font-mono text-[0.9em] bg-primary-200/40 dark:bg-primary/10;
+}
+@utility document-code-block {
+  @apply my-2 p-4 rounded-xl font-mono bg-primary-50 dark:bg-primary/10;
+  font-size: var(--font-size-code, 12px);
+  line-height: 1.7;
+  white-space: pre;
+  tab-size: 2;
+}
+@utility document-quote {
+  @apply border-l-4 border-primary-400 dark:border-primary-600 pl-4 py-1 my-2 italic text-primary-700 dark:text-primary-300;
+
+  & p { color: inherit; }
+}
+@utility document-divider {
+  @apply my-4 border-0 border-t border-primary-200/40 dark:border-primary-700/20;
+}
+@utility document-image {
+  @apply max-w-full h-auto rounded-xl my-2 border border-primary-200/40 dark:border-primary-700/20;
+}
+@utility document-table-frame {
+  @apply my-4 rounded-lg border border-primary-200/40 dark:border-primary-700/20;
+}
+@utility document-table {
+  @apply min-w-full border-collapse;
+}
+@utility document-table-head {
+  @apply bg-primary-50 dark:bg-primary/10;
+}
+@utility document-table-body {
+  @apply bg-primary dark:bg-primary/5;
+}
+@utility document-table-row {
+  @apply hover:bg-primary-200/20 dark:hover:bg-primary/5 transition-colors duration-150;
+}
+@utility document-table-cell {
+  @apply px-4 py-3 font-sans text-sm text-left border-0 border-r border-b border-primary-200/40 dark:border-primary-700/35 last:border-r-0;
+
+  &:is(tbody > tr:last-child > *) { border-bottom-width: 0; }
+}

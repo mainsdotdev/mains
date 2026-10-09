@@ -107,6 +107,14 @@ export interface CodexAppServerRpc {
   "skills/list": RpcMethod<SkillsListParams, SkillsListResponse>;
 
   "config/value/write": RpcMethod<ConfigValueWriteParams, ConfigWriteResponse>;
+  "config/read": RpcMethod<
+    { includeLayers?: boolean; cwd?: string | null },
+    { config: {
+      features?: { memories?: boolean } | null;
+      memories?: { disable_on_external_context?: boolean } | null;
+    } }
+  >;
+  "memory/reset": RpcMethod<undefined, Record<string, never>>;
   "model/list": RpcMethod<ModelListParams, ModelListResponse>;
   "mcpServer/oauth/login": RpcMethod<
     McpServerOauthLoginParams,

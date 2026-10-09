@@ -52,6 +52,7 @@ function placeSubmenu(
   return {
     top: clampToViewport(anchor.top, size.height, viewport.height),
     left: clampToViewport(desiredLeft, size.width, viewport.width),
+    transformOrigin: opensRight ? "top left" : "top right",
   };
 }
 
@@ -126,7 +127,8 @@ interface DropdownMenuBaseProps {
   children?: ReactNode;
   minWidth?: number;
   className?: string;
-  origin?: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "auto";
+  /** `right` keeps the horizontal animation anchor while allowing upward placement. */
+  origin?: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "right" | "auto";
   /** Which enabled row receives focus when the menu opens. */
   initialFocus?: "first" | "selected";
   /** A search field can receive focus before the selectable rows. */
@@ -298,6 +300,7 @@ export function DropdownMenu({
   };
 
   const getTransformOrigin = () => {
+    if (origin === "right") return opensUpward ? "bottom right" : "top right";
     if (origin !== "auto") {
       const originMap = {
         "top-left": "top left",
@@ -362,7 +365,7 @@ export function DropdownMenuSub({
   const focusSubmenuOnOpen = useRef(false);
   const [isOpen, setIsOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [submenuPosition, setSubmenuPosition] = useState({ top: 0, left: 0 });
+  const [submenuPosition, setSubmenuPosition] = useState({ top: 0, left: 0, transformOrigin: "top left" });
 
   const updateSubmenuPosition = useCallback(() => {
     const trigger = triggerRef.current;
@@ -376,7 +379,7 @@ export function DropdownMenuSub({
       { width: window.innerWidth, height: window.innerHeight },
     );
     setSubmenuPosition((current) =>
-      current.top === next.top && current.left === next.left ? current : next,
+      current.top === next.top && current.left === next.left && current.transformOrigin === next.transformOrigin ? current : next,
     );
   }, []);
 
@@ -509,6 +512,7 @@ export function DropdownMenuSub({
             style={{
               top: submenuPosition.top,
               left: submenuPosition.left,
+              transformOrigin: submenuPosition.transformOrigin,
               minWidth: SUBMENU_WIDTH_ESTIMATE,
               maxWidth: window.innerWidth - VIEWPORT_PADDING * 2,
               maxHeight: window.innerHeight - VIEWPORT_PADDING * 2,

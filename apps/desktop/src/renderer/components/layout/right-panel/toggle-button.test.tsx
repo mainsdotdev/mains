@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement, StrictMode } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToggleButton } from "./toggle-button";
 
@@ -58,6 +58,25 @@ afterEach(() => {
 });
 
 describe("session trigger during browser entry", () => {
+  it("offers only the docked browser control for Atlas", () => {
+    const toggleBrowser = vi.fn();
+    render(createElement(ToggleButton, {
+      isOpen: false,
+      onClick: onToggle,
+      showRightPanelToggle: false,
+      showChatActions: false,
+      hideChatControls: true,
+      browserOpen: false,
+      onBrowserToggle: toggleBrowser,
+    }));
+    expect(screen.queryByText("Session details")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open right panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open terminal" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand browser" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open browser" }));
+    expect(toggleBrowser).toHaveBeenCalledOnce();
+  });
+
   it("stays hidden throughout entry, then appears without remounting the controls", () => {
     const view = render(controls(false));
     const session = screen.getByRole("button", { name: "Session details" });

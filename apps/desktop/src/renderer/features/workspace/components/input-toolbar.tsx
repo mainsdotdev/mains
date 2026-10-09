@@ -15,11 +15,12 @@ import {
   FILE_TYPES,
   type UploadedFile,
   Input,
+  Button,
 } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
-import { Microphone } from "@/components/ui/icons";
+import { Microphone, Plus } from "@/components/ui/icons";
 import { VoiceMuteButton } from "./voice-mute-button";
 import type { ComposerPrimaryAction } from "../lib/composer-controls";
 
@@ -67,7 +68,10 @@ interface InputToolbarProps {
   // File uploads
   uploadedFiles: UploadedFile[];
   onUploadedFilesChange: (files: UploadedFile[]) => void;
+  attachmentMode?: "all" | "images";
+  uploadInputRef?: RefObject<HTMLInputElement | null>;
   layout?: "default" | "floating";
+  dense?: boolean;
   floatingChatMode?: FloatingChatMode;
 }
 
@@ -102,7 +106,10 @@ export function InputToolbar({
   supportsUltracode,
   uploadedFiles,
   onUploadedFilesChange,
+  attachmentMode = "all",
+  uploadInputRef,
   layout = "default",
+  dense = false,
   floatingChatMode,
 }: InputToolbarProps) {
   const isMobile = useIsMobile();
@@ -113,7 +120,8 @@ export function InputToolbar({
   const permissionDropdownRef = useRef<HTMLDivElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const fileDropdownRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const internalFileInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = uploadInputRef ?? internalFileInputRef;
   const previousFloatingChatMode = useRef(floatingChatMode);
 
   useLayoutEffect(() => {
@@ -133,21 +141,21 @@ export function InputToolbar({
     if (showPermissionDropdown) setShowPermissionDropdown(false);
   });
 
-  const openFilePicker = useCallback((accept: string) => {
+  const openFilePicker = (accept: string) => {
     if (fileInputRef.current) {
       fileInputRef.current.accept = accept;
       fileInputRef.current.click();
     }
     setShowFileDropdown(false);
-  }, []);
+  };
 
-  const handleImageUpload = useCallback(() => {
+  const handleImageUpload = () => {
     openFilePicker(FILE_TYPES.IMAGE);
-  }, [openFilePicker]);
+  };
 
-  const handleDocumentUpload = useCallback(() => {
+  const handleDocumentUpload = () => {
     openFilePicker(FILE_TYPES.DOCUMENT);
-  }, [openFilePicker]);
+  };
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -158,6 +166,7 @@ export function InputToolbar({
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const isImage = file.type.startsWith("image/");
+        if (attachmentMode === "images" && !isImage) continue;
         const uploaded: UploadedFile = {
           file,
           type: isImage ? "image" : "document",
@@ -170,8 +179,22 @@ export function InputToolbar({
       // Reset so the same file can be selected again
       e.target.value = "";
     },
-    [uploadedFiles, onUploadedFilesChange],
+    [uploadedFiles, onUploadedFilesChange, attachmentMode],
   );
+
+  const uploadButton = attachmentMode === "images" ? (
+    <Button aria-label="Upload image" onClick={handleImageUpload}
+      className="flex size-8 items-center justify-center rounded-full text-primary-600 hover:bg-primary/5 dark:text-primary-300">
+      <Plus className="size-5" />
+    </Button>
+  ) : (
+    <FileUploadDropdown isOpen={showFileDropdown} onToggle={() => setShowFileDropdown(!showFileDropdown)}
+      onImageUpload={handleImageUpload} onDocumentUpload={handleDocumentUpload} dropdownRef={fileDropdownRef}
+      openUpward compact={layout === "floating"} />
+  );
+  const uploadInput = <Input variant="bare" ref={fileInputRef} type="file" className="hidden"
+    aria-label={attachmentMode === "images" ? "Upload images" : "Upload files"}
+    accept={attachmentMode === "images" ? FILE_TYPES.IMAGE : undefined} multiple onChange={handleFileChange} />;
 
   const actionButtons = (
     <>
@@ -196,24 +219,8 @@ export function InputToolbar({
     return (
       <div className="pointer-events-none absolute inset-x-2.5 bottom-1.5 flex items-center justify-between">
         <div className="pointer-events-auto flex items-center">
-          <FileUploadDropdown
-            isOpen={showFileDropdown}
-            onToggle={() => setShowFileDropdown(!showFileDropdown)}
-            onImageUpload={handleImageUpload}
-            onDocumentUpload={handleDocumentUpload}
-            dropdownRef={fileDropdownRef}
-            openUpward
-            compact
-          />
-          <Input
-            variant="bare"
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            aria-label="Upload files"
-            multiple
-            onChange={handleFileChange}
-          />
+          {uploadButton}
+          {uploadInput}
         </div>
         <div className="pointer-events-auto flex items-center gap-0.75">
           <ModelSelectDropdown
@@ -234,7 +241,8 @@ export function InputToolbar({
             variant={variant}
             iconOnly
           />
-          <PermissionModeDropdown
+          {supportsFastMode && <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} />}
+          {modeConfig.showPermissionControls && <PermissionModeDropdown
             permissionMode={permissionMode}
             onPermissionModeChange={onPermissionModeChange}
             isOpen={showPermissionDropdown}
@@ -245,7 +253,7 @@ export function InputToolbar({
             onPlanModeToggle={modeConfig.showPlanControls ? onPlanModeToggle : undefined}
             goalMode={goalMode}
             iconOnly
-          />
+          />}
           {actionButtons}
         </div>
       </div>
@@ -253,27 +261,12 @@ export function InputToolbar({
   }
 
   return (
-    <div className="min-w-0 px-3 pt-6">
+    <div className={`min-w-0 px-3 ${dense ? "pt-1" : "pt-6"}`}>
       <div className="flex min-w-0 w-full items-end justify-between">
         {/* Wrap within the chat pane, leaving send/stop its own fixed space. */}
         <div className="relative ml-1 flex min-w-0 flex-1 flex-wrap items-center gap-0.5 gap-y-1.5 pr-2 *:max-w-full *:shrink-0">
-          <FileUploadDropdown
-              isOpen={showFileDropdown}
-              onToggle={() => setShowFileDropdown(!showFileDropdown)}
-              onImageUpload={handleImageUpload}
-              onDocumentUpload={handleDocumentUpload}
-              dropdownRef={fileDropdownRef}
-              openUpward={true}
-            />
-          <Input
-            variant="bare"
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            aria-label="Upload files"
-            multiple
-            onChange={handleFileChange}
-          />
+          {uploadButton}
+          {uploadInput}
           {isMobile ? (
             <CompactComposerControls
               variant={variant}

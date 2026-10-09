@@ -124,4 +124,25 @@ describe("BrowserPanelProvider", () => {
     }));
     expect(panel?.ownerKey).toBe("chat-1");
   });
+
+  it("docks the browser in Atlas and restores expansion when leaving without changing saved state", () => {
+    harness.browserPanelOpen = true;
+    harness.browserPanelExpanded = true;
+    const view = render(createElement(BrowserPanelProvider, null, createElement(Consumer)));
+    expect(panel?.isExpanded).toBe(true);
+
+    harness.pathname = "/atlas/page-1";
+    view.rerender(createElement(BrowserPanelProvider, null, createElement(Consumer)));
+    expect(panel?.isOpen).toBe(true);
+    expect(panel?.isExpanded).toBe(false);
+    expect(panel?.canExpand).toBe(false);
+    act(() => panel!.toggleExpanded());
+    expect(harness.dispatch).not.toHaveBeenCalled();
+
+    harness.pathname = "/code/run-1";
+    view.rerender(createElement(BrowserPanelProvider, null, createElement(Consumer)));
+    expect(panel?.isExpanded).toBe(true);
+    expect(panel?.canExpand).toBe(true);
+    expect(harness.dispatch).not.toHaveBeenCalled();
+  });
 });

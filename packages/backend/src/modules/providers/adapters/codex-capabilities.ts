@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type {
   AccountInfo,
+  CodexMemorySetting,
+  CodexMemorySettings,
   ConnectorInfo,
   ConnectorOverview,
   ConsumeRateLimitResetCreditOutcome,
@@ -62,7 +64,7 @@ const MCP_DISCOVERY_TIMEOUT_MS = 60_000;
 
 function isUnsupportedRpc(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /method not found|unknown method|not supported/i.test(message);
+  return /method not found|unknown method|not supported|unsupported method|experimental api/i.test(message);
 }
 
 let appDirectoryMemo: {
@@ -954,6 +956,78 @@ export function createCodexCapabilities(
     }
   }
 
+  async function getCodexMemorySettings(): Promise<CodexMemorySettings> {
+    const server = await options.ensureServer();
+    try {
+      const { config } = await server.sendRequest("config/read", {
+        includeLayers: false,
+      });
+      const enabled = config.features?.memories;
+      const disabledOnExternalContext =
+        config.memories?.disable_on_external_context;
+      return {
+        supported: true,
+        memoriesEnabled: typeof enabled === "boolean" ? enabled : null,
+        allowToolAssistedChats:
+          typeof disabledOnExternalContext === "boolean"
+            ? !disabledOnExternalContext
+            : null,
+      };
+    } catch (error) {
+      if (isUnsupportedRpc(error)) {
+        return {
+          supported: false,
+          memoriesEnabled: null,
+          allowToolAssistedChats: null,
+        };
+      }
+      throw error;
+    }
+  }
+
+  async function setCodexMemorySetting(
+    setting: CodexMemorySetting,
+    enabled: boolean,
+  ): Promise<void> {
+    if (setting !== "memoriesEnabled" && setting !== "allowToolAssistedChats") {
+      throw new Error("Unknown Codex memory setting.");
+    }
+    if (typeof enabled !== "boolean") {
+      throw new Error("Codex memory setting must be a boolean.");
+    }
+    const server = await options.ensureServer();
+    const keyPath = setting === "memoriesEnabled"
+      ? "features.memories"
+      : "memories.disable_on_external_context";
+    try {
+      const result = await server.sendRequest("config/value/write", {
+        keyPath,
+        value: setting === "memoriesEnabled" ? enabled : !enabled,
+        mergeStrategy: "upsert",
+      });
+      if (result.status === "okOverridden") {
+        throw new Error("A managed Codex policy overrides this memory setting.");
+      }
+    } catch (error) {
+      if (isUnsupportedRpc(error)) {
+        throw new Error("This Codex version cannot update memory settings.");
+      }
+      throw error;
+    }
+  }
+
+  async function resetCodexMemories(): Promise<void> {
+    const server = await options.ensureServer();
+    try {
+      await server.sendRequest("memory/reset", undefined);
+    } catch (error) {
+      if (isUnsupportedRpc(error)) {
+        throw new Error("This Codex version cannot delete memories through App Server.");
+      }
+      throw error;
+    }
+  }
+
   async function consumeRateLimitResetCredit(
     params: ConsumeRateLimitResetCreditParams,
   ): Promise<ConsumeRateLimitResetCreditOutcome> {
@@ -1571,6 +1645,9 @@ export function createCodexCapabilities(
     listRealtimeVoices,
     getAccountInfo,
     getRateLimits,
+    getCodexMemorySettings,
+    setCodexMemorySetting,
+    resetCodexMemories,
     consumeRateLimitResetCredit,
     listSkills,
     listPlugins,

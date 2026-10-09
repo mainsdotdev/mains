@@ -359,6 +359,54 @@ describe("buildTurnRenderRows — deliverable breakout", () => {
   });
 });
 
+describe("final-answer transcript layout", () => {
+  const prompt = () => ev({ id: "prompt", metadata: { kind: "user-prompt" } });
+  const report = (id: string, messagePhase?: string) => ev({ id, content: id, metadata: { kind: "report", messagePhase } });
+
+  it("keeps the confirmed final answer outside even when commentary arrives afterward", () => {
+    const rows = buildTurnRenderRows(groupEvents([prompt(), report("progress", "commentary"),
+      report("final", "final_answer"), report("late", "commentary")]));
+    const row = rows[1];
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    expect(row.lastSegment).toEqual([2]);
+    expect(row.previousSegments.flat()).toEqual([1, 3]);
+    expect(row.previousMessageCount).toBe(2);
+  });
+
+  it("keeps every block of a split final reply visible", () => {
+    const rows = buildTurnRenderRows(groupEvents([prompt(), report("progress", "commentary"),
+      report("final-1", "final_answer"), report("final-2", "final_answer"),
+      ev({ id: "image", metadata: { kind: "image" }, content: "/tmp/output.png" })]));
+    const row = rows[1];
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    expect(row.lastSegment).toEqual([2, 3]);
+    expect(row.messageBreakoutIndices).toEqual([4]);
+    expect(row.previousSegments.flat()).toEqual([1]);
+  });
+
+  it("folds prefix tools when the only reply is a confirmed final answer", () => {
+    const rows = buildTurnRenderRows(groupEvents([prompt(),
+      ev({ id: "tool", type: "tool_call", metadata: { status: "done" } }), report("final", "final_answer")]));
+    const row = rows[1];
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    expect(row.previousToolSummary).toBe("1 tool call");
+    expect(row.previousMessageCount).toBe(0);
+    expect(row.lastSegment).toEqual([2]);
+  });
+
+  it.each([undefined, "commentary", "unknown"])("falls back to the latest reply without confirmed final evidence (%s)", (phase) => {
+    const rows = buildTurnRenderRows(groupEvents([prompt(), report("first", phase), report("last", phase)]));
+    const row = rows[1];
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    expect(row.lastSegment).toEqual([2]);
+    expect(row.previousSegments.flat()).toEqual([1]);
+  });
+});
+
 describe("matchTurnsToGroups", () => {
   // A continue that died before the provider emitted anything leaves a short
   // turn row with no prompt of its own in the transcript. Its bar must not

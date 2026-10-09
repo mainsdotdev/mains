@@ -38,25 +38,25 @@ describe("conversation history pages", () => {
     expect(runsRepo.findToolOutput("other-run", call.id)).toBeNull();
   });
 
-  it("opens on 10 complete prompt blocks and keeps unrelated runs out", () => {
+  it("opens on 20 complete prompt blocks and keeps unrelated runs out", () => {
     for (let i = 0; i < 45; i++) turn(i);
     turn(100, "another");
     const page = runsRepo.findHistoryPage({ runId: "r" });
-    expect(prompts(page)).toEqual(Array.from({ length: 10 }, (_, i) => `prompt-${i + 35}`));
-    expect(page.artifacts).toHaveLength(20);
-    expect(page.toolCalls).toHaveLength(10);
-    expect(page.turns.map((t) => t.turnIndex)).toEqual(Array.from({ length: 10 }, (_, i) => i + 35));
+    expect(prompts(page)).toEqual(Array.from({ length: 20 }, (_, i) => `prompt-${i + 25}`));
+    expect(page.artifacts).toHaveLength(40);
+    expect(page.toolCalls).toHaveLength(20);
+    expect(page.turns.map((t) => t.turnIndex)).toEqual(Array.from({ length: 20 }, (_, i) => i + 25));
     expect(page.hasOlder).toBe(true);
     expect(page.hasNewer).toBe(false);
   });
 
-  it("pages to the beginning and back with a 30-block bounded window", () => {
+  it("pages to the beginning and back with a 60-block bounded window", () => {
     for (let i = 0; i < 65; i++) turn(i);
     let page = runsRepo.findHistoryPage({ runId: "r" });
     const seen = new Set(prompts(page));
     while (page.hasOlder) {
       page = runsRepo.findHistoryPage({ runId: "r", direction: "older", cursor: page.start! });
-      expect(prompts(page).length).toBeLessThanOrEqual(30);
+      expect(prompts(page).length).toBeLessThanOrEqual(60);
       expect(new Set(page.artifacts.map((a) => a.id)).size).toBe(page.artifacts.length);
       prompts(page).forEach((prompt) => seen.add(prompt));
     }
@@ -64,7 +64,15 @@ describe("conversation history pages", () => {
     expect(prompts(page)[0]).toBe("prompt-0");
     while (page.hasNewer) page = runsRepo.findHistoryPage({ runId: "r", direction: "newer", cursor: page.end! });
     expect(prompts(page).at(-1)).toBe("prompt-64");
-    expect(prompts(page)).toHaveLength(30);
+    expect(prompts(page)).toHaveLength(60);
+  });
+
+  it("keeps all tool calls in a prompt block", () => {
+    createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "prompt", createdAt: at(0) });
+    for (let i = 0; i < 60; i++) createToolCall(db, { runId: "r", createdAt: at(i, 1000), toolName: `tool-${i}` });
+    const page = runsRepo.findHistoryPage({ runId: "r" });
+    expect(prompts(page)).toEqual(["prompt"]);
+    expect(page.toolCalls).toHaveLength(60);
   });
 
   it("refreshes changed tools in an older window without pulling in new turns", () => {
@@ -103,7 +111,7 @@ describe("conversation history pages", () => {
   });
 
   it("uses the displayed start time of a voice prompt persisted much later", () => {
-    for (let i = 0; i < 20; i++) turn(i);
+    for (let i = 0; i < 40; i++) turn(i);
     const voice = createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "spoken", createdAt: at(100),
       metadata: JSON.stringify({ voice: true, voiceStartedAt: at(0, 4000).getTime() }) });
     const latest = runsRepo.findHistoryPage({ runId: "r" });
@@ -112,14 +120,13 @@ describe("conversation history pages", () => {
     expect(old.artifacts.map((a) => a.id)).toContain(voice.id);
   });
 
-  it("bounds log-only histories and handles empty conversations", () => {
+  it("loads complete promptless histories and handles empty conversations", () => {
     expect(runsRepo.findHistoryPage({ runId: "r" }).start).toBeNull();
     for (let i = 0; i < 900; i++) createRunArtifact(db, { runId: "r", kind: "log", content: `log-${i}`, createdAt: at(i) });
     const page = runsRepo.findHistoryPage({ runId: "r" });
-    expect(page.artifacts).toHaveLength(200);
-    expect(page.hasOlder).toBe(true);
-    const older = runsRepo.findHistoryPage({ runId: "r", direction: "older", cursor: page.start! });
-    expect(older.artifacts.length).toBeLessThanOrEqual(600);
+    expect(page.artifacts).toHaveLength(900);
+    expect(page.hasOlder).toBe(false);
+    expect(page.hasNewer).toBe(false);
   });
 
   it("validates navigation inputs before querying", () => {

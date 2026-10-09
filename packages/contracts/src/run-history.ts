@@ -1,7 +1,7 @@
 import type { ReadRunHistoryPayload, RunHistoryCursor } from "./runs";
 
-const PAGE_TURNS = 10;
-const WINDOW_TURNS = 30;
+const PAGE_TURNS = 20;
+const WINDOW_TURNS = 60;
 
 export function compareHistoryCursors(a: RunHistoryCursor, b: RunHistoryCursor): number {
   return a.timestamp - b.timestamp || Number(a.source === "tool") - Number(b.source === "tool") || a.id - b.id;

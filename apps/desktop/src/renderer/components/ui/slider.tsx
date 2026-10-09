@@ -22,6 +22,9 @@ interface SliderBaseProps {
   showValue?: boolean;
   formatValue?: (value: number) => string;
   disabled?: boolean;
+  orientation?: "horizontal" | "vertical";
+  className?: string;
+  autoFocus?: boolean;
 }
 
 export type SliderProps = SliderBaseProps &
@@ -44,9 +47,13 @@ export function Slider({
   showValue = true,
   formatValue,
   disabled = false,
+  orientation = "horizontal",
+  className,
+  autoFocus,
   "aria-label": ariaLabel,
 }: SliderProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const vertical = orientation === "vertical";
   const containerRef = useRef<HTMLDivElement>(null);
   // The commit fires from a window listener installed once per drag, so it
   // closes over the render that started the drag. Both the value it reports and
@@ -101,13 +108,23 @@ export function Slider({
 
   const lineOpacity =
     percentage > 90 ? 0 : percentage > 75 ? (90 - percentage) / 15 : 1;
+  const valueDisplay = showValue && (
+    <Text as="div" size="xs" weight="medium"
+      className={vertical ? "shrink-0 tabular-nums" : "absolute inset-y-0 right-2 flex items-center tabular-nums"}>
+      {typeof displayValue === "number" ? (
+        <NumberFlow value={displayValue} format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
+      ) : displayValue}
+    </Text>
+  );
 
   return (
-    <div className="space-y-3">
+    <div className={cn(vertical ? "flex h-32 w-fit flex-col items-center gap-2" : "space-y-3", className)}>
+      {vertical && minLabel && <Text size="xs">{minLabel}</Text>}
       <div
         ref={containerRef}
         className={cn(
-          "relative w-full min-w-50 overflow-hidden rounded-[10px] px-3 py-3.5",
+          "relative overflow-hidden rounded-[10px]",
+          vertical ? "min-h-0 w-7 flex-1 px-3.5 py-3" : "w-full min-w-50 px-3 py-3.5",
           "bg-primary-950/5 dark:bg-primary/5 glass-outline",
           "flex items-center justify-between text-sm text-primary-900 dark:text-primary",
           "has-focus-visible:ring-2 has-focus-visible:ring-accent has-focus-visible:ring-offset-2",
@@ -120,33 +137,20 @@ export function Slider({
             handful of positions, which reads as stuttering rather than
             tracking; a short duration keeps it attached to the cursor. */}
         <div
-          className={`absolute inset-y-0 left-0 rounded-lg bg-primary-950/10 dark:bg-primary/10 transition-[width] ease-out ${isDragging ? "duration-100" : "duration-150"}`}
-          style={{ width: `${percentage}%` }}
+          className={cn("absolute rounded-lg bg-primary-950/10 dark:bg-primary/10 ease-out",
+            vertical ? "inset-x-0 top-0 transition-[height]" : "inset-y-0 left-0 transition-[width]",
+            isDragging ? "duration-100" : "duration-150")}
+          style={vertical ? { height: `${percentage}%` } : { width: `${percentage}%` }}
         >
-          {/* Vertical line inside percentage bar */}
+          {/* Position marker inside the fill. */}
           <div
-            className="absolute inset-y-0 right-2 h-4 rounded-full top-1.5 w-[1.5px] bg-primary-950/20 dark:bg-primary/50 transition-opacity duration-150"
+            className={cn("absolute rounded-full bg-primary-950/20 dark:bg-primary/50 transition-opacity duration-150",
+              vertical ? "inset-x-0 bottom-2 mx-auto h-[1.5px] w-4" : "inset-y-0 right-2 top-1.5 h-4 w-[1.5px]")}
             style={{ opacity: lineOpacity }}
           />
         </div>
 
-        {showValue && (
-          <Text
-            as="div"
-            size="xs"
-            weight="medium"
-            className="absolute inset-y-0 right-2 flex items-center tabular-nums"
-          >
-            {typeof displayValue === "number" ? (
-              <NumberFlow
-                value={displayValue}
-                format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }}
-              />
-            ) : (
-              displayValue
-            )}
-          </Text>
-        )}
+        {!vertical && valueDisplay}
 
         <input
           id={id}
@@ -156,18 +160,23 @@ export function Slider({
           step={step}
           value={value}
           aria-label={ariaLabel ?? label}
+          aria-orientation={orientation}
           aria-valuetext={
             typeof displayValue === "string" ? displayValue : undefined
           }
           disabled={disabled}
+          autoFocus={autoFocus}
           onChange={handleChange}
           onMouseDown={handleMouseDown}
           onTouchStart={handleMouseDown}
           onKeyUp={handleKeyUp}
           className="absolute inset-0 size-full cursor-pointer opacity-0 focus:outline-none disabled:cursor-not-allowed"
+          style={vertical ? { writingMode: "vertical-lr", direction: "ltr" } : undefined}
         />
       </div>
-      {(minLabel || maxLabel) && (
+      {vertical && maxLabel && <Text size="xs">{maxLabel}</Text>}
+      {vertical && valueDisplay}
+      {!vertical && (minLabel || maxLabel) && (
         <div className="flex justify-between">
           {minLabel && <Text size="xs">{minLabel}</Text>}
           {maxLabel && <Text size="xs">{maxLabel}</Text>}

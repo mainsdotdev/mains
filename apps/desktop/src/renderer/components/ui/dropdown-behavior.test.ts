@@ -140,6 +140,26 @@ describe("DropdownMenu focus handoff", () => {
 });
 
 describe("DropdownMenu viewport placement", () => {
+  it.each([80, 850])("keeps right-anchored animation at x=%s while allowing an upward flip", (x) => {
+    vi.stubGlobal("innerWidth", 1_200);
+    vi.stubGlobal("innerHeight", 800);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(200);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(220);
+    const menuAt = (y: number, anchorTop: number) => createElement(
+      DropdownMenu,
+      { isOpen: true, position: { x, y, anchorTop }, origin: "right", onClose: () => undefined, "aria-label": "Card actions" },
+      createElement(DropdownMenuItem, { onClick: () => undefined }, "Open"),
+    );
+    const view = render(menuAt(100, 70));
+    const menu = screen.getByRole("menu", { name: "Card actions" });
+    expect(menu.style.transformOrigin).toBe("top right");
+    expect(menu.style.top).toBe("100px");
+
+    view.rerender(menuAt(760, 730));
+    expect(menu.style.transformOrigin).toBe("bottom right");
+    expect(menu.style.top).toBe("510px");
+  });
+
   it("flips a tall menu above an anchor near the bottom edge", () => {
     vi.stubGlobal("innerWidth", 1_200);
     vi.stubGlobal("innerHeight", 800);
@@ -179,7 +199,10 @@ describe("DropdownMenu viewport placement", () => {
     expect(menu.style.transformOrigin).toBe("bottom left");
   });
 
-  it("keeps a tall submenu above the viewport bottom edge", async () => {
+  it.each([
+    { anchorLeft: 200, submenuLeft: "304px", transformOrigin: "top left" },
+    { anchorLeft: 950, submenuLeft: "766px", transformOrigin: "top right" },
+  ])("keeps a tall submenu visible and animates from its anchor at x=$anchorLeft", async ({ anchorLeft, submenuLeft, transformOrigin }) => {
     vi.stubGlobal("innerWidth", 1_200);
     vi.stubGlobal("innerHeight", 600);
     vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
@@ -196,12 +219,12 @@ describe("DropdownMenu viewport placement", () => {
       function (this: HTMLElement) {
         if (this.getAttribute("role") === "menuitem") {
           return {
-            x: 200,
+            x: anchorLeft,
             y: 520,
             top: 520,
-            right: 300,
+            right: anchorLeft + 100,
             bottom: 550,
-            left: 200,
+            left: anchorLeft,
             width: 100,
             height: 30,
             toJSON: () => ({}),
@@ -258,10 +281,14 @@ describe("DropdownMenu viewport placement", () => {
 
     const submenu = screen.getByRole("menu", { name: "Move" });
     await waitFor(() => expect(submenu.style.top).toBe("332px"));
+    expect(submenu.style.left).toBe(submenuLeft);
+    expect(submenu.style.transformOrigin).toBe(transformOrigin);
 
     // Clicking an already-open hover submenu must not reset it to the initial
     // 160px height estimate.
     await user.click(trigger);
     await waitFor(() => expect(submenu.style.top).toBe("332px"));
+    expect(submenu.style.left).toBe(submenuLeft);
+    expect(submenu.style.transformOrigin).toBe(transformOrigin);
   });
 });

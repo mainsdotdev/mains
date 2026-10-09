@@ -15,6 +15,7 @@ import {
   Edit,
   OpenWith,
   Option,
+  Page,
   Pin,
   PinFilled,
   Trash,
@@ -42,6 +43,8 @@ interface ChatItemProps {
   isActive: boolean;
   isRecent?: boolean;
   onSelect: () => void;
+  /** Opens the linked Atlas Page with this chat selected. */
+  onOpenPage?: () => void;
   /** Reversible: the chat leaves the list but is restorable in Settings → Archive. */
   onArchive: () => void;
   /** Permanent: the run row and its turns go for good. Confirmed by the caller. */
@@ -60,6 +63,7 @@ export function ChatItem({
   isActive,
   isRecent = false,
   onSelect,
+  onOpenPage,
   onArchive,
   onDelete,
   onRename,
@@ -191,11 +195,26 @@ export function ChatItem({
             </span>
           </span>
         )}
-        <span className="relative min-w-0 flex-1">
+        <span className="relative flex min-w-0 flex-1 items-center gap-1.5">
           {isLive && !isRecent && (
             <span className="pointer-events-none absolute right-full top-1/2 mr-1.5 -translate-y-1/2">
               <AsciiSpinner variant={variant} kind="circle" />
             </span>
+          )}
+          {onOpenPage && !isEditing && (
+            <Button
+              variant="icon"
+              iconSize="xs"
+              tooltip="Open linked Atlas page"
+              tooltipPosition="right"
+              aria-label="Open page"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenPage();
+              }}
+            >
+              <Page aria-hidden="true" />
+            </Button>
           )}
           {isEditing ? (
             <Input
@@ -230,7 +249,7 @@ export function ChatItem({
               as="span"
               size="s"
               tone={isActive ? "contrast" : "default"}
-              className="block min-w-0"
+              className="block min-w-0 flex-1"
             >
               <AnimatedTitle title={label} className="block truncate" />
             </Text>

@@ -9,7 +9,7 @@ import {
   useReducedMotion,
 } from "motion/react";
 import { AsciiSpinner, Button } from "@/components/ui";
-import { Chat, Minus } from "@/components/ui/icons";
+import { Mains, Minus } from "@/components/ui/icons";
 import type { FloatingChatMode } from "../../../../shared/floating-chat";
 
 const CHAT_BAR_SIZE = 48;
@@ -364,7 +364,7 @@ export function FloatingChatOverlay({
                   className="size-4"
                 />
               ) : (
-                <Chat className="size-5" />
+                <Mains className="size-5" />
               )}
             </Button>
           </m.div>

@@ -6,6 +6,7 @@ import {
   createProvider,
   createWorkspace,
   createRun,
+  createSpace,
   createRunTurn,
   createToolCall,
 } from "../../../test/factories";
@@ -159,6 +160,31 @@ describe("runsRepo", () => {
   });
 
   describe("findRecentRunsByExperience", () => {
+    it("filters Page and Space before limiting results, retaining older Page chats among unrelated recent runs", async () => {
+      const space = createSpace(db, { id: "page-space", providerId: "copilot_cli", mode: "work" });
+      const otherSpace = createSpace(db, { id: "other-space", name: "Other Space", providerId: "copilot_cli", mode: "work" });
+      createRun(db, { id: "old-page-chat", mode: "work", spaceId: space.id,
+        configSnapshot: JSON.stringify({ atlasPageId: "page-one" }), updatedAt: new Date("2026-01-01") });
+      createRun(db, { id: "other-page", mode: "work", spaceId: space.id,
+        configSnapshot: JSON.stringify({ atlasPageId: "page-two" }), updatedAt: new Date("2026-10-01") });
+      createRun(db, { id: "other-space", mode: "work", spaceId: otherSpace.id,
+        configSnapshot: JSON.stringify({ atlasPageId: "page-one" }), updatedAt: new Date("2026-10-02") });
+      createRun(db, { id: "ordinary-chat", mode: "work", spaceId: space.id, updatedAt: new Date("2026-10-03") });
+      const result = await runsRepo.findRecentRunsByExperience({ accountId: "default", providerId: "copilot_cli",
+        mode: "work", spaceId: space.id, atlasPageId: "page-one", limit: 1 });
+      expect(result.map((run) => run.id)).toEqual(["old-page-chat"]);
+    });
+
+    it("restores the most recently used Page chat even when an older chat is pinned", async () => {
+      const configSnapshot = JSON.stringify({ atlasPageId: "page-one" });
+      createRun(db, { id: "pinned-old-page-chat", mode: "work", configSnapshot,
+        updatedAt: new Date("2026-01-01"), pinnedAt: new Date("2026-10-01") });
+      createRun(db, { id: "latest-page-chat", mode: "work", configSnapshot, updatedAt: new Date("2026-10-02") });
+      const result = await runsRepo.findRecentRunsByExperience({ accountId: "default", providerId: "copilot_cli",
+        mode: "work", atlasPageId: "page-one", limit: 1 });
+      expect(result.map((run) => run.id)).toEqual(["latest-page-chat"]);
+    });
+
     it("scopes rows by account, provider, mode, and archive state", async () => {
       createAccount(db, { id: "other" });
       createRun(db, {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "@/components/ui";
+import { Document, Picture } from "@/components/ui/icons";
 import { useLocation, useNavigate } from "react-router-dom";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { ProviderVariant } from "@/lib/provider-variants";
@@ -59,6 +60,7 @@ import { floatingChatRunStatus } from "../lib/floating-chat-run-status";
 import { store } from "@/lib/redux";
 import { baseApi } from "@/lib/redux/api/baseApi";
 import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
+import { addComposerUploads } from "@/features/workspace/lib/composer-uploads";
 import { deserializeBrowserChatUploads } from "@/features/workspace/lib/upload-bridge";
 import type { UploadedFile } from "@/components/ui";
 import type { BrowserChatUpload } from "../../../../shared/browser-chat-window";
@@ -671,6 +673,10 @@ export function WorkspaceProviderPage({
     onModeChange: (mode: "queue" | "steer") => { void window.api.browserChat.postAction({ type: "queueAction", ownerKey: browserOwnerKey, action: mode === "queue" ? "queueMode" : "steerMode" }); },
     onReorder: (orderedIds: string[]) => { void window.api.browserChat.postAction({ type: "queueReorder", ownerKey: browserOwnerKey, orderedIds }); },
   } : ws.runQueue;
+  const [isChatFileDragOver, setIsChatFileDragOver] = useState(false);
+  const chatFileDragDepth = useRef(0);
+  const chatDropEnabled = !reviewVisible && !floatingPanel.isExpanded && !ws.isEmptyStatePending &&
+    (useCenteredPromptLayout || (!!ws.activeRunId && ws.activeTab === ws.activeRunId));
   const browserComposer = (browserChatOnly || !floatingPanel.nativeOverlay) && onboardingCompleted && !ws.isEmptyStatePending ? (
     <WorkspaceInput
       runQueue={browserRunQueue}
@@ -787,7 +793,48 @@ export function WorkspaceProviderPage({
       className={`relative flex flex-col h-full ${routeTopRounding} overflow-hidden`}
     >
       {/* Separate painted panes leave the translucent shell visible between chat and terminal. */}
-      <div className="flex min-h-0 flex-1 flex-col rounded-b-2xl bg-primary dark:bg-primary-950">
+      <div
+        className="relative flex min-h-0 flex-1 flex-col rounded-b-2xl bg-primary dark:bg-primary-950"
+        onDragEnter={chatDropEnabled ? (event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          chatFileDragDepth.current += 1;
+          if (chatFileDragDepth.current === 1) setIsChatFileDragOver(true);
+        } : undefined}
+        onDragLeave={chatDropEnabled ? () => {
+          chatFileDragDepth.current = Math.max(0, chatFileDragDepth.current - 1);
+          if (chatFileDragDepth.current === 0) setIsChatFileDragOver(false);
+        } : undefined}
+        onDragOver={chatDropEnabled ? (event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        } : undefined}
+        onDropCapture={chatDropEnabled ? () => {
+          chatFileDragDepth.current = 0;
+          setIsChatFileDragOver(false);
+        } : undefined}
+        onDrop={chatDropEnabled ? (event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          addComposerUploads(event.dataTransfer.files, ws.uploadedFiles, ws.setUploadedFiles);
+        } : undefined}
+      >
+      {chatDropEnabled && isChatFileDragOver && (
+        <div className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center rounded-b-2xl bg-primary-50/85 px-6 text-center text-primary-950 dark:bg-primary-950/85 dark:text-white" role="status">
+          <div className="relative mb-5 h-16 w-22" aria-hidden="true">
+            <div className="absolute left-2 top-2 flex size-11 -rotate-12 items-center justify-center rounded-xl bg-accent text-primary shadow-lg">
+              <Picture className="size-6" />
+            </div>
+            <div className="absolute right-2 top-0 flex size-11 rotate-12 items-center justify-center rounded-xl bg-primary-800 text-primary shadow-lg">
+              <Document className="size-6" />
+            </div>
+          </div>
+          <span className="text-xl font-semibold">Add files</span>
+          <span className="mt-2 text-sm text-primary-700 dark:text-primary-200">Drop a file here to attach it to the conversation</span>
+        </div>
+      )}
       {/* `content-inset` on the transcript and composer, but not on the
           terminal below them: the session box only covers the top-right of the
           content, so the terminal keeps the full width. */}

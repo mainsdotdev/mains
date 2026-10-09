@@ -27,6 +27,9 @@ import {
   installPluginForProvider,
   uninstallPluginForProvider,
   setPluginEnabledForProvider,
+  getCodexMemorySettingsForProvider,
+  setCodexMemorySettingForProvider,
+  resetCodexMemoriesForProvider,
   updatePluginForProvider,
   listConnectorsForProvider,
   startConnectorOAuthForProvider,
@@ -47,7 +50,7 @@ import {
   type ConnectorOAuthStartResult,
   type ConnectorOverview,
 } from "./adapters";
-import type { PluginScope } from "../../../shared/adapter.types";
+import type { CodexMemorySetting, CodexMemorySettings, PluginScope } from "../../../shared/adapter.types";
 import type {
   ConsumeRateLimitResetCreditOutcome,
   ConsumeRateLimitResetCreditParams,
@@ -325,6 +328,25 @@ export const providersService = {
   ): Promise<void> {
     const provider = await requireEnabledProvider(id);
     await setPluginEnabledForProvider(provider, pluginId, enabled);
+  },
+
+  async getCodexMemorySettings(id: string): Promise<CodexMemorySettings> {
+    const provider = await requireEnabledProvider(id);
+    return getCodexMemorySettingsForProvider(provider);
+  },
+
+  async setCodexMemorySetting(
+    id: string,
+    setting: CodexMemorySetting,
+    enabled: boolean,
+  ): Promise<void> {
+    const provider = await requireEnabledProvider(id);
+    await setCodexMemorySettingForProvider(provider, setting, enabled);
+  },
+
+  async resetCodexMemories(id: string): Promise<void> {
+    const provider = await requireEnabledProvider(id);
+    await resetCodexMemoriesForProvider(provider);
   },
 
   async updatePlugin(id: string, pluginId: string): Promise<void> {

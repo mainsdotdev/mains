@@ -68,11 +68,14 @@ if (process.versions.electron) {
     }
   }
   for (const { name } of sources) {
-    execFileSync(ictool, [path.join(iconsDir, name), '--export-image',
-      '--output-file', path.join(iconsDir, `${name.slice(0, -5)}.png`),
-      '--platform', 'macOS', '--rendition', 'Default',
-      '--width', '1024', '--height', '1024', '--scale', '1']);
+    for (const rendition of ['Default', 'Dark']) {
+      const suffix = rendition === 'Dark' ? '-dark' : '';
+      execFileSync(ictool, [path.join(iconsDir, name), '--export-image',
+        '--output-file', path.join(iconsDir, `${name.slice(0, -5)}${suffix}.png`),
+        '--platform', 'macOS', '--rendition', rendition,
+        '--width', '1024', '--height', '1024', '--scale', '1']);
+    }
   }
-  console.log(`Rendered ${sources.length} app icons from Icon Composer sources.`);
+  console.log(`Rendered light and dark appearances for ${sources.length} app icons from Icon Composer sources.`);
   execFileSync(require('electron'), [__filename], { stdio: 'inherit' });
 }

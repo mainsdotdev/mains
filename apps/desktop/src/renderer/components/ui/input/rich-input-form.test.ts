@@ -37,6 +37,27 @@ function hasDirectFormattingNewline(element: ParentNode): boolean {
 }
 
 describe("RichInputForm Markdown editing", () => {
+  it("retains an active editor's selection when autofocus is requested again", () => {
+    const ref = createRef<RichInputFormHandle>();
+    render(createElement(RichInputForm, {
+      ref, query: "Create a page about ", onQueryChange: vi.fn(), onSubmit: vi.fn(),
+    }));
+    const editor = screen.getByRole("textbox");
+    editor.focus();
+    const range = document.createRange();
+    range.setStart(editor.firstChild!, 7);
+    range.setEnd(editor.firstChild!, 13);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    act(() => ref.current!.focus({ caret: "end" }));
+
+    expect(selection.toString()).toBe("a page");
+    expect(selection.anchorOffset).toBe(7);
+    expect(selection.focusOffset).toBe(13);
+  });
+
   it("renders a contextual icon as part of the empty placeholder", () => {
     render(
       createElement(RichInputForm, {

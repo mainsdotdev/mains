@@ -1,3 +1,4 @@
+import { DEFAULT_MODE_ID, type ModeId } from "@mains/contracts/modes";
 import type {
   DriverOutcome,
   WorkRunEvent,
@@ -43,6 +44,7 @@ export interface CodexRunSession {
 }
 
 export type CodexActiveRunState = CodexEventRunState & {
+  mode: ModeId;
   subscribedThreadIds: Set<string>;
   aborted: boolean;
   timeoutError?: string;
@@ -62,6 +64,7 @@ interface CodexRunCoordinatorOptions {
 
 interface RegisterRunParams {
   runId: string;
+  mode?: ModeId;
   threadId: string | null;
   mainsCtx: MainsToolContext;
   subAgents?: CodexSubAgentRunMeta[];
@@ -237,6 +240,7 @@ export function createCodexRunCoordinator(
     if (threadId) sessionSubAgents.set(threadId, subAgents);
     activeRuns.set(runId, {
       ...state,
+      mode: params.mode ?? DEFAULT_MODE_ID,
       subscribedThreadIds: new Set(
         threadId ? [threadId] : [],
       ),

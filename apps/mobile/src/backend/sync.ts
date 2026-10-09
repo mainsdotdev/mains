@@ -448,6 +448,9 @@ export async function syncModels(
             supportsFastMode: model.supportsFastMode === true,
             sortOrder: index,
           })
+          // Macs up to 0.16 pass on Copilot's catalogue with every model twice;
+          // the first copy wins.
+          .onConflictDoNothing()
           .run();
       });
     }
@@ -769,9 +772,9 @@ export async function syncDiffSummary(
 const ARTIFACT_IMAGE_SIDE = 1200;
 
 /** An image artifact's pixels, as the Mac scales them for a phone. */
-export function readArtifactImage(transport: WsTransport, artifactId: number): Promise<ArtifactImage> {
+export function readArtifactImage(transport: WsTransport, artifactId: number, runId?: string): Promise<ArtifactImage> {
   return invoke<ArtifactImage>(transport, CHANNELS.runArtifacts.readImage, [
-    { artifactId, maxSide: ARTIFACT_IMAGE_SIDE },
+    { artifactId, ...(runId ? { runId } : {}), maxSide: ARTIFACT_IMAGE_SIDE },
   ]);
 }
 

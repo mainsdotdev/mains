@@ -1,5 +1,6 @@
 import { GenericTool } from "@/components/ui/icons";
 import {
+  ATLAS_PAGE_TOOLS,
   BUILTIN_TOOLS,
   DEFAULT_VERBS,
   VENDORS,
@@ -256,6 +257,14 @@ function humanizeToolName(toolName: string): string {
 function resolveToolImpl(toolName: string): ResolvedTool {
   const lower = toolName.toLowerCase();
 
+  // Exact app-owned names precede MCP vendors and loose Read/Create matching.
+  const atlasName = lower.replace(/^mcp__mains__/, "");
+  const atlas = ATLAS_PAGE_TOOLS.find((tool) => tool.aliases.includes(atlasName));
+  if (atlas) {
+    return { displayName: atlas.displayName, groupKey: atlas.groupKey,
+      groupLabel: atlas.displayName, category: atlas.category, icon: atlas.icon, isBuiltin: true };
+  }
+
   // Vendor prefix wins — `mcp__linear__list_issues` resolves cleanly even
   // though the builtin `search` substring is contained in it.
   const vendorHit = findVendor(lower);
@@ -308,13 +317,14 @@ const RESOLVE_CACHE_LIMIT = 500;
 /**
  * Resolve a tool name (or full RunEvent content) into a `ResolvedTool`. Order
  * of resolution:
- *   1) Vendor prefix match → MCP tool (verb/entity parsed)
- *   2) Generic `mcp__…` fallback for any unrecognized vendor — never touches
+ *   1) Exact Atlas operation, with or without the Mains MCP prefix
+ *   2) Vendor prefix match → MCP tool (verb/entity parsed)
+ *   3) Generic `mcp__…` fallback for any unrecognized vendor — never touches
  *      the builtin list, because substrings like `read`/`search`/`bash`
  *      legitimately appear inside MCP tool names (`gmail_read_email_thread`)
  *      and must not falsely match builtins.
- *   3) Built-in match (Read, Bash, …) — only for non-MCP names
- *   4) Plain unknown tool — keep the original name and use the Mcp icon
+ *   4) Built-in match (Read, Bash, …) — only for non-MCP names
+ *   5) Plain unknown tool — keep the original name and use the Mcp icon
  */
 export function resolveTool(rawNameOrContent: string): ResolvedTool {
   const toolName = extractToolName(rawNameOrContent);

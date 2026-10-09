@@ -1,6 +1,5 @@
 import {
   memo,
-  useMemo,
   useState,
   useEffect,
   useRef,
@@ -9,7 +8,7 @@ import {
 } from "react";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import type { EventGroup } from "../../lib/group-events";
-import { Code } from "@/components/ui/icons/space";
+import { Code, Globe } from "@/components/ui/icons/space";
 import {
   Picture,
   FileIconComponent,
@@ -29,6 +28,7 @@ import { useLazyGetAppsForFileQuery } from "@/lib/redux/api";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useCapabilities } from "@/lib/platform";
+import { useSaveToAtlas } from "@/features/atlas/hooks/use-save-to-atlas";
 import { DocumentArtifact } from "@/features/workspace/components/tools/document-artifact";
 import { ImageGenerationLoader } from "@/features/workspace/components/tools/image-generation-loader";
 import { VisualizationArtifact } from "@/features/workspace/components/tools/visualization-artifact";
@@ -94,45 +94,13 @@ function PromptImageAttachment({ attachment, runId, onPreview }: {
   );
 }
 
-const IMAGE_PATH_REGEX = /([~/]?[\w./-]+\.(?:png|jpe?g|webp|gif))\b/gi;
-
-function extractImagePaths(text: string): string[] {
-  if (!text) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const m of text.matchAll(IMAGE_PATH_REGEX)) {
-    const p = m[1];
-    if (!p || p.includes("://")) continue;
-    const idx = m.index ?? 0;
-    const before = text.slice(Math.max(0, idx - 12), idx);
-    if (before.includes("://")) continue;
-    if (seen.has(p)) continue;
-    seen.add(p);
-    out.push(p);
-  }
-  return out;
-}
-
-function resolveImagePath(
-  rawPath: string,
-  workspaceRoot?: string,
-): string | null {
-  if (!rawPath) return null;
-  if (rawPath.startsWith("~")) return rawPath;
-  if (rawPath.startsWith("/")) return rawPath;
-  if (!workspaceRoot) return null;
-  const sep = workspaceRoot.endsWith("/") ? "" : "/";
-  return `${workspaceRoot}${sep}${rawPath}`;
-}
-
 interface InfoGroupProps {
   group: EventGroup;
   runId?: string;
-  workspaceRootPath?: string;
   floatingChat?: boolean;
 }
 
-function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }: InfoGroupProps) {
+function InfoGroupImpl({ group, runId, floatingChat = false }: InfoGroupProps) {
   const event = group.events[0];
   const [previewAtt, setPreviewAtt] = useState<PromptPreview | null>(null);
   if (!event) return null;
@@ -345,12 +313,13 @@ function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }
         {images.length === 1 ? (
           <ImageArtifact
             key={images[0].absPath}
+            runId={runId}
             absPath={images[0].absPath}
             fileName={images[0].fileName}
             onPreview={setPreviewAtt}
           />
         ) : (
-          <ImageArtifactGallery images={images} onPreview={setPreviewAtt} />
+          <ImageArtifactGallery runId={runId} images={images} onPreview={setPreviewAtt} />
         )}
         {previewAtt && (
           <PromptPreviewModal preview={previewAtt} onClose={() => setPreviewAtt(null)} />
@@ -380,6 +349,7 @@ function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }
     return (
       <div className="overflow-hidden">
         <DocumentArtifact
+          runId={runId}
           absPath={absPath}
           fileName={fileName}
           docType={docType}
@@ -413,7 +383,6 @@ function InfoGroupImpl({ group, runId, workspaceRootPath, floatingChat = false }
         interrupted={event.metadata?.interrupted === true}
         previewAtt={previewAtt}
         onPreview={setPreviewAtt}
-        workspaceRootPath={workspaceRootPath}
       />
     );
   }
@@ -510,9 +479,11 @@ function AttachmentDocumentCard({
 }
 
 function ImageArtifactGallery({
+  runId,
   images,
   onPreview,
 }: {
+  runId?: string;
   images: Array<{ absPath: string; fileName: string }>;
   onPreview: (att: { name: string; dataUrl: string }) => void;
 }) {
@@ -551,6 +522,7 @@ function ImageArtifactGallery({
       <div className="mr-17 min-w-0 sm:mr-21">
         <ImageArtifact
           key={selected.absPath}
+          runId={runId}
           absPath={selected.absPath}
           fileName={selected.fileName}
           onPreview={onPreview}
@@ -628,6 +600,7 @@ function ImageGalleryThumbnail({
 }
 
 function ImageArtifact({
+  runId,
   absPath,
   fileName,
   onPreview,
@@ -636,9 +609,11 @@ function ImageArtifact({
   absPath: string;
   fileName: string;
   onPreview: (att: { name: string; dataUrl: string }) => void;
+  runId?: string;
   /** `gallery` fills the selected-image stage; `preview` keeps the single-image size. */
   variant?: "preview" | "gallery";
 }) {
+  const atlas = useSaveToAtlas();
   const url = useLocalImageUrl(absPath);
   const { revealInFolder } = useCapabilities();
   const [thumbFailed, setThumbFailed] = useState(false);
@@ -696,6 +671,9 @@ function ImageArtifact({
         <Mains className="size-4 shrink-0" />
         Show Image
       </DropdownMenuItem>
+      {runId && <DropdownMenuItem disabled={atlas.saving} onClick={() => { setMenuOpen(false); void atlas.save(runId, absPath); }}>
+        <Globe className="size-4 shrink-0" />Save to Atlas
+      </DropdownMenuItem>}
       {revealInFolder && (
         <DropdownMenuItem onClick={showInFinder}>
           <Finder className="size-4 shrink-0" />
@@ -774,80 +752,23 @@ function ImageArtifact({
   );
 }
 
-function InlineMarkdownImage({
-  abs,
-  name,
-  onPreview,
-  onError,
-}: {
-  abs: string;
-  name: string;
-  onPreview: (att: { name: string; dataUrl: string }) => void;
-  onError: () => void;
-}) {
-  const url = useLocalImageUrl(abs);
-  if (!url) return null;
-  return (
-    <Button
-      type="button"
-      onClick={() => onPreview({ name, dataUrl: url })}
-      className="block w-full overflow-hidden rounded-xl glass-surface cursor-pointer"
-      title={abs}
-    >
-      <img
-        src={url}
-        alt={name}
-        className="w-full max-h-120 object-contain"
-        loading="lazy"
-        onError={onError}
-      />
-    </Button>
-  );
-}
-
 function ArtifactBody({
   content,
   isStreaming,
   interrupted,
   previewAtt,
   onPreview,
-  workspaceRootPath,
 }: {
   content: string;
   isStreaming: boolean;
   interrupted: boolean;
   previewAtt: { name: string; dataUrl: string } | null;
   onPreview: (att: { name: string; dataUrl: string } | null) => void;
-  workspaceRootPath?: string;
 }) {
   // Bursty SDK chunks are revealed a few characters per frame so the text
   // flows instead of popping in chunk-sized jumps, including the final buffer.
   const displayContent = useSmoothText(content, isStreaming);
   const isRevealing = isStreaming || displayContent !== content;
-
-  const resolvedImages = useMemo(() => {
-    const out: Array<{ key: string; raw: string; abs: string; name: string }> =
-      [];
-    const seen = new Set<string>();
-    for (const raw of extractImagePaths(displayContent)) {
-      const abs = resolveImagePath(raw, workspaceRootPath);
-      if (!abs || seen.has(abs)) continue;
-      seen.add(abs);
-      out.push({ key: abs, raw, abs, name: raw.split("/").pop() ?? raw });
-    }
-    return out;
-  }, [displayContent, workspaceRootPath]);
-
-  // Track images whose load failed so we hide them instead of leaving a
-  // broken icon. The extractor pulls path-like substrings from the markdown,
-  // resolves them against the workspace root, and renders an <img> for each;
-  // when the file doesn't actually live there (codex saves to ~/.codex/…
-  // etc.) the protocol returns 404 and the browser falls back to a broken
-  // image glyph. Mirrors ImageArtifact's onError behavior.
-  const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
-  const visibleImages = resolvedImages.filter(
-    (img) => !failedImages.has(img.key),
-  );
 
   return (
     <div className="overflow-hidden">
@@ -855,30 +776,11 @@ function ArtifactBody({
         <AgentMarkdown
           className={isRevealing ? "streaming-text" : undefined}
           isStreaming={isRevealing || interrupted}
+          onImagePreview={onPreview}
         >
           {displayContent}
         </AgentMarkdown>
       </div>
-      {visibleImages.length > 0 && (
-        <div className="mt-3 flex flex-col gap-3">
-          {visibleImages.map(({ key, abs, name }) => (
-            <InlineMarkdownImage
-              key={key}
-              abs={abs}
-              name={name}
-              onPreview={onPreview}
-              onError={() =>
-                setFailedImages((prev) => {
-                  if (prev.has(key)) return prev;
-                  const next = new Set(prev);
-                  next.add(key);
-                  return next;
-                })
-              }
-            />
-          ))}
-        </div>
-      )}
       {previewAtt && (
         <ImagePreviewModal
           name={previewAtt.name}

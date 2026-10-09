@@ -1,9 +1,9 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { LazyMotion, domAnimation, m } from "motion/react";
 import { FileDiff, Virtualizer, useVirtualizer, type DiffLineAnnotation } from "@pierre/diffs/react";
-import { DEFAULT_VIRTUAL_FILE_METRICS } from "@pierre/diffs";
+import { DEFAULT_VIRTUAL_FILE_METRICS, type SelectedLineRange } from "@pierre/diffs";
 import type { ReviewComment } from "@mains/contracts/review-comments";
-import { Button, Text, toast } from "@/components/ui";
+import { Button, Text, Tooltip, toast } from "@/components/ui";
 import { ArrowUp, Chat, Refresh, FileIconComponent, Review } from "@/components/ui/icons";
 import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
 import { useGetLatestWorkspaceDiffQuery, useResyncWorkspaceDiffMutation } from "@/lib/redux/api";
@@ -13,15 +13,23 @@ import { DIFF_TYPOGRAPHY_STYLE, patchDiffOptions } from "@/lib/diff-style";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { useComposerContextActions, useComposerReviewComments } from "../hooks/use-composer-context";
 import { useReviewPanelTransition } from "../hooks/use-review-panel-transition";
-import { reviewFiles, reviewLineText, reviewCommentMatches, type ReviewDiffStyle, type ReviewFile } from "../lib/review-diff";
+import { reviewFiles, reviewLineRangeText, reviewCommentMatches, type ReviewDiffStyle, type ReviewFile } from "../lib/review-diff";
 import { useReviewFileNavigation, type ReviewFileNavigation, type ReviewFileTarget } from "../hooks/use-review-file-navigation";
 import { ReviewCommentCard, ReviewCommentEditor } from "./review-comment-card";
 import { InvertedCorner } from "./base-tab";
 import { ReviewDiffProvider } from "./review-diff-provider";
 import { ReviewToolbar } from "./review-toolbar";
 
-interface DraftLine { side: ReviewComment["side"]; lineNumber: number; lineText: string }
+interface DraftLine { side: ReviewComment["side"]; lineNumber: number; endLineNumber?: number; lineText: string }
 interface Annotation { comments: ReviewComment[]; draft?: DraftLine }
+
+const ReviewGutterTooltip = forwardRef<{ attach: (button: HTMLButtonElement) => void }>(function ReviewGutterTooltip(_props, ref) {
+  const [target, setTarget] = useState<HTMLButtonElement | null>(null);
+  useImperativeHandle(ref, () => ({ attach: setTarget }), []);
+  return target && <Tooltip target={target} position="right" autoHideAfter={4000} hideOnClick
+    className="max-w-72 whitespace-normal"
+    content="To comment on multiple lines, drag + from the first line to the last, or click the first line number, Shift-click the last, then click +." />;
+});
 
 const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPath, onCommentAdded, diffStyle, registerFile }: {
   file: ReviewFile;
@@ -33,8 +41,10 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
 }) {
   const section = useRef<HTMLElement>(null);
   const header = useRef<HTMLButtonElement>(null);
+  const gutterTooltip = useRef<{ attach: (button: HTMLButtonElement) => void }>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [draft, setDraft] = useState<DraftLine | null>(null);
+  const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(null);
   const reviewComments = useComposerReviewComments(workspaceId, file.path);
   const { add, update, remove } = useComposerContextActions();
   const isDark = useIsDarkMode();
@@ -49,14 +59,16 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
   const annotations = useMemo(() => {
     const grouped = new Map<string, DiffLineAnnotation<Annotation>>();
     for (const comment of comments) {
-      const key = `${comment.side}:${comment.lineNumber}`;
-      const annotation = grouped.get(key) ?? { side: comment.side, lineNumber: comment.lineNumber, metadata: { comments: [] } };
+      const lineNumber = comment.endLineNumber ?? comment.lineNumber;
+      const key = `${comment.side}:${lineNumber}`;
+      const annotation = grouped.get(key) ?? { side: comment.side, lineNumber, metadata: { comments: [] } };
       annotation.metadata.comments.push(comment);
       grouped.set(key, annotation);
     }
     if (draft) {
-      const key = `${draft.side}:${draft.lineNumber}`;
-      const annotation = grouped.get(key) ?? { side: draft.side, lineNumber: draft.lineNumber, metadata: { comments: [] } };
+      const lineNumber = draft.endLineNumber ?? draft.lineNumber;
+      const key = `${draft.side}:${lineNumber}`;
+      const annotation = grouped.get(key) ?? { side: draft.side, lineNumber, metadata: { comments: [] } };
       annotation.metadata.draft = draft;
       grouped.set(key, annotation);
     }
@@ -65,10 +77,15 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
   const additions = file.diff?.hunks.reduce((sum, hunk) => sum + hunk.additionLines, 0) ?? 0;
   const deletions = file.diff?.hunks.reduce((sum, hunk) => sum + hunk.deletionLines, 0) ?? 0;
   const status = file.diff?.type === "new" ? "A" : file.diff?.type === "deleted" ? "D" : file.diff?.prevName ? "R" : "M";
-  const openComment = (side: ReviewComment["side"], lineNumber: number) => {
+  const openComment = ({ start, end, side = "additions", endSide = side }: SelectedLineRange) => {
     if (!file.diff) return;
-    const lineText = reviewLineText(file.diff, side, lineNumber);
-    if (lineText !== undefined) setDraft({ side, lineNumber, lineText });
+    if (side !== endSide) { setSelectedLines(null); return; }
+    const lineNumber = Math.min(start, end);
+    const endLineNumber = Math.max(start, end);
+    const lineText = reviewLineRangeText(file.diff, side, lineNumber, endLineNumber);
+    if (lineText === undefined) { setSelectedLines(null); return; }
+    setSelectedLines({ start: lineNumber, end: endLineNumber, side });
+    setDraft({ side, lineNumber, ...(endLineNumber !== lineNumber ? { endLineNumber } : {}), lineText });
   };
   return <section ref={section} className="border-b border-primary-200/60 dark:border-primary-800/60" aria-label={`Changes in ${file.path}`}>
     <Button ref={header} type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}
@@ -82,8 +99,9 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
       <span className="text-primary-500">{status}</span>
       <span className="tabular-nums text-success">+{additions}</span><span className="tabular-nums text-danger">-{deletions}</span>
     </Button>
+    {!collapsed && <ReviewGutterTooltip ref={gutterTooltip} />}
     {!collapsed && (file.diff?.hunks.length ? <FileDiff fileDiff={file.diff}
-      style={DIFF_TYPOGRAPHY_STYLE} metrics={metrics} lineAnnotations={annotations} selectedLines={null}
+      style={DIFF_TYPOGRAPHY_STYLE} metrics={metrics} lineAnnotations={annotations} selectedLines={selectedLines}
       options={{ ...diffOptions, diffStyle, enableGutterUtility: true,
         unsafeCSS: `${diffOptions.unsafeCSS ?? ""}
           [data-utility-button] {
@@ -91,19 +109,27 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
             color: var(--color-${isDark ? "primary-950" : "primary"}) !important;
             border-radius: 12px !important;
           }`,
-        onGutterUtilityClick: ({ start, side = "additions" }) => {
-          openComment(side, start);
+        enableLineSelection: true,
+        onLineSelectionStart: setSelectedLines,
+        onLineSelectionChange: setSelectedLines,
+        onLineSelected: (range) => {
+          if (!range || !file.diff || range.side !== (range.endSide ?? range.side) ||
+            reviewLineRangeText(file.diff, range.side ?? "additions", Math.min(range.start, range.end), Math.max(range.start, range.end)) === undefined) {
+            setSelectedLines(null);
+          } else setSelectedLines(range);
         },
+        onGutterUtilityClick: openComment,
         onLineEnter: ({ numberElement, annotationSide, lineNumber }) => {
           const button = numberElement.querySelector<HTMLButtonElement>("[data-utility-button]");
           if (!button) return;
+          gutterTooltip.current?.attach(button);
           button.setAttribute("aria-label", `Add comment on ${annotationSide === "deletions" ? "L" : "R"}${lineNumber} in ${file.path}`);
           // The library handles pointer selection; keyboard and accessibility clicks need a click handler.
-          button.onclick = (event) => { if (event.detail === 0) openComment(annotationSide, lineNumber); };
+          button.onclick = (event) => { if (event.detail === 0) openComment({ start: lineNumber, end: lineNumber, side: annotationSide }); };
           button.onkeydown = (event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
-            openComment(annotationSide, lineNumber);
+            openComment({ start: lineNumber, end: lineNumber, side: annotationSide });
           };
         } }}
       renderAnnotation={({ metadata }) => <div className="space-y-2 px-3 py-3" style={{ fontFamily: "var(--font-sans)" }}>
@@ -111,14 +137,15 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
           onUpdate={(text) => update({ kind: "review", ...comment, comment: text })}
           onRemove={() => remove({ kind: "review", ...comment })} />)}
         {metadata.draft && <div className="glass-card max-w-2xl rounded-xl p-3">
-          <Text as="div" size="xs" tone="subtle" className="mb-2">Comment on {metadata.draft.side === "deletions" ? "L" : "R"}{metadata.draft.lineNumber}</Text>
-          <ReviewCommentEditor key={`${file.patchId}:${metadata.draft.side}:${metadata.draft.lineNumber}`}
-            onCancel={() => setDraft(null)} onSave={(comment) => {
+          <Text as="div" size="xs" tone="subtle" className="mb-2">Comment on {metadata.draft.side === "deletions" ? "L" : "R"}{metadata.draft.lineNumber}{metadata.draft.endLineNumber ? `-${metadata.draft.endLineNumber}` : ""}</Text>
+          <ReviewCommentEditor key={`${file.patchId}:${metadata.draft.side}:${metadata.draft.lineNumber}:${metadata.draft.endLineNumber ?? metadata.draft.lineNumber}`}
+            onCancel={() => { setDraft(null); setSelectedLines(null); }} onSave={(comment) => {
               const line = metadata.draft!;
               add({ kind: "review", id: crypto.randomUUID(), workspaceId, filePath: file.path,
                 absolutePath: `${rootPath.replace(/\/$/, "")}/${line.side === "deletions" ? file.diff?.prevName ?? file.path : file.path}`,
                 patchId: file.patchId, ...line, comment });
               setDraft(null);
+              setSelectedLines(null);
               onCommentAdded();
             }} />
         </div>}

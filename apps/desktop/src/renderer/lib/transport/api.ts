@@ -33,6 +33,9 @@ export const appApi = {
   account: {
     get: method<typeof window.api.account.get>(CHANNELS.account.get),
   },
+  atlas: {
+    get: method<typeof window.api.atlas.get>(CHANNELS.atlas.get),
+  },
   runs: {
     getHistory: method<typeof window.api.runs.getHistory>(CHANNELS.runs.getHistory),
     getById: method<typeof window.api.runs.getById>(CHANNELS.runs.getById),

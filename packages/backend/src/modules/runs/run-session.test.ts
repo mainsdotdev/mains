@@ -83,6 +83,10 @@ import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
 import { APP_WRITER, worktreeWrites } from "../git";
 import { registerEventSink } from "../../ipc-kit/event-bus";
+import {
+  createCodexEventMapper,
+  type CodexEventRunState,
+} from "../providers/adapters/codex-event-mapper";
 
 describe("RunSession", () => {
   beforeEach(() => {
@@ -141,6 +145,64 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   // Construction
   // ─────────────────────────────────────────────────────────────
+  it("keeps a late tool completion in the turn where the call started", async () => {
+    const session = makeSession();
+    await session.project({ type: "tool_call", toolName: "Write", input: { path: "first.md" },
+      metadata: { phase: "start", toolCallId: "late-tool" } });
+    const [first] = await runsRepo.findTurnsByRun("r1");
+    await session.project({ type: "artifact", kind: "user-prompt", content: "Follow up", metadata: { kind: "user-prompt" } });
+    await session.project({ type: "tool_call", toolName: "Write", output: { path: "first.md" },
+      metadata: { phase: "complete", toolCallId: "late-tool" } });
+    expect(await runsRepo.findToolCallsByRun("r1")).toEqual([expect.objectContaining({
+      metadata: expect.objectContaining({ turnId: first.id }), status: "done",
+    })]);
+  });
+  it("confirms existing split report blocks by provider identity without changing content, order or other messages", async () => {
+    const session = makeSession();
+    await flushBackground();
+    createRun(db, { id: "r2", accountId: "default", providerId: "copilot_cli", workspaceId: "w1" });
+    for (const [content, providerMessageId, isFromSubagent] of [
+      ["Progress", "progress", false], ["First part", "final", false],
+      ["Second part", "final", false], ["Child", "final", true],
+    ] as const) {
+      await session.project({ type: "artifact", kind: "report", content,
+        metadata: { providerMessageId, messagePhase: "commentary", isFromSubagent, source: "assistant.message" } });
+    }
+    await runsRepo.insertArtifact({ runId: "r2", kind: "report", content: "Other run",
+      metadata: { providerMessageId: "final", messagePhase: "commentary" } });
+    const before = await runsRepo.findArtifactsByRun("r1");
+    await session.project({ type: "message_phase", messageId: "final", phase: "final_answer" });
+    const after = await runsRepo.findArtifactsByRun("r1");
+    expect(after.map((artifact) => [artifact.id, artifact.content, artifact.createdAt]))
+      .toEqual(before.map((artifact) => [artifact.id, artifact.content, artifact.createdAt]));
+    expect(after.map((artifact) => artifact.metadata?.messagePhase))
+      .toEqual(["commentary", "final_answer", "final_answer", "commentary"]);
+    expect(after[1].metadata?.source).toBe("assistant.message");
+    expect((await runsRepo.findArtifactsByRun("r2"))[0].metadata?.messagePhase).toBe("commentary");
+  });
+
+  it("waits for a pending report insert before applying its final phase", async () => {
+    const session = makeSession();
+    await flushBackground();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = runsRepo.insertArtifact.bind(runsRepo);
+    const insert = vi.spyOn(runsRepo, "insertArtifact").mockImplementation(async (params) => {
+      await gate;
+      return original(params);
+    });
+    try {
+      const writing = session.project({ type: "artifact", kind: "report", content: "Final answer",
+        metadata: { providerMessageId: "final", messagePhase: "commentary" } });
+      const confirming = session.project({ type: "message_phase", messageId: "final", phase: "final_answer" });
+      release();
+      await Promise.all([writing, confirming]);
+      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({
+        content: "Final answer", metadata: expect.objectContaining({ providerMessageId: "final", messagePhase: "final_answer", turnId: expect.any(Number) }),
+      })]);
+    } finally { release(); insert.mockRestore(); }
+  });
+
   it("persists steer input inside the current turn without a new Git boundary", async () => {
     const session = makeSession({ initialPromptContent: "original" });
     await flushBackground();
@@ -1175,6 +1237,48 @@ describe("RunSession", () => {
   // finalize
   // ─────────────────────────────────────────────────────────────
   describe("finalize", () => {
+    it.each([false, true])("does not recover raw Codex follow-ups after their completed message (suggestions only: %s)", async (suggestionsOnly) => {
+      const session = makeSession();
+      await flushBackground();
+      const state: CodexEventRunState = {
+        threadId: "thread-parent", turnId: null, currentMessageItemId: null,
+        agentMessageBuffer: "", emittedAgentMessageItemIds: new Set(),
+        emittedAsyncQuestionItemIds: new Set(), emittedContextCompactionItemIds: new Set(),
+        startedContextCompactionItemIds: new Set(), pendingFlush: [],
+        mainsCtx: { workspaceId: "w1", rootPath: null, runId: "r1" },
+        fileChangeBuffers: new Map(), fileChangeItems: new Map(), commandOutputBuffers: new Map(),
+        emittedImagePaths: new Set(), emittedDocPaths: new Set(), emittedVisualizationKeys: new Set(),
+        runStartedAt: Date.now(), planBuffers: new Map(), lastPlanSnapshot: null, subAgents: new Map(),
+      };
+      const mapper = createCodexEventMapper({
+        getRunState: () => state, onReviewCompleted: vi.fn(),
+        onParentThreadStarted: vi.fn(), getDefaultModel: () => "gpt-fixture",
+      });
+      const directives = [
+        '- :codex-followup[Metni güçlendir]{prompt="CV’min metnini daha kısa ve güçlü şekilde yeniden yaz."}',
+        '- :codex-followup[Mobil role uyarla]{prompt="CV’mi mobil rol için düzenle."}',
+        '- :codex-followup[Etkiyi ortaya çıkar]{prompt="Deneyimlerim hakkında hedefli sorular sor."}',
+      ].join("\n");
+      const text = suggestionsOnly ? directives :
+        `CV için önerilerim.\n:codex-file-citation{purpose="source" path="/tmp/cv.pdf"}\n\n${directives}`;
+      for (const event of mapper.mapNotification("item/agentMessage/delta", {
+        threadId: "thread-parent", itemId: "message-final", delta: text,
+      }, "r1")) await session.project(event);
+      for (const event of mapper.mapNotification("item/completed", {
+        threadId: "thread-parent", item: { id: "message-final", type: "agentMessage", text },
+      }, "r1")) await session.project(event);
+      await session.finalize({ status: "succeeded" });
+
+      const artifacts = await runsRepo.findArtifactsByRun("r1");
+      expect(artifacts.filter((artifact) => artifact.kind === "report").map((artifact) => artifact.content))
+        .toEqual(suggestionsOnly ? [] : ["CV için önerilerim. [cv.pdf](/tmp/cv.pdf)"]);
+      expect(artifacts.slice(-3).map((artifact) => [artifact.kind, artifact.metadata?.label]))
+        .toEqual(["Metni güçlendir", "Mobil role uyarla", "Etkiyi ortaya çıkar"].map((label) => ["prompt_suggestion", label]));
+      if (!suggestionsOnly) {
+        expect(artifacts[0].metadata?.streamId).toEqual(expect.stringContaining("codex-msg-r1-message-final-"));
+      }
+    });
+
     it.each(["canceled", "failed", "succeeded"] as const)("preserves the latest streamed answer before publishing %s", async (status) => {
       const session = makeSession();
       await flushBackground();

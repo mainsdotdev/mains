@@ -47,7 +47,7 @@ import { selectActiveTool } from "../lib/select-active-tool";
 import { selectActiveCompaction } from "../lib/select-active-compaction";
 import { ProviderAuthNotice } from "./provider-auth-notice";
 import { classifyRunErrorKind } from "../../../../shared/run-errors";
-import { ArrowUp, Brain, Fork } from "@/components/ui/icons";
+import { ArrowUp, Brain, ChevronDown, Fork } from "@/components/ui/icons";
 import {
   useGetAppSettingsQuery,
   useGetProviderAccountInfoQuery,
@@ -59,6 +59,7 @@ import { dedupeGeneratedImageCopies } from "../lib/dedupe-generated-images";
 import { resolveModelDisplayName } from "@/lib/model-display";
 import { Button, CopyButton, Text, Tooltip } from "@/components/ui";
 import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
+import { formatAbsoluteDate } from "@/lib/format-date";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
 import { TurnChangesCard } from "./turn-changes-card";
 import { TranscriptWindow, type TranscriptWindowRow } from "./transcript-window";
@@ -67,6 +68,11 @@ import { createTranscriptViewCache, TranscriptItemScope, TranscriptViewProvider,
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
 }
+
+const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+});
 
 /**
  * Assistant-error codes an auth notice already speaks for. Anything else the
@@ -277,6 +283,13 @@ function SessionTimeBar({
           </Button>
         </>
       )}
+      {info.receivedAt && Number.isFinite(info.receivedAt.getTime()) && (
+        <Text as="span" size="xs" tone="faint" className="ml-1 shrink-0 select-none whitespace-nowrap tabular-nums opacity-0 transition-opacity group-hover/agent-turn:opacity-100 group-focus-within/agent-turn:opacity-100 motion-reduce:transition-none">
+          <time dateTime={info.receivedAt.toISOString()} title={formatAbsoluteDate(info.receivedAt)}>
+            {messageTimeFormatter.format(info.receivedAt)}
+          </time>
+        </Text>
+      )}
     </Text>
   );
 }
@@ -433,7 +446,6 @@ export function WorkspaceEvents({
   activeTab,
   currentEvents,
   isSubmitting = false,
-  currentWorkspace,
   eventsEndRef,
   issueTabs,
   signalTabs = [],
@@ -731,7 +743,7 @@ export function WorkspaceEvents({
               />
             )
           ) : (
-            <InfoGroup group={group} runId={activeRun?.id} workspaceRootPath={currentWorkspace?.rootPath} floatingChat={floatingChat} />
+            <InfoGroup group={group} runId={activeRun?.id} floatingChat={floatingChat} />
           )}
           {group.type !== "prompt_suggestion" && turnChangesCard}
           {group.type !== "prompt_suggestion" && sessionBarForThis && (
@@ -760,7 +772,6 @@ export function WorkspaceEvents({
       hasPendingPlanApproval,
       isRunning,
       floatingChat,
-      currentWorkspace?.rootPath,
       modelChanges,
       providerModels,
       activeCompaction,
@@ -773,10 +784,10 @@ export function WorkspaceEvents({
     const indices = row.kind === "flat" ? row.indices : row.lastSegment;
     const estimate = Math.min(1400, 64 + indices.reduce((total, index) => total + eventGroups[index].events.reduce((sum, event) => sum + Math.min(1000, 32 + Math.ceil(event.content.length / 90) * 20), 0), 0));
     return { id, groupIndex: row.kind === "flat" ? first : undefined, estimate,
-      render: () => <TranscriptItemScope id={id}>{row.kind === "flat"
+      render: () => <TranscriptItemScope id={id}><div className="group/agent-turn space-y-4">{row.kind === "flat"
         ? row.indices.map(renderGroupAt)
         : <AgentTurnMessagesAccordion {...row} renderGroup={renderGroupAt}
-          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}</TranscriptItemScope> };
+          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}</div></TranscriptItemScope> };
   }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
 
   const activeTool = useMemo(() => selectActiveTool(currentEvents), [currentEvents]);
@@ -850,14 +861,6 @@ export function WorkspaceEvents({
               {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction && (
                 <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />
               )}
-              {history?.historical && (
-                <div className="flex justify-center gap-4 text-xs text-secondary py-2">
-                  {history.hasNewer && <button type="button" disabled={history.loading}
-                    onClick={() => void pageHistory("newer")}>Load newer messages</button>}
-                  <button type="button" disabled={history.loading}
-                    onClick={() => void pageHistory("latest")}>Jump to latest</button>
-                </div>
-              )}
               <div ref={eventsEndRef} />
             </div>
             </div>
@@ -869,6 +872,19 @@ export function WorkspaceEvents({
             onSelect={scrollToTurn}
             transcriptRef={transcriptRef}
           />
+        )}
+        {hasRunContent && history?.historical && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-4 z-(--z-base) flex justify-center group-has-data-voice-orb-overlay/voice-chat:bottom-52 sm:group-has-data-voice-orb-overlay/voice-chat:bottom-68">
+            <Button
+              aria-label="Jump to latest"
+              tooltip="Jump to latest"
+              disabled={history.loading}
+              onClick={() => void pageHistory("latest")}
+              className="pointer-events-auto flex size-8 items-center justify-center rounded-full border border-primary-200 bg-primary text-primary-700 shadow-sm enabled:hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/40 dark:border-primary-800 dark:bg-primary-950 dark:text-primary-200 dark:enabled:hover:bg-primary-900"
+            >
+              <ChevronDown className="size-5" aria-hidden="true" />
+            </Button>
+          </div>
         )}
       </div>
       {/* Anchor fades to the chat surface beneath the floating voice orb. */}

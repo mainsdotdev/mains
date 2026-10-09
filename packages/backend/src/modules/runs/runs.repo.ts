@@ -52,12 +52,7 @@ export const runsRepo = {
       const last = db.get<RunHistoryCursor>(sql`SELECT * FROM (${timeline}) ORDER BY timestamp DESC, source DESC, id DESC LIMIT 1`);
       const anchors = db.all<RunHistoryCursor>(sql`SELECT ${artifactHistoryTime} AS timestamp, 'artifact' AS source, id
         FROM run_artifacts WHERE run_id = ${request.runId} AND kind = 'user-prompt' ORDER BY timestamp, id`);
-      if (!anchors.length && first) {
-        // Imported/log-only runs still have bounded, navigable pages.
-        anchors.push(...db.all<RunHistoryCursor>(sql`SELECT timestamp, source, id FROM (
-          SELECT *, ROW_NUMBER() OVER (ORDER BY timestamp, source, id) AS position FROM (${timeline})
-        ) WHERE (position - 1) % 20 = 0 ORDER BY timestamp, source, id`));
-      } else if (first && (!anchors[0] || compareCursor(first, anchors[0]) < 0)) anchors.unshift(first);
+      if (first && (!anchors[0] || compareCursor(first, anchors[0]) < 0)) anchors.unshift(first);
       const range = historyWindow(anchors, request);
       const artifacts = range.start ? db.select().from(runArtifacts).where(and(eq(runArtifacts.runId, request.runId),
         historyCut(artifactHistoryTime, "artifact", runArtifacts.id, range.start, false),
@@ -90,6 +85,12 @@ export const runsRepo = {
     return row ? { output: safeJsonParse(row.output) } : null;
   },
   // Originals have run-owned references, independent of transcript row deletion.
+  listAttachments(runId: string) {
+    return getDb().select({ attachment: runAttachments }).from(runAttachments)
+      .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))
+      .where(eq(runAttachmentRefs.runId, runId)).all().map((row) => row.attachment);
+  },
+
   findAttachment(runId: string, attachmentId: string) {
     return getDb().select({ attachment: runAttachments }).from(runAttachments)
       .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))
@@ -181,9 +182,15 @@ export const runsRepo = {
           eq(runs.accountId, options.accountId),
           eq(runs.mode, options.mode),
           eq(runs.isArchived, false),
+          options.spaceId ? eq(runs.spaceId, options.spaceId) : undefined,
+          options.atlasPageId
+            ? sql`json_extract(${runs.configSnapshot}, '$.atlasPageId') = ${options.atlasPageId}`
+            : undefined,
         ),
       )
-      .orderBy(desc(runs.pinnedAt), desc(runs.updatedAt))
+      .orderBy(...(options.atlasPageId
+        ? [desc(runs.updatedAt), desc(runs.createdAt), desc(runs.id)]
+        : [desc(runs.pinnedAt), desc(runs.updatedAt)]))
       .limit(options.limit ?? 50);
     return rows.map(mapRunRowToResponse);
   },
@@ -430,8 +437,9 @@ export const runsRepo = {
   // Run Artifact Operations
   // ─────────────────────────────────────────────────────────────
   /**
-   * Artifacts are insert-only, so `sinceId` (exclusive) yields just the rows
-   * appended since the caller's last sync. Ordered by id (= insertion order).
+   * Artifact bodies are append-only; report phases can be confirmed later.
+   * `sinceId` yields new rows only. History refreshes also read phase changes.
+   * Ordered by id (= insertion order).
    */
   async findArtifactsByRun(
     runId: string,
@@ -460,6 +468,15 @@ export const runsRepo = {
     return rows[0] ? mapArtifactRowToResponse(rows[0]) : null;
   },
 
+  findOutputArtifactKeys(runId: string): RunArtifactResponse[] {
+    return getDb().select({ ...getTableColumns(runArtifacts), blobData: sql<null>`NULL`,
+      content: sql<string | null>`CASE WHEN ${runArtifacts.kind} = 'user-prompt' THEN ${runArtifacts.content}
+        WHEN ${runArtifacts.kind} = 'report' AND length(trim(${runArtifacts.content})) > 0 THEN '[message]' ELSE NULL END` })
+      .from(runArtifacts).where(and(eq(runArtifacts.runId, runId),
+        sql`${runArtifacts.kind} IN ('report', 'user-prompt', 'image')`))
+      .orderBy(asc(runArtifacts.id)).all().map(mapArtifactRowToResponse);
+  },
+
   async insertArtifact(payload: CreateRunArtifactPayload): Promise<number> {
     const db = getDb();
     const result = await db
@@ -481,6 +498,22 @@ export const runsRepo = {
   async deleteArtifact(id: number): Promise<void> {
     const db = getDb();
     await db.delete(runArtifacts).where(eq(runArtifacts.id, id));
+  },
+
+  async setReportMessagePhase(
+    runId: string,
+    messageId: string,
+    phase: "commentary" | "final_answer",
+  ): Promise<boolean> {
+    const rows = await getDb().update(runArtifacts).set({
+      metadata: sql`json_patch(COALESCE(${runArtifacts.metadata}, '{}'), ${JSON.stringify({ messagePhase: phase })})`,
+    }).where(and(
+      eq(runArtifacts.runId, runId),
+      eq(runArtifacts.kind, "report"),
+      sql`json_extract(${runArtifacts.metadata}, '$.providerMessageId') = ${messageId}`,
+      sql`COALESCE(json_extract(${runArtifacts.metadata}, '$.isFromSubagent'), 0) = 0`,
+    )).returning({ id: runArtifacts.id });
+    return rows.length > 0;
   },
 
 
@@ -512,6 +545,17 @@ export const runsRepo = {
       .where(where)
       .orderBy(asc(toolCalls.id));
     return rows.map(mapToolCallRowToResponse);
+  },
+
+  // Tail selection needs ordering/identity, not every historical command body.
+  findOutputToolCallKeys(runId: string): ToolCallResponse[] {
+    return getDb().select({ ...getTableColumns(toolCalls), input: sql<null>`NULL`, output: sql<null>`NULL` })
+      .from(toolCalls).where(eq(toolCalls.runId, runId)).orderBy(asc(toolCalls.id)).all().map(mapToolCallRowToResponse);
+  },
+
+  findOutputToolCall(runId: string, id: number): ToolCallResponse | null {
+    const row = getDb().select().from(toolCalls).where(and(eq(toolCalls.runId, runId), eq(toolCalls.id, id))).get();
+    return row ? mapToolCallRowToResponse(row) : null;
   },
 
   async insertToolCall(payload: CreateToolCallPayload): Promise<number> {

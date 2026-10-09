@@ -6,6 +6,7 @@ export interface ReviewComment {
   absolutePath: string;
   side: "additions" | "deletions";
   lineNumber: number;
+  endLineNumber?: number;
   lineText: string;
   patchId: string;
   comment: string;
@@ -21,7 +22,9 @@ export function readReviewComments(value: unknown): ReviewComment[] {
       .every((key) => typeof record[key] === "string") ||
       !record.id || !record.filePath || !record.comment ||
       (record.side !== "additions" && record.side !== "deletions") ||
-      typeof record.lineNumber !== "number" || !Number.isSafeInteger(record.lineNumber) || record.lineNumber < 1) return [];
+      typeof record.lineNumber !== "number" || !Number.isSafeInteger(record.lineNumber) || record.lineNumber < 1 ||
+      (record.endLineNumber !== undefined && (typeof record.endLineNumber !== "number" ||
+        !Number.isSafeInteger(record.endLineNumber) || record.endLineNumber < record.lineNumber))) return [];
     return [{
       id: record.id as string,
       workspaceId: record.workspaceId as string,
@@ -29,6 +32,7 @@ export function readReviewComments(value: unknown): ReviewComment[] {
       absolutePath: record.absolutePath as string,
       side: record.side,
       lineNumber: record.lineNumber,
+      ...(record.endLineNumber !== undefined ? { endLineNumber: record.endLineNumber as number } : {}),
       lineText: record.lineText as string,
       patchId: record.patchId as string,
       comment: record.comment as string,

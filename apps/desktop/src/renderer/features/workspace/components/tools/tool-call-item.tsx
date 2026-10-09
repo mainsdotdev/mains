@@ -37,6 +37,7 @@ import { AskUserQuestionDisplay, type AskUserQuestionParams } from "./ask-user-q
 import { WebFetchDisplay, type WebFetchParams } from "./web-fetch-display";
 import { CuaReplDisplay, type CuaReplParams } from "./cua-repl-display";
 import { GenericToolDisplay } from "./generic-tool-display";
+import { AtlasReadPageDisplay, AtlasCreatePageDisplay, AtlasUpdatePageDisplay } from "./atlas-page-tool-display";
 import { TOOL_ROW_TEXT, ToolStatusProvider, eventToolStatus } from "./_shared";
 import {
   TaskProgressStrip,
@@ -127,7 +128,15 @@ function byDisplayName<T>(
 
 const summaryAs = (key: string) => (ctx: Ctx) => ({ [key]: ctx.summary }) as never;
 
+const ATLAS_DISPLAYS = { atlasreadpage: AtlasReadPageDisplay, atlascreatepage: AtlasCreatePageDisplay, atlasupdatepage: AtlasUpdatePageDisplay };
+
 const DISPATCH: Renderer[] = [
+  (ctx) => {
+    if (ctx.resolved.category !== "Atlas") return null;
+    const Display = ATLAS_DISPLAYS[ctx.resolved.groupKey as keyof typeof ATLAS_DISPLAYS];
+    return Display ? <Display params={ctx.metadataInput ?? ctx.params}
+      output={ctx.event.metadata?.output} isCompact={ctx.isCompact} /> : null;
+  },
   // Plan / ExitPlanMode — PlanDisplay needs the raw event, not params.
   (ctx) =>
     ctx.toolNameLower === "plan" ||

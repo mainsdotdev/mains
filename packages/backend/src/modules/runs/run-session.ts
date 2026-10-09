@@ -692,7 +692,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   async function projectToolCall(
     event: Extract<WorkRunEvent, { type: "tool_call" }>,
   ): Promise<void> {
-    const metadata = event.metadata as Record<string, unknown> | undefined;
+    if (initialTurnReady) await initialTurnReady;
+    const metadata = event.metadata;
     const phase = metadata?.phase;
     if (phase === "start") {
       const metadataToolCallId = metadata?.toolCallId;
@@ -710,9 +711,9 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         input: event.input,
         startedAt: event.startedAt ? new Date(event.startedAt) : new Date(),
       });
-      // A running voice tool must already belong to its work block. Waiting
-      // for completion metadata would move it in the transcript mid-execution.
-      if (metadata?.inputSource === "voice") await runsRepo.updateToolCall(toolCallId, { metadata });
+      // Capture ownership at start. A late completion must not move a call
+      // into the follow-up turn; metadata patches retain this turn ID.
+      await runsRepo.updateToolCall(toolCallId, { metadata: { ...metadata, turnId: activeTurnId } });
       const callKey = metadataToolCallId
         ? String(metadataToolCallId)
         : `${event.toolName}-${event.startedAt || Date.now()}`;
@@ -798,6 +799,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       return false;
     }
 
+    if (initialTurnReady) await initialTurnReady;
+    event = { ...event, metadata: { ...event.metadata, turnId: activeTurnId } };
     let reportKey: string | undefined;
     if (event.kind === "report" && event.metadata?.isFromSubagent !== true) {
       const streamId = event.streamId ?? event.metadata?.streamId;
@@ -979,6 +982,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         break;
       case "plan_update":
         didPersist = await projectPlanUpdate(event);
+        break;
+      case "message_phase":
+        // SDK listeners may publish the result before an earlier text insert
+        // finishes. Update the existing rows, preserving their identity/order.
+        await Promise.all([...artifactProjections]);
+        didPersist = await runsRepo.setReportMessagePhase(runId, event.messageId, event.phase);
         break;
       case "status":
         console.log(`[RunSession ${runId}] status event: ${event.status}`);

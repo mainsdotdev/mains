@@ -5,7 +5,7 @@ import { composerControls, stopComposerActivity } from "./composer-controls";
 const draft = {
   state: { phase: "idle" as const, runId: null, muted: false },
   runId: undefined, isNewRun: true, hasMessage: false, preparing: false, startDisabled: false,
-  isRunning: false, voiceEnabled: true, sendDisabled: false,
+  isRunning: false, canSendDuringRun: false, voiceEnabled: true, sendDisabled: false,
 };
 
 describe("single composer action", () => {
@@ -18,7 +18,7 @@ describe("single composer action", () => {
   });
 
   it.each(["connecting", "connected", "ending", "stop_failed", "error"] as const)("keeps the owning chat's primary voice action during %s, even with draft text", (phase) => {
-    const controls = composerControls({ ...draft, isNewRun: false, runId: "voice", hasMessage: true,
+    const controls = composerControls({ ...draft, isNewRun: false, runId: "voice", hasMessage: true, canSendDuringRun: true,
       state: { phase, runId: "voice", muted: true } });
     expect(controls.primary.kind).toBe("stop");
     expect(controls.voiceActive).toBe(true);
@@ -48,14 +48,32 @@ describe("single composer action", () => {
     expect(composerControls({ ...draft, startDisabled: true }).primary.disabled).toBe(true);
   });
 
-  it.each([false, true])("keeps a running turn's Stop with hasMessage=%s, regardless of queue labels or send readiness", (hasMessage) => {
+  it.each([false, true])("keeps a running turn's Stop with hasMessage=%s when its composer cannot queue messages", (hasMessage) => {
     expect(composerControls({ ...draft, isNewRun: false, runId: "work", isRunning: true,
       hasMessage, sendLabel: "Save queued message", startDisabled: true, sendDisabled: true }))
       .toMatchObject({ primary: { kind: "stop", label: "Stop run", disabled: false }, mute: undefined });
   });
 
+  it.each([false, true])("uses Send for a running turn's queued draft and respects sendDisabled=%s", (sendDisabled) => {
+    expect(composerControls({ ...draft, isNewRun: false, runId: "work", isRunning: true,
+      canSendDuringRun: true, hasMessage: true, sendLabel: "Queue message", sendDisabled }))
+      .toMatchObject({ primary: { kind: "send", label: "Queue message", disabled: sendDisabled }, mute: undefined });
+  });
+
+  it.each(["Save queued message", "Steer active turn"])("preserves the running draft action: %s", (sendLabel) => {
+    expect(composerControls({ ...draft, isNewRun: false, runId: "work", isRunning: true,
+      canSendDuringRun: true, hasMessage: true, sendLabel }))
+      .toMatchObject({ primary: { kind: "send", label: sendLabel, disabled: false } });
+  });
+
+  it("returns to Stop for an empty running draft even when queuing is supported", () => {
+    expect(composerControls({ ...draft, isNewRun: false, runId: "work", isRunning: true,
+      canSendDuringRun: true, hasMessage: hasComposerMessage("  ", 0, []) }))
+      .toMatchObject({ primary: { kind: "stop", label: "Stop run", disabled: false } });
+  });
+
   it.each(["connected", "ending", "stop_failed"] as const)("keeps the combined Stop enabled while voice is %s and work is running", (phase) => {
-    expect(composerControls({ ...draft, isNewRun: false, runId: "voice", isRunning: true,
+    expect(composerControls({ ...draft, isNewRun: false, runId: "voice", isRunning: true, canSendDuringRun: true,
       state: { phase, runId: "voice", muted: false }, hasMessage: true, sendDisabled: true }))
       .toMatchObject({ primary: { kind: "stop", disabled: false, label: "Stop voice chat and run" }, voiceActive: true });
   });

@@ -167,7 +167,7 @@ export function ChatActionsMenu({ aboveBrowser = false }: { aboveBrowser?: boole
         </DropdownMenuItem>
         <MenuSeparator />
         <DropdownMenuItem onClick={act(() => void forkChat(run))}>
-          <Fork className="size-3.5" />
+          <Fork className="size-3.5 rotate-90" />
           <span>Fork</span>
         </DropdownMenuItem>
         <DropdownMenuItem onClick={act(() => void copyLastMessage(run))}>

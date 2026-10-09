@@ -40,7 +40,7 @@ export function SidebarContent({
       className="flex-1 overflow-y-auto noscrollbar px-3"
       style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
     >
-      <div style={{ animation: "slide-fade-down 200ms cubic-bezier(0.23, 1, 0.32, 1)" }}>
+      <div >
         {itemType === "chat" ? (
           <SidebarChatList
             searchQuery={searchQuery}

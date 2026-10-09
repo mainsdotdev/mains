@@ -1,6 +1,8 @@
+import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
 import { contextBridge, ipcRenderer } from "electron";
-import type { RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
+import type { RunExperienceOptions, RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
 import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
@@ -322,6 +324,19 @@ const api = {
       ipcRenderer.invoke(CHANNELS.projects.listIssues, projectId),
   },
   // Non-developer Projects: organizational Collections for Work/Chat runs.
+  atlas: {
+    list: (options: AtlasListOptions) => ipcRenderer.invoke(CHANNELS.atlas.list, options),
+    generated: (options: AtlasGeneratedOptions) => ipcRenderer.invoke(CHANNELS.atlas.generated, options),
+    get: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.get, options),
+    createPage: (input: AtlasCreatePage) => ipcRenderer.invoke(CHANNELS.atlas.createPage, input),
+    savePage: (input: AtlasSavePage) => ipcRenderer.invoke(CHANNELS.atlas.savePage, input),
+    revisions: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.revisions, options),
+    restore: (input: AtlasIdentity & { version: number; expectedVersion: number }) => ipcRenderer.invoke(CHANNELS.atlas.restore, input),
+    saveFile: (input: AtlasSaveFile) => ipcRenderer.invoke(CHANNELS.atlas.saveFile, input),
+    uploadFile: (input: AtlasUploadFile) => ipcRenderer.invoke(CHANNELS.atlas.uploadFile, input),
+    update: (input: AtlasUpdateItem) => ipcRenderer.invoke(CHANNELS.atlas.update, input),
+    remove: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.remove, options),
+  },
   collections: {
     list: (options: {
       accountId: string;
@@ -460,6 +475,10 @@ const api = {
     getSkills: (id: string, workspacePath?: string) => ipcRenderer.invoke(CHANNELS.providers.getSkills, id, workspacePath),
     getRateLimits: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRateLimits, id),
     getRealtimeVoices: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getRealtimeVoices, id),
+    getCodexMemorySettings: (id: string) => ipcRenderer.invoke(CHANNELS.providers.getCodexMemorySettings, id),
+    setCodexMemorySetting: (id: string, setting: "memoriesEnabled" | "allowToolAssistedChats", enabled: boolean) =>
+      ipcRenderer.invoke(CHANNELS.providers.setCodexMemorySetting, id, setting, enabled),
+    resetCodexMemories: (id: string) => ipcRenderer.invoke(CHANNELS.providers.resetCodexMemories, id),
     consumeRateLimitResetCredit: (id: string, params: unknown) =>
       ipcRenderer.invoke(CHANNELS.providers.consumeRateLimitResetCredit, id, params),
     // Fired when the provider streams a fresh rate-limit snapshot during a run
@@ -659,7 +678,7 @@ const api = {
     listArchived: () => ipcRenderer.invoke(CHANNELS.runs.listArchived),
     /** Runs with a live session right now, across every space and workspace. */
     listActive: () => ipcRenderer.invoke(CHANNELS.runs.listActive),
-    listRecent: (options: { accountId: string; providerId: string; mode: ModeId; limit?: number }) =>
+    listRecent: (options: RunExperienceOptions) =>
       ipcRenderer.invoke(CHANNELS.runs.listRecent, options),
     getAll: (limit?: number) => ipcRenderer.invoke(CHANNELS.runs.getAll, limit),
     getById: (id: string) => ipcRenderer.invoke(CHANNELS.runs.getById, id),
@@ -709,6 +728,8 @@ const api = {
       workspaceId?: string;
       collectionId?: string;
       spaceId?: string;
+      /** Run-local experience; omitting it uses the Space's saved mode. */
+      mode?: ModeId;
       providerId: string;
       goal: string;
       model?: string;
@@ -1045,7 +1066,7 @@ const api = {
     homedir: os.homedir(),
   },
   imageProxy: {
-    sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.imageProxy.sign, absPath),
+    sign: (absPath: string, maxSide?: LocalImagePreviewSize) => ipcRenderer.invoke(CHANNELS.imageProxy.sign, absPath, maxSide),
   },
   documents: {
     sign: (absPath: string) => ipcRenderer.invoke(CHANNELS.documents.sign, absPath),
@@ -1111,9 +1132,19 @@ const api = {
       return () => ipcRenderer.removeListener(CHANNELS.app.flushAndQuit, listener);
     },
     onFullscreenChange: (callback: (isFullscreen: boolean) => void) => {
-      const listener = (_: any, isFullscreen: boolean) => callback(isFullscreen);
+      let acceptSnapshot = true;
+      const listener = (_: unknown, isFullscreen: boolean) => {
+        acceptSnapshot = false;
+        callback(isFullscreen);
+      };
       ipcRenderer.on(CHANNELS.app.fullscreenChange, listener);
+      // A remounted shell or a reload can miss the enter/leave event. Subscribe
+      // first, then seed the current state without overwriting a newer event.
+      void ipcRenderer.invoke(CHANNELS.app.getFullscreen).then((result: ServiceResponse<boolean>) => {
+        if (acceptSnapshot && result.success && typeof result.data === "boolean") callback(result.data);
+      }).catch(() => { /* Native changes remain available if the window closes during the read. */ });
       return () => {
+        acceptSnapshot = false;
         ipcRenderer.removeListener(CHANNELS.app.fullscreenChange, listener);
       };
     },

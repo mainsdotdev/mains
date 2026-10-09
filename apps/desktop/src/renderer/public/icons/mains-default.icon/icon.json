@@ -1,20 +1,32 @@
 {
   "fill" : {
-    "solid" : "extended-gray:1.00000,1.00000"
+    "automatic-gradient" : "display-p3:1.00000,1.00000,1.00000,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "glass" : false,
-          "hidden" : false,
-          "image-name" : "mains-default.png",
-          "name" : " mains-default",
+          "fill-specializations" : [
+            {
+              "value" : {
+                "solid" : "display-p3:0.00000,0.00000,0.00000,1.00000"
+              }
+            },
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "display-p3:0.92226,0.92226,0.92226,1.00000"
+              }
+            }
+          ],
+          "glass" : true,
+          "image-name" : "asdasd 2.svg",
+          "name" : "mains-default",
           "position" : {
-            "scale" : 1,
+            "scale" : 1.05,
             "translation-in-points" : [
               0,
-              -0.5
+              0
             ]
           }
         }

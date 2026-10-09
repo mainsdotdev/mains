@@ -64,6 +64,7 @@ import {
   registerWorkspaceDialogIpc,
   unregisterWorkspaceDialogIpc,
 } from "./modules/workspace/workspace.dialog.ipc";
+import { registerAtlasIpc, unregisterAtlasIpc } from "@mains/backend/modules/atlas";
 import { registerRunsIpc, unregisterRunsIpc, configureRunNotificationSink, startAttachmentMaintenance, stopAttachmentMaintenance } from "@mains/backend/modules/runs";
 import { createElectronRunNotificationSink } from "./modules/runs/run-notifications";
 import { runSessionRegistry } from "@mains/backend/modules/runs";
@@ -841,6 +842,7 @@ async function initializeApp() {
     registerWorkspaceDialogIpc();
     registerProjectsIpc();
     registerCollectionsIpc();
+    registerAtlasIpc();
     registerRunsIpc();
     startAttachmentMaintenance();
     registerFileExplorerIpc();
@@ -1020,6 +1022,11 @@ async function initializeApp() {
     ipcMain.handle(CHANNELS.app.quit, () => {
       app.quit();
     });
+    // Read this renderer's native window; chrome state stays on the local shell.
+    ipcMain.handle(CHANNELS.app.getFullscreen, (event) => ({
+      success: true,
+      data: BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false,
+    }));
     registerWindowRequestIpc();
     registerThemeSourceIpc();
     registerOnboardingWindowIpc();
@@ -1194,6 +1201,7 @@ async function cleanupApp() {
     unregisterWorkspaceDialogIpc();
     unregisterProjectsIpc();
     unregisterCollectionsIpc();
+    unregisterAtlasIpc();
     await stopAttachmentMaintenance();
     unregisterRunsIpc();
     unregisterFileExplorerIpc();
@@ -1234,6 +1242,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.app.setUnsavedChanges);
     ipcMain.removeHandler(CHANNELS.app.setMenuBarIconVisible);
     ipcMain.removeHandler(CHANNELS.app.quit);
+    ipcMain.removeHandler(CHANNELS.app.getFullscreen);
     unregisterWindowRequestIpc();
     unregisterThemeSourceIpc();
     unregisterOnboardingWindowIpc();

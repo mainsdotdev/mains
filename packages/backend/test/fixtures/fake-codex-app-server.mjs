@@ -16,6 +16,9 @@ if (process.argv.includes("--version")) {
 const logPath = process.env.MAINS_CODEX_FIXTURE_LOG;
 let nextThreadId = 1;
 const activeThreads = new Set();
+let nextDynamicToolId = 1000;
+const pendingDynamicTools = new Map();
+const memoryConfig = { features: { memories: false }, memories: null };
 
 function log(message) {
   if (!logPath) return;
@@ -119,7 +122,17 @@ input.on("line", (line) => {
   const message = JSON.parse(line);
   log(message);
 
-  if (!("method" in message) || !("id" in message)) return;
+  if (!("method" in message) || !("id" in message)) {
+    const pending = pendingDynamicTools.get(message.id);
+    if (pending) {
+      pendingDynamicTools.delete(message.id);
+      notify("turn/completed", {
+        threadId: pending.threadId,
+        turn: { id: pending.turnId, items: [], status: "completed", error: null },
+      });
+    }
+    return;
+  }
 
   const { id, method, params = {} } = message;
   if (process.env.MAINS_CODEX_FIXTURE_HANG_METHOD === method) return;
@@ -253,6 +266,19 @@ input.on("line", (line) => {
           threadId: params.threadId,
           turn: { id: turnId, items: [], status: "inProgress", error: null },
         });
+        if (prompt.startsWith("dynamic tool ")) {
+          const toolId = nextDynamicToolId++;
+          pendingDynamicTools.set(toolId, { threadId: params.threadId, turnId });
+          send({
+            jsonrpc: "2.0", id: toolId, method: "item/tool/call",
+            params: {
+              threadId: params.threadId, turnId, callId: `call-${toolId}`,
+              tool: prompt.slice("dynamic tool ".length),
+              arguments: { pageId: "page-1", expectedVersion: 3, markdown: "Updated page" },
+            },
+          });
+          return;
+        }
         if (prompt.includes("active subagent")) {
           const childThreadId = `${params.threadId}-child`;
           notify("thread/started", {
@@ -899,13 +925,39 @@ input.on("line", (line) => {
       respond(id, {});
       break;
 
+    case "config/read":
+      if (process.env.MAINS_CODEX_FIXTURE_MEMORY_READ_UNSUPPORTED === "1") {
+        respondError(id, -32601, "Method not found: config/read");
+        break;
+      }
+      respond(id, { config: memoryConfig, origins: {} });
+      break;
+
     case "config/value/write":
+      if (process.env.MAINS_CODEX_FIXTURE_MEMORY_WRITE_UNSUPPORTED === "1" &&
+          (params.keyPath === "features.memories" || params.keyPath === "memories.disable_on_external_context")) {
+        respondError(id, -32601, "Method not found: config/value/write");
+        break;
+      }
+      if (params.keyPath === "features.memories") {
+        memoryConfig.features.memories = params.value;
+      } else if (params.keyPath === "memories.disable_on_external_context") {
+        memoryConfig.memories = { disable_on_external_context: params.value };
+      }
       respond(id, {
         status: "ok",
         version: "1",
         filePath: "/tmp/mains-test-codex-home/config.toml",
         overriddenMetadata: null,
       });
+      break;
+
+    case "memory/reset":
+      if (process.env.MAINS_CODEX_FIXTURE_MEMORY_RESET_UNSUPPORTED === "1") {
+        respondError(id, -32601, "Method not found: memory/reset");
+        break;
+      }
+      respond(id, {});
       break;
 
     case "mcpServer/resource/read":
