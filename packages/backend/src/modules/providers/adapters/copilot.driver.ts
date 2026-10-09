@@ -949,11 +949,14 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         const content = String(payload.content ?? "").trim();
         if (!content) return null;
         const streamId = assistantStreamId(payload, runId, "report");
+        const providerMessageId = payload.apiCallId || payload.messageId;
         return {
           type: "artifact",
           kind: "report",
           content,
-          metadata: { source: "assistant.message", ...(streamId ? { streamId } : {}) },
+          metadata: { source: "assistant.message", ...(streamId ? { streamId } : {}),
+            ...(typeof providerMessageId === "string" && providerMessageId
+              ? { providerMessageId, messagePhase: "commentary" } : {}) },
         };
       }
 
@@ -1539,6 +1542,14 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           });
         }
 
+        // sendAndWait returns the last main-agent message after session.idle;
+        // assistant.turn_end only closes one model call inside the tool loop.
+        const payload = result ? getPayload(result) : {};
+        const messageId = payload.apiCallId || payload.messageId;
+        if (!signal.aborted && typeof messageId === "string" && messageId &&
+          typeof payload.content === "string" && payload.content.trim()) {
+          await onEvent({ type: "message_phase", messageId, phase: "final_answer" });
+        }
         return buildSuccessOutcome(result, cs.runId);
       } catch (error) {
         await emitPendingToolInterruptions(onEvent);

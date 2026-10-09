@@ -341,6 +341,26 @@ describe("Copilot session settings and SDK callbacks", () => {
   });
 
   describe("streaming", () => {
+    it("confirms only the response returned after idle, including all chunks from its API call", async () => {
+      sdk.events = [
+        { type: "assistant.message", data: { messageId: "progress", apiCallId: "call-1", content: "Working" } },
+        { type: "assistant.turn_end", data: { turnId: "turn-1" } },
+        { type: "assistant.message", data: { messageId: "part-1", apiCallId: "call-2", content: "First part" } },
+        { type: "assistant.message", data: { messageId: "part-2", apiCallId: "call-2", content: "Second part" } },
+      ];
+      sdk.result = sdk.events[3];
+      const current = driver();
+      const acquired = await current.createSession(request());
+      const events: WorkRunEvent[] = [];
+      await current.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+      expect(events.filter((event) => event.type === "message_phase"))
+        .toEqual([{ type: "message_phase", messageId: "call-2", phase: "final_answer" }]);
+      expect(events.filter((event) => event.type === "artifact" && event.kind === "report"))
+        .toEqual(["call-1", "call-2", "call-2"].map((providerMessageId) => expect.objectContaining({
+          metadata: expect.objectContaining({ providerMessageId, messagePhase: "commentary" }),
+        })));
+    });
+
     it("accumulates interleaved messages independently and reconciles corrected final text by identity", async () => {
       sdk.events = [
         { type: "assistant.message_delta", ephemeral: true, data: { messageId: "a", deltaContent: "Mer" } },
@@ -361,8 +381,8 @@ describe("Copilot session settings and SDK callbacks", () => {
         ["copilot-msg-run-fast-b", "Other text"], ["copilot-msg-run-fast-b", "Other text"],
       ]);
       expect(artifacts.filter((event) => !event.ephemeral)).toEqual([
-        expect.objectContaining({ kind: "report", content: "Merhaba!", metadata: { source: "assistant.message", streamId: "copilot-msg-run-fast-a" } }),
-        expect.objectContaining({ kind: "report", content: "Other text", metadata: { source: "assistant.message", streamId: "copilot-msg-run-fast-b" } }),
+        expect.objectContaining({ kind: "report", content: "Merhaba!", metadata: expect.objectContaining({ source: "assistant.message", streamId: "copilot-msg-run-fast-a" }) }),
+        expect.objectContaining({ kind: "report", content: "Other text", metadata: expect.objectContaining({ source: "assistant.message", streamId: "copilot-msg-run-fast-b" }) }),
       ]);
     });
 

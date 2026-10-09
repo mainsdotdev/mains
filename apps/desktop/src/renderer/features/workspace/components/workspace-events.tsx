@@ -446,7 +446,6 @@ export function WorkspaceEvents({
   activeTab,
   currentEvents,
   isSubmitting = false,
-  currentWorkspace,
   eventsEndRef,
   issueTabs,
   signalTabs = [],
@@ -744,7 +743,7 @@ export function WorkspaceEvents({
               />
             )
           ) : (
-            <InfoGroup group={group} runId={activeRun?.id} workspaceRootPath={currentWorkspace?.rootPath} floatingChat={floatingChat} />
+            <InfoGroup group={group} runId={activeRun?.id} floatingChat={floatingChat} />
           )}
           {group.type !== "prompt_suggestion" && turnChangesCard}
           {group.type !== "prompt_suggestion" && sessionBarForThis && (
@@ -773,7 +772,6 @@ export function WorkspaceEvents({
       hasPendingPlanApproval,
       isRunning,
       floatingChat,
-      currentWorkspace?.rootPath,
       modelChanges,
       providerModels,
       activeCompaction,

@@ -980,6 +980,12 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       case "plan_update":
         didPersist = await projectPlanUpdate(event);
         break;
+      case "message_phase":
+        // SDK listeners may publish the result before an earlier text insert
+        // finishes. Update the existing rows, preserving their identity/order.
+        await Promise.all([...artifactProjections]);
+        didPersist = await runsRepo.setReportMessagePhase(runId, event.messageId, event.phase);
+        break;
       case "status":
         console.log(`[RunSession ${runId}] status event: ${event.status}`);
         break;

@@ -442,7 +442,12 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
       continue;
     }
 
-    if (segments.length === 1) {
+    // Native final-answer evidence takes precedence over transport order. A
+    // final reply can span multiple text blocks, followed by later commentary.
+    const finalSegments = segments.filter((segment) => groups[segment.start].events.some((event) =>
+      event.type === "artifact" && event.metadata?.kind === "report" && event.metadata?.messagePhase === "final_answer",
+    ));
+    if (segments.length === 1 && finalSegments.length === 0) {
       rows.push({
         kind: "flat",
         indices: [...prefixIndices, ...expandIndexRange(segments[0]!)],
@@ -452,9 +457,13 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
 
     // Accordion only merges groups that start with `response`; tool blocks before the first
     // reply were emitted as separate "prefix" rows. Fold them into the first collapsed chunk.
-    const prevRanges = segments.slice(0, -1).map(expandIndexRange);
+    const visibleSegments = finalSegments.length > 0 ? finalSegments : [segments[segments.length - 1]!];
+    const visibleSet = new Set(visibleSegments);
+    const lastSegment = visibleSegments.flatMap(expandIndexRange);
+    const prevRanges = segments.filter((segment) => !visibleSet.has(segment)).map(expandIndexRange);
     if (prefixIndices.length > 0) {
-      prevRanges[0] = [...prefixIndices, ...prevRanges[0]!];
+      if (prevRanges.length > 0) prevRanges[0] = [...prefixIndices, ...prevRanges[0]!];
+      else prevRanges.push(prefixIndices);
     }
 
     // Plans and MCP Apps must stay out of the collapsed region so their
@@ -488,7 +497,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
         indices: [
           ...messageBreakout,
           ...planBreakout,
-          ...expandIndexRange(segments[segments.length - 1]!),
+          ...lastSegment,
         ],
       });
       continue;
@@ -506,7 +515,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
       previousSegments: filteredPrevRanges,
       planBreakoutIndices: planBreakout,
       messageBreakoutIndices: messageBreakout,
-      lastSegment: expandIndexRange(segments[segments.length - 1]!),
+      lastSegment,
       previousMessageCount: visibleMessageCount,
       previousToolSummary: formatAccordionToolSummary(toolTotal),
     });

@@ -183,6 +183,9 @@ export function isRemoteImageSrc(src: string | undefined | null): src is string 
   return !!src && (src.startsWith("https://") || src.startsWith("http://"));
 }
 
+export type MarkdownImagePreview = { name: string; dataUrl: string };
+export const MarkdownImagePreviewContext = createContext<((image: MarkdownImagePreview) => void) | undefined>(undefined);
+
 /**
  * Markdown `img` with consent-gated remote loading.
  *
@@ -197,6 +200,7 @@ export function isRemoteImageSrc(src: string | undefined | null): src is string 
  * fallback to the raw URL on proxy error — that would reopen the channel.
  */
 function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+  const onPreview = useContext(MarkdownImagePreviewContext);
   const [loadApproved, setLoadApproved] = useState(false);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const remote = isRemoteImageSrc(src);
@@ -232,13 +236,25 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
   const imageSrc = localPath ? localUrl : proxiedImageSrc(src) ?? src;
   if (!imageSrc || failedSrc === src) return null;
 
-  return (
+  const image = (
     <img
       src={imageSrc}
       alt={alt || ""}
       onError={() => setFailedSrc(src ?? "")}
       className="document-image"
     />
+  );
+  if (!onPreview || !localPath) return image;
+  const name = alt?.trim() || localPath.split("/").pop() || "image";
+  return (
+    <Button
+      onClick={() => onPreview({ name, dataUrl: imageSrc })}
+      aria-label={`Preview ${name}`}
+      title={`Click to preview · ${name}`}
+      className="block w-fit max-w-full cursor-zoom-in rounded-lg focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      {image}
+    </Button>
   );
 }
 

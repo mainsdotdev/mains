@@ -420,6 +420,10 @@ _Avoid_: putting Lens controls back on General; registering Lens on the remote b
 
 ## Transcript rows
 
+Assistant report images are rendered through Markdown image syntax, including reference-style images. Plain file paths remain text or file links; reports do not scan them for extra image previews. Embedded local images open the report's existing image preview on click. Structured image artifacts and user attachments keep their own image displays.
+
+Assistant report `metadata.messagePhase` distinguishes `commentary` from `final_answer`. Codex supplies its native phase; Claude confirms its last main-agent API message on a successful result, Copilot confirms the message returned after session idle, and Cursor labels the remaining reply after a successful ACP `end_turn`. Claude/Copilot correlate split blocks through `providerMessageId`; the `message_phase` adapter event updates only that run's existing main-agent report metadata, waits for pending inserts and triggers the normal transcript-history refresh. Content, ids and timestamps stay unchanged. The layout keeps every confirmed final block outside the accordion, even if later commentary/media arrives. With no confirmed final, legacy/latest-message layout remains available for old or interrupted runs.
+
 **structural plan snapshot**:
 The live execution checklist emitted as a shared `plan_update` adapter event. `RunSession` merges the latest snapshot into the active `run_turns.metadata.codexPlan` value and emits the normal `runs:eventPersisted` invalidation, so tab focus and reload recover the same state without replaying transient notifications. The renderer validates that metadata and gives it precedence in `TodoSummaryBar`, falling back to legacy `UpdateTodos` or `TaskCreate`/`TaskUpdate` tool-call aggregation for providers without structural plan events. This is distinct from a plan proposal rendered by `PlanDisplay`, which is content awaiting Apply/Dismiss.
 _Avoid_: storing live plan progress as fake tool calls; replacing the whole turn metadata object; treating a proposal `plan` item as execution progress; keeping structural plan state only in component memory.

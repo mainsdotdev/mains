@@ -337,7 +337,17 @@ export type WorkRunEvent =
   | WorkRunTaskEvent
   | WorkRunPromptSuggestionEvent
   | WorkRunContextUsageEvent
-  | WorkRunPlanUpdateEvent;
+  | WorkRunPlanUpdateEvent
+  | WorkRunMessagePhaseEvent;
+
+/** A provider confirmed the phase of an already emitted main-agent message. */
+export interface WorkRunMessagePhaseEvent {
+  type: "message_phase";
+  /** Correlates with report metadata.providerMessageId, including split text blocks. */
+  messageId: string;
+  phase: "commentary" | "final_answer";
+  ts?: number;
+}
 
 /**
  * Artifact summary in the result

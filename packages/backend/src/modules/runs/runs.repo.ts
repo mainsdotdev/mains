@@ -437,8 +437,9 @@ export const runsRepo = {
   // Run Artifact Operations
   // ─────────────────────────────────────────────────────────────
   /**
-   * Artifacts are insert-only, so `sinceId` (exclusive) yields just the rows
-   * appended since the caller's last sync. Ordered by id (= insertion order).
+   * Artifact bodies are append-only; report phases can be confirmed later.
+   * `sinceId` yields new rows only. History refreshes also read phase changes.
+   * Ordered by id (= insertion order).
    */
   async findArtifactsByRun(
     runId: string,
@@ -488,6 +489,22 @@ export const runsRepo = {
   async deleteArtifact(id: number): Promise<void> {
     const db = getDb();
     await db.delete(runArtifacts).where(eq(runArtifacts.id, id));
+  },
+
+  async setReportMessagePhase(
+    runId: string,
+    messageId: string,
+    phase: "commentary" | "final_answer",
+  ): Promise<boolean> {
+    const rows = await getDb().update(runArtifacts).set({
+      metadata: sql`json_patch(COALESCE(${runArtifacts.metadata}, '{}'), ${JSON.stringify({ messagePhase: phase })})`,
+    }).where(and(
+      eq(runArtifacts.runId, runId),
+      eq(runArtifacts.kind, "report"),
+      sql`json_extract(${runArtifacts.metadata}, '$.providerMessageId') = ${messageId}`,
+      sql`COALESCE(json_extract(${runArtifacts.metadata}, '$.isFromSubagent'), 0) = 0`,
+    )).returning({ id: runArtifacts.id });
+    return rows.length > 0;
   },
 
 

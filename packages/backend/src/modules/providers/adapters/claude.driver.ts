@@ -389,7 +389,7 @@ interface SDKAssistantMessage {
   type: "assistant";
   uuid: string;
   session_id: string;
-  message: { role: "assistant"; model?: string; content: SDKMessageContent[] };
+  message: { id?: string; role: "assistant"; model?: string; content: SDKMessageContent[] };
   parent_tool_use_id: string | null;
   /**
    * Set when the API call behind this turn failed. Without it an auth or
@@ -840,6 +840,7 @@ interface ClaudeSession {
     lastUsage?: WorkRunUsage;
     terminalToolNonExecutionKind?: string;
     hasAssistantContent: boolean;
+    lastAssistantMessage?: { id: string; hasText: boolean; hasTools: boolean };
     lastFastModeState?: FastModeState;
     lastAssistantError?: string;
     sawRateLimitNotice?: boolean;
@@ -1878,6 +1879,19 @@ export function mapSDKMessage(
     case "assistant": {
       const assistantMsg = msg as SDKAssistantMessage;
       const isFromSubagent = !!assistantMsg.parent_tool_use_id;
+      const providerMessageId = assistantMsg.message?.id || assistantMsg.uuid;
+      // The CLI can emit several blocks sharing one API message id. A child
+      // message must not replace the main agent's final-answer candidate.
+      if (!isFromSubagent && providerMessageId) {
+        if (cs.state.lastAssistantMessage?.id !== providerMessageId) {
+          cs.state.lastAssistantMessage = { id: providerMessageId, hasText: false, hasTools: false };
+        }
+        const candidate = cs.state.lastAssistantMessage;
+        candidate.hasText ||= assistantMsg.message?.content?.some((block) => block.type === "text" && !!block.text) ?? false;
+        candidate.hasTools ||= assistantMsg.message?.content?.some((block) => block.type === "tool_use") ?? false;
+      } else if (!isFromSubagent) {
+        delete cs.state.lastAssistantMessage;
+      }
 
       const errorEvent = buildAssistantErrorEvent(
         {
@@ -1901,6 +1915,7 @@ export function mapSDKMessage(
               content: block.text,
               metadata: {
                 source: "assistant.message",
+                ...(providerMessageId ? { providerMessageId, messagePhase: "commentary" } : {}),
                 isFromSubagent,
                 parentToolUseId: assistantMsg.parent_tool_use_id || undefined,
               },
@@ -2281,6 +2296,8 @@ export function mapSDKMessage(
 
     case "result": {
       const resultMsg = msg as SDKResultMessage;
+      const isFinal = resultMsg.subtype === "success" && !resultMsg.is_error &&
+        (resultMsg.stop_reason == null || resultMsg.stop_reason === "end_turn" || resultMsg.stop_reason === "stop_sequence");
 
       if (
         resultMsg.subtype === "success" &&
@@ -2291,9 +2308,16 @@ export function mapSDKMessage(
           type: "artifact",
           kind: "report",
           content: resultMsg.result,
-          metadata: { source: "result.message" },
+          metadata: { source: "result.message", ...(isFinal ? { messagePhase: "final_answer" } : {}) },
         });
       }
+
+      const finalMessage = cs.state.lastAssistantMessage;
+      if (isFinal && resultMsg.subtype === "success" && resultMsg.result &&
+        finalMessage?.hasText && !finalMessage.hasTools) {
+        events.push({ type: "message_phase", messageId: finalMessage.id, phase: "final_answer", ts });
+      }
+      delete cs.state.lastAssistantMessage;
 
       if (resultMsg.stop_reason && resultMsg.stop_reason !== "end_turn") {
         events.push({

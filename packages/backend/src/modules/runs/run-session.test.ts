@@ -145,6 +145,52 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   // Construction
   // ─────────────────────────────────────────────────────────────
+  it("confirms existing split report blocks by provider identity without changing content, order or other messages", async () => {
+    const session = makeSession();
+    await flushBackground();
+    createRun(db, { id: "r2", accountId: "default", providerId: "copilot_cli", workspaceId: "w1" });
+    for (const [content, providerMessageId, isFromSubagent] of [
+      ["Progress", "progress", false], ["First part", "final", false],
+      ["Second part", "final", false], ["Child", "final", true],
+    ] as const) {
+      await session.project({ type: "artifact", kind: "report", content,
+        metadata: { providerMessageId, messagePhase: "commentary", isFromSubagent, source: "assistant.message" } });
+    }
+    await runsRepo.insertArtifact({ runId: "r2", kind: "report", content: "Other run",
+      metadata: { providerMessageId: "final", messagePhase: "commentary" } });
+    const before = await runsRepo.findArtifactsByRun("r1");
+    await session.project({ type: "message_phase", messageId: "final", phase: "final_answer" });
+    const after = await runsRepo.findArtifactsByRun("r1");
+    expect(after.map((artifact) => [artifact.id, artifact.content, artifact.createdAt]))
+      .toEqual(before.map((artifact) => [artifact.id, artifact.content, artifact.createdAt]));
+    expect(after.map((artifact) => artifact.metadata?.messagePhase))
+      .toEqual(["commentary", "final_answer", "final_answer", "commentary"]);
+    expect(after[1].metadata?.source).toBe("assistant.message");
+    expect((await runsRepo.findArtifactsByRun("r2"))[0].metadata?.messagePhase).toBe("commentary");
+  });
+
+  it("waits for a pending report insert before applying its final phase", async () => {
+    const session = makeSession();
+    await flushBackground();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = runsRepo.insertArtifact.bind(runsRepo);
+    const insert = vi.spyOn(runsRepo, "insertArtifact").mockImplementation(async (params) => {
+      await gate;
+      return original(params);
+    });
+    try {
+      const writing = session.project({ type: "artifact", kind: "report", content: "Final answer",
+        metadata: { providerMessageId: "final", messagePhase: "commentary" } });
+      const confirming = session.project({ type: "message_phase", messageId: "final", phase: "final_answer" });
+      release();
+      await Promise.all([writing, confirming]);
+      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({
+        content: "Final answer", metadata: { providerMessageId: "final", messagePhase: "final_answer" },
+      })]);
+    } finally { release(); insert.mockRestore(); }
+  });
+
   it("persists steer input inside the current turn without a new Git boundary", async () => {
     const session = makeSession({ initialPromptContent: "original" });
     await flushBackground();

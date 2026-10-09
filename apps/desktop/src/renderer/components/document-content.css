@@ -44,13 +44,13 @@
   & p { color: inherit; }
 }
 @utility document-divider {
-  @apply my-4 border-0 border-t border-primary-300 dark:border-primary-700;
+  @apply my-4 border-0 border-t border-primary-200/40 dark:border-primary-700/20;
 }
 @utility document-image {
-  @apply max-w-full h-auto rounded-lg my-2 border border-primary-200 dark:border-primary-700;
+  @apply max-w-full h-auto rounded-xl my-2 border border-primary-200/40 dark:border-primary-700/20;
 }
 @utility document-table-frame {
-  @apply my-4 rounded-lg border border-primary-300 dark:border-primary-700;
+  @apply my-4 rounded-lg border border-primary-200/40 dark:border-primary-700/20;
 }
 @utility document-table {
   @apply min-w-full border-collapse;

@@ -1233,7 +1233,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             type: "artifact",
             kind: "report",
             content: message.content,
-            metadata: { source: "agent_message", streamId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}` },
+            metadata: { source: "agent_message", streamId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}`, messagePhase: "commentary" },
           });
         }
         cs.agentMessage = new CursorMessageStream();
@@ -2240,14 +2240,6 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
 
         // Flush remaining agent message buffer
         const message = cs.agentMessage.finish();
-        if (message.content) {
-          await onEvent({
-            type: "artifact",
-            kind: "report",
-            content: message.content,
-            metadata: { source: "agent_message", streamId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}` },
-          });
-        }
         if (message.failure && outcome.status !== "canceled") {
           // Cursor can append this close error after delivering a reply. ACP
           // also returns end_turn for real failures, so only tolerate this exact
@@ -2260,6 +2252,16 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
           } else {
             outcome = { ...outcome, status: "failed", summary: message.failure };
           }
+        }
+        if (message.content) {
+          await onEvent({
+            type: "artifact",
+            kind: "report",
+            content: message.content,
+            metadata: { source: "agent_message", streamId: `${cs.agentMessageStreamId}-${cs.agentMessageIndex}`,
+              ...(outcome.status === "succeeded" && outcome.stopReason === "end_turn" && !signal.aborted
+                ? { messagePhase: "final_answer" } : {}) },
+          });
         }
         return outcome;
       } finally {

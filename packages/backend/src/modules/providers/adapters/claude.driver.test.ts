@@ -2210,6 +2210,55 @@ describe("claude.driver / permission mode tracking", () => {
   });
 });
 
+describe("Claude final-answer identity", () => {
+  const message = (id: string, content: object[], parent: string | null = null) => ({
+    type: "assistant", uuid: `block-${id}`, session_id: "s1", parent_tool_use_id: parent,
+    message: { id, role: "assistant", content },
+  }) as any;
+  const result = (overrides: object = {}) => ({
+    type: "result", subtype: "success", is_error: false, stop_reason: "end_turn", result: "Final answer",
+    ...overrides,
+  }) as any;
+
+  it("confirms the final API message, including split blocks, without inserting the answer twice", () => {
+    const cs = makeClaudeSession();
+    mapSDKMessage(message("progress", [{ type: "text", text: "Working" }, { type: "tool_use", id: "tool-1", name: "Read", input: {} }]), cs);
+    const first = mapSDKMessage(message("final", [{ type: "text", text: "First part" }]), cs);
+    const second = mapSDKMessage(message("final", [{ type: "text", text: "Second part" }]), cs);
+    mapSDKMessage(message("child", [{ type: "text", text: "Subagent result" }], "tool-1"), cs);
+    cs.state.hasAssistantContent = true;
+    const events = mapSDKMessage(result(), cs);
+    expect([first[0], second[0]]).toEqual([1, 2].map(() => expect.objectContaining({
+      metadata: expect.objectContaining({ providerMessageId: "final", messagePhase: "commentary" }),
+    })));
+    expect(events.filter((event) => event.type === "artifact")).toEqual([]);
+    expect(events.filter((event) => event.type === "message_phase"))
+      .toEqual([expect.objectContaining({ messageId: "final", phase: "final_answer" })]);
+    expect(mapSDKMessage(result(), cs).filter((event) => event.type === "message_phase")).toEqual([]);
+  });
+
+  it.each(["max_tokens", "refusal", "tool_use"])("does not promote partial output on %s", (stop_reason) => {
+    const cs = makeClaudeSession();
+    mapSDKMessage(message("partial", [{ type: "text", text: "Partial" }]), cs);
+    cs.state.hasAssistantContent = true;
+    expect(mapSDKMessage(result({ stop_reason }), cs).some((event) => event.type === "message_phase")).toBe(false);
+  });
+
+  it("does not promote commentary whose message requested a tool", () => {
+    const cs = makeClaudeSession();
+    mapSDKMessage(message("working", [{ type: "text", text: "Working" }]), cs);
+    mapSDKMessage(message("working", [{ type: "tool_use", id: "tool-1", name: "Read", input: {} }]), cs);
+    cs.state.hasAssistantContent = true;
+    expect(mapSDKMessage(result(), cs).some((event) => event.type === "message_phase")).toBe(false);
+  });
+
+  it("marks a result-only response as final", () => {
+    const events = mapSDKMessage(result(), makeClaudeSession());
+    expect(events).toContainEqual(expect.objectContaining({ type: "artifact", content: "Final answer",
+      metadata: { source: "result.message", messagePhase: "final_answer" } }));
+  });
+});
+
 function makeClaudeSession(overrides: Record<string, unknown> = {}) {
   return {
     runId: "run-1",
