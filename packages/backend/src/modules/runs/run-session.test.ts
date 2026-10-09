@@ -145,6 +145,18 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   // Construction
   // ─────────────────────────────────────────────────────────────
+  it("keeps a late tool completion in the turn where the call started", async () => {
+    const session = makeSession();
+    await session.project({ type: "tool_call", toolName: "Write", input: { path: "first.md" },
+      metadata: { phase: "start", toolCallId: "late-tool" } });
+    const [first] = await runsRepo.findTurnsByRun("r1");
+    await session.project({ type: "artifact", kind: "user-prompt", content: "Follow up", metadata: { kind: "user-prompt" } });
+    await session.project({ type: "tool_call", toolName: "Write", output: { path: "first.md" },
+      metadata: { phase: "complete", toolCallId: "late-tool" } });
+    expect(await runsRepo.findToolCallsByRun("r1")).toEqual([expect.objectContaining({
+      metadata: expect.objectContaining({ turnId: first.id }), status: "done",
+    })]);
+  });
   it("confirms existing split report blocks by provider identity without changing content, order or other messages", async () => {
     const session = makeSession();
     await flushBackground();
@@ -186,7 +198,7 @@ describe("RunSession", () => {
       release();
       await Promise.all([writing, confirming]);
       expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({
-        content: "Final answer", metadata: { providerMessageId: "final", messagePhase: "final_answer" },
+        content: "Final answer", metadata: expect.objectContaining({ providerMessageId: "final", messagePhase: "final_answer", turnId: expect.any(Number) }),
       })]);
     } finally { release(); insert.mockRestore(); }
   });

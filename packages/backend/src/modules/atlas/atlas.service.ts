@@ -91,39 +91,10 @@ async function runContext(runId: string, accountId: string) {
       ...attachments.map((file) => path.dirname(file.path))] };
 }
 async function generatedForRun(runId: string, accountId: string): Promise<AtlasGeneratedFile[]> {
-  const { run, runsService, roots, codexImages, attachments } = await runContext(runId, accountId);
+  const { run, runsService, roots, attachments } = await runContext(runId, accountId);
   const candidates = new Set<string>();
-  for (const artifact of atlasRepo.generatedArtifacts(runId)) {
-    let metadata: Record<string, unknown> = {};
-    try { metadata = artifact.metadata ? JSON.parse(artifact.metadata) : {}; } catch { /* Legacy metadata. */ }
-    if (metadata.working || metadata.viewed) continue;
-    const file = typeof metadata.path === "string" ? metadata.path : artifact.path;
-    if (!file) continue;
-    const resolved = path.isAbsolute(file) ? file : path.resolve(roots[0], file);
-    // Mentioned paths belong to the transcript, not the image library. Keep
-    // native generation results, including Codex's inline-image fallback.
-    if (classify(resolved)?.kind === "image" && metadata.source !== "codex_image_generation") continue;
-    candidates.add(resolved);
-  }
-  // Run-folder discovery supplies documents; native image discovery is below.
-  for (const file of await runsService.listRunOutputFiles(runId)) {
-    if (classify(file.absolutePath)?.kind === "file") candidates.add(file.absolutePath);
-  }
-  if (codexImages) {
-    try {
-      const stat = await fs.lstat(codexImages);
-      if (stat.isDirectory() && !stat.isSymbolicLink()) {
-        // Native generations are flat within the thread folder. Keep discovery
-        // bounded and avoid scanning ~/.codex or other sessions recursively.
-        const directory = await fs.opendir(codexImages);
-        let visited = 0;
-        for await (const entry of directory) {
-          if (entry.isFile() && IMAGE_MIMES[path.extname(entry.name).slice(1).toLowerCase()])
-            candidates.add(path.join(codexImages, entry.name));
-          if (++visited >= 200) break;
-        }
-      }
-    } catch { /* Older or remote sessions may not have a local native folder. */ }
+  for (const artifact of await runsService.getOutputArtifacts(runId)) {
+    if (artifact.metadata?.outputSelected && artifact.path) candidates.add(artifact.path);
   }
   const uploads = new Set(attachments.map((file) => file.path));
   for (const file of uploads) candidates.add(file);
@@ -131,8 +102,6 @@ async function generatedForRun(runId: string, accountId: string): Promise<AtlasG
   for (const file of candidates) {
     const type = classify(file);
     if (!type) continue;
-    // Renderer exports and Office preview sidecars are not independent deliverables.
-    if (!uploads.has(file) && (/(?:^|\/)(?:rendered|renders|previews|thumbnails)(?:\/|$)/i.test(file) || /\.rendered\./i.test(file))) continue;
     try {
       const { real, stats } = await inspectSource(file, roots);
       result.push({ sourceKey: sourceKey(runId, real), runId, runTitle: run.title ?? "Conversation",

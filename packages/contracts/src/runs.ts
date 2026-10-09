@@ -176,6 +176,7 @@ export type RunArtifactKind =
  * "prompt_suggestion", or anything else (an assistant message).
  */
 export interface RunArtifactResponse {
+  /** Positive persisted row ID, or a stable negative ID for a selected output projection. */
   id: number;
   runId: string;
   kind: RunArtifactKind;
@@ -191,6 +192,8 @@ export interface RunArtifactResponse {
  */
 export interface ReadArtifactImagePayload {
   artifactId: number;
+  /** Required for a derived output row (negative artifact ID). */
+  runId?: string;
   /** Longest side the image is scaled down to before it travels; the Mac caps it. */
   maxSide?: number;
 }

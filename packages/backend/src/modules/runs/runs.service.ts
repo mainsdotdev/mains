@@ -5,6 +5,7 @@ import { createVoiceTaskCoordinator, VOICE_COORDINATOR_INSTRUCTIONS } from "./vo
 import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "node:os";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
@@ -64,6 +65,7 @@ import { resolveAtlasPageContext } from "./run-atlas-page";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
 import { withImageContentHashes } from "./run-image-content-hashes";
+import { deliverableTails, projectRunDeliverables } from "./run-deliverables";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -107,9 +109,6 @@ const RUN_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const RUN_TEXT_SEARCH_MAX_ENTRIES = 10_000;
 const RUN_TEXT_SEARCH_MAX_DEPTH = 12;
 const RUN_TEXT_SEARCH_EXCLUDES = new Set([".git", "node_modules"]);
-/** A run folder is app-owned, but still bound traversal in case a tool explodes it. */
-const RUN_OUTPUT_MAX_FILES = 500;
-const RUN_OUTPUT_MAX_DEPTH = 12;
 const MAX_ADDITIONAL_DIRECTORIES = 20;
 
 /** Resolve grants on the host before they reach either provider runtime. */
@@ -149,16 +148,6 @@ function normalizeAdditionalDirectories(
   }
   return { ...snapshot, additionalDirectories: [...resolved] };
 }
-const RUN_OUTPUT_EXCLUDES = new Set([
-  ".mains",
-  "project-resources",
-  "collection-sources",
-  ".git",
-  "node_modules",
-  "bower_components",
-  ".DS_Store",
-  "Thumbs.db",
-]);
 
 function joinInstructions(...instructions: (string | null)[]): string | null {
   const parts = instructions.filter(
@@ -180,6 +169,43 @@ const RAW_IMAGE_MIMES: Record<string, string> = {
   svg: "image/svg+xml",
 };
 
+async function selectedOutputArtifacts(run: RunResponse) {
+  const terminal = run.status !== "running" && run.status !== "queued";
+  const artifacts = runsRepo.findOutputArtifactKeys(run.id);
+  const toolCalls = runsRepo.findOutputToolCallKeys(run.id);
+  const history = { artifacts, toolCalls, turns: await runsRepo.findTurnsByRun(run.id), terminal };
+  const tails = deliverableTails(history);
+  const selectedIds = new Set(tails.flatMap((tail) => tail.calls.map((call) => call.id)));
+  const messageIds = new Set(tails.flatMap((tail) => tail.messages.flat().map((row) => row.id)));
+  // Hydrate only the two selected calls per completed turn. The transcript's
+  // deferred output preview must not change which deliverables Atlas sees.
+  const hydrated = toolCalls.map((call) => selectedIds.has(call.id)
+    ? runsRepo.findOutputToolCall(run.id, call.id) ?? call : call);
+  const hydratedArtifacts = await Promise.all(artifacts.map(async (row) => messageIds.has(row.id)
+    ? await runsRepo.findArtifactById(row.id) ?? row : row));
+  const root = await runsService.getRunExecutionRoot(run.id);
+  const extraRoots = [path.join(getBackendRuntime().getPath("userData"), "generated-images", run.id)];
+  if (run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId))
+    extraRoots.push(path.join(os.homedir(), ".codex", "generated_images", run.sessionId));
+  return (await projectRunDeliverables({ ...history, artifacts: hydratedArtifacts, toolCalls: hydrated,
+    runId: run.id, root, extraRoots })).filter((row) => row.metadata?.outputSelected);
+}
+
+async function selectedArtifacts(run: RunResponse, artifacts: RunArtifactResponse[], outputWindow?: {
+  artifacts: RunArtifactResponse[]; toolCalls: ToolCallResponse[];
+}) {
+  let outputs = await selectedOutputArtifacts(run);
+  if (outputWindow) {
+    const artifactIds = new Set(outputWindow.artifacts.map((row) => row.id));
+    const callIds = new Set(outputWindow.toolCalls.map((row) => row.id));
+    outputs = outputs.filter((row) => {
+      const anchor = row.metadata!.outputAnchor as { source: string; id: number };
+      return (anchor.source === "artifact" ? artifactIds : callIds).has(anchor.id);
+    });
+  }
+  return withImageContentHashes([...artifacts.filter((row) => !["file", "document", "image"].includes(row.kind)), ...outputs]);
+}
+
 /** Last model that actually handled a turn, falling back to the run's initial snapshot. */
 function latestKnownModel(
   turns: RunTurnResponse[],
@@ -195,69 +221,6 @@ function latestKnownModel(
 function isWithin(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-/**
- * Visible files created in a managed Work/Chat directory. Legacy source copies
- * and the Collection source link are input context, not output. Symlinks are
- * deliberately not followed.
- */
-async function listManagedOutputFiles(root: string): Promise<RunOutputFile[]> {
-  const files: RunOutputFile[] = [];
-
-  const visit = async (directory: string, depth: number): Promise<void> => {
-    if (depth > RUN_OUTPUT_MAX_DEPTH || files.length >= RUN_OUTPUT_MAX_FILES) {
-      return;
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = await fs.promises.readdir(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
-    );
-
-    for (const entry of entries) {
-      if (files.length >= RUN_OUTPUT_MAX_FILES) break;
-      if (entry.name.startsWith(".") || RUN_OUTPUT_EXCLUDES.has(entry.name)) {
-        continue;
-      }
-
-      const absolutePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(absolutePath, depth + 1);
-        continue;
-      }
-      // `Dirent.isFile()` excludes symlinks, sockets, and device files.
-      if (!entry.isFile()) continue;
-
-      let stats: fs.Stats;
-      try {
-        stats = await fs.promises.stat(absolutePath);
-      } catch {
-        continue;
-      }
-      if (!stats.isFile()) continue;
-
-      files.push({
-        fileName: entry.name,
-        relativePath: path.relative(root, absolutePath).split(path.sep).join("/"),
-        absolutePath,
-        size: stats.size,
-        modifiedAt: Math.trunc(stats.mtimeMs),
-      });
-    }
-  };
-
-  await visit(root, 0);
-  return files.sort(
-    (a, b) =>
-      b.modifiedAt - a.modifiedAt || a.relativePath.localeCompare(b.relativePath),
-  );
 }
 
 /**
@@ -1007,15 +970,16 @@ export const runsService = {
     return managedRunDir(run.id, run.mode);
   },
 
-  /**
-   * Files the agent left in a Work/Chat run's managed directory. Developer
-   * runs use workspace changes instead; scanning their whole repository would
-   * mislabel pre-existing files as deliverables.
-   */
+  /** The same selected outputs shown by the transcript and Atlas. */
   async listRunOutputFiles(runId: string): Promise<RunOutputFile[]> {
-    const run = await runsRepo.findRunById(runId);
-    if (!run || run.mode === "developer" || run.workspaceId) return [];
-    return listManagedOutputFiles(managedRunDir(run.id, run.mode));
+    const executionRoot = await runsService.getRunExecutionRoot(runId);
+    const root = executionRoot ? await fs.promises.realpath(executionRoot).catch(() => executionRoot) : null;
+    const rows = await runsService.getOutputArtifacts(runId);
+    const files = rows.filter((row) => row.metadata?.outputSelected && row.path).map((row) => ({
+      fileName: String(row.metadata!.fileName), relativePath: root ? path.relative(root, row.path!) : row.path!,
+      absolutePath: row.path!, size: Number(row.metadata!.byteSize), modifiedAt: Number(row.metadata!.modifiedAt),
+    }));
+    return [...new Map(files.map((file) => [file.absolutePath, file])).values()];
   },
 
   /**
@@ -1245,11 +1209,16 @@ export const runsService = {
   },
 
   // ─── Run Artifact Operations ───
+  async getOutputArtifacts(runId: string): Promise<RunArtifactResponse[]> {
+    const run = await runsRepo.findRunById(runId);
+    return run ? selectedOutputArtifacts(run) : [];
+  },
   async getHistoryPage(payload: ReadRunHistoryPayload) {
     validateHistoryRequest(payload);
-    if (!await runsRepo.findRunById(payload.runId)) throw new Error("Conversation not found");
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run) throw new Error("Conversation not found");
     const page = runsRepo.findHistoryPage(payload);
-    return { ...page, artifacts: await withImageContentHashes(page.artifacts) };
+    return { ...page, artifacts: await selectedArtifacts(run, page.artifacts, page) };
   },
 
   async getToolOutput(runId: string, toolId: number) {
@@ -1263,7 +1232,12 @@ export const runsService = {
     runId: string,
     sinceId?: number,
   ): Promise<RunArtifactResponse[]> {
-    return withImageContentHashes(await runsRepo.findArtifactsByRun(runId, sinceId));
+    const run = await runsRepo.findRunById(runId);
+    if (!run) return [];
+    const selected = await selectedArtifacts(run, await runsRepo.findArtifactsByRun(runId));
+    // Return selected outputs with every delta, including an earlier candidate
+    // that became deliverable when the turn completed. Identity stays stable.
+    return sinceId === undefined ? selected : selected.filter((row) => row.metadata?.outputSelected || row.id > sinceId);
   },
 
   /**
@@ -1274,7 +1248,9 @@ export const runsService = {
    * not the file.
    */
   async readArtifactImage(payload: ReadArtifactImagePayload): Promise<ArtifactImage> {
-    const artifact = await runsRepo.findArtifactById(payload.artifactId);
+    const artifact = payload.artifactId < 0 && payload.runId
+      ? (await runsService.getArtifactsByRun(payload.runId)).find((row) => row.id === payload.artifactId)
+      : await runsRepo.findArtifactById(payload.artifactId);
     if (!artifact) throw new Error("Artifact not found");
     if (artifact.kind !== "image") throw new Error("Not an image artifact");
     // The adapters record where the file is in the metadata, not the column.
@@ -1363,7 +1339,7 @@ export const runsService = {
       runsRepo.findToolCallsByRun(runId),
       runsRepo.findTurnsByRun(runId),
     ]);
-    return { run, context, artifacts: await withImageContentHashes(artifacts), toolCalls, turns };
+    return { run, context, artifacts: await selectedArtifacts(run, artifacts), toolCalls, turns };
   },
 
   // ─── Orchestrators ───

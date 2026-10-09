@@ -2,6 +2,15 @@ import { describe, it, expect } from "vitest";
 import { mergeRunEvents, mapArtifactToEvent, mapToolCallToEvent, omitCompletedCodexPreviews } from "./run-event-mappers";
 import type { RunArtifact, ToolCall } from "../types";
 
+it("places a derived document after its message and before the next same-second prompt", () => {
+  const output = { ...artifact(-123, "", 10), kind: "document", metadata: JSON.stringify({
+    outputAnchor: { source: "artifact", id: 2 }, outputSelected: true, path: "/out/report.md",
+  }) } as RunArtifact;
+  const result = mergeRunEvents([], [artifact(1, "prompt", 10), artifact(2, "answer", 10), output,
+    artifact(3, "next prompt", 10)], []);
+  expect(result.map((event) => event.id)).toEqual(["artifact-1", "artifact-2", "artifact--123", "artifact-3"]);
+});
+
 function artifact(id: number, content: string, sec: number): RunArtifact {
   return {
     id,

@@ -111,6 +111,7 @@ function restoreLegacyImageViews(events: RunEvent[]): RunEvent[] {
     if (
       event.type === "artifact" &&
       event.metadata?.kind === "image" &&
+      event.metadata?.outputSelected !== true &&
       event.metadata?.source !== "codex_image_generation" &&
       viewedPaths.has(event.metadata?.path as string)
     ) return [];
@@ -188,6 +189,9 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
         currentToolGroup.push(event);
       }
     } else if (event.type === "artifact") {
+      // The common backend output set still includes this file for Atlas and
+      // the shelf; Markdown already renders its image in the transcript.
+      if (event.metadata?.inlineInReport === true) continue;
       // A subagent's messages belong to its detail tab, not the parent chat.
       // Skipped before the flush so they don't split a tool accordion either.
       if (event.metadata?.isFromSubagent) {

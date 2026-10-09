@@ -366,6 +366,7 @@ function documentArtifactKey(event: EventGroup["events"][number]): string | null
   if (event.type !== "artifact" || event.metadata?.kind !== "document") {
     return null;
   }
+  if (event.metadata.outputSelected === true && typeof event.metadata.path === "string") return event.metadata.path;
   const candidate =
     (typeof event.metadata.fileName === "string" && event.metadata.fileName) ||
     (typeof event.metadata.path === "string" && event.metadata.path) ||

@@ -24,13 +24,23 @@ vi.mock("../runs", () => ({ runsService: {
     return root(id, run?.mode ?? "work");
   },
   listRunOutputFiles: vi.fn(async (_id: string): Promise<RunOutputFile[]> => []),
+  getOutputArtifacts: async (id: string) => {
+    const { runsRepo } = await import("../runs/runs.repo");
+    const { projectRunDeliverables } = await import("../runs/run-deliverables");
+    const run = await runsRepo.findRunById(id);
+    if (!run) return [];
+    return projectRunDeliverables({ runId: id, artifacts: await runsRepo.findArtifactsByRun(id),
+      toolCalls: await runsRepo.findToolCallsByRun(id), turns: await runsRepo.findTurnsByRun(id),
+      terminal: run.status === "succeeded", root: root(id, run.mode),
+      extraRoots: [path.join(directory, "generated-images", id),
+        ...(run.sessionId ? [path.join(directory, ".codex", "generated_images", run.sessionId)] : [])] });
+  },
   listRunAttachmentFiles: async (id: string) => {
     const { listRunAttachmentFiles } = await import("../runs/run-attachment-storage");
     return listRunAttachmentFiles(id);
   },
 } }));
 import { atlasService } from "./atlas.service";
-import { runsService } from "../runs";
 import { prepareRunAttachments } from "../runs/run-attachment-storage";
 import { handleAtlasCreatePage, handleAtlasReadPage, handleAtlasUpdatePage } from "../providers/adapters/atlas-tools";
 
@@ -79,15 +89,30 @@ describe("Atlas agent access", { timeout: 15000 }, () => {
 afterEach(() => { cleanup(); restoreRuntime(); vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
 function output(name = "report.pdf", runId = "conversation") {
-  createRun(db, { id: runId, mode: "work", title: "Research" });
+  createRun(db, { id: runId, mode: "work", title: "Research", status: "succeeded" });
   fs.mkdirSync(root(runId), { recursive: true });
   const file = path.join(root(runId), name);
   fs.writeFileSync(file, "original contents");
   createRunArtifact(db, { runId, kind: name.endsWith(".png") ? "image" : "document",
     metadata: JSON.stringify({ path: file }) });
+  createRunArtifact(db, { runId, kind: "report", content: `[Output](<${file}>)` });
   return file;
 }
 describe("Atlas file lifecycle", { timeout: 15000 }, () => {
+  it("uses the same tail-selected, deduplicated outputs as the conversation", async () => {
+    const file = output("final.md");
+    const early = path.join(root("conversation"), "CONTEXT.md"); fs.writeFileSync(early, "project context");
+    createRunArtifact(db, { runId: "conversation", kind: "document", metadata: JSON.stringify({ path: early }) });
+    createRunArtifact(db, { runId: "conversation", kind: "report", content: `[Early](<${early}>)` });
+    createRunArtifact(db, { runId: "conversation", kind: "report", content: "Working" });
+    createRunArtifact(db, { runId: "conversation", kind: "report", content: `[Delivered](<${file}>) [Again](./final.md)` });
+    createRunArtifact(db, { runId: "conversation", kind: "report", content: "Done" });
+    const { runsService } = await import("../runs");
+    const selected = (await runsService.getOutputArtifacts("conversation")).filter((row) => row.metadata?.outputSelected);
+    const generated = await atlasService.generated({ accountId: "default" });
+    expect(selected).toHaveLength(1);
+    expect(generated.items.map((item) => item.path)).toEqual(selected.map((row) => row.path));
+  });
   it("preserves extensions and supports filenames containing repeated dots", async () => {
     const file = output("report..pdf");
     const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: file });
@@ -105,9 +130,9 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(atlasService.list({ accountId: "default" })).toEqual([]);
     expect(fs.existsSync(path.join(directory, "atlas"))).toBe(false);
   });
-  it.each(["work", "chat"] as const)("excludes scanned and artifact-registered images in a %s folder while retaining documents", async (mode) => {
+  it.each(["work", "chat"] as const)("shows only delivered files in a %s folder", async (mode) => {
     const runId = `folder-${mode}`;
-    createRun(db, { id: runId, mode });
+    createRun(db, { id: runId, mode, status: "succeeded" });
     const files = ["screenshot.PNG", "nested/chart.svg", "export.webp", "report.pdf", "summary.txt", "registered.png"]
       .map((relativePath): RunOutputFile => {
         const absolutePath = path.join(root(runId, mode), relativePath);
@@ -118,14 +143,15 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
           size: stats.size, modifiedAt: stats.mtimeMs };
       });
     createRunArtifact(db, { runId, kind: "image", path: path.join(root(runId, mode), "registered.png") });
-    vi.mocked(runsService.listRunOutputFiles).mockResolvedValueOnce(files);
+    createRunArtifact(db, { runId, kind: "report", content: "[Report](report.pdf) [Summary](summary.txt)" });
+    expect(files).toHaveLength(6);
 
     const result = await atlasService.generated({ accountId: "default" });
     expect(result.items.map((item) => item.fileName).sort()).toEqual(["report.pdf", "summary.txt"]);
   });
   it("projects and saves Codex images from the run's native thread folder", async () => {
     vi.spyOn(os, "homedir").mockReturnValue(directory);
-    createRun(db, { id: "codex-run", providerId: "codex", mode: "work", sessionId: "native-thread" });
+    createRun(db, { id: "codex-run", providerId: "codex", mode: "work", sessionId: "native-thread", status: "succeeded" });
     const images = path.join(directory, ".codex", "generated_images", "native-thread");
     fs.mkdirSync(images, { recursive: true });
     const registered = path.join(images, "generated.png");
@@ -143,14 +169,14 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     fs.writeFileSync(unrelated, "another thread");
     createRunArtifact(db, { runId: "codex-run", kind: "image", path: unrelated });
     const result = await atlasService.generated({ accountId: "default" });
-    expect(result.items.map((item) => item.path).sort()).toEqual([registered, unregistered].map((file) => fs.realpathSync(file)).sort());
+    expect(result.items.map((item) => item.path)).toEqual([fs.realpathSync(registered)]);
     expect(atlasService.list({ accountId: "default" })).toEqual([]);
     const saved = await atlasService.saveFile({ accountId: "default", runId: "codex-run", path: registered });
     expect(fs.readFileSync(saved.path!, "utf8")).toBe("generated image");
     await expect(atlasService.saveFile({ accountId: "default", runId: "codex-run", path: unrelated })).rejects.toThrow("outside");
   });
   it("retains explicit native image-generation results when Codex returns inline pixels", async () => {
-    createRun(db, { id: "inline-image", providerId: "codex", mode: "work" });
+    createRun(db, { id: "inline-image", providerId: "codex", mode: "work", status: "succeeded" });
     const image = path.join(directory, "generated-images", "inline-image", "generated.png");
     fs.mkdirSync(path.dirname(image), { recursive: true });
     fs.writeFileSync(image, "native image output");

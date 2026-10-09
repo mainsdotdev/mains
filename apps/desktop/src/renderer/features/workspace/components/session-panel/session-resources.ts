@@ -4,16 +4,8 @@ import type {
   RunOutputFile,
   ToolCall,
 } from "@/lib/redux/api";
-import {
-  classifyDocType,
-  isDocumentRenderImage,
-} from "@/lib/document-viewer";
+import { classifyDocType } from "@/lib/document-viewer";
 import { resolveTool } from "@/features/workspace/lib/resolve-tool";
-import {
-  deliverableDedupeKey,
-  documentBundleStem,
-  isDocumentBundleSidecar,
-} from "@/features/workspace/lib/deliverable-identity";
 
 export type SessionResourceKind =
   | "file"
@@ -610,10 +602,6 @@ function conversationLinkResources(
 }
 
 function deliverableResources(artifacts: readonly RunArtifact[]): SessionResource[] {
-  const documentPaths = artifacts
-    .filter((artifact) => String(artifact.kind) === "document")
-    .map((artifact) => artifact.path ?? text(record(artifact.metadata)?.path))
-    .filter((path): path is string => !!path);
   const resources: SessionResource[] = [];
 
   for (const artifact of artifacts) {
@@ -622,7 +610,6 @@ function deliverableResources(artifacts: readonly RunArtifact[]): SessionResourc
     const metadata = record(artifact.metadata) ?? {};
     const path = artifact.path ?? text(metadata.path);
     if (!path) continue;
-    if (kind === "image" && isDocumentRenderImage(path, documentPaths)) continue;
 
     const title = text(metadata.fileName) ?? basename(path);
     const resourceKind = kind as Extract<
@@ -642,44 +629,21 @@ function deliverableResources(artifacts: readonly RunArtifact[]): SessionResourc
           : { type: "file", value: path },
       createdAt: timestamp(artifact.createdAt),
     });
-    // Agents commonly emit draft/render/final copies under different folders
-    // with the same display name. The shelf represents the latest usable
-    // deliverable, not every intermediate location from the transcript.
-    resources.push({
-      ...resource,
-      dedupeKey: `deliverable:${deliverableDedupeKey(title)}`,
-    });
+    resources.push({ ...resource, dedupeKey: `deliverable:${path}` });
   }
 
   return resources;
 }
 
-/**
- * The managed execution directory is the authority for workspace-less output:
- * it catches files created through Write, shell commands, and provider-native
- * tools even when no explicit artifact event was emitted.
- */
+/** The backend already selected and canonicalized these output paths. */
 function executionFileResources(
   files: readonly RunOutputFile[],
 ): SessionResource[] {
-  const documentPaths = files
-    .filter((file) => classifyDocType(file.absolutePath) !== null)
-    .map((file) => file.absolutePath);
-  const documentStems = new Set(
-    files
-      .map((file) => documentBundleStem(file.fileName))
-      .filter((stem): stem is string => !!stem),
-  );
   const resources: SessionResource[] = [];
 
   for (const file of files) {
-    if (isDocumentBundleSidecar(file.fileName, documentStems)) continue;
     const ext = extension(file.fileName).toLocaleLowerCase();
     const isImage = IMAGE_EXTENSIONS.has(ext);
-    if (isImage && isDocumentRenderImage(file.absolutePath, documentPaths)) {
-      continue;
-    }
-
     const kind: Extract<
       SessionResourceKind,
       "file" | "image" | "document"
@@ -703,7 +667,7 @@ function executionFileResources(
     });
     resources.push({
       ...resource,
-      dedupeKey: `deliverable:${deliverableDedupeKey(file.fileName)}`,
+      dedupeKey: `deliverable:${file.absolutePath}`,
     });
   }
 
@@ -751,25 +715,14 @@ export function buildSessionResources(args: {
   outputFiles?: readonly RunOutputFile[];
 }): SessionResources {
   const artifactDeliverables = deliverableResources(args.artifacts);
-  const artifactFileNames = new Set(
-    artifactDeliverables.map((resource) =>
-      resource.title.normalize("NFKC").toLocaleLowerCase(),
-    ),
-  );
-  const discoveredDeliverables = executionFileResources(
-    args.outputFiles ?? [],
-  ).filter(
-    (resource) =>
-      !artifactFileNames.has(
-        resource.title.normalize("NFKC").toLocaleLowerCase(),
-      ),
-  );
+  const artifactPaths = new Set(artifactDeliverables.map((resource) => resource.dedupeKey));
+  const discoveredDeliverables = executionFileResources(args.outputFiles ?? [])
+    .filter((resource) => !artifactPaths.has(resource.dedupeKey));
 
   return {
     sources: buildSessionSourceResources(args),
     plugins: sessionPlugins(args.artifacts, args.toolCalls),
-    // Explicit artifacts keep their richer kind/metadata. Directory discovery
-    // fills only the gaps, including files created by shell commands.
+    // Both sources use the same backend projection and exact path identity.
     deliverables: dedupe([
       ...discoveredDeliverables,
       ...artifactDeliverables,

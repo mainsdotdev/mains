@@ -1,7 +1,7 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { AtlasMetadataPatch } from "@mains/contracts/atlas";
 import { getDb } from "../../db/client";
-import { atlasItems, atlasPageRevisions, atlasPageFileRefs, runs, runArtifacts } from "../../db/schema";
+import { atlasItems, atlasPageRevisions, atlasPageFileRefs, runs } from "../../db/schema";
 import { mergeMetadata, readMetadata } from "./atlas.metadata";
 
 export type AtlasRecord = typeof atlasItems.$inferSelect;
@@ -103,9 +103,5 @@ export const atlasRepo = {
       .from(runs).where(and(...conditions)).orderBy(desc(runs.createdAt), desc(runs.id))
       .offset(offset).limit(limit).all();
   },
-  generatedArtifacts(runId: string) {
-    return getDb().select({ path: runArtifacts.path, metadata: runArtifacts.metadata })
-      .from(runArtifacts).where(and(eq(runArtifacts.runId, runId),
-        inArray(runArtifacts.kind, ["file", "document", "image"]))).all();
-  },
+
 };

@@ -2473,7 +2473,7 @@ describe("runsService", () => {
 
     it("returns artifacts", async () => {
       createRun(db, { id: "r1" });
-      createRunArtifact(db, { runId: "r1", kind: "file", content: "hello" });
+      createRunArtifact(db, { runId: "r1", kind: "report", content: "hello" });
 
       const result = await runsService.getArtifactsByRun("r1");
       expect(result).toHaveLength(1);
@@ -2481,7 +2481,7 @@ describe("runsService", () => {
 
     it("returns multiple artifacts", async () => {
       createRun(db, { id: "r1" });
-      createRunArtifact(db, { runId: "r1", kind: "file", content: "a" });
+      createRunArtifact(db, { runId: "r1", kind: "report", content: "a" });
       createRunArtifact(db, { runId: "r1", kind: "log", content: "b" });
 
       const result = await runsService.getArtifactsByRun("r1");
@@ -2489,6 +2489,7 @@ describe("runsService", () => {
     });
 
     it("returns error when repo throws", async () => {
+      createRun(db, { id: "r1" });
       vi.spyOn(runsRepo, "findArtifactsByRun").mockRejectedValueOnce(new Error("db error"));
       await expect(runsService.getArtifactsByRun("r1")).rejects.toThrow("db error");
     });
@@ -2518,11 +2519,63 @@ describe("runsService", () => {
   });
 
   describe("listRunOutputFiles", () => {
-    it("lists visible files from a Work run and excludes internal context", async () => {
+    it("hydrates only the last two logical calls, including a path beyond the deferred preview", async () => {
+      createRun(db, { id: "tail-tools", mode: "work", status: "succeeded" });
+      const root = managedRunDir("tail-tools", "work");
+      mkdirSync(root, { recursive: true });
+      for (const name of ["early.md", "delivered.md", "CONTEXT.md"]) writeFileSync(join(root, name), "file");
+      for (let i = 0; i < 20; i++) createToolCall(db, { runId: "tail-tools", toolName: "Bash", status: "done",
+        output: JSON.stringify(i === 18 ? { stdout: "x".repeat(20_000) + "\n[Output](delivered.md)" }
+          : i === 19 ? { path: "CONTEXT.md" } : { path: "early.md" }) });
+      const hydrate = vi.spyOn(runsRepo, "findOutputToolCall");
+      try {
+        const history = await runsService.getHistoryPage({ runId: "tail-tools", deferToolOutput: true });
+        expect(hydrate).toHaveBeenCalledTimes(2);
+        const output = history.artifacts.filter((row) => row.metadata?.outputSelected);
+        expect(output.map((row) => row.metadata?.fileName)).toEqual(["delivered.md", "CONTEXT.md"]);
+        expect((await runsService.getOutputArtifacts("tail-tools")).map((row) => row.id)).toEqual(output.map((row) => row.id));
+      } finally { hydrate.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+    });
+    it("keeps turn selection global when steering prompts fall outside a history page", async () => {
+      createRun(db, { id: "steered-outputs", mode: "work", status: "succeeded" });
+      const root = managedRunDir("steered-outputs", "work");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, "early.md"), "early"); writeFileSync(join(root, "final.md"), "final");
+      const at = (second: number) => new Date((1_700_000_000 + second) * 1000);
+      createRunArtifact(db, { runId: "steered-outputs", kind: "user-prompt" as "report", content: "Start", createdAt: at(0) });
+      for (let i = 1; i <= 35; i++) {
+        createRunArtifact(db, { runId: "steered-outputs", kind: "report", content: i < 35 ? "early.md" : "final.md", createdAt: at(i * 2) });
+        if (i < 35) createRunArtifact(db, { runId: "steered-outputs", kind: "user-prompt" as "report", content: "Steer",
+          metadata: JSON.stringify({ delivery: "steer" }), createdAt: at(i * 2 + 1) });
+      }
+      createRunArtifact(db, { runId: "steered-outputs", kind: "report", content: "Done", createdAt: at(72) });
+      try {
+        const latest = await runsService.getHistoryPage({ runId: "steered-outputs" });
+        expect(latest.artifacts.filter((row) => row.metadata?.outputSelected).map((row) => row.metadata?.fileName)).toEqual(["final.md"]);
+        const older = await runsService.getHistoryPage({ runId: "steered-outputs", direction: "refresh", cursor: {
+          timestamp: at(0).getTime(), source: "artifact", id: 1 }, end: { timestamp: at(40).getTime(), source: "artifact", id: 0 } });
+        expect(older.artifacts.some((row) => row.metadata?.outputSelected)).toBe(false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+    it("reads a derived image by its stable ID and conversation", async () => {
+      createRun(db, { id: "derived-image", mode: "work", status: "succeeded" });
+      const root = managedRunDir("derived-image", "work");
+      mkdirSync(root, { recursive: true }); writeFileSync(join(root, "result.png"), "image bytes");
+      createRunArtifact(db, { runId: "derived-image", kind: "report", content: "![Result](result.png)" });
+      try {
+        const [output] = await runsService.getOutputArtifacts("derived-image");
+        expect(output.id).toBeLessThan(0);
+        expect((await runsService.readArtifactImage({ artifactId: output.id, runId: "derived-image" })).base64)
+          .toBe(Buffer.from("image bytes").toString("base64"));
+        await expect(runsService.readArtifactImage({ artifactId: output.id, runId: "other" })).rejects.toThrow("not found");
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+    it("shares tail-selected outputs across history, chat and the file shelf", async () => {
       createRun(db, {
         id: "run-outputs",
         providerId: "claude_code",
         mode: "work",
+        status: "succeeded",
       });
       const root = managedRunDir("run-outputs", "work");
       const outside = "/tmp/mains-output-outside.md";
@@ -2536,6 +2589,10 @@ describe("runsService", () => {
       writeFileSync(`${root}/.hidden.txt`, "hidden");
       writeFileSync(outside, "outside");
       symlinkSync(outside, `${root}/linked.md`);
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: ".mains/sources/brief.pdf project-resources/source-1/brief.pdf" });
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "Working" });
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "[Notes](notes.md) [Chart](outputs/chart.csv) linked.md" });
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "Done" });
 
       try {
         const files = await runsService.listRunOutputFiles("run-outputs");
@@ -2548,11 +2605,19 @@ describe("runsService", () => {
           expect.arrayContaining([
             expect.objectContaining({
               fileName: "notes.md",
-              absolutePath: `${root}/notes.md`,
+              absolutePath: realpathSync(`${root}/notes.md`),
               size: 7,
             }),
           ]),
         );
+        const [history, details, artifacts] = await Promise.all([
+          runsService.getHistoryPage({ runId: "run-outputs", deferToolOutput: true }),
+          runsService.getRunDetails("run-outputs"), runsService.getArtifactsByRun("run-outputs"),
+        ]);
+        const paths = (rows: typeof artifacts) => rows.filter((row) => row.metadata?.outputSelected).map((row) => row.path).sort();
+        expect(paths(history.artifacts)).toEqual(paths(artifacts));
+        expect(paths(details!.artifacts)).toEqual(paths(artifacts));
+        expect(files.map((file) => file.absolutePath).sort()).toEqual(paths(artifacts));
       } finally {
         rmSync(root, { recursive: true, force: true });
         rmSync(outside, { force: true });
@@ -2800,7 +2865,7 @@ describe("runsService", () => {
     it("returns run with all related data", async () => {
       createRun(db, { id: "r1" });
       createRunContext(db, { runId: "r1", kind: "file", content: "test.ts" });
-      createRunArtifact(db, { runId: "r1", kind: "file", content: "output" });
+      createRunArtifact(db, { runId: "r1", kind: "report", content: "output" });
       createToolCall(db, { runId: "r1", toolName: "read" });
       createRunTurn(db, { runId: "r1", turnIndex: 0 });
 

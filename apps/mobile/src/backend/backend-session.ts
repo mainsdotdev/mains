@@ -557,11 +557,11 @@ class BackendSession {
   }
 
   /** An image artifact's pixels, from the Mac; rejects while it is out of reach. */
-  readArtifactImage(artifactId: number): Promise<ArtifactImage> {
+  readArtifactImage(artifactId: number, runId?: string): Promise<ArtifactImage> {
     if (!this.isConnected() || !this.transport) {
       return Promise.reject(new Error("Connect to Mains on your computer to load this image"));
     }
-    return readArtifactImage(this.transport, artifactId);
+    return readArtifactImage(this.transport, artifactId, runId);
   }
 
   readAttachmentImage(runId: string, attachmentId: string): Promise<ArtifactImage> {
