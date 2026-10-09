@@ -18,6 +18,21 @@ export const atlasApi = baseApi.injectEndpoints({
     atlasPage: builder.query<AtlasPage | null, AtlasIdentity>({
       query: (options) => ({ handler: CHANNELS.atlas.get, args: [options] }),
       providesTags: (_r, _e, { id }) => [{ type: "AtlasPage", id }],
+      async onQueryStarted(_identity, { dispatch, getState, getCacheEntry, queryFulfilled }) {
+        const previous = getCacheEntry().data?.item;
+        const backendId = (getState() as RootState).backends.activeBackendId;
+        try {
+          const { data } = await queryFulfilled;
+          if ((getState() as RootState).backends.activeBackendId !== backendId) return;
+          const next = data?.item;
+          // Agent writes bypass renderer mutations. The editor's polling read
+          // must also refresh library/Recents metadata when the Page changes.
+          if (previous?.version !== next?.version || previous?.title !== next?.title ||
+            previous?.updatedAt !== next?.updatedAt || previous?.trashedAt !== next?.trashedAt) {
+            dispatch(baseApi.util.invalidateTags(["Atlas"]));
+          }
+        } catch { /* Keep the library's last successful data when a Page read fails. */ }
+      },
     }),
     createAtlasPage: builder.mutation<AtlasPage, AtlasCreatePage>({
       query: (input) => ({ handler: CHANNELS.atlas.createPage, args: [input] }),

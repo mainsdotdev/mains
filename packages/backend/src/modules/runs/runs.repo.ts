@@ -182,9 +182,15 @@ export const runsRepo = {
           eq(runs.accountId, options.accountId),
           eq(runs.mode, options.mode),
           eq(runs.isArchived, false),
+          options.spaceId ? eq(runs.spaceId, options.spaceId) : undefined,
+          options.atlasPageId
+            ? sql`json_extract(${runs.configSnapshot}, '$.atlasPageId') = ${options.atlasPageId}`
+            : undefined,
         ),
       )
-      .orderBy(desc(runs.pinnedAt), desc(runs.updatedAt))
+      .orderBy(...(options.atlasPageId
+        ? [desc(runs.updatedAt), desc(runs.createdAt), desc(runs.id)]
+        : [desc(runs.pinnedAt), desc(runs.updatedAt)]))
       .limit(options.limit ?? 50);
     return rows.map(mapRunRowToResponse);
   },

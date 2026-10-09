@@ -52,10 +52,12 @@ describe("Atlas agent access", { timeout: 15000 }, () => {
     expect(page.item.accountId).toBe("default");
     expect(page.revision.actor).toBe("agent");
     expect(page.revision.sourceRunId).toBe("work");
+    expect(page.pageHref).toBe(`/atlas/${page.item.id}`);
     await expect(handleAtlasReadPage({ pageId: page.item.id }, context("foreign"))).rejects.toThrow("Page not found");
     await expect(handleAtlasUpdatePage({ pageId: page.item.id, expectedVersion: 1, markdown: "Foreign" }, context("foreign"))).rejects.toThrow("Page not found");
     const updated = await handleAtlasUpdatePage({ pageId: page.item.id, expectedVersion: 1, markdown: "Updated" }, context("work"));
     expect(JSON.parse(updated.content[0].text).item.version).toBe(2);
+    expect(JSON.parse(updated.content[0].text).pageHref).toBe(page.pageHref);
     await expect(handleAtlasUpdatePage({ pageId: page.item.id, expectedVersion: 1, markdown: "Stale" }, context("work"))).rejects.toThrow("changed elsewhere");
     expect(atlasService.getPage({ id: page.item.id, accountId: "default" })?.revision.markdown).toContain("Updated");
   });
@@ -65,6 +67,7 @@ describe("Atlas agent access", { timeout: 15000 }, () => {
     const page = await atlasService.createPage({ accountId: "default", title: "Readable notes", markdown: "Read me" });
     const read = await handleAtlasReadPage({ pageId: page.item.id }, context("chat"));
     expect(JSON.parse(read.content[0].text).revision.markdown).toContain("Read me");
+    expect(JSON.parse(read.content[0].text).pageHref).toBe(`/atlas/${page.item.id}`);
     for (const runId of ["chat", "developer"]) {
       await expect(handleAtlasCreatePage({ title: "Write", markdown: "Disallowed" }, context(runId))).rejects.toThrow("Work mode");
       await expect(handleAtlasUpdatePage({ pageId: page.item.id, expectedVersion: 1, markdown: "Disallowed" }, context(runId))).rejects.toThrow("Work mode");

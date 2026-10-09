@@ -48,13 +48,7 @@ export interface UpdateRunPayload {
   sessionId?: string | null;
 }
 
-/** The provider/mode pair that defines which UI experience owns a run. */
-export interface RunExperienceOptions {
-  accountId: string;
-  providerId: string;
-  mode: ModeId;
-  limit?: number;
-}
+export type { RunExperienceOptions } from "@mains/contracts/runs";
 
 /** Optional narrowing for callers that load a workspace's run history. */
 export interface WorkspaceRunListOptions {

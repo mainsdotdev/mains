@@ -83,19 +83,19 @@ const DEVELOPER_ONLY: ModeId[] = ["developer"];
 export const MAINS_TOOLS: MainsToolDef[] = [
   {
     name: "AtlasReadPage",
-    description: "Read an Atlas Page's title, canonical BlockNote blocks, Markdown projection and current version. Page IDs are provided by the user or AtlasCreatePage. Markdown is lossy for some block formats.",
+    description: "Read an Atlas Page's title, canonical BlockNote blocks, Markdown projection and current version. Page IDs are provided by the user or AtlasCreatePage. Markdown is lossy for some block formats. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
     schema: AtlasReadPageSchema, handler: handleAtlasReadPage,
     providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude],
   },
   {
     name: "AtlasCreatePage",
-    description: "Create a permanent Atlas Page in the current account and project. Use for user-requested notes, knowledge pages or checklists. Returns the Page ID and version; Pages survive conversation deletion.",
+    description: "Create a permanent Atlas Page in the current account and project. Use for user-requested notes, knowledge pages or checklists. Returns the Page ID, version and pageHref; Pages survive conversation deletion. Link to the Page using pageHref as the Markdown destination; never prepend a localhost or web origin.",
     schema: AtlasCreatePageSchema, handler: handleAtlasCreatePage,
     providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
   },
   {
     name: "AtlasUpdatePage",
-    description: "Update an Atlas Page after AtlasReadPage. Preserve existing block formatting, IDs and atlas-file:// references. Supply expectedVersion; stale updates fail without overwriting user changes. Creates a Page revision attributed to this conversation.",
+    description: "Update an Atlas Page after AtlasReadPage. Preserve existing block formatting, IDs and atlas-file:// references. Supply expectedVersion; stale updates fail without overwriting user changes. Creates a Page revision attributed to this conversation. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
     schema: AtlasUpdatePageSchema, handler: handleAtlasUpdatePage,
     providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude], modes: ["work"],
   },

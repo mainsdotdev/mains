@@ -2,7 +2,7 @@ import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOp
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
 import { contextBridge, ipcRenderer } from "electron";
-import type { RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
+import type { RunExperienceOptions, RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
 import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
@@ -678,7 +678,7 @@ const api = {
     listArchived: () => ipcRenderer.invoke(CHANNELS.runs.listArchived),
     /** Runs with a live session right now, across every space and workspace. */
     listActive: () => ipcRenderer.invoke(CHANNELS.runs.listActive),
-    listRecent: (options: { accountId: string; providerId: string; mode: ModeId; limit?: number }) =>
+    listRecent: (options: RunExperienceOptions) =>
       ipcRenderer.invoke(CHANNELS.runs.listRecent, options),
     getAll: (limit?: number) => ipcRenderer.invoke(CHANNELS.runs.getAll, limit),
     getById: (id: string) => ipcRenderer.invoke(CHANNELS.runs.getById, id),

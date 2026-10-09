@@ -1,6 +1,6 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AtlasItem } from "@mains/contracts/atlas";
+import type { AtlasItem, AtlasPage } from "@mains/contracts/atlas";
 import { CHANNELS } from "@mains/contracts/channels";
 import { baseApi } from "./baseApi";
 import { atlasApi } from "./atlasApi";
@@ -73,5 +73,41 @@ describe("Atlas deleted Page tabs", () => {
     await store.dispatch(atlasApi.endpoints.updateAtlasItem.initiate({ accountId: "account", id: "page", trashed: false })).unwrap();
     await store.dispatch(atlasApi.endpoints.updateAtlasItem.initiate({ accountId: "account", id: "page", metadata: { icon: "emoji:😁" } })).unwrap();
     expect(store.getState().atlas.byOwner[localOwner].tabs).toEqual([{ id: "page" }, { id: "remaining" }]);
+  });
+});
+
+describe("Atlas Page refresh", () => {
+  it("refreshes the sidebar list when the editor reads an agent's changed Page", async () => {
+    const identity = { accountId: "account", id: "page" };
+    let saved: AtlasPage = {
+      item: { ...page, title: "Untitled page", trashedAt: null },
+      revision: { id: "revision-1", itemId: "page", version: 1, schemaVersion: 1, title: "Untitled page",
+        blocks: [], markdown: "", actor: "user", sourceRunId: null, createdAt: page.createdAt },
+    };
+    mocks.invoke.mockImplementation(async (handler) => ({ success: true,
+      data: handler === CHANNELS.atlas.list ? [saved.item] : saved,
+    }));
+    const list = store.dispatch(atlasApi.endpoints.listAtlas.initiate({ accountId: "account" }));
+    await list.unwrap();
+    const read = store.dispatch(atlasApi.endpoints.atlasPage.initiate(identity));
+    await read.unwrap();
+    await vi.waitFor(() => expect(atlasApi.endpoints.listAtlas.select({ accountId: "account" })(store.getState()).status).toBe("fulfilled"));
+    const listCalls = () => mocks.invoke.mock.calls.filter(([handler]) => handler === CHANNELS.atlas.list).length;
+    const initialCalls = listCalls();
+
+    // The agent calls the backend directly, outside the renderer's save mutation.
+    saved = { item: { ...saved.item, title: "How generative UI changes product interaction", version: 2, updatedAt: "2026-10-09" },
+      revision: { ...saved.revision, title: "How generative UI changes product interaction", version: 2, actor: "agent" },
+    };
+    await store.dispatch(atlasApi.endpoints.atlasPage.initiate(identity, { forceRefetch: true, subscribe: false })).unwrap();
+    expect(atlasApi.endpoints.atlasPage.select(identity)(store.getState()).data?.item.title).toBe(saved.item.title);
+    await vi.waitFor(() => expect(atlasApi.endpoints.listAtlas.select({ accountId: "account" })(store.getState()).data?.[0].title).toBe(saved.item.title));
+    expect(listCalls()).toBe(initialCalls + 1);
+
+    // An unchanged polling response must not refetch the entire library again.
+    await store.dispatch(atlasApi.endpoints.atlasPage.initiate(identity, { forceRefetch: true, subscribe: false })).unwrap();
+    expect(listCalls()).toBe(initialCalls + 1);
+    list.unsubscribe();
+    read.unsubscribe();
   });
 });

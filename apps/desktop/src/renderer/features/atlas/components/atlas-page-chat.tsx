@@ -23,7 +23,7 @@ import {
 } from "@/hooks/use-active-space";
 import { store } from "@/lib/redux";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { useAbortRunMutation, type Space } from "@/lib/redux/api";
+import { useAbortRunMutation, useListRecentRunsQuery, type Run, type Space } from "@/lib/redux/api";
 import {
   setComposerContextKey,
   setContextItemsForKey,
@@ -35,6 +35,7 @@ import {
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { getTransport } from "@/lib/transport";
 import { FloatingChatOverlay } from "@/features/workspace/components/floating-chat-overlay";
+import { ComposerSendTargetSelect } from "@/features/workspace/components/composer-send-target-select";
 import { WorkspaceInput } from "@/features/workspace/components/workspace-input";
 import { WorkspaceEvents } from "@/features/workspace/components/workspace-events";
 import { ToolApprovalDialog } from "@/features/workspace/components/tools/tool-approval-dialog";
@@ -65,6 +66,7 @@ const EMPTY_CHAT: AtlasPageChatState = {
   mode: "input",
 };
 const EMPTY_CONTEXT: ContextItem[] = [];
+const EMPTY_RUNS: Run[] = [];
 const LOCAL_SELECTION = { selection: "local" } as const;
 const NO_WORKSPACES: readonly string[] = [];
 
@@ -78,6 +80,7 @@ interface AtlasPageChatProps {
 }
 interface ChatPanelProps {
   title: string;
+  titleControl?: ReactNode;
   state: AtlasPageChatState;
   update: (patch: Partial<AtlasPageChatState>) => void;
   activity?: "running" | "queued" | null;
@@ -186,7 +189,29 @@ function AtlasWorkingChat({
       : (state.workspace.contextItemsByKey[composerKey] ?? EMPTY_CONTEXT),
   );
   const [files, setFiles] = useTransientUploads(composerKey);
-  const requestedRunId = state.spaceId === space.id ? state.runId : null;
+  const pageChats = useListRecentRunsQuery({
+    accountId: page.accountId,
+    providerId: space.providerId,
+    mode: "work",
+    spaceId: space.id,
+    atlasPageId: page.id,
+    limit: 100,
+  }, { pollingInterval: 5000, refetchOnMountOrArgChange: true });
+  const savedRuns = pageChats.currentData ?? EMPTY_RUNS;
+  // An absent selection restores the most recently used chat. An explicit null
+  // in this Space means the user chose New page chat and must stay a new draft.
+  const requestedRunId = state.spaceId === space.id
+    ? state.runId
+    : savedRuns[0]?.id ?? null;
+  const discoveringChats = pageChats.currentData === undefined;
+  useEffect(() => {
+    if (discoveringChats || state.spaceId === space.id) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) update({ runId: requestedRunId, spaceId: space.id });
+    });
+    return () => { cancelled = true; };
+  }, [discoveringChats, state.spaceId, space.id, requestedRunId, update]);
   const ws = useWorkspaceRuns(
     undefined,
     space.providerId,
@@ -235,6 +260,8 @@ function AtlasWorkingChat({
       activity ||
       page.disabled ||
       !ws.runsLoaded ||
+      discoveringChats ||
+      !!pageChats.error ||
       !conversation.ready ||
       !hasComposerMessage(state.draft, files.length, contextItems)
     )
@@ -332,11 +359,39 @@ function AtlasWorkingChat({
       setStopping(false);
     }
   };
+  const selectChat = (selectedId: string | null) => {
+    if (pending.current || submitting) return;
+    if (selectedId && !savedRuns.some((run) => run.id === selectedId) && selectedId !== runId) return;
+    update({ runId: selectedId, spaceId: space.id, mode: "details" });
+  };
+  const selectableRuns = runId && activeRun && !savedRuns.some((run) => run.id === runId)
+    ? [activeRun, ...savedRuns]
+    : savedRuns;
+  const chatOptions = [
+    { runId: null, label: "New page chat" },
+    ...selectableRuns.map((run) => ({
+      runId: run.id,
+      label: run.title?.trim() || run.goal?.trim() || "Untitled chat",
+    })),
+  ];
 
   return (
     <PluginLogoProvider providerId={space.providerId}>
       <AtlasChatPanel
         title={page.title}
+        titleControl={
+          <ComposerSendTargetSelect
+            key={state.mode}
+            variant="title"
+            target={{
+              runId: requestedRunId,
+              label: chatOptions.find((option) => option.runId === requestedRunId)?.label ?? page.title,
+              options: chatOptions,
+            }}
+            onChange={selectChat}
+            disabled={submitting || discoveringChats || !!pageChats.error || (!!requestedRunId && !ws.runsLoaded)}
+          />
+        }
         state={state}
         update={update}
         activity={activity}
@@ -348,7 +403,7 @@ function AtlasWorkingChat({
             activeRun={activeRun}
             canResume={!!runId}
             isLoading={submitting}
-            disabled={page.disabled || preparing || !ws.runsLoaded}
+            disabled={page.disabled || preparing || !ws.runsLoaded || discoveringChats || !!pageChats.error}
             providerId={space.providerId}
             selectedModel={conversation.settings.model}
             onModelChange={conversation.changeModel}
@@ -382,7 +437,7 @@ function AtlasWorkingChat({
               <DropdownMenuItem
                 onClick={() => {
                   close();
-                  update({ runId: null, mode: "details" });
+                  selectChat(null);
                 }}
               >
                 New page chat
@@ -391,6 +446,11 @@ function AtlasWorkingChat({
           </AtlasMenu>
         ) : undefined}
       >
+        {!!pageChats.error && (
+          <Text role="alert" size="xs" className="px-4 pt-3">
+            {atlasError(pageChats.error)}
+          </Text>
+        )}
         {ws.error && (
           <Text role="alert" size="xs" className="px-4 pt-3">
             {ws.error}
@@ -430,6 +490,7 @@ function AtlasWorkingChat({
 
 function AtlasChatPanel({
   title,
+  titleControl,
   state,
   update,
   activity = null,
@@ -441,6 +502,7 @@ function AtlasChatPanel({
     <div className="pointer-events-none absolute inset-0 z-(--z-overlay)">
       <FloatingChatOverlay
         title={title || "Untitled page"}
+        titleControl={titleControl}
         iconTooltip={`Work with ${title || "this page"}`}
         activity={activity}
         mode={state.mode}

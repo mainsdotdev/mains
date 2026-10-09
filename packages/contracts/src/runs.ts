@@ -24,6 +24,16 @@ export function modeLabel(mode: ModeId): string {
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type RunTurnStatus = "active" | "completed";
 
+/** Recent conversations in one experience, optionally scoped to a Page and Space. */
+export interface RunExperienceOptions {
+  accountId: string;
+  providerId: string;
+  mode: ModeId;
+  spaceId?: string;
+  atlasPageId?: string;
+  limit?: number;
+}
+
 /** Chronological position; artifacts precede tools when timestamps tie. */
 export interface RunHistoryCursor {
   timestamp: number;

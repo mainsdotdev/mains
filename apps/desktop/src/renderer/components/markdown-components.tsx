@@ -11,6 +11,7 @@ import { useOpenFileInEditor } from "@/features/workspace/hooks/use-open-file-in
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useOpenLink } from "@/hooks/use-open-link";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
+import { atlasPageIdFromHref } from "@/features/atlas/lib/page-link";
 
 /**
  * Split a trailing line locator off a file href: `path.ts:114`,
@@ -62,12 +63,13 @@ export function MarkdownLink({
   const openFileInEditor = useOpenFileInEditor();
   const openLink = useOpenLink();
   const { openHtmlFile } = useBrowserPanel();
+  const isPageLink = !!href && !!atlasPageIdFromHref(href, window.location.href);
 
   // A fragment names a node in this very document — GFM footnote references
   // and their back-links are the common case. Handing it to the shell was a
   // silent no-op (main parses the URL and drops what has no protocol), which
   // left every footnote link dead.
-  if (href?.startsWith("#")) {
+  if (!isPageLink && href?.startsWith("#")) {
     return (
       <a
         href={href}
@@ -87,7 +89,7 @@ export function MarkdownLink({
   }
 
   const target = href ? splitFileHref(href) : null;
-  if (href && target && isFileHref(target.path)) {
+  if (!isPageLink && href && target && isFileHref(target.path)) {
     const basename = target.path.split("/").pop() ?? target.path;
     const dotIdx = basename.lastIndexOf(".");
     const extension =
@@ -126,7 +128,7 @@ export function MarkdownLink({
       onClick={(event) => {
         event.preventDefault();
         if (href) {
-          if (openWebLinksInApp) {
+          if (isPageLink || openWebLinksInApp) {
             void openLink(href);
           } else {
             void window.api.shell.openExternal(href);
@@ -135,7 +137,7 @@ export function MarkdownLink({
       }}
       className="document-link inline whitespace-normal wrap-break-word text-left"
     >
-      {showFavicon && <LinkFavicon key={href} href={href} />}
+      {showFavicon && !isPageLink && <LinkFavicon key={href} href={href} />}
       {children}
     </a>
   );

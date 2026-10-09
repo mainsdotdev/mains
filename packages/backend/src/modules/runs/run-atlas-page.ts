@@ -1,4 +1,5 @@
 import type { ModeId } from "@mains/contracts/modes";
+import { atlasPageHref } from "@mains/contracts/atlas";
 import { atlasService } from "../atlas";
 
 /** Resolve trusted Page metadata, keeping app instructions out of user messages. */
@@ -31,6 +32,7 @@ export function resolveAtlasPageContext(
     instructions: `# Atlas page context
 
 The user is working on Atlas page ${JSON.stringify(page.title)} (pageId: ${page.id}, current version: ${page.version}).
+When linking to this Page, use [Page title](${atlasPageHref(page.id)}). This is an internal Mains reference; do not prepend a localhost or web origin.
 Use AtlasReadPage before editing. Apply changes with AtlasUpdatePage using the version returned by the read. Preserve the user's existing blocks, file references and formatting. If the version changed, read again and reconcile before saving. The page is stored in Atlas; do not write a separate Markdown file as the result.`,
   };
 }

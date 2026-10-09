@@ -1,4 +1,5 @@
 import type { MainsToolContext } from "./mains-tools.core";
+import { atlasPageHref, type AtlasPage } from "@mains/contracts/atlas";
 import { AtlasCreatePageSchema, AtlasReadPageSchema, AtlasUpdatePageSchema } from "./mains-tools.schemas";
 
 async function context(ctx: MainsToolContext, write: boolean) {
@@ -11,7 +12,8 @@ async function context(ctx: MainsToolContext, write: boolean) {
   const { atlasService } = await import("../../atlas");
   return { run, atlasService };
 }
-const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
+const result = (page: AtlasPage) => ({ content: [{ type: "text" as const,
+  text: JSON.stringify({ ...page, pageHref: atlasPageHref(page.item.id) }) }] });
 function content(input: { blocksJson?: string; markdown?: string }) {
   if (input.blocksJson === undefined && input.markdown === undefined) throw new Error("Supply blocksJson or markdown");
   return input.blocksJson !== undefined ? { blocks: JSON.parse(input.blocksJson) as unknown[], markdown: input.markdown }

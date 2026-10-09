@@ -23,6 +23,10 @@ const mocks = vi.hoisted(() => ({
   getState: vi.fn(), invoke: vi.fn(),
   chatProvider: vi.fn(),
   chatMode: vi.fn(),
+  pageRuns: [] as Array<{ id: string; accountId: string; providerId: string; spaceId: string; mode: string; title: string; configSnapshot: Record<string, unknown> }>,
+  historyLoading: false,
+  historyError: undefined as unknown,
+  listPageRuns: vi.fn(),
   settings: { model: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } },
   provider: { defaultModel: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } },
   models: [
@@ -37,9 +41,10 @@ vi.mock("@/features/workspace/hooks/use-workspace-runs", () => ({
     mocks.chatProvider(_provider);
     mocks.chatMode(_mode);
     mocks.selection = selection;
-    const runId = _run === mocks.runId ? mocks.runId : null;
+    const savedRun = mocks.pageRuns.find((run) => run.id === _run);
+    const runId = savedRun?.id ?? (_run === mocks.runId ? mocks.runId : null);
     const activeRun = runId ? { id: runId, mode: mocks.runMode, providerId: mocks.runProviderId, spaceId: mocks.runSpaceId, status: "succeeded", goal: "Edit page",
-      model: mocks.settings.model, configSnapshot: { conversationSettings: mocks.settings } } : undefined;
+      model: mocks.settings.model, configSnapshot: { conversationSettings: mocks.settings }, ...savedRun } : undefined;
     return { runsLoaded: true, runs: activeRun ? [activeRun] : [], activeRunId: runId, activeRun,
       currentEvents: [], currentTurns: [], eventsEndRef: { current: null }, history: undefined,
       isLoading: false, error: null, executeRun: mocks.execute, continueRun: mocks.continue };
@@ -54,6 +59,13 @@ vi.mock("@/lib/redux/api", () => ({
   useGetAppSettingsQuery: () => ({ data: { activeSpaceId: mocks.activeSpaceId ?? mocks.spaces[0]?.id }, isLoading: false }),
   useGetSpacesQuery: () => ({ data: mocks.spaces, isLoading: false }),
   useAbortRunMutation: () => [mocks.abort],
+  useListRecentRunsQuery: (options: { accountId: string; providerId: string; spaceId: string; atlasPageId: string }) => {
+    mocks.listPageRuns(options);
+    return { currentData: mocks.historyLoading || mocks.historyError ? undefined : mocks.pageRuns.filter((run) =>
+      run.accountId === options.accountId && run.providerId === options.providerId && run.spaceId === options.spaceId
+      && run.mode === "work" && run.configSnapshot.atlasPageId === options.atlasPageId),
+      isLoading: mocks.historyLoading, isFetching: mocks.historyLoading, error: mocks.historyError };
+  },
   useGetProviderAccountInfoQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/lib/redux/api/providersApi", () => ({
@@ -104,6 +116,9 @@ beforeEach(() => {
   mocks.runProviderId = "codex";
   mocks.runSpaceId = "work-space";
   mocks.activeSpaceId = undefined;
+  mocks.pageRuns = [];
+  mocks.historyLoading = false;
+  mocks.historyError = undefined;
   mocks.spaces = [{ id: "work-space", accountId: "account", name: "Codex Work", mode: "work", providerId: "codex", model: "test-model" }];
   mocks.settings = { model: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } };
   mocks.invoke.mockResolvedValue(undefined);
@@ -124,6 +139,52 @@ afterEach(() => {
 });
 
 describe("Atlas floating page chat", () => {
+  it("restores a saved Page conversation after opening with fresh renderer state", async () => {
+    mocks.pageRuns = [{ id: "saved-run", accountId: "account", providerId: "codex", spaceId: "work-space", mode: "work",
+      title: "Saved page chat", configSnapshot: { atlasPageId: "one", conversationSettings: mocks.settings } }];
+    setup();
+    fireEvent.click(screen.getByRole("textbox", { name: "Page instruction" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Saved page chat" })).toBeTruthy());
+    typeInstruction("Continue after reload");
+    fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
+    await waitFor(() => expect(mocks.continue).toHaveBeenCalledWith("saved-run", "Continue after reload", "test-model", undefined, [], undefined, mocks.settings, undefined, "one"));
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
+  it("selects an older Page chat from the floating title and keeps an explicit new-chat choice", async () => {
+    mocks.pageRuns = ["Latest chat", "Older chat"].map((title, index) => ({ id: `saved-${index}`, accountId: "account",
+      providerId: "codex", spaceId: "work-space", mode: "work", title,
+      configSnapshot: { atlasPageId: "one", conversationSettings: mocks.settings } }));
+    const view = setup(true);
+    fireEvent.click(await screen.findByRole("button", { name: "Latest chat" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Older chat" }));
+    typeInstruction("Expand the old discussion");
+    fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
+    await waitFor(() => expect(mocks.continue.mock.calls[0]?.[0]).toBe("saved-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Older chat" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "New page chat" }));
+    view.switchPage("two");
+    view.switchPage("one");
+    typeInstruction("Start another discussion");
+    fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
+    await waitFor(() => expect(mocks.execute).toHaveBeenCalledOnce());
+    expect(mocks.continue).toHaveBeenCalledOnce();
+  });
+
+  it("waits for Page chat discovery before allowing a send and retains the draft on discovery failure", async () => {
+    mocks.historyLoading = true;
+    const view = setup(true);
+    typeInstruction("Keep this request");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Send page instruction" }).disabled).toBe(true);
+    expect(mocks.execute).not.toHaveBeenCalled();
+    mocks.historyLoading = false;
+    mocks.historyError = { message: "Could not load chats" };
+    view.switchPage("one");
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Send page instruction" }).disabled).toBe(true);
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Page instruction" }).textContent).toBe("Keep this request");
+  });
+
   it("opens a seeded prompt for the user to complete without starting a run", async () => {
     const view = setup(true);
     const input = screen.getByRole("textbox", { name: "Page instruction" });

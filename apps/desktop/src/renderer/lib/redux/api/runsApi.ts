@@ -4,7 +4,7 @@ import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { ModeId } from "../../../../shared/modes";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
-import type { RunOutputFile } from "@mains/contracts/runs";
+import type { RunExperienceOptions, RunOutputFile } from "@mains/contracts/runs";
 import type { AppDispatch, RootState } from "../index";
 import { forgetDeletedUiContext } from "../ui-state-cleanup";
 import { detachArchivedRun } from "../slices/workspaceSlice";
@@ -273,7 +273,7 @@ export const runsApi = baseApi.injectEndpoints({
 
     listRecentRuns: builder.query<
       RecentRun[],
-      { accountId: string; providerId: string; mode: ModeId; limit?: number }
+      RunExperienceOptions
     >({
       query: (options) => ({
         handler: CHANNELS.runs.listRecent,

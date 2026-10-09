@@ -1,6 +1,10 @@
 /** Atlas stores Pages and explicitly saved files; generated files are projections. */
 export type AtlasKind = "page" | "file" | "image";
 export interface AtlasIdentity { accountId: string; id: string }
+/** Portable Page reference, resolved inside the current Mains app and backend. */
+export function atlasPageHref(id: string): string {
+  return `/atlas/${encodeURIComponent(id)}`;
+}
 /** Page presentation is independent of its content revisions. */
 export interface AtlasMetadata {
   /** Same emoji:/icon: format used by projects and spaces. */

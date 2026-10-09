@@ -973,6 +973,7 @@ describe("runsService", () => {
       expect(startRun.mock.calls[0][0].extraInstructions).toContain(`pageId: ${page.item.id}`);
       expect(startRun.mock.calls[0][0].extraInstructions).toContain("Answer in Turkish.");
       expect(startRun.mock.calls[0][0].extraInstructions).toContain("AtlasReadPage");
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain(`[Page title](/atlas/${page.item.id})`);
       expect((await runsService.getRunById(runId))?.goal).toBe("hi");
 
       await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 1,
