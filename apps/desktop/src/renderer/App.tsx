@@ -14,12 +14,14 @@ import {
 } from "./components/layout/main";
 import {
   shouldHideRightPanel,
+  shouldHideWorkspacePanels,
   SESSION_PANEL_GUTTER,
   CONTENT_LEFT_VAR,
   CONTENT_RIGHT_VAR,
   hasSidebarPanel,
   isSettingsRoute,
   isWorkspaceRoute,
+  isAtlasRoute,
   NAV_RAIL_WIDTH,
   MCP_APP_PANEL_WIDTH_VAR,
 } from "./lib/layout";
@@ -119,8 +121,10 @@ function AppContent() {
   const sidebarPanelRoute = hasSidebarPanel(location.pathname);
   const settingsRoute = isSettingsRoute(location.pathname);
   const workspaceRoute = isWorkspaceRoute(location.pathname);
+  const atlasRoute = isAtlasRoute(location.pathname);
   useRealtimeVoiceLifecycle();
   const hideRightPanel = shouldHideRightPanel(location.pathname);
+  const hideWorkspacePanels = shouldHideWorkspacePanels(location.pathname);
   const variant = useWorkspaceVariant();
   const activeProviderId =
     variant === "default" ? undefined : getProviderVariant(variant).providerId;
@@ -130,8 +134,8 @@ function AppContent() {
   const appExpanded = !!mcpAppPanel?.isExpanded;
   const docViewer = useDocumentViewer();
   const modeConfig = useModeConfig();
-  const showTerminalToggle = variant !== "default" && modeConfig.showTerminal;
-  const showBrowserToggle = variant !== "default";
+  const showTerminalToggle = !hideWorkspacePanels && variant !== "default" && modeConfig.showTerminal;
+  const showBrowserToggle = atlasRoute || variant !== "default";
   const dispatch = useAppDispatch();
   const sidebarCollapsed = useAppSelector(
     (state) => state.appSettings.sidebarCollapsed,
@@ -159,11 +163,10 @@ function AppContent() {
   const isMobile = useIsMobile();
   const browserTabsInHeader = browserPanel.isExpanded && !modeConfig.showTabs && !isMobile;
 
-  // Chat/work hide the right panel entirely; a persisted rightPanelOpen from a
-  // developer session must not inset the content there (and is left untouched
-  // so switching back to developer restores it).
+  // Atlas and Chat/Work hide workspace tools without changing the persisted
+  // developer preference. Document and browser previews own a separate lane.
   const rightPanelVisible =
-    rightPaneReady && !hideRightPanel && modeConfig.showRightPanel && isRightPanelOpen;
+    rightPaneReady && !hideWorkspacePanels && modeConfig.showRightPanel && isRightPanelOpen;
   // Whatever currently owns the right edge — the content stops there, and the
   // session box aligns to the same edge just inside it.
   const rightLaneWidth = mcpAppPanel?.isOpen
@@ -184,7 +187,7 @@ function AppContent() {
     (modeConfig.showSources && !!sessionRunId);
   const sessionPanelShown =
     isSessionPanelOpen &&
-    !hideRightPanel &&
+    !hideWorkspacePanels &&
     hasSessionPanelTarget;
   // The box floats — overlays the content instead of taking a column — when
   // there is no room to share (another panel already holds the right edge), or
@@ -209,7 +212,7 @@ function AppContent() {
   const subagentPanelShown =
     hasSubagents &&
     !!sessionRunId &&
-    !hideRightPanel &&
+    !hideWorkspacePanels &&
     !mcpAppPanel?.isOpen &&
     rightLaneWidth === EDGE_GUTTER;
   const subagentPanelDocked =
@@ -242,7 +245,7 @@ function AppContent() {
 
   useKeyboardShortcut("app.toggleSidebar", () => {
     dispatch(setSidebarCollapsed(!sidebarCollapsed));
-  }, { enabled: !appExpanded && (isMobile || workspaceRoute), allowInEditable: true });
+  }, { enabled: !appExpanded && (isMobile || workspaceRoute || atlasRoute), allowInEditable: true });
   useKeyboardShortcut("app.toggleTerminal", bottomTerminal.toggle, {
     enabled:
       showTerminalToggle && (!!activeWorkspaceId || bottomTerminal.isOpen),
@@ -308,8 +311,9 @@ function AppContent() {
   const showLayoutControls = !mcpAppPanel?.isOpen && !hideRightPanel && !(isMobile && !sidebarCollapsed);
   const layoutControls = showLayoutControls ? (
     <ToggleButton
-      showChatActions={isMobile}
-      hideChatControls={appExpanded}
+      showChatActions={isMobile && !atlasRoute}
+      hideChatControls={appExpanded || hideWorkspacePanels}
+      showRightPanelToggle={!hideWorkspacePanels}
       sessionPanelRight={!isMobile
         ? mcpAppPanel?.isOpen && !appExpanded
           ? `calc(var(${MCP_APP_PANEL_WIDTH_VAR}) + 0.75rem)`
@@ -333,7 +337,7 @@ function AppContent() {
       onTerminalToggle={showTerminalToggle ? bottomTerminal.toggle : undefined}
       browserOpen={showBrowserToggle ? browserPanel.isOpen : undefined}
       browserExpanded={browserPanel.isExpanded}
-      onBrowserExpandToggle={showBrowserToggle ? browserPanel.toggleExpanded : undefined}
+      onBrowserExpandToggle={showBrowserToggle && browserPanel.canExpand ? browserPanel.toggleExpanded : undefined}
       onBrowserToggle={showBrowserToggle ? () => {
         if (!browserPanel.isOpen) {
           mcpAppPanel?.close();
@@ -373,7 +377,7 @@ function AppContent() {
             aria-hidden
           />
         )}
-        {!appExpanded && (isMobile || workspaceRoute) && !(
+        {!appExpanded && (isMobile || workspaceRoute || atlasRoute) && !(
           isMobile &&
           (rightPanelVisible || browserPanel.isOpen || docViewer.isOpen || mcpAppPanel?.isOpen)
         ) && (
@@ -401,10 +405,10 @@ function AppContent() {
             <MainRoutes />
           </ErrorBoundary>
         </MainContent>
-        {!hideRightPanel && modeConfig.showRightPanel && (
+        {!hideWorkspacePanels && modeConfig.showRightPanel && (
           <RightPanel isOpen={rightPanelVisible} width={RIGHT_PANEL_WIDTH} />
         )}
-        {!hideRightPanel && (
+        {!hideWorkspacePanels && (
           <SessionPanel
             providerId={activeProviderId}
             runId={sessionRunId}
@@ -412,7 +416,7 @@ function AppContent() {
             floating={sessionPanelFloating}
           />
         )}
-        {!hideRightPanel && (
+        {!hideWorkspacePanels && (
           <SubagentPanel shown={subagentPanelShown} laneOffset={rightLaneWidth} />
         )}
         <BrowserPanel

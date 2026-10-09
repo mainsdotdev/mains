@@ -84,6 +84,7 @@ export function SidebarGroupSection({
         ref={sortHandle?.ref}
         role="button"
         tabIndex={0}
+        aria-expanded={expanded}
         onPointerDown={(event) => {
           // A press on one of the header's own buttons is a click on that
           // button, never the start of a drag.

@@ -148,7 +148,6 @@ export { default as Powerpoint } from "./powerpoint";
 export { default as Goal } from "./goal";
 export { default as ProjectFolder } from "./project-folder";
 export { default as ProjectFolderOpen } from "./project-folder-open";
-export { default as MainsOutline } from "./mains-color";
 export { default as Download } from "./download";
 export { default as Plugin } from "./plugin";
 export { default as Workflow } from "./workflow";
@@ -182,12 +181,19 @@ export { default as Review} from "./review"
 export { default as JumpToFile} from "./jump-to-file"
 export { default as Activity} from "./activity"
 export { default as Compact} from "./compact"
-
-
-
-
-
-
+export { default as Passport} from "./passport"
+export { default as Page} from "./page"
+export { default as Library} from "./library"
+export { default as LibrarySquare} from "./library-square"
+export { default as List} from "./list"
+export { default as Grid} from "./grid"
+export { default as Generate} from "./generate"
+export { default as Filter} from "./filter"
+export { default as Txt} from "./txt"
+export { default as MainsStroke} from "./mains-stroke"
+export { default as Import} from "./import"
+export { default as Export} from "./export"
+export { default as Palm} from "./palm"
 
 
 

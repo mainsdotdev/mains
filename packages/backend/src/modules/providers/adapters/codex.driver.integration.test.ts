@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkRunRequest } from "../../../../shared/adapter.types";
 import { runsRepo } from "../../runs/runs.repo";
+import * as mainsTools from "./mains-tools.registry";
 
 // Each test spawns the fake codex app-server as a real Node subprocess and
 // completes a JSON-RPC handshake. Under full-suite load that spawn can blow
@@ -133,6 +134,47 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it.each(["work", "chat"] as const)("uses %s tool availability on start, resume, and fork", async (mode) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-atlas-tools-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const dispatch = vi.spyOn(mainsTools, "dispatchMainsTool").mockResolvedValue({
+      content: [{ type: "text", text: JSON.stringify({ item: { id: "page-1", version: 4 } }) }],
+    });
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+    drivers.push(driver);
+    const runId = `atlas-tools-${mode}`;
+    const base = request(runId);
+    const message = "dynamic tool AtlasUpdatePage";
+    const execute = async (acquired: Awaited<ReturnType<typeof driver.createSession>>, expectedRunId: string) => {
+      const outcome = await driver.executePrompt(
+        acquired.session, acquired.prompt, async () => undefined, new AbortController().signal,
+      );
+      expect(outcome.status).toBe("succeeded");
+      const reply = readProtocolLog(logPath).filter((entry) =>
+        typeof entry.id === "number" && entry.id >= 1000 && !entry.method,
+      ).at(-1);
+      if (mode === "work") {
+        expect(reply?.result).toMatchObject({
+          success: true,
+          contentItems: [{ type: "inputText", text: JSON.stringify({ item: { id: "page-1", version: 4 } }) }],
+        });
+        expect(dispatch).toHaveBeenLastCalledWith("AtlasUpdatePage", {
+          pageId: "page-1", expectedVersion: 3, markdown: "Updated page",
+        }, { workspaceId: base.execution.workspaceId, rootPath: base.execution.cwd, runId: expectedRunId });
+      } else {
+        expect(reply?.error).toMatchObject({ code: -32601, message: "Unknown dynamic tool: AtlasUpdatePage" });
+        expect(dispatch).not.toHaveBeenCalled();
+      }
+    };
+
+    await execute(await driver.createSession({ ...base, mode, goal: message }), runId);
+    await execute(await driver.resumeSession!({ ...base, mode, message }), runId);
+    await execute(await driver.forkSession!({ ...base, runId: `${runId}-fork`, sourceRunId: runId, mode, message }), `${runId}-fork`);
+    expect(dispatch).toHaveBeenCalledTimes(mode === "work" ? 3 : 0);
+  });
+
   it("starts fresh voice on an empty thread without a synthetic text turn or goal", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-fresh-voice-"));
     tempDirs.push(tempDir);

@@ -169,8 +169,10 @@ describe("isTextDocType", () => {
     // The panel branches on this: text renders as React so it keeps the app's
     // theme, Office bytes go behind a shadow root.
     expect(isTextDocType("md")).toBe(true);
+    expect(isTextDocType("txt")).toBe(true);
     expect(isTextDocType("docx")).toBe(false);
     expect(isTextDocType("xlsx")).toBe(false);
     expect(isTextDocType("pptx")).toBe(false);
+    expect(isTextDocType("pdf")).toBe(false);
   });
 });

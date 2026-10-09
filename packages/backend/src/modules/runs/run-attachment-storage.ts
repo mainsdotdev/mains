@@ -6,6 +6,7 @@ import type { FileAttachment as UploadAttachment, StoredAttachment } from "@main
 import type { FileAttachment } from "../../../shared/adapter.types";
 import type { runAttachments } from "../../db/schema";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
+import { removeImagePreviews } from "../imageProxy";
 import { attachmentFileName } from "./run-attachments";
 import { runsRepo } from "./runs.repo";
 
@@ -135,6 +136,17 @@ export async function resolveRunAttachment(runId: string, attachmentId: string):
   return { attachment, path: await originalPath(attachment) };
 }
 
+/** A read-only projection of this run's verified originals, without loading bytes. */
+export async function listRunAttachmentFiles(runId: string) {
+  const result: Array<{ attachmentId: string; path: string; type: AttachmentRow["type"] }> = [];
+  for (const attachment of runsRepo.listAttachments(runId)) {
+    try {
+      result.push({ attachmentId: attachment.id, type: attachment.type, path: await originalPath(attachment) });
+    } catch { /* Missing legacy originals must not hide the remaining library. */ }
+  }
+  return result;
+}
+
 /** Last-reference cleanup also catches cascaded account/workspace deletions. */
 export async function pruneUnreferencedAttachments(): Promise<void> {
   for (;;) {
@@ -146,6 +158,7 @@ export async function pruneUnreferencedAttachments(): Promise<void> {
       const claimed = runsRepo.claimUnreferencedAttachment(row.id);
       if (!claimed) continue;
       removed++;
+      await removeImagePreviews(path.join(attachmentRoot(), row.id, row.name)).catch(() => {});
       await fs.rm(path.join(attachmentRoot(), row.id), { recursive: true, force: true }).catch((error) => console.error("[attachments] cleanup failed", error));
       await fs.rm(path.join(getBackendRuntime().getPath("userData"), "cache", "attachment-thumbnails", row.id), { recursive: true, force: true }).catch(() => {});
     }

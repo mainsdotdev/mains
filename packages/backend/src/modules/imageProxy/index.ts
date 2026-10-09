@@ -6,3 +6,4 @@ export {
   serveLocalDocument,
 } from "./imageProxy.local-serve";
 export { serveLocalVisualization } from "./imageProxy.visualization-serve";
+export { readImagePreview, pruneImagePreviews, removeImagePreviews, drainImagePreviews } from "./image-previews";

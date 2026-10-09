@@ -2,15 +2,13 @@
 
 import { createElement } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MODE_CONFIGS } from "@/lib/mode-config";
+
+const mocks = vi.hoisted(() => ({ mode: "developer" as "developer" | "work" | "chat" }));
 
 vi.mock("@/hooks/use-mode-config", () => ({
-  useModeConfig: () => ({
-    showPermissionControls: true,
-    showPlanControls: true,
-    showGoalControls: false,
-    showPluginsButton: false,
-  }),
+  useModeConfig: () => MODE_CONFIGS[mocks.mode],
 }));
 
 import { InputToolbar } from "./input-toolbar";
@@ -29,7 +27,43 @@ function nativeToolbarProps(): Parameters<typeof InputToolbar>[0] {
   };
 }
 
+beforeEach(() => { mocks.mode = "developer"; });
+
 describe("floating composer controls", () => {
+  it("confirms every Codex Full Access selection before changing the mode", () => {
+    const props = nativeToolbarProps();
+    const { rerender } = render(createElement(InputToolbar, props));
+    const chooseFullAccess = () => {
+      fireEvent.click(screen.getByRole("button", { name: "Permission mode" }));
+      fireEvent.click(screen.getByRole("menuitemradio", { name: /Full Access/ }));
+    };
+
+    chooseFullAccess();
+    expect(props.onPermissionModeChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Turn on Full Access?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onPermissionModeChange).not.toHaveBeenCalled();
+
+    chooseFullAccess();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(props.onPermissionModeChange).toHaveBeenCalledExactlyOnceWith("danger-full-access");
+
+    rerender(createElement(InputToolbar, { ...props, permissionMode: "danger-full-access" }));
+    chooseFullAccess();
+    expect(screen.getByRole("dialog", { name: "Turn on Full Access?" })).toBeTruthy();
+    expect(props.onPermissionModeChange).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["work", "chat"] as const)("retains Fast and model controls while hiding permissions in %s mode", (mode) => {
+    mocks.mode = mode;
+    const props = { ...nativeToolbarProps(), layout: "floating" as const, supportsFastMode: true, fastMode: true };
+    render(createElement(InputToolbar, props));
+    expect(screen.getByRole("button", { name: "Model and effort" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Permission mode" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Fast/ }));
+    expect(props.onFastModeToggle).toHaveBeenCalledOnce();
+  });
+
   it("keeps attachment, model and effort, permissions, and send in one row", () => {
     const onSubmit = vi.fn();
     const props: Parameters<typeof InputToolbar>[0] = {
@@ -138,7 +172,7 @@ describe("floating composer controls", () => {
 
 const idleComposer = {
   state: { phase: "idle" as const, runId: null, muted: false }, runId: "chat", isNewRun: false,
-  isRunning: false, voiceEnabled: true, hasMessage: false, preparing: false, startDisabled: false, sendDisabled: false,
+  isRunning: false, canSendDuringRun: false, voiceEnabled: true, hasMessage: false, preparing: false, startDisabled: false, sendDisabled: false,
 };
 
 describe("single primary composer button", () => {
@@ -211,18 +245,27 @@ describe("single primary composer button", () => {
     expect(onMute).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["default", "floating"] as const)("keeps Stop while work is running in the %s composer, even with a draft", (layout) => {
+  it.each(["default", "floating"] as const)("switches running work from Stop to queued Send and back in the %s composer", (layout) => {
     const props = nativeToolbarProps();
     const onStop = vi.fn();
-    const controls = (hasMessage: boolean) => ({ ...composerControls({ ...idleComposer, isRunning: true, hasMessage,
-      sendLabel: "Save queued message", sendDisabled: true }).primary, onClick: onStop });
-    const { rerender } = render(createElement(InputToolbar, { ...props, layout, primaryAction: controls(false) }));
-    for (const hasMessage of [false, true]) {
-      rerender(createElement(InputToolbar, { ...props, layout, primaryAction: controls(hasMessage) }));
-      fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
-      expect(screen.queryByRole("button", { name: /Send prompt|Save queued message|Start voice chat/ })).toBeNull();
+    const onSubmit = vi.fn();
+    const controls = (text: string, attachments = 0, sendLabel = "Queue message") => {
+      const { primary } = composerControls({ ...idleComposer, isRunning: true, canSendDuringRun: true,
+        hasMessage: hasComposerMessage(text, attachments, []), sendLabel });
+      return { ...primary, onClick: primary.kind === "stop" ? onStop : onSubmit };
+    };
+    const { rerender } = render(createElement(InputToolbar, { ...props, layout, primaryAction: controls("") }));
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeTruthy();
+    for (const [text, attachments, label] of [["next message", 0, "Queue message"], ["", 1, "Queue message"], ["edited", 0, "Save queued message"]] as const) {
+      rerender(createElement(InputToolbar, { ...props, layout, primaryAction: controls(text, attachments, label) }));
+      expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: label }));
     }
-    expect(onStop).toHaveBeenCalledTimes(2);
+    expect(onSubmit).toHaveBeenCalledTimes(3);
+    expect(onStop).not.toHaveBeenCalled();
+    rerender(createElement(InputToolbar, { ...props, layout, primaryAction: controls("  ") }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(onStop).toHaveBeenCalledOnce();
   });
 
   it("uses the same Stop to close voice and stop work without submitting draft text", () => {

@@ -6,11 +6,11 @@ export type OfficeDocType = "docx" | "xlsx" | "pptx";
 
 /**
  * Everything the viewer can show. Office formats go through the render host;
- * text ones (`md`) are React all the way down, so they keep the app's theme
- * and typography instead of living behind a shadow boundary. PDFs are drawn
- * page by page onto canvases by pdf.js.
+ * text ones (`md`, `txt`) are React all the way down, so they keep the app's
+ * theme and typography instead of living behind a shadow boundary. PDFs are
+ * drawn page by page onto canvases by pdf.js.
  */
-export type DocType = OfficeDocType | "md" | "pdf";
+export type DocType = OfficeDocType | "md" | "pdf" | "txt";
 
 /** Renderer module key dispatched on by the render host. */
 export type RendererKey = OfficeDocType;
@@ -22,6 +22,7 @@ const EXT_TO_DOC_TYPE: Record<string, DocType> = {
   ".md": "md",
   ".markdown": "md",
   ".pdf": "pdf",
+  ".txt": "txt",
 };
 
 /**
@@ -45,11 +46,12 @@ export const DOC_VIEWER_LABELS: Record<DocType, string> = {
   pptx: "Presentation",
   md: "Markdown",
   pdf: "PDF Document",
+  txt: "Text Document",
 };
 
 /** Text formats render as React, not as bytes through the shadow-DOM host. */
-export function isTextDocType(docType: DocType): docType is "md" {
-  return docType === "md";
+export function isTextDocType(docType: DocType): docType is "md" | "txt" {
+  return docType === "md" || docType === "txt";
 }
 
 /** Maps an Office DocType to its renderer module key. Identity today, but kept

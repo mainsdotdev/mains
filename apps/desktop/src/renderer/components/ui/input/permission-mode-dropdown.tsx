@@ -1,7 +1,8 @@
-import { RefObject } from "react";
+import { RefObject, useState } from "react";
 import { Plan, Lock, Edit, DontAsk, Danger, ArrowUp, Infinite } from "../icons";
 import DropdownWrapper from "../dropdown-wrapper";
 import { Button } from "../button";
+import { FullAccessConfirmationModal } from "../full-access-confirmation-modal";
 import Tooltip from "../tooltip";
 import { Caption, Tiny } from "../text";
 import { useIsMobile } from "@/lib/platform";
@@ -168,6 +169,7 @@ export function PermissionModeDropdown({
   iconOnly = false,
 }: PermissionModeDropdownProps) {
   const isCodex = variant === "codex";
+  const [isFullAccessConfirmationOpen, setIsFullAccessConfirmationOpen] = useState(false);
   const showPlanRow = isCodex && !!onPlanModeToggle;
   // Goal mode and plan mode are mutually exclusive — when goal is on, the plan
   // row is shown disabled with a tooltip pointing the user at the goal toggle.
@@ -224,7 +226,11 @@ export function PermissionModeDropdown({
             role="menuitemradio"
             aria-checked={permissionMode === mode.value}
             onClick={() => {
-              onPermissionModeChange(mode.value);
+              if (isCodex && mode.value === "danger-full-access") {
+                setIsFullAccessConfirmationOpen(true);
+              } else {
+                onPermissionModeChange(mode.value);
+              }
               onToggle();
             }}
             className={`w-full text-left px-2 py-1.5 cursor-pointer rounded-xl transition-colors flex items-center gap-2
@@ -287,6 +293,14 @@ export function PermissionModeDropdown({
         )}
         </div>
       </DropdownWrapper>
+      <FullAccessConfirmationModal
+        isOpen={isFullAccessConfirmationOpen}
+        onCancel={() => setIsFullAccessConfirmationOpen(false)}
+        onConfirm={() => {
+          setIsFullAccessConfirmationOpen(false);
+          onPermissionModeChange("danger-full-access");
+        }}
+      />
     </div>
   );
 }

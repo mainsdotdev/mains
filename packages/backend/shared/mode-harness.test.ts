@@ -30,13 +30,13 @@ describe("MODE_HARNESSES table invariants", () => {
     expect(dev.configOverrides).toEqual({});
   });
 
-  it("keeps chat's allowlist free of write tools, Bash, and mains tools", () => {
+  it("keeps chat read-only and permits only the Atlas read tool from Mains", () => {
     const allowed = MODE_HARNESSES.chat.toolPolicy?.allowedTools ?? [];
     for (const tool of ["Bash", "Write", "Edit", "NotebookEdit", "Task"]) {
       expect(allowed).not.toContain(tool);
     }
     expect(allowed).toContain("ToolSearch");
-    expect(allowed.some((t) => t.startsWith("mcp__mains__"))).toBe(false);
+    expect(allowed.filter((t) => t.startsWith("mcp__mains__"))).toEqual(["mcp__mains__AtlasReadPage"]);
   });
 
   it("denies Bash in work mode while keeping the default allowlist", () => {

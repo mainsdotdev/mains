@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readReviewComments, type ReviewComment } from "@mains/contracts/review-comments";
-import { reviewFiles, reviewLineText, reviewCommentMatches } from "./review-diff";
+import { reviewFiles, reviewLineText, reviewLineRangeText, reviewCommentMatches } from "./review-diff";
 import { buildRunContextPayload } from "./run-context-payload";
 import { composerAnnotationPrompt } from "./composer-message";
 import { groupContextItems } from "./composer-context";
@@ -31,6 +31,16 @@ describe("review diffs and comments", () => {
     expect(reviewLineText(file.diff!, "additions", 9)).toBeUndefined();
     expect(reviewCommentMatches(comment(), "ws", file)).toBe(true);
     expect(reviewCommentMatches(comment(), "another-workspace", file)).toBe(false);
+  });
+
+  it("keeps a consecutive range on one diff side and rejects gaps", () => {
+    const file = reviewFiles(patch, ["src/a.ts"])[0];
+    expect(reviewLineRangeText(file.diff!, "deletions", 10, 12)).toBe("context\noldValue\nend");
+    expect(reviewLineRangeText(file.diff!, "additions", 10, 12)).toBe("context\nnewValue\nend");
+    expect(reviewLineRangeText(file.diff!, "deletions", 9, 11)).toBeUndefined();
+    expect(reviewLineRangeText(file.diff!, "deletions", 10, Number.MAX_SAFE_INTEGER)).toBeUndefined();
+    expect(reviewCommentMatches(comment({ lineNumber: 10, endLineNumber: 12, lineText: "context\noldValue\nend" }), "ws", file)).toBe(true);
+    expect(reviewCommentMatches(comment({ lineNumber: 10, endLineNumber: 12, lineText: "context\nnewValue\nend" }), "ws", file)).toBe(false);
   });
 
   it("keeps comments off a changed snapshot even when the line number remains the same", () => {
@@ -95,8 +105,17 @@ rename to new name.ts
     expect(isRunTab("review")).toBe(false);
   });
 
+  it("includes both ends of a range in prompt references and saved metadata", () => {
+    const range = comment({ lineNumber: 10, endLineNumber: 12, lineText: "context\noldValue\nend" });
+    const payload = buildRunContextPayload([{ kind: "review", ...range }]);
+    expect(payload.initialContext[0].ref).toBe("/repo/src/a.ts#L10-12");
+    expect(payload.initialContext[0].content).toContain("old version, lines 10-12");
+    expect(readReviewComments([payload.initialContext[0].metadata])).toEqual([range]);
+  });
+
   it("rejects malformed saved comment metadata and projects only supported fields", () => {
-    expect(readReviewComments([null, {}, { ...comment(), side: "right" }, { ...comment(), lineNumber: 0 }])).toEqual([]);
+    expect(readReviewComments([null, {}, { ...comment(), side: "right" }, { ...comment(), lineNumber: 0 },
+      { ...comment(), endLineNumber: 10 }, { ...comment(), endLineNumber: 11.5 }])).toEqual([]);
     expect(readReviewComments([{ ...comment(), source: "review", extra: "unrelated" }])).toEqual([comment()]);
   });
 });

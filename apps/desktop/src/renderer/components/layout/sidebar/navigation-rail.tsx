@@ -11,7 +11,7 @@ import {
   Settings,
   Task,
 } from "@/components/ui/icons";
-import { Clock } from "@/components/ui/icons/space";
+import { Clock, Globe } from "@/components/ui/icons/space";
 import { RealtimeVoiceDock } from "@/features/workspace/components/realtime-voice-dock";
 import {
   getCommandMenuOpen,
@@ -29,12 +29,15 @@ import { useMcpAppExtensions } from "@/hooks/use-mcp-app-extensions";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
 import { McpAppRail } from "./mcp-app-rail";
 
+
 interface NavigationRailProps {
   showTasks: boolean;
   pluginsAvailable: boolean;
+  atlasAvailable: boolean;
   spaces: Space[];
   activeSpaceId: string | null;
   onHomeClick: () => void;
+  onAtlasClick?: () => void;
   onSpaceChange: (spaceId: string) => void;
   onSettingsClick: () => void;
   onHelpClick: (event: MouseEvent) => void;
@@ -44,9 +47,11 @@ interface NavigationRailProps {
 export function NavigationRail({
   showTasks,
   pluginsAvailable,
+  atlasAvailable,
   spaces,
   activeSpaceId,
   onHomeClick,
+  onAtlasClick,
   onSpaceChange,
   onSettingsClick,
   onHelpClick,
@@ -74,6 +79,7 @@ export function NavigationRail({
   const destinations: Array<{
     label: string; path: string; Icon: typeof Plugin; disabled?: boolean;
   }> = [
+    { label: "Atlas", path: "/atlas", Icon: Globe, disabled: !atlasAvailable },
     {
       label: "Plugins",
       path: "/plugins",
@@ -142,7 +148,11 @@ export function NavigationRail({
               aria-label={label}
               aria-current={active ? "page" : undefined}
               disabled={disabled}
-              onClick={() => navigate(path)}
+              onClick={() => {
+                appPanel?.close();
+                if (path === "/atlas" && onAtlasClick) onAtlasClick();
+                else navigate(path);
+              }}
             >
               <Icon
                 className={`size-5 ${label === "Plugins" ? "-rotate-45" : ""}`}

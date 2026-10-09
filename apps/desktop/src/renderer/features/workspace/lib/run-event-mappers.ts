@@ -1,6 +1,28 @@
 import type { RunEvent } from "../types";
 import { previewParams } from "./parse-tool-content";
 
+/** Older Codex sessions could save a raw preview after its transformed answer. */
+export function omitCompletedCodexPreviews(events: RunEvent[], runId: string): RunEvent[] {
+  const isRecoveredPreview = (event: RunEvent) => event.type === "artifact" &&
+    event.metadata?.kind === "report" && event.metadata.source === "agent_message_streaming" &&
+    event.metadata.streaming === false && event.metadata.interrupted === false;
+  if (!events.some(isRecoveredPreview)) return events;
+
+  const completedStreams = new Set(events.flatMap((event) =>
+    event.type === "artifact" && event.metadata?.kind === "report" &&
+    event.metadata.source === "agent_message" && typeof event.metadata.itemId === "string"
+      ? [`codex-msg-${runId}-${event.metadata.itemId}`] : [],
+  ));
+  return events.filter((event) => {
+    if (!isRecoveredPreview(event)) return true;
+    const streamId = event.metadata?.streamId;
+    if (typeof streamId !== "string") return true;
+    // RunSession appends its UUID and message sequence to the provider id.
+    const nativeId = streamId.replace(/-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}-\d+$/i, "");
+    return !completedStreams.has(nativeId);
+  });
+}
+
 function parseMetadata(metadata: unknown): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
   if (typeof metadata === "string") {
@@ -70,12 +92,16 @@ export function mapArtifactToEvent(artifact: MappableArtifact): RunEvent {
 /** Artifacts sort before tool calls on a timestamp tie — matches the prior
  *  full-fetch order, where artifacts were pushed into the list before tool calls. */
 function eventTieRank(e: RunEvent): number {
+  const anchor = e.metadata?.outputAnchor as { source?: string } | undefined;
+  if (anchor) return anchor.source === "tool" ? 1 : 0;
   return e.type === "tool_call" ? 1 : 0;
 }
 
 /** Numeric source-row id embedded in an event id (`"tool-42"` → 42) for stable
  *  within-type ordering when timestamps tie (second-grained `createdAt`). */
 function eventNumericId(e: RunEvent): number {
+  const anchor = e.metadata?.outputAnchor as { id?: number } | undefined;
+  if (typeof anchor?.id === "number") return anchor.id;
   const dash = e.id.lastIndexOf("-");
   const n = dash >= 0 ? Number(e.id.slice(dash + 1)) : NaN;
   return Number.isFinite(n) ? n : 0;
@@ -175,7 +201,10 @@ export function mergeMappedRunEvents(existing: RunEvent[], incoming: readonly Ru
     if (dt !== 0) return dt;
     const dr = eventTieRank(a) - eventTieRank(b);
     if (dr !== 0) return dr;
-    return eventNumericId(a) - eventNumericId(b);
+    const idOrder = eventNumericId(a) - eventNumericId(b);
+    if (idOrder) return idOrder;
+    const derivedOrder = Number(!!a.metadata?.outputAnchor) - Number(!!b.metadata?.outputAnchor);
+    return derivedOrder || a.id.localeCompare(b.id);
   });
   return merged;
 }

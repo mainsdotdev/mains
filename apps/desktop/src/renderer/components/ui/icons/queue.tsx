@@ -14,7 +14,8 @@ const SvgComponent = (props: SVGProps<SVGSVGElement>) => (
     {...props}
     viewBox="0 0 24 24"
   >
-    <path d="M3 6h6M16 9s-3-2.21-3-3 3-3 3-3m-2 3h1c2.828 0 4.243 0 5.121.879C21 7.757 21 9.172 21 12v9M3 13h13M3 20h13" />
+    <path d="M15.5 14s3.5 2.578 3.5 3.5c0 .922-3.5 3.5-3.5 3.5" />
+    <path d="M18.5 17.5h-6c-3.287 0-4.931 0-6.038-.908a4 4 0 0 1-.554-.554C5 14.93 5 13.288 5 10V3M9 6h10M9 10h7" />
   </svg>
 )
 export default SvgComponent

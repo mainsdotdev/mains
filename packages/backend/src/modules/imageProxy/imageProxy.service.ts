@@ -1,6 +1,7 @@
 import * as os from "os";
 import * as path from "path";
 import * as dns from "dns";
+import { isLocalImagePreviewSize, type LocalImagePreviewSize } from "@mains/contracts/image-preview";
 import { getConnectionWithSecrets } from "../connections";
 import {
   signLocalDocumentPath,
@@ -15,9 +16,9 @@ const GITHUB_DOMAINS = ["githubusercontent.com", "github.com"];
 /** GitHub hosts that serve data, never images — the token is not sent there. */
 const GITHUB_API_HOSTS = new Set(["api.github.com", "uploads.github.com"]);
 
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif"]);
 
-const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf"]);
+const DOCUMENT_EXTENSIONS = new Set([".docx", ".xlsx", ".pptx", ".pdf", ".md", ".markdown", ".txt", ".csv"]);
 
 function expandTilde(p: string): string {
   if (p === "~") return os.homedir();
@@ -128,15 +129,16 @@ export const imageProxyService = {
    * The HMAC signature is what authorizes the path, so the policy applied
    * here is the *only* policy enforced at request time.
    */
-  signLocalImageUrl(rawPath: string, ttlMs?: number): string | null {
+  signLocalImageUrl(rawPath: string, ttlMs?: number, maxSide?: LocalImagePreviewSize): string | null {
     if (typeof rawPath !== "string" || rawPath.length === 0) return null;
+    if (maxSide !== undefined && !isLocalImagePreviewSize(maxSide)) return null;
     const expanded = expandTilde(rawPath);
     if (!path.isAbsolute(expanded)) return null;
     const resolved = path.resolve(expanded);
     if (resolved.includes("\0")) return null;
     const ext = path.extname(resolved).toLowerCase();
     if (!IMAGE_EXTENSIONS.has(ext)) return null;
-    return signLocalImagePath(resolved, ttlMs);
+    return signLocalImagePath(resolved, ttlMs, maxSide);
   },
 
   /**

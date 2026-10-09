@@ -4,10 +4,11 @@ import { ArrowUp, Chat, Check, Plus } from "@/components/ui/icons";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { ComposerSendTarget } from "../lib/composer-send-target";
 
-export function ComposerSendTargetSelect({ target, onChange, variant = "chip" }: {
+export function ComposerSendTargetSelect({ target, onChange, variant = "chip", disabled = false }: {
   target: ComposerSendTarget;
   onChange?: (runId: string | null) => void;
   variant?: "chip" | "title";
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -29,7 +30,7 @@ export function ComposerSendTargetSelect({ target, onChange, variant = "chip" }:
   }, [open]);
 
   return <div ref={titleAnchor} className={variant === "title" ? "min-w-0 flex-1" : "relative min-w-0 max-w-full"}>
-    <Button ref={trigger} type="button" onClick={() => setOpen(!open)}
+    <Button ref={trigger} type="button" disabled={disabled} onClick={() => setOpen(!open)}
       aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
       title="Choose which chat this message is sent to"
       className={variant === "title"

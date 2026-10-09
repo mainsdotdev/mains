@@ -43,7 +43,7 @@ vi.mock("@/lib/redux/hooks", () => ({
     selector({ workspace: { pendingRunId: null } }),
 }));
 vi.mock("@/lib/redux/api", () => ({
-  workspaceApi: { util: { invalidateTags: vi.fn() } },
+  runsApi: { util: { invalidateTags: vi.fn() } },
   useArchiveRunMutation: () => [vi.fn()],
 }));
 vi.mock("@/components/ui", () => ({ toast: { error: vi.fn() } }));
@@ -231,6 +231,21 @@ describe("useWorkspaceRuns streaming transcript", () => {
     const view = await transcript([{ id: 2, kind: "report", content: "Hello" }]);
     expect(view.result.current.currentEvents).toHaveLength(1);
     expect(view.result.current.currentEvents[0].metadata?.streaming).toBeUndefined();
+  });
+
+  it("restores Codex suggestions in an older transcript with a recovered duplicate preview", async () => {
+    const artifacts = [
+      { id: 13, kind: "report", content: "CV için önerilerim.",
+        metadata: { source: "agent_message", itemId: "message-final", messagePhase: "final_answer" } },
+      { id: 14, kind: "prompt_suggestion", content: "CV’mi yeniden yaz.", metadata: { label: "Metni güçlendir" } },
+      { id: 17, kind: "report", content: 'CV için önerilerim.\n\n- :codex-followup[Metni güçlendir]{prompt="CV’mi yeniden yaz."}',
+        metadata: { source: "agent_message_streaming", streamId: "codex-msg-run-a-message-final-2851043d-559c-4e12-9853-b5bcbcc83175-3", streaming: false, interrupted: false } },
+    ];
+    const view = await transcript(artifacts, "codex");
+    expect(view.result.current.currentEvents.map((event) => event.id))
+      .toEqual(["artifact-13", "artifact-14"]);
+    // Display reconciliation must leave the stored history intact.
+    expect(artifacts).toHaveLength(3);
   });
 
   it("updates live voice input in the user bubble and holds a completed reply until its artifact arrives", async () => {

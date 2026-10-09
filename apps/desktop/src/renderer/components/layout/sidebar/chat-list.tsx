@@ -30,6 +30,7 @@ import {
   setPendingRunId,
   setSelectedCollectionId,
 } from "@/lib/redux/slices/workspaceSlice";
+import { updateAtlasPageChat } from "@/lib/redux/slices/atlasSlice";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { resolveRunSpaceTarget } from "@/features/workspace/lib/background-runs";
 import { getProviderVariantById } from "@/lib/provider-variants";
@@ -89,6 +90,7 @@ export function SidebarChatList({
   const [isDeletingRun, setIsDeletingRun] = useState(false);
 
   const activeTab = useAppSelector((state) => state.workspace.activeTab);
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
   const { data: recentRuns, isLoading } = useRecentChats();
   const { data: collections } = useListCollectionsQuery(
     { accountId: account?.id ?? "" },
@@ -210,6 +212,34 @@ export function SidebarChatList({
     navigate(targetPath);
   };
 
+  const handleOpenPage = async (run: RecentRun, pageId: string) => {
+    const space = spaces.find(
+      (candidate) => candidate.id === run.spaceId && candidate.providerId === run.providerId,
+    );
+    if (!space) {
+      toast.error("No space is set up for this page's chat");
+      return;
+    }
+    // Atlas projects the run's own Space to Work locally. Opening its Page
+    // switches to that Space without changing the Space's saved mode.
+    if (space.id !== activeSpaceId) {
+      try {
+        navigate("/", { replace: true });
+        await setActiveSpace(space.id).unwrap();
+      } catch (error) {
+        console.error("Failed to switch space for page:", error);
+        toast.error("Failed to switch space");
+        return;
+      }
+    }
+    dispatch(updateAtlasPageChat({
+      ownerKey: JSON.stringify([backendId ?? "local", run.accountId]),
+      id: pageId,
+      patch: { runId: run.id, spaceId: space.id, mode: "details" },
+    }));
+    navigate(`/atlas/${encodeURIComponent(pageId)}`);
+  };
+
   const handleDeleteRun = async () => {
     if (!deleteRunTarget) return;
     setIsDeletingRun(true);
@@ -249,14 +279,19 @@ export function SidebarChatList({
     }
   };
 
-  const renderChat = (run: RecentRun, isRecent = false) => (
-    <ChatItem
+  const renderChat = (run: RecentRun, isRecent = false) => {
+    const provider = getProviderVariantById(run.providerId);
+    const linkedPageId = run.configSnapshot?.atlasPageId;
+    const pageId = typeof linkedPageId === "string" ? linkedPageId.trim() : "";
+    const canOpenPage = provider?.supportsAtlas && run.mode === "work" && !!run.spaceId && !!pageId;
+    return <ChatItem
       key={run.id}
       run={run}
-      variant={getProviderVariantById(run.providerId)?.variant ?? "null"}
+      variant={provider?.variant ?? "null"}
       isActive={activeTab === run.id}
       isRecent={isRecent}
       onSelect={() => void handleSelectChat(run)}
+      onOpenPage={canOpenPage ? () => void handleOpenPage(run, pageId) : undefined}
       onArchive={() => void archiveChat(run)}
       onDelete={() => setDeleteRunTarget(run)}
       onRename={(title) => void renameChat(run, title)}
@@ -264,8 +299,8 @@ export function SidebarChatList({
       onMove={(collectionId) => void moveChat(run, collectionId)}
       isPinned={run.pinnedAt !== null}
       onTogglePin={() => void toggleChatPin(run)}
-    />
-  );
+    />;
+  };
 
   if (isLoading) {
     return (

@@ -8,9 +8,11 @@ interface ProjectInstructionsSectionProps {
   prInstructions: string;
   rootPath: string | undefined;
   onFieldChange: (field: "commitInstructions" | "prInstructions", value: string) => void;
+  onImport: (value: string) => Promise<void>;
+  saving: boolean;
 }
 
-export function ProjectInstructionsSection({ commitInstructions, prInstructions, rootPath, onFieldChange }: ProjectInstructionsSectionProps) {
+export function ProjectInstructionsSection({ commitInstructions, prInstructions, rootPath, onFieldChange, onImport, saving }: ProjectInstructionsSectionProps) {
   const [importing, setImporting] = useState(false);
 
   const handleImportPrTemplate = useCallback(async () => {
@@ -26,8 +28,7 @@ export function ProjectInstructionsSection({ commitInstructions, prInstructions,
       for (const path of paths) {
         const result = await appApi.fileExplorer.readFile(path);
         if (result?.success && result.data) {
-          onFieldChange("prInstructions", result.data);
-          toast.success("PR template imported");
+          await onImport(result.data);
           return;
         }
       }
@@ -37,7 +38,7 @@ export function ProjectInstructionsSection({ commitInstructions, prInstructions,
     } finally {
       setImporting(false);
     }
-  }, [rootPath, importing, onFieldChange]);
+  }, [rootPath, importing, onImport]);
 
   return (
     <SettingsSection title="Instructions">
@@ -71,8 +72,8 @@ export function ProjectInstructionsSection({ commitInstructions, prInstructions,
           <div className="flex justify-end">
             <Button
               type="button"
-              variant="ghost"
-              disabled={importing}
+              variant="primary"
+              disabled={importing || saving}
               isLoading={importing}
               onClick={handleImportPrTemplate}
             >

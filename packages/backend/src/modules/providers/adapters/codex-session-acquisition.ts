@@ -433,6 +433,7 @@ export function createCodexSessionAcquisition(
     runCoordinator.registerRun({
       runId,
       threadId: threadId ?? null,
+      mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
     });
 
@@ -538,6 +539,7 @@ export function createCodexSessionAcquisition(
     runCoordinator.registerRun({
       runId,
       threadId,
+      mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
       subAgents: persistedSubAgents,
     });
@@ -647,6 +649,7 @@ export function createCodexSessionAcquisition(
     runCoordinator.registerRun({
       runId,
       threadId: forkedThreadId,
+      mode: request.mode,
       mainsCtx: mainsContext(runId, request.execution),
     });
 
@@ -803,6 +806,7 @@ export function createCodexSessionAcquisition(
       runCoordinator.attachThread(request.runId, threadId);
       runCoordinator.registerRun({
         runId: request.runId, threadId,
+        mode: request.mode,
         mainsCtx: { workspaceId: request.execution.workspaceId, rootPath: request.execution.cwd, runId: request.runId },
         subAgents: !runCoordinator.hasSessionSubAgentState(request.runId)
           ? await findPersistedSubAgents?.(request.runId)

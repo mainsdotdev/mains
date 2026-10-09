@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { mergeRunEvents, mapArtifactToEvent, mapToolCallToEvent } from "./run-event-mappers";
+import { mergeRunEvents, mapArtifactToEvent, mapToolCallToEvent, omitCompletedCodexPreviews } from "./run-event-mappers";
 import type { RunArtifact, ToolCall } from "../types";
+
+it("places a derived document after its message and before the next same-second prompt", () => {
+  const output = { ...artifact(-123, "", 10), kind: "document", metadata: JSON.stringify({
+    outputAnchor: { source: "artifact", id: 2 }, outputSelected: true, path: "/out/report.md",
+  }) } as RunArtifact;
+  const result = mergeRunEvents([], [artifact(1, "prompt", 10), artifact(2, "answer", 10), output,
+    artifact(3, "next prompt", 10)], []);
+  expect(result.map((event) => event.id)).toEqual(["artifact-1", "artifact-2", "artifact--123", "artifact-3"]);
+});
 
 function artifact(id: number, content: string, sec: number): RunArtifact {
   return {
@@ -29,6 +38,20 @@ function toolCall(
     updatedAt: new Date(updatedSec * 1000),
   } as ToolCall;
 }
+
+it("keeps recovered previews without a matching completed Codex item, including interrupted messages", () => {
+  const final = mapArtifactToEvent({ ...artifact(1, "Final answer", 1), metadata: { source: "agent_message", itemId: "message" } });
+  const preview = (id: number, itemId: string, interrupted = false, source = "agent_message_streaming") =>
+    mapArtifactToEvent({ ...artifact(id, "Raw preview", id), metadata: {
+      source, streaming: false, interrupted,
+      streamId: `codex-msg-r1-${itemId}-2851043d-559c-4e12-9853-b5bcbcc83175-${id}`,
+    } });
+  const events = [final, preview(2, "message"), preview(3, "message-next"), preview(4, "message", true),
+    preview(5, "message", false, "assistant.message_delta")];
+  expect(omitCompletedCodexPreviews(events, "r1").map((event) => event.id))
+    .toEqual(["artifact-1", "artifact-3", "artifact-4", "artifact-5"]);
+  expect(omitCompletedCodexPreviews(events, "another-run")).toEqual(events);
+});
 
 describe("mapArtifactToEvent", () => {
   it("restores a voice task navigation card from the existing report artifact, without restyling ordinary reports", () => {

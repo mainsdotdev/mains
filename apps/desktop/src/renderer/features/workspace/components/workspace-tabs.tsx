@@ -1,4 +1,4 @@
-import { Plus, Note, Document, Picture, Review } from "@/components/ui/icons";
+import { Plus, Note, Picture, Review, Page } from "@/components/ui/icons";
 import { RunTab, getTabTitle } from "./run-tab";
 import { EditorTab } from "./editor-tab";
 import { IssueTab } from "./issue-tab";
@@ -90,7 +90,7 @@ export function WorkspaceTabs({
         label: fileName || "Editor",
         icon: fileName && isPreviewableImagePath(fileName)
           ? <Picture className="size-4" />
-          : <Document className="size-4" />,
+          : <Page className="size-4" />,
         group: "Editor",
         onSelect: onSelectEditorTab,
         onClose: onCloseEditorTab,

@@ -14,6 +14,7 @@
 
 import type { RunEvent } from "../types";
 import { resolveTool } from "./resolve-tool";
+import { atlasToolHasError } from "./atlas-tool-content";
 import { PHRASES_BY_GROUP_KEY, VENDOR_PHRASE_RANK } from "./tool-registry";
 
 const MAX_SUMMARY_CLAUSES = 3;
@@ -69,7 +70,10 @@ export function summarizeToolCalls(events: RunEvent[]): string {
       return;
     }
 
-    const existing = clauses.get(resolved.groupKey);
+    const failedAtlas = resolved.category === "Atlas" &&
+      (event.metadata?.status === "error" || event.metadata?.status === "canceled" || atlasToolHasError(event.metadata?.output));
+    const groupKey = failedAtlas ? `${resolved.groupKey}:failed` : resolved.groupKey;
+    const existing = clauses.get(groupKey);
     if (existing) {
       existing.count++;
       return;
@@ -77,12 +81,12 @@ export function summarizeToolCalls(events: RunEvent[]): string {
 
     // No registered phrase: name the tool rather than dropping it from the
     // sentence. Reads as "… and used Glob" — duller, never wrong.
-    const phrase = PHRASES_BY_GROUP_KEY[resolved.groupKey] ?? {
+    const phrase = PHRASES_BY_GROUP_KEY[groupKey] ?? {
       one: `used ${resolved.groupLabel}`,
       many: `used ${resolved.groupLabel}`,
       rank: 70,
     };
-    clauses.set(resolved.groupKey, {
+    clauses.set(groupKey, {
       rank: phrase.rank,
       order: index,
       count: 1,

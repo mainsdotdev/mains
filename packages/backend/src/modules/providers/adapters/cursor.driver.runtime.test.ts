@@ -98,6 +98,23 @@ describe("Cursor ACP transcript", () => {
     return { outcome, calls: events.filter((event) => event.type === "tool_call") };
   }
 
+  it("marks the terminal answer as final and the text before a tool as commentary", async () => {
+    const acquired = await acquire();
+    const events: WorkRunEvent[] = [];
+    fixture.onPrompt = (message) => {
+      fixture.text(acquired.sessionId!, "Working.");
+      fixture.update(acquired.sessionId!, { sessionUpdate: "tool_call", toolCallId: "read-1", kind: "read", title: "Read", status: "pending", rawInput: {} });
+      fixture.update(acquired.sessionId!, { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed" });
+      fixture.text(acquired.sessionId!, "Done.");
+      fixture.finish(message);
+    };
+    await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    expect(reports(events)).toEqual([
+      expect.objectContaining({ content: "Working.", metadata: expect.objectContaining({ messagePhase: "commentary" }) }),
+      expect.objectContaining({ content: "Done.", metadata: expect.objectContaining({ messagePhase: "final_answer" }) }),
+    ]);
+  });
+
   it("keeps the native session title out of the transcript", async () => {
     const acquired = await acquire();
     const events: WorkRunEvent[] = [];
@@ -320,6 +337,7 @@ describe("Cursor ACP transcript", () => {
     };
     const outcome = await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
     expect(outcome).toMatchObject({ status: "failed", summary: "agent crashed" });
+    expect(reports(events).every((event) => event.type === "artifact" && event.metadata?.messagePhase !== "final_answer")).toBe(true);
     expect(reports(events)).toEqual([expect.objectContaining({ content: "Partial reply." })]);
     expect(events.slice(-2)).toEqual([
       expect.objectContaining({ type: "artifact", ephemeral: true, content: "", metadata: { source: "agent_message_streaming" } }),

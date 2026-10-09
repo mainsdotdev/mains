@@ -19,7 +19,7 @@ import {
   Connect,
   Document,
   Enter,
-  Mains,
+  MainsStroke,
   Plus,
   Project,
   ProjectFolder,
@@ -31,7 +31,7 @@ import {
   Terminal,
 } from "@/components/ui/icons";
 import { Modal } from "@/components/ui";
-import { parseIcon, type IconComponent } from "@/lib/icon-registry";
+import { iconBadgeClass, parseIcon, type IconComponent } from "@/lib/icon-registry";
 import {
   useGetAccountQuery,
   useGetRunArtifactsQuery,
@@ -91,17 +91,6 @@ const ICON_TONE_CLASSES: Record<IconTone, string> = {
   amber: "bg-amber-600 text-primary-50 dark:bg-amber-500",
 };
 
-const PROJECT_ICON_BACKGROUND_CLASSES: Record<string, string> = {
-  default: "bg-primary-950 dark:bg-primary-50",
-  violet: "bg-violet-600 dark:bg-violet-400",
-  rose: "bg-rose-600 dark:bg-rose-400",
-  orange: "bg-orange-600 dark:bg-orange-400",
-  amber: "bg-amber-600 dark:bg-amber-400",
-  green: "bg-green-600 dark:bg-green-500",
-  sky: "bg-sky-500 dark:bg-sky-500",
-  olive: "bg-olive-600 dark:bg-olive-400",
-};
-
 interface PendingDocument {
   runId: string;
   path: string;
@@ -157,14 +146,11 @@ function MenuIcon({ item }: { item: MenuItemModel }) {
     const parsed = parseIcon(item.projectIcon);
     if (parsed.type === "icon") {
       const ProjectIcon = parsed.value;
-      const backgroundClass =
-        PROJECT_ICON_BACKGROUND_CLASSES[parsed.color ?? "default"] ??
-        PROJECT_ICON_BACKGROUND_CLASSES.default;
       return (
         <span
-          className={`flex size-6 shrink-0 items-center justify-center rounded-lg ${backgroundClass}`}
+          className={`flex size-6 shrink-0 items-center justify-center rounded-lg ${iconBadgeClass(parsed.color)}`}
         >
-          <ProjectIcon className="size-3.5 text-white" />
+          <ProjectIcon className="size-3.5" />
         </span>
       );
     }
@@ -710,7 +696,7 @@ export function CommandMenu() {
         className="flex min-h-0 flex-col gap-3 bg-transparent"
       >
         <div className="glass-command flex h-14 shrink-0 items-center gap-3 rounded-3xl px-4 backdrop-blur-sm ">
-          <Mains className="size-5 shrink-0 text-primary-500 dark:text-primary-400" />
+          <MainsStroke className="size-5 shrink-0 text-primary-500 dark:text-primary-400" />
           <Command.Input
             ref={inputRef}
             value={query}

@@ -1,4 +1,5 @@
 import * as crypto from "crypto";
+import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
 
 // Secret lives in main-process memory only. Regenerated on each launch — that
 // means any URLs persisted across app restarts will fail signature verification
@@ -15,15 +16,16 @@ function hmac(payload: string): string {
   return crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
 }
 
-export function signLocalImagePath(absPath: string, ttlMs: number = DEFAULT_TTL_MS): string {
+export function signLocalImagePath(absPath: string, ttlMs: number = DEFAULT_TTL_MS, maxSide?: LocalImagePreviewSize): string {
   const exp = Date.now() + ttlMs;
-  const payload = `${absPath}|${exp}`;
+  const payload = `${absPath}|${exp}${maxSide ? `|preview:${maxSide}` : ""}`;
   const sig = hmac(payload);
   const params = new URLSearchParams({
     path: absPath,
     exp: String(exp),
     sig,
   });
+  if (maxSide) params.set("size", String(maxSide));
   return `${SCHEME}://img/?${params.toString()}`;
 }
 
@@ -77,6 +79,7 @@ export function verifySignedPath(
   rawPath: string | null,
   rawExp: string | null,
   rawSig: string | null,
+  maxSide?: LocalImagePreviewSize,
 ): VerifiedSignedPath | InvalidSignedPath {
   if (!rawPath || !rawExp || !rawSig) {
     return { ok: false, reason: "missing" };
@@ -85,7 +88,7 @@ export function verifySignedPath(
   if (!Number.isFinite(exp) || exp < Date.now()) {
     return { ok: false, reason: "expired" };
   }
-  const expected = hmac(`${rawPath}|${exp}`);
+  const expected = hmac(`${rawPath}|${exp}${maxSide ? `|preview:${maxSide}` : ""}`);
   const a = Buffer.from(rawSig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {

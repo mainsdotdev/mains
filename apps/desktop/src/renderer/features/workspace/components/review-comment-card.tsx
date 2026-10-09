@@ -36,7 +36,7 @@ export function ReviewCommentCard({ comment, onUpdate, onRemove }: {
   onRemove?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const line = `${comment.side === "deletions" ? "L" : "R"}${comment.lineNumber}`;
+  const line = `${comment.side === "deletions" ? "L" : "R"}${comment.lineNumber}${comment.endLineNumber && comment.endLineNumber !== comment.lineNumber ? `-${comment.endLineNumber}` : ""}`;
   return <article className="glass-card min-w-0 rounded-2xl p-3 font-sans text-xs">
     <div className="mb-2 flex items-center gap-2">
       <span title={comment.filePath} className="min-w-0 flex-1 truncate text-primary-500">{comment.filePath} · {line}</span>

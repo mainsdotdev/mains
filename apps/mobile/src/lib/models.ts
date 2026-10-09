@@ -173,9 +173,9 @@ export function pickDefaultEffort(supported: readonly string[] | undefined, pref
 }
 
 /**
- * The name the desktop prints for a model: Claude's models carry it in the
- * description ("Opus 5 · …"), Cursor's ids are spelled out, the rest show
- * their display name.
+ * The name the desktop prints for a model: Cursor's ids are spelled out, the
+ * rest show their display name. Older Claude catalogues carry a fuller name in
+ * the description ("Opus 5.5 · …"), used only when it extends the display name.
  */
 export function modelPrettyName(
   model: { displayName: string; description?: string | null },
@@ -185,8 +185,7 @@ export function modelPrettyName(
 
   if (providerId === "cursor") name = formatCursorModelName(name);
   if (providerId === "claude_code" && model.description) {
-    const first = model.description.split("·")[0].trim();
-    name = first.replace(/ with 1M context$/, " [1M]");
+    name = claudeDescribedName(model.displayName, model.description) ?? name;
   }
 
   // Match desktop: humanise GPT display labels without changing the model id
@@ -195,6 +194,27 @@ export function modelPrettyName(
     return name.replace(/^gpt-/i, "GPT ").replace(/-/g, " ");
   }
   return name;
+}
+
+/**
+ * Newer Claude catalogues use the description only for a tagline, which
+ * several models can share, so it must never replace the SDK's display name.
+ * Mirrors the desktop's `getModelPrettyName`.
+ */
+function claudeDescribedName(displayName: string, description: string): string | undefined {
+  const first = description.split("·")[0].trim();
+  const name = displayName.replace(/^Claude\s+/i, "").trim();
+  const described = first.replace(/^Claude\s+/i, "");
+  const remainder = described.slice(name.length);
+  if (
+    (description.includes("·") || first.endsWith(" with 1M context")) &&
+    name &&
+    described.toLowerCase().startsWith(name.toLowerCase()) &&
+    (!remainder || /^[\s([]/.test(remainder))
+  ) {
+    return first.replace(/ with 1M context$/, " [1M]");
+  }
+  return undefined;
 }
 
 /** Keeps the first model when several share a label. */

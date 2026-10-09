@@ -53,9 +53,10 @@ function extensionFor(mime: string): string {
  * only transition and the chat is still there underneath.
  */
 export default function ImageViewerScreen() {
-  const { artifactId: idParam, fileName: nameParam } = useLocalSearchParams<{
+  const { artifactId: idParam, fileName: nameParam, runId } = useLocalSearchParams<{
     artifactId: string;
     fileName?: string;
+    runId?: string;
   }>();
   const artifactId = Number(idParam);
   const fileName =
@@ -74,7 +75,7 @@ export default function ImageViewerScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    loadImage(artifactId).then(
+    loadImage(artifactId, runId).then(
       (loaded) => {
         if (!cancelled) setImage(loaded);
       },
@@ -90,7 +91,7 @@ export default function ImageViewerScreen() {
     return () => {
       cancelled = true;
     };
-  }, [artifactId]);
+  }, [artifactId, runId]);
 
   const close = () => router.back();
   const toggleChrome = () => setChrome((on) => !on);

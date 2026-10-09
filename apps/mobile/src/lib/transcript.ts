@@ -54,6 +54,7 @@ export type TranscriptItem =
 export interface TranscriptImage {
   artifactId: number;
   fileName: string;
+  runId?: string;
 }
 
 /** Pre-fold shape: one entry per tool call or image, before consecutive ones merge. */
@@ -128,7 +129,8 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
         typeof meta.fileName === "string" && meta.fileName
           ? meta.fileName
           : (artifact.path?.split("/").pop() ?? "image");
-      return { key, kind: "image", image: { artifactId: artifact.id, fileName }, at };
+      return { key, kind: "image", image: { artifactId: artifact.id, fileName,
+        ...(artifact.id < 0 ? { runId: artifact.runId } : {}) }, at };
     }
     default: {
       const text = artifact.content ?? artifact.path ?? "";

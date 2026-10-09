@@ -4,7 +4,7 @@ import { Chat, Close, Maximize, Minimize } from "@/components/ui/icons";
 interface PreviewPanelControlsProps {
   label: string;
   isExpanded: boolean;
-  onToggleExpanded: () => void;
+  onToggleExpanded?: () => void;
   onClose?: () => void;
   chatVisible?: boolean;
   onToggleChat?: () => void;
@@ -36,7 +36,7 @@ export function PreviewPanelControls({
         <Chat aria-hidden className="size-3.5" />
       </Button>
     )}
-    <Button
+    {onToggleExpanded && <Button
       variant="icon"
       onClick={onToggleExpanded}
       tooltip={expandLabel}
@@ -45,7 +45,7 @@ export function PreviewPanelControls({
       aria-pressed={isExpanded}
     >
       {isExpanded ? <Minimize aria-hidden className="size-4" /> : <Maximize aria-hidden className="size-4" />}
-    </Button>
+    </Button>}
     {onClose && (
       <Button
         variant="icon"

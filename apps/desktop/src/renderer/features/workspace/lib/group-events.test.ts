@@ -21,6 +21,18 @@ function baseEvents(): RunEvent[] {
 }
 
 describe("groupEvents", () => {
+  it("renders a Markdown-delivered image once while retaining other structured images", () => {
+    const report = ev({ id: "report", content: "![Result](/out/image.png)", metadata: { kind: "report" } });
+    const duplicate = ev({ id: "image", metadata: { kind: "image", inlineInReport: true, path: "/out/image.png" } });
+    const other = ev({ id: "other", metadata: { kind: "image", path: "/out/other.png" } });
+    expect(groupEvents([report, duplicate, other]).flatMap((group) => group.events).map((event) => event.id))
+      .toEqual(["report", "other"]);
+  });
+  it("keeps a selected image after image inspection instead of applying the legacy preview filter", () => {
+    const view = ev({ id: "view", type: "tool_call", metadata: { codexItemType: "imageView", input: { path: "/out/result.png" } } });
+    const image = ev({ id: "image", metadata: { kind: "image", outputSelected: true, path: "/out/result.png" } });
+    expect(groupEvents([view, image]).flatMap((group) => group.events).map((event) => event.id)).toEqual(["view", "image"]);
+  });
   it("replaces the running compaction row with its completed separator at the same position", () => {
     const start = ev({ id: "start", type: "log", timestamp: new Date(1000), metadata: { source: "context_compaction", itemId: "compact-1", phase: "start" } });
     const complete = ev({ id: "complete", type: "log", timestamp: new Date(2000), metadata: { ...start.metadata, phase: "complete" } });

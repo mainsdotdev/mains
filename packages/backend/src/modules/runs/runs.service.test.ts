@@ -122,6 +122,8 @@ import { prepareRunAttachments } from "./run-attachment-storage";
 import { createWorkAdapter, emitUserPromptArtifact } from "../providers/adapters";
 import { collectionsService } from "../collections";
 import { workspaceService } from "../workspace";
+import { spaceService } from "../space";
+import { atlasService } from "../atlas";
 import { gitService } from "../git/git.service";
 
 describe("runsService", () => {
@@ -938,11 +940,124 @@ describe("runsService", () => {
   // to the adapter; continueRun re-applies the stored snapshot.
   // ─────────────────────────────────────────────────────────────
   describe("executeRun mode snapshot", () => {
+    beforeEach(() => {
+      vi.mocked(gitService.getHeadSha).mockClear();
+    });
     function mockStartAdapter() {
       const startRun = vi.fn().mockResolvedValue({ status: "succeeded" });
       vi.mocked(createWorkAdapter).mockReturnValue({ startRun } as any);
       return startRun;
     }
+
+    it.each(["claude_code", "codex"] as const)("keeps Atlas instructions separate from %s user prompts on start, continue and fork", async (providerId) => {
+      if (providerId === "codex") createProvider(db, { id: providerId });
+      const space = createSpace(db, { providerId, mode: "work", systemPrompt: "Answer in Turkish." });
+      const page = await atlasService.createPage({ accountId: "default", title: "Notes", markdown: "Existing content" });
+      const startRun = vi.fn(async (request, onEvent) => {
+        await emitUserPromptArtifact(onEvent, request.goal);
+        return { status: "succeeded" };
+      });
+      const continueRun = vi.fn(async (request, onEvent) => {
+        await emitUserPromptArtifact(onEvent, request.message);
+        return { status: "succeeded" };
+      });
+      const forkRun = vi.fn(async (request, onEvent) => {
+        await emitUserPromptArtifact(onEvent, request.message);
+        return { status: "succeeded" };
+      });
+      vi.mocked(createWorkAdapter).mockReturnValue({ startRun, continueRun, forkRun } as never);
+      const { runId } = await runsService.executeRun({ accountId: "default", spaceId: space.id, providerId,
+        goal: "hi", atlasPageId: page.item.id });
+      await flushBackground();
+      expect(startRun.mock.calls[0][0]).toMatchObject({ goal: "hi", configSnapshot: { atlasPageId: page.item.id } });
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain(`pageId: ${page.item.id}`);
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain("Answer in Turkish.");
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain("AtlasReadPage");
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain(`[Page title](/atlas/${page.item.id})`);
+      expect((await runsService.getRunById(runId))?.goal).toBe("hi");
+
+      await atlasService.savePage({ accountId: "default", id: page.item.id, expectedVersion: 1,
+        title: "Renamed notes", markdown: "Updated content" });
+      await runsService.continueRun({ runId, accountId: "default", message: "expand this" });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0].message).toBe("expand this");
+      expect(continueRun.mock.calls[0][0].extraInstructions).toContain('"Renamed notes"');
+      expect(continueRun.mock.calls[0][0].extraInstructions).toContain("current version: 2");
+      expect((await runsRepo.findArtifactsByRun(runId)).filter((row) => row.metadata?.source === "user")
+        .map((row) => row.content)).toEqual(["hi", "expand this"]);
+
+      const fork = await runsService.forkRun({ sourceRunId: runId, accountId: "default", message: "try another approach" });
+      await flushBackground();
+      expect(forkRun.mock.calls[0][0]).toMatchObject({ message: "try another approach", configSnapshot: { atlasPageId: page.item.id } });
+      expect(forkRun.mock.calls[0][0].extraInstructions).toContain(`pageId: ${page.item.id}`);
+      expect((await runsRepo.findArtifactsByRun(fork.runId)).filter((row) => row.metadata?.source === "user")
+        .map((row) => row.content)).toEqual(["try another approach"]);
+    });
+
+    it("validates Atlas page ownership before opening a run and cannot retarget an existing page chat", async () => {
+      const space = createSpace(db, { providerId: "claude_code", mode: "work" });
+      const page = await atlasService.createPage({ accountId: "default", title: "First" });
+      const other = await atlasService.createPage({ accountId: "default", title: "Second" });
+      createAccount(db, { id: "other" });
+      const foreign = await atlasService.createPage({ accountId: "other", title: "Private" });
+      const startRun = mockStartAdapter();
+      const payload = { accountId: "default", spaceId: space.id, providerId: "claude_code", goal: "hi" };
+      await expect(runsService.executeRun({ ...payload, atlasPageId: foreign.item.id })).rejects.toThrow("Page unavailable");
+      expect(startRun).not.toHaveBeenCalled();
+      expect(await runsService.getRunsByAccount("default")).toEqual([]);
+      const { runId } = await runsService.executeRun({ ...payload, atlasPageId: page.item.id });
+      await flushBackground();
+      await expect(runsService.continueRun({ runId, accountId: "default", message: "hi", atlasPageId: other.item.id }))
+        .rejects.toThrow("Conversation belongs to another Atlas page");
+      expect((await runsService.getRunById(runId))?.status).toBe("succeeded");
+    });
+
+    it("adds separate page instructions when continuing a page chat created before page identity was stored", async () => {
+      const space = createSpace(db, { providerId: "claude_code", mode: "work" });
+      const page = await atlasService.createPage({ accountId: "default", title: "Existing page" });
+      const run = createRun(db, { providerId: "claude_code", spaceId: space.id, mode: "work", status: "succeeded" });
+      const continueRun = vi.fn().mockResolvedValue({ status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ continueRun } as never);
+      await runsService.continueRun({ runId: run.id, accountId: "default", message: "only my message", atlasPageId: page.item.id });
+      await flushBackground();
+      expect(continueRun.mock.calls[0][0]).toMatchObject({ message: "only my message", configSnapshot: { atlasPageId: page.item.id } });
+      expect(continueRun.mock.calls[0][0].extraInstructions).toContain(`pageId: ${page.item.id}`);
+      expect((await runsService.getRunById(run.id))?.configSnapshot?.atlasPageId).toBe(page.item.id);
+    });
+
+    it.each([
+      ["claude_code", "chat"], ["claude_code", "developer"],
+      ["codex", "chat"], ["codex", "developer"],
+    ] as const)("runs Work locally from %s/%s without changing the Space's next ordinary run", async (providerId, savedMode) => {
+      if (providerId === "codex") createProvider(db, { id: providerId });
+      const space = createSpace(db, { providerId, mode: savedMode });
+      const startRun = mockStartAdapter();
+      const payload = { accountId: "default", spaceId: space.id, providerId, goal: "Edit an Atlas page" };
+      const { runId } = await runsService.executeRun({ ...payload, mode: "work" });
+      await flushBackground();
+      expect(await runsService.getRunById(runId)).toMatchObject({ mode: "work", spaceId: space.id, workspaceId: null });
+      expect(startRun.mock.calls[0][0]).toMatchObject({ mode: "work", execution: { workspaceId: null } });
+      expect(startRun.mock.calls[0][0].extraInstructions).toContain("non-technical");
+      expect((await spaceService.getById(space.id))?.mode).toBe(savedMode);
+
+      const workspace = savedMode === "developer" ? createWorkspace(db) : undefined;
+      const ordinary = await runsService.executeRun({ ...payload, workspaceId: workspace?.id });
+      await flushBackground();
+      expect((await runsService.getRunById(ordinary.runId))?.mode).toBe(savedMode);
+      expect(startRun.mock.calls[1][0].mode).toBe(savedMode);
+    });
+
+    it.each([
+      { providerId: "claude_code", mode: "invalid", error: "Invalid run mode" },
+      { providerId: "copilot_cli", mode: "work", error: "does not support work mode" },
+    ] as const)("rejects unsupported explicit mode $mode for $providerId before starting a run", async ({ providerId, mode, error }) => {
+      const space = createSpace(db, { providerId, mode: "developer" });
+      const startRun = mockStartAdapter();
+      await expect(runsService.executeRun({ accountId: "default", providerId, spaceId: space.id,
+        goal: "Edit a page", mode: mode as "work" })).rejects.toThrow(error);
+      expect(startRun).not.toHaveBeenCalled();
+      expect(await runsService.getRunsByAccount("default")).toEqual([]);
+    });
 
     it("snapshots work mode from the space and passes the delta to the adapter", async () => {
       createSpace(db, {
@@ -2358,7 +2473,7 @@ describe("runsService", () => {
 
     it("returns artifacts", async () => {
       createRun(db, { id: "r1" });
-      createRunArtifact(db, { runId: "r1", kind: "file", content: "hello" });
+      createRunArtifact(db, { runId: "r1", kind: "report", content: "hello" });
 
       const result = await runsService.getArtifactsByRun("r1");
       expect(result).toHaveLength(1);
@@ -2366,7 +2481,7 @@ describe("runsService", () => {
 
     it("returns multiple artifacts", async () => {
       createRun(db, { id: "r1" });
-      createRunArtifact(db, { runId: "r1", kind: "file", content: "a" });
+      createRunArtifact(db, { runId: "r1", kind: "report", content: "a" });
       createRunArtifact(db, { runId: "r1", kind: "log", content: "b" });
 
       const result = await runsService.getArtifactsByRun("r1");
@@ -2374,6 +2489,7 @@ describe("runsService", () => {
     });
 
     it("returns error when repo throws", async () => {
+      createRun(db, { id: "r1" });
       vi.spyOn(runsRepo, "findArtifactsByRun").mockRejectedValueOnce(new Error("db error"));
       await expect(runsService.getArtifactsByRun("r1")).rejects.toThrow("db error");
     });
@@ -2403,11 +2519,63 @@ describe("runsService", () => {
   });
 
   describe("listRunOutputFiles", () => {
-    it("lists visible files from a Work run and excludes internal context", async () => {
+    it("hydrates only the last two logical calls, including a path beyond the deferred preview", async () => {
+      createRun(db, { id: "tail-tools", mode: "work", status: "succeeded" });
+      const root = managedRunDir("tail-tools", "work");
+      mkdirSync(root, { recursive: true });
+      for (const name of ["early.md", "delivered.md", "CONTEXT.md"]) writeFileSync(join(root, name), "file");
+      for (let i = 0; i < 20; i++) createToolCall(db, { runId: "tail-tools", toolName: "Bash", status: "done",
+        output: JSON.stringify(i === 18 ? { stdout: "x".repeat(20_000) + "\n[Output](delivered.md)" }
+          : i === 19 ? { path: "CONTEXT.md" } : { path: "early.md" }) });
+      const hydrate = vi.spyOn(runsRepo, "findOutputToolCall");
+      try {
+        const history = await runsService.getHistoryPage({ runId: "tail-tools", deferToolOutput: true });
+        expect(hydrate).toHaveBeenCalledTimes(2);
+        const output = history.artifacts.filter((row) => row.metadata?.outputSelected);
+        expect(output.map((row) => row.metadata?.fileName)).toEqual(["delivered.md", "CONTEXT.md"]);
+        expect((await runsService.getOutputArtifacts("tail-tools")).map((row) => row.id)).toEqual(output.map((row) => row.id));
+      } finally { hydrate.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+    });
+    it("keeps turn selection global when steering prompts fall outside a history page", async () => {
+      createRun(db, { id: "steered-outputs", mode: "work", status: "succeeded" });
+      const root = managedRunDir("steered-outputs", "work");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, "early.md"), "early"); writeFileSync(join(root, "final.md"), "final");
+      const at = (second: number) => new Date((1_700_000_000 + second) * 1000);
+      createRunArtifact(db, { runId: "steered-outputs", kind: "user-prompt" as "report", content: "Start", createdAt: at(0) });
+      for (let i = 1; i <= 35; i++) {
+        createRunArtifact(db, { runId: "steered-outputs", kind: "report", content: i < 35 ? "early.md" : "final.md", createdAt: at(i * 2) });
+        if (i < 35) createRunArtifact(db, { runId: "steered-outputs", kind: "user-prompt" as "report", content: "Steer",
+          metadata: JSON.stringify({ delivery: "steer" }), createdAt: at(i * 2 + 1) });
+      }
+      createRunArtifact(db, { runId: "steered-outputs", kind: "report", content: "Done", createdAt: at(72) });
+      try {
+        const latest = await runsService.getHistoryPage({ runId: "steered-outputs" });
+        expect(latest.artifacts.filter((row) => row.metadata?.outputSelected).map((row) => row.metadata?.fileName)).toEqual(["final.md"]);
+        const older = await runsService.getHistoryPage({ runId: "steered-outputs", direction: "refresh", cursor: {
+          timestamp: at(0).getTime(), source: "artifact", id: 1 }, end: { timestamp: at(40).getTime(), source: "artifact", id: 0 } });
+        expect(older.artifacts.some((row) => row.metadata?.outputSelected)).toBe(false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+    it("reads a derived image by its stable ID and conversation", async () => {
+      createRun(db, { id: "derived-image", mode: "work", status: "succeeded" });
+      const root = managedRunDir("derived-image", "work");
+      mkdirSync(root, { recursive: true }); writeFileSync(join(root, "result.png"), "image bytes");
+      createRunArtifact(db, { runId: "derived-image", kind: "report", content: "![Result](result.png)" });
+      try {
+        const [output] = await runsService.getOutputArtifacts("derived-image");
+        expect(output.id).toBeLessThan(0);
+        expect((await runsService.readArtifactImage({ artifactId: output.id, runId: "derived-image" })).base64)
+          .toBe(Buffer.from("image bytes").toString("base64"));
+        await expect(runsService.readArtifactImage({ artifactId: output.id, runId: "other" })).rejects.toThrow("not found");
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+    it("shares tail-selected outputs across history, chat and the file shelf", async () => {
       createRun(db, {
         id: "run-outputs",
         providerId: "claude_code",
         mode: "work",
+        status: "succeeded",
       });
       const root = managedRunDir("run-outputs", "work");
       const outside = "/tmp/mains-output-outside.md";
@@ -2421,6 +2589,10 @@ describe("runsService", () => {
       writeFileSync(`${root}/.hidden.txt`, "hidden");
       writeFileSync(outside, "outside");
       symlinkSync(outside, `${root}/linked.md`);
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: ".mains/sources/brief.pdf project-resources/source-1/brief.pdf" });
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "Working" });
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "[Notes](notes.md) [Chart](outputs/chart.csv) linked.md" });
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "Done" });
 
       try {
         const files = await runsService.listRunOutputFiles("run-outputs");
@@ -2433,11 +2605,19 @@ describe("runsService", () => {
           expect.arrayContaining([
             expect.objectContaining({
               fileName: "notes.md",
-              absolutePath: `${root}/notes.md`,
+              absolutePath: realpathSync(`${root}/notes.md`),
               size: 7,
             }),
           ]),
         );
+        const [history, details, artifacts] = await Promise.all([
+          runsService.getHistoryPage({ runId: "run-outputs", deferToolOutput: true }),
+          runsService.getRunDetails("run-outputs"), runsService.getArtifactsByRun("run-outputs"),
+        ]);
+        const paths = (rows: typeof artifacts) => rows.filter((row) => row.metadata?.outputSelected).map((row) => row.path).sort();
+        expect(paths(history.artifacts)).toEqual(paths(artifacts));
+        expect(paths(details!.artifacts)).toEqual(paths(artifacts));
+        expect(files.map((file) => file.absolutePath).sort()).toEqual(paths(artifacts));
       } finally {
         rmSync(root, { recursive: true, force: true });
         rmSync(outside, { force: true });
@@ -2685,7 +2865,7 @@ describe("runsService", () => {
     it("returns run with all related data", async () => {
       createRun(db, { id: "r1" });
       createRunContext(db, { runId: "r1", kind: "file", content: "test.ts" });
-      createRunArtifact(db, { runId: "r1", kind: "file", content: "output" });
+      createRunArtifact(db, { runId: "r1", kind: "report", content: "output" });
       createToolCall(db, { runId: "r1", toolName: "read" });
       createRunTurn(db, { runId: "r1", turnIndex: 0 });
 

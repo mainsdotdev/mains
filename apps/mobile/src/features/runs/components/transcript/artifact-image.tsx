@@ -17,10 +17,10 @@ import { ThemedText } from "@/components/ui";
 const loaded = new Map<number, Promise<ArtifactImage>>();
 const LOADED_LIMIT = 48;
 
-export function loadImage(artifactId: number): Promise<ArtifactImage> {
+export function loadImage(artifactId: number, runId?: string): Promise<ArtifactImage> {
   const hit = loaded.get(artifactId);
   if (hit) return hit;
-  const promise = backendSession.readArtifactImage(artifactId).catch((error: unknown) => {
+  const promise = backendSession.readArtifactImage(artifactId, runId).catch((error: unknown) => {
     loaded.delete(artifactId);
     throw error;
   });
@@ -96,7 +96,7 @@ function ArtifactImageView({
 
   useEffect(() => {
     let cancelled = false;
-    loadImage(image.artifactId).then(
+    loadImage(image.artifactId, image.runId).then(
       (loadedImage) => {
         if (!cancelled) setState({ status: "ready", image: loadedImage });
       },
@@ -109,7 +109,7 @@ function ArtifactImageView({
     return () => {
       cancelled = true;
     };
-  }, [image.artifactId]);
+  }, [image.artifactId, image.runId]);
 
   if (state.status === "failed") {
     return (
@@ -140,7 +140,7 @@ function ArtifactImageView({
       onPress={() =>
         router.push({
           pathname: "/image/[artifactId]",
-          params: { artifactId: String(image.artifactId), fileName: image.fileName },
+          params: { artifactId: String(image.artifactId), fileName: image.fileName, runId: image.runId },
         } as Href)
       }
       style={({ pressed }) => ({

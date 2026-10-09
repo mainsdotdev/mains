@@ -1,3 +1,4 @@
+import { Globe } from "@/components/ui/icons/space";
 import {
   Bash,
   Box,
@@ -65,6 +66,31 @@ export interface BuiltinTool {
    */
   aliases: string[];
 }
+
+/** App-owned Page operations have the same presentation over MCP and dynamic tools. */
+export const ATLAS_PAGE_TOOLS: BuiltinTool[] = [
+  {
+    displayName: "Read Atlas page",
+    groupKey: "atlasreadpage",
+    category: "Atlas",
+    icon: <Globe className="size-4" />,
+    aliases: ["atlasreadpage"],
+  },
+  {
+    displayName: "Updated Atlas page",
+    groupKey: "atlasupdatepage",
+    category: "Atlas",
+    icon: <Globe className="size-4" />,
+    aliases: ["atlasupdatepage"],
+  },
+  {
+    displayName: "Created Atlas page",
+    groupKey: "atlascreatepage",
+    category: "Atlas",
+    icon: <Globe className="size-4" />,
+    aliases: ["atlascreatepage"],
+  },
+];
 
 /** One clause of a tool group's summary sentence — see `PHRASES_BY_GROUP_KEY`. */
 export interface ToolPhrase {
@@ -457,10 +483,44 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
  * to a duller sentence instead of vanishing from the header.
  */
 export const PHRASES_BY_GROUP_KEY: Record<string, ToolPhrase> = {
+  atlasreadpage: {
+    one: "read an Atlas page",
+    many: "read Atlas pages",
+    rank: 30,
+  },
+  atlasupdatepage: {
+    one: "updated an Atlas page",
+    many: "updated Atlas pages",
+    rank: 20,
+  },
+  atlascreatepage: {
+    one: "created an Atlas page",
+    many: "created Atlas pages",
+    rank: 20,
+  },
+  "atlasreadpage:failed": {
+    one: "tried to read an Atlas page",
+    many: "tried to read Atlas pages",
+    rank: 30,
+  },
+  "atlasupdatepage:failed": {
+    one: "tried to update an Atlas page",
+    many: "tried to update Atlas pages",
+    rank: 20,
+  },
+  "atlascreatepage:failed": {
+    one: "tried to create an Atlas page",
+    many: "tried to create Atlas pages",
+    rank: 20,
+  },
   // Setup / intent — what the agent reached for before doing the work.
   skill: { one: "loaded a tool", many: "loaded tools", rank: 10 },
   intent: { one: "stated its intent", many: "stated its intent", rank: 10 },
-  enterplanmode: { one: "entered plan mode", many: "entered plan mode", rank: 12 },
+  enterplanmode: {
+    one: "entered plan mode",
+    many: "entered plan mode",
+    rank: 12,
+  },
   exitplanmode: { one: "shared a plan", many: "shared a plan", rank: 12 },
   plan: { one: "wrote a plan", many: "wrote plans", rank: 12 },
   taskget: { one: "checked the plan", many: "checked the plan", rank: 12 },
@@ -495,10 +555,18 @@ export const PHRASES_BY_GROUP_KEY: Record<string, ToolPhrase> = {
   agent: { one: "ran an agent", many: "ran agents", rank: 50 },
   workflow: { one: "ran a workflow", many: "ran workflows", rank: 50 },
   sendmessage: { one: "messaged an agent", many: "messaged agents", rank: 52 },
-  askuserquestion: { one: "asked a question", many: "asked questions", rank: 54 },
+  askuserquestion: {
+    one: "asked a question",
+    many: "asked questions",
+    rank: 54,
+  },
 
   // Mains' own review tools.
-  checkpackage: { one: "checked a package", many: "checked packages", rank: 60 },
+  checkpackage: {
+    one: "checked a package",
+    many: "checked packages",
+    rank: 60,
+  },
   savereview: { one: "saved a review", many: "saved reviews", rank: 60 },
   savefinding: { one: "saved a finding", many: "saved findings", rank: 60 },
   savefindings: { one: "saved findings", many: "saved findings", rank: 60 },

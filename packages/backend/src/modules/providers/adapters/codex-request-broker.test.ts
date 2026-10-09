@@ -351,6 +351,58 @@ describe("Codex request broker", () => {
     ]);
   });
 
+  it.each(["AtlasCreatePage", "AtlasUpdatePage"])(
+    "dispatches %s for a Work run",
+    async (tool) => {
+      const { broker, dispatchTool, runState } = createHarness();
+      runState.mode = "work";
+      const responder = createResponder();
+      const args = tool === "AtlasCreatePage"
+        ? { title: "New page", markdown: "Initial page" }
+        : { pageId: "page-1", expectedVersion: 3, markdown: "Updated page" };
+
+      await handle(broker, responder.server, "item/tool/call", { tool, arguments: args });
+
+      expect(dispatchTool).toHaveBeenCalledWith(tool, args, {
+        workspaceId: "workspace-1", rootPath: "/workspace", runId: "run-1",
+      });
+      expect(responder.errors).toEqual([]);
+      expect(responder.responses[0]?.result).toMatchObject({ success: true });
+    },
+  );
+
+  it.each([
+    ["developer", "AtlasUpdatePage"],
+    ["chat", "AtlasCreatePage"],
+    ["chat", "AtlasUpdatePage"],
+    ["work", "CheckPackage"],
+    ["chat", "CheckPackage"],
+  ] as const)("rejects %s calls to %s outside the run's tool list", async (mode, tool) => {
+    const { broker, dispatchTool, runState } = createHarness();
+    runState.mode = mode;
+    const responder = createResponder();
+
+    await handle(broker, responder.server, "item/tool/call", { tool });
+
+    expect(dispatchTool).not.toHaveBeenCalled();
+    expect(responder.errors).toEqual([
+      { id: 42, code: -32601, message: `Unknown dynamic tool: ${tool}` },
+    ]);
+  });
+
+  it.each(["developer", "work", "chat"] as const)("keeps AtlasReadPage available in %s mode", async (mode) => {
+    const { broker, dispatchTool, runState } = createHarness();
+    runState.mode = mode;
+    const responder = createResponder();
+
+    await handle(broker, responder.server, "item/tool/call", {
+      tool: "AtlasReadPage", arguments: { pageId: "page-1" },
+    });
+
+    expect(dispatchTool).toHaveBeenCalledOnce();
+    expect(responder.responses[0]?.result).toMatchObject({ success: true });
+  });
+
   it.each(["form", "openai/form", "openaiForm"])("collects %s input through the form dialog and returns typed content", async (mode) => {
     const requestedSchema = {
       type: "object",

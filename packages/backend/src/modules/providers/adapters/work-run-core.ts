@@ -275,6 +275,12 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
     adapter.generateText = driver.generateText.bind(driver);
   if (driver.getRateLimits)
     adapter.getRateLimits = driver.getRateLimits.bind(driver);
+  if (driver.getCodexMemorySettings)
+    adapter.getCodexMemorySettings = driver.getCodexMemorySettings.bind(driver);
+  if (driver.setCodexMemorySetting)
+    adapter.setCodexMemorySetting = driver.setCodexMemorySetting.bind(driver);
+  if (driver.resetCodexMemories)
+    adapter.resetCodexMemories = driver.resetCodexMemories.bind(driver);
   if (driver.listRealtimeVoices)
     adapter.listRealtimeVoices = driver.listRealtimeVoices.bind(driver);
   if (driver.consumeRateLimitResetCredit)

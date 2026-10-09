@@ -6,12 +6,13 @@ export interface ComposerPrimaryAction {
   disabled: boolean;
 }
 
-/** Resolve the single primary button: Stop takes priority over draft content. */
-export function composerControls({ state, runId, isNewRun, isRunning, voiceEnabled, hasMessage, preparing, startDisabled, sendDisabled, sendLabel = "Send prompt" }: {
+/** Running drafts can queue; an owned voice call keeps its Stop action. */
+export function composerControls({ state, runId, isNewRun, isRunning, canSendDuringRun, voiceEnabled, hasMessage, preparing, startDisabled, sendDisabled, sendLabel = "Send prompt" }: {
   state: Pick<RealtimeVoiceState, "phase" | "runId" | "muted">;
   runId: string | undefined;
   isNewRun: boolean;
   isRunning: boolean;
+  canSendDuringRun: boolean;
   voiceEnabled: boolean;
   hasMessage: boolean;
   preparing: boolean;
@@ -23,7 +24,7 @@ export function composerControls({ state, runId, isNewRun, isRunning, voiceEnabl
   const running = !isNewRun && isRunning;
   const busy = state.phase !== "idle" && state.phase !== "error";
   let primary: ComposerPrimaryAction;
-  if (running || voiceActive) {
+  if (voiceActive || (running && (!hasMessage || !canSendDuringRun))) {
     primary = {
       kind: "stop",
       label: running ? voiceActive ? "Stop voice chat and run" : "Stop run"

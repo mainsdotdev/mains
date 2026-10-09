@@ -6,6 +6,7 @@ import {
   useCallback,
   useState,
   useMemo,
+  type RefObject,
 } from "react";
 import type { CommandInfo, SkillInfo } from "@/lib/redux/api/providersApi";
 import type { Run } from "../types";
@@ -68,36 +69,13 @@ import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
 import type { ComposerSendTarget } from "../lib/composer-send-target";
 import { ComposerSendTargetSelect } from "./composer-send-target-select";
+import { addComposerUploads } from "../lib/composer-uploads";
 
 const EMPTY_UPLOADED_FILES: UploadedFile[] = [];
 const EMPTY_DIRECTORIES: string[] = [];
 
 function directoryName(folderPath: string): string {
   return folderPath.replace(/\/+$/, "").split("/").pop() || folderPath;
-}
-
-function looksLikeImageFile(file: File): boolean {
-  if (file.type.startsWith("image/")) return true;
-  return /\.(png|jpe?g|gif|webp|bmp|heic|svg)$/i.test(file.name);
-}
-
-/** Matches toolbar document picker: pdf, doc, docx, txt */
-function looksLikeDocumentFile(file: File): boolean {
-  const mime = file.type.toLowerCase();
-  if (
-    mime === "application/pdf" ||
-    mime === "application/msword" ||
-    mime ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    mime === "text/plain"
-  ) {
-    return true;
-  }
-  return /\.(pdf|doc|docx|txt)$/i.test(file.name);
-}
-
-function isAttachableUpload(file: File): boolean {
-  return looksLikeImageFile(file) || looksLikeDocumentFile(file);
 }
 
 /**
@@ -135,15 +113,6 @@ function codeSelectionChipLabel(sel: ContextCodeSelection): string {
     : `${sel.fileName}:${sel.startLine}-${sel.endLine}`;
 }
 
-function fileToUploadedFile(file: File): UploadedFile {
-  const isImage = looksLikeImageFile(file);
-  return {
-    file,
-    type: isImage ? "image" : "document",
-    preview: isImage ? URL.createObjectURL(file) : undefined,
-  };
-}
-
 function skillMentionToken(skill: { name: string; displayName?: string; scope?: string }): string {
   return skill.scope === "computer"
     ? `@${skill.displayName || skill.name}`
@@ -165,6 +134,14 @@ interface WorkspaceInputProps {
   goal: string;
   onGoalChange: (value: string) => void;
   onSubmit: () => void;
+  disabled?: boolean;
+  sendDisabled?: boolean;
+  allowVoice?: boolean;
+  showGoalButton?: boolean;
+  showPluginsButton?: boolean;
+  placeholder?: string;
+  inputLabel?: string;
+  sendLabel?: string;
   onCreateVoiceConversation?: () => Promise<string | null>;
   isLoading: boolean;
   activeRun: Run | undefined;
@@ -182,6 +159,8 @@ interface WorkspaceInputProps {
   projectId?: string;
   uploadedFiles?: UploadedFile[];
   onUploadedFilesChange?: (files: UploadedFile[]) => void;
+  attachmentMode?: "all" | "images";
+  uploadInputRef?: RefObject<HTMLInputElement | null>;
   additionalDirectories?: string[];
   onAdditionalDirectoriesChange?: (directories: string[]) => void;
   onStop?: () => void;
@@ -190,6 +169,8 @@ interface WorkspaceInputProps {
   /** Empty-state stack: tighter outer margins so the bar sits vertically centered with the headline. */
   layout?: "default" | "centered" | "floating";
   floatingChatMode?: FloatingChatMode;
+  /** Use the full Work/Chat toolbar when this floating panel is expanded. */
+  expandFloatingToolbar?: boolean;
   onFloatingFocus?: () => void;
   floatingAutoFocus?: boolean;
   /** Selected run activity shown in the compact floating composer while idle. */
@@ -201,6 +182,14 @@ export function WorkspaceInput({
   goal,
   onGoalChange,
   onSubmit,
+  disabled = false,
+  sendDisabled: externalSendDisabled = false,
+  allowVoice = true,
+  showGoalButton = true,
+  showPluginsButton = true,
+  placeholder,
+  inputLabel,
+  sendLabel = "Send prompt",
   onCreateVoiceConversation,
   isLoading,
   activeRun,
@@ -217,21 +206,26 @@ export function WorkspaceInput({
   projectId,
   uploadedFiles = EMPTY_UPLOADED_FILES,
   onUploadedFilesChange,
+  attachmentMode = "all",
+  uploadInputRef,
   additionalDirectories = EMPTY_DIRECTORIES,
   onAdditionalDirectoriesChange,
   onStop,
   isNewRunTabActive = false,
   layout = "default",
   floatingChatMode,
+  expandFloatingToolbar = false,
   onFloatingFocus,
   floatingAutoFocus = false,
   floatingStatusPlaceholder,
 }: WorkspaceInputProps) {
+  const compactFloating = layout === "floating" && (!expandFloatingToolbar || floatingChatMode !== "details");
+  const denseFloating = layout === "floating" && !compactFloating;
   const voice = useRealtimeVoice();
   const inputRef = useRef<RichInputFormHandle>(null);
   useEffect(() => {
     if (layout !== "floating" || !floatingAutoFocus) return;
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    const frame = requestAnimationFrame(() => inputRef.current?.focus({ caret: "end" }));
     return () => cancelAnimationFrame(frame);
   }, [layout, floatingAutoFocus]);
   const unifiedContextDropdownRef = useRef<HTMLDivElement>(null);
@@ -794,25 +788,16 @@ export function WorkspaceInput({
       e.preventDefault();
       e.stopPropagation();
       setIsFileDragOver(false);
-      const merge = onUploadedFilesChange;
-      if (!merge) return;
-      const files = Array.from(e.dataTransfer.files).filter(isAttachableUpload);
-      if (files.length === 0) return;
-      const newFiles: UploadedFile[] = files.map(fileToUploadedFile);
-      merge([...uploadedFiles, ...newFiles]);
+      addComposerUploads(e.dataTransfer.files, uploadedFiles, onUploadedFilesChange, attachmentMode);
     },
-    [uploadedFiles, onUploadedFilesChange],
+    [uploadedFiles, onUploadedFilesChange, attachmentMode],
   );
 
   const handlePasteFiles = useCallback(
     (clipboardFiles: File[]): boolean => {
-      if (!onUploadedFilesChange) return false;
-      const files = clipboardFiles.filter(isAttachableUpload);
-      if (files.length === 0) return false;
-      onUploadedFilesChange([...uploadedFiles, ...files.map(fileToUploadedFile)]);
-      return true;
+      return addComposerUploads(clipboardFiles, uploadedFiles, onUploadedFilesChange, attachmentMode);
     },
-    [uploadedFiles, onUploadedFilesChange],
+    [uploadedFiles, onUploadedFilesChange, attachmentMode],
   );
 
   const handleRemoveUploadedFile = useCallback(
@@ -833,11 +818,11 @@ export function WorkspaceInput({
       return "Drop images or documents here";
     }
     // Short, calm placeholder on mobile — the long hint wraps to 2–3 lines on a phone.
-    const baseHint = isMobile
+    const baseHint = placeholder ?? (isMobile
       ? "Do anything"
       : canResume
         ? composerPlaceholder.followUp
-        : composerPlaceholder.initial;
+        : composerPlaceholder.initial);
 
     const imageCount =
       uploadedFiles.filter((file) => file.type === "image").length +
@@ -868,6 +853,7 @@ export function WorkspaceInput({
     canResume,
     isMobile,
     composerPlaceholder,
+    placeholder,
   ]);
   const floatingRunStatus = layout === "floating" && !isFileDragOver
     ? floatingStatusPlaceholder
@@ -893,7 +879,7 @@ export function WorkspaceInput({
   const hasMessage = hasComposerMessage(goal, uploadedFiles.length, contextItems);
   const voiceStartingRef = useRef(false);
   const [voiceStarting, setVoiceStarting] = useState(false);
-  const voiceEnabled = isElectron && activeDescriptor.supportsRealtime && layout !== "floating";
+  const voiceEnabled = allowVoice && isElectron && activeDescriptor.supportsRealtime && layout !== "floating";
   const voiceBusy = voice.state.phase === "connecting" || voice.state.phase === "connected" || voice.state.phase === "ending" || voice.state.phase === "stop_failed";
   const voiceForThisRun = voiceBusy && voice.state.runId === activeRun?.id;
   const startVoice = async () => {
@@ -923,12 +909,14 @@ export function WorkspaceInput({
   const isRunning = !isNewRunTabActive && (activeRun?.status === "running" || activeRun?.status === "queued");
   const canSendDuringRun = activeDescriptor.supportsTurnSteer && !!runQueue;
   const steerPending = runQueue?.queue?.mode === "steer" && runQueue.queue.messages.some((message) => message.status === "sending");
-  const submitDisabled = isLoading || voiceStarting || voiceForThisRun || !!steerPending || !hasMessage || (isRunning && !canSendDuringRun);
-  const sendDisabled = !settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0);
+  const submitDisabled = disabled || isLoading || voiceStarting || voiceForThisRun || !!steerPending || !hasMessage || (isRunning && !canSendDuringRun);
+  const sendDisabled = externalSendDisabled || !settingsReady || submitDisabled || !!authErrorMessage || (!isLoadingModels && modelDisplayNames.length === 0);
   const controls = composerControls({
     state: voice.state, runId: activeRun?.id, isNewRun: !activeRun || isNewRunTabActive,
-    isRunning, voiceEnabled, sendDisabled,
-    sendLabel: runQueue?.editing ? "Save queued message" : "Send prompt",
+    isRunning, canSendDuringRun, voiceEnabled, sendDisabled,
+    sendLabel: runQueue?.editing ? "Save queued message"
+      : isRunning && canSendDuringRun ? runQueue?.queue?.mode === "steer" ? "Steer active turn" : "Queue message"
+      : sendLabel,
     hasMessage, preparing: voiceStarting,
     startDisabled: ((!activeRun || isNewRunTabActive) && !onCreateVoiceConversation) || !settingsReady || isLoading ||
       !!runQueue?.queue?.messages.length || !!providerSignedOut || cliUnsupported || !!authErrorMessage,
@@ -957,10 +945,10 @@ export function WorkspaceInput({
       planMode={planMode}
       onPlanModeToggle={handlePlanModeToggle}
       goalMode={goalMode}
-      onGoalModeToggle={handleGoalModeToggle}
+      onGoalModeToggle={showGoalButton ? handleGoalModeToggle : undefined}
       pluginSkills={pluginSkills}
       pluginsMenuOpen={pluginsMenuOpen}
-      onTogglePluginsMenu={handleTogglePluginsMenu}
+      onTogglePluginsMenu={showPluginsButton ? handleTogglePluginsMenu : undefined}
       pluginsButtonRef={pluginsButtonRef}
       thinkingMode={thinkingMode}
       onThinkingModeToggle={handleThinkingModeToggle}
@@ -973,7 +961,10 @@ export function WorkspaceInput({
       supportsUltracode={supportsUltracode}
       uploadedFiles={uploadedFiles}
       onUploadedFilesChange={onUploadedFilesChange ?? (() => {})}
-      layout={layout === "floating" ? "floating" : "default"}
+      attachmentMode={attachmentMode}
+      uploadInputRef={uploadInputRef}
+      layout={compactFloating ? "floating" : "default"}
+      dense={denseFloating}
     />
   );
 
@@ -1012,12 +1003,17 @@ export function WorkspaceInput({
       <div
         className={`@container/composer relative mx-auto flex min-w-0 w-full max-w-210 flex-col cursor-pointer transition-all
         ${layout === "floating"
-          ? "rounded-[28px] text-primary-950 dark:text-primary-50"
+          ? `rounded-[28px] text-primary-950 dark:text-primary-50 ${compactFloating ? "" : "pb-2"}`
           : "rounded-[28px] glass-surface pb-2"}
         ${layout === "default" ? "mb-4" : ""}
         ${isFileDragOver ? "ring dark:ring-primary/50 ring-primary-950/50 ring-offset-2 " : ""}`}
         onFocusCapture={(event) => {
           if (layout === "floating" && event.target instanceof HTMLElement && event.target.getAttribute("role") === "textbox") {
+            onFloatingFocus?.();
+          }
+        }}
+        onClickCapture={(event) => {
+          if (layout === "floating" && event.target instanceof HTMLElement && event.target.closest('[role="textbox"]')) {
             onFloatingFocus?.();
           }
         }}
@@ -1076,6 +1072,8 @@ export function WorkspaceInput({
             onQueryChange={handleGoalChange}
             onSubmit={handleSubmit}
             submitDisabled={sendDisabled}
+            disabled={disabled}
+            ariaLabel={inputLabel}
             onSkillChipsChange={handleSkillChipsChange}
             onFileChipsChange={handleFileChipsChange}
             onCodeChipsChange={handleCodeChipsChange}
@@ -1094,7 +1092,8 @@ export function WorkspaceInput({
                 />
               : undefined}
             focusShortcutLabel={layout === "floating" ? undefined : focusComposerShortcut}
-            compact={layout === "floating"}
+            compact={compactFloating}
+            dense={denseFloating}
           />
           <UnifiedContextDropdown
             isOpen={unifiedMenu.visible}
@@ -1116,9 +1115,9 @@ export function WorkspaceInput({
             dropdownRef={unifiedContextDropdownRef}
             triggerRef={pluginsButtonRef}
           />
-          {layout === "floating" && toolbar}
+          {compactFloating && toolbar}
         </div>
-        {layout !== "floating" && toolbar}
+        {!compactFloating && toolbar}
       </div>
     </>
   );

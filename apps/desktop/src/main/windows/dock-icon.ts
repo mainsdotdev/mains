@@ -1,4 +1,4 @@
-import { app, ipcMain, nativeImage, type NativeImage } from "electron";
+import { app, ipcMain, nativeImage, systemPreferences, type NativeImage } from "electron";
 import fs from "fs";
 import path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
@@ -14,6 +14,7 @@ const ICON_CANVAS_SIZE = 1024;
 // PNG exports fill their canvas; leave the same margin as native macOS icons.
 const ICON_CONTENT_SIZE = 832;
 const ICON_INSET = (ICON_CANVAS_SIZE - ICON_CONTENT_SIZE) / 2;
+let appearanceSubscription: number | undefined;
 
 function statePath(): string {
   return path.join(app.getPath("userData"), "dock-icon.json");
@@ -31,7 +32,12 @@ export function getSavedDockIcon(): AppIconId {
 }
 
 export function getAppIconPath(id: AppIconId): string {
-  const assetPath = appIconAssetPath(id);
+  // nativeTheme follows Mains' themeSource override. Dock icons follow the
+  // Mac's appearance even when Mains has a different light/dark preference.
+  const appearance = systemPreferences.getUserDefault("AppleInterfaceStyle", "string") === "Dark"
+    ? "dark"
+    : "light";
+  const assetPath = appIconAssetPath(id, appearance);
   if (!app.isPackaged) {
     return path.join(app.getAppPath(), "src/renderer/public", assetPath);
   }
@@ -86,6 +92,10 @@ function setDockImage(id: AppIconId): void {
 /** Apply the persisted choice before the first window opens. */
 export function applySavedDockIcon(): void {
   if (!app.dock) return;
+  appearanceSubscription ??= systemPreferences.subscribeNotification(
+    "AppleInterfaceThemeChangedNotification",
+    () => applySavedDockIcon(),
+  );
   const selected = getSavedDockIcon();
   if (app.isPackaged && selected === DEFAULT_APP_ICON_ID) return;
   try {
@@ -132,4 +142,8 @@ export function registerDockIconIpc(): void {
 export function unregisterDockIconIpc(): void {
   ipcMain.removeHandler(CHANNELS.app.getDockIcon);
   ipcMain.removeHandler(CHANNELS.app.setDockIcon);
+  if (appearanceSubscription !== undefined) {
+    systemPreferences.unsubscribeNotification(appearanceSubscription);
+    appearanceSubscription = undefined;
+  }
 }

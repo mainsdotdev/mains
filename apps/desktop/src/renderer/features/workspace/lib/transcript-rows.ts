@@ -24,6 +24,7 @@ import { voiceWorkTurnIdentity } from "./voice-transcript-view";
 export interface SessionInfo {
   elapsed: number;
   responseContent: string;
+  receivedAt?: Date;
   turn?: RunTurn;
 }
 
@@ -43,6 +44,13 @@ function collectResponseContent(
     }
   }
   return parts.join("\n\n");
+}
+
+function lastResponseReceivedAt(groups: EventGroup[], fromIdx: number, toIdx: number): Date | undefined {
+  for (let index = Math.min(toIdx, groups.length - 1); index >= fromIdx; index--) {
+    if (groups[index]?.type === "response") return groups[index].endTime;
+  }
+  return undefined;
 }
 
 /**
@@ -78,6 +86,7 @@ export function matchTurnsToGroups(
         result.set(last, {
           elapsed: turn.elapsedMs,
           responseContent: turn.responseContent || collectResponseContent(workGroups, 0, workGroups.length - 1),
+          receivedAt: lastResponseReceivedAt(workGroups, 0, workGroups.length - 1),
           turn,
         });
         lastGroupIdx = Math.max(lastGroupIdx, last + 1);
@@ -139,6 +148,7 @@ export function matchTurnsToGroups(
       elapsed: turn.elapsedMs,
       responseContent:
         turn.responseContent || collectResponseContent(normalGroups, 0, normalGroups.length - 1),
+      receivedAt: lastResponseReceivedAt(normalGroups, 0, normalGroups.length - 1),
       turn,
     });
 
@@ -181,6 +191,7 @@ function computeSessionTimesFromEvents(
           result.set(i - 1, {
             elapsed,
             responseContent: collectResponseContent(groups, turnStartIdx, i - 1),
+            receivedAt: lastResponseReceivedAt(groups, turnStartIdx, i - 1),
           });
         }
       }
@@ -205,6 +216,7 @@ function computeSessionTimesFromEvents(
         result.set(lastIdx, {
           elapsed,
           responseContent: collectResponseContent(groups, turnStartIdx, lastIdx),
+          receivedAt: lastResponseReceivedAt(groups, turnStartIdx, lastIdx),
         });
       }
     }
@@ -354,6 +366,7 @@ function documentArtifactKey(event: EventGroup["events"][number]): string | null
   if (event.type !== "artifact" || event.metadata?.kind !== "document") {
     return null;
   }
+  if (event.metadata.outputSelected === true && typeof event.metadata.path === "string") return event.metadata.path;
   const candidate =
     (typeof event.metadata.fileName === "string" && event.metadata.fileName) ||
     (typeof event.metadata.path === "string" && event.metadata.path) ||
@@ -430,7 +443,12 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
       continue;
     }
 
-    if (segments.length === 1) {
+    // Native final-answer evidence takes precedence over transport order. A
+    // final reply can span multiple text blocks, followed by later commentary.
+    const finalSegments = segments.filter((segment) => groups[segment.start].events.some((event) =>
+      event.type === "artifact" && event.metadata?.kind === "report" && event.metadata?.messagePhase === "final_answer",
+    ));
+    if (segments.length === 1 && finalSegments.length === 0) {
       rows.push({
         kind: "flat",
         indices: [...prefixIndices, ...expandIndexRange(segments[0]!)],
@@ -440,9 +458,13 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
 
     // Accordion only merges groups that start with `response`; tool blocks before the first
     // reply were emitted as separate "prefix" rows. Fold them into the first collapsed chunk.
-    const prevRanges = segments.slice(0, -1).map(expandIndexRange);
+    const visibleSegments = finalSegments.length > 0 ? finalSegments : [segments[segments.length - 1]!];
+    const visibleSet = new Set(visibleSegments);
+    const lastSegment = visibleSegments.flatMap(expandIndexRange);
+    const prevRanges = segments.filter((segment) => !visibleSet.has(segment)).map(expandIndexRange);
     if (prefixIndices.length > 0) {
-      prevRanges[0] = [...prefixIndices, ...prevRanges[0]!];
+      if (prevRanges.length > 0) prevRanges[0] = [...prefixIndices, ...prevRanges[0]!];
+      else prevRanges.push(prefixIndices);
     }
 
     // Plans and MCP Apps must stay out of the collapsed region so their
@@ -476,7 +498,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
         indices: [
           ...messageBreakout,
           ...planBreakout,
-          ...expandIndexRange(segments[segments.length - 1]!),
+          ...lastSegment,
         ],
       });
       continue;
@@ -494,7 +516,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
       previousSegments: filteredPrevRanges,
       planBreakoutIndices: planBreakout,
       messageBreakoutIndices: messageBreakout,
-      lastSegment: expandIndexRange(segments[segments.length - 1]!),
+      lastSegment,
       previousMessageCount: visibleMessageCount,
       previousToolSummary: formatAccordionToolSummary(toolTotal),
     });

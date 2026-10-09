@@ -12,6 +12,7 @@ import appSettingsReducer from "./slices/appSettingsSlice";
 import workspaceReducer from "./slices/workspaceSlice";
 import backendsReducer from "./slices/backendsSlice";
 import runQueueReducer from "./slices/runQueueSlice";
+import atlasReducer from "./slices/atlasSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
 import { onTransportChange } from "../transport";
 import { parseAppThemeSettings } from "../app-themes";
@@ -104,6 +105,14 @@ const persistedBackendsReducer = persistReducer(
   backendsReducer,
 );
 
+// Cover framing is local to this device. Open tabs and chat drafts stay in-session.
+const persistedAtlasReducer = persistReducer({
+  key: "atlas",
+  storage,
+  version: 1,
+  whitelist: ["coverPositions"],
+}, atlasReducer);
+
 export const store = configureStore({
   reducer: {
     [baseApi.reducerPath]: baseApi.reducer,
@@ -112,6 +121,7 @@ export const store = configureStore({
     backends: persistedBackendsReducer,
     // Unsent messages and their delivery mode live only in this renderer.
     runQueue: runQueueReducer,
+    atlas: persistedAtlasReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({

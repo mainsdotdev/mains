@@ -144,6 +144,45 @@ describe("browserService — tabs by chat", () => {
       .toEqual([]);
   });
 
+  it("detaches the browser after closing the final tab without creating a replacement", async () => {
+    await browserService.setContext("chat-a");
+    await browserService.createTab("https://example.com/final");
+    const tabId = browserService.getState().activeTabId;
+    const contents = liveView(browserService.tabs.get(tabId)!);
+    browserService.attached = true;
+    browserService.visible = true;
+
+    const state = await browserService.closeTab(tabId);
+
+    expect(state).toEqual({ ownerKey: "chat-a", activeTabId: "", tabs: [] });
+    expect(contents.close).toHaveBeenCalledOnce();
+    expect(browserService.attached).toBe(false);
+    expect(browserService.visible).toBe(false);
+    expect(browserService.activeTabIdsByOwner["chat-a"]).toBeUndefined();
+    browserService.setBounds({ x: 0, y: 0, width: 500, height: 600 });
+    browserService.setVisible(true);
+    expect(browserService.getState().tabs).toEqual([]);
+    browserService._persistNow();
+    expect(JSON.parse(readFileSync(join(harness.userData, "browser-tabs.json"), "utf8")).tabs)
+      .toEqual([]);
+  });
+
+  it("keeps the browser attached when closing one of multiple tabs", async () => {
+    await browserService.createTab("https://example.com/first");
+    const firstTabId = browserService.getState().activeTabId;
+    await browserService.createTab("https://example.com/second");
+    const secondTabId = browserService.getState().activeTabId;
+    browserService.attached = true;
+    browserService.visible = true;
+
+    const state = await browserService.closeTab(secondTabId);
+
+    expect(state.activeTabId).toBe(firstTabId);
+    expect(state.tabs.map((tab) => tab.tabId)).toEqual([firstTabId]);
+    expect(browserService.attached).toBe(true);
+    expect(browserService.visible).toBe(true);
+  });
+
   it("reports a click in the active live page without blocking the page", async () => {
     await browserService.setContext("chat-a");
     await browserService.createTab("https://example.com/a");

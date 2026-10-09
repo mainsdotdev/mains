@@ -337,7 +337,17 @@ export type WorkRunEvent =
   | WorkRunTaskEvent
   | WorkRunPromptSuggestionEvent
   | WorkRunContextUsageEvent
-  | WorkRunPlanUpdateEvent;
+  | WorkRunPlanUpdateEvent
+  | WorkRunMessagePhaseEvent;
+
+/** A provider confirmed the phase of an already emitted main-agent message. */
+export interface WorkRunMessagePhaseEvent {
+  type: "message_phase";
+  /** Correlates with report metadata.providerMessageId, including split text blocks. */
+  messageId: string;
+  phase: "commentary" | "final_answer";
+  ts?: number;
+}
 
 /**
  * Artifact summary in the result
@@ -708,6 +718,13 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
     params: ConsumeRateLimitResetCreditParams,
   ): Promise<ConsumeRateLimitResetCreditOutcome>;
 
+  /** Read the Codex host's memory preferences from App Server. */
+  getCodexMemorySettings?(): Promise<CodexMemorySettings>;
+  /** Set one Codex memory preference; `allowToolAssistedChats` is the UI-facing inverse. */
+  setCodexMemorySetting?(setting: CodexMemorySetting, enabled: boolean): Promise<void>;
+  /** Delete the Codex host's memories through App Server. */
+  resetCodexMemories?(): Promise<void>;
+
   // ── Thread goal controls (Codex `thread/goal/*`) ──
   /** Set/update the goal for a run's thread. Partial — omitted fields unchanged. */
   setGoal?(runId: string, params: GoalSetParams): Promise<GoalInfo | null>;
@@ -931,6 +948,9 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   consumeRateLimitResetCredit?(
     params: ConsumeRateLimitResetCreditParams,
   ): Promise<ConsumeRateLimitResetCreditOutcome>;
+  getCodexMemorySettings?(): Promise<CodexMemorySettings>;
+  setCodexMemorySetting?(setting: CodexMemorySetting, enabled: boolean): Promise<void>;
+  resetCodexMemories?(): Promise<void>;
   getAccountInfo?(): Promise<AccountInfo>;
   updateCli?(): Promise<CliUpdateResult>;
   listPlugins?(): Promise<PluginListResponse>;
@@ -1048,6 +1068,15 @@ export type ConsumeRateLimitResetCreditOutcome =
   | "nothingToReset"
   | "noCredit"
   | "alreadyRedeemed";
+
+export type CodexMemorySetting = "memoriesEnabled" | "allowToolAssistedChats";
+
+export interface CodexMemorySettings {
+  supported: boolean;
+  /** Null means App Server did not report an explicit value. */
+  memoriesEnabled: boolean | null;
+  allowToolAssistedChats: boolean | null;
+}
 
 export interface RateLimitWindow {
   /** Percentage used (0-100) */

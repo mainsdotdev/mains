@@ -24,6 +24,16 @@ export function modeLabel(mode: ModeId): string {
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type RunTurnStatus = "active" | "completed";
 
+/** Recent conversations in one experience, optionally scoped to a Page and Space. */
+export interface RunExperienceOptions {
+  accountId: string;
+  providerId: string;
+  mode: ModeId;
+  spaceId?: string;
+  atlasPageId?: string;
+  limit?: number;
+}
+
 /** Chronological position; artifacts precede tools when timestamps tie. */
 export interface RunHistoryCursor {
   timestamp: number;
@@ -166,6 +176,7 @@ export type RunArtifactKind =
  * "prompt_suggestion", or anything else (an assistant message).
  */
 export interface RunArtifactResponse {
+  /** Positive persisted row ID, or a stable negative ID for a selected output projection. */
   id: number;
   runId: string;
   kind: RunArtifactKind;
@@ -181,6 +192,8 @@ export interface RunArtifactResponse {
  */
 export interface ReadArtifactImagePayload {
   artifactId: number;
+  /** Required for a derived output row (negative artifact ID). */
+  runId?: string;
   /** Longest side the image is scaled down to before it travels; the Mac caps it. */
   maxSide?: number;
 }
@@ -374,6 +387,8 @@ export interface StartRunPayload {
   spaceId: string;
   providerId: string;
   goal: string;
+  /** Optional native Page context, separate from the visible user message. */
+  atlasPageId?: string;
   workspaceId?: string;
   collectionId?: string;
   model?: string;
@@ -531,6 +546,8 @@ export interface ContinueRunPayload {
   accountId: string;
   /** The follow-up message to send. */
   message: string;
+  /** Optional Page identity for a page-chat continuation. */
+  atlasPageId?: string;
   /** Model for this continuation; omitted = the provider's default. */
   model?: string | null;
   /** Images/documents picked on the phone. */

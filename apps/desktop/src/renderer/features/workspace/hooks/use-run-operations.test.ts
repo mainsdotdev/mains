@@ -82,6 +82,17 @@ function renderOperations() {
 }
 
 describe("useRunOperations collection payload", () => {
+  it("sends Atlas page identity separately from the user's first and follow-up messages", async () => {
+    mocks.mode = "work";
+    const { result } = renderOperations();
+    await act(async () => {
+      await result.current.executeRun("hi", undefined, "codex", undefined, undefined, [], undefined, undefined, undefined, undefined, "page-1");
+      await result.current.continueRun("run-1", "expand this", undefined, undefined, [], undefined, undefined, undefined, "page-1");
+    });
+    expect(mocks.execute).toHaveBeenCalledWith(expect.objectContaining({ goal: "hi", atlasPageId: "page-1" }));
+    expect(mocks.continue).toHaveBeenCalledWith(expect.objectContaining({ message: "expand this", atlasPageId: "page-1" }));
+  });
+
   it("carries local prompt identity through execute and ordinary continue without queue acceptance fields", async () => {
     const { result } = renderOperations();
     await act(async () => {
@@ -173,7 +184,14 @@ describe("useRunOperations collection payload", () => {
     });
 
     expect(mocks.execute).toHaveBeenCalledWith(
-      expect.objectContaining({ collectionId: "collection-1" }),
+      expect.objectContaining({ collectionId: "collection-1", mode: "work" }),
     );
+  });
+
+  it("sends the current experience while leaving an ordinary Chat run in Chat", async () => {
+    mocks.mode = "chat";
+    const { result } = renderOperations();
+    await act(async () => result.current.executeRun("Hello", undefined, "codex"));
+    expect(mocks.execute).toHaveBeenCalledWith(expect.objectContaining({ spaceId: "space-1", mode: "chat" }));
   });
 });

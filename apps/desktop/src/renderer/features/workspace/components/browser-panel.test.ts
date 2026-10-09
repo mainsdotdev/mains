@@ -25,15 +25,18 @@ const mocks = vi.hoisted(() => ({
   setChatMode: vi.fn(),
   setChatHost: vi.fn(),
   expanded: false,
+  canExpand: true,
   chatVisible: true,
   chatMode: "input",
   sidebarCollapsed: false,
+  ownerKey: undefined as string | undefined,
 }));
 
 vi.mock("@/hooks/use-browser-panel", () => ({
   useBrowserPanel: () => ({
     isOpen: true,
     isExpanded: mocks.expanded,
+    canExpand: mocks.canExpand,
     chatMode: mocks.chatMode,
     setChatMode: mocks.setChatMode,
     chatVisible: mocks.chatVisible,
@@ -41,6 +44,7 @@ vi.mock("@/hooks/use-browser-panel", () => ({
     setChatHost: mocks.setChatHost,
     toggleExpanded: mocks.toggleExpanded,
     close: mocks.closePanel,
+    ownerKey: mocks.ownerKey,
   }),
 }));
 
@@ -116,6 +120,7 @@ function createBrowserApi() {
     setBounds: vi.fn().mockResolvedValue({ success: true, data: null }),
     setVisible: vi.fn().mockResolvedValue({ success: true, data: null }),
     createTab: vi.fn().mockResolvedValue({ success: true, data: null }),
+    closeTab: vi.fn().mockResolvedValue({ success: true, data: { activeTabId: "", tabs: [] } }),
     activateTab: vi.fn().mockResolvedValue({ success: true, data: null }),
     navigate: vi.fn().mockResolvedValue({ success: true, data: null }),
     getState: vi.fn().mockResolvedValue({
@@ -144,9 +149,11 @@ describe("BrowserPanel browser menu", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);
     mocks.expanded = false;
+    mocks.canExpand = true;
     mocks.chatVisible = true;
     mocks.chatMode = "input";
     mocks.sidebarCollapsed = false;
+    mocks.ownerKey = undefined;
   });
 
   afterEach(() => {
@@ -174,6 +181,78 @@ describe("BrowserPanel browser menu", () => {
     act(() => modeChanged({ enabled: false }));
     fireEvent.keyDown(annotate, { key: "Escape" });
     expect(api.setSelectMode).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a docked-only browser closable without an expansion control", async () => {
+    mocks.canExpand = false;
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { browser: createBrowserApi() },
+    });
+    render(createElement(BrowserPanel));
+    await screen.findByRole("tab", { name: "New tab" });
+    expect(screen.queryByRole("button", { name: "Expand browser" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close browser" })).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "Embedded browser" }).style.width)
+      .toBe("var(--browser-panel-width)");
+  });
+
+  it("closes the panel after closing its final tab", async () => {
+    const api = createBrowserApi();
+    Object.defineProperty(window, "api", { configurable: true, value: { browser: api } });
+    render(createElement(BrowserPanel));
+    await screen.findByRole("tab", { name: "New tab" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close New tab" }));
+
+    await waitFor(() => expect(mocks.closePanel).toHaveBeenCalledOnce());
+    expect(api.closeTab).toHaveBeenCalledExactlyOnceWith(blankTab.tabId);
+  });
+
+  it("keeps the panel open when another tab remains or closing fails", async () => {
+    const api = createBrowserApi();
+    const remaining = { ...blankTab, tabId: "remaining-tab", title: "Remaining" };
+    api.closeTab.mockResolvedValueOnce({ success: true, data: { activeTabId: remaining.tabId, tabs: [remaining] } });
+    Object.defineProperty(window, "api", { configurable: true, value: { browser: api } });
+    render(createElement(BrowserPanel));
+    await screen.findByRole("tab", { name: "New tab" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close New tab" }));
+    await screen.findByRole("tab", { name: "Remaining" });
+    expect(mocks.closePanel).not.toHaveBeenCalled();
+
+    api.closeTab.mockResolvedValueOnce({ success: false, error: "Could not close tab" } as never);
+    fireEvent.click(screen.getByRole("button", { name: "Close Remaining" }));
+    await waitFor(() => expect(api.closeTab).toHaveBeenCalledTimes(2));
+    expect(mocks.closePanel).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: "Remaining" })).toBeTruthy();
+  });
+
+  it("also closes when the native browser reports its final tab closed", async () => {
+    const api = createBrowserApi();
+    Object.defineProperty(window, "api", { configurable: true, value: { browser: api } });
+    render(createElement(BrowserPanel));
+    await screen.findByRole("tab", { name: "New tab" });
+
+    act(() => api.onStateChanged.mock.calls[0][0]({ activeTabId: "", tabs: [] }));
+
+    expect(mocks.closePanel).toHaveBeenCalledOnce();
+    expect(api.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("does not close when switching to a conversation with no browser tabs", async () => {
+    const api = createBrowserApi();
+    Object.defineProperty(window, "api", { configurable: true, value: { browser: api } });
+    const { rerender } = render(createElement(BrowserPanel));
+    await screen.findByRole("tab", { name: "New tab" });
+
+    mocks.ownerKey = "another-conversation";
+    api.getState.mockResolvedValue({ success: true, data: { ownerKey: mocks.ownerKey, activeTabId: "", tabs: [] } } as never);
+    api.getState.mockClear();
+    rerender(createElement(BrowserPanel));
+    await waitFor(() => expect(api.getState).toHaveBeenCalledOnce());
+
+    expect(mocks.closePanel).not.toHaveBeenCalled();
   });
 
   it("places expand beside close and fills the workspace on expansion", async () => {

@@ -4,6 +4,7 @@ import { SidebarHeader } from "./sidebar-header";
 import { SidebarFooter } from "./sidebar-footer";
 import { SidebarContent } from "./sidebar-content";
 import { NavigationRail } from "./navigation-rail";
+import { AtlasSidebar } from "@/features/atlas/components/atlas-sidebar";
 import DeleteConfirmationModal from "./delete-confirmation-modal";
 import NewButton from "./new-button";
 import SettingsView from "./settings-view";
@@ -45,6 +46,7 @@ import {
   SIDEBAR_WIDTH_MAX,
   SIDEBAR_WIDTH_DEFAULT,
   hasSidebarPanel,
+  isAtlasRoute,
   isSettingsRoute,
   isWorkspaceRoute,
 } from "@/lib/layout";
@@ -75,6 +77,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const { spaces, activeSpaceId, activeSpace } = useActiveSpace();
   const [updateSpace] = useUpdateSpaceMutation();
   const spaceProvider = useSpaceProviderVariant();
+  const atlasRoute = isAtlasRoute(location.pathname) && spaceProvider.supportsAtlas;
 
   const { searchQuery } = useSidebarSearch();
 
@@ -265,9 +268,14 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         <NavigationRail
           showTasks={modeConfig.showTasksNav}
           pluginsAvailable={!isPluginsDisabledForAgent}
+          atlasAvailable={spaceProvider.supportsAtlas}
           spaces={spaces}
           activeSpaceId={activeSpaceId}
           onHomeClick={handleHomeClick}
+          onAtlasClick={() => {
+            dispatch(setSidebarCollapsed(false));
+            navigate("/atlas");
+          }}
           onSpaceChange={(spaceId) => {
             dispatch(setSidebarCollapsed(false));
             void handleSpaceChange(spaceId);
@@ -305,12 +313,14 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           pointerEvents: panelHidden ? "none" : "auto",
         }}
         role="complementary"
-        aria-label="Workspace sidebar"
+        aria-label={atlasRoute ? "Atlas sidebar" : "Workspace sidebar"}
         aria-hidden={panelHidden}
         inert={panelHidden}
       >
         {isSettingsOpen ? (
           <SettingsView onClose={handleCloseSettings} />
+        ) : atlasRoute ? (
+          <AtlasSidebar />
         ) : (
           <div className="h-full overflow-hidden flex flex-col">
             <SidebarHeader

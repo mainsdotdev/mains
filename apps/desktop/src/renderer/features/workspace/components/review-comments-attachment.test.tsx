@@ -33,4 +33,11 @@ describe("review comment attachment", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Review comments" })).toBeNull();
   });
+
+  it("shows the full line range on a comment", async () => {
+    render(<ReviewCommentsAttachment comments={[{ ...comment, endLineNumber: 13, lineText: "oldValue\nnextLine" }]} />);
+    fireEvent.click(screen.getByRole("button", { name: "1 review comment" }));
+    expect(await screen.findByText("src/a.ts · L11-13")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Review comments" }).querySelector("pre")?.textContent).toBe("oldValue\nnextLine");
+  });
 });

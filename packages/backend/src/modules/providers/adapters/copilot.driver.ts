@@ -949,11 +949,14 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
         const content = String(payload.content ?? "").trim();
         if (!content) return null;
         const streamId = assistantStreamId(payload, runId, "report");
+        const providerMessageId = payload.apiCallId || payload.messageId;
         return {
           type: "artifact",
           kind: "report",
           content,
-          metadata: { source: "assistant.message", ...(streamId ? { streamId } : {}) },
+          metadata: { source: "assistant.message", ...(streamId ? { streamId } : {}),
+            ...(typeof providerMessageId === "string" && providerMessageId
+              ? { providerMessageId, messagePhase: "commentary" } : {}) },
         };
       }
 
@@ -1539,6 +1542,14 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           });
         }
 
+        // sendAndWait returns the last main-agent message after session.idle;
+        // assistant.turn_end only closes one model call inside the tool loop.
+        const payload = result ? getPayload(result) : {};
+        const messageId = payload.apiCallId || payload.messageId;
+        if (!signal.aborted && typeof messageId === "string" && messageId &&
+          typeof payload.content === "string" && payload.content.trim()) {
+          await onEvent({ type: "message_phase", messageId, phase: "final_answer" });
+        }
         return buildSuccessOutcome(result, cs.runId);
       } catch (error) {
         await emitPendingToolInterruptions(onEvent);
@@ -1789,16 +1800,25 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
           return modelsCache?.models ?? [];
         }
 
+        // The runtime can list every model twice. Ids key the catalogue — a
+        // paired phone stores it under them — so keep the first of each.
+        const seen = new Set<string>();
+        const unique = raw.filter((model) => {
+          if (seen.has(model.id)) return false;
+          seen.add(model.id);
+          return true;
+        });
+
         // "auto" is the CLI's own synthetic entry: available on every plan and
         // never retired, so it is the stable fallback when the configured
         // default has aged out of the catalogue.
         const defaultId = resolveCatalogDefaultId(
-          raw.map((model) => model.id),
+          unique.map((model) => model.id),
           config.defaultModel,
           ["auto"],
         );
 
-        const models = raw.map(
+        const models = unique.map(
           (model): ModelInfo => ({
             id: model.id,
             displayName: model.name || model.id,

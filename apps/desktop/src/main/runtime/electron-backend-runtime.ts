@@ -32,7 +32,7 @@ export function createElectronBackendRuntime(): BackendRuntime {
       stop: (id) => powerSaveBlocker.stop(id),
     },
     imagePreview: {
-      async resizeToJpeg(bytes, maxSide) {
+      async resize(bytes, maxSide, preserveAlpha = false) {
         const source = nativeImage.createFromBuffer(bytes);
         if (source.isEmpty()) return null;
         const size = source.getSize();
@@ -49,8 +49,17 @@ export function createElectronBackendRuntime(): BackendRuntime {
               })
             : source;
         const outputSize = scaled.getSize();
+        let hasAlpha = false;
+        if (preserveAlpha) {
+          // Inspect only the bounded, resized BGRA bitmap, not the original.
+          const bitmap = scaled.toBitmap();
+          for (let index = 3; index < bitmap.length; index += 4) {
+            if (bitmap[index] < 255) { hasAlpha = true; break; }
+          }
+        }
         return {
-          jpeg: scaled.toJPEG(82),
+          bytes: hasAlpha ? scaled.toPNG() : scaled.toJPEG(82),
+          mime: hasAlpha ? "image/png" : "image/jpeg",
           width: outputSize.width,
           height: outputSize.height,
         };

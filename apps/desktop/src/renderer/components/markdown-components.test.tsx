@@ -7,6 +7,7 @@ import { AgentMarkdown } from "./agent-markdown";
 import {
   faviconUrlForHref,
   isRemoteImageSrc,
+  MarkdownLink,
 } from "./markdown-components";
 
 const linkHarness = vi.hoisted(() => ({
@@ -373,6 +374,29 @@ describe("assistant markdown / streaming fade", () => {
 });
 
 describe("markdownComponents / links", () => {
+  it.each([
+    "/atlas/page-1",
+    "#/atlas/page-1",
+    "http://localhost:5173/#/atlas/page-1",
+  ])("opens Page reference %s through internal navigation", (href) => {
+    renderMarkdown(`[Created Page](${href})`);
+    const link = screen.getByRole("link", { name: "Created Page" });
+
+    fireEvent.click(link);
+
+    expect(linkHarness.openLink).toHaveBeenCalledWith(href);
+    expect(linkHarness.openFile).not.toHaveBeenCalled();
+    expect(linkHarness.openHtmlFile).not.toHaveBeenCalled();
+    expect(link.querySelector("img")).toBeNull();
+  });
+
+  it("also opens Page references in document markdown", () => {
+    render(<MarkdownLink href="/atlas/page-1">Related Page</MarkdownLink>);
+    fireEvent.click(screen.getByRole("link", { name: "Related Page" }));
+    expect(linkHarness.openLink).toHaveBeenCalledWith("/atlas/page-1");
+    expect(linkHarness.openFile).not.toHaveBeenCalled();
+  });
+
   it("opens generated HTML in the browser panel instead of the editor", () => {
     linkHarness.openHtmlFile.mockResolvedValue(undefined);
     renderMarkdown(

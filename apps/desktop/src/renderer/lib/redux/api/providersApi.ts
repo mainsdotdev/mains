@@ -11,6 +11,8 @@ import type {
 import type {
   ConsumeRateLimitResetCreditOutcome,
   ConsumeRateLimitResetCreditParams,
+  CodexMemorySetting,
+  CodexMemorySettings,
   ConnectorMcpServerInfo,
   ConnectorOAuthStartResult,
   RateLimitInfo,
@@ -377,6 +379,37 @@ export const providersApi = baseApi.injectEndpoints({
       keepUnusedDataFor: 300,
     }),
 
+    getCodexMemorySettings: builder.query<CodexMemorySettings, string>({
+      query: (id) => ({
+        handler: CHANNELS.providers.getCodexMemorySettings,
+        args: [id],
+      }),
+      providesTags: (_result, _error, id) => [{ type: "ProviderMemory", id }],
+    }),
+
+    setCodexMemorySetting: builder.mutation<
+      void,
+      { providerId: string; setting: CodexMemorySetting; enabled: boolean }
+    >({
+      query: ({ providerId, setting, enabled }) => ({
+        handler: CHANNELS.providers.setCodexMemorySetting,
+        args: [providerId, setting, enabled],
+      }),
+      invalidatesTags: (_result, _error, { providerId }) => [
+        { type: "ProviderMemory", id: providerId },
+      ],
+    }),
+
+    resetCodexMemories: builder.mutation<void, string>({
+      query: (id) => ({
+        handler: CHANNELS.providers.resetCodexMemories,
+        args: [id],
+      }),
+      invalidatesTags: (_result, _error, id) => [
+        { type: "ProviderMemory", id },
+      ],
+    }),
+
     getProviderCommands: builder.query<
       CommandInfo[],
       { id: string; workspacePath?: string }
@@ -590,6 +623,9 @@ export const {
   useDisableProviderMutation,
   useGetProviderModelsQuery,
   useGetProviderRealtimeVoicesQuery,
+  useGetCodexMemorySettingsQuery,
+  useSetCodexMemorySettingMutation,
+  useResetCodexMemoriesMutation,
   useLazyGetProviderModelsQuery,
   useGetProviderCommandsQuery,
   useLazyGetProviderCommandsQuery,

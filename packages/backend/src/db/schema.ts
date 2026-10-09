@@ -42,6 +42,60 @@ export const accounts = sqliteTable(
   ],
 );
 
+/** Only native Pages and files explicitly saved to Atlas live here. */
+export const atlasItems = sqliteTable("atlas_items", {
+  id: text("id").primaryKey().notNull(),
+  accountId: text("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: ["page", "file", "image"] }).notNull(),
+  title: text("title").notNull(),
+  metadata: text("metadata"),
+  collectionId: text("collection_id").references(() => collections.id, { onDelete: "set null" }),
+  sourceRunId: text("source_run_id").references(() => runs.id, { onDelete: "set null" }),
+  // Stable origin identity survives deletion of the source conversation.
+  sourceKey: text("source_key"),
+  storageKey: text("storage_key"),
+  fileName: text("file_name"),
+  mimeType: text("mime_type"),
+  byteSize: integer("byte_size"),
+  contentHash: text("content_hash"),
+  isFavorite: integer("is_favorite", { mode: "boolean" }).notNull().default(false),
+  trashedAt: integer("trashed_at", { mode: "timestamp" }),
+  version: integer("version").notNull().default(0),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [
+  index("idx_atlas_items_account_updated").on(t.accountId, t.updatedAt),
+  index("idx_atlas_items_collection").on(t.collectionId),
+  uniqueIndex("uniq_atlas_items_source").on(t.accountId, t.sourceKey),
+  check("check_atlas_items_kind", sql`${t.kind} IN ('page', 'file', 'image')`),
+  check("check_atlas_items_metadata_json", sql`json_valid(${t.metadata}) OR ${t.metadata} IS NULL`),
+]);
+
+export const atlasPageRevisions = sqliteTable("atlas_page_revisions", {
+  id: text("id").primaryKey().notNull(),
+  itemId: text("item_id").notNull().references(() => atlasItems.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  schemaVersion: integer("schema_version").notNull().default(1),
+  title: text("title").notNull(),
+  blocksJson: text("blocks_json").notNull(),
+  markdown: text("markdown").notNull(),
+  actor: text("actor", { enum: ["user", "agent"] }).notNull(),
+  sourceRunId: text("source_run_id").references(() => runs.id, { onDelete: "set null" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, (t) => [
+  uniqueIndex("uniq_atlas_page_revisions_version").on(t.itemId, t.version),
+  check("check_atlas_page_revisions_blocks_json", sql`json_valid(${t.blocksJson})`),
+]);
+
+// Embedded files stay available for every restorable Page revision.
+export const atlasPageFileRefs = sqliteTable("atlas_page_file_refs", {
+  revisionId: text("revision_id").notNull().references(() => atlasPageRevisions.id, { onDelete: "cascade" }),
+  fileId: text("file_id").notNull().references(() => atlasItems.id, { onDelete: "restrict" }),
+}, (t) => [
+  primaryKey({ columns: [t.revisionId, t.fileId] }),
+  index("idx_atlas_page_file_refs_file").on(t.fileId),
+]);
+
 export const appSettings = sqliteTable("app_settings", {
   id: text("id").primaryKey().notNull().default("default"),
   accountId: text("account_id")
