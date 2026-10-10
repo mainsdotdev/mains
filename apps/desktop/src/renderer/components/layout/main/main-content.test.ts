@@ -12,7 +12,7 @@ vi.mock("@/lib/platform", () => ({
 
 type MainContentProps = ComponentProps<typeof MainContent>;
 
-const runHeader =createElement("button", null, "Selected run");
+const runHeader = createElement("button", null, "Selected run");
 
 function RunContent({ expanded, collapsed }: { expanded: boolean; collapsed: boolean }) {
   useSetMainHeader(runHeader, true);
@@ -21,7 +21,6 @@ function RunContent({ expanded, collapsed }: { expanded: boolean; collapsed: boo
     marginLeft: collapsed ? "4rem" : "22rem",
     marginRight: "38rem",
     sidebarCollapsed: collapsed,
-    browserOpen: true,
     headerHidden: expanded,
   };
   return createElement(
@@ -54,19 +53,43 @@ describe("MainContent under the expanded browser", () => {
 
     for (const collapsed of [false, true, false, true]) {
       view.rerender(content(true, collapsed));
-      const header = screen.getByText("Selected run").parentElement!;
+      const header = screen.getByText("Selected run").closest("[data-shell-header]")!;
       expect(getComputedStyle(header).visibility).toBe("hidden");
       expect(screen.queryByRole("button", { name: "Selected run" })).toBeNull();
     }
 
     view.rerender(content(false, true));
-    const header = screen.getByText("Selected run").parentElement!;
+    const header = screen.getByText("Selected run").closest("[data-shell-header]")!;
     expect(getComputedStyle(header).visibility).toBe("visible");
     expect(screen.getByRole("button", { name: "Selected run" })).toBeTruthy();
   });
 });
 
 describe("MainContent during sidebar navigation", () => {
+  it("keeps contextual actions in the main header while adjacent panels change its edge", () => {
+    const actions = createElement("button", null, "Session details");
+    const content = (right: string) => {
+      const props: Omit<MainContentProps, "children"> = {
+        marginLeft: "22rem",
+        marginRight: right,
+        headerActions: actions,
+      };
+      return createElement(MainHeaderProvider, null,
+        createElement(HeaderOwner, { label: "Open chat", pending: false }),
+        createElement(MainContent, props as MainContentProps, createElement("div", null, "Transcript")));
+    };
+    const view = render(content("0.375rem"));
+    const session = screen.getByRole("button", { name: "Session details" });
+    const header = session.closest("[data-shell-header]");
+    for (const right of ["38rem", "45rem", "22rem", "0.375rem"]) {
+      view.rerender(content(right));
+      expect(screen.getByRole("button", { name: "Session details" })).toBe(session);
+      expect(session.closest("[data-shell-header]")).toBe(header);
+      expect(session.closest("main")).toBe(screen.getByRole("main"));
+      expect(screen.getByRole("main").style.marginRight).toBe(right);
+    }
+  });
+
   it("preserves the tab and corner while loading, disables stale actions, and clears the header when its page leaves", () => {
     const content = (label: string, pending: boolean, showOwner = true) =>
       createElement(MainHeaderProvider, null,
@@ -78,11 +101,11 @@ describe("MainContent during sidebar navigation", () => {
 
     view.rerender(content("First chat", false));
     const tab = screen.getByRole("button", { name: "First chat" });
-    const header = tab.parentElement!;
+    const header = tab.closest("[data-shell-header]")!;
     const surface = document.querySelector("[data-main-content-surface]")!;
     view.rerender(content("Second chat", true));
     expect(screen.getByText("First chat")).toBe(tab);
-    expect(tab.parentElement).toBe(header);
+    expect(tab.closest("[data-shell-header]")).toBe(header);
     expect(header.hasAttribute("inert")).toBe(true);
     expect(header.getAttribute("aria-busy")).toBe("true");
     expect(surface.classList.contains("rounded-tl-none")).toBe(true);

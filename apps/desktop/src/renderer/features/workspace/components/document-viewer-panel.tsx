@@ -1,4 +1,6 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { ShellHeader } from "@/components/layout/shell-header";
+import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { Button, Text, toast } from "@/components/ui";
 import { Close, Document, Download } from "@/components/ui/icons";
 import { appApi } from "@/lib/transport";
@@ -20,13 +22,11 @@ import { DocumentRenderHost } from "./document-viewer/document-render-host";
 import { MarkdownDocument } from "./document-viewer/markdown-document";
 import { PdfDocument } from "./document-viewer/pdf-document";
 
-type AnimationState = "closed" | "opening" | "open" | "closing";
-
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2;
 const ZOOM_STEP = 0.1;
 
-export function DocumentViewerPanel() {
+export function DocumentViewerPanel({ reserveLayoutControls = false }: { reserveLayoutControls?: boolean }) {
   const { isOpen, currentDoc, close } = useDocumentViewer();
   const dispatch = useAppDispatch();
   const documentViewerWidth = useAppSelector((s) => s.appSettings.documentViewerWidth);
@@ -42,29 +42,7 @@ export function DocumentViewerPanel() {
     if (zoom !== 1) setZoom(1);
   }
 
-  const [animState, dispatchAnim] = useReducer(
-    (_: AnimationState, next: AnimationState) => next,
-    isOpen ? "open" : "closed",
-  );
-
-  useEffect(() => {
-    dispatchAnim(isOpen ? "opening" : "closing");
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (animState === "opening") {
-      const t = setTimeout(() => dispatchAnim("open"), 50);
-      return () => clearTimeout(t);
-    }
-    if (animState === "closing") {
-      const t = setTimeout(() => dispatchAnim("closed"), 300);
-      return () => clearTimeout(t);
-    }
-    return undefined;
-  }, [animState]);
-
-  const isVisible = animState !== "closed";
-  const isAnimatedIn = animState === "open";
+  const { isVisible, isAnimatedIn } = usePanelAnimation(isOpen);
 
   if (!isVisible) return null;
 
@@ -98,7 +76,8 @@ export function DocumentViewerPanel() {
 
   return (
     <div
-      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[transform,opacity] duration-300 ease-out"
+      data-document-viewer-panel=""
+      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[transform,opacity] duration-150 ease-out"
       style={{
         width: "var(--doc-viewer-panel-width)",
         transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
@@ -123,19 +102,7 @@ export function DocumentViewerPanel() {
           the translucent app frame visible on every side. */}
       <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-primary-200/60 dark:border-primary-800/50">
-        <DocIcon className="size-4 shrink-0 " />
-        <div className="flex-1 min-w-0">
-          <Text as="div" size="xs" tone="default" weight="medium" className="truncate">
-            {currentDoc?.fileName ?? "Document"}
-          </Text>
-          {currentDoc && (
-            <Text as="div" size="t" tone="subtle" className="-mt-px">
-              {DOC_VIEWER_LABELS[currentDoc.docType]}
-            </Text>
-          )}
-        </div>
-
+      <ShellHeader reserveWindowControls={reserveLayoutControls} className="pl-2.5 border-b border-primary-200/60 dark:border-primary-800/50" actions={<>
         {/* Zoom controls — rendered documents only. Text sets its own type
             from the app's scale, so there is nothing here to scale. */}
         {currentDoc && !isTextDocType(currentDoc.docType) && (
@@ -198,7 +165,17 @@ export function DocumentViewerPanel() {
         >
           <Close className="size-4" />
         </Button>
-      </div>
+      </>}>
+        <div className="flex min-w-0 items-center gap-2">
+          <DocIcon className="size-4 shrink-0" />
+          <div className="min-w-0">
+            <Text as="div" size="xs" tone="default" weight="medium" className="truncate">
+              {currentDoc?.fileName ?? "Document"}
+            </Text>
+            {currentDoc && <Text as="div" size="t" tone="subtle" className="-mt-px">{DOC_VIEWER_LABELS[currentDoc.docType]}</Text>}
+          </div>
+        </div>
+      </ShellHeader>
 
       {/* Body — text formats render as React, PDFs as pdf.js canvases, Office
           bytes go to the shadow host. They never mix, so the branch lives here

@@ -3,176 +3,93 @@
 import { createElement, StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/components/ui";
+import { LAYOUT_TOGGLE_WIDTH_VAR } from "@/lib/layout";
 import { ToggleButton } from "./toggle-button";
 
+const ui = vi.hoisted(() => ({ workspaceId: "workspace-1" as string | null, width: 88, resize: () => {} }));
 vi.mock("@/lib/redux/hooks", () => ({
-  useAppSelector: (selector: (state: unknown) => unknown) =>
-    selector({ workspace: { activeWorkspaceId: "workspace-1" } }),
+  useAppSelector: (selector: (state: unknown) => unknown) => selector({ workspace: { activeWorkspaceId: ui.workspaceId } }),
 }));
-vi.mock("@/lib/platform", () => ({
-  useCapabilities: () => ({ embeddedBrowser: true }),
-}));
-vi.mock("@/hooks/use-mode-config", () => ({
-  useModeConfig: () => ({ showSources: true, showGitActions: false, showRightPanel: true }),
-}));
-vi.mock("@/providers/keyboard-shortcuts-provider", () => ({
-  useKeyboardShortcutBinding: () => undefined,
-}));
-vi.mock("@/features/workspace/components/session-panel", () => ({
-  SessionPanelTrigger: () => createElement("button", null, "Session details"),
-}));
-vi.mock("@/features/workspace/components/chat-actions-menu", () => ({
-  ChatActionsMenu: () => null,
-}));
+vi.mock("@/lib/platform", () => ({ useCapabilities: () => ({ embeddedBrowser: true }) }));
+vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ showRightPanel: true }) }));
+vi.mock("@/providers/keyboard-shortcuts-provider", () => ({ useKeyboardShortcutBinding: () => undefined }));
+vi.mock("@/features/workspace/components/chat-actions-menu", () => ({ ChatActionsMenu: () => null }));
 
 const onToggle = vi.fn();
-function controls(browserOpen: boolean, terminalOpen = false, browserExpanded = false, appPanel?: { expanded: boolean }) {
+function controls(browserOpen = false, hideTerminalControls = false, terminalOpen = false) {
   return createElement(StrictMode, null, createElement(ToggleButton, {
-    isOpen: false,
-    onClick: onToggle,
-    onTerminalToggle: onToggle,
-    terminalOpen,
-    browserOpen,
-    browserExpanded,
-    onBrowserToggle: onToggle,
-    onBrowserExpandToggle: onToggle,
-    showChatActions: false,
-    hideChatControls: !!appPanel?.expanded,
-    sessionPanelRight: appPanel && !appPanel.expanded
-      ? "calc(var(--mcp-app-panel-width) + 0.75rem)"
-      : browserOpen && !browserExpanded ? "calc(38rem + 0.75rem)" : undefined,
+    isOpen: false, onClick: onToggle, onTerminalToggle: onToggle, terminalOpen,
+    onBrowserToggle: onToggle, browserOpen, showChatActions: false, hideTerminalControls,
   }));
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  onToggle.mockClear();
+  ui.workspaceId = "workspace-1";
+  ui.width = 88;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return { width: this.hasAttribute("data-layout-toggle") ? ui.width : 0 } as DOMRect;
+  });
   vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { ui.resize = callback; }
     observe() {}
     disconnect() {}
   });
 });
-afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe("session trigger during browser entry", () => {
-  it("offers only the docked browser control for Atlas", () => {
-    const toggleBrowser = vi.fn();
-    render(createElement(ToggleButton, {
-      isOpen: false,
-      onClick: onToggle,
-      showRightPanelToggle: false,
-      showChatActions: false,
-      hideChatControls: true,
-      browserOpen: false,
-      onBrowserToggle: toggleBrowser,
-    }));
-    expect(screen.queryByText("Session details")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open right panel" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open terminal" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Expand browser" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Open browser" }));
-    expect(toggleBrowser).toHaveBeenCalledOnce();
-  });
-
-  it("stays hidden throughout entry, then appears without remounting the controls", () => {
-    const view = render(controls(false));
-    const session = screen.getByRole("button", { name: "Session details" });
+describe("fixed window controls", () => {
+  it("keeps terminal, browser and right-panel toggles in order and mounted across browser changes", () => {
+    const view = render(controls());
     const terminal = screen.getByRole("button", { name: "Open terminal" });
     const browser = screen.getByRole("button", { name: "Open browser" });
-    const sidebar = screen.getByRole("button", { name: "Open right panel" });
-
+    const panel = screen.getByRole("button", { name: "Open right panel" });
+    expect(screen.getAllByRole("button")).toEqual([terminal, browser, panel]);
     view.rerender(controls(true));
-    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
-    expect(screen.getByText("Session details")).toBe(session);
-    expect(getComputedStyle(session.parentElement!).opacity).toBe("0");
-    expect(screen.getByRole("button", { name: "Open terminal" })).toBe(terminal);
+    expect(screen.getAllByRole("button")).toEqual([terminal, browser, panel]);
     expect(screen.getByRole("button", { name: "Close browser" })).toBe(browser);
-    expect(screen.getByRole("button", { name: "Open right panel" })).toBe(sidebar);
-
-    act(() => vi.advanceTimersByTime(350));
-    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
-    act(() => vi.advanceTimersByTime(100));
-    expect(screen.getByRole("button", { name: "Session details" })).toBe(session);
-    expect(getComputedStyle(session.parentElement!).opacity).toBe("1");
+    fireEvent.click(browser);
+    expect(onToggle).toHaveBeenCalledOnce();
   });
 
-  it("cancels the previous reveal when the browser closes and quickly reopens", () => {
+  it("retains the fixed controls while an expanded preview hides the terminal", () => {
     const view = render(controls(true));
-    act(() => vi.advanceTimersByTime(200));
-    view.rerender(controls(false));
-    expect(screen.getByRole("button", { name: "Session details" })).toBeTruthy();
-
-    view.rerender(controls(true));
-    act(() => vi.advanceTimersByTime(250));
-    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
-    act(() => vi.advanceTimersByTime(200));
-    expect(screen.getByRole("button", { name: "Session details" })).toBeTruthy();
-  });
-
-  it("hides immediately on a fresh open after an earlier reveal", () => {
-    const view = render(controls(true));
-    act(() => vi.advanceTimersByTime(450));
-    view.rerender(controls(false));
-    view.rerender(controls(true));
-    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
-
-    act(() => vi.advanceTimersByTime(450));
-    expect(screen.getByRole("button", { name: "Session details" })).toBeTruthy();
-    view.rerender(controls(true, true));
-    expect(screen.getByRole("button", { name: "Session details" })).toBeTruthy();
-  });
-
-  it("hides session and terminal controls in the expanded browser and restores them when docked", () => {
-    const view = render(controls(true));
-    act(() => vi.advanceTimersByTime(450));
     const browser = screen.getByRole("button", { name: "Close browser" });
-    const sidebar = screen.getByRole("button", { name: "Open right panel" });
-
-    view.rerender(controls(true, false, true));
-    expect(screen.queryByText("Session details")).toBeNull();
+    const panel = screen.getByRole("button", { name: "Open right panel" });
+    view.rerender(controls(true, true));
     expect(screen.queryByRole("button", { name: "Open terminal" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Restore browser panel" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Close browser" })).toBe(browser);
-    expect(screen.getByRole("button", { name: "Open right panel" })).toBe(sidebar);
-
-    view.rerender(controls(true));
-    expect(screen.getByRole("button", { name: "Open terminal" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Expand browser" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
-    act(() => vi.advanceTimersByTime(450));
-    expect(screen.getByRole("button", { name: "Session details" })).toBeTruthy();
+    expect(screen.getAllByRole("button")).toEqual([browser, panel]);
   });
 
-  it("hides session and terminal controls for an expanded app while retaining the fixed browser button", () => {
-    const view = render(controls(false, false, false, { expanded: false }));
-    act(() => vi.advanceTimersByTime(450));
-    const browser = screen.getByRole("button", { name: "Open browser" });
-
-    view.rerender(controls(false, false, false, { expanded: true }));
-    expect(screen.queryByText("Session details")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Open terminal" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Open browser" })).toBe(browser);
-
-    view.rerender(controls(false, false, false, { expanded: false }));
-    expect(screen.getByRole("button", { name: "Open terminal" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
-    act(() => vi.advanceTimersByTime(450));
-    expect(screen.getByRole("button", { name: "Session details" })).toBeTruthy();
+  it("publishes the measured group width and clears it when the controls leave", () => {
+    const view = render(controls());
+    expect(document.documentElement.style.getPropertyValue(LAYOUT_TOGGLE_WIDTH_VAR)).toBe("88px");
+    ui.width = 60;
+    view.rerender(controls(true, true));
+    act(() => ui.resize());
+    expect(document.documentElement.style.getPropertyValue(LAYOUT_TOGGLE_WIDTH_VAR)).toBe("60px");
+    view.unmount();
+    expect(document.documentElement.style.getPropertyValue(LAYOUT_TOGGLE_WIDTH_VAR)).toBe("");
   });
 
-  it("waits for the new edge when changing from the browser to a docked app", () => {
-    const view = render(controls(true));
-    act(() => vi.advanceTimersByTime(450));
-    const session = screen.getByRole("button", { name: "Session details" });
+  it("requires a workspace to open a terminal but lets an existing terminal close", () => {
+    ui.workspaceId = null;
+    const error = vi.spyOn(toast, "error").mockImplementation(() => "toast");
+    const view = render(controls());
+    fireEvent.click(screen.getByRole("button", { name: "Open terminal" }));
+    expect(onToggle).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith("Select a workspace first to use the terminal");
+    view.rerender(controls(false, false, true));
+    fireEvent.click(screen.getByRole("button", { name: "Close terminal" }));
+    expect(onToggle).toHaveBeenCalledOnce();
+  });
 
-    view.rerender(controls(false, false, false, { expanded: false }));
-    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
-    act(() => vi.advanceTimersByTime(350));
-    expect(screen.queryByRole("button", { name: "Session details" })).toBeNull();
-    act(() => vi.advanceTimersByTime(100));
-    expect(screen.getByRole("button", { name: "Session details" })).toBe(session);
+  it("offers only the browser toggle for Atlas", () => {
+    render(createElement(ToggleButton, { isOpen: false, onClick: onToggle,
+      showRightPanelToggle: false, showChatActions: false, onBrowserToggle: onToggle }));
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Open browser" }));
+    expect(onToggle).toHaveBeenCalledOnce();
   });
 });

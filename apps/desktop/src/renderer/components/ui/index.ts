@@ -5,6 +5,7 @@ export { CopyButton } from "./copy-button";
 export { AgentGlyph } from "./agent-glyph";
 
 // Segmented tabs
+export { TabStrip } from "./tab-strip";
 export {
   getNextSegmentedValue,
   getSegmentedTabId,

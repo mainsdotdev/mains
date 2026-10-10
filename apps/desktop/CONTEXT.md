@@ -317,6 +317,25 @@ The app shell that hosts whatever route is active: `main/` (route table), `sideb
 Plugins and MCP App route shells render immediately after rail navigation. The Plugins page loads its feature content within its own Suspense boundary, keeping the page heading visible while the code and data load.
 _Avoid_: adding a panel to `components/layout/` because that's where panels used to go — ask whether it renders anything outside its feature's state.
 
+## Shell header
+
+**shell header**:
+The shared top row above the main working area and preview panels. `components/layout/shell-header.tsx` owns the row, contextual action space and measured reservation for fixed window controls. `use-shell-header-chrome.ts` owns native window/fullscreen spacing.
+
+- The sidebar toggle anchors to the window's left edge, accounting for native window controls and fullscreen, independently of sidebar panel width.
+- Session details and sources anchor to the main working area's right edge and follow that edge as adjacent panels change its width. Chat options belong to their conversation tab; each tab group's create action belongs to that group.
+- Preview expand/restore, reload and close actions anchor to their own preview header's right edge and move with that preview.
+- Terminal, browser and right-panel toggles remain together at the window's far-right edge, in that order. Their placement stays fixed as panels open, close or resize.
+
+The refactor preserves the visual design of icons, tabs, colors and corner joins while allowing position rules to improve. This placement contract does not change a control's mode, route or capability requirements.
+The row's empty insets pass pointer hits through; only its content and action slots accept them. The collapsed-sidebar inset overlaps the fixed sidebar toggle, so making the whole row interactive blocks that toggle even though it remains visible. Verify this with browser hit testing or a physical pointer click; accessibility activation and jsdom event dispatch do not expose the overlap.
+_Avoid_: deriving a contextual action's position from unrelated controls' widths; coupling the sidebar toggle's position to sidebar panel width.
+
+**tab strip**:
+`components/ui/tab-strip.tsx` owns tab scrolling and create-action spacing across workspace, conversation, Atlas, browser and app headers. All tabs share an 11rem ideal width and 7rem minimum width, shrink equally including the active tab, then scroll horizontally. Selection, tab insertion and lane resizing reveal the active tab without scrolling the surrounding page; ordinary updates preserve manual scrolling. Each group's create action stays outside its scrolling viewport. The header supplies the first tab's corner treatment rather than each tab reading sidebar state. Sliding panels and the header use the shared `LAYOUT_PANEL_ANIM_MS` clock.
+The viewport's corner gutter is offset so the first tab's face aligns with the content edge. The owning main area or preview's inset content container clips tabs at that edge, including during scrolling; the collapsed-sidebar header inset leaves the leading curve inside that boundary. Clipping only the outer browser/app panel lets tabs paint into its 5px frame gap. Verify both initial alignment and scrolled overflow in a real browser: jsdom does not calculate CSS geometry or clipping.
+_Avoid_: special sizing for the active tab; putting the create action inside the scrolling viewport; guessing a fixed width for visible controls; retaining an empty flow slot for a relocated action.
+
 ## MCP App extensions
 
 **app entrypoint**:

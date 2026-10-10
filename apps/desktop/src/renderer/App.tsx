@@ -3,7 +3,7 @@ import { HashRouter as Router, useLocation } from "react-router-dom";
 import Sidebar from "./components/layout/sidebar";
 import RightPanel from "./components/layout/right-panel";
 import { ToggleButton } from "./components/layout/right-panel/toggle-button";
-import { SessionPanel } from "@/features/workspace/components/session-panel";
+import { SessionPanel, SessionPanelTrigger } from "@/features/workspace/components/session-panel";
 import { SubagentPanel } from "@/features/workspace/components/subagent-panel/subagent-panel";
 import { useHasSessionSubagents } from "./features/workspace/hooks/use-session-subagents";
 import { selectSessionRunId } from "@/features/workspace/components/session-panel/select-session-run";
@@ -306,21 +306,12 @@ function AppContent() {
     );
   }
 
-  // App previews use their own reload and expand/collapse controls. Keep the
-  // workspace controls outside animated panels when no app preview is open.
-  const showLayoutControls = !mcpAppPanel?.isOpen && !hideRightPanel && !(isMobile && !sidebarCollapsed);
+  const showLayoutControls = !hideRightPanel && !(isMobile && !sidebarCollapsed);
   const layoutControls = showLayoutControls ? (
     <ToggleButton
       showChatActions={isMobile && !atlasRoute}
-      hideChatControls={appExpanded || hideWorkspacePanels}
+      hideTerminalControls={appExpanded || hideWorkspacePanels || (browserPanel.isOpen && browserPanel.isExpanded)}
       showRightPanelToggle={!hideWorkspacePanels}
-      sessionPanelRight={!isMobile
-        ? mcpAppPanel?.isOpen && !appExpanded
-          ? `calc(var(${MCP_APP_PANEL_WIDTH_VAR}) + 0.75rem)`
-          : browserPanel.isOpen && !browserPanel.isExpanded
-            ? `calc(${BROWSER_PANEL_WIDTH} + 0.75rem)`
-            : undefined
-        : undefined}
       isOpen={rightPanelVisible}
       onClick={() => {
         const open = !isRightPanelOpen;
@@ -336,8 +327,6 @@ function AppContent() {
       terminalOpen={showTerminalToggle ? bottomTerminal.isOpen : undefined}
       onTerminalToggle={showTerminalToggle ? bottomTerminal.toggle : undefined}
       browserOpen={showBrowserToggle ? browserPanel.isOpen : undefined}
-      browserExpanded={browserPanel.isExpanded}
-      onBrowserExpandToggle={showBrowserToggle && browserPanel.canExpand ? browserPanel.toggleExpanded : undefined}
       onBrowserToggle={showBrowserToggle ? () => {
         if (!browserPanel.isOpen) {
           mcpAppPanel?.close();
@@ -393,10 +382,10 @@ function AppContent() {
           marginRight={contentRight}
           transparentSurface={workspaceRoute}
           contentInsetRight={contentInsetRight}
-          hasRightPanel={
-            !hideRightPanel && !rightPanelVisible && !browserPanel.isOpen && !docViewer.isOpen && !mcpAppPanel?.isOpen
-          }
-          browserOpen={browserPanel.isOpen || docViewer.isOpen || !!mcpAppPanel?.isOpen}
+          headerActions={!isMobile && !hideWorkspacePanels && !appExpanded && !browserPanel.isExpanded && (
+            <SessionPanelTrigger showGitActions={modeConfig.showGitActions} showSources={modeConfig.showSources} />
+          )}
+          reserveWindowControls={showLayoutControls && rightLaneWidth === EDGE_GUTTER}
           headerHidden={(browserPanel.isExpanded && !browserTabsInHeader) || appExpanded}
           browserTabsInHeader={browserTabsInHeader}
           sidebarCollapsed={sidebarCollapsed}
@@ -424,8 +413,8 @@ function AppContent() {
           reserveLayoutControls={showLayoutControls}
         />
         <McpAppPanel reserveLayoutControls={showLayoutControls} />
+        <DocumentViewerPanel reserveLayoutControls={showLayoutControls} />
         {layoutControls}
-        <DocumentViewerPanel />
       </MainLayout>
     </>
   );
