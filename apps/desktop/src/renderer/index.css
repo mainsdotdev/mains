@@ -438,6 +438,20 @@ body[data-resizing] iframe {
   transform: translateZ(0);
 }
 
+/* A fixed overlay can reveal async rows by resizing its clipped viewport.
+   Keep text unscaled and retarget both height and anchor on the same clock. */
+.dropdown-scroll-menu[data-resize-ready="true"] {
+  transition: height 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    top 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    left 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dropdown-scroll-menu[data-resize-ready="true"] {
+    transition: none;
+  }
+}
+
 /* Closed-state pre-warm: keep the layer allocated so the first open is smooth */
 .dropdown-prewarm {
   opacity: 0;

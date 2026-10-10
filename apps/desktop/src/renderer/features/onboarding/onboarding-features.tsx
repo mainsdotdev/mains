@@ -184,7 +184,7 @@ export const CORE_FEATURES: CoreFeature[] = [
         action={{
           row: 1,
           // The first two are `commit-section.tsx`'s own placeholders.
-          placeholder: "Commit message (leave blank to generate)…",
+          placeholder: "Commit message (leave blank to auto generate)…",
           generating: "Generating commit message…",
           message: "fix(sidebar): cap height to the viewport",
           confirm: { icon: <ArrowUp className="size-4" />, label: "Commit and push" },

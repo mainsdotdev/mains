@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Button, DropdownWrapper } from "@/components/ui";
-import { ArrowUp, Chat, Check, Plus } from "@/components/ui/icons";
+import { ArrowUp, Chat, Check, New } from "@/components/ui/icons";
 import { useClickOutside } from "@/hooks/use-click-outside";
 import type { ComposerSendTarget } from "../lib/composer-send-target";
 
@@ -60,7 +60,7 @@ export function ComposerSendTargetSelect({
           (target.runId ? (
             <Chat className="size-3 shrink-0" />
           ) : (
-            <Plus className="size-3 shrink-0" />
+            <New className="size-3 shrink-0" />
           ))}
         <span
           className={
@@ -114,7 +114,7 @@ export function ComposerSendTargetSelect({
                 {option.runId ? (
                   <Chat className="size-3.5 shrink-0" />
                 ) : (
-                  <Plus className="size-3.5 shrink-0" />
+                  <New className="size-3.5 shrink-0" />
                 )}
                 <span className="min-w-0 flex-1 truncate" title={option.label}>
                   {option.label}

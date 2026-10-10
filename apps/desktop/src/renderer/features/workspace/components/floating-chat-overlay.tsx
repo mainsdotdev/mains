@@ -65,7 +65,7 @@ export function floatingChatSize(
   }
   const transcriptHeight = Math.min(
       CHAT_HEIGHT_LIMIT,
-      Math.max(CHAT_BAR_SIZE, stage.height / 2),
+      Math.max(CHAT_BAR_SIZE, stage.height * 0.6),
       Math.max(CHAT_BAR_SIZE, stage.height - CHAT_EDGE_INSET * 2),
     );
   return {

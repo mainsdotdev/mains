@@ -23,6 +23,7 @@ import {
   Document,
   Download,
   Ellipsis,
+  External,
   LibrarySquare,
   List,
   Grid,
@@ -37,7 +38,7 @@ import {
   Generate,
 } from "@/components/ui/icons";
 import { Dna, Globe, Lightbulb, Rocket, Star } from "@/components/ui/icons/space";
-import { useListCollectionsQuery } from "@/lib/redux/api";
+import { useLazyGetAppsForFileQuery, useListCollectionsQuery } from "@/lib/redux/api";
 import {
   useAtlasGeneratedQuery,
   useCreateAtlasPageMutation,
@@ -48,6 +49,7 @@ import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { classifyDocType } from "@/lib/document-viewer";
 import { appApi, getTransport } from "@/lib/transport";
+import { useCapabilities } from "@/lib/platform";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import { useAppDispatch } from "@/lib/redux/hooks";
@@ -188,6 +190,9 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const [update, updating] = useUpdateAtlasItemMutation();
   const { save, saving } = useSaveToAtlas();
   const { open } = useDocumentViewer();
+  const { openWithApp } = useCapabilities();
+  const [fetchApps, { currentData: handlerApps = [], isFetching: appsLoading, originalArgs: appsPath }] =
+    useLazyGetAppsForFileQuery();
   const jumpToRun = useJumpToRun();
   const focusSearch = params.get("focus") === "search";
   useEffect(() => {
@@ -363,11 +368,24 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       toast.error(atlasError(error));
     }
   };
+  const openWith = async (path: string, bundleId: string) => {
+    try {
+      const response = await window.api.shell.openFileWithBundle(path, bundleId);
+      if (!response.success) toast.error(response.error ?? "Could not open file");
+    } catch (error) {
+      toast.error(atlasError(error));
+    }
+  };
   const itemMenu = (entry: Entry, image = false) => (
     <AtlasMenu
       label={`Actions for ${entry.title}`}
       className={`size-7 rounded-full ${image ? "bg-primary-950/75 text-primary-100 hover:bg-primary-950" : "text-primary-500 hover:bg-primary-200/60 dark:hover:bg-primary-800"}`}
       trigger={<Ellipsis className="size-4" />}
+      menuClassName={entry.path ? "w-72" : undefined}
+      scrollable={!!entry.path}
+      onOpen={() => {
+        if (entry.path && openWithApp) void fetchApps(entry.path, true);
+      }}
     >
       {(close) => (
         <>
@@ -413,6 +431,30 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               <Chat className="size-4" />
               Open chat
             </DropdownMenuItem>
+          )}
+          {entry.path && openWithApp && appsPath === entry.path && (
+            appsLoading ? (
+              <Text as="div" size="xs" tone="subtle" className="px-3 py-2">
+                Loading applications…
+              </Text>
+            ) : handlerApps.map((app) => (
+              <DropdownMenuItem
+                key={app.bundleId}
+                onClick={() => {
+                  close();
+                  void openWith(entry.path!, app.bundleId);
+                }}
+              >
+                {app.icon ? (
+                  <img src={app.icon} alt="" draggable={false} className="size-4 shrink-0 rounded-sm" />
+                ) : (
+                  <External className="size-4 shrink-0 opacity-70" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-left" title={`Open with ${app.name}`}>
+                  Open with {app.name}
+                </span>
+              </DropdownMenuItem>
+            ))
           )}
           {entry.saved && (
             <>

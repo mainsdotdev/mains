@@ -32,7 +32,7 @@ export function DocumentArtifact({
   const { open } = useDocumentViewer();
   const atlas = useSaveToAtlas();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number; anchorTop?: number }>({ x: 0, y: 0 });
   const openBtnRef = useRef<HTMLButtonElement>(null);
   const [fetchApps, { data: handlerApps = [], isFetching }] =
     useLazyGetAppsForFileQuery();
@@ -44,7 +44,7 @@ export function DocumentArtifact({
   const DocIcon = DOC_TYPE_ICONS[docType];
 
   useEffect(() => {
-    if (menuOpen) void fetchApps(absPath);
+    if (menuOpen) void fetchApps(absPath, true);
   }, [menuOpen, absPath, fetchApps]);
 
   const openInMains = () => {
@@ -56,8 +56,8 @@ export function DocumentArtifact({
     e.stopPropagation();
     if (openBtnRef.current) {
       const r = openBtnRef.current.getBoundingClientRect();
-      const menuWidth = 240;
-      setMenuPos({ x: Math.max(8, r.right - menuWidth), y: r.bottom + 6 });
+      const menuWidth = 288;
+      setMenuPos({ x: Math.max(8, r.right - menuWidth), y: r.bottom + 6, anchorTop: r.top - 6 });
     }
     setMenuOpen(true);
   };
@@ -138,8 +138,10 @@ export function DocumentArtifact({
         aria-label="Document actions"
         position={menuPos}
         onClose={() => setMenuOpen(false)}
-        minWidth={240}
-        origin="top-right"
+        minWidth={288}
+        origin="right"
+        className="w-72"
+        scrollable
       >
         <DropdownMenuItem onClick={openInMains}>
           <Mains className="size-4 shrink-0" />
@@ -185,7 +187,9 @@ export function DocumentArtifact({
                   className="size-4 shrink-0 rounded-sm"
                 />
               ) : null}
-              Open with {app.name}
+              <span className="min-w-0 flex-1 truncate text-left" title={`Open with ${app.name}`}>
+                Open with {app.name}
+              </span>
             </DropdownMenuItem>
           ))
         )}

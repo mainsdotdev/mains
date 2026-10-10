@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { configureStore } from "@reduxjs/toolkit";
 import { Provider } from "react-redux";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AtlasGeneratedFile, AtlasListItem } from "@mains/contracts/atlas";
+import type { FileHandlerApp } from "@/lib/redux/api/shellApi";
 import atlasReducer, { updateAtlasPageChat } from "@/lib/redux/slices/atlasSlice";
 import { useAppSelector } from "@/lib/redux/hooks";
 import { AtlasLibrary } from "./atlas-library";
@@ -19,9 +21,21 @@ const mocks = vi.hoisted(() => ({
   items: [] as AtlasListItem[],
   generated: [] as AtlasGeneratedFile[],
   list: vi.fn(),
+  fetchApps: vi.fn(), openWith: vi.fn(), openWithApp: true, appsLoading: false,
+  appsByPath: {} as Record<string, FileHandlerApp[]>,
 }));
 
-vi.mock("@/lib/redux/api", () => ({ useListCollectionsQuery: () => ({ data: mocks.empty }) }));
+vi.mock("@/lib/redux/api", () => ({
+  useListCollectionsQuery: () => ({ data: mocks.empty }),
+  useLazyGetAppsForFileQuery: () => {
+    const [path, setPath] = useState<string>();
+    return [(nextPath: string, cached?: boolean) => { mocks.fetchApps(nextPath, cached); setPath(nextPath); }, {
+      currentData: path ? mocks.appsByPath[path] : undefined,
+      originalArgs: path, isFetching: mocks.appsLoading,
+    }];
+  },
+}));
+vi.mock("@/lib/platform", () => ({ useCapabilities: () => ({ openWithApp: mocks.openWithApp }) }));
 vi.mock("@/lib/redux/api/atlasApi", () => ({
   useListAtlasQuery: (options: unknown) => {
     mocks.list(options);
@@ -88,6 +102,11 @@ beforeEach(() => {
   mocks.items = [];
   mocks.generated = [];
   mocks.transport = "backend-a";
+  mocks.openWithApp = true;
+  mocks.appsLoading = false;
+  mocks.appsByPath = {};
+  mocks.openWith.mockResolvedValue({ success: true });
+  vi.stubGlobal("api", { shell: { openFileWithBundle: mocks.openWith } });
   mocks.create.mockImplementation(() => ({ unwrap: async () => ({ item: { id: "new-page" } }) }));
 });
 
@@ -98,6 +117,84 @@ describe("Atlas image creation navigation", () => {
     expect(screen.getByTestId("url").textContent).toBe("/atlas/images/new?project=project");
     expect(screen.getByText("Image creator")).toBeTruthy();
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("Atlas Open with actions", () => {
+  const generated: AtlasGeneratedFile = { sourceKey: "image", runId: "run", runTitle: "Images",
+    collectionId: null, kind: "image", path: "/generated.png", fileName: "generated.png",
+    mimeType: "image/png", byteSize: 1, modifiedAt: "2026-10-07" };
+  const saved: AtlasListItem = { id: "document", accountId: "account", kind: "file", title: "Report",
+    metadata: null, collectionId: null, sourceRunId: null, sourceKey: null, path: "/atlas/report.pdf",
+    fileName: "report.pdf", mimeType: "application/pdf", byteSize: 1, isFavorite: false, trashedAt: null,
+    version: 1, createdAt: "2026-10-07", updatedAt: "2026-10-07" };
+  const app: FileHandlerApp = { bundleId: "com.example.viewer", name: "Viewer", path: "/Applications/Viewer.app",
+    icon: "data:image/png;base64,eA==" };
+
+  it.each([
+    ["generated image", "/atlas"], ["generated image", "/atlas?layout=grid"],
+    ["saved document", "/atlas"], ["saved document", "/atlas?layout=grid"],
+  ])("opens a %s with its registered native app from %s", (kind, route) => {
+    const isImage = kind === "generated image";
+    if (isImage) mocks.generated = [generated];
+    else mocks.items = [saved];
+    const path = isImage ? generated.path : saved.path!;
+    const title = isImage ? generated.fileName : saved.title;
+    mocks.appsByPath[path] = [app];
+    setup(route);
+    expect(mocks.fetchApps).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: `Actions for ${title}` }));
+    expect(mocks.fetchApps).toHaveBeenCalledWith(path, true);
+    const action = screen.getByRole("menuitem", { name: "Open with Viewer" });
+    expect(action.querySelector("img")?.getAttribute("src")).toBe(app.icon);
+    fireEvent.click(action);
+    expect(mocks.openWith).toHaveBeenCalledWith(path, app.bundleId);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByTestId("url").textContent).toBe(route);
+  });
+
+  it("loads the application list for the newly opened file rather than keeping the previous file's apps", () => {
+    mocks.generated = [generated];
+    mocks.items = [saved];
+    mocks.appsByPath[generated.path] = [app];
+    mocks.appsByPath[saved.path!] = [{ ...app, name: "PDF reader", bundleId: "com.example.pdf", icon: null }];
+    setup("/atlas");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for generated.png" }));
+    expect(screen.getByRole("menuitem", { name: "Open with Viewer" })).toBeTruthy();
+    fireEvent.mouseDown(document.body);
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Report" }));
+    expect(screen.queryByRole("menuitem", { name: "Open with Viewer" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open with PDF reader" }));
+    expect(mocks.openWith).toHaveBeenCalledWith(saved.path, "com.example.pdf");
+  });
+
+  it("shows a loading state while applications are being detected", () => {
+    mocks.generated = [generated];
+    mocks.appsLoading = true;
+    setup("/atlas");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for generated.png" }));
+    expect(screen.getByText("Loading applications…")).toBeTruthy();
+  });
+
+  it("keeps native app discovery out of unsupported platforms", () => {
+    mocks.generated = [generated];
+    mocks.openWithApp = false;
+    mocks.appsByPath[generated.path] = [app];
+    setup("/atlas");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for generated.png" }));
+    expect(mocks.fetchApps).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menuitem", { name: /Open with/ })).toBeNull();
+  });
+
+  it("reports a native open failure after closing the menu", async () => {
+    mocks.generated = [generated];
+    mocks.appsByPath[generated.path] = [app];
+    mocks.openWith.mockResolvedValue({ success: false, error: "App is no longer available" });
+    setup("/atlas");
+    fireEvent.click(screen.getByRole("button", { name: "Actions for generated.png" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open with Viewer" }));
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith("App is no longer available"));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 
@@ -258,6 +355,7 @@ describe("Atlas Page grid previews", () => {
     fireEvent.click(screen.getByRole("button", { name: "Actions for Notes" }));
     expect(screen.getByRole("menu").style.transformOrigin).toBe("top right");
     expect(screen.getByRole("menuitem", { name: "Open" })).toBeTruthy();
+    expect(mocks.fetchApps).not.toHaveBeenCalled();
     expect(screen.getByTestId("url").textContent).toBe("/atlas?type=page&layout=grid");
   });
 

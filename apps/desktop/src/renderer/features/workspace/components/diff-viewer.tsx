@@ -9,6 +9,7 @@ import {
 import { setPendingGoal, setPendingAutoExecute } from "@/lib/redux/slices/workspaceSlice";
 import { expandDiffForFindings } from "../lib/expand-diff";
 import { normalizePatchForPatchDiff } from "../lib/patch-utils";
+import type { ReviewDiffStyle } from "../lib/review-diff";
 import { normalizePath, pathsMatch } from "../lib/path-utils";
 import type { FileContentResponse, ServiceResponse } from "@/features/workspace/types/file-explorer";
 import { ImagePreviewModal } from "./image-preview-modal";
@@ -91,6 +92,7 @@ interface FindingMeta {
 
 interface DiffViewerProps {
   diffText: string;
+  diffStyle?: ReviewDiffStyle;
   filename?: string;
   className?: string;
   workspaceId?: string;
@@ -173,6 +175,7 @@ function makeFindingAnnotation({ colors, textColor, mutedColor, suggestionColor,
 
 export function DiffViewer({
   diffText,
+  diffStyle = "unified",
   className = "",
   workspaceId,
   filePath,
@@ -322,7 +325,7 @@ export function DiffViewer({
         <PatchDiff
           patch={expandedDiff}
           style={DIFF_TYPOGRAPHY_STYLE}
-          options={patchDiffOptions(isDarkMode)}
+          options={{ ...patchDiffOptions(isDarkMode), diffStyle }}
           lineAnnotations={lineAnnotations}
           renderAnnotation={lineAnnotations ? renderAnnotation : undefined}
         />
