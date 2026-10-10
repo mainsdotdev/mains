@@ -45,6 +45,7 @@ import { ReviewCommentsAttachment } from "../review-comments-attachment";
 import { PromptBrowserAnnotations } from "./prompt-browser-annotations";
 import { VoiceTaskCard } from "../voice-task-card";
 import type { VoiceTaskLink } from "@mains/contracts/realtime";
+import { AskUserQuestionDisplay } from "./ask-user-question-display";
 
 interface PromptAttachment {
   attachmentId?: string;
@@ -370,6 +371,23 @@ function InfoGroupImpl({ group, runId, floatingChat = false }: InfoGroupProps) {
         mode={mode}
       />
     );
+  }
+
+  // Codex delivers async questions on agentMessage items. Their report
+  // artifacts retain the structured fields, including in saved conversations.
+  if (event.type === "artifact" && event.metadata?.source === "codex_async_questions") {
+    const rawQuestions = event.metadata.questions;
+    const questions = Array.isArray(rawQuestions) ? rawQuestions.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const { title, options } = entry as Record<string, unknown>;
+      if (typeof title !== "string" || !title.trim()) return [];
+      return [{
+        question: title.trim(),
+        options: Array.isArray(options) ? options.flatMap((option) =>
+          typeof option === "string" && option.trim() ? [{ label: option.trim() }] : []) : undefined,
+      }];
+    }) : [];
+    if (questions.length > 0) return <AskUserQuestionDisplay params={{ questions }} />;
   }
 
   if (event.type === "artifact") {
