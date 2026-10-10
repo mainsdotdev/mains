@@ -1,4 +1,4 @@
-import { parsePatchFiles, type BaseDiffOptions, type FileDiffMetadata } from "@pierre/diffs";
+import { parsePatchFiles, processFile, type BaseDiffOptions, type FileDiffMetadata } from "@pierre/diffs";
 import type { ReviewComment } from "@mains/contracts/review-comments";
 
 export type ReviewDiffStyle = NonNullable<BaseDiffOptions["diffStyle"]>;
@@ -8,6 +8,8 @@ export interface ReviewFile {
   patchId: string;
   diff?: FileDiffMetadata;
   error?: string;
+  /** No trustworthy file version is available in this snapshot. */
+  reviewUnavailable?: boolean;
 }
 
 function fingerprint(value: string): string {
@@ -23,22 +25,33 @@ export function reviewFiles(diffText: string, paths: readonly string[]): ReviewF
   const files: ReviewFile[] = [];
   const parsedPaths = new Set<string>();
   for (const patch of diffText.split(/(?=^diff --git )/m).filter((part) => part.trim())) {
+    const patchId = fingerprint(patch);
     try {
-      const patchId = fingerprint(patch);
       for (const diff of parsePatchFiles(patch, `review:${patchId}:${patch.length}`, true).flatMap((parsed) => parsed.files)) {
-        files.push({ path: diff.name, patchId, diff });
+        files.push({ path: diff.name, patchId, diff,
+          // Untracked binary/large-file stubs contain only a size, not content.
+          ...(/^Binary or large file /m.test(patch) ? { reviewUnavailable: true } : {}) });
         parsedPaths.add(diff.name);
         if (diff.prevName) parsedPaths.add(diff.prevName);
       }
     } catch {
-      // The snapshot's file list below still provides a visible fallback.
+      // A malformed hunk can still carry a usable per-file patch identity.
+      try {
+        const header = processFile(patch.split(/^@@ /m, 1)[0], { throwOnError: true });
+        if (header?.name) {
+          files.push({ path: header.name, patchId, error: "A text diff is unavailable for this file." });
+          parsedPaths.add(header.name);
+          if (header.prevName) parsedPaths.add(header.prevName);
+        }
+      } catch {
+        // The snapshot's file list below still provides a visible fallback.
+      }
     }
   }
-  let fallbackSnapshotId: string | undefined;
   for (const path of paths) {
     if (!parsedPaths.has(path)) {
-      fallbackSnapshotId ??= fingerprint(diffText);
-      files.push({ path, patchId: fingerprint(`${path}:${fallbackSnapshotId}`), error: "A text diff is unavailable for this file." });
+      files.push({ path, patchId: `unavailable:${fingerprint(path)}`, reviewUnavailable: true,
+        error: "A text diff is unavailable for this file." });
       parsedPaths.add(path);
     }
   }
