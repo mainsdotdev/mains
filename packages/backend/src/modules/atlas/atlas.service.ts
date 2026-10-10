@@ -10,7 +10,7 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { atlasRepo, type AtlasRecord, type RevisionRecord } from "./atlas.repo";
 import { pageContent } from "./atlas.blocks";
 import { metadataPatch, readMetadata } from "./atlas.metadata";
-import { atlasRoot, fileHash, inspectSource, readSource, removeFiles, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
+import { atlasRoot, fileHash, imageContentHash, inspectSource, readSource, removeFiles, safeName, sourceKey, storagePath, writeFile } from "./atlas.storage";
 
 const pendingSaves = new Map<string, Promise<AtlasItem>>();
 const IMAGE_MIMES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
@@ -96,16 +96,18 @@ async function generatedForRun(runId: string, accountId: string): Promise<AtlasG
   for (const artifact of await runsService.getOutputArtifacts(runId)) {
     if (artifact.metadata?.outputSelected && artifact.path) candidates.add(artifact.path);
   }
-  const uploads = new Set(attachments.map((file) => file.path));
-  for (const file of uploads) candidates.add(file);
+  const uploads = new Map(attachments.map((file) => [file.path, file]));
+  for (const [file, attachment] of uploads) if (!attachment.isBrowserAnnotation) candidates.add(file);
   const result: AtlasGeneratedFile[] = [];
   for (const file of candidates) {
+    if (uploads.get(file)?.isBrowserAnnotation) continue;
     const type = classify(file);
     if (!type) continue;
     try {
       const { real, stats } = await inspectSource(file, roots);
       result.push({ sourceKey: sourceKey(runId, real), runId, runTitle: run.title ?? "Conversation",
         origin: uploads.has(file) ? "attachment" : "generated",
+        ...(type.kind === "image" ? { contentHash: uploads.get(file)?.contentHash ?? await imageContentHash(real, stats) } : {}),
         collectionId: run.collectionId, ...type, path: real, fileName: path.basename(real),
         byteSize: stats.size, modifiedAt: stats.mtime.toISOString() });
     } catch { /* Missing/incomplete files and symlinks are excluded from the projection. */ }
@@ -142,6 +144,7 @@ export const atlasService = {
     const includePreview = options?.includePagePreview === true;
     return atlasRepo.list(required(options?.accountId, "Account"), includePreview)
       .map(({ item, preview }) => ({ ...format(item),
+        ...(item.kind === "image" && item.contentHash ? { contentHash: item.contentHash } : {}),
         ...(includePreview && item.kind === "page" ? { preview: preview ?? "" } : {}) }));
   },
   async generated(options: AtlasGeneratedOptions) {
@@ -223,8 +226,10 @@ export const atlasService = {
         if (old.trashedAt) atlasRepo.update(old.id, accountId, { trashedAt: null });
         return format(owned({ id: old.id, accountId }));
       }
-      const generated = await generatedForRun(input.runId, accountId);
-      if (!generated.some((file) => file.sourceKey === key)) throw new Error("File is not a generated output of this conversation");
+      // Hidden annotation captures remain available for an explicit user save.
+      const attachment = context.attachments.some((file) => file.path === real);
+      if (!attachment && !(await generatedForRun(input.runId, accountId)).some((file) => file.sourceKey === key))
+        throw new Error("File is not a generated output of this conversation");
       const bytes = await readSource(real, context.roots);
       return store(accountId, key, safeName(path.basename(real)), bytes, input.runId, context.run.collectionId);
     });

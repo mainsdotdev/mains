@@ -76,6 +76,7 @@ type Entry = {
   date: string;
   collectionId: string | null;
   path: string | null;
+  contentHash?: string;
   saved?: AtlasListItem;
   generated?: AtlasGeneratedFile;
 };
@@ -223,6 +224,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           date: item.updatedAt,
           collectionId: item.collectionId,
           path: item.path,
+          contentHash: item.contentHash,
           saved: item,
         });
       }
@@ -234,7 +236,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
             item,
           ]),
         ).values(),
-      ];
+      ].sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
       for (const file of files) {
         if (scope === "generated" && file.origin === "attachment") continue;
         if (scope === "uploads" && file.origin !== "attachment") continue;
@@ -246,12 +248,14 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           date: file.modifiedAt,
           collectionId: file.collectionId,
           path: file.path,
+          contentHash: file.contentHash,
           generated: file,
           saved:
             scope !== "all" ? bySource.get(file.sourceKey) : undefined,
         });
       }
     }
+    const seenImages = new Set<string>();
     return results
       .filter(
         (entry) =>
@@ -261,6 +265,12 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
             .toLocaleLowerCase()
             .includes(searchValue.toLocaleLowerCase().trim()),
       )
+      .filter((entry) => {
+        if (entry.kind !== "image" || !entry.contentHash) return true;
+        if (seenImages.has(entry.contentHash)) return false;
+        seenImages.add(entry.contentHash);
+        return true;
+      })
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [
     saved.data,

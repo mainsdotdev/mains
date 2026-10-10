@@ -102,6 +102,35 @@ describe("Atlas image creation navigation", () => {
 });
 
 describe("Atlas image sources", () => {
+  it("merges identical image bytes across chats after applying the Uploads and project filters", () => {
+    const upload: AtlasGeneratedFile = { sourceKey: "newest", origin: "attachment", contentHash: "same-bytes", runId: "new-chat", runTitle: "Images",
+      collectionId: "project", kind: "image", path: "/new.png", fileName: "new.png", mimeType: "image/png", byteSize: 10, modifiedAt: "2026-10-10" };
+    mocks.generated = [upload,
+      { ...upload, sourceKey: "older", runId: "old-chat", path: "/old.png", fileName: "old.png", modifiedAt: "2026-10-09" },
+      { ...upload, sourceKey: "foreign-project", collectionId: "other", modifiedAt: "2026-10-11", fileName: "other.png" },
+      { ...upload, sourceKey: "changed", contentHash: "different-bytes", path: "/changed.png", fileName: "changed.png" }];
+    setup("/atlas?type=image&view=uploads&project=project");
+    expect(screen.getAllByRole("button", { name: "Open new.png" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Open old.png" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open other.png" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open changed.png" })).toBeTruthy();
+  });
+  it("prefers a saved copy in All while each source view retains its matching image", () => {
+    const image: AtlasGeneratedFile = { sourceKey: "generated", contentHash: "same-bytes", runId: "chat", runTitle: "Images",
+      collectionId: null, kind: "image", path: "/generated.png", fileName: "generated.png", mimeType: "image/png", byteSize: 10, modifiedAt: "2026-10-10" };
+    mocks.generated = [image, { ...image, sourceKey: "upload", origin: "attachment", path: "/upload.png", fileName: "upload.png" }];
+    mocks.items = [{ id: "saved", accountId: "account", kind: "image", title: "Saved photo", contentHash: "same-bytes", metadata: null,
+      collectionId: null, sourceKey: null, sourceRunId: null, path: "/saved.png", fileName: "saved.png", mimeType: "image/png", byteSize: 10,
+      version: 1, isFavorite: true, trashedAt: null, createdAt: "2026-10-07", updatedAt: "2026-10-07" }];
+    setup("/atlas?type=image");
+    expect(screen.getByRole("button", { name: "Open Saved photo" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open generated.png" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open upload.png" })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "Your creations" }));
+    expect(screen.getByRole("button", { name: "Open generated.png" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Uploads" }));
+    expect(screen.getByRole("button", { name: "Open upload.png" })).toBeTruthy();
+  });
   it.each(["/atlas", "/atlas?layout=grid", "/atlas?type=image"])("opens images in the shared zoomable preview from %s", (route) => {
     mocks.generated = [{ sourceKey: "generated", runId: "run", runTitle: "Images",
       collectionId: null, kind: "image", path: "/generated.png", fileName: "generated.png",

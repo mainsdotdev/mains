@@ -41,7 +41,9 @@ vi.mock("../runs", () => ({ runsService: {
   },
 } }));
 import { atlasService } from "./atlas.service";
-import { prepareRunAttachments } from "../runs/run-attachment-storage";
+import { attachmentDescriptor, prepareRunAttachments, resolveRunAttachment } from "../runs/run-attachment-storage";
+import { runsRepo } from "../runs/runs.repo";
+import { insertRunInputArtifact } from "../runs/run-input-artifact";
 import { handleAtlasCreatePage, handleAtlasReadPage, handleAtlasUpdatePage } from "../providers/adapters/atlas-tools";
 
 beforeEach(() => {
@@ -199,6 +201,48 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(fs.readFileSync(saved.path!, "utf8")).toBe("uploaded original");
     fs.unlinkSync(attachment.sourcePath);
     expect((await atlasService.generated({ accountId: "default" })).items).toEqual([]);
+  });
+  it("excludes historical annotation screenshots while retaining ordinary uploads and chat originals", async () => {
+    createRun(db, { id: "annotations" });
+    const files = (await prepareRunAttachments("annotations", [
+      { name: "browser-localhost-annotation-abcdef.png", type: "image", mimeType: "image/png", data: Buffer.from("annotation").toString("base64") },
+      { name: "browser-localhost-annotation-other.png", type: "image", mimeType: "image/png", data: Buffer.from("ordinary upload").toString("base64") },
+    ], "sent"))!;
+    await insertRunInputArtifact("annotations", { type: "artifact", kind: "user-prompt", content: "remove them",
+      metadata: { browserAnnotations: [{ id: "abcdef-annotation", url: "http://localhost:3000", elements: [{ tagName: "h1", selector: "h1" }] }],
+        attachments: files.map(attachmentDescriptor) } });
+    expect((await atlasService.generated({ accountId: "default" })).items.map((file) => file.path)).toEqual([files[1].sourcePath]);
+    expect(await resolveRunAttachment("annotations", files[0].attachmentId!)).toMatchObject({ path: files[0].sourcePath });
+    expect((await runsRepo.findArtifactsByRun("annotations"))[0].metadata?.attachments).toHaveLength(2);
+    // An explicit user save still admits a hidden context screenshot.
+    expect((await atlasService.saveFile({ accountId: "default", runId: "annotations", path: files[0].sourcePath })).kind).toBe("image");
+  });
+  it("uses annotation attachment identity regardless of filename, including inherited fork attachments", async () => {
+    createRun(db, { id: "annotation-source" });
+    createRun(db, { id: "annotation-fork" });
+    const [image] = (await prepareRunAttachments("annotation-source", [{ name: "capture.png", type: "image",
+      mimeType: "image/png", data: Buffer.from("annotation").toString("base64") }], "sent"))!;
+    await insertRunInputArtifact("annotation-source", { type: "artifact", kind: "user-prompt", content: "change it",
+      metadata: { browserAnnotations: [{ id: "annotation", url: "http://localhost", screenshotAttachmentId: image.attachmentId,
+        elements: [{ tagName: "h1", selector: "h1" }] }], attachments: [attachmentDescriptor(image)] } });
+    runsRepo.inheritAttachmentRefs("annotation-source", "annotation-fork");
+    expect((await atlasService.generated({ accountId: "default" })).items).toEqual([]);
+    expect(await resolveRunAttachment("annotation-fork", image.attachmentId!)).toMatchObject({ path: image.sourcePath });
+  });
+  it("projects image content hashes across uploads and generated files and refreshes changed outputs", async () => {
+    createRun(db, { id: "hash-uploads" });
+    const [upload] = (await prepareRunAttachments("hash-uploads", [{ name: "photo.png", type: "image", mimeType: "image/png",
+      data: Buffer.from("same image bytes").toString("base64") }]))!;
+    const generated = output("generated.png", "hash-generated");
+    const realGenerated = fs.realpathSync(generated);
+    fs.writeFileSync(generated, "same image bytes");
+    const files = (await atlasService.generated({ accountId: "default" })).items;
+    expect(files).toHaveLength(2);
+    const hash = files.find((file) => file.path === upload.sourcePath)?.contentHash;
+    expect(hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(files.find((file) => file.path === realGenerated)?.contentHash).toBe(hash);
+    fs.writeFileSync(generated, "changed content!");
+    expect((await atlasService.generated({ accountId: "default" })).items.find((file) => file.path === realGenerated)?.contentHash).not.toBe(hash);
   });
   it("saves once under concurrent requests and survives source deletion", async () => {
     const file = output();

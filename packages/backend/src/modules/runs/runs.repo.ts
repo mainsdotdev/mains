@@ -91,6 +91,18 @@ export const runsRepo = {
       .where(eq(runAttachmentRefs.runId, runId)).all().map((row) => row.attachment);
   },
 
+  listAttachmentPromptMetadata(runId: string) {
+    const db = getDb();
+    const ids = db.select({ id: runAttachmentRefs.attachmentId }).from(runAttachmentRefs)
+      .where(eq(runAttachmentRefs.runId, runId));
+    // Include the original conversation for references inherited by a fork.
+    const owners = db.select({ id: runAttachmentRefs.runId }).from(runAttachmentRefs)
+      .where(inArray(runAttachmentRefs.attachmentId, ids));
+    return db.select({ metadata: runArtifacts.metadata }).from(runArtifacts)
+      .where(and(sql`${runArtifacts.kind} = 'user-prompt'`, inArray(runArtifacts.runId, owners)))
+      .all().map((row) => safeJsonParse<Record<string, unknown>>(row.metadata));
+  },
+
   findAttachment(runId: string, attachmentId: string) {
     return getDb().select({ attachment: runAttachments }).from(runAttachments)
       .innerJoin(runAttachmentRefs, eq(runAttachments.id, runAttachmentRefs.attachmentId))

@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { promises as fs, constants } from "node:fs";
+import { promises as fs, constants, type Stats } from "node:fs";
 import path from "node:path";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { removeImagePreviews } from "../imageProxy";
 
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
+const imageHashes = new Map<string, { signature: string; value: Promise<string> }>();
 export const atlasRoot = () => path.join(getBackendRuntime().getPath("userData"), "atlas", "files");
 export const fileHash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 export const sourceKey = (runId: string, absPath: string) =>
@@ -55,6 +56,39 @@ export async function readSource(file: string, roots: string[]) {
       throw new Error("File changed while saving; try again");
     return bytes;
   } finally { await handle.close(); }
+}
+
+/** Stream validated images once per file version, without retaining pixels. */
+export async function imageContentHash(real: string, stats: Stats): Promise<string> {
+  const signature = [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(":");
+  const cached = imageHashes.get(real);
+  if (cached?.signature === signature) {
+    imageHashes.delete(real);
+    imageHashes.set(real, cached);
+    return cached.value;
+  }
+  const value = (async () => {
+    const handle = await fs.open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.ino !== stats.ino || opened.dev !== stats.dev || opened.size !== stats.size
+        || opened.size > MAX_FILE_BYTES || opened.mtimeMs !== stats.mtimeMs || opened.ctimeMs !== stats.ctimeMs)
+        throw new Error("Image changed while listing");
+      const hash = createHash("sha256");
+      for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk);
+      const after = await handle.stat();
+      if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs)
+        throw new Error("Image changed while listing");
+      return hash.digest("hex");
+    } finally { await handle.close(); }
+  })();
+  imageHashes.set(real, { signature, value });
+  if (imageHashes.size > 128) imageHashes.delete(imageHashes.keys().next().value!);
+  try { return await value; }
+  catch (error) {
+    if (imageHashes.get(real)?.value === value) imageHashes.delete(real);
+    throw error;
+  }
 }
 export async function writeFile(id: string, name: string, bytes: Buffer) {
   if (bytes.length > MAX_FILE_BYTES) throw new Error("File exceeds the 100 MB Atlas limit");

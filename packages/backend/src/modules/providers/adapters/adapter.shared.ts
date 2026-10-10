@@ -6,7 +6,7 @@ import { readReviewComments } from "@mains/contracts/review-comments";
 
 import fs from "node:fs";
 import path from "node:path";
-import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
+import { browserAnnotationAttachmentName, type BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import type {
   WorkRunEvent,
   WorkRunEventHandler,
@@ -576,9 +576,15 @@ export async function emitUserPromptArtifact(
       }];
     });
     if (!elements.length) return [];
+    const id = typeof metadata.id === "string" ? metadata.id : `browser-${index}`;
+    const url = typeof metadata.url === "string" ? metadata.url : ref ?? "";
+    // Captures are appended after explicit uploads. Prefer that final match
+    // when a user-supplied file happens to have the same name.
+    const screenshot = [...options?.attachments ?? []].reverse().find((file) =>
+      file.type === "image" && file.name === browserAnnotationAttachmentName({ id, url }));
     return [{
-      id: typeof metadata.id === "string" ? metadata.id : `browser-${index}`,
-      url: typeof metadata.url === "string" ? metadata.url : ref ?? "",
+      id, url,
+      ...(screenshot?.attachmentId ? { screenshotAttachmentId: screenshot.attachmentId } : {}),
       ...(typeof metadata.title === "string" ? { title: metadata.title } : {}),
       ...(typeof metadata.comment === "string" ? { comment: metadata.comment } : {}),
       elements,

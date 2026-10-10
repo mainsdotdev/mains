@@ -18,6 +18,7 @@ import {
 } from "./composer-context";
 import { mcpAppContextPayload } from "./mcp-app-context";
 import type { BrowserSelectionElement } from "../../../../shared/browser-annotation";
+import { browserAnnotationAttachmentName } from "@mains/contracts/browser-annotations";
 
 export type Attachments = Array<{
   name: string;
@@ -183,7 +184,7 @@ function browserSelectionsToPayload(selections: readonly ContextBrowserItem[]): 
 
     if (sel.screenshotPath) {
       attachments.push({
-        name: `browser-${host}-${slug}-${sel.id.slice(0, 6)}.png`,
+        name: isAnnotation ? browserAnnotationAttachmentName(sel) : `browser-${host}-${slug}-${sel.id.slice(0, 6)}.png`,
         type: "image",
         sourcePath: sel.screenshotPath,
         mimeType: sel.screenshotMimeType || "image/png",
