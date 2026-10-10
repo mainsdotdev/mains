@@ -57,6 +57,7 @@ function lastResponseReceivedAt(groups: EventGroup[], fromIdx: number, toIdx: nu
  * Match backend turns to event group indices.
  * For each completed turn, find the last event group whose endTime falls
  * within that turn's time range, or the closest group before the next turn.
+ * Then attach its footer to the last visible group in the rendered layout.
  */
 export function matchTurnsToGroups(
   groups: EventGroup[],
@@ -68,7 +69,7 @@ export function matchTurnsToGroups(
 
   if (turns.length === 0) {
     // Fallback: no turns from backend yet — compute from events like before
-    return computeSessionTimesFromEvents(groups, runStartedAt, isRunCompleted);
+    return sessionBarsInRenderOrder(groups, computeSessionTimesFromEvents(groups, runStartedAt, isRunCompleted));
   }
 
   // For each turn, find the group range and place the session bar
@@ -155,6 +156,36 @@ export function matchTurnsToGroups(
     lastGroupIdx = bestIdx + 1;
   }
 
+  return sessionBarsInRenderOrder(groups, result);
+}
+
+/** A final-answer segment can render after a chronologically later artifact or
+ * commentary. Keep changes/copy/fork below the whole visible turn, outside its
+ * collapsed details, while retaining the original turn ownership and timing. */
+function sessionBarsInRenderOrder(
+  groups: EventGroup[],
+  sessions: Map<number, SessionInfo>,
+): Map<number, SessionInfo> {
+  if (sessions.size === 0) return sessions;
+  const visibleOrder = buildTurnRenderRows(groups).flatMap((row) => row.kind === "flat" ? row.indices : [
+    ...row.messageBreakoutIndices, ...row.planBreakoutIndices, ...row.lastSegment,
+  ]);
+  const rank = new Map(visibleOrder.map((index, order) => [index, order]));
+  const result = new Map<number, SessionInfo>();
+  let start = 0;
+  for (const [end, info] of [...sessions].sort(([a], [b]) => a - b)) {
+    let anchor = end;
+    let lastRank = -1;
+    for (let index = start; index <= end; index++) {
+      const order = rank.get(index);
+      if (order !== undefined && order > lastRank && !isUserPromptGroup(groups[index])) {
+        anchor = index;
+        lastRank = order;
+      }
+    }
+    result.set(anchor, info);
+    start = end + 1;
+  }
   return result;
 }
 

@@ -34,6 +34,32 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-deliverab
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("per-turn deliverables", () => {
+  it("does not turn a repository image in the final git diff stat into a deliverable", async () => {
+    file("public/og-blueprint.png");
+    const edit = { ...call(6, { path: "components/sections/hero-section.tsx" }), toolName: "Edit" };
+    const check = { ...call(7, { command: "npx eslint components/sections/hero-section.tsx; git diff --check; git diff --stat" }),
+      toolName: "Bash", output: " components/sections/hero-section.tsx | 2 +-\n public/og-blueprint.png | Bin 29022 -> 14825 bytes\n" };
+    expect(outputs(await project([
+      report(2, "I'll update the three annotated sections."),
+      report(3, "Updated all three annotated sections. ESLint and diff checks passed.", 1, { messagePhase: "final_answer" }),
+    ], [edit, check]))).toEqual([]);
+  });
+  it("does not deliver images merely read or mentioned in tool inputs and source code", async () => {
+    file("public/logo.png");
+    const read = { ...call(1, { path: "public/logo.png" }), toolName: "Read" };
+    const edit = { ...call(2, { content: 'const src = "public/logo.png";' }),
+      output: { content: ' <Image src="public/logo.png" alt="logo" />', filenames: ["public/logo.png"] } };
+    expect(outputs(await project([report(3, "Done")], [read, edit]))).toEqual([]);
+  });
+  it.each(["object", "json-object", "json-path"])("keeps explicitly returned image paths and Markdown links from tail tools (%s)", async (format) => {
+    const generated = file("generated.png");
+    const linked = file("linked.png");
+    const tool = { ...call(1, {}), toolName: "imagegen", output: format === "json-path" ? JSON.stringify(generated)
+      : format === "json-object" ? JSON.stringify({ path: generated }) : { path: generated } };
+    const second = { ...call(2, {}), toolName: "Bash", output: `Created [preview](linked.png)` };
+    const result = outputs(await project([report(3, "Done")], [tool, second]));
+    expect(result.map((row) => row.path).sort()).toEqual([generated, linked].map((file) => fs.realpathSync(file)).sort());
+  });
   it("selects exactly the last two logical messages and calls, without a filename blacklist", async () => {
     ["early.md", "CONTEXT.md", "last.md", "early-tool.pdf", "last-tool.pdf", "other-tool.pdf"].forEach(file);
     const artifacts = [report(1, "early.md"), report(2, "CONTEXT.md"), report(3, "last.md")];
@@ -109,3 +135,4 @@ describe("per-turn deliverables", () => {
     expect(result[0].metadata?.inlineInReport).toBe(true);
   });
 });
+

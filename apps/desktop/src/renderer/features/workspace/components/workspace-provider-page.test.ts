@@ -15,6 +15,31 @@ import appSettingsReducer, {
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import type { BrowserChatAction } from "../../../../shared/browser-chat-window";
 import { voiceChatPresence } from "../lib/voice-chat-presence";
+import { store } from "@/lib/redux";
+import { setContextItemsForKey } from "@/lib/redux/slices/workspaceSlice";
+import type { ContextBrowserItem } from "../lib/composer-context";
+
+const annotation = (id: string, comment = "Remove this"): ContextBrowserItem => ({
+  kind: "browser", id, comment, url: "https://example.com", title: "Example", timestamp: "2026-10-10T00:58:31Z",
+  selector: "h1", tagName: "h1", text: "Heading", styles: {}, screenshotMimeType: "image/png",
+  rect: { x: 0, y: 0, width: 100, height: 20 }, pageRect: { x: 0, y: 0, width: 100, height: 20 },
+  scroll: { x: 0, y: 0 }, viewport: { width: 1000, height: 800 }, devicePixelRatio: 1,
+});
+
+function annotationChat(status = "succeeded") {
+  browser.isExpanded = true;
+  browser.nativeOverlay = true;
+  browser.ownerKey = "annotation-test";
+  browser.chatHost = document.createElement("div");
+  document.body.appendChild(browser.chatHost);
+  page.state = {
+    runs: [], activeTab: "run-1", activeRunId: "run-1", activeRun: { id: "run-1", status },
+    composerRun: { id: "run-1", status }, currentEvents: [], currentTurns: [],
+    goal: "remove them", contextItems: [], uploadedFiles: [], currentWorkspace: null,
+    openIssueTabs: [], openSignalTabs: [], openNoteTabs: [], showEmptyState: false, showInput: true,
+    setGoal: vi.fn(), setUploadedFiles: vi.fn(), handleSelectRunTab: vi.fn(),
+  };
+}
 
 const page = vi.hoisted(() => ({
   state: {} as Record<string, unknown>,
@@ -163,6 +188,7 @@ function renderPage(browserChatOnly = false) {
 
 afterEach(() => {
   cleanup();
+  store.dispatch(setContextItemsForKey({ key: "annotation-test", items: [] }));
   (mcp.panel?.chatHost as HTMLElement | undefined)?.remove();
   mcp.panel = null;
   browser.isExpanded = false;
@@ -179,6 +205,71 @@ afterEach(() => {
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
+  it.each([true, false])("consumes floating annotations in the parent only after an accepted send (%s)", async (accepted) => {
+    annotationChat();
+    const sent = annotation("sent");
+    store.dispatch(setContextItemsForKey({ key: browser.ownerKey, items: [sent] }));
+    page.state.contextItems = [sent];
+    page.state.handleExecute = vi.fn().mockResolvedValue(accepted ? "run-1" : null);
+    page.dispatch.mockImplementation(store.dispatch);
+    let onAction: ((action: BrowserChatAction) => void) | undefined;
+    const postAction = vi.fn(async (action: BrowserChatAction) => {
+      onAction?.(structuredClone(action));
+      return { success: true };
+    });
+    vi.stubGlobal("api", { browserChat: { publishContext: vi.fn(), postAction,
+      onAction: (callback: typeof onAction) => { onAction = callback; return vi.fn(); } } });
+    renderPage();
+    renderPage(true);
+    fireEvent.click(screen.getByTestId("browser-input"));
+    await waitFor(() => expect(page.state.handleExecute).toHaveBeenCalledOnce());
+    await waitFor(() => expect(postAction).toHaveBeenCalledWith(expect.objectContaining({ type: "draft" })));
+    expect(store.getState().workspace.contextItemsByKey[browser.ownerKey]).toEqual(accepted ? [] : [sent]);
+    expect(postAction.mock.calls.some(([action]) => action.type === "contextSubmitted")).toBe(accepted);
+  });
+
+  it("preserves new annotations and edits made while a floating send is pending", async () => {
+    annotationChat();
+    const sent = [annotation("first"), annotation("second")];
+    store.dispatch(setContextItemsForKey({ key: browser.ownerKey, items: sent }));
+    page.state.contextItems = sent;
+    let finish!: (id: string) => void;
+    page.state.handleExecute = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+    page.dispatch.mockImplementation(store.dispatch);
+    let onAction: ((action: BrowserChatAction) => void) | undefined;
+    const postAction = vi.fn(async (action: BrowserChatAction) => { onAction?.(structuredClone(action)); return { success: true }; });
+    vi.stubGlobal("api", { browserChat: { publishContext: vi.fn(), postAction,
+      onAction: (callback: typeof onAction) => { onAction = callback; return vi.fn(); } } });
+    renderPage();
+    renderPage(true);
+    fireEvent.click(screen.getByTestId("browser-input"));
+    await waitFor(() => expect(page.state.handleExecute).toHaveBeenCalledOnce());
+    const edited = annotation("second", "Keep this new comment");
+    const added = annotation("new");
+    store.dispatch(setContextItemsForKey({ key: browser.ownerKey, items: [structuredClone(sent[0]), edited, added] }));
+    await act(async () => { finish("run-1"); });
+    await waitFor(() => expect(store.getState().workspace.contextItemsByKey[browser.ownerKey]).toEqual([edited, added]));
+  });
+
+  it("clears queued annotations even when an IPC echo replaces their object identities", async () => {
+    annotationChat("running");
+    const sent = annotation("sent");
+    const added = annotation("new");
+    store.dispatch(setContextItemsForKey({ key: browser.ownerKey, items: [sent] }));
+    page.state.runQueue = { queue: { mode: "queue", messages: [] } };
+    const postAction = vi.fn(async (action: BrowserChatAction) => {
+      if (action.type === "queueSubmit") {
+        store.dispatch(setContextItemsForKey({ key: browser.ownerKey, items: structuredClone([sent, added]) }));
+      }
+      return { success: true };
+    });
+    page.dispatch.mockImplementation(store.dispatch);
+    vi.stubGlobal("api", { browserChat: { postAction } });
+    renderPage(true);
+    fireEvent.click(screen.getByTestId("browser-input"));
+    await waitFor(() => expect(postAction).toHaveBeenCalledWith(expect.objectContaining({ type: "queueSubmit" })));
+    await waitFor(() => expect(store.getState().workspace.contextItemsByKey[browser.ownerKey]).toEqual([added]));
+  });
   it("shows the chat-wide file overlay and adds dropped files to the composer", () => {
     const existing = { file: new File(["old"], "old.txt", { type: "text/plain" }), type: "document" as const };
     const setUploadedFiles = vi.fn();

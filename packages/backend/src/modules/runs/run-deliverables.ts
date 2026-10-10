@@ -90,16 +90,27 @@ export function deliverableTails(history: History): Tail[] {
     messages: [...group.messages.values()].slice(-2), calls: [...group.calls.values()].slice(-2) }));
 }
 
-function strings(value: unknown): string[] {
-  const result: string[] = [];
+function strings(value: unknown, generatedPaths = false): { text: string; returnedPath: boolean }[] {
+  const result: { text: string; returnedPath: boolean }[] = [];
+  const pathFields = new Set(["path", "filepath", "imagepath", "outputpath", "absolutepath", "paths", "filepaths", "imagepaths", "outputpaths"]);
   let remaining = 2_000_000;
-  const visit = (next: unknown, depth: number) => {
+  const visit = (next: unknown, depth: number, returnedPath: boolean) => {
     if (depth > 8 || result.length >= 1000 || remaining <= 0) return;
-    if (typeof next === "string") { const text = next.slice(0, Math.min(remaining, 1_000_000)); result.push(text); remaining -= text.length; }
-    else if (Array.isArray(next)) next.forEach((child) => visit(child, depth + 1));
-    else if (next && typeof next === "object") Object.values(next).forEach((child) => visit(child, depth + 1));
+    if (typeof next === "string") {
+      const text = next.slice(0, Math.min(remaining, 1_000_000));
+      // MCP and command adapters can wrap structured results in JSON text.
+      if (/^\s*[[{"]/.test(text)) {
+        try {
+          const decoded: unknown = JSON.parse(text);
+          visit(decoded, depth + 1, returnedPath || (depth === 0 && typeof decoded === "string")); return;
+        } catch { /* Plain tool text. */ }
+      }
+      result.push({ text, returnedPath: returnedPath || depth === 0 }); remaining -= text.length;
+    } else if (Array.isArray(next)) next.forEach((child) => visit(child, depth + 1, returnedPath));
+    else if (next && typeof next === "object") Object.entries(next).forEach(([key, child]) =>
+      visit(child, depth + 1, pathFields.has(key.replace(/[_-]/g, "").toLowerCase())));
   };
-  visit(value, 0);
+  visit(value, 0, generatedPaths);
   return result;
 }
 function resolveReference(reference: string, root: string | null): string | null {
@@ -115,18 +126,21 @@ function resolveReference(reference: string, root: string | null): string | null
   if (value.includes("\0") || value.length > 4096) return null;
   return path.isAbsolute(value) ? path.resolve(value) : root ? path.resolve(root, value) : null;
 }
-function references(text: string, root: string | null): Set<string> {
+function references(text: string, root: string | null, images: "all" | "explicit" | "none" = "all", returnedPath = false): Set<string> {
   const result = new Set<string>();
-  const add = (reference: string) => {
+  const add = (reference: string, explicit = false) => {
     if (result.size >= 500 || reference.length > 4096) return;
     const file = resolveReference(reference, root);
-    if (file && (DOCUMENT_TYPES[path.extname(file).slice(1).toLowerCase()] || IMAGE_EXTENSIONS.has(path.extname(file).slice(1).toLowerCase()))) result.add(file);
+    if (!file) return;
+    const extension = path.extname(file).slice(1).toLowerCase();
+    if (IMAGE_EXTENSIONS.has(extension) && (images === "none" || (images === "explicit" && !explicit))) return;
+    if (DOCUMENT_TYPES[extension] || IMAGE_EXTENSIONS.has(extension)) result.add(file);
   };
   // Markdown destinations and quoted paths preserve spaces; bare tokens cover
   // shell output and structured path fields. Remote URLs never become local paths.
-  for (const match of text.matchAll(/\]\(\s*(<[^>]+>|[^\n)]+)\)/g)) add(match[1].replace(/\s+["'][^"']*["']$/, ""));
+  for (const match of text.matchAll(/\]\(\s*(<[^>]+>|[^\n)]+)\)/g)) add(match[1].replace(/\s+["'][^"']*["']$/, ""), true);
   for (const match of text.matchAll(/[`"']([^`"'\n]+)[`"']/g)) add(match[1]);
-  for (const match of text.matchAll(/^\s*\[[^\]]+\]:\s*(<[^>]+>|\S+)/gm)) add(match[1]);
+  for (const match of text.matchAll(/^\s*\[[^\]]+\]:\s*(<[^>]+>|\S+)/gm)) add(match[1], true);
   const withoutUrls = text.replace(/(?:https?:\/\/|[a-z][\w+.-]*:\/\/)[^\s<>"'`]+/gi, "");
   const extension = new RegExp(`\\.(?:${EXTENSIONS})(?:#L\\d+(?:-\\d+)?|:\\d+(?::\\d+)?)?$`, "i");
   for (const match of withoutUrls.matchAll(/[^\s`"'<>()[\]{}=,;]+/g)) {
@@ -134,7 +148,7 @@ function references(text: string, root: string | null): Set<string> {
     if (token.length <= 4096 && extension.test(token)) add(token);
   }
   // A path field is often the whole string, including whitespace in its name.
-  if (!text.includes("\n") && new RegExp(`\\.(?:${EXTENSIONS})$`, "i").test(text.trim())) add(text);
+  if (!text.includes("\n") && new RegExp(`\\.(?:${EXTENSIONS})$`, "i").test(text.trim())) add(text, returnedPath);
   return result;
 }
 function inlineImages(text: string, root: string | null) {
@@ -211,8 +225,14 @@ export async function projectRunDeliverables(input: History & {
       references(text, input.root).forEach(add);
       inlineImages(text, input.root).forEach((file) => embedded.add(file));
     }
-    for (const call of tail.calls) for (const text of strings([call.input, call.output]))
-      references(text, input.root).forEach(add);
+    for (const call of tail.calls) {
+      // Tool inputs describe material being worked with. Image mentions in
+      // source code or git/stat logs are not delivery: require a returned path
+      // or a Markdown link in the output, including native generation results.
+      for (const { text } of strings(call.input)) references(text, input.root, "none").forEach(add);
+      for (const { text, returnedPath } of strings(call.output, call.metadata?.source === "codex_image_generation"))
+        references(text, input.root, "explicit", returnedPath).forEach(add);
+    }
     const anchor = messages.at(-1) ?? tail.calls.at(-1);
     if (!anchor) continue;
     const anchorSource = messages.length || anchor.id < 0 ? "artifact" : "tool";
