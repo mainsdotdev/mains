@@ -1,5 +1,7 @@
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
+import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 import type { DashboardQuery, ProviderFilter } from "@mains/contracts/stats";
 import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
 import { contextBridge, ipcRenderer } from "electron";
@@ -492,10 +494,10 @@ const api = {
       return () => ipcRenderer.removeListener(CHANNELS.providers.rateLimitsUpdated, listener);
     },
     // Thread goal controls (Codex `thread/goal/*`), keyed by runId.
-    setGoal: (id: string, runId: string, params: { objective?: string; status?: string; tokenBudget?: number }) =>
+    setGoal: (id: string, runId: string, params: GoalSetParams) =>
       ipcRenderer.invoke(CHANNELS.providers.setGoal, id, runId, params),
     getGoal: (id: string, runId: string) => ipcRenderer.invoke(CHANNELS.providers.getGoal, id, runId),
-    clearGoal: (id: string, runId: string) => ipcRenderer.invoke(CHANNELS.providers.clearGoal, id, runId),
+    clearGoal: (id: string, runId: string, origin?: GoalMutationOrigin) => ipcRenderer.invoke(CHANNELS.providers.clearGoal, id, runId, origin),
     // Fired when a thread goal changes (set/updated/cleared); goal === null on clear.
     onGoalUpdated: (callback: (data: { providerId: string; runId: string | null; goal: unknown }) => void) => {
       const listener = (_: any, data: any) => callback(data);
@@ -510,8 +512,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.providers.getConnectors, id, forceRefresh),
     startConnectorOAuth: (id: string, serverName: string) =>
       ipcRenderer.invoke(CHANNELS.providers.startConnectorOAuth, id, serverName),
-    onConnectorsUpdated: (callback: (data: { providerId: string }) => void) => {
-      const listener = (_: any, data: { providerId: string }) => callback(data);
+    onConnectorsUpdated: (callback: (data: ProviderConnectorsUpdatedEvent) => void) => {
+      const listener = (_: any, data: ProviderConnectorsUpdatedEvent) => callback(data);
       ipcRenderer.on(CHANNELS.providers.connectorsUpdated, listener);
       return () =>
         ipcRenderer.removeListener(CHANNELS.providers.connectorsUpdated, listener);

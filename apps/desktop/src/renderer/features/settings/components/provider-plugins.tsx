@@ -21,7 +21,6 @@ import {
   useInstallProviderPluginMutation,
   useUninstallProviderPluginMutation,
   useSetProviderPluginEnabledMutation,
-  useStartProviderConnectorOAuthMutation,
   useUpdateProviderPluginMutation,
 } from "@/lib/redux/api";
 import type {
@@ -35,11 +34,11 @@ import { getPluginInstallBlockReason } from "../../../../shared/plugin-install-a
 import { extractErrorMessage } from "@/lib/extract-error-message";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
 import { appEvents } from "@/lib/transport/events";
+import { useConnectorOAuth } from "../hooks/use-connector-oauth";
 import {
   Search,
   Check,
   Apps,
-  External,
   Plus,
   ArrowUp,
   Close,
@@ -339,7 +338,7 @@ function ConnectionBadge({
       as="span"
       size="xs"
       tone={tone}
-      className={`shrink-0 rounded-full px-2 py-0.5 ${background}`}
+      className={`shrink-0 rounded-full  px-2 py-0.5 ${background}`}
     >
       {label}
     </Text>
@@ -510,38 +509,30 @@ function PluginDetail({
   // them by backend id, so an empty path is fine to send.
   const { data: detail, refetch: refetchDetail } = useReadProviderPluginQuery(
     { providerId, pluginName, marketplacePath },
-    { skip: !pluginName },
+    { skip: !pluginName, refetchOnMountOrArgChange: true },
   );
-  const [startConnectorOAuth] = useStartProviderConnectorOAuthMutation();
-  const [oauthServer, setOauthServer] = useState<string | null>(null);
+  const { startLogin, isPending: isOAuthPending } = useConnectorOAuth(providerId);
 
-  useEffect(
-    () =>
-      appEvents.providers.onConnectorsUpdated(({ providerId: changedId }) => {
-        if (changedId === providerId) void refetchDetail();
-      }),
-    [providerId, refetchDetail],
-  );
+  useEffect(() => {
+    if (!pluginName) return;
+    const refresh = () => { void refetchDetail(); };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const off = appEvents.providers.onConnectorsUpdated(({ providerId: changedId }) => {
+      if (changedId === providerId) refresh();
+    });
+    // ChatGPT-hosted setup has no callback into Mains. Re-read its runtime
+    // state when the user returns from the browser or reopens this detail.
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      off();
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [providerId, pluginName, refetchDetail]);
 
-  const handleConnectorOAuth = useCallback(
-    async (serverName: string) => {
-      setOauthServer(serverName);
-      try {
-        const result = await startConnectorOAuth({
-          providerId,
-          serverName,
-        }).unwrap();
-        await window.api.shell.openExternal(result.authorizationUrl);
-      } catch (error) {
-        toast.error(
-          extractErrorMessage(error, "Failed to start connector login"),
-        );
-      } finally {
-        setOauthServer(null);
-      }
-    },
-    [providerId, startConnectorOAuth],
-  );
   const hasIncludes =
     detail &&
     (detail.skills.length > 0 ||
@@ -755,14 +746,13 @@ function PluginDetail({
                         app.isEnabled !== false &&
                         app.installUrl && (
                           <Button
-                            variant="secondary"
+                            variant="submit"
                             className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-0"
                             onClick={() =>
                               window.api.shell.openExternal(app.installUrl!)
                             }
                           >
-                            <span>Set up</span>
-                            <External className="size-3.5 shrink-0" />
+                            <span>Connect</span>
                           </Button>
                         )}
                     </div>
@@ -814,10 +804,10 @@ function PluginDetail({
                       variant={
                         state.action === "Reconnect" ? "primary" : "secondary"
                       }
-                      disabled={oauthServer === server.name}
-                      onClick={() => handleConnectorOAuth(server.name)}
+                      disabled={isOAuthPending(server.name)}
+                      onClick={() => startLogin(server.name)}
                     >
-                      {oauthServer === server.name ? (
+                      {isOAuthPending(server.name) ? (
                         <AsciiSpinner variant="null" />
                       ) : (
                         state.action

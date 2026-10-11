@@ -8,6 +8,10 @@ import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
 import type { StoredAttachment } from "@mains/contracts/runs";
 import type { ProviderCliInfo } from "@mains/contracts/provider-cli";
+import type { ConnectorOAuthStartResult } from "@mains/contracts/provider-connectors";
+import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
+export type { ConnectorOAuthStartResult } from "@mains/contracts/provider-connectors";
+export type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { ModeToolPolicy } from "./mode-harness";
@@ -345,7 +349,7 @@ export interface WorkRunMessagePhaseEvent {
   type: "message_phase";
   /** Correlates with report metadata.providerMessageId, including split text blocks. */
   messageId: string;
-  phase: "commentary" | "final_answer";
+  phase: "commentary" | "partial_answer" | "final_answer";
   ts?: number;
 }
 
@@ -731,7 +735,7 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
   /** Read the current goal for a run's thread (null if none). */
   getGoal?(runId: string): Promise<GoalInfo | null>;
   /** Clear the goal on a run's thread. Returns true if cleared. */
-  clearGoal?(runId: string): Promise<boolean>;
+  clearGoal?(runId: string, origin?: GoalMutationOrigin): Promise<boolean>;
 
   /**
    * Read account info from the provider.
@@ -984,7 +988,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   /** Read the current goal for a run's thread (null if none). */
   getGoal?(runId: string): Promise<GoalInfo | null>;
   /** Clear the goal on a run's thread. Returns true if cleared. */
-  clearGoal?(runId: string): Promise<boolean>;
+  clearGoal?(runId: string, origin?: GoalMutationOrigin): Promise<boolean>;
 }
 
 /**
@@ -1001,13 +1005,6 @@ export interface GoalInfo {
   timeUsedSeconds?: number;
   createdAt?: number;
   updatedAt?: number;
-}
-
-/** Params for {@link ProviderDriver.setGoal}. All fields optional (partial update). */
-export interface GoalSetParams {
-  objective?: string;
-  status?: string;
-  tokenBudget?: number;
 }
 
 /**
@@ -2122,8 +2119,4 @@ export interface ConnectorOverview {
   supported: boolean;
   apps: ConnectorInfo[];
   mcpServers: ConnectorMcpServerInfo[];
-}
-
-export interface ConnectorOAuthStartResult {
-  authorizationUrl: string;
 }

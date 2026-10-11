@@ -237,6 +237,16 @@ try {
     assertContains("v2/ThreadRealtimeStartTransport.ts", ['"type": "webrtc"', "sdp: string"]);
     assertContains("RealtimeConversationVersion.ts", ['"v3"']);
   }
+  if (compareVersions(versionOutput, "0.161.0") >= 0) {
+    assertContains("v2/ThreadGoalSetParams.ts", ["origin?: ThreadGoalMutationOrigin | null"]);
+    assertContains("v2/ThreadGoalClearParams.ts", ["origin?: ThreadGoalMutationOrigin | null"]);
+    assertContains("v2/ThreadGoalMutationOrigin.ts", ['"user"', '"automatic"']);
+    assertContains("v2/McpServerOauthLoginResponse.ts", ["loginId?: string"]);
+    assertContains("v2/McpServerOauthLoginCompletedNotification.ts", ["loginId?: string | null"]);
+  }
+  if (compareVersions(versionOutput, "0.162.0") >= 0) {
+    assertContains("MessagePhase.ts", ['"partial_answer"']);
+  }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",
     "originCallId?: string | null",

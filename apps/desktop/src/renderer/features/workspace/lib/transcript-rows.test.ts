@@ -363,9 +363,9 @@ describe("final-answer transcript layout", () => {
   const prompt = () => ev({ id: "prompt", metadata: { kind: "user-prompt" } });
   const report = (id: string, messagePhase?: string) => ev({ id, content: id, metadata: { kind: "report", messagePhase } });
 
-  it("keeps the confirmed final answer outside even when commentary arrives afterward", () => {
+  it.each(["commentary", "partial_answer"])("keeps the confirmed final answer outside even when %s arrives afterward", (phase) => {
     const rows = buildTurnRenderRows(groupEvents([prompt(), report("progress", "commentary"),
-      report("final", "final_answer"), report("late", "commentary")]));
+      report("final", "final_answer"), report("late", phase)]));
     const row = rows[1];
     expect(row.kind).toBe("accordion");
     if (row.kind !== "accordion") return;
@@ -397,7 +397,7 @@ describe("final-answer transcript layout", () => {
     expect(row.lastSegment).toEqual([2]);
   });
 
-  it.each([undefined, "commentary", "unknown"])("falls back to the latest reply without confirmed final evidence (%s)", (phase) => {
+  it.each([undefined, "commentary", "partial_answer", "unknown"])("falls back to the latest reply without confirmed final evidence (%s)", (phase) => {
     const rows = buildTurnRenderRows(groupEvents([prompt(), report("first", phase), report("last", phase)]));
     const row = rows[1];
     expect(row.kind).toBe("accordion");

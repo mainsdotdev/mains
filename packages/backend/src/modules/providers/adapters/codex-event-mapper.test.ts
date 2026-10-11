@@ -608,6 +608,19 @@ describe("Codex event mapper", () => {
     );
   });
 
+  it("preserves a partial answer separately from the terminal answer", () => {
+    const { mapper } = createHarness();
+    const reports = ["partial_answer", "final_answer"].flatMap((phase) => mapper.mapNotification(
+      "item/completed",
+      { threadId: "thread-parent", item: { id: `message-${phase}`, type: "agentMessage", text: `${phase} text`, phase } },
+      "run-1",
+    )).filter((event) => event.type === "artifact" && event.kind === "report" && !event.ephemeral);
+    expect(reports).toMatchObject([
+      { content: "partial_answer text", metadata: { itemId: "message-partial_answer", messagePhase: "partial_answer" } },
+      { content: "final_answer text", metadata: { itemId: "message-final_answer", messagePhase: "final_answer" } },
+    ]);
+  });
+
   it("surfaces a completed async agent message and its questions without deltas", () => {
     const { mapper } = createHarness();
     const notification = {

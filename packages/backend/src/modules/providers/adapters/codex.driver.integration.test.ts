@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkRunRequest } from "../../../../shared/adapter.types";
 import { runsRepo } from "../../runs/runs.repo";
 import * as mainsTools from "./mains-tools.registry";
+import { registerEventSink } from "../../../ipc-kit/event-bus";
+import { CHANNELS } from "@mains/contracts/channels";
+import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 
 // Each test spawns the fake codex app-server as a real Node subprocess and
 // completes a JSON-RPC handshake. Under full-suite load that spawn can blow
@@ -127,6 +130,8 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_EMPTY_MODELS;
   delete process.env.MAINS_CODEX_FIXTURE_MCP_REQUIRE_ACTIVE_THREAD;
   delete process.env.MAINS_CODEX_FIXTURE_MCP_RESUME_ACTIVE_WRITER;
+  delete process.env.MAINS_CODEX_FIXTURE_OAUTH_ERROR;
+  delete process.env.MAINS_CODEX_FIXTURE_LEGACY_OAUTH;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -134,6 +139,57 @@ afterEach(async () => {
 });
 
 describe("codex.driver / app-server protocol", () => {
+  it("distinguishes explicit goal controls from automatic goal lifecycle mutations", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-goal-origin-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000, goalMode: true });
+    drivers.push(driver);
+    await driver.createSession(request("run-goal-origin"));
+    await expect(driver.setGoal?.("run-goal-origin", { objective: "Updated objective" })).resolves.toMatchObject({ objective: "Updated objective" });
+    await expect(driver.setGoal?.("run-goal-origin", { status: "paused" })).resolves.toMatchObject({ status: "paused" });
+    await expect(driver.setGoal?.("run-goal-origin", { status: "active" })).resolves.toMatchObject({ status: "active" });
+    await expect(driver.clearGoal?.("run-goal-origin")).resolves.toBe(true);
+    await driver.setGoal?.("run-goal-origin", { objective: "Next objective" });
+    await expect(driver.clearGoal?.("run-goal-origin", "automatic")).resolves.toBe(true);
+    const mutations = readProtocolLog(logPath).filter((entry) => entry.method === "thread/goal/set" || entry.method === "thread/goal/clear");
+    expect(mutations.map((entry) => entry.params)).toEqual([
+      { threadId: "thread-1", objective: "Return structured output", origin: "automatic" },
+      { threadId: "thread-1", objective: "Updated objective", origin: "user" },
+      { threadId: "thread-1", status: "paused", origin: "user" },
+      { threadId: "thread-1", status: "active", origin: "user" },
+      { threadId: "thread-1", origin: "user" },
+      { threadId: "thread-1", objective: "Next objective", origin: "user" },
+      { threadId: "thread-1", origin: "automatic" },
+    ]);
+  });
+
+  it.each([
+    { label: "current success", legacy: false, error: undefined },
+    { label: "current failure", legacy: false, error: "Login canceled" },
+    { label: "legacy success", legacy: true, error: undefined },
+  ])("forwards native OAuth identity and completion outcome ($label)", async ({ legacy, error }) => {
+    if (error) process.env.MAINS_CODEX_FIXTURE_OAUTH_ERROR = error;
+    if (legacy) process.env.MAINS_CODEX_FIXTURE_LEGACY_OAUTH = "1";
+    const updates: ProviderConnectorsUpdatedEvent[] = [];
+    const off = registerEventSink({ kind: "oauth-test", send(channel, payload) {
+      if (channel === CHANNELS.providers.connectorsUpdated) updates.push(payload as ProviderConnectorsUpdatedEvent);
+    } });
+    try {
+      const driver = createCodexDriver({ binary: fixtureBinary, timeout: 2000 });
+      drivers.push(driver);
+      const result = await driver.startConnectorOAuth?.("gmail");
+      expect(result).toEqual({ authorizationUrl: "https://example.com/oauth/gmail", ...(!legacy ? { loginId: "fixture-login-1" } : {}) });
+      await vi.waitFor(() => expect(updates).toContainEqual({
+        providerId: "codex",
+        oauthLogin: { serverName: "gmail", ...(result?.loginId ? { loginId: result.loginId } : {}), success: !error, ...(error ? { error } : {}) },
+      }));
+    } finally {
+      off();
+    }
+  });
+
   it.each(["work", "chat"] as const)("uses %s tool availability on start, resume, and fork", async (mode) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-atlas-tools-"));
     tempDirs.push(tempDir);

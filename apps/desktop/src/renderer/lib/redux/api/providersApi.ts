@@ -2,6 +2,8 @@ import { baseApi } from "./baseApi";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { DetectedClis, ProviderCliInfo } from "@mains/contracts/provider-cli";
 import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
+import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
+export type { GoalSetParams } from "@mains/contracts/provider-goals";
 export type { DetectedClis } from "@mains/contracts/provider-cli";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type {
@@ -41,12 +43,6 @@ export interface GoalInfo {
   timeUsedSeconds?: number;
   createdAt?: number;
   updatedAt?: number;
-}
-
-export interface GoalSetParams {
-  objective?: string;
-  status?: string;
-  tokenBudget?: number;
 }
 
 export type ProviderKind = "llm_runtime" | "agent_runtime";
@@ -592,10 +588,10 @@ export const providersApi = baseApi.injectEndpoints({
       }),
     }),
 
-    clearProviderGoal: builder.mutation<boolean, { providerId: string; runId: string }>({
-      query: ({ providerId, runId }) => ({
+    clearProviderGoal: builder.mutation<boolean, { providerId: string; runId: string; origin?: GoalMutationOrigin }>({
+      query: ({ providerId, runId, origin = "user" }) => ({
         handler: CHANNELS.providers.clearGoal,
-        args: [providerId, runId],
+        args: [providerId, runId, origin],
       }),
     }),
 

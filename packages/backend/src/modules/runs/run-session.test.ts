@@ -157,7 +157,7 @@ describe("RunSession", () => {
       metadata: expect.objectContaining({ turnId: first.id }), status: "done",
     })]);
   });
-  it("confirms existing split report blocks by provider identity without changing content, order or other messages", async () => {
+  it.each(["partial_answer", "final_answer"] as const)("confirms %s for existing split report blocks without changing content, order or other messages", async (phase) => {
     const session = makeSession();
     await flushBackground();
     createRun(db, { id: "r2", accountId: "default", providerId: "copilot_cli", workspaceId: "w1" });
@@ -171,12 +171,12 @@ describe("RunSession", () => {
     await runsRepo.insertArtifact({ runId: "r2", kind: "report", content: "Other run",
       metadata: { providerMessageId: "final", messagePhase: "commentary" } });
     const before = await runsRepo.findArtifactsByRun("r1");
-    await session.project({ type: "message_phase", messageId: "final", phase: "final_answer" });
+    await session.project({ type: "message_phase", messageId: "final", phase });
     const after = await runsRepo.findArtifactsByRun("r1");
     expect(after.map((artifact) => [artifact.id, artifact.content, artifact.createdAt]))
       .toEqual(before.map((artifact) => [artifact.id, artifact.content, artifact.createdAt]));
     expect(after.map((artifact) => artifact.metadata?.messagePhase))
-      .toEqual(["commentary", "final_answer", "final_answer", "commentary"]);
+      .toEqual(["commentary", phase, phase, "commentary"]);
     expect(after[1].metadata?.source).toBe("assistant.message");
     expect((await runsRepo.findArtifactsByRun("r2"))[0].metadata?.messagePhase).toBe("commentary");
   });

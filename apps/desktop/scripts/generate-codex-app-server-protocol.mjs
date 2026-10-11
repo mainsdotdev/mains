@@ -44,6 +44,7 @@ const roots = [
   "v2/ListMcpServerStatusResponse.ts",
   "v2/McpServerOauthLoginParams.ts",
   "v2/McpServerOauthLoginResponse.ts",
+  "v2/McpServerOauthLoginCompletedNotification.ts",
   "v2/McpResourceReadParams.ts",
   "v2/McpResourceReadResponse.ts",
   "v2/McpServerToolCallParams.ts",

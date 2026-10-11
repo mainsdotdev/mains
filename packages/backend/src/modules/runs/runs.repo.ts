@@ -515,7 +515,7 @@ export const runsRepo = {
   async setReportMessagePhase(
     runId: string,
     messageId: string,
-    phase: "commentary" | "final_answer",
+    phase: "commentary" | "partial_answer" | "final_answer",
   ): Promise<boolean> {
     const rows = await getDb().update(runArtifacts).set({
       metadata: sql`json_patch(COALESCE(${runArtifacts.metadata}, '{}'), ${JSON.stringify({ messagePhase: phase })})`,

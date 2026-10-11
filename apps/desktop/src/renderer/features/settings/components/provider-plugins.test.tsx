@@ -3,8 +3,12 @@ import type { ComponentProps, ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 
-const mocks = vi.hoisted(() => ({ getPlugins: vi.fn(), readPlugin: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  getPlugins: vi.fn(), readPlugin: vi.fn(), refetch: vi.fn(), open: vi.fn(),
+  listeners: new Set<(event: ProviderConnectorsUpdatedEvent) => void>(),
+}));
 vi.mock("@/lib/redux/api", () => ({
   useGetProviderPluginsQuery: mocks.getPlugins,
   useReadProviderPluginQuery: mocks.readPlugin,
@@ -15,7 +19,10 @@ vi.mock("@/lib/redux/api", () => ({
   useStartProviderConnectorOAuthMutation: () => [vi.fn(), {}],
 }));
 vi.mock("@/lib/transport/events", () => ({
-  appEvents: { providers: { onConnectorsUpdated: () => () => {} } },
+  appEvents: { providers: { onConnectorsUpdated: (listener: (event: ProviderConnectorsUpdatedEvent) => void) => {
+    mocks.listeners.add(listener);
+    return () => { mocks.listeners.delete(listener); };
+  } } },
 }));
 vi.mock("@/components/ui", () => ({
   Button: (props: ComponentProps<"button">) => <button {...props} />,
@@ -52,12 +59,48 @@ function RouteControls() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.refetch.mockReset();
   mocks.getPlugins.mockReturnValue({ data: pluginData, isLoading: false });
-  mocks.readPlugin.mockReturnValue({ refetch: vi.fn() });
+  mocks.readPlugin.mockReturnValue({ refetch: mocks.refetch });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); mocks.listeners.clear(); });
 
 describe("plugin detail navigation", () => {
+  it("refreshes the connection on returning from hosted setup and replaces Set up with Connected", async () => {
+    const detail = {
+      summary: plugin, skills: [], mcpServers: [], apps: [{
+        id: "app-gmail", name: "Gmail", installed: true, runtimeEnabled: true, callable: false,
+        installUrl: "https://chatgpt.com/apps/gmail", description: "Gmail app",
+      }],
+    };
+    mocks.readPlugin.mockReturnValue({ data: detail, refetch: mocks.refetch });
+    const previousApi = Object.getOwnPropertyDescriptor(window, "api");
+    Object.defineProperty(window, "api", { configurable: true, value: { shell: { openExternal: mocks.open } } });
+    try {
+      const route = `/plugins?provider=codex&plugin=${encodeURIComponent(plugin.id)}`;
+      const view = render(<MemoryRouter initialEntries={[route]}><ProviderPlugins providerId="codex" /></MemoryRouter>);
+      fireEvent.click(screen.getByRole("button", { name: "Set up" }));
+      expect(mocks.open).toHaveBeenCalledWith("https://chatgpt.com/apps/gmail");
+      expect(screen.getByText("Needs setup")).toBeTruthy();
+      mocks.refetch.mockImplementation(() => {
+        mocks.readPlugin.mockReturnValue({
+          data: { ...detail, apps: [{ ...detail.apps[0], callable: true }] }, refetch: mocks.refetch,
+        });
+        view.rerender(<MemoryRouter initialEntries={[route]}><ProviderPlugins providerId="codex" /></MemoryRouter>);
+      });
+      fireEvent.focus(window);
+      expect(mocks.refetch).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Connected")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Set up" })).toBeNull();
+      view.unmount();
+      fireEvent.focus(window);
+      expect(mocks.refetch).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousApi) Object.defineProperty(window, "api", previousApi);
+      else Reflect.deleteProperty(window, "api");
+    }
+  });
+
   it("opens the URL's exact plugin after the catalog loads and preserves other params on Back", () => {
     mocks.getPlugins.mockReturnValue({ isLoading: true });
     const initial = `/plugins?provider=codex&plugin=${encodeURIComponent(plugin.id)}`;
@@ -72,7 +115,7 @@ describe("plugin detail navigation", () => {
 
     expect(screen.getByRole("heading", { name: "Gmail", level: 2 })).toBeTruthy();
     expect(mocks.readPlugin).toHaveBeenCalledWith(
-      { providerId: "codex", pluginName: "gmail", marketplacePath: "" }, { skip: false },
+      { providerId: "codex", pluginName: "gmail", marketplacePath: "" }, { skip: false, refetchOnMountOrArgChange: true },
     );
     fireEvent.click(screen.getByRole("button", { name: "Back to plugins" }));
     expect(screen.queryByRole("heading", { name: "Gmail", level: 2 })).toBeNull();
