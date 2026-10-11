@@ -440,7 +440,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         outputTokens: usage?.outputTokens,
         cacheReadTokens: usage?.cacheReadTokens,
         cacheWriteTokens: usage?.cacheWriteTokens,
-        costMicros: usage?.totalCostUsd
+        costMicros: usage?.totalCostUsd !== undefined
           ? Math.round(usage.totalCostUsd * 1_000_000)
           : undefined,
         model: usage?.model,

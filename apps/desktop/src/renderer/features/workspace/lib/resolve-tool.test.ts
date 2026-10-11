@@ -1,6 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { resolveTool } from "./resolve-tool";
 
+describe("resolveTool — names matching inherited object properties", () => {
+  it.each(["constructor", "__proto__", "hasOwnProperty", "toString"])("treats %s as a tool name rather than a registry entry", (name) => {
+    for (const wireName of [name, `mcp__mains__${name}`, `mcp__other__${name}_items`]) {
+      const tool = resolveTool(wireName);
+      expect(typeof tool.displayName).toBe("string");
+      expect(typeof tool.groupLabel).toBe("string");
+      expect(tool.displayName).not.toContain("undefined");
+      expect(tool.isBuiltin).toBe(false);
+    }
+  });
+});
+
 describe("resolveTool — Atlas Page tools", () => {
   it.each([
     ["AtlasReadPage", "Read Atlas page", "atlasreadpage"],

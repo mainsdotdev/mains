@@ -179,7 +179,7 @@ export function SegmentedTabs<T extends string>({
         className={cn(
           "absolute transition-all duration-300 ease-in-out",
           variant === "pill"
-            ? "top-0.75 glass-outline-soft bg-primary dark:bg-primary/10 rounded-full"
+            ? "top-0.75 glass-outline-soft bg-primary-200/40 dark:bg-primary/10 rounded-full"
             : "inset-y-0 bg-primary-200/80 dark:bg-primary-800/60 glass-card rounded-xl",
         )}
         style={{

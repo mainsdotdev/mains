@@ -1237,6 +1237,17 @@ describe("RunSession", () => {
   // finalize
   // ─────────────────────────────────────────────────────────────
   describe("finalize", () => {
+    it("preserves a reported zero USD cost and zero tokens on the completed turn", async () => {
+      const session = makeSession();
+      await flushBackground();
+      await session.finalize({
+        status: "succeeded",
+        usage: { totalCostUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      });
+      const [turn] = await runsRepo.findTurnsByRun("r1");
+      expect(turn).toMatchObject({ status: "completed", costMicros: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    });
+
     it.each([false, true])("does not recover raw Codex follow-ups after their completed message (suggestions only: %s)", async (suggestionsOnly) => {
       const session = makeSession();
       await flushBackground();

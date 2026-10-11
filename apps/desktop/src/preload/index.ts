@@ -1,5 +1,6 @@
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { DashboardQuery, ProviderFilter } from "@mains/contracts/stats";
 import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
 import { contextBridge, ipcRenderer } from "electron";
 import type { RunExperienceOptions, RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
@@ -1102,7 +1103,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.shell.openFileWithBundle, filePath, bundleId),
   },
   stats: {
-    getDashboard: (filter?: string) => ipcRenderer.invoke(CHANNELS.stats.getDashboard, filter),
+    getConsumption: (query?: DashboardQuery) => ipcRenderer.invoke(CHANNELS.stats.getConsumption, query),
+    getDashboard: (query?: DashboardQuery | ProviderFilter) => ipcRenderer.invoke(CHANNELS.stats.getDashboard, query),
   },
   app: {
     quit: () => ipcRenderer.invoke(CHANNELS.app.quit),

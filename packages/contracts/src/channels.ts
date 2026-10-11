@@ -445,6 +445,7 @@ export const CHANNELS = {
     update: "space:update",
   },
   stats: {
+    getConsumption: "stats:getConsumption",
     getDashboard: "stats:getDashboard",
   },
   sync: {
