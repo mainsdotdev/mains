@@ -65,7 +65,7 @@ function write(repo: string, file: string, content: string): void {
  * recorded; returns the files recorded since. Closed when the test ends.
  */
 function watchWorktree(repo: string): () => Set<string> {
-  const topLevel = fs.realpathSync(repo);
+  const topLevel = fs.realpathSync.native(repo);
   const runId = `watcher-${++repoCounter}`;
   const since = Date.now();
   worktreeWrites.open(topLevel, runId, since);
@@ -1090,21 +1090,23 @@ describe("diffTrees", () => {
     const repo = makeTurnRepo();
     const before = await gitService.snapshotWorkingTree(repo);
     makeTurnEdits(repo);
-    write(repo, "*.ts", "not a glob\n");
+    write(repo, "a[1].ts", "not a glob\n");
+    write(repo, "a1.ts", "not the literal filename\n");
     const after = await gitService.snapshotWorkingTree(repo);
 
     const diff = await gitService.diffTrees(repo, before, after, [
       "keep.ts",
       "moved.ts",
       "move-me.ts",
-      "*.ts",
+      "a[1].ts",
     ]);
-    expect(diff.files.map((f) => f.path).sort()).toEqual(["*.ts", "keep.ts", "moved.ts"]);
+    expect(diff.files.map((f) => f.path).sort()).toEqual(["a[1].ts", "keep.ts", "moved.ts"]);
     expect(diff.files.find((f) => f.path === "moved.ts")).toMatchObject({
       status: "renamed",
       oldPath: "move-me.ts",
     });
     expect(diff.diffText).not.toContain("new.ts");
+    expect(diff.diffText).not.toContain("a1.ts");
     expect(diff.additions).toBe(2);
     expect(diff.deletions).toBe(1);
 
@@ -1132,10 +1134,10 @@ describe("locateWorktree", () => {
     fs.mkdirSync(path.join(repo, "apps", "desktop"), { recursive: true });
 
     const atRoot = await gitService.locateWorktree(repo);
-    expect(atRoot).toEqual({ topLevel: fs.realpathSync(repo), prefix: "" });
+    expect(atRoot).toEqual({ topLevel: fs.realpathSync.native(repo), prefix: "" });
 
     const inSubdir = await gitService.locateWorktree(path.join(repo, "apps", "desktop"));
-    expect(inSubdir).toEqual({ topLevel: fs.realpathSync(repo), prefix: "apps/desktop/" });
+    expect(inSubdir).toEqual({ topLevel: fs.realpathSync.native(repo), prefix: "apps/desktop/" });
   });
 });
 

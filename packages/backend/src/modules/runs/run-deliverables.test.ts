@@ -35,7 +35,7 @@ describe("per-turn final-answer deliverables", () => {
     const absolute = file("Türkçe report 100%.pdf");
     for (const reference of [absolute, pathToFileURL(absolute).href]) {
       const result = outputs(await project([report(1, `[Report](<${reference}>)`)]));
-      expect(result.map(row => row.path)).toEqual([fs.realpathSync(absolute)]);
+      expect(result.map(row => row.path)).toEqual([fs.realpathSync.native(absolute)]);
     }
   });
   it.each(["agent_message", "assistant", "result.message"])("uses confirmed final evidence despite later commentary (%s)", async (source) => {
@@ -97,7 +97,7 @@ describe("per-turn final-answer deliverables", () => {
     const artifacts = [candidate, report(2, `[Report](<${target}>) [Again](My%20report.md) ./My%20report.md`)];
     const result = outputs(await project(artifacts));
     expect(result).toHaveLength(1);
-    expect(result[0].path).toBe(fs.realpathSync(target));
+    expect(result[0].path).toBe(fs.realpathSync.native(target));
     expect(outputs(await project([...artifacts, report(3, `[Delivered](<${target}>)`)]))[0].id).toBe(result[0].id);
   });
   it("retains each completed turn's final outputs while a follow-up is still running", async () => {

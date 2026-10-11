@@ -18,7 +18,7 @@ describe("providers.utils / development Copilot runtime", () => {
   it("resolves the host SDK's runtime wrapper and native library without a system installation", () => {
     const runtime = resolveCopilotRuntime();
     expect(runtime?.source).toBe("bundled");
-    expect(runtime?.path).toContain("@github/copilot-sdk-");
+    expect(runtime?.path).toContain(path.join("@github", "copilot-sdk-"));
     expect(path.basename(runtime!.path)).toBe(process.platform === "win32" ? "copilot-runtime.exe" : "copilot-runtime");
     expect(fs.statSync(runtime!.path).isFile()).toBe(true);
     expect(fs.statSync(path.join(path.dirname(runtime!.path), "runtime.node")).isFile()).toBe(true);
