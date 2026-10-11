@@ -92,6 +92,23 @@ const RowWithMenu: FunctionComponent = () => {
 };
 
 describe("DropdownMenu focus handoff", () => {
+  it("can show a hover preview without moving or restoring the composer focus", () => {
+    const content = (isOpen: boolean) => createElement("div", null,
+      createElement("input", { "aria-label": "Prompt" }),
+      createElement(DropdownMenu, { isOpen, position: { x: 0, y: 0 }, onClose() {}, initialFocus: "none", "aria-label": "Preview" },
+        createElement(DropdownMenuItem, { onClick() {} }, "Server")),
+    );
+    const view = render(content(false));
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    view.rerender(content(true));
+    expect(screen.getByRole("menuitem", { name: "Server" })).toBeTruthy();
+    expect(document.activeElement).toBe(prompt);
+    view.rerender(content(false));
+    flushFrames();
+    expect(document.activeElement).toBe(prompt);
+  });
+
   it("returns focus to the trigger when an item's action leaves focus behind", async () => {
     const user = userEvent.setup();
     render(createElement(RowWithMenu));

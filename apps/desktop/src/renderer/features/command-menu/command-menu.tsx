@@ -40,10 +40,8 @@ import {
   useListCollectionsQuery,
   useListProjectsQuery,
 } from "@/lib/redux/api";
-import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import {
-  setBottomTerminalOpen,
-} from "@/lib/redux/slices/appSettingsSlice";
+import { useAppSelector } from "@/lib/redux/hooks";
+import { useBottomTerminal } from "@/hooks/use-bottom-terminal";
 import { isElectron, useCapabilities } from "@/lib/platform";
 import { useActiveSpace } from "@/hooks/use-active-space";
 import { useDarkMode } from "@/hooks/use-dark-mode";
@@ -244,7 +242,6 @@ export function CommandMenu() {
     useState<PendingDocument | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
-  const dispatch = useAppDispatch();
   const documentViewer = useDocumentViewer();
   const { nativeDialogs } = useCapabilities();
   const { darkMode, toggleDarkMode } = useDarkMode();
@@ -255,9 +252,7 @@ export function CommandMenu() {
   const sessionRunId = useAppSelector((state) =>
     selectSessionRunId(state.workspace),
   );
-  const bottomTerminalOpen = useAppSelector(
-    (state) => state.appSettings.bottomTerminalOpen,
-  );
+  const bottomTerminal = useBottomTerminal();
   const { data: account } = useGetAccountQuery();
   const { data: recentRuns = [] } = useGetRunsQuery(10, { skip: !open });
   const { data: projects = [] } = useListProjectsQuery(undefined, {
@@ -355,12 +350,10 @@ export function CommandMenu() {
     if (mode === "developer") {
       items.push({
         id: "command:terminal",
-        title: bottomTerminalOpen ? "Close terminal" : "Open terminal",
+        title: bottomTerminal.isOpen ? "Hide terminal" : "Open terminal",
         keywords: "terminal shell console toggle",
         icon: Terminal,
-        onSelect: runAndClose(() =>
-          dispatch(setBottomTerminalOpen(!bottomTerminalOpen)),
-        ),
+        onSelect: runAndClose(bottomTerminal.toggle),
       });
     }
 
@@ -391,7 +384,7 @@ export function CommandMenu() {
       });
     }
     return items;
-  }, [activeSpace, bottomTerminalOpen, darkMode, dispatch, mode, navigate, runAndClose, switchMode, toggleDarkMode]);
+  }, [activeSpace, bottomTerminal.isOpen, bottomTerminal.toggle, darkMode, mode, navigate, runAndClose, switchMode, toggleDarkMode]);
 
   const quickActions = useMemo<MenuItemModel[]>(() => {
     const items: MenuItemModel[] = [

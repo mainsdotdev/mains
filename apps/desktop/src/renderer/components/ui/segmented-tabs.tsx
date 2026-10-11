@@ -178,8 +178,9 @@ export function SegmentedTabs<T extends string>({
         aria-hidden
         className={cn(
           "absolute transition-all duration-300 ease-in-out",
+          // Keep the light selection tone consistent on page and card surfaces.
           variant === "pill"
-            ? "top-0.75 glass-outline-soft bg-primary-200/40 dark:bg-primary/10 rounded-full"
+            ? "top-0.75 glass-outline-soft bg-[color-mix(in_srgb,var(--color-primary-200)_40%,var(--color-primary))] dark:bg-primary/10 rounded-full"
             : "inset-y-0 bg-primary-200/80 dark:bg-primary-800/60 glass-card rounded-xl",
         )}
         style={{

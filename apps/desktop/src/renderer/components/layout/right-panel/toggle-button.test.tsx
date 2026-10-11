@@ -81,7 +81,7 @@ describe("fixed window controls", () => {
     expect(onToggle).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith("Select a workspace first to use the terminal");
     view.rerender(controls(false, false, true));
-    fireEvent.click(screen.getByRole("button", { name: "Close terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Hide terminal" }));
     expect(onToggle).toHaveBeenCalledOnce();
   });
 

@@ -19,6 +19,7 @@ import type {
 import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
+import type { TerminalCreateOptions, TerminalDataEvent, TerminalExitEvent, TerminalSession, TerminalSnapshot } from "@mains/contracts/terminal";
 import type { CreatePrPayload, CreatePrResult, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
 import type {
@@ -1049,18 +1050,31 @@ const api = {
   },
   // Terminal operations
   terminal: {
-    create: (payload: { id: string; cwd?: string }) =>
+    create: (payload: TerminalCreateOptions): Promise<ServiceResponse<TerminalSnapshot>> =>
       ipcRenderer.invoke(CHANNELS.terminal.create, payload),
+    attach: (id: string): Promise<ServiceResponse<TerminalSnapshot>> => ipcRenderer.invoke(CHANNELS.terminal.attach, id),
+    list: (): Promise<ServiceResponse<TerminalSession[]>> => ipcRenderer.invoke(CHANNELS.terminal.list),
     write: (id: string, data: string) =>
       ipcRenderer.invoke(CHANNELS.terminal.write, id, data),
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.invoke(CHANNELS.terminal.resize, id, cols, rows),
     destroy: (id: string) => ipcRenderer.invoke(CHANNELS.terminal.destroy, id),
-    onData: (callback: (data: { id: string; data: string }) => void) => {
-      const listener = (_: any, data: { id: string; data: string }) =>
+    destroyIdle: (workspaceId: string): Promise<ServiceResponse<string[]>> =>
+      ipcRenderer.invoke(CHANNELS.terminal.destroyIdle, workspaceId),
+    onData: (callback: (data: TerminalDataEvent) => void) => {
+      const listener = (_: any, data: TerminalDataEvent) =>
         callback(data);
       ipcRenderer.on(CHANNELS.terminal.data, listener);
       return () => ipcRenderer.removeListener(CHANNELS.terminal.data, listener);
+    },
+    onExit: (callback: (data: TerminalExitEvent) => void) => {
+      const listener = (_: unknown, data: TerminalExitEvent) => callback(data);
+      ipcRenderer.on(CHANNELS.terminal.exit, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.terminal.exit, listener);
+    },
+    onChanged: (callback: () => void) => {
+      ipcRenderer.on(CHANNELS.terminal.changed, callback);
+      return () => ipcRenderer.removeListener(CHANNELS.terminal.changed, callback);
     },
   },
   platform: {

@@ -70,7 +70,7 @@ export function ToggleButton({
   const browserTooltip = `${browserOpen ? "Close" : "Open"} browser${
     browserShortcut ? ` (${browserShortcut})` : ""
   }`;
-  const terminalTooltip = `${terminalOpen ? "Close" : "Open"} terminal${
+  const terminalTooltip = `${terminalOpen ? "Hide" : "Open"} terminal${
     terminalShortcut ? ` (${terminalShortcut})` : ""
   }`;
   return (
@@ -98,7 +98,7 @@ export function ToggleButton({
               onTerminalToggle();
             }}
             className={terminalOpen ? "text-primary-700 dark:text-primary-300" : undefined}
-            aria-label={terminalOpen ? "Close terminal" : "Open terminal"}
+            aria-label={terminalOpen ? "Hide terminal" : "Open terminal"}
           >
             {terminalOpen ? (
               <TerminalOpen className="size-4" />

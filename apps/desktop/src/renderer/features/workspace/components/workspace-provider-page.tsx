@@ -12,6 +12,7 @@ import {
   WorkspaceInput,
   WorkspaceTabs,
   TerminalSection,
+  WorkspaceTerminal,
   GoalSummaryBar,
   TodoSummaryBar,
 } from "@/features/workspace/components";
@@ -1006,31 +1007,18 @@ export function WorkspaceProviderPage({
       </div>
       </div>
 
-      {(activeAuthTerminal || showWorkspaceTerminal) && (
+      {activeAuthTerminal ? (
         <TerminalSection
-          id={
-            activeAuthTerminal
-              ? `auth-${providerId}`
-              : ws.currentWorkspace!.id
-          }
-          rootPath={
-            activeAuthTerminal
-              ? undefined
-              : ws.currentWorkspace!.rootPath
-          }
-          isOpen={activeAuthTerminal ? true : bottomTerminal.isOpen}
-          title={
-            activeAuthTerminal
-              ? `Sign in to ${providerLabel}`
-              : "Terminal"
-          }
-          pendingCommand={activeAuthTerminal?.pendingCommand}
+          id={`auth-${providerId}`}
+          isOpen
+          title={`Sign in to ${providerLabel}`}
+          pendingCommand={activeAuthTerminal.pendingCommand}
           onPendingCommandSent={authTerminal.markCommandSent}
-          onClose={
-            activeAuthTerminal ? authTerminal.close : bottomTerminal.close
-          }
+          onClose={authTerminal.close}
         />
-      )}
+      ) : showWorkspaceTerminal && <WorkspaceTerminal workspaceId={ws.currentWorkspace!.id}
+        workspaceName={ws.currentWorkspace!.name} rootPath={ws.currentWorkspace!.rootPath}
+        isOpen={bottomTerminal.isOpen} onHide={bottomTerminal.close} />}
     </div>
     </PluginLogoProvider>
   );

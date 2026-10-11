@@ -97,6 +97,7 @@ vi.mock("@/features/workspace/components", () => ({
   WorkspaceTabs: (props: ComponentProps<typeof WorkspaceTabs>) =>
     createElement("div", { "data-testid": "tabs" }, page.realTabs && createElement(WorkspaceTabs, props)),
   TerminalSection: () => null,
+  WorkspaceTerminal: () => null,
   GoalSummaryBar: () => null,
   TodoSummaryBar: () => null,
 }));

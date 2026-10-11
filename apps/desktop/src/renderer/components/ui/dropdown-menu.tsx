@@ -129,8 +129,10 @@ interface DropdownMenuBaseProps {
   className?: string;
   /** `right` keeps the horizontal animation anchor while allowing upward placement. */
   origin?: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "right" | "auto";
-  /** Which enabled row receives focus when the menu opens. */
-  initialFocus?: "first" | "selected";
+  /** `none` lets hover previews preserve the user's current input focus. */
+  initialFocus?: "first" | "selected" | "none";
+  onMouseEnter?: React.MouseEventHandler<HTMLDivElement>;
+  onMouseLeave?: React.MouseEventHandler<HTMLDivElement>;
   /** A search field can receive focus before the selectable rows. */
   initialFocusRef?: React.RefObject<HTMLElement | null>;
   /** Prefer the space above the trigger even when the menu would fit below. */
@@ -156,6 +158,8 @@ export function DropdownMenu({
   origin = "auto",
   initialFocus = "first",
   initialFocusRef,
+  onMouseEnter,
+  onMouseLeave,
   openUpward = false,
   scrollable = false,
   maxHeight = 384,
@@ -186,7 +190,7 @@ export function DropdownMenu({
   useLayoutEffect(() => {
     if (!isOpen) return;
     previouslyFocused.current = document.activeElement as HTMLElement | null;
-    shouldRestoreFocus.current = true;
+    shouldRestoreFocus.current = initialFocus !== "none";
     const enabledItems = getEnabledMenuItems(menuRef.current);
     const selectedItem = enabledItems.find(
       (item) => item.getAttribute("aria-checked") === "true",
@@ -195,7 +199,7 @@ export function DropdownMenu({
       initialFocus === "selected"
         ? (selectedItem ?? enabledItems[0])
         : enabledItems[0];
-    (initialFocusRef?.current ?? itemToFocus)?.focus();
+    if (initialFocus !== "none" || initialFocusRef) (initialFocusRef?.current ?? itemToFocus)?.focus();
 
     return () => {
       const target = previouslyFocused.current;
@@ -416,6 +420,8 @@ export function DropdownMenu({
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
         onKeyDown={handleMenuKeyDown}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
         className={cn(
           "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in",
           scrollable ? "dropdown-scroll-menu" : "p-1.25 space-y-0.5",

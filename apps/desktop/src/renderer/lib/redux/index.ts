@@ -13,6 +13,7 @@ import workspaceReducer from "./slices/workspaceSlice";
 import backendsReducer from "./slices/backendsSlice";
 import runQueueReducer from "./slices/runQueueSlice";
 import atlasReducer from "./slices/atlasSlice";
+import terminalReducer from "./slices/terminalSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
 import { onTransportChange } from "../transport";
 import { parseAppThemeSettings } from "../app-themes";
@@ -122,6 +123,7 @@ export const store = configureStore({
     // Unsent messages and their delivery mode live only in this renderer.
     runQueue: runQueueReducer,
     atlas: persistedAtlasReducer,
+    terminal: terminalReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware({
