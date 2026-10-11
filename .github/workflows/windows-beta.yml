@@ -52,7 +52,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: npm run test:build
       - name: Test renderer paths, shortcuts and OS features
-        run: npm test -- src/shared/keyboard-shortcuts.test.ts src/renderer/lib/file-path.test.ts src/renderer/lib/platform/capabilities.test.ts src/renderer/components/markdown-components.test.tsx src/renderer/features/workspace/components/document-viewer/markdown-document.test.tsx src/renderer/providers/keyboard-shortcuts-provider.test.tsx src/renderer/providers/keyboard-shortcuts-windows.test.tsx src/main/modules/keyboardShortcuts/keyboardShortcuts.validation.test.ts
+        run: npm test -- src/shared/keyboard-shortcuts.test.ts src/renderer/lib/file-path.test.ts src/renderer/lib/platform/capabilities.test.ts src/renderer/components/markdown-components.test.tsx src/renderer/features/workspace/components/document-viewer/markdown-document.test.tsx src/renderer/providers/keyboard-shortcuts-provider.test.tsx src/renderer/providers/keyboard-shortcuts-windows.test.tsx src/main/modules/keyboardShortcuts/keyboardShortcuts.validation.test.ts src/main/move-to-applications.test.ts
       - name: Test native runtimes, process cleanup, MCP and Git
         working-directory: packages/backend
         env:
@@ -63,15 +63,17 @@ jobs:
       - name: Regenerate notices for the Windows dependency tree
         run: npm run licenses:generate
       - name: Make the Windows installer
+        id: make
         env:
           MAINS_GITHUB_CLIENT_ID: ${{ secrets.MAINS_GITHUB_CLIENT_ID }}
         run: npm run make -- --platform win32 --arch x64
       - name: Smoke the packaged app with isolated user data
         run: npm run smoke:package
       - name: Upload beta installer and Squirrel update assets
+        if: always() && steps.make.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: Mains-windows-x64-beta-${{ github.sha }}
+          name: Mains-windows-x64-${{ job.status == 'success' && 'beta' || 'diagnostic' }}-${{ github.sha }}
           path: |
             apps/desktop/out/make/squirrel.windows/x64/*.exe
             apps/desktop/out/make/squirrel.windows/x64/*.nupkg
