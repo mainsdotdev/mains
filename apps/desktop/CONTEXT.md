@@ -336,6 +336,11 @@ _Avoid_: deriving a contextual action's position from unrelated controls' widths
 The viewport's corner gutter is offset so the first tab's face aligns with the content edge. The owning main area or preview's inset content container clips tabs at that edge, including during scrolling; the collapsed-sidebar header inset leaves the leading curve inside that boundary. Clipping only the outer browser/app panel lets tabs paint into its 5px frame gap. Verify both initial alignment and scrolled overflow in a real browser: jsdom does not calculate CSS geometry or clipping.
 _Avoid_: special sizing for the active tab; putting the create action inside the scrolling viewport; guessing a fixed width for visible controls; retaining an empty flow slot for a relocated action.
 
+**document viewer header**:
+Markdown, text, PDF and Office previews use the shared tab strip for the current document's icon, filename and close action. The selected tab joins the inset content surface. A separate document toolbar immediately below it owns the format label, rendered-document zoom and Save a copy; it stays visible while the document body scrolls. Text follows the app's type scale, while rendered documents retain their own zoom, reset when the document path changes. Fixed terminal/browser/right-panel toggles reserve space only in the tab row.
+
+Markdown previews parse raw HTML through the shared sanitizer before rendering it with the common Markdown components. The viewer owns the inherited light/dark text tone, resolves relative images against the document directory and keeps sized HTML images centered within authored alignment. Remote images retain their explicit Load action; native `source` elements are excluded so they cannot bypass it. Text documents keep HTML literal. Sanitized fragment targets use the `user-content-` ID prefix, which the shared link renderer also checks for footnote navigation.
+
 ## MCP App extensions
 
 **app entrypoint**:
