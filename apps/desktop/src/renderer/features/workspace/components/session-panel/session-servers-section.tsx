@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import type { TerminalSession } from "@mains/contracts/terminal";
 import { Text, toast } from "@/components/ui";
-import { Terminal, Trash } from "@/components/ui/icons";
+import { ArrowUp, Trash } from "@/components/ui/icons";
 import { useStopTerminalMutation } from "@/lib/redux/api";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setBottomTerminalOpen } from "@/lib/redux/slices/appSettingsSlice";
@@ -17,7 +17,7 @@ function SessionServerPorts({ session }: { session: TerminalSession }) {
   const navigate = useNavigate();
   const backendId = useAppSelector((state) => state.backends.activeBackendId ?? "local");
   const [stop, stopping] = useStopTerminalMutation();
-  const context = `${session.workspaceName ?? session.workspaceId} · ${session.title}`;
+  const workspaceName = session.workspaceName ?? session.workspaceId;
 
   const openTerminal = () => {
     if (!session.workspaceId) return;
@@ -46,26 +46,28 @@ function SessionServerPorts({ session }: { session: TerminalSession }) {
   return session.servers?.map((server) => (
     <PanelItem
       key={`${server.pid}:${server.port}`}
-      icon={<Terminal className="size-4 text-success" />}
+      icon={
+        <span className="flex size-3 items-center justify-center">
+          <span className="size-2 rounded-full bg-success" />
+        </span>
+      }
       label={
-        <span className="block min-w-0">
-          <span className="flex items-center gap-2">
+        <span className="flex min-w-0 items-center justify-between gap-3">
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="truncate">{server.command}</span>{" "}
             <span className="shrink-0 tabular-nums">:{server.port}</span>
-            <Text as="span" size="inherit" tone="subtle" weight="normal" className="truncate">
-              {server.command}
-            </Text>
-          </span>
-          <Text as="span" size="xs" tone="faint" weight="normal" className="block truncate">
-            {context}
+          </span>{" "}
+          <Text as="span" size="xs" tone="subtle" weight="normal" className="max-w-[40%] shrink-0 truncate">
+            {workspaceName}
           </Text>
         </span>
       }
-      title={`Open terminal: ${context}`}
+      title={`Open terminal: ${workspaceName}`}
       onClick={openTerminal}
-      trailing={<Terminal aria-hidden className="size-3.5" />}
+      trailing={<ArrowUp aria-hidden className="size-3.5 rotate-90" />}
       hoverAction={{
         icon: <Trash className="size-3.5" />,
-        title: `Stop terminal and its servers: ${context}`,
+        title: `Stop terminal and its servers: ${workspaceName}`,
         onClick: () => void stopTerminal(),
         pending: stopping.isLoading,
       }}

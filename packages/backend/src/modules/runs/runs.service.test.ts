@@ -2519,7 +2519,7 @@ describe("runsService", () => {
   });
 
   describe("listRunOutputFiles", () => {
-    it("hydrates only the last two logical calls, including a path beyond the deferred preview", async () => {
+    it("selects only final-message files even when tail tool calls mention other documents", async () => {
       createRun(db, { id: "tail-tools", mode: "work", status: "succeeded" });
       const root = managedRunDir("tail-tools", "work");
       mkdirSync(root, { recursive: true });
@@ -2527,14 +2527,30 @@ describe("runsService", () => {
       for (let i = 0; i < 20; i++) createToolCall(db, { runId: "tail-tools", toolName: "Bash", status: "done",
         output: JSON.stringify(i === 18 ? { stdout: "x".repeat(20_000) + "\n[Output](delivered.md)" }
           : i === 19 ? { path: "CONTEXT.md" } : { path: "early.md" }) });
-      const hydrate = vi.spyOn(runsRepo, "findOutputToolCall");
+      createRunArtifact(db, { runId: "tail-tools", kind: "report", content: "[Final](delivered.md)",
+        metadata: JSON.stringify({ messagePhase: "final_answer" }) });
+      createRunArtifact(db, { runId: "tail-tools", kind: "report", content: "CONTEXT.md",
+        metadata: JSON.stringify({ messagePhase: "commentary" }) });
       try {
         const history = await runsService.getHistoryPage({ runId: "tail-tools", deferToolOutput: true });
-        expect(hydrate).toHaveBeenCalledTimes(2);
         const output = history.artifacts.filter((row) => row.metadata?.outputSelected);
-        expect(output.map((row) => row.metadata?.fileName)).toEqual(["delivered.md", "CONTEXT.md"]);
+        expect(output.map((row) => row.metadata?.fileName)).toEqual(["delivered.md"]);
         expect((await runsService.getOutputArtifacts("tail-tools")).map((row) => row.id)).toEqual(output.map((row) => row.id));
-      } finally { hydrate.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+    it("does not promote tool-only documents when the last agent message has no file reference", async () => {
+      createRun(db, { id: "tool-only-outputs", mode: "work", status: "succeeded" });
+      const root = managedRunDir("tool-only-outputs", "work");
+      mkdirSync(root, { recursive: true }); writeFileSync(join(root, "CONTEXT.md"), "project context");
+      createToolCall(db, { runId: "tool-only-outputs", toolName: "Read", status: "done",
+        input: JSON.stringify({ path: "CONTEXT.md" }), output: JSON.stringify({ path: "CONTEXT.md" }) });
+      createRunArtifact(db, { runId: "tool-only-outputs", kind: "report", content: "Review now refreshes the diff." });
+      try {
+        expect(await runsService.getOutputArtifacts("tool-only-outputs")).toEqual([]);
+        expect(await runsService.listRunOutputFiles("tool-only-outputs")).toEqual([]);
+        const history = await runsService.getHistoryPage({ runId: "tool-only-outputs" });
+        expect(history.artifacts.some((row) => row.metadata?.outputSelected)).toBe(false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
     });
     it("keeps turn selection global when steering prompts fall outside a history page", async () => {
       createRun(db, { id: "steered-outputs", mode: "work", status: "succeeded" });
@@ -2544,7 +2560,8 @@ describe("runsService", () => {
       const at = (second: number) => new Date((1_700_000_000 + second) * 1000);
       createRunArtifact(db, { runId: "steered-outputs", kind: "user-prompt" as "report", content: "Start", createdAt: at(0) });
       for (let i = 1; i <= 35; i++) {
-        createRunArtifact(db, { runId: "steered-outputs", kind: "report", content: i < 35 ? "early.md" : "final.md", createdAt: at(i * 2) });
+        createRunArtifact(db, { runId: "steered-outputs", kind: "report", content: i < 35 ? "early.md" : "final.md", createdAt: at(i * 2),
+          metadata: i === 35 ? JSON.stringify({ messagePhase: "final_answer" }) : undefined });
         if (i < 35) createRunArtifact(db, { runId: "steered-outputs", kind: "user-prompt" as "report", content: "Steer",
           metadata: JSON.stringify({ delivery: "steer" }), createdAt: at(i * 2 + 1) });
       }
@@ -2570,7 +2587,7 @@ describe("runsService", () => {
         await expect(runsService.readArtifactImage({ artifactId: output.id, runId: "other" })).rejects.toThrow("not found");
       } finally { rmSync(root, { recursive: true, force: true }); }
     });
-    it("shares tail-selected outputs across history, chat and the file shelf", async () => {
+    it("shares final-message outputs across history, chat and the file shelf", async () => {
       createRun(db, {
         id: "run-outputs",
         providerId: "claude_code",
@@ -2591,7 +2608,8 @@ describe("runsService", () => {
       symlinkSync(outside, `${root}/linked.md`);
       createRunArtifact(db, { runId: "run-outputs", kind: "report", content: ".mains/sources/brief.pdf project-resources/source-1/brief.pdf" });
       createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "Working" });
-      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "[Notes](notes.md) [Chart](outputs/chart.csv) linked.md" });
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "[Notes](notes.md) [Chart](outputs/chart.csv) linked.md",
+        metadata: JSON.stringify({ messagePhase: "final_answer" }) });
       createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "Done" });
 
       try {

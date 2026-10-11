@@ -65,7 +65,7 @@ import { resolveAtlasPageContext } from "./run-atlas-page";
 import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
 import { withImageContentHashes } from "./run-image-content-hashes";
-import { deliverableTails, projectRunDeliverables } from "./run-deliverables";
+import { deliverableReplies, projectRunDeliverables } from "./run-deliverables";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -172,35 +172,30 @@ const RAW_IMAGE_MIMES: Record<string, string> = {
 async function selectedOutputArtifacts(run: RunResponse) {
   const terminal = run.status !== "running" && run.status !== "queued";
   const artifacts = runsRepo.findOutputArtifactKeys(run.id);
-  const toolCalls = runsRepo.findOutputToolCallKeys(run.id);
-  const history = { artifacts, toolCalls, turns: await runsRepo.findTurnsByRun(run.id), terminal };
-  const tails = deliverableTails(history);
-  const selectedIds = new Set(tails.flatMap((tail) => tail.calls.map((call) => call.id)));
-  const messageIds = new Set(tails.flatMap((tail) => tail.messages.flat().map((row) => row.id)));
-  // Hydrate only the two selected calls per completed turn. The transcript's
-  // deferred output preview must not change which deliverables Atlas sees.
-  const hydrated = toolCalls.map((call) => selectedIds.has(call.id)
-    ? runsRepo.findOutputToolCall(run.id, call.id) ?? call : call);
+  const history = { artifacts, turns: await runsRepo.findTurnsByRun(run.id), terminal };
+  const replies = deliverableReplies(history);
+  const messageIds = new Set(replies.flatMap((reply) => reply.messages.flat().map((row) => row.id)));
+  // Load only the selected reply bodies. Tool records and the transcript's
+  // paging or deferred previews cannot change which deliverables Atlas sees.
   const hydratedArtifacts = await Promise.all(artifacts.map(async (row) => messageIds.has(row.id)
     ? await runsRepo.findArtifactById(row.id) ?? row : row));
   const root = await runsService.getRunExecutionRoot(run.id);
   const extraRoots = [path.join(getBackendRuntime().getPath("userData"), "generated-images", run.id)];
   if (run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId))
     extraRoots.push(path.join(os.homedir(), ".codex", "generated_images", run.sessionId));
-  return (await projectRunDeliverables({ ...history, artifacts: hydratedArtifacts, toolCalls: hydrated,
+  return (await projectRunDeliverables({ ...history, artifacts: hydratedArtifacts,
     runId: run.id, root, extraRoots })).filter((row) => row.metadata?.outputSelected);
 }
 
 async function selectedArtifacts(run: RunResponse, artifacts: RunArtifactResponse[], outputWindow?: {
-  artifacts: RunArtifactResponse[]; toolCalls: ToolCallResponse[];
+  artifacts: RunArtifactResponse[];
 }) {
   let outputs = await selectedOutputArtifacts(run);
   if (outputWindow) {
     const artifactIds = new Set(outputWindow.artifacts.map((row) => row.id));
-    const callIds = new Set(outputWindow.toolCalls.map((row) => row.id));
     outputs = outputs.filter((row) => {
       const anchor = row.metadata!.outputAnchor as { source: string; id: number };
-      return (anchor.source === "artifact" ? artifactIds : callIds).has(anchor.id);
+      return artifactIds.has(anchor.id);
     });
   }
   return withImageContentHashes([...artifacts.filter((row) => !["file", "document", "image"].includes(row.kind)), ...outputs]);

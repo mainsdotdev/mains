@@ -559,17 +559,6 @@ export const runsRepo = {
     return rows.map(mapToolCallRowToResponse);
   },
 
-  // Tail selection needs ordering/identity, not every historical command body.
-  findOutputToolCallKeys(runId: string): ToolCallResponse[] {
-    return getDb().select({ ...getTableColumns(toolCalls), input: sql<null>`NULL`, output: sql<null>`NULL` })
-      .from(toolCalls).where(eq(toolCalls.runId, runId)).orderBy(asc(toolCalls.id)).all().map(mapToolCallRowToResponse);
-  },
-
-  findOutputToolCall(runId: string, id: number): ToolCallResponse | null {
-    const row = getDb().select().from(toolCalls).where(and(eq(toolCalls.runId, runId), eq(toolCalls.id, id))).get();
-    return row ? mapToolCallRowToResponse(row) : null;
-  },
-
   async insertToolCall(payload: CreateToolCallPayload): Promise<number> {
     const db = getDb();
     const result = await db

@@ -96,8 +96,12 @@ describe("session panel running servers", () => {
     render(panel());
     const section = await screen.findByRole("region", { name: "Running servers" });
     expect(within(section).getByText("3")).toBeTruthy();
-    expect(within(section).getAllByRole("button", { name: /^:/ }).map((button) => button.textContent))
-      .toEqual([":3000nodeWebsite · Terminal 1", ":3001nodeWebsite · Terminal 1", ":8080nodeAPI · Terminal 1"]);
+    expect(within(section).getAllByRole("button", { name: /^node/ })
+      .map((button) => within(button).getByText(/^:\d+$/).textContent))
+      .toEqual([":3000", ":3001", ":8080"]);
+    expect(within(section).getAllByText("Website")).toHaveLength(2);
+    expect(within(section).getByText("API")).toBeTruthy();
+    expect(within(section).queryByText(/Terminal 1/)).toBeNull();
     expect(screen.getAllByRole("heading").map((heading) => heading.textContent))
       .toEqual(["mains", "Running servers", "Sources"]);
     expect(screen.getByRole("complementary", { name: "Session panel" }).contains(section)).toBe(true);
@@ -106,7 +110,7 @@ describe("session panel running servers", () => {
   it("opens the owning workspace and selects that server's existing terminal", async () => {
     sessions = [session("api", "b", [8080])];
     render(panel());
-    fireEvent.click(await screen.findByRole("button", { name: /^:8080/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^node :8080/ }));
     expect(screen.getByTestId("location").textContent).toBe("/code/b");
     expect(testStore.getState().terminal.selectedByWorkspace[terminalWorkspaceKey("local", "b")]).toBe("api");
     expect(testStore.getState().appSettings.bottomTerminalOpen).toBe(true);
@@ -118,7 +122,7 @@ describe("session panel running servers", () => {
     sessions = [session("website", "a", [3000, 3001]), session("api", "b", [8080])];
     testStore.dispatch(selectTerminal({ key: terminalWorkspaceKey("local", "a"), id: "website" }));
     render(panel());
-    const buttons = await screen.findAllByRole("button", { name: "Stop terminal and its servers: Website · Terminal 1" });
+    const buttons = await screen.findAllByRole("button", { name: "Stop terminal and its servers: Website" });
     fireEvent.click(buttons[0]);
     await waitFor(() => expect(screen.queryByText(":3000")).toBeNull());
     expect(screen.queryByText(":3001")).toBeNull();

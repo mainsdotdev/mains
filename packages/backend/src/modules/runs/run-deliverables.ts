@@ -3,18 +3,16 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { RunArtifactResponse } from "./runs.dto";
-import type { RunTurnResponse, ToolCallResponse } from "@mains/contracts/runs";
+import type { RunTurnResponse } from "@mains/contracts/runs";
 
 interface History {
   artifacts: RunArtifactResponse[];
-  toolCalls: ToolCallResponse[];
   turns: RunTurnResponse[];
   terminal: boolean;
 }
-interface Tail {
+interface Reply {
   key: string;
   messages: RunArtifactResponse[][];
-  calls: ToolCallResponse[];
 }
 const FILE_KINDS = new Set(["file", "document", "image"]);
 const DOCUMENT_TYPES: Record<string, string> = { md: "md", markdown: "md", txt: "txt", csv: "txt",
@@ -29,8 +27,8 @@ const isMessage = (row: RunArtifactResponse) => row.kind === "report" && !!row.c
   (!row.metadata?.kind || row.metadata.kind === "report") &&
   !["codex_plan", "codex_plan_streaming", "agent_thinking_streaming"].includes(String(row.metadata?.source));
 
-/** Logical messages (including multipart provider records) and calls, per actual turn. */
-export function deliverableTails(history: History): Tail[] {
+/** Confirmed final replies, falling back to the last logical message, per completed turn. */
+export function deliverableReplies(history: History): Reply[] {
   const turns = [...history.turns].sort((a, b) => a.turnIndex - b.turnIndex);
   const prompts = history.artifacts.filter((row) => String(row.kind) === "user-prompt" &&
     row.metadata?.delivery !== "steer" && parent(row.metadata)).sort(chronological);
@@ -43,75 +41,35 @@ export function deliverableTails(history: History): Tail[] {
   const completed = new Set(turns.filter((turn) => turn.status === "completed").map((turn) => `turn:${turn.id}`));
   boundaries.filter((boundary) => boundary.complete).forEach((boundary) => completed.add(boundary.key));
   if (!turns.length && !prompts.length && history.terminal) completed.add("legacy");
-  const keyFor = (row: { id: number; createdAt: Date; metadata: Record<string, unknown> | null }, tool: boolean) => {
+  const keyFor = (row: RunArtifactResponse) => {
     if (typeof row.metadata?.turnId === "number") return `turn:${row.metadata.turnId}`;
     const boundary = [...boundaries].reverse().find(({ row: prompt }) => time(prompt.createdAt) < time(row.createdAt) ||
-      (time(prompt.createdAt) === time(row.createdAt) && (tool || prompt.id <= row.id)));
+      (time(prompt.createdAt) === time(row.createdAt) && prompt.id <= row.id));
     if (boundary) return boundary.key;
     const turn = [...turns].reverse().find((turn) => time(turn.startedAt) <= time(row.createdAt));
     return turn ? `turn:${turn.id}` : "legacy";
   };
-  const groups = new Map<string, { messages: Map<string, RunArtifactResponse[]>; calls: Map<string, ToolCallResponse> }>();
+  const groups = new Map<string, Map<string, RunArtifactResponse[]>>();
   const group = (key: string) => {
     let result = groups.get(key);
-    if (!result) { result = { messages: new Map(), calls: new Map() }; groups.set(key, result); }
+    if (!result) { result = new Map(); groups.set(key, result); }
     return result;
   };
   for (const row of [...history.artifacts].sort(chronological)) {
     if (!isMessage(row)) continue;
-    const messages = group(keyFor(row, false)).messages;
+    const messages = group(keyFor(row));
     const nativeId = row.metadata?.providerMessageId ?? row.metadata?.itemId ?? row.metadata?.streamId;
     const messageKey = typeof nativeId === "string" ? nativeId : `row:${row.id}`;
     const parts = messages.get(messageKey) ?? [];
     parts.push(row);
-    // Updated parts belong to the same message, not to another last-two slot.
+    // A provider may persist several parts of one final reply.
     messages.set(messageKey, parts);
   }
-  // Codex's native image-generation item is a logical tool call even though
-  // its adapter persists the result as image artifacts rather than tool rows.
-  const native = new Map<string, ToolCallResponse>();
-  for (const row of history.artifacts) {
-    if (row.kind !== "image" || row.metadata?.source !== "codex_image_generation" || !parent(row.metadata)) continue;
-    const itemId = String(row.metadata.itemId ?? row.id);
-    const key = `${keyFor(row, false)}:${itemId}`;
-    const previous = native.get(key);
-    const file = row.metadata.path ?? row.path;
-    if (previous) { (previous.output as unknown[]).push(file); continue; }
-    if (history.toolCalls.some((call) => call.toolId === itemId && keyFor(call, true) === keyFor(row, false))) continue;
-    native.set(key, { id: -row.id, runId: row.runId, toolId: itemId, parentToolCallId: null,
-      toolName: "image_generation", status: "done", input: null, output: [file], error: null,
-      startedAt: row.createdAt, endedAt: row.createdAt, createdAt: row.createdAt, updatedAt: row.createdAt, metadata: row.metadata });
-  }
-  for (const row of [...history.toolCalls, ...native.values()].sort(chronological)) {
-    if (row.parentToolCallId || !parent(row.metadata) || row.metadata?.parentToolUseId) continue;
-    group(keyFor(row, true)).calls.set(row.toolId || `row:${row.id}`, row);
-  }
-  return [...groups].filter(([key]) => completed.has(key)).map(([key, group]) => ({ key,
-    messages: [...group.messages.values()].slice(-2), calls: [...group.calls.values()].slice(-2) }));
-}
-
-function strings(value: unknown, generatedPaths = false): { text: string; returnedPath: boolean }[] {
-  const result: { text: string; returnedPath: boolean }[] = [];
-  const pathFields = new Set(["path", "filepath", "imagepath", "outputpath", "absolutepath", "paths", "filepaths", "imagepaths", "outputpaths"]);
-  let remaining = 2_000_000;
-  const visit = (next: unknown, depth: number, returnedPath: boolean) => {
-    if (depth > 8 || result.length >= 1000 || remaining <= 0) return;
-    if (typeof next === "string") {
-      const text = next.slice(0, Math.min(remaining, 1_000_000));
-      // MCP and command adapters can wrap structured results in JSON text.
-      if (/^\s*[[{"]/.test(text)) {
-        try {
-          const decoded: unknown = JSON.parse(text);
-          visit(decoded, depth + 1, returnedPath || (depth === 0 && typeof decoded === "string")); return;
-        } catch { /* Plain tool text. */ }
-      }
-      result.push({ text, returnedPath: returnedPath || depth === 0 }); remaining -= text.length;
-    } else if (Array.isArray(next)) next.forEach((child) => visit(child, depth + 1, returnedPath));
-    else if (next && typeof next === "object") Object.entries(next).forEach(([key, child]) =>
-      visit(child, depth + 1, pathFields.has(key.replace(/[_-]/g, "").toLowerCase())));
-  };
-  visit(value, 0, generatedPaths);
-  return result;
+  return [...groups].filter(([key]) => completed.has(key)).map(([key, group]) => {
+    const messages = [...group.values()];
+    const final = messages.filter((parts) => parts.some((row) => row.metadata?.messagePhase === "final_answer"));
+    return { key, messages: final.length ? final : messages.slice(-1) };
+  });
 }
 function resolveReference(reference: string, root: string | null): string | null {
   let value = reference.trim().replace(/^<|>$/g, "");
@@ -126,29 +84,28 @@ function resolveReference(reference: string, root: string | null): string | null
   if (value.includes("\0") || value.length > 4096) return null;
   return path.isAbsolute(value) ? path.resolve(value) : root ? path.resolve(root, value) : null;
 }
-function references(text: string, root: string | null, images: "all" | "explicit" | "none" = "all", returnedPath = false): Set<string> {
+function references(text: string, root: string | null): Set<string> {
   const result = new Set<string>();
-  const add = (reference: string, explicit = false) => {
+  const add = (reference: string) => {
     if (result.size >= 500 || reference.length > 4096) return;
     const file = resolveReference(reference, root);
     if (!file) return;
     const extension = path.extname(file).slice(1).toLowerCase();
-    if (IMAGE_EXTENSIONS.has(extension) && (images === "none" || (images === "explicit" && !explicit))) return;
     if (DOCUMENT_TYPES[extension] || IMAGE_EXTENSIONS.has(extension)) result.add(file);
   };
   // Markdown destinations and quoted paths preserve spaces; bare tokens cover
-  // shell output and structured path fields. Remote URLs never become local paths.
-  for (const match of text.matchAll(/\]\(\s*(<[^>]+>|[^\n)]+)\)/g)) add(match[1].replace(/\s+["'][^"']*["']$/, ""), true);
+  // plain file references in the reply. Remote URLs never become local paths.
+  for (const match of text.matchAll(/\]\(\s*(<[^>]+>|[^\n)]+)\)/g)) add(match[1].replace(/\s+["'][^"']*["']$/, ""));
   for (const match of text.matchAll(/[`"']([^`"'\n]+)[`"']/g)) add(match[1]);
-  for (const match of text.matchAll(/^\s*\[[^\]]+\]:\s*(<[^>]+>|\S+)/gm)) add(match[1], true);
+  for (const match of text.matchAll(/^\s*\[[^\]]+\]:\s*(<[^>]+>|\S+)/gm)) add(match[1]);
   const withoutUrls = text.replace(/(?:https?:\/\/|[a-z][\w+.-]*:\/\/)[^\s<>"'`]+/gi, "");
   const extension = new RegExp(`\\.(?:${EXTENSIONS})(?:#L\\d+(?:-\\d+)?|:\\d+(?::\\d+)?)?$`, "i");
   for (const match of withoutUrls.matchAll(/[^\s`"'<>()[\]{}=,;]+/g)) {
     const token = match[0].replace(/[.,;!?]+$/, "");
     if (token.length <= 4096 && extension.test(token)) add(token);
   }
-  // A path field is often the whole string, including whitespace in its name.
-  if (!text.includes("\n") && new RegExp(`\\.(?:${EXTENSIONS})$`, "i").test(text.trim())) add(text, returnedPath);
+  // A reply can consist of a path, including whitespace in its name.
+  if (!text.includes("\n") && new RegExp(`\\.(?:${EXTENSIONS})$`, "i").test(text.trim())) add(text);
   return result;
 }
 function inlineImages(text: string, root: string | null) {
@@ -209,33 +166,24 @@ export async function projectRunDeliverables(input: History & {
     if (!resolved) continue;
     addImageRow(resolved, row);
     // Resolve aliases of the roots once; don't inspect earlier image files
-    // merely to recover their persisted ID. Only tail-selected files are read.
+    // merely to recover their persisted ID. Only delivered files are read.
     rootPaths.forEach((root, index) => {
       if (roots[index] && within(root, resolved))
         addImageRow(path.resolve(roots[index]!, path.relative(root, resolved)), row);
     });
   }
-  for (const tail of deliverableTails(input)) {
-    const messages = tail.messages.flat();
+  for (const reply of deliverableReplies(input)) {
+    const messages = reply.messages.flat();
     const paths = new Set<string>();
     const embedded = new Set<string>();
     const add = (file: string) => { if (paths.size < 500) paths.add(file); };
-    for (const parts of tail.messages) {
+    for (const parts of reply.messages) {
       const text = parts.map((row) => row.content ?? "").join("\n");
       references(text, input.root).forEach(add);
       inlineImages(text, input.root).forEach((file) => embedded.add(file));
     }
-    for (const call of tail.calls) {
-      // Tool inputs describe material being worked with. Image mentions in
-      // source code or git/stat logs are not delivery: require a returned path
-      // or a Markdown link in the output, including native generation results.
-      for (const { text } of strings(call.input)) references(text, input.root, "none").forEach(add);
-      for (const { text, returnedPath } of strings(call.output, call.metadata?.source === "codex_image_generation"))
-        references(text, input.root, "explicit", returnedPath).forEach(add);
-    }
-    const anchor = messages.at(-1) ?? tail.calls.at(-1);
+    const anchor = messages.at(-1);
     if (!anchor) continue;
-    const anchorSource = messages.length || anchor.id < 0 ? "artifact" : "tool";
     const seen = new Set<string>();
     const realEmbedded = new Set((await Promise.all([...embedded].map(inspect))).flatMap((file) => file ? [file.real] : []));
     for (const file of paths) {
@@ -248,17 +196,17 @@ export async function projectRunDeliverables(input: History & {
       // Preserve existing image IDs so older paired clients can still request
       // their pixels. New files and repeated delivery in another turn derive IDs.
       const existingImage = image ? [...(imageRows.get(real) ?? [])].reverse().find((row) => {
-        if (typeof row.metadata?.turnId === "number") return tail.key === `turn:${row.metadata.turnId}`;
+        if (typeof row.metadata?.turnId === "number") return reply.key === `turn:${row.metadata.turnId}`;
         return time(row.createdAt) < time(anchor.createdAt) || (time(row.createdAt) === time(anchor.createdAt) &&
-          (anchorSource === "tool" || row.id <= Math.abs(anchor.id)));
+          row.id <= anchor.id);
       }) : undefined;
       const id = existingImage && !usedImageIds.has(existingImage.id) ? existingImage.id
-        : -parseInt(createHash("sha256").update(JSON.stringify([input.runId, tail.key, real])).digest("hex").slice(0, 13), 16) - 1;
+        : -parseInt(createHash("sha256").update(JSON.stringify([input.runId, reply.key, real])).digest("hex").slice(0, 13), 16) - 1;
       if (existingImage) usedImageIds.add(existingImage.id);
       result.push({ id, runId: input.runId, kind: image ? "image" : "document", path: real, content: "",
         blobData: null, entityId: null, contentHash: null,
         createdAt: anchor.createdAt, metadata: { kind: image ? "image" : "document", outputSelected: true,
-          outputTurn: tail.key, outputAnchor: { source: anchorSource, id: Math.abs(anchor.id) }, path: real,
+          outputTurn: reply.key, outputAnchor: { source: "artifact", id: anchor.id }, path: real,
           fileName: path.basename(real), docType: DOCUMENT_TYPES[extension], byteSize: inspectedFile.size,
           modifiedAt: inspectedFile.modifiedAt, ...(image && realEmbedded.has(real) ? { inlineInReport: true } : {}) } });
     }
