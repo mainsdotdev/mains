@@ -59,7 +59,7 @@ Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the 
 
 ## Architecture Overview
 
-Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). CommonJS package with ESM Vite configs (`.mjs`). **macOS** (Apple Silicon and Intel), with a **Windows x64 beta target** awaiting Windows CI and VM acceptance. Lens, Dock icon customization and native Open With remain macOS-only. Windows uses PowerShell and manual installer upgrades; see `docs/design/windows-x64-beta.md` for build and acceptance checks. Linux desktop is not supported.
+Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). CommonJS package with ESM Vite configs (`.mjs`). **macOS** (Apple Silicon and Intel), with a **Windows x64 beta target** verified by native Windows CI and installed-app smoke in Parallels; interactive beta acceptance remains pending. Lens, Dock icon customization and native Open With remain macOS-only. Windows uses PowerShell and manual installer upgrades; see `docs/design/windows-x64-beta.md` for build and acceptance checks. Linux desktop is not supported.
 
 ### Process Boundaries
 
