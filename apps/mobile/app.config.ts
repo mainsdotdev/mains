@@ -64,7 +64,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       // cabled `expo run:ios --device` signs without opening Xcode.
       appleTeamId: "Y4MVJ7JSH6",
       supportsTablet: false,
-      icon: "./assets/images/icon.png",
+      // The desktop's Icon Composer bundle (`mains-default.icon`), so iOS
+      // renders the same light, dark and tinted appearances the Mac does.
+      icon: "./assets/app.icon",
       infoPlist: {
         // Only TLS and WebSockets: the standard exemption, declared so
         // TestFlight stops asking about export compliance on every build.
@@ -102,18 +104,15 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-splash-screen",
         {
-          // Both icons are flat squares with no alpha, so each one's
-          // background has to match the scheme it launches into exactly or the
-          // square shows as a tile and then jumps colour as the app takes
-          // over: black on iOS's dark `systemBackground`, white on its light
-          // one. `splash-icon-light.png` is `icon.png` inverted, which is the
-          // whole of the difference between them.
+          // Transparent renders of the mark in the `app.icon` layer's own
+          // fills, on iOS's `systemBackground` for each scheme so the splash
+          // hands over to the app without a colour jump.
           backgroundColor: "#ffffff",
           image: "./assets/images/splash-icon-light.png",
           imageWidth: 160,
           dark: {
             backgroundColor: "#000000",
-            image: "./assets/images/icon.png",
+            image: "./assets/images/splash-icon-dark.png",
           },
         },
       ],
