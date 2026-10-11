@@ -33,6 +33,11 @@ Thumbs.db
 *.swo
 *~
 /docs*
+!/docs/
+/docs/*
+!/docs/design/
+/docs/design/*
+!/docs/design/windows-x64-beta.md
 
 # Coverage
 coverage/

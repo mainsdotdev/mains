@@ -4,6 +4,8 @@ if (process.platform === "win32") {
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 
+if (process.platform === "win32") app.setAppUserModelId("com.squirrel.Mains.Mains");
+
 // Disable background Chromium features we never use. `CalculateNativeWinOcclusion`
 // in particular can cause steady CPU churn on Windows when the window is hidden.
 app.commandLine.appendSwitch(
@@ -181,6 +183,18 @@ import { CHANNELS } from "@mains/contracts/channels";
 import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime";
 import { createElectronBackendRuntime } from "./runtime/electron-backend-runtime";
 import { configureIpcMainAdapter } from "@mains/backend/ipc-kit/ipc-main";
+import { runPackageSmoke } from "./package-smoke";
+
+const SMOKE_TEST = process.argv.includes("--smoke-test");
+function finishPackageSmoke(error?: unknown): void {
+  if (!process.env.MAINS_SMOKE_RESULT) throw new Error("Package smoke requires a result file");
+  fs.writeFileSync(process.env.MAINS_SMOKE_RESULT, JSON.stringify({
+    success: !error, platform: process.platform, arch: process.arch,
+    ...(error ? { error: error instanceof Error ? error.stack ?? error.message : String(error) } : {}),
+  }));
+  if (error) app.exit(1);
+  else app.quit();
+}
 
 configureBackendRuntime(createElectronBackendRuntime());
 configureIpcMainAdapter(ipcMain);
@@ -1123,10 +1137,14 @@ async function initializeApp() {
     createMainWindow({
       show: false,
       // The renderer's early storage read permits this only for completed users.
-      showStartupSplash: true,
+      showStartupSplash: !SMOKE_TEST,
       onReadyToShow: (window) => {
         // Close splash and show main window
         closeSplashWindow();
+        if (SMOKE_TEST) {
+          void runPackageSmoke(window).then(() => finishPackageSmoke(), finishPackageSmoke);
+          return;
+        }
         window.show();
 
         // Warm the installed-app cache off the critical path so the workspace
@@ -1152,6 +1170,10 @@ async function initializeApp() {
   } catch (error) {
     console.error("Failed to initialize application:", error);
     closeSplashWindow();
+    if (SMOKE_TEST) {
+      finishPackageSmoke(error);
+      return;
+    }
     if (error instanceof DatabaseOwnershipError) {
       dialog.showErrorBox("Mains data is already in use", error.message);
     }
@@ -1260,7 +1282,7 @@ async function cleanupApp() {
 // Single instance lock — prevent multiple app instances
 // Skip the single-instance lock in headless --serve mode so a backend can run
 // alongside a local GUI instance (e.g. for testing).
-if (!SERVE.serve) {
+if (!SERVE.serve && !SMOKE_TEST) {
   const gotTheLock = app.requestSingleInstanceLock();
 
   if (!gotTheLock) {
@@ -1286,7 +1308,10 @@ if (!app.isPackaged) {
 // The display name is "Mains", but userData has always lived under the
 // lowercase dir — pin it so existing installs keep their data even on
 // case-sensitive filesystems.
-app.setPath("userData", path.join(app.getPath("appData"), "mains"));
+if (SMOKE_TEST && (!process.env.MAINS_SMOKE_USER_DATA || !path.isAbsolute(process.env.MAINS_SMOKE_USER_DATA))) {
+  throw new Error("Package smoke requires an isolated absolute userData directory");
+}
+app.setPath("userData", SMOKE_TEST ? process.env.MAINS_SMOKE_USER_DATA! : path.join(app.getPath("appData"), "mains"));
 
 // Custom About panel
 app.setAboutPanelOptions({

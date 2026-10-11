@@ -1,3 +1,5 @@
+import { isAbsoluteFilePath } from "@/lib/file-path";
+
 import {
   useReducer,
   useRef,
@@ -427,8 +429,8 @@ export function WorkspaceInput({
 
   const addAdditionalDirectory = useCallback((folderPath: string) => {
     const normalized = folderPath.trim();
-    if (!normalized.startsWith("/")) {
-      toast.error("Enter an absolute folder path on the Mac running Mains.");
+    if (!isAbsoluteFilePath(normalized)) {
+      toast.error("Enter an absolute folder path on the computer running this backend.");
       return;
     }
     if (!additionalDirectories.includes(normalized)) {

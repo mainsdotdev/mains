@@ -8,6 +8,7 @@ import {
   isReservedKeyboardShortcut,
   keyboardShortcutFromInput,
   KEYBOARD_SHORTCUTS,
+  resolveKeyboardShortcut,
   type KeyboardShortcutCategory,
   type KeyboardShortcutDefinition,
   type KeyboardShortcutId,
@@ -216,11 +217,11 @@ export default function KeyboardShortcutsSettings() {
     }
     const binding = keyboardShortcutFromInput(event.nativeEvent);
     if (!binding) {
-      setRecordingError("Include Command, Control, or Option in the shortcut");
+      setRecordingError("Include a primary modifier in the shortcut");
       return;
     }
     if (isReservedKeyboardShortcut(binding)) {
-      setRecordingError("This shortcut is reserved by macOS");
+      setRecordingError("This shortcut is reserved by the operating system");
       return;
     }
     const conflict = findKeyboardShortcutConflict(id, binding, overrides);
@@ -309,7 +310,7 @@ export default function KeyboardShortcutsSettings() {
                     setRecordingError(null);
                   }}
                   onClear={() => void commit(shortcut.id, null)}
-                  onReset={() => void commit(shortcut.id, shortcut.defaultBinding)}
+                  onReset={() => void commit(shortcut.id, resolveKeyboardShortcut(shortcut.id, {}))}
                 />
               </div>
             ))}

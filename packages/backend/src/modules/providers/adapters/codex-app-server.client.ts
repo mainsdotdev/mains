@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnProvider as spawn, killProviderProcess } from "./provider-process";
 import {
   createLogger,
   type AdapterLogger,
@@ -112,7 +113,6 @@ export class CodexAppServer {
       cwd,
       env: spawnEnv,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
 
     if (!this.child.stdout || !this.child.stdin) {
@@ -251,7 +251,7 @@ export class CodexAppServer {
       child.stdin?.end();
       await new Promise<void>((resolve) => {
         const killTimer = setTimeout(() => {
-          child.kill("SIGKILL");
+          killProviderProcess(child);
           resolve();
         }, 3000);
         child.on("close", () => {
@@ -260,7 +260,7 @@ export class CodexAppServer {
         });
       });
     } catch {
-      child.kill("SIGKILL");
+      killProviderProcess(child);
     }
   }
 

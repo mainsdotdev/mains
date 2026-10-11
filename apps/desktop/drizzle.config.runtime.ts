@@ -8,8 +8,8 @@ import { join } from "path";
  */
 
 // macOS: ~/Library/Application Support/mains/mains.db
-// Linux: ~/.config/mains/mains.db (not implemented yet)
-// Windows: %APPDATA%/mains/mains.db (not implemented yet)
+// Linux: $XDG_CONFIG_HOME/mains/mains.db (defaults to ~/.config)
+// Windows: %APPDATA%/mains/mains.db
 const getRuntimeDbPath = () => {
   const platform = process.platform;
   const home = homedir();
@@ -17,9 +17,9 @@ const getRuntimeDbPath = () => {
   if (platform === "darwin") {
     return join(home, "Library", "Application Support", "mains", "mains.db");
   } else if (platform === "win32") {
-    return join(home, "AppData", "Roaming", "mains", "mains.db");
+    return join(process.env.APPDATA ?? join(home, "AppData", "Roaming"), "mains", "mains.db");
   } else {
-    return join(home, ".config", "mains", "mains.db");
+    return join(process.env.XDG_CONFIG_HOME ?? join(home, ".config"), "mains", "mains.db");
   }
 };
 

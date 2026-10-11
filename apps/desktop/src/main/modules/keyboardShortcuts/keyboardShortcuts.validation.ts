@@ -31,7 +31,7 @@ export function requireKeyboardShortcutUpdate(
     throw new Error("Shortcut must include a modifier key");
   }
   if (isReservedKeyboardShortcut(binding)) {
-    throw new Error("This shortcut is reserved by macOS");
+    throw new Error("This shortcut is reserved by the operating system");
   }
   const conflict = findKeyboardShortcutConflict(value.id, binding, overrides);
   if (conflict) {

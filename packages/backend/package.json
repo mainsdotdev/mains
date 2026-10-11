@@ -50,6 +50,7 @@
     "@mains/contracts": "file:../contracts",
     "@octokit/rest": "22.0.1",
     "@types/better-sqlite3": "^9.6.0",
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.20.0",
     "@types/ws": "^8.18.1",
     "@vscode/ripgrep": "1.18.0",
@@ -68,6 +69,7 @@
   },
   "dependencies": {
     "@blocknote/server-util": "0.55.0",
+    "cross-spawn": "^7.0.6",
     "y-prosemirror": "1.3.7"
   }
 }

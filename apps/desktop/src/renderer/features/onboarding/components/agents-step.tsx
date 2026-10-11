@@ -260,7 +260,7 @@ export function AgentsStep({
     <div className="onboarding-providers">
       <div className="onboarding-provider-toolbar">
         <span role="status">
-          {isDetecting ? "Checking this Mac…" : "On this Mac"}
+          {isDetecting ? "Checking this computer…" : "On this computer"}
         </span>
         <Button
           variant="subtle"

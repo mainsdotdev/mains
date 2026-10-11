@@ -41,8 +41,10 @@ export function createSplashWindow(
     hasShadow: false,
     // Same vibrancy material as the main window (mainWindow.ts) so the splash
     // background reads identically to the onboarding/main background.
-    vibrancy: "fullscreen-ui",
-    visualEffectState: "active",
+    ...(process.platform === "darwin" ? {
+      vibrancy: "fullscreen-ui" as const,
+      visualEffectState: "active" as const,
+    } : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

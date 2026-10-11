@@ -8,6 +8,8 @@ import {
   useKeyboardShortcut,
 } from "./keyboard-shortcuts-provider";
 
+vi.mock("../../shared/runtime-platform", () => ({ getRuntimeOS: () => "darwin" }));
+
 function ShortcutTarget({ onRun }: { onRun: () => void }) {
   useKeyboardShortcut("app.openSettings", onRun);
   return (

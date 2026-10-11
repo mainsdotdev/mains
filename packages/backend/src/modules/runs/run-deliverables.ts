@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { RunArtifactResponse } from "./runs.dto";
 import type { RunTurnResponse } from "@mains/contracts/runs";
 
@@ -73,11 +74,12 @@ export function deliverableReplies(history: History): Reply[] {
 }
 function resolveReference(reference: string, root: string | null): string | null {
   let value = reference.trim().replace(/^<|>$/g, "");
-  try { value = decodeURIComponent(value); } catch { /* Literal percent in a filename. */ }
-  if (/^[a-z][\w+.-]*:/i.test(value) && !value.startsWith("file:")) return null;
-  if (value.startsWith("file:")) {
-    try { const url = new URL(value); if (url.hostname && url.hostname !== "localhost") return null; value = url.pathname; }
+  if (/^file:/i.test(value)) {
+    try { const url = new URL(value); if (url.hostname && url.hostname !== "localhost") return null; value = fileURLToPath(url); }
     catch { return null; }
+  } else {
+    try { value = decodeURIComponent(value); } catch { /* Literal percent in a filename. */ }
+    if (!/^[a-z]:[\\/]/i.test(value) && /^[a-z][\w+.-]*:/i.test(value)) return null;
   }
   value = value.replace(/(?:#L\d+(?:-\d+)?|:\d+(?::\d+)?)$/, "");
   if (value.startsWith("~/")) value = path.join(os.homedir(), value.slice(2));

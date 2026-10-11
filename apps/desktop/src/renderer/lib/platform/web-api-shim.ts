@@ -47,6 +47,7 @@ function isEventMethod(name: string): boolean {
 function localStub(ns: string, method: string): unknown {
   // platform.homedir is a value, not a function.
   if (ns === "platform" && method === "homedir") return "";
+  if (ns === "platform" && method === "os") return undefined;
   if (isEventMethod(method)) return () => () => {};
   if (ns === "shell" && method === "openExternal") {
     return (url: string) => {

@@ -1079,6 +1079,7 @@ const api = {
   },
   platform: {
     homedir: os.homedir(),
+    os: process.platform,
   },
   imageProxy: {
     sign: (absPath: string, maxSide?: LocalImagePreviewSize) => ipcRenderer.invoke(CHANNELS.imageProxy.sign, absPath, maxSide),

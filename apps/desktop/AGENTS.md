@@ -8,7 +8,7 @@ This file provides guidance to coding agents working with code in this repositor
 
 ```bash
 # Start development server
-npm start                   # electron-forge start (raises ulimit to 65536)
+npm start                   # portable Forge launcher (raises macOS ulimit to 65536)
 npm run serve               # start with MAINS_SERVE=1 (backend exposed over WebSocket)
 npm run serve:tailscale     # serve + MAINS_TAILSCALE_SERVE=1 (Tailscale HTTPS exposure)
 npm run build:web           # build the renderer as a standalone web client → dist-web/
@@ -59,7 +59,7 @@ Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the 
 
 ## Architecture Overview
 
-Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). CommonJS package with ESM Vite configs (`.mjs`). **macOS only** (Apple Silicon and Intel) — Windows and Linux are not supported.
+Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). CommonJS package with ESM Vite configs (`.mjs`). **macOS** (Apple Silicon and Intel), with a **Windows x64 beta target** awaiting Windows CI and VM acceptance. Lens, Dock icon customization and native Open With remain macOS-only. Windows uses PowerShell and manual installer upgrades; see `docs/design/windows-x64-beta.md` for build and acceptance checks. Linux desktop is not supported.
 
 ### Process Boundaries
 

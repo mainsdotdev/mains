@@ -32,6 +32,11 @@ export function getSavedDockIcon(): AppIconId {
 }
 
 export function getAppIconPath(id: AppIconId): string {
+  if (process.platform !== "darwin") {
+    return app.isPackaged
+      ? path.join(process.resourcesPath, "icon.png")
+      : path.join(app.getAppPath(), "src/renderer/public/icon.png");
+  }
   // nativeTheme follows Mains' themeSource override. Dock icons follow the
   // Mac's appearance even when Mains has a different light/dark preference.
   const appearance = systemPreferences.getUserDefault("AppleInterfaceStyle", "string") === "Dark"

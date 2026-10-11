@@ -35,6 +35,7 @@ const isDataFile = (filePath) => {
 module.exports = {
   hooks: {
     packageAfterPrune: async (_forgeConfig, buildPath, electronVersion, platform, arch) => {
+      if (platform === 'win32' && arch !== 'x64') throw new Error('The Windows beta supports x64 only');
       const { rebuild } = require('@electron/rebuild');
       const path = require('path');
 
@@ -221,11 +222,11 @@ module.exports = {
         'Mains may capture the screen when you use features or connected tools that need a visual of your desktop.',
     },
     asar: {
-      unpack: '{**/*.node,**/claude,**/copilot,**/copilot-runtime,**/spawn-helper,**/rg,**/*.wasm}',
-      unpackDir: '.vite/build/node_modules/{node-pty,@github/copilot-sdk-darwin-arm64,@github/copilot-sdk-darwin-x64,@github/copilot-darwin-arm64,@github/copilot-darwin-x64,@anthropic-ai/claude-agent-sdk-darwin-arm64,@anthropic-ai/claude-agent-sdk-darwin-x64,@vscode/ripgrep-darwin-arm64,@vscode/ripgrep-darwin-x64}',
+      unpack: '{**/*.node,**/*.exe,**/*.dll,**/claude,**/copilot,**/copilot-runtime,**/spawn-helper,**/rg,**/*.wasm}',
+      unpackDir: '.vite/build/node_modules/{node-pty,@github/copilot-sdk-{darwin-arm64,darwin-x64,win32-x64},@github/copilot-{darwin-arm64,darwin-x64,win32-x64},@anthropic-ai/claude-agent-sdk-{darwin-arm64,darwin-x64,win32-x64},@vscode/ripgrep-{darwin-arm64,darwin-x64,win32-x64}}',
     },
     // Native appearances on macOS 26+, with ICNS for older macOS and the DMG.
-    icon: [
+    icon: process.platform === 'win32' ? 'src/renderer/public/icon.ico' : [
       'src/renderer/public/icon.icns',
       'src/renderer/public/icons/mains-default.icon',
     ],
@@ -240,6 +241,7 @@ module.exports = {
       'THIRD-PARTY-NOTICES.txt',
     ],
     ...((() => {
+      if (process.platform !== 'darwin') return {};
       const hasSigningVars = process.env.APPLE_ID && process.env.APPLE_PASSWORD && process.env.APPLE_TEAM_ID;
       const isRelease = process.env.CI || process.env.RELEASE;
 
@@ -291,6 +293,17 @@ module.exports = {
     force: true,
   },
   makers: [
+    {
+      name: '@electron-forge/maker-squirrel',
+      platforms: ['win32'],
+      config: {
+        name: 'Mains',
+        setupExe: `Mains-${version}-win32-x64-Setup.exe`,
+        setupIcon: 'src/renderer/public/icon.ico',
+        // The first Windows beta is distributed without a signing certificate.
+        // Do not share Apple's signing settings with the Windows maker.
+      },
+    },
     {
       name: '@electron-forge/maker-zip',
       platforms: ['darwin'],

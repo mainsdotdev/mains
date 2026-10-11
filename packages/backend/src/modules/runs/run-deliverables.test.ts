@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { RunArtifactResponse } from "./runs.dto";
 import type { RunTurnResponse } from "@mains/contracts/runs";
 import { projectRunDeliverables } from "./run-deliverables";
@@ -30,6 +31,13 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-deliverab
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("per-turn final-answer deliverables", () => {
+  it("selects native absolute paths and file URLs with spaces and percent signs", async () => {
+    const absolute = file("Türkçe report 100%.pdf");
+    for (const reference of [absolute, pathToFileURL(absolute).href]) {
+      const result = outputs(await project([report(1, `[Report](<${reference}>)`)]));
+      expect(result.map(row => row.path)).toEqual([fs.realpathSync(absolute)]);
+    }
+  });
   it.each(["agent_message", "assistant", "result.message"])("uses confirmed final evidence despite later commentary (%s)", async (source) => {
     ["progress.md", "final.md", "CONTEXT.md"].forEach(file);
     const artifacts = [report(1, "progress.md"), report(2, "final.md", 1, { source, messagePhase: "final_answer" }),

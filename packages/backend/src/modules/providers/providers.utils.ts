@@ -63,21 +63,61 @@ export function mergePathDirs(
   loginShellPath: string | null,
   currentPath: string,
   extraDirs: string[],
+  platform: string = process.platform,
 ): string {
+  const delimiter = platform === "win32" ? ";" : ":";
   const seen = new Set<string>();
   const merged: string[] = [];
   const dirs = [
-    ...(loginShellPath ? loginShellPath.split(path.delimiter) : []),
-    ...currentPath.split(path.delimiter),
+    ...(loginShellPath ? loginShellPath.split(delimiter) : []),
+    ...currentPath.split(delimiter),
     ...extraDirs,
   ];
   for (const dir of dirs) {
-    if (dir && !seen.has(dir)) {
-      seen.add(dir);
+    const key = platform === "win32" ? dir.toLowerCase() : dir;
+    if (dir && !seen.has(key)) {
+      seen.add(key);
       merged.push(dir);
     }
   }
-  return merged.join(path.delimiter);
+  return merged.join(delimiter);
+}
+
+function providerPathDirectories(): string[] {
+  const home = os.homedir();
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming");
+    const localData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+    return [path.join(home, ".local", "bin"), path.join(appData, "npm"),
+      path.join(home, ".volta", "bin"), path.join(home, ".cursor", "bin"),
+      path.join(localData, "cursor-agent"),
+      path.join(localData, "Microsoft", "WinGet", "Links"),
+      path.join(process.env.ProgramFiles ?? "C:\\Program Files", "nodejs"),
+      ...(process.env.NVM_SYMLINK ? [process.env.NVM_SYMLINK] : [])];
+  }
+  const directories = [path.join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin",
+    path.join(home, ".nvm", "current", "bin"), path.join(home, ".npm-global", "bin")];
+  try {
+    const nvm = process.env.NVM_DIR ?? path.join(home, ".nvm");
+    directories.push(...fs.readdirSync(path.join(nvm, "versions", "node"))
+      .map(version => path.join(nvm, "versions", "node", version, "bin")));
+  } catch { /* nvm is optional */ }
+  return directories;
+}
+
+/** The same PATH for provider sessions, probes and one-shot update commands. */
+export function providerProcessPath(binaryPath?: string): string {
+  return mergePathDirs(binaryPath ? path.dirname(binaryPath) : null, process.env.PATH ?? "", providerPathDirectories());
+}
+
+/** Login commands run in the backend's default PTY: PowerShell on Windows. */
+export function providerLoginCommand(binaryPath: string, args: string[], platform: string = process.platform): string {
+  if (platform === "win32") {
+    const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
+    return `& ${[binaryPath, ...args].map(quote).join(" ")}`;
+  }
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  return [quote(binaryPath), ...args.map(arg => /^[\w-]+$/.test(arg) ? arg : quote(arg))].join(" ");
 }
 
 /**
@@ -93,14 +133,7 @@ export function mergePathDirs(
  * and demote session-level overrides (`nvm use` in the launching terminal).
  */
 export function augmentPathForPackagedApp(readLoginShell: boolean): void {
-  const homeDir = os.homedir();
-  const fallbackPaths = [
-    path.join(homeDir, ".local", "bin"),
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    path.join(homeDir, ".nvm", "current", "bin"),
-    path.join(homeDir, ".npm-global", "bin"),
-  ];
+  const fallbackPaths = providerPathDirectories();
 
   const currentPath = process.env.PATH || "";
   const loginShellPath = readLoginShell ? readLoginShellPath() : null;
@@ -345,8 +378,7 @@ export function resolveClaudeRuntime(configuredBinary?: string): ClaudeRuntime |
 
 export function claudeAuthLoginCommand(runtime: ClaudeRuntime): string {
   // Login runs in a PTY shell. Paths can contain spaces, quotes or shell syntax.
-  const quoted = `'${runtime.path.replace(/'/g, `'\\''`)}'`;
-  return `${quoted} auth login`;
+  return providerLoginCommand(runtime.path, ["auth", "login"]);
 }
 
 /**
@@ -579,8 +611,7 @@ export function copilotAuthLoginCommand(runtime: CopilotRuntime): string | undef
     process.platform === "win32" ? "copilot.exe" : "copilot",
   );
   if (!cli) return undefined;
-  const quoted = `'${cli.path.replace(/'/g, `'\\''`)}'`;
-  return [quoted, ...copilotRuntimeArgs(cli), "login"].join(" ");
+  return providerLoginCommand(cli.path, [...copilotRuntimeArgs(cli), "login"]);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -655,7 +686,11 @@ export function findCodexBinaryPath(): string | null {
   if (onPath) return onPath;
 
   const homedir = os.homedir();
-  const candidates = [
+  const candidates = isWindowsPlatform ? [
+    path.join(homedir, ".codex", "bin", "codex.exe"),
+    path.join(process.env.APPDATA ?? path.join(homedir, "AppData", "Roaming"), "npm", "codex.cmd"),
+    path.join(homedir, ".volta", "bin", "codex.exe"),
+  ] : [
     path.join(homedir, ".codex", "bin", "codex"),
     "/usr/local/bin/codex",
     // nvm-managed global installs
@@ -678,14 +713,21 @@ export function findCodexBinaryPath(): string | null {
 /**
  * Locate the Cursor Agent CLI binary on the user's machine.
  * The Cursor CLI binary is called `agent` (not `cursor`).
- * Installed via: curl https://cursor.com/install -fsS | bash
+ * Windows installs under LOCALAPPDATA/cursor-agent; Unix uses ~/.local/bin.
  */
 export function findCursorBinaryPath(): string | null {
   const onPath = whichBinary("agent");
   if (onPath) return onPath;
 
   const homedir = os.homedir();
-  const candidates = [
+  const candidates = isWindowsPlatform ? [
+    path.join(process.env.LOCALAPPDATA ?? path.join(homedir, "AppData", "Local"), "cursor-agent", "agent.exe"),
+    path.join(process.env.LOCALAPPDATA ?? path.join(homedir, "AppData", "Local"), "cursor-agent", "agent.cmd"),
+    path.join(homedir, ".local", "bin", "agent.exe"),
+    path.join(homedir, ".local", "bin", "agent.cmd"),
+    path.join(homedir, ".cursor", "bin", "agent.exe"),
+    path.join(homedir, ".cursor", "bin", "agent.cmd"),
+  ] : [
     path.join(homedir, ".local", "bin", "agent"),
     "/usr/local/bin/agent",
     "/opt/homebrew/bin/agent",

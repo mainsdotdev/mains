@@ -1,0 +1,80 @@
+name: Windows x64 beta
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/windows-x64-beta]
+  pull_request:
+    branches: [dev, main, v0.18]
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/backend/**'
+      - 'packages/contracts/**'
+      - '.github/workflows/windows-beta.yml'
+
+concurrency:
+  group: windows-beta-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/desktop
+
+jobs:
+  windows-x64:
+    name: Test, package and smoke Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            packages/backend/package-lock.json
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - name: Check backend types and lint
+        working-directory: packages/backend
+        run: |
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: npm run test:build
+      - name: Test renderer paths, shortcuts and OS features
+        run: npm test -- src/shared/keyboard-shortcuts.test.ts src/renderer/lib/file-path.test.ts src/renderer/lib/platform/capabilities.test.ts src/renderer/components/markdown-components.test.tsx src/renderer/features/workspace/components/document-viewer/markdown-document.test.tsx src/renderer/providers/keyboard-shortcuts-provider.test.tsx src/renderer/providers/keyboard-shortcuts-windows.test.tsx src/main/modules/keyboardShortcuts/keyboardShortcuts.validation.test.ts
+      - name: Test native runtimes, process cleanup, MCP and Git
+        working-directory: packages/backend
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        run: npm test -- src/modules/providers/providers.utils.test.ts src/modules/providers/adapters/provider-process.test.ts src/modules/providers/adapters/mains-mcp-server.test.ts src/modules/git/worktree-writes.test.ts src/modules/git/git.service.test.ts src/modules/runs/run-deliverables.test.ts
+      - name: Regenerate notices for the Windows dependency tree
+        run: npm run licenses:generate
+      - name: Make the Windows installer
+        env:
+          MAINS_GITHUB_CLIENT_ID: ${{ secrets.MAINS_GITHUB_CLIENT_ID }}
+        run: npm run make -- --platform win32 --arch x64
+      - name: Smoke the packaged app with isolated user data
+        run: npm run smoke:package
+      - name: Upload beta installer and Squirrel update assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mains-windows-x64-beta-${{ github.sha }}
+          path: |
+            apps/desktop/out/make/squirrel.windows/x64/*.exe
+            apps/desktop/out/make/squirrel.windows/x64/*.nupkg
+            apps/desktop/out/make/squirrel.windows/x64/RELEASES
+          if-no-files-found: error
+          retention-days: 14

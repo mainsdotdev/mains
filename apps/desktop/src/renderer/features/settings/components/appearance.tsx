@@ -371,7 +371,7 @@ function CodeFontSizeSlider() {
  */
 export default function AppearanceSettings() {
   const isMobile = useIsMobile();
-  const { windowChrome } = useCapabilities();
+  const { dockIcon } = useCapabilities();
   const { spaces } = useActiveSpace();
   const { darkMode } = useDarkMode();
   const [scope, setScope] = useState(ALL_PROVIDERS);
@@ -466,7 +466,7 @@ export default function AppearanceSettings() {
           <CodeFontSizeSlider />
         </SettingsRow>
       </SettingsSection>
-      {windowChrome && <AppIconPicker />}
+      {dockIcon && <AppIconPicker />}
     </SettingsPageShell>
   );
 }

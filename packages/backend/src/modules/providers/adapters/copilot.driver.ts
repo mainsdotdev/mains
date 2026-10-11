@@ -1,3 +1,4 @@
+import { providerProcessPath } from "../providers.utils";
 // ─────────────────────────────────────────────────────────────
 // Copilot ProviderDriver
 //
@@ -17,7 +18,7 @@
 
 import path from "node:path";
 import os from "node:os";
-import { spawn } from "node:child_process";
+import { spawnProvider as spawn } from "./provider-process";
 import type {
   CopilotClient as CopilotClientInterface,
   CopilotClientOptions,
@@ -1908,13 +1909,7 @@ export function createCopilotDriver(config: CopilotAdapterConfig): ProviderDrive
       const env: Record<string, string | undefined> = {
         ...process.env,
         HOME: os.homedir(),
-        PATH: [
-          path.dirname(binaryPath),
-          path.join(os.homedir(), ".local", "bin"),
-          "/usr/local/bin",
-          "/opt/homebrew/bin",
-          process.env.PATH || "",
-        ].join(":"),
+        PATH: providerProcessPath(binaryPath),
       };
 
       return new Promise<CliUpdateResult>((resolve) => {

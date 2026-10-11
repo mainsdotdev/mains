@@ -1,3 +1,5 @@
+import { getRuntimeOS } from "./runtime-platform";
+
 export type KeyboardShortcutScope = "app" | "browser" | "editor" | "settings";
 
 export type KeyboardShortcutCategory =
@@ -428,11 +430,18 @@ export function keyboardShortcutFromInput(
   return normalizeKeyboardShortcut(parts.join("+"));
 }
 
-export function formatKeyboardShortcut(binding: string | null): string[] {
+export function formatKeyboardShortcut(binding: string | null, platform = getRuntimeOS()): string[] {
   if (!binding) return [];
   const normalized = normalizeKeyboardShortcut(binding);
   if (!normalized) return [];
   return normalized.split("+").map((part) => {
+    if (platform !== "darwin") {
+      const labels: Record<string, string> = {
+        Command: "Win", Control: "Ctrl", Option: "Alt", Shift: "Shift",
+        Enter: "Enter", Tab: "Tab", Backspace: "Backspace", Delete: "Delete",
+      };
+      if (labels[part]) return labels[part];
+    }
     if (part in DISPLAY_MODIFIERS) {
       return DISPLAY_MODIFIERS[part as keyof typeof DISPLAY_MODIFIERS];
     }
@@ -440,8 +449,8 @@ export function formatKeyboardShortcut(binding: string | null): string[] {
   });
 }
 
-export function keyboardShortcutLabel(binding: string | null): string {
-  return formatKeyboardShortcut(binding).join("");
+export function keyboardShortcutLabel(binding: string | null, platform = getRuntimeOS()): string {
+  return formatKeyboardShortcut(binding, platform).join(platform === "darwin" ? "" : "+");
 }
 
 export function isKeyboardShortcutId(input: string): input is KeyboardShortcutId {
@@ -485,13 +494,23 @@ export function parseKeyboardShortcutOverrides(
 export function resolveKeyboardShortcut(
   id: KeyboardShortcutId,
   overrides: KeyboardShortcutOverrides,
+  platform = getRuntimeOS(),
 ): string | null {
   return Object.prototype.hasOwnProperty.call(overrides, id)
     ? overrides[id] ?? null
-    : getKeyboardShortcutDefinition(id).defaultBinding;
+    : normalizeKeyboardShortcut(platform === "darwin"
+      ? getKeyboardShortcutDefinition(id).defaultBinding
+      : getKeyboardShortcutDefinition(id).defaultBinding.replace(/Command/g, "Control"));
 }
 
-export function isReservedKeyboardShortcut(binding: string): boolean {
+export function isReservedKeyboardShortcut(binding: string, platform = getRuntimeOS()): boolean {
+  if (platform !== "darwin") {
+    return binding.includes("Command+") || new Set([
+      "Option+F4", "Option+Tab", "Option+Shift+Tab", "Control+Option+Delete",
+      "Control+A", "Control+C", "Control+V", "Control+X", "Control+Z",
+      "Control+Y", "Control+Shift+Z",
+    ]).has(binding);
+  }
   return RESERVED_BINDINGS.has(binding);
 }
 
@@ -506,6 +525,7 @@ export function findKeyboardShortcutConflict(
   id: KeyboardShortcutId,
   binding: string,
   overrides: KeyboardShortcutOverrides,
+  platform = getRuntimeOS(),
 ): KeyboardShortcutDefinition | null {
   const definition = getKeyboardShortcutDefinition(id);
   return (
@@ -513,18 +533,19 @@ export function findKeyboardShortcutConflict(
       (candidate) =>
         candidate.id !== id &&
         scopesOverlap(definition.scope, candidate.scope) &&
-        resolveKeyboardShortcut(candidate.id, overrides) === binding,
+        resolveKeyboardShortcut(candidate.id, overrides, platform) === binding,
     ) ?? null
   );
 }
 
 export function bindingsForKeyboardShortcuts(
   overrides: KeyboardShortcutOverrides,
+  platform = getRuntimeOS(),
 ): Record<KeyboardShortcutId, string | null> {
   return Object.fromEntries(
     KEYBOARD_SHORTCUTS.map((shortcut) => [
       shortcut.id,
-      resolveKeyboardShortcut(shortcut.id, overrides),
+      resolveKeyboardShortcut(shortcut.id, overrides, platform),
     ]),
   ) as Record<KeyboardShortcutId, string | null>;
 }

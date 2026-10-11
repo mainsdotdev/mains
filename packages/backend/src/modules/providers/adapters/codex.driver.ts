@@ -1,3 +1,4 @@
+import { providerProcessPath, providerLoginCommand } from "../providers.utils";
 // ─────────────────────────────────────────────────────────────
 // OpenAI Codex ProviderDriver
 //
@@ -18,7 +19,7 @@
 // right `turn/start` or `review/start` request.
 // ─────────────────────────────────────────────────────────────
 
-import { spawn } from "node:child_process";
+import { spawnProvider as spawn, killProviderProcess } from "./provider-process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -551,21 +552,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     const env: Record<string, string> = {};
     env.HOME = os.homedir();
 
-    const homedir = os.homedir();
-    const extraPaths = [
-      path.dirname(binaryPath),
-      path.join(homedir, ".nvm", "versions", "node"),
-      "/usr/local/bin",
-      "/opt/homebrew/bin",
-    ];
-    try {
-      const nvmDir = process.env.NVM_DIR || path.join(homedir, ".nvm");
-      const nodeVersions = fs.readdirSync(path.join(nvmDir, "versions", "node"));
-      for (const v of nodeVersions) {
-        extraPaths.push(path.join(nvmDir, "versions", "node", v, "bin"));
-      }
-    } catch { /* no nvm */ }
-    env.PATH = [...extraPaths, process.env.PATH || ""].join(":");
+    env.PATH = providerProcessPath(binaryPath);
 
     if (config.apiKey) {
       env.OPENAI_API_KEY = config.apiKey;
@@ -673,6 +660,9 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       compatibility,
       minimumVersion: CODEX_MIN_CLI_VERSION,
       testedProtocolVersion: CODEX_APP_SERVER_PROTOCOL_VERSION,
+      ...(process.platform === "win32"
+        ? { authLoginCommand: providerLoginCommand(findCodexBinary(), ["login"]) }
+        : {}),
     };
   }
 
@@ -1200,13 +1190,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           const env: Record<string, string | undefined> = {
             ...process.env,
             HOME: os.homedir(),
-            PATH: [
-              path.dirname(binaryPath),
-              path.join(os.homedir(), ".nvm", "versions", "node"),
-              "/usr/local/bin",
-              "/opt/homebrew/bin",
-              process.env.PATH || "",
-            ].join(":"),
+            PATH: providerProcessPath(binaryPath),
           };
           if (config.apiKey) {
             env.OPENAI_API_KEY = config.apiKey;
@@ -1240,7 +1224,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
           });
 
           const timer = setTimeout(() => {
-            try { child.kill("SIGKILL"); } catch { /* already exited */ }
+            try { killProviderProcess(child); } catch { /* already exited */ }
             finish(() => {
               cleanup();
               reject(new Error("Codex title generation timed out"));
@@ -1328,13 +1312,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         const env: Record<string, string | undefined> = {
           ...process.env,
           HOME: os.homedir(),
-          PATH: [
-            path.dirname(binaryPath),
-            path.join(os.homedir(), ".nvm", "versions", "node"),
-            "/usr/local/bin",
-            "/opt/homebrew/bin",
-            process.env.PATH || "",
-          ].join(":"),
+          PATH: providerProcessPath(binaryPath),
         };
         if (config.apiKey) {
           env.OPENAI_API_KEY = config.apiKey;
@@ -1366,7 +1344,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         });
 
         const timer = setTimeout(() => {
-          try { child.kill("SIGKILL"); } catch { /* already exited */ }
+          try { killProviderProcess(child); } catch { /* already exited */ }
           finish(() => {
             cleanup();
             reject(new Error("Codex text generation timed out"));

@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import net from "node:net";
+import { once } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import type { VoiceTaskTools } from "../../../../shared/voice-task-tools";
@@ -66,6 +68,28 @@ describe("Cursor ACP MCP bridges", () => {
     await start("run-a");
     expect(fs.existsSync(path.join(directory, "home", ".cursor"))).toBe(false);
     expect(fs.existsSync(path.join(directory, "workspace", ".cursor"))).toBe(false);
+  });
+
+  it("rejects missing credentials and another session's token before dispatching tools", async () => {
+    const tools = { start: vi.fn() } as unknown as VoiceTaskTools;
+    const first = new MainsMcpStdioServer({ runId: "first", rootPath: null, workspaceId: null, voiceTools: tools }, "chat", { provider: PROVIDER_IDS.codex, scope: "voice" });
+    servers.push(first);
+    await first.start();
+    const second = await start("second");
+    const env = Object.fromEntries(first.mcpConfig.env.map(({ name, value }) => [name, value]));
+    const otherToken = second.mcpConfig.env.find(({ name }) => name === "MAINS_IPC_TOKEN")!.value;
+    if (process.platform === "win32") expect(env.MAINS_IPC_SOCKET.startsWith("\\\\.\\pipe\\")).toBe(true);
+    for (const token of [undefined, otherToken]) {
+      const socket = net.createConnection(env.MAINS_IPC_SOCKET);
+      const closed = once(socket, "close");
+      let output = "";
+      socket.setEncoding("utf8");
+      socket.on("data", chunk => { output += chunk; });
+      socket.on("connect", () => socket.write(JSON.stringify({ id: "probe", token, tool: "StartVoiceTask", args: {} }) + "\n"));
+      await closed;
+      expect(JSON.parse(output)).toMatchObject({ isError: true, content: [{ text: "Unauthorized bridge request" }] });
+    }
+    expect(tools.start).not.toHaveBeenCalled();
   });
 
   it("serves only scoped voice tools over real MCP stdio and dispatches to the owning call", async () => {

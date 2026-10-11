@@ -12,6 +12,7 @@ import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useOpenLink } from "@/hooks/use-open-link";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { atlasPageIdFromHref } from "@/features/atlas/lib/page-link";
+import { fileBasename, fileHrefPath, isAbsoluteFilePath, isWindowsAbsolutePath } from "@/lib/file-path";
 
 /**
  * Split a trailing line locator off a file href: `path.ts:114`,
@@ -26,11 +27,7 @@ function splitFileHref(href: string): { path: string; line?: number } {
 }
 
 function decodeFileHrefPath(filePath: string): string {
-  try {
-    return decodeURIComponent(filePath);
-  } catch {
-    return filePath;
-  }
+  return fileHrefPath(filePath);
 }
 
 /**
@@ -39,6 +36,7 @@ function decodeFileHrefPath(filePath: string): string {
  */
 function isFileHref(href: string): boolean {
   if (!href || href.startsWith("#") || href.startsWith("//")) return false;
+  if (isWindowsAbsolutePath(href) || /^file:/i.test(href)) return isAbsoluteFilePath(fileHrefPath(href));
   if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
   const last = href.split("/").pop() ?? "";
   return /\.[A-Za-z0-9]+$/.test(last) || href.includes("/");
@@ -89,7 +87,7 @@ export function MarkdownLink({
 
   const target = href ? splitFileHref(href) : null;
   if (!isPageLink && href && target && isFileHref(target.path)) {
-    const basename = target.path.split("/").pop() ?? target.path;
+    const basename = fileBasename(fileHrefPath(target.path));
     const dotIdx = basename.lastIndexOf(".");
     const extension =
       dotIdx > 0 && dotIdx < basename.length - 1
@@ -100,7 +98,7 @@ export function MarkdownLink({
       <Button
         onClick={() => {
           const filePath = decodeFileHrefPath(target.path);
-          if (isHtml && filePath.startsWith("/")) {
+          if (isHtml && isAbsoluteFilePath(filePath)) {
             void openHtmlFile(filePath).catch((error) => {
               toast.error(error instanceof Error ? error.message : "Failed to open HTML preview");
             });
@@ -179,7 +177,10 @@ const InCodeBlock = createContext(false);
 
 /** Network URLs — the only sources whose mere loading has a side effect. */
 export function isRemoteImageSrc(src: string | undefined | null): src is string {
-  return !!src && (src.startsWith("https://") || src.startsWith("http://"));
+  const decoded = src ? fileHrefPath(src) : "";
+  // UNC paths can contact an SMB server on Windows, so they need the same
+  // explicit load action as web images, including URL-encoded backslashes.
+  return /^https?:\/\//i.test(decoded) || decoded.startsWith("\\\\");
 }
 
 export type MarkdownImagePreview = { name: string; dataUrl: string };
@@ -209,18 +210,18 @@ function MarkdownImage({ src, alt, width, height, title }: {
   const [loadApproved, setLoadApproved] = useState(false);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const remote = isRemoteImageSrc(src);
-  const localPath = src?.startsWith("/") && !src.startsWith("//") &&
-    !src.startsWith("/__")
+  const localPath = src && isAbsoluteFilePath(fileHrefPath(src)) && !src.startsWith("/__")
     ? decodeFileHrefPath(src)
     : undefined;
-  const localUrl = useLocalImageUrl(localPath);
+  const localUrl = useLocalImageUrl(!remote || loadApproved ? localPath : undefined);
 
   if (remote && !loadApproved) {
     let host = src;
     try {
       host = new URL(src).host;
     } catch {
-      // Unparseable URL — show it verbatim so the user can judge it.
+      const native = fileHrefPath(src);
+      if (native.startsWith("\\\\")) host = native.split(/[\\/]/).filter(Boolean)[0] ?? src;
     }
     return (
       <Button
@@ -253,7 +254,7 @@ function MarkdownImage({ src, alt, width, height, title }: {
     />
   );
   if (!onPreview || !localPath) return image;
-  const name = alt?.trim() || localPath.split("/").pop() || "image";
+  const name = alt?.trim() || fileBasename(localPath) || "image";
   return (
     <Button
       onClick={() => onPreview({ name, dataUrl: imageSrc })}
