@@ -435,6 +435,63 @@ describe("claude.driver / permission bridge", () => {
     expect(requestApproval).not.toHaveBeenCalled();
   });
 
+  it.each(["default", "bypassPermissions"] as const)(
+    "honors required connector approval in %s mode even for an allowlisted MCP tool",
+    async (mode) => {
+      const requestApproval = vi.fn().mockResolvedValue({ requestId: "managed-1", approved: false });
+      const toolName = "mcp__calendar__create_event";
+      const bridge = createClaudePermissionBridge({
+        runId: "run-managed", allowedTools: new Set([toolName]),
+        permissionMode: createClaudePermissionModeRef(mode), requestApproval,
+      });
+
+      const decision = await bridge.canUseTool(toolName, { title: "Team sync" }, {
+        signal: new AbortController().signal, toolUseID: "tool-managed", requestId: "managed-1",
+        suppressAlwaysAllowRule: true, title: "Allow creating this event?",
+        displayName: "Create calendar event", description: "Your organization requires approval.",
+      });
+
+      expect(requestApproval).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        requestId: "managed-1", kind: "tool_approval", toolName, toolInput: { title: "Team sync" },
+        suppressAlwaysAllowRule: true, question: "Allow creating this event?",
+        header: "Create calendar event", description: "Your organization requires approval.",
+      }));
+      expect(decision).toMatchObject({ behavior: "deny", toolUseID: "tool-managed" });
+    },
+  );
+
+  it("requires an explicit decision for a pre-approved tool with defaultToNo", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({ requestId: "careful-1", approved: true });
+    const bridge = createClaudePermissionBridge({
+      runId: "run-careful", allowedTools: new Set(["Read"]),
+      permissionMode: createClaudePermissionModeRef("bypassPermissions"), requestApproval,
+    });
+
+    const decision = await bridge.canUseTool("Read", { file_path: "/tmp/file.ts" }, {
+      signal: new AbortController().signal, toolUseID: "tool-careful", requestId: "careful-1",
+      defaultToNo: true,
+    });
+
+    expect(requestApproval).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ defaultToNo: true }));
+    expect(decision).toEqual({ behavior: "allow", updatedInput: { file_path: "/tmp/file.ts" }, toolUseID: "tool-careful" });
+  });
+
+  it.each(["default", "bypassPermissions"] as const)("honors a user's ask rule in %s mode", async (mode) => {
+    const requestApproval = vi.fn().mockResolvedValue({ requestId: "ask-rule-1", approved: false });
+    const bridge = createClaudePermissionBridge({
+      runId: "run-ask-rule", allowedTools: new Set(["Read"]),
+      permissionMode: createClaudePermissionModeRef(mode), requestApproval,
+    });
+
+    const decision = await bridge.canUseTool("Read", { file_path: "/tmp/file.ts" }, {
+      signal: new AbortController().signal, toolUseID: "tool-ask-rule", requestId: "ask-rule-1",
+      matchedAskRule: { source: "user", toolName: "Read", ruleContent: "Read(**)" },
+    });
+
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(decision?.behavior).toBe("deny");
+  });
+
   it("stops trusting MCP tools once a mode replaces the toolset", async () => {
     // Chat ships its own allowlist. Without this, an attached filesystem or
     // issue-tracker MCP server would hand the mode's removed write powers back.

@@ -47,6 +47,8 @@ function isPlanReview(toolName: string): boolean {
 export function approvalNotificationMode(
   req: ToolApprovalRequest,
 ): ApprovalNotificationMode {
+  // Guarded prompts need the dialog's decline focus, not a banner shortcut.
+  if (req.defaultToNo) return "open";
   if (req.kind === "tool_approval") {
     return isPlanReview(req.toolName) ? "open" : "approve";
   }
@@ -83,7 +85,7 @@ function content(
   if (req.kind === "tool_approval") {
     return {
       title:
-        mode === "open"
+        mode === "open" && isPlanReview(req.toolName)
           ? "Plan ready for review"
           : `Allow ${displayToolName(req.toolName)}?`,
       body: "",

@@ -510,6 +510,10 @@ export interface ToolApprovalRequest {
   requestedSchema?: Record<string, unknown>;
   url?: string;
   description?: string;
+  /** Start on decline and disable implicit keyboard approval. */
+  defaultToNo?: boolean;
+  /** Only this call can be approved; offer no persistent permission grant. */
+  suppressAlwaysAllowRule?: boolean;
   timestamp: number;
 }
 

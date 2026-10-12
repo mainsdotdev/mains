@@ -294,6 +294,8 @@ interface SDKCanUseToolOptions {
   title?: string;
   displayName?: string;
   description?: string;
+  defaultToNo?: boolean;
+  suppressAlwaysAllowRule?: boolean;
   toolUseID: string;
   agentID?: string;
   requestId: string;
@@ -1029,7 +1031,7 @@ export function createClaudePermissionBridge({
   async function decide(
     toolName: string,
     toolInput: Record<string, unknown>,
-    context: { signal: AbortSignal; requestId?: string },
+    context: SDKCanUseToolOptions,
   ): Promise<PermissionDecision> {
     const isAskUser = toolName === "AskUserQuestion";
     const isPlanReview = toolName === "ExitPlanMode";
@@ -1048,7 +1050,11 @@ export function createClaudePermissionBridge({
     const bypass = mode === "bypassPermissions" && !isAskUser && !isPlanReview;
     const mcpTrusted = !restrictedToolset && toolName.startsWith("mcp__");
     const planGated = mode === "plan" && couldModifyFiles(toolName);
-    if (!planGated && (bypass || allowedTools.has(toolName) || mcpTrusted)) {
+    // A provider's guarded prompt or an explicit ask rule still needs the
+    // user's decision, including managed connectors in a bypass run.
+    const requiresUserApproval = context.defaultToNo === true ||
+      context.suppressAlwaysAllowRule === true || !!context.matchedAskRule;
+    if (!planGated && !requiresUserApproval && (bypass || allowedTools.has(toolName) || mcpTrusted)) {
       return { allowed: true, updatedInput: toolInput };
     }
 
@@ -1064,6 +1070,11 @@ export function createClaudePermissionBridge({
       toolName,
       toolInput,
       kind: isAskUser ? "ask_user" : "tool_approval",
+      header: context.displayName,
+      question: context.title,
+      description: context.description ?? context.decisionReason,
+      defaultToNo: context.defaultToNo,
+      suppressAlwaysAllowRule: context.suppressAlwaysAllowRule,
       timestamp: Date.now(),
     };
 
@@ -1145,10 +1156,7 @@ export function createClaudePermissionBridge({
   }
 
   const canUseTool: SDKCanUseTool = async (toolName, toolInput, options) => {
-    const decision = await decide(toolName, toolInput, {
-      signal: options.signal,
-      requestId: options.requestId,
-    });
+    const decision = await decide(toolName, toolInput, options);
     if (!decision.allowed) {
       return {
         behavior: "deny",
