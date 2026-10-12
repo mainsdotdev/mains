@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,11 +19,19 @@ const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
   openExternal: vi.fn(),
   bridges: [] as Array<{
-    onrequestdisplaymode?: (request: { mode: "inline" | "fullscreen" | "pip" }) => Promise<{ mode: string }>;
+    onrequestdisplaymode?: (request: {
+      mode: "inline" | "fullscreen" | "pip";
+    }) => Promise<{ mode: string }>;
     oninitialized?: () => void;
-    oncalltool?: (request: { name: string; arguments?: Record<string, unknown> }) => Promise<unknown>;
+    oncalltool?: (request: {
+      name: string;
+      arguments?: Record<string, unknown>;
+    }) => Promise<unknown>;
     onopenlink?: (request: { url: string }) => Promise<unknown>;
-    onmessage?: (request: { content: unknown; _meta?: Record<string, unknown> }, extra?: { signal: AbortSignal }) => Promise<unknown>;
+    onmessage?: (
+      request: { content: unknown; _meta?: Record<string, unknown> },
+      extra?: { signal: AbortSignal },
+    ) => Promise<unknown>;
     onupdatemodelcontext?: (context: unknown) => Promise<unknown>;
     close: ReturnType<typeof vi.fn>;
     connect: ReturnType<typeof vi.fn>;
@@ -34,30 +49,59 @@ vi.mock("@/hooks/use-is-dark-mode", () => ({ useIsDarkMode: () => false }));
 vi.mock("@/hooks/use-browser-panel", () => ({
   useBrowserPanel: () => ({ openUrl: mocks.openUrl }),
 }));
-vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>()),
-  AppBridge: class {
-    onrequestdisplaymode?: (request: { mode: "inline" | "fullscreen" | "pip" }) => Promise<{ mode: string }>;
-    oninitialized?: () => void;
-    getAppCapabilities = vi.fn();
-    setHostContext = vi.fn();
-    connect = vi.fn().mockResolvedValue(undefined);
-    close = vi.fn().mockResolvedValue(undefined);
-    sendToolInput = vi.fn().mockResolvedValue(undefined);
-    sendToolResult = vi.fn().mockResolvedValue(undefined);
-    onmessage?: (request: { content: unknown; _meta?: Record<string, unknown> }, extra?: { signal: AbortSignal }) => Promise<unknown>;
-    replaceRequestHandler = vi.fn((schema: { parse: (value: unknown) => MessageRequest }, handler: (request: MessageRequest, extra: { signal: AbortSignal }) => Promise<unknown>) => {
-      this.onmessage = (params, extra) => handler(schema.parse({ method: "ui/message", params: { role: "user", ...params } }), extra ?? { signal: new AbortController().signal });
-    });
-    capabilities: Record<string, unknown>;
-    constructor(_client: unknown, _info: unknown, capabilities: Record<string, unknown>) {
-      this.capabilities = capabilities;
-      mocks.bridges.push(this);
-    }
-  },
-  PostMessageTransport: class {},
-  buildAllowAttribute: () => "",
-}));
+vi.mock(
+  "@modelcontextprotocol/ext-apps/app-bridge",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@modelcontextprotocol/ext-apps/app-bridge")
+    >()),
+    AppBridge: class {
+      onrequestdisplaymode?: (request: {
+        mode: "inline" | "fullscreen" | "pip";
+      }) => Promise<{ mode: string }>;
+      oninitialized?: () => void;
+      getAppCapabilities = vi.fn();
+      setHostContext = vi.fn();
+      connect = vi.fn().mockResolvedValue(undefined);
+      close = vi.fn().mockResolvedValue(undefined);
+      sendToolInput = vi.fn().mockResolvedValue(undefined);
+      sendToolResult = vi.fn().mockResolvedValue(undefined);
+      onmessage?: (
+        request: { content: unknown; _meta?: Record<string, unknown> },
+        extra?: { signal: AbortSignal },
+      ) => Promise<unknown>;
+      replaceRequestHandler = vi.fn(
+        (
+          schema: { parse: (value: unknown) => MessageRequest },
+          handler: (
+            request: MessageRequest,
+            extra: { signal: AbortSignal },
+          ) => Promise<unknown>,
+        ) => {
+          this.onmessage = (params, extra) =>
+            handler(
+              schema.parse({
+                method: "ui/message",
+                params: { role: "user", ...params },
+              }),
+              extra ?? { signal: new AbortController().signal },
+            );
+        },
+      );
+      capabilities: Record<string, unknown>;
+      constructor(
+        _client: unknown,
+        _info: unknown,
+        capabilities: Record<string, unknown>,
+      ) {
+        this.capabilities = capabilities;
+        mocks.bridges.push(this);
+      }
+    },
+    PostMessageTransport: class {},
+    buildAllowAttribute: () => "",
+  }),
+);
 
 import { McpAppDisplay } from "./mcp-app-display";
 
@@ -70,7 +114,10 @@ const app = {
   linkId: "account-2",
 };
 
-function renderApp(availableDisplayModes?: string[], preferredModelDisplayMode?: "inline" | "fullscreen") {
+function renderApp(
+  availableDisplayModes?: string[],
+  preferredModelDisplayMode?: "inline" | "fullscreen",
+) {
   mocks.readResource.mockResolvedValue({
     success: true,
     data: {
@@ -79,12 +126,14 @@ function renderApp(availableDisplayModes?: string[], preferredModelDisplayMode?:
       meta: { availableDisplayModes },
     },
   });
-  render(createElement(McpAppDisplay, {
-    runId: "run-1",
-    app: { ...app, preferredModelDisplayMode },
-    input: {},
-    title: "Trip map",
-  }));
+  render(
+    createElement(McpAppDisplay, {
+      runId: "run-1",
+      app: { ...app, preferredModelDisplayMode },
+      input: {},
+      title: "Trip map",
+    }),
+  );
 }
 
 beforeEach(() => {
@@ -98,7 +147,11 @@ beforeEach(() => {
   Object.defineProperty(window, "api", {
     configurable: true,
     value: {
-      mcpApps: { readResource: mocks.readResource, callTool: mocks.callTool, sendMessage: mocks.sendMessage },
+      mcpApps: {
+        readResource: mocks.readResource,
+        callTool: mocks.callTool,
+        sendMessage: mocks.sendMessage,
+      },
       shell: { openExternal: mocks.openExternal },
     },
   });
@@ -107,52 +160,211 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   mocks.bridges.length = 0;
 });
 
 describe("MCP App tool synchronization", () => {
   const props = {
-    runId: "run-1", presentation: "page" as const, panelDisplayMode: "inline" as const,
-    app, input: { origin: "IST" }, title: "Flights",
+    runId: "run-1",
+    presentation: "page" as const,
+    panelDisplayMode: "inline" as const,
+    app,
+    input: { origin: "IST" },
+    title: "Flights",
   };
-  const output = { content: [], structuredContent: { flights: ["IST → TYO"] }, _meta: { searchId: "search-1" } };
+  const output = {
+    content: [],
+    structuredContent: { flights: ["IST → TYO"] },
+    _meta: { searchId: "search-1" },
+  };
+
+  it("shows a readable fallback for an omitted bootstrap result without creating an iframe or bridge", () => {
+    render(
+      createElement(McpAppDisplay, {
+        ...props,
+        output: {
+          content: [{ type: "text", text: "Flight preview" }],
+          structuredContentOmitted: true,
+          _meta: { token: "private-token" },
+        },
+      }),
+    );
+    expect(screen.getByRole("status").textContent).toContain("too large");
+    expect(screen.getByText("Flight preview")).toBeTruthy();
+    expect(screen.queryByTitle("Flights interactive app")).toBeNull();
+    expect(screen.queryByText(/private-token/)).toBeNull();
+    expect(mocks.readResource).not.toHaveBeenCalled();
+    expect(mocks.bridges).toHaveLength(0);
+  });
+
+  it("replaces a running widget with the incomplete result and recovers on the next full result", async () => {
+    const { view, iframe, bridge } = await renderFlights();
+    view.rerender(
+      createElement(McpAppDisplay, {
+        ...props,
+        output: {
+          content: [{ type: "text", text: "Partial flight summary" }],
+          structuredContentOmitted: true,
+        },
+      }),
+    );
+    expect(screen.queryByTitle("Flights interactive app")).toBeNull();
+    expect(screen.getByText("Partial flight summary")).toBeTruthy();
+    expect(bridge.close).toHaveBeenCalledOnce();
+    view.rerender(createElement(McpAppDisplay, { ...props, output }));
+    await screen.findByTitle("Flights interactive app");
+    await waitFor(() => expect(mocks.bridges).toHaveLength(2));
+    expect(screen.getByTitle("Flights interactive app")).not.toBe(iframe);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("keeps a widget usable while explaining an omitted tool callback result", async () => {
+    const { iframe, bridge } = await renderFlights();
+    mocks.callTool.mockResolvedValue({
+      success: true,
+      data: {
+        content: [{ type: "text", text: "Available callback text" }],
+        structuredContentOmitted: true,
+        structuredContent: { stale: true },
+        _meta: { token: "hidden" },
+      },
+    });
+    let result: any;
+    await act(async () => {
+      result = await bridge.oncalltool?.({ name: "lookup" });
+    });
+    expect(result).toMatchObject({
+      structuredContentOmitted: true,
+      content: [{ type: "text", text: "Available callback text" }],
+    });
+    expect(result).not.toHaveProperty("structuredContent");
+    expect(result).not.toHaveProperty("isError");
+    expect(screen.getByRole("status").textContent).toContain("too large");
+    expect(screen.getByText("Available callback text")).toBeTruthy();
+    expect(screen.queryByText(/hidden/)).toBeNull();
+    expect(screen.getByTitle("Flights interactive app")).toBe(iframe);
+    mocks.callTool.mockResolvedValue({ success: true, data: output });
+    await act(async () => {
+      await bridge.oncalltool?.({ name: "lookup", arguments: { limit: 10 } });
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(bridge.close).not.toHaveBeenCalled();
+  });
+
+  it("preserves omitted callback results on the compatibility wire as usable text", async () => {
+    const { iframe, postMessage } = await renderFlights();
+    mocks.callTool.mockResolvedValue({
+      success: true,
+      data: {
+        content: [{ type: "text", text: "Compatibility preview" }],
+        structuredContentOmitted: true,
+      },
+    });
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: iframe.contentWindow,
+          data: {
+            type: "mains:mcp-app-request",
+            id: 18,
+            method: "tools/call",
+            params: { name: "lookup" },
+          },
+        }),
+      );
+    });
+    expect(postMessage).toHaveBeenCalledWith(
+      {
+        type: "mains:mcp-app-response",
+        id: 18,
+        result: {
+          content: [{ type: "text", text: "Compatibility preview" }],
+          structuredContentOmitted: true,
+        },
+      },
+      "*",
+    );
+    expect(screen.getByText("Compatibility preview")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("too large");
+  });
 
   it("starts initial and reloaded panels on an inert document while the resource is loading", async () => {
     mocks.readResource.mockImplementation(() => new Promise(() => undefined));
     const initial = render(createElement(McpAppDisplay, props));
-    expect(screen.getByTitle("Flights interactive app").getAttribute("src")).toBe("about:blank");
+    expect(
+      screen.getByTitle("Flights interactive app").getAttribute("src"),
+    ).toBe("about:blank");
     expect(mocks.bridges).toHaveLength(0);
     initial.unmount();
 
     render(createElement(McpAppDisplay, props));
-    expect(screen.getByTitle("Flights interactive app").getAttribute("src")).toBe("about:blank");
+    expect(
+      screen.getByTitle("Flights interactive app").getAttribute("src"),
+    ).toBe("about:blank");
     expect(mocks.bridges).toHaveLength(0);
   });
 
   async function renderFlights() {
-    mocks.readResource.mockResolvedValue({ success: true, data: {
-      url: "about:blank", meta: { availableDisplayModes: ["inline", "fullscreen"] },
-    } });
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank",
+        meta: { availableDisplayModes: ["inline", "fullscreen"] },
+      },
+    });
     const view = render(createElement(McpAppDisplay, props));
-    const iframe = await screen.findByTitle<HTMLIFrameElement>("Flights interactive app");
+    const iframe = await screen.findByTitle<HTMLIFrameElement>(
+      "Flights interactive app",
+    );
+    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     await waitFor(() => expect(iframe.getAttribute("src")).toBe("about:blank"));
-    const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage").mockImplementation(() => undefined);
+    const postMessage = vi
+      .spyOn(iframe.contentWindow!, "postMessage")
+      .mockImplementation(() => undefined);
     return { view, iframe, postMessage, bridge: mocks.bridges[0] };
   }
 
-  function compatibilityReady(iframe: HTMLIFrameElement, source = iframe.contentWindow) {
-    act(() => { window.dispatchEvent(new MessageEvent("message", {
-      source, data: { type: "mains:mcp-app-ready" },
-    })); });
+  function compatibilityReady(
+    iframe: HTMLIFrameElement,
+    source = iframe.contentWindow,
+  ) {
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source,
+          data: { type: "mains:mcp-app-ready" },
+        }),
+      );
+    });
   }
+
+  it.each([
+    [{ type: "text", text: "2026-10-12T14:59:37.924Z" }],
+    '[{"type":"text","text":"2026-10-12T14:59:37.924Z"}]',
+    "2026-10-12T14:59:37.924Z",
+  ])("sends legacy text-only results to the app as MCP content blocks", async (legacyOutput) => {
+    const { view, bridge } = await renderFlights();
+    view.rerender(createElement(McpAppDisplay, { ...props, output: legacyOutput }));
+    act(() => bridge.oninitialized?.());
+    expect(bridge.sendToolResult).toHaveBeenCalledExactlyOnceWith({
+      content: [{ type: "text", text: "2026-10-12T14:59:37.924Z" }],
+    });
+    expect(mocks.readResource).toHaveBeenCalledOnce();
+  });
 
   it("renders a late result in a compatibility app without reloading or a standard handshake", async () => {
     const { view, iframe, postMessage, bridge } = await renderFlights();
     // A compatibility widget displays results from globals; it never initializes AppBridge.
     postMessage.mockImplementation((message) => {
-      if (message.type !== "mains:mcp-app-globals" || !("toolOutput" in message.globals)) return;
-      iframe.contentDocument!.body.textContent = message.globals.toolOutput?.flights?.join(", ") ?? "";
+      if (
+        message.type !== "mains:mcp-app-globals" ||
+        !("toolOutput" in message.globals)
+      )
+        return;
+      iframe.contentDocument!.body.textContent =
+        message.globals.toolOutput?.flights?.join(", ") ?? "";
     });
     fireEvent.load(iframe);
     compatibilityReady(iframe);
@@ -162,10 +374,21 @@ describe("MCP App tool synchronization", () => {
     view.rerender(createElement(McpAppDisplay, { ...props, output }));
 
     expect(iframe.contentDocument!.body.textContent).toBe("IST → TYO");
-    expect(postMessage).toHaveBeenCalledWith({ type: "mains:mcp-app-globals", globals: {
-      toolOutput: output.structuredContent, toolResponseMetadata: output._meta,
-    } }, "*");
-    expect(postMessage.mock.calls.some(([message]) => message.globals && "widgetState" in message.globals)).toBe(false);
+    expect(postMessage).toHaveBeenCalledWith(
+      {
+        type: "mains:mcp-app-globals",
+        globals: {
+          toolOutput: output.structuredContent,
+          toolResponseMetadata: output._meta,
+        },
+      },
+      "*",
+    );
+    expect(
+      postMessage.mock.calls.some(
+        ([message]) => message.globals && "widgetState" in message.globals,
+      ),
+    ).toBe(false);
     expect(screen.getByTitle("Flights interactive app")).toBe(iframe);
     expect(mocks.readResource).toHaveBeenCalledOnce();
     expect(mocks.bridges).toHaveLength(1);
@@ -180,11 +403,19 @@ describe("MCP App tool synchronization", () => {
 
     view.rerender(createElement(McpAppDisplay, { ...props, input }));
 
-    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "mains:mcp-app-globals", globals: {
-      toolInput: input,
-    } }, "*");
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith(
+      {
+        type: "mains:mcp-app-globals",
+        globals: {
+          toolInput: input,
+        },
+      },
+      "*",
+    );
     expect(bridge.sendToolInput).not.toHaveBeenCalled();
-    view.rerender(createElement(McpAppDisplay, { ...props, input: { ...input } }));
+    view.rerender(
+      createElement(McpAppDisplay, { ...props, input: { ...input } }),
+    );
     expect(postMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -196,9 +427,17 @@ describe("MCP App tool synchronization", () => {
 
     compatibilityReady(iframe);
 
-    expect(postMessage).toHaveBeenCalledWith({ type: "mains:mcp-app-globals", globals: expect.objectContaining({
-      toolInput: input, toolOutput: output.structuredContent, toolResponseMetadata: output._meta,
-    }) }, "*");
+    expect(postMessage).toHaveBeenCalledWith(
+      {
+        type: "mains:mcp-app-globals",
+        globals: expect.objectContaining({
+          toolInput: input,
+          toolOutput: output.structuredContent,
+          toolResponseMetadata: output._meta,
+        }),
+      },
+      "*",
+    );
     expect(bridge.sendToolInput).not.toHaveBeenCalled();
     expect(bridge.sendToolResult).not.toHaveBeenCalled();
   });
@@ -208,20 +447,36 @@ describe("MCP App tool synchronization", () => {
     compatibilityReady(iframe);
     view.rerender(createElement(McpAppDisplay, { ...props, output }));
     act(() => bridge.oninitialized?.());
-    expect(bridge.sendToolInput).toHaveBeenCalledExactlyOnceWith({ arguments: props.input });
+    expect(bridge.sendToolInput).toHaveBeenCalledExactlyOnceWith({
+      arguments: props.input,
+    });
     expect(bridge.sendToolResult).toHaveBeenCalledExactlyOnceWith(output);
     postMessage.mockClear();
     bridge.sendToolResult.mockClear();
 
-    view.rerender(createElement(McpAppDisplay, { ...props, output: { ...output } }));
+    view.rerender(
+      createElement(McpAppDisplay, { ...props, output: { ...output } }),
+    );
     expect(postMessage).not.toHaveBeenCalled();
     expect(bridge.sendToolResult).not.toHaveBeenCalled();
-    const nextOutput = { ...output, structuredContent: { flights: ["IST → LHR"] } };
-    view.rerender(createElement(McpAppDisplay, { ...props, output: nextOutput }));
+    const nextOutput = {
+      ...output,
+      structuredContent: { flights: ["IST → LHR"] },
+    };
+    view.rerender(
+      createElement(McpAppDisplay, { ...props, output: nextOutput }),
+    );
     expect(bridge.sendToolResult).toHaveBeenCalledExactlyOnceWith(nextOutput);
-    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "mains:mcp-app-globals", globals: {
-      toolOutput: nextOutput.structuredContent, toolResponseMetadata: nextOutput._meta,
-    } }, "*");
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith(
+      {
+        type: "mains:mcp-app-globals",
+        globals: {
+          toolOutput: nextOutput.structuredContent,
+          toolResponseMetadata: nextOutput._meta,
+        },
+      },
+      "*",
+    );
   });
 
   it("delivers results when the standard bridge initializes before the compatibility shim", async () => {
@@ -232,30 +487,51 @@ describe("MCP App tool synchronization", () => {
     expect(postMessage).not.toHaveBeenCalled();
 
     compatibilityReady(iframe);
-    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ globals: expect.objectContaining({
-      toolOutput: output.structuredContent,
-    }) }), "*");
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        globals: expect.objectContaining({
+          toolOutput: output.structuredContent,
+        }),
+      }),
+      "*",
+    );
     expect(bridge.sendToolResult).toHaveBeenCalledTimes(1);
   });
 
   it("waits for the replacement document's own readiness before forwarding updates", async () => {
     const { view, iframe, bridge } = await renderFlights();
     compatibilityReady(iframe);
-    mocks.readResource.mockResolvedValue({ success: true, data: {
-      url: "about:blank#replacement", meta: { availableDisplayModes: ["inline", "fullscreen"] },
-    } });
-    const nextProps = { ...props, app: { ...app, resourceUri: "ui://maps/another.html" } };
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank#replacement",
+        meta: { availableDisplayModes: ["inline", "fullscreen"] },
+      },
+    });
+    const nextProps = {
+      ...props,
+      app: { ...app, resourceUri: "ui://maps/another.html" },
+    };
     view.rerender(createElement(McpAppDisplay, nextProps));
-    await waitFor(() => expect(iframe.getAttribute("src")).toBe("about:blank#replacement"));
+    await waitFor(() =>
+      expect(iframe.getAttribute("src")).toBe("about:blank#replacement"),
+    );
     expect(bridge.close).toHaveBeenCalledOnce();
-    const postMessage = vi.spyOn(iframe.contentWindow!, "postMessage").mockImplementation(() => undefined);
+    const postMessage = vi
+      .spyOn(iframe.contentWindow!, "postMessage")
+      .mockImplementation(() => undefined);
     view.rerender(createElement(McpAppDisplay, { ...nextProps, output }));
     expect(postMessage).not.toHaveBeenCalled();
 
     compatibilityReady(iframe);
-    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ globals: expect.objectContaining({
-      toolOutput: output.structuredContent,
-    }) }), "*");
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        globals: expect.objectContaining({
+          toolOutput: output.structuredContent,
+        }),
+      }),
+      "*",
+    );
     expect(mocks.bridges[1].sendToolResult).not.toHaveBeenCalled();
   });
 
@@ -265,79 +541,185 @@ describe("MCP App tool synchronization", () => {
     view.rerender(createElement(McpAppDisplay, { ...props, output }));
     expect(postMessage).not.toHaveBeenCalled();
     compatibilityReady(iframe);
-    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ globals: expect.objectContaining({
-      toolOutput: output.structuredContent,
-    }) }), "*");
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        globals: expect.objectContaining({
+          toolOutput: output.structuredContent,
+        }),
+      }),
+      "*",
+    );
   });
 });
 
 describe("MCP App display modes", () => {
   it("starts the bridge when an initially unavailable iframe browsing context becomes ready", async () => {
-    const original = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentWindow")!.get!;
+    const original = Object.getOwnPropertyDescriptor(
+      HTMLIFrameElement.prototype,
+      "contentWindow",
+    )!.get!;
     let ready = false;
-    const getter = vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockImplementation(function (this: HTMLIFrameElement) {
-      return ready ? original.call(this) : null;
+    const getter = vi
+      .spyOn(HTMLIFrameElement.prototype, "contentWindow", "get")
+      .mockImplementation(function (this: HTMLIFrameElement) {
+        return ready ? original.call(this) : null;
+      });
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank",
+        meta: { availableDisplayModes: ["inline", "fullscreen"] },
+      },
     });
-    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["inline", "fullscreen"] } } });
-    const props = { sessionId: "app-session", presentation: "page" as const, panelDisplayMode: "fullscreen" as const,
-      app, input: {}, title: "MagicPath", isActive: false };
+    const props = {
+      sessionId: "app-session",
+      presentation: "page" as const,
+      panelDisplayMode: "fullscreen" as const,
+      app,
+      input: {},
+      title: "MagicPath",
+      isActive: false,
+    };
     const view = render(createElement(McpAppDisplay, props));
     try {
-      await waitFor(() => expect(screen.queryByText("Loading app…")).toBeNull());
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      await waitFor(() =>
+        expect(screen.queryByText("Loading app…")).toBeNull(),
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
       expect(mocks.bridges).toHaveLength(1);
       expect(mocks.bridges[0].connect).not.toHaveBeenCalled();
       ready = true;
       view.rerender(createElement(McpAppDisplay, { ...props, isActive: true }));
       fireEvent.load(screen.getByTitle("MagicPath interactive app"));
       await waitFor(() => expect(mocks.bridges).toHaveLength(1));
-      await waitFor(() => expect(mocks.bridges[0].connect).toHaveBeenCalledOnce());
-      await waitFor(() => expect(screen.getByTitle("MagicPath interactive app").getAttribute("src")).toBe("about:blank"));
-      view.rerender(createElement(McpAppDisplay, { ...props, isActive: false }));
+      await waitFor(() =>
+        expect(mocks.bridges[0].connect).toHaveBeenCalledOnce(),
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByTitle("MagicPath interactive app").getAttribute("src"),
+        ).toBe("about:blank"),
+      );
+      view.rerender(
+        createElement(McpAppDisplay, { ...props, isActive: false }),
+      );
       view.rerender(createElement(McpAppDisplay, { ...props, isActive: true }));
       expect(mocks.bridges).toHaveLength(1);
       expect(mocks.bridges[0].close).not.toHaveBeenCalled();
-    } finally { getter.mockRestore(); }
+    } finally {
+      getter.mockRestore();
+    }
   });
 
-  it.each(["timeout", "unmount"])("ends iframe readiness waiting on %s", async (end) => {
-    vi.useFakeTimers();
-    const getter = vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(null);
-    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
-    const view = render(createElement(McpAppDisplay, { sessionId: "app-session", presentation: "page", app, input: {}, title: "MagicPath" }));
-    try {
-      await act(async () => { await Promise.resolve(); });
-      expect(mocks.bridges).toHaveLength(1);
-      expect(mocks.bridges[0].connect).not.toHaveBeenCalled();
-      if (end === "unmount") view.unmount();
-      act(() => vi.advanceTimersByTime(10_000));
-      if (end === "timeout") expect(screen.getByText(/The app frame could not start/)).toBeTruthy();
-      else expect(mocks.bridges[0].close).toHaveBeenCalledOnce();
-      expect(mocks.bridges[0].connect).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally { view.unmount(); getter.mockRestore(); vi.useRealTimers(); }
-  });
+  it.each(["timeout", "unmount"])(
+    "ends iframe readiness waiting on %s",
+    async (end) => {
+      vi.useFakeTimers();
+      const getter = vi
+        .spyOn(HTMLIFrameElement.prototype, "contentWindow", "get")
+        .mockReturnValue(null);
+      mocks.readResource.mockResolvedValue({
+        success: true,
+        data: {
+          url: "about:blank",
+          meta: { availableDisplayModes: ["fullscreen"] },
+        },
+      });
+      const view = render(
+        createElement(McpAppDisplay, {
+          sessionId: "app-session",
+          presentation: "page",
+          app,
+          input: {},
+          title: "MagicPath",
+        }),
+      );
+      try {
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(mocks.bridges).toHaveLength(1);
+        expect(mocks.bridges[0].connect).not.toHaveBeenCalled();
+        if (end === "unmount") view.unmount();
+        act(() => vi.advanceTimersByTime(10_000));
+        if (end === "timeout")
+          expect(
+            screen.getByText(/The app frame could not start/),
+          ).toBeTruthy();
+        else expect(mocks.bridges[0].close).toHaveBeenCalledOnce();
+        expect(mocks.bridges[0].connect).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        view.unmount();
+        getter.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps a tool-opened canvas connected through panel changes and resolves its bare UI tools", async () => {
-    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["inline", "fullscreen"] } } });
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank",
+        meta: { availableDisplayModes: ["inline", "fullscreen"] },
+      },
+    });
     mocks.callTool.mockResolvedValue({ success: true, data: { content: [] } });
     const changeMode = vi.fn();
-    const props = { resourceRunId: "source-run", runId: "source-run", presentation: "page" as const,
-      panelDisplayMode: "inline" as const, onDisplayModeChange: changeMode, onMessage: vi.fn(),
-      app: { ...app, tool: "magicpath.open_magicpath_canvas", resourceUri: "ui://magicpath/canvas" }, input: {}, title: "MagicPath" };
+    const props = {
+      resourceRunId: "source-run",
+      runId: "source-run",
+      presentation: "page" as const,
+      panelDisplayMode: "inline" as const,
+      onDisplayModeChange: changeMode,
+      onMessage: vi.fn(),
+      app: {
+        ...app,
+        tool: "magicpath.open_magicpath_canvas",
+        resourceUri: "ui://magicpath/canvas",
+      },
+      input: {},
+      title: "MagicPath",
+    };
     const view = render(createElement(McpAppDisplay, props));
     const iframe = await screen.findByTitle("MagicPath interactive app");
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     const bridge = mocks.bridges[0];
     act(() => bridge.oninitialized?.());
-    await bridge.oncalltool?.({ name: "create_canvas_app_session", arguments: { projectId: "existing-project" } });
-    expect(mocks.callTool).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "source-run",
-      tool: "magicpath.create_canvas_app_session", arguments: { projectId: "existing-project" } }));
-    await act(async () => { expect(await bridge.onrequestdisplaymode?.({ mode: "fullscreen" })).toEqual({ mode: "fullscreen" }); });
+    await bridge.oncalltool?.({
+      name: "create_canvas_app_session",
+      arguments: { projectId: "existing-project" },
+    });
+    expect(mocks.callTool).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "source-run",
+        tool: "magicpath.create_canvas_app_session",
+        arguments: { projectId: "existing-project" },
+      }),
+    );
+    await act(async () => {
+      expect(
+        await bridge.onrequestdisplaymode?.({ mode: "fullscreen" }),
+      ).toEqual({ mode: "fullscreen" });
+    });
     expect(changeMode).toHaveBeenCalledWith("fullscreen");
-    view.rerender(createElement(McpAppDisplay, { ...props, runId: "next-chat", panelDisplayMode: "fullscreen" }));
+    view.rerender(
+      createElement(McpAppDisplay, {
+        ...props,
+        runId: "next-chat",
+        panelDisplayMode: "fullscreen",
+      }),
+    );
     await bridge.oncalltool?.({ name: "create_canvas_app_session" });
-    expect(mocks.callTool).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "source-run", tool: "magicpath.create_canvas_app_session" }));
+    expect(mocks.callTool).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "source-run",
+        tool: "magicpath.create_canvas_app_session",
+      }),
+    );
     expect(screen.getByTitle("MagicPath interactive app")).toBe(iframe);
     expect(mocks.readResource).toHaveBeenCalledTimes(1);
     expect(mocks.bridges).toHaveLength(1);
@@ -345,108 +727,250 @@ describe("MCP App display modes", () => {
   });
 
   it("keeps the app document connected when its draft becomes a real conversation", async () => {
-    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank",
+        meta: { availableDisplayModes: ["fullscreen"] },
+      },
+    });
     mocks.callTool.mockResolvedValue({ success: true, data: { content: [] } });
     const firstMessage = vi.fn().mockResolvedValue(undefined);
     const nextMessage = vi.fn().mockResolvedValue(undefined);
-    const updateContext = vi.fn().mockResolvedValue({ updateId: "update-1", content: [{ type: "text", text: "Canvas 1" }] });
-    const props = { sessionId: "app-session", presentation: "page" as const,
-      app: { ...app, originCallId: undefined }, input: {}, title: "MagicPath",
-      onMessage: firstMessage, onModelContextChange: updateContext, modelContext: null };
+    const updateContext = vi
+      .fn()
+      .mockResolvedValue({
+        updateId: "update-1",
+        content: [{ type: "text", text: "Canvas 1" }],
+      });
+    const props = {
+      sessionId: "app-session",
+      presentation: "page" as const,
+      app: { ...app, originCallId: undefined },
+      input: {},
+      title: "MagicPath",
+      onMessage: firstMessage,
+      onModelContextChange: updateContext,
+      modelContext: null,
+    };
     const page = render(createElement(McpAppDisplay, props));
     const iframe = await screen.findByTitle("MagicPath interactive app");
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     const bridge = mocks.bridges[0];
     act(() => bridge.oninitialized?.());
     expect(bridge.capabilities.message).toEqual({ text: {} });
-    expect(bridge.capabilities.experimental).toEqual({ "openai/modelContext": {}, "openai/message": {} });
+    expect(bridge.capabilities.experimental).toEqual({
+      "openai/modelContext": {},
+      "openai/message": {},
+    });
     let firstSend!: Promise<unknown>;
-    act(() => { firstSend = bridge.onmessage!({ content: [{ type: "text", text: "Start from the canvas" }] }); });
+    act(() => {
+      firstSend = bridge.onmessage!({
+        content: [{ type: "text", text: "Start from the canvas" }],
+      });
+    });
     expect(firstMessage).not.toHaveBeenCalled();
-    expect((await screen.findByRole("textbox", { name: "App prompt" }) as HTMLTextAreaElement).value).toBe("Start from the canvas");
+    expect(
+      (
+        (await screen.findByRole("textbox", {
+          name: "App prompt",
+        })) as HTMLTextAreaElement
+      ).value,
+    ).toBe("Start from the canvas");
     await userEvent.setup().click(screen.getByRole("button", { name: "Send" }));
     await firstSend;
-    expect(firstMessage).toHaveBeenCalledWith([{ type: "text", text: "Start from the canvas" }], {});
+    expect(firstMessage).toHaveBeenCalledWith(
+      [{ type: "text", text: "Start from the canvas" }],
+      {},
+    );
     // The browser callback changes with the composer owner, too.
     mocks.openUrl = vi.fn();
-    page.rerender(createElement(McpAppDisplay, { ...props, runId: "real-run", onMessage: nextMessage,
-      modelContext: { updateId: "update-1", content: [{ type: "text" as const, text: "Canvas 1" }] } }));
+    page.rerender(
+      createElement(McpAppDisplay, {
+        ...props,
+        runId: "real-run",
+        onMessage: nextMessage,
+        modelContext: {
+          updateId: "update-1",
+          content: [{ type: "text" as const, text: "Canvas 1" }],
+        },
+      }),
+    );
     expect(screen.getByTitle("MagicPath interactive app")).toBe(iframe);
     expect(mocks.bridges).toHaveLength(1);
     expect(bridge.close).not.toHaveBeenCalled();
     expect(mocks.readResource).toHaveBeenCalledTimes(1);
     let nextSend!: Promise<unknown>;
-    act(() => { nextSend = bridge.onmessage!({ content: [{ type: "text", text: "Another idea" }], _meta: { "openai/message": { target: "new" } } }); });
+    act(() => {
+      nextSend = bridge.onmessage!({
+        content: [{ type: "text", text: "Another idea" }],
+        _meta: { "openai/message": { target: "new" } },
+      });
+    });
     const user = userEvent.setup();
     const editor = await screen.findByRole("textbox", { name: "App prompt" });
     expect(nextMessage).not.toHaveBeenCalled();
     expect(screen.getByText("This will start a new chat.")).toBeTruthy();
     await user.clear(editor);
-    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
     await user.type(editor, "My edited idea");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await nextSend;
-    expect(nextMessage).toHaveBeenCalledWith([{ type: "text", text: "My edited idea" }], { target: "new" });
+    expect(nextMessage).toHaveBeenCalledWith(
+      [{ type: "text", text: "My edited idea" }],
+      { target: "new" },
+    );
     await bridge.oncalltool?.({ name: "show_map" });
-    expect(mocks.callTool).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "app-session", runId: "real-run" }));
-    expect(await bridge.onupdatemodelcontext?.({ content: [{ type: "text", text: "Canvas 1" }] }))
-      .toEqual({ _meta: { "openai/modelContext": { updateId: "update-1" } } });
-    page.rerender(createElement(McpAppDisplay, { ...props, runId: "real-run", onMessage: nextMessage, modelContext: null }));
-    expect(bridge.setHostContext).toHaveBeenLastCalledWith(expect.objectContaining({
-      "openai/modelContext": null, displayMode: "fullscreen", toolInfo: expect.any(Object),
-    }));
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "app-session", runId: "real-run" }),
+    );
+    expect(
+      await bridge.onupdatemodelcontext?.({
+        content: [{ type: "text", text: "Canvas 1" }],
+      }),
+    ).toEqual({ _meta: { "openai/modelContext": { updateId: "update-1" } } });
+    page.rerender(
+      createElement(McpAppDisplay, {
+        ...props,
+        runId: "real-run",
+        onMessage: nextMessage,
+        modelContext: null,
+      }),
+    );
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        "openai/modelContext": null,
+        displayMode: "fullscreen",
+        toolInfo: expect.any(Object),
+      }),
+    );
     expect(mocks.bridges).toHaveLength(1);
   });
 
   it("reports a failed UI message instead of acknowledging it as sent", async () => {
-    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
-    render(createElement(McpAppDisplay, { sessionId: "app-session", presentation: "page", app, input: {}, title: "Canvas",
-      onMessage: vi.fn().mockRejectedValue(new Error("Wait for the current response")) }));
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank",
+        meta: { availableDisplayModes: ["fullscreen"] },
+      },
+    });
+    render(
+      createElement(McpAppDisplay, {
+        sessionId: "app-session",
+        presentation: "page",
+        app,
+        input: {},
+        title: "Canvas",
+        onMessage: vi
+          .fn()
+          .mockRejectedValue(new Error("Wait for the current response")),
+      }),
+    );
     await screen.findByTitle("Canvas interactive app");
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     let sent!: Promise<unknown>;
-    act(() => { sent = mocks.bridges[0].onmessage!({ content: [{ type: "text", text: "Next" }] }); });
-    const rejected = expect(sent).rejects.toThrow("Wait for the current response");
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Send" }));
+    act(() => {
+      sent = mocks.bridges[0].onmessage!({
+        content: [{ type: "text", text: "Next" }],
+      });
+    });
+    const rejected = expect(sent).rejects.toThrow(
+      "Wait for the current response",
+    );
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Send" }));
     await rejected;
   });
 
-  it.each(["Cancel", "Escape", "Close"])("sends nothing when the user dismisses the preview with %s", async (dismiss) => {
-    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
-    const onMessage = vi.fn();
-    render(createElement(McpAppDisplay, { sessionId: "app-session", presentation: "page", app, input: {}, title: "Canva", onMessage }));
-    await screen.findByTitle("Canva interactive app");
-    await waitFor(() => expect(mocks.bridges).toHaveLength(1));
-    let sent!: Promise<unknown>;
-    act(() => { sent = mocks.bridges[0].onmessage!({ content: [{ type: "text", text: "Design a presentation" }] }); });
-    const editor = await screen.findByRole("textbox", { name: "App prompt" });
-    expect(document.activeElement).toBe(editor);
-    const user = userEvent.setup();
-    if (dismiss === "Escape") await user.keyboard("{Escape}");
-    else await user.click(screen.getByRole("button", { name: dismiss === "Close" ? "Cancel app prompt" : "Cancel" }));
-    expect(await sent).toEqual({ isError: true });
-    expect(onMessage).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(mocks.bridges[0].close).not.toHaveBeenCalled();
-  });
+  it.each(["Cancel", "Escape", "Close"])(
+    "sends nothing when the user dismisses the preview with %s",
+    async (dismiss) => {
+      mocks.readResource.mockResolvedValue({
+        success: true,
+        data: {
+          url: "about:blank",
+          meta: { availableDisplayModes: ["fullscreen"] },
+        },
+      });
+      const onMessage = vi.fn();
+      render(
+        createElement(McpAppDisplay, {
+          sessionId: "app-session",
+          presentation: "page",
+          app,
+          input: {},
+          title: "Canva",
+          onMessage,
+        }),
+      );
+      await screen.findByTitle("Canva interactive app");
+      await waitFor(() => expect(mocks.bridges).toHaveLength(1));
+      let sent!: Promise<unknown>;
+      act(() => {
+        sent = mocks.bridges[0].onmessage!({
+          content: [{ type: "text", text: "Design a presentation" }],
+        });
+      });
+      const editor = await screen.findByRole("textbox", { name: "App prompt" });
+      expect(document.activeElement).toBe(editor);
+      const user = userEvent.setup();
+      if (dismiss === "Escape") await user.keyboard("{Escape}");
+      else
+        await user.click(
+          screen.getByRole("button", {
+            name: dismiss === "Close" ? "Cancel app prompt" : "Cancel",
+          }),
+        );
+      expect(await sent).toEqual({ isError: true });
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(mocks.bridges[0].close).not.toHaveBeenCalled();
+    },
+  );
 
   it("cancels pending previews on RPC abort or navigation and rejects overlapping app requests", async () => {
-    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank",
+        meta: { availableDisplayModes: ["fullscreen"] },
+      },
+    });
     const onMessage = vi.fn();
-    const page = render(createElement(McpAppDisplay, { sessionId: "app-session", presentation: "page", app, input: {}, title: "Canva", onMessage }));
+    const page = render(
+      createElement(McpAppDisplay, {
+        sessionId: "app-session",
+        presentation: "page",
+        app,
+        input: {},
+        title: "Canva",
+        onMessage,
+      }),
+    );
     await screen.findByTitle("Canva interactive app");
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     const bridge = mocks.bridges[0];
     const controller = new AbortController();
     const request = { content: [{ type: "text", text: "Review this" }] };
     let sent!: Promise<unknown>;
-    act(() => { sent = bridge.onmessage!(request, { signal: controller.signal }); });
+    act(() => {
+      sent = bridge.onmessage!(request, { signal: controller.signal });
+    });
     await screen.findByRole("textbox", { name: "App prompt" });
-    await expect(bridge.onmessage!(request)).rejects.toThrow("current prompt first");
+    await expect(bridge.onmessage!(request)).rejects.toThrow(
+      "current prompt first",
+    );
     act(() => controller.abort());
     expect(await sent).toEqual({ isError: true });
     expect(screen.queryByRole("dialog")).toBeNull();
-    act(() => { sent = bridge.onmessage!(request); });
+    act(() => {
+      sent = bridge.onmessage!(request);
+    });
     await screen.findByRole("textbox", { name: "App prompt" });
     page.unmount();
     expect(await sent).toEqual({ isError: true });
@@ -454,24 +978,61 @@ describe("MCP App display modes", () => {
   });
 
   it("reviews legacy app messages through the same editable dialog", async () => {
-    mocks.readResource.mockResolvedValue({ success: true, data: { url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] } } });
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank",
+        meta: { availableDisplayModes: ["fullscreen"] },
+      },
+    });
     const onMessage = vi.fn().mockResolvedValue(undefined);
-    render(createElement(McpAppDisplay, { sessionId: "app-session", presentation: "page", app, input: {}, title: "Canva", onMessage }));
-    const iframe = await screen.findByTitle("Canva interactive app") as HTMLIFrameElement;
+    render(
+      createElement(McpAppDisplay, {
+        sessionId: "app-session",
+        presentation: "page",
+        app,
+        input: {},
+        title: "Canva",
+        onMessage,
+      }),
+    );
+    const iframe = (await screen.findByTitle(
+      "Canva interactive app",
+    )) as HTMLIFrameElement;
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     const response = vi.spyOn(iframe.contentWindow!, "postMessage");
-    act(() => window.dispatchEvent(new MessageEvent("message", {
-      source: iframe.contentWindow, data: { type: "mains:mcp-app-request", id: 12, method: "ui/message",
-        params: { content: [{ type: "text", text: "Original" }], _meta: { "openai/message": { target: "new" } } } },
-    })));
+    act(() =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: iframe.contentWindow,
+          data: {
+            type: "mains:mcp-app-request",
+            id: 12,
+            method: "ui/message",
+            params: {
+              content: [{ type: "text", text: "Original" }],
+              _meta: { "openai/message": { target: "new" } },
+            },
+          },
+        }),
+      ),
+    );
     expect(onMessage).not.toHaveBeenCalled();
     const user = userEvent.setup();
     const editor = await screen.findByRole("textbox", { name: "App prompt" });
     await user.clear(editor);
     await user.type(editor, "Edited from the app");
     await user.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(onMessage).toHaveBeenCalledWith([{ type: "text", text: "Edited from the app" }], { target: "new" }));
-    expect(response).toHaveBeenCalledWith({ type: "mains:mcp-app-response", id: 12, result: {} }, "*");
+    await waitFor(() =>
+      expect(onMessage).toHaveBeenCalledWith(
+        [{ type: "text", text: "Edited from the app" }],
+        { target: "new" },
+      ),
+    );
+    expect(response).toHaveBeenCalledWith(
+      { type: "mains:mcp-app-response", id: 12, result: {} },
+      "*",
+    );
   });
 
   it("also reviews messages from an inline app before using the run's IPC path", async () => {
@@ -480,11 +1041,21 @@ describe("MCP App display modes", () => {
     await screen.findByTitle("Trip map interactive app");
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     let sent!: Promise<unknown>;
-    act(() => { sent = mocks.bridges[0].onmessage!({ content: [{ type: "text", text: "Review the map" }] }); });
+    act(() => {
+      sent = mocks.bridges[0].onmessage!({
+        content: [{ type: "text", text: "Review the map" }],
+      });
+    });
     expect(mocks.sendMessage).not.toHaveBeenCalled();
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Send" }));
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Send" }));
     expect(await sent).toEqual({});
-    expect(mocks.sendMessage).toHaveBeenCalledWith({ runId: "run-1", content: [{ type: "text", text: "Review the map" }], modelContext: undefined });
+    expect(mocks.sendMessage).toHaveBeenCalledWith({
+      runId: "run-1",
+      content: [{ type: "text", text: "Review the map" }],
+      modelContext: undefined,
+    });
   });
 
   it("hides the host Expand button until a widget opts into fullscreen", async () => {
@@ -495,7 +1066,9 @@ describe("MCP App display modes", () => {
 
     act(() => bridge.oninitialized?.());
 
-    expect(screen.queryByRole("button", { name: "Expand Trip map" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Expand Trip map" }),
+    ).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -505,17 +1078,26 @@ describe("MCP App display modes", () => {
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     const bridge = mocks.bridges[0];
     act(() => bridge.oninitialized?.());
-    expect(screen.queryByRole("button", { name: "Expand Trip map" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Expand Trip map" }),
+    ).toBeNull();
 
     await act(async () => {
-      expect(await bridge.onrequestdisplaymode?.({ mode: "fullscreen" }))
-        .toEqual({ mode: "fullscreen" });
+      expect(
+        await bridge.onrequestdisplaymode?.({ mode: "fullscreen" }),
+      ).toEqual({ mode: "fullscreen" });
     });
 
-    expect(screen.getByRole("dialog", { name: "Trip map interactive app" })).toBeTruthy();
-    await userEvent.setup().click(screen.getByRole("button", { name: "Return to chat" }));
+    expect(
+      screen.getByRole("dialog", { name: "Trip map interactive app" }),
+    ).toBeTruthy();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Return to chat" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("button", { name: "Expand Trip map" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Expand Trip map" }),
+    ).toBeTruthy();
   });
 
   it("offers fullscreen after the widget announces support at initialization", async () => {
@@ -523,37 +1105,49 @@ describe("MCP App display modes", () => {
     await screen.findByTitle("Trip map interactive app");
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     const bridge = mocks.bridges[0];
-    bridge.getAppCapabilities.mockReturnValue({ availableDisplayModes: ["inline", "fullscreen"] });
+    bridge.getAppCapabilities.mockReturnValue({
+      availableDisplayModes: ["inline", "fullscreen"],
+    });
 
     act(() => bridge.oninitialized?.());
 
-    expect(screen.getByRole("button", { name: "Expand Trip map" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Expand Trip map" }),
+    ).toBeTruthy();
   });
 
   it("expands and returns to the conversation without replacing the iframe", async () => {
     renderApp(["inline", "fullscreen"]);
-    const expand = await screen.findByRole("button", { name: "Expand Trip map" });
+    const expand = await screen.findByRole("button", {
+      name: "Expand Trip map",
+    });
     const iframe = screen.getByTitle("Trip map interactive app");
     const user = userEvent.setup();
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     act(() => mocks.bridges[0].oninitialized?.());
 
     await user.click(expand);
-    expect(screen.getByRole("dialog", { name: "Trip map interactive app" })).toBeTruthy();
+    expect(
+      screen.getByRole("dialog", { name: "Trip map interactive app" }),
+    ).toBeTruthy();
     expect(screen.getByTitle("Trip map interactive app")).toBe(iframe);
-    await waitFor(() => expect(mocks.bridges[0]?.setHostContext).toHaveBeenCalledWith(
-      expect.objectContaining({ displayMode: "fullscreen" }),
-    ));
+    await waitFor(() =>
+      expect(mocks.bridges[0]?.setHostContext).toHaveBeenCalledWith(
+        expect.objectContaining({ displayMode: "fullscreen" }),
+      ),
+    );
 
     await user.click(screen.getByRole("button", { name: "Return to chat" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByTitle("Trip map interactive app")).toBe(iframe);
     expect(document.activeElement).toBe(expand);
     expect(mocks.bridges).toHaveLength(1);
-    expect(mocks.readResource).toHaveBeenCalledWith(expect.objectContaining({
-      connectorId: "maps",
-      linkId: "account-2",
-    }));
+    expect(mocks.readResource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectorId: "maps",
+        linkId: "account-2",
+      }),
+    );
   });
 
   it("honors a widget display-mode request and reports the actual mode", async () => {
@@ -563,14 +1157,16 @@ describe("MCP App display modes", () => {
     const bridge = mocks.bridges[0];
 
     await act(async () => {
-      expect(await bridge.onrequestdisplaymode?.({ mode: "fullscreen" }))
-        .toEqual({ mode: "fullscreen" });
+      expect(
+        await bridge.onrequestdisplaymode?.({ mode: "fullscreen" }),
+      ).toEqual({ mode: "fullscreen" });
     });
     expect(screen.getByRole("dialog")).toBeTruthy();
 
     await act(async () => {
-      expect(await bridge.onrequestdisplaymode?.({ mode: "pip" }))
-        .toEqual({ mode: "fullscreen" });
+      expect(await bridge.onrequestdisplaymode?.({ mode: "pip" })).toEqual({
+        mode: "fullscreen",
+      });
     });
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
@@ -578,7 +1174,9 @@ describe("MCP App display modes", () => {
   it("opens a fullscreen-only widget directly and collapses it on close", async () => {
     renderApp(["fullscreen"], "fullscreen");
     await screen.findByRole("dialog", { name: "Trip map interactive app" });
-    await userEvent.setup().click(screen.getByRole("button", { name: "Return to chat" }));
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Return to chat" }));
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText("Open app")).toBeTruthy();
@@ -592,33 +1190,51 @@ describe("MCP App display modes", () => {
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     const bridge = mocks.bridges[0];
     const iframe = screen.getByTitle("Trip map interactive app");
-    bridge.getAppCapabilities.mockReturnValue({ availableDisplayModes: ["inline"] });
+    bridge.getAppCapabilities.mockReturnValue({
+      availableDisplayModes: ["inline"],
+    });
 
     act(() => bridge.oninitialized?.());
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByTitle("Trip map interactive app")).toBe(iframe);
-    expect(screen.queryByRole("button", { name: "Expand Trip map" })).toBeNull();
-    expect(bridge.setHostContext).toHaveBeenCalledWith(expect.objectContaining({
-      displayMode: "inline",
-      availableDisplayModes: ["inline", "fullscreen"],
-    }));
+    expect(
+      screen.queryByRole("button", { name: "Expand Trip map" }),
+    ).toBeNull();
+    expect(bridge.setHostContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayMode: "inline",
+        availableDisplayModes: ["inline", "fullscreen"],
+      }),
+    );
     await act(async () => {
-      expect(await bridge.onrequestdisplaymode?.({ mode: "fullscreen" }))
-        .toEqual({ mode: "inline" });
+      expect(
+        await bridge.onrequestdisplaymode?.({ mode: "fullscreen" }),
+      ).toEqual({ mode: "inline" });
     });
   });
 
   it("hosts a sidebar app as a page and routes tools through its session without advertising chat", async () => {
-    mocks.readResource.mockResolvedValue({ success: true, data: {
-      url: "about:blank", meta: { availableDisplayModes: ["fullscreen"] },
-    } });
+    mocks.readResource.mockResolvedValue({
+      success: true,
+      data: {
+        url: "about:blank",
+        meta: { availableDisplayModes: ["fullscreen"] },
+      },
+    });
     mocks.callTool.mockResolvedValue({ success: true, data: { content: [] } });
-    render(createElement(McpAppDisplay, {
-      sessionId: "app-session", presentation: "page", app: { ...app, originCallId: undefined },
-      unsupportedTools: { _dotcom_zero: "Live sync does not support this host" },
-      input: {}, title: "tldraw",
-    }));
+    render(
+      createElement(McpAppDisplay, {
+        sessionId: "app-session",
+        presentation: "page",
+        app: { ...app, originCallId: undefined },
+        unsupportedTools: {
+          _dotcom_zero: "Live sync does not support this host",
+        },
+        input: {},
+        title: "tldraw",
+      }),
+    );
     await screen.findByTitle("tldraw interactive app");
     await waitFor(() => expect(mocks.bridges).toHaveLength(1));
     const bridge = mocks.bridges[0];
@@ -626,17 +1242,28 @@ describe("MCP App display modes", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("button", { name: "Return to chat" })).toBeNull();
     expect(bridge.capabilities.message).toBeUndefined();
-    expect(bridge.setHostContext).toHaveBeenCalledWith(expect.objectContaining({
-      displayMode: "fullscreen", availableDisplayModes: ["fullscreen"],
-    }));
+    expect(bridge.setHostContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayMode: "fullscreen",
+        availableDisplayModes: ["fullscreen"],
+      }),
+    );
     await bridge.oncalltool?.({ name: "_dotcom_boards" });
-    expect(mocks.callTool).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "app-session", tool: "_dotcom_boards" }));
-    expect(await bridge.onrequestdisplaymode?.({ mode: "inline" })).toEqual({ mode: "fullscreen" });
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "app-session",
+        tool: "_dotcom_boards",
+      }),
+    );
+    expect(await bridge.onrequestdisplaymode?.({ mode: "inline" })).toEqual({
+      mode: "fullscreen",
+    });
     await bridge.onopenlink?.({ url: "https://www.tldraw.com/" });
     expect(mocks.openExternal).toHaveBeenCalledWith("https://www.tldraw.com/");
     expect(mocks.openUrl).not.toHaveBeenCalled();
     expect(await bridge.oncalltool?.({ name: "_dotcom_zero" })).toEqual({
-      isError: true, content: [{ type: "text", text: "Live sync does not support this host" }],
+      isError: true,
+      content: [{ type: "text", text: "Live sync does not support this host" }],
     });
     expect(mocks.callTool).toHaveBeenCalledTimes(1);
   });

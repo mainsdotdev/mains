@@ -596,6 +596,9 @@ export interface McpAppCallToolRequest {
 export interface McpAppCallToolResult {
   content: unknown[];
   structuredContent?: unknown;
+  /** The provider left structured data out of this result; content remains usable. */
+  structuredContentOmitted?: boolean;
+  resourceLinks?: unknown[];
   isError?: boolean;
   _meta?: unknown;
 }

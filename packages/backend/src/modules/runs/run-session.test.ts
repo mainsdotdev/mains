@@ -49,9 +49,9 @@ vi.mock("../providers/adapters", async () => ({
   couldModifyFiles: vi.fn().mockReturnValue(false),
   // The real classifier: turn-change attribution depends on what it names.
   toolWrites: (
-    await vi.importActual<typeof import("../providers/adapters/adapter.shared")>(
-      "../providers/adapters/adapter.shared",
-    )
+    await vi.importActual<
+      typeof import("../providers/adapters/adapter.shared")
+    >("../providers/adapters/adapter.shared")
   ).toolWrites,
 }));
 
@@ -83,7 +83,10 @@ import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
 import { APP_WRITER, worktreeWrites } from "../git";
 import { registerEventSink } from "../../ipc-kit/event-bus";
-import { createClaudePermissionModeRef, mapSDKMessage } from "../providers/adapters/claude.driver";
+import {
+  createClaudePermissionModeRef,
+  mapSDKMessage,
+} from "../providers/adapters/claude.driver";
 import {
   createCodexEventMapper,
   type CodexEventRunState,
@@ -112,7 +115,9 @@ describe("RunSession", () => {
       new Error("not a git repo"),
     );
     // Default: the working tree never changes, so no turn records changes.
-    vi.mocked(gitService.snapshotWorkingTree).mockReset().mockResolvedValue("tree-same");
+    vi.mocked(gitService.snapshotWorkingTree)
+      .mockReset()
+      .mockResolvedValue("tree-same");
     vi.mocked(gitService.diffTrees).mockReset();
     // Default: no worktree, so no run is ever told apart from a parallel one.
     vi.mocked(gitService.locateWorktree).mockReset();
@@ -148,76 +153,184 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   it("keeps a late tool completion in the turn where the call started", async () => {
     const session = makeSession();
-    await session.project({ type: "tool_call", toolName: "Write", input: { path: "first.md" },
-      metadata: { phase: "start", toolCallId: "late-tool" } });
+    await session.project({
+      type: "tool_call",
+      toolName: "Write",
+      input: { path: "first.md" },
+      metadata: { phase: "start", toolCallId: "late-tool" },
+    });
     const [first] = await runsRepo.findTurnsByRun("r1");
-    await session.project({ type: "artifact", kind: "user-prompt", content: "Follow up", metadata: { kind: "user-prompt" } });
-    await session.project({ type: "tool_call", toolName: "Write", output: { path: "first.md" },
-      metadata: { phase: "complete", toolCallId: "late-tool" } });
-    expect(await runsRepo.findToolCallsByRun("r1")).toEqual([expect.objectContaining({
-      metadata: expect.objectContaining({ turnId: first.id }), status: "done",
-    })]);
+    await session.project({
+      type: "artifact",
+      kind: "user-prompt",
+      content: "Follow up",
+      metadata: { kind: "user-prompt" },
+    });
+    await session.project({
+      type: "tool_call",
+      toolName: "Write",
+      output: { path: "first.md" },
+      metadata: { phase: "complete", toolCallId: "late-tool" },
+    });
+    expect(await runsRepo.findToolCallsByRun("r1")).toEqual([
+      expect.objectContaining({
+        metadata: expect.objectContaining({ turnId: first.id }),
+        status: "done",
+      }),
+    ]);
   });
-  it.each(["partial_answer", "final_answer"] as const)("confirms %s for existing split report blocks without changing content, order or other messages", async (phase) => {
-    const session = makeSession();
-    await flushBackground();
-    createRun(db, { id: "r2", accountId: "default", providerId: "copilot_cli", workspaceId: "w1" });
-    for (const [content, providerMessageId, isFromSubagent] of [
-      ["Progress", "progress", false], ["First part", "final", false],
-      ["Second part", "final", false], ["Child", "final", true],
-    ] as const) {
-      await session.project({ type: "artifact", kind: "report", content,
-        metadata: { providerMessageId, messagePhase: "commentary", isFromSubagent, source: "assistant.message" } });
-    }
-    await runsRepo.insertArtifact({ runId: "r2", kind: "report", content: "Other run",
-      metadata: { providerMessageId: "final", messagePhase: "commentary" } });
-    const before = await runsRepo.findArtifactsByRun("r1");
-    await session.project({ type: "message_phase", messageId: "final", phase });
-    const after = await runsRepo.findArtifactsByRun("r1");
-    expect(after.map((artifact) => [artifact.id, artifact.content, artifact.createdAt]))
-      .toEqual(before.map((artifact) => [artifact.id, artifact.content, artifact.createdAt]));
-    expect(after.map((artifact) => artifact.metadata?.messagePhase))
-      .toEqual(["commentary", phase, phase, "commentary"]);
-    expect(after[1].metadata?.source).toBe("assistant.message");
-    expect((await runsRepo.findArtifactsByRun("r2"))[0].metadata?.messagePhase).toBe("commentary");
-  });
+  it.each(["partial_answer", "final_answer"] as const)(
+    "confirms %s for existing split report blocks without changing content, order or other messages",
+    async (phase) => {
+      const session = makeSession();
+      await flushBackground();
+      createRun(db, {
+        id: "r2",
+        accountId: "default",
+        providerId: "copilot_cli",
+        workspaceId: "w1",
+      });
+      for (const [content, providerMessageId, isFromSubagent] of [
+        ["Progress", "progress", false],
+        ["First part", "final", false],
+        ["Second part", "final", false],
+        ["Child", "final", true],
+      ] as const) {
+        await session.project({
+          type: "artifact",
+          kind: "report",
+          content,
+          metadata: {
+            providerMessageId,
+            messagePhase: "commentary",
+            isFromSubagent,
+            source: "assistant.message",
+          },
+        });
+      }
+      await runsRepo.insertArtifact({
+        runId: "r2",
+        kind: "report",
+        content: "Other run",
+        metadata: { providerMessageId: "final", messagePhase: "commentary" },
+      });
+      const before = await runsRepo.findArtifactsByRun("r1");
+      await session.project({
+        type: "message_phase",
+        messageId: "final",
+        phase,
+      });
+      const after = await runsRepo.findArtifactsByRun("r1");
+      expect(
+        after.map((artifact) => [
+          artifact.id,
+          artifact.content,
+          artifact.createdAt,
+        ]),
+      ).toEqual(
+        before.map((artifact) => [
+          artifact.id,
+          artifact.content,
+          artifact.createdAt,
+        ]),
+      );
+      expect(after.map((artifact) => artifact.metadata?.messagePhase)).toEqual([
+        "commentary",
+        phase,
+        phase,
+        "commentary",
+      ]);
+      expect(after[1].metadata?.source).toBe("assistant.message");
+      expect(
+        (await runsRepo.findArtifactsByRun("r2"))[0].metadata?.messagePhase,
+      ).toBe("commentary");
+    },
+  );
 
   it("waits for a pending report insert before applying its final phase", async () => {
     const session = makeSession();
     await flushBackground();
     let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    const original = runsRepo.insertArtifact.bind(runsRepo);
-    const insert = vi.spyOn(runsRepo, "insertArtifact").mockImplementation(async (params) => {
-      await gate;
-      return original(params);
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
+    const original = runsRepo.insertArtifact.bind(runsRepo);
+    const insert = vi
+      .spyOn(runsRepo, "insertArtifact")
+      .mockImplementation(async (params) => {
+        await gate;
+        return original(params);
+      });
     try {
-      const writing = session.project({ type: "artifact", kind: "report", content: "Final answer",
-        metadata: { providerMessageId: "final", messagePhase: "commentary" } });
-      const confirming = session.project({ type: "message_phase", messageId: "final", phase: "final_answer" });
+      const writing = session.project({
+        type: "artifact",
+        kind: "report",
+        content: "Final answer",
+        metadata: { providerMessageId: "final", messagePhase: "commentary" },
+      });
+      const confirming = session.project({
+        type: "message_phase",
+        messageId: "final",
+        phase: "final_answer",
+      });
       release();
       await Promise.all([writing, confirming]);
-      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({
-        content: "Final answer", metadata: expect.objectContaining({ providerMessageId: "final", messagePhase: "final_answer", turnId: expect.any(Number) }),
-      })]);
-    } finally { release(); insert.mockRestore(); }
+      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([
+        expect.objectContaining({
+          content: "Final answer",
+          metadata: expect.objectContaining({
+            providerMessageId: "final",
+            messagePhase: "final_answer",
+            turnId: expect.any(Number),
+          }),
+        }),
+      ]);
+    } finally {
+      release();
+      insert.mockRestore();
+    }
   });
 
   it("persists steer input inside the current turn without a new Git boundary", async () => {
     const session = makeSession({ initialPromptContent: "original" });
     await flushBackground();
     const before = await runsRepo.findTurnsByRun("r1");
-    const snapshots = vi.mocked(gitService.snapshotWorkingTree).mock.calls.length;
-    await session.project({ type: "artifact", kind: "user-prompt", content: "new guidance",
-      metadata: { kind: "user-prompt", delivery: "steer", clientUserMessageId: "input-id", providerTurnId: "native-turn" } });
-    await session.project({ type: "artifact", kind: "user-prompt", content: "new guidance",
-      metadata: { kind: "user-prompt", delivery: "steer", clientUserMessageId: "input-id", providerTurnId: "native-turn" } });
+    const snapshots = vi.mocked(gitService.snapshotWorkingTree).mock.calls
+      .length;
+    await session.project({
+      type: "artifact",
+      kind: "user-prompt",
+      content: "new guidance",
+      metadata: {
+        kind: "user-prompt",
+        delivery: "steer",
+        clientUserMessageId: "input-id",
+        providerTurnId: "native-turn",
+      },
+    });
+    await session.project({
+      type: "artifact",
+      kind: "user-prompt",
+      content: "new guidance",
+      metadata: {
+        kind: "user-prompt",
+        delivery: "steer",
+        clientUserMessageId: "input-id",
+        providerTurnId: "native-turn",
+      },
+    });
     const after = await runsRepo.findTurnsByRun("r1");
     expect(after.map((turn) => turn.id)).toEqual(before.map((turn) => turn.id));
     expect(after[0]?.promptContent).toBe("original");
-    expect(vi.mocked(gitService.snapshotWorkingTree).mock.calls).toHaveLength(snapshots);
-    expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({ content: "new guidance", metadata: expect.objectContaining({ delivery: "steer" }) })]);
+    expect(vi.mocked(gitService.snapshotWorkingTree).mock.calls).toHaveLength(
+      snapshots,
+    );
+    expect(await runsRepo.findArtifactsByRun("r1")).toEqual([
+      expect.objectContaining({
+        content: "new guidance",
+        metadata: expect.objectContaining({ delivery: "steer" }),
+      }),
+    ]);
     await session.finalize({ status: "succeeded" });
   });
 
@@ -252,7 +365,10 @@ describe("RunSession", () => {
       createRunTurn(db, { runId: "r1", turnIndex: 1 });
       createRunTurn(db, { runId: "r1", turnIndex: 2 });
 
-      makeSession({ seedTurnIndex: 2, initialPromptContent: "continued message" });
+      makeSession({
+        seedTurnIndex: 2,
+        initialPromptContent: "continued message",
+      });
       await flushBackground();
 
       const turns = await runsRepo.findTurnsByRun("r1");
@@ -266,9 +382,16 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   describe("turn changes", () => {
     const treeDiff = {
-      diffText: "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more\n",
+      diffText:
+        "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,2 @@\n-old\n+new\n+more\n",
       files: [
-        { path: "a.ts", status: "modified" as const, additions: 2, deletions: 1, binary: false },
+        {
+          path: "a.ts",
+          status: "modified" as const,
+          additions: 2,
+          deletions: 1,
+          binary: false,
+        },
       ],
       additions: 2,
       deletions: 1,
@@ -285,7 +408,11 @@ describe("RunSession", () => {
       await flushBackground();
       await session.finalize({ status: "succeeded" });
 
-      expect(gitService.diffTrees).toHaveBeenCalledWith("/tmp/w1", "tree-start", "tree-end");
+      expect(gitService.diffTrees).toHaveBeenCalledWith(
+        "/tmp/w1",
+        "tree-start",
+        "tree-end",
+      );
       const [turn] = await runsRepo.findTurnsByRun("r1");
       expect(turn.changes).toMatchObject({
         files: treeDiff.files,
@@ -336,8 +463,13 @@ describe("RunSession", () => {
           metadata: { phase, toolCallId },
         }));
 
-      async function edit(session: ReturnType<typeof makeSession>, id: string, filePath: string) {
-        for (const event of editEvents(id, filePath)) await session.project(event as any);
+      async function edit(
+        session: ReturnType<typeof makeSession>,
+        id: string,
+        filePath: string,
+      ) {
+        for (const event of editEvents(id, filePath))
+          await session.project(event as any);
       }
 
       beforeEach(() => {
@@ -351,8 +483,13 @@ describe("RunSession", () => {
         tree = "t0";
         // A worktree of its own per test: the ledger is module state.
         topLevel = `/tmp/w1-${Math.random()}`;
-        vi.mocked(gitService.locateWorktree).mockResolvedValue({ topLevel, prefix: "" });
-        vi.mocked(gitService.snapshotWorkingTree).mockImplementation(async () => tree);
+        vi.mocked(gitService.locateWorktree).mockResolvedValue({
+          topLevel,
+          prefix: "",
+        });
+        vi.mocked(gitService.snapshotWorkingTree).mockImplementation(
+          async () => tree,
+        );
         vi.mocked(gitService.diffTrees).mockImplementation(
           async (_cwd, _from, to, paths) => {
             const files = (changed[to] ?? [])
@@ -365,7 +502,9 @@ describe("RunSession", () => {
                 binary: false,
               }));
             return {
-              diffText: files.map((f) => `diff --git a/${f.path} b/${f.path}\n`).join(""),
+              diffText: files
+                .map((f) => `diff --git a/${f.path} b/${f.path}\n`)
+                .join(""),
               files,
               additions: files.length,
               deletions: files.length,
@@ -419,7 +558,12 @@ describe("RunSession", () => {
 
         expect(await storedPaths("r1")).toEqual(["a.ts"]);
         expect(await storedPaths("r2")).toEqual(["b.ts"]);
-        expect(gitService.diffTrees).toHaveBeenCalledWith("/tmp/w1", "t0", "t2", ["a.ts"]);
+        expect(gitService.diffTrees).toHaveBeenCalledWith(
+          "/tmp/w1",
+          "t0",
+          "t2",
+          ["a.ts"],
+        );
         const [turn] = await runsRepo.findTurnsByRun("r1");
         const stored = await runsRepo.findTurnChanges("r1", turn.id);
         expect(stored?.diffText).toBe("diff --git a/a.ts b/a.ts\n");
@@ -620,28 +764,165 @@ describe("RunSession", () => {
   // project — tool_call events
   // ─────────────────────────────────────────────────────────────
   describe("project — tool_call events", () => {
+    it.each([false, true])(
+      "retains omitted MCP results and text after a database read, app=%s",
+      async (hasApp) => {
+        const session = makeSession();
+        await flushBackground();
+        const cs = {
+          runId: "r1",
+          state: { hasAssistantContent: false },
+          toolCallIndex: new Map(),
+          permissionMode: createClaudePermissionModeRef("default"),
+          ...(hasApp
+            ? {
+                mcpApps: {
+                  catalog: {
+                    known: new Set(),
+                    apps: new Map([
+                      [
+                        "mcp__demo__lookup",
+                        {
+                          server: "demo",
+                          tool: "lookup",
+                          resourceUri: "ui://demo/results",
+                        },
+                      ],
+                    ]),
+                  },
+                },
+              }
+            : {}),
+        } as any;
+        const base = { session_id: "sdk", parent_tool_use_id: null };
+        const messages = [
+          {
+            ...base,
+            type: "assistant",
+            uuid: "start",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "lookup",
+                  name: "mcp__demo__lookup",
+                  input: { query: "results" },
+                },
+              ],
+            },
+          },
+          {
+            ...base,
+            type: "user",
+            uuid: "result",
+            tool_use_result: {
+              structuredContentOmitted: true,
+              resourceLinks: [
+                { uri: "result://full-data", name: "Full result" },
+              ],
+            },
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "lookup",
+                  content: "Available summary",
+                },
+              ],
+            },
+          },
+        ];
+        for (const msg of messages)
+          for (const event of mapSDKMessage(msg as any, cs))
+            await session.project(event);
+        await session.finalize({ status: "succeeded" });
+        const [saved] = await runsRepo.findToolCallsByRun("r1");
+        expect(saved).toMatchObject({
+          status: "done",
+          output: {
+            content: [{ type: "text", text: "Available summary" }],
+            structuredContentOmitted: true,
+            resourceLinks: [{ uri: "result://full-data", name: "Full result" }],
+          },
+        });
+        expect(saved.output).not.toHaveProperty("structuredContent");
+        expect(saved.error).toBeNull();
+      },
+    );
+
     it("keeps a detached Claude tool running and saves only its eventual output", async () => {
       const session = makeSession();
       await flushBackground();
-      const cs = { runId: "r1", state: { hasAssistantContent: false }, toolCallIndex: new Map(),
-        permissionMode: createClaudePermissionModeRef("default") } as any;
+      const cs = {
+        runId: "r1",
+        state: { hasAssistantContent: false },
+        toolCallIndex: new Map(),
+        permissionMode: createClaudePermissionModeRef("default"),
+      } as any;
       const base = { session_id: "sdk-session", parent_tool_use_id: null };
       const messages = [
-        { ...base, type: "assistant", uuid: "start", message: { role: "assistant", content: [
-          { type: "tool_use", id: "web-1", name: "WebFetch", input: { url: "https://docs.test" } },
-        ] } },
-        { ...base, type: "user", uuid: "detached", tool_use_result: { detachedToolCall: true }, message: {
-          role: "user", content: [{ type: "tool_result", tool_use_id: "web-1", content: "Result will follow" }],
-        } },
+        {
+          ...base,
+          type: "assistant",
+          uuid: "start",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "web-1",
+                name: "WebFetch",
+                input: { url: "https://docs.test" },
+              },
+            ],
+          },
+        },
+        {
+          ...base,
+          type: "user",
+          uuid: "detached",
+          tool_use_result: { detachedToolCall: true },
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "web-1",
+                content: "Result will follow",
+              },
+            ],
+          },
+        },
       ];
-      for (const msg of messages) for (const event of mapSDKMessage(msg as any, cs)) await session.project(event);
+      for (const msg of messages)
+        for (const event of mapSDKMessage(msg as any, cs))
+          await session.project(event);
       const [waiting] = await runsRepo.findToolCallsByRun("r1");
-      expect(waiting).toMatchObject({ status: "running", endedAt: null, output: null });
+      expect(waiting).toMatchObject({
+        status: "running",
+        endedAt: null,
+        output: null,
+      });
 
-      const msg = { ...base, type: "user", uuid: "real-result", message: {
-        role: "user", content: [{ type: "tool_result", tool_use_id: "web-1", content: "Actual page" }],
-      } };
-      for (const event of mapSDKMessage(msg as any, cs)) await session.project(event);
+      const msg = {
+        ...base,
+        type: "user",
+        uuid: "real-result",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "web-1",
+              content: "Actual page",
+            },
+          ],
+        },
+      };
+      for (const event of mapSDKMessage(msg as any, cs))
+        await session.project(event);
       const [complete] = await runsRepo.findToolCallsByRun("r1");
       expect(complete.id).toBe(waiting.id);
       expect(complete).toMatchObject({ status: "done", output: "Actual page" });
@@ -928,56 +1209,193 @@ describe("RunSession", () => {
     it("persists native task hierarchy and links child reports to their immediate agent", async () => {
       const session = makeSession();
       await flushBackground();
-      const cs = { runId: "r1", state: { hasAssistantContent: false }, toolCallIndex: new Map(), taskIndex: new Map(),
-        permissionMode: createClaudePermissionModeRef("default") } as any;
+      const cs = {
+        runId: "r1",
+        state: { hasAssistantContent: false },
+        toolCallIndex: new Map(),
+        taskIndex: new Map(),
+        permissionMode: createClaudePermissionModeRef("default"),
+      } as any;
       async function project(msg: Record<string, unknown>) {
-        for (const event of mapSDKMessage({ session_id: "sdk", uuid: "u", ...msg } as any, cs)) await session.project(event);
+        for (const event of mapSDKMessage(
+          { session_id: "sdk", uuid: "u", ...msg } as any,
+          cs,
+        ))
+          await session.project(event);
       }
-      await project({ type: "assistant", parent_tool_use_id: null, message: { role: "assistant", content: [
-        { type: "tool_use", id: "parent-call", name: "Agent", input: {} },
-        { type: "tool_use", id: "child-call", name: "Agent", input: {} },
-      ] } });
-      await project({ type: "system", subtype: "task_started", task_id: "parent", run_id: "001", tool_use_id: "parent-call", task_type: "local_agent" });
-      await project({ type: "system", subtype: "task_notification", task_id: "parent", run_id: "001", status: "completed" });
-      await project({ type: "system", subtype: "task_started", task_id: "child", run_id: "002", tool_use_id: "child-call", task_type: "local_agent", parent_task_id: "parent" });
-      await project({ type: "assistant", parent_tool_use_id: null, agent_id: "child", message: { role: "assistant", content: [
-        { type: "text", text: "Nested report" }, { type: "tool_use", id: "read", name: "Read", input: {} },
-      ] } });
+      await project({
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "parent-call", name: "Agent", input: {} },
+            { type: "tool_use", id: "child-call", name: "Agent", input: {} },
+          ],
+        },
+      });
+      await project({
+        type: "system",
+        subtype: "task_started",
+        task_id: "parent",
+        run_id: "001",
+        tool_use_id: "parent-call",
+        task_type: "local_agent",
+      });
+      await project({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "parent",
+        run_id: "001",
+        status: "completed",
+      });
+      await project({
+        type: "system",
+        subtype: "task_started",
+        task_id: "child",
+        run_id: "002",
+        tool_use_id: "child-call",
+        task_type: "local_agent",
+        parent_task_id: "parent",
+      });
+      await project({
+        type: "assistant",
+        parent_tool_use_id: null,
+        agent_id: "child",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Nested report" },
+            { type: "tool_use", id: "read", name: "Read", input: {} },
+          ],
+        },
+      });
       const calls = await runsRepo.findToolCallsByRun("r1");
-      expect(calls.find((call) => call.toolId === "child-call")).toMatchObject({ parentToolCallId: "parent-call", metadata: {
-        isFromSubagent: true, task: { taskId: "child", providerRunId: "002", parentTaskId: "parent" },
-      } });
-      expect(calls.find((call) => call.toolId === "read")).toMatchObject({ parentToolCallId: "child-call" });
-      expect(await runsRepo.findArtifactsByRun("r1")).toContainEqual(expect.objectContaining({ content: "Nested report", metadata: expect.objectContaining({
-        agentId: "child", parentToolUseId: "child-call", isFromSubagent: true,
-      }) }));
+      expect(calls.find((call) => call.toolId === "child-call")).toMatchObject({
+        parentToolCallId: "parent-call",
+        metadata: {
+          isFromSubagent: true,
+          task: {
+            taskId: "child",
+            providerRunId: "002",
+            parentTaskId: "parent",
+          },
+        },
+      });
+      expect(calls.find((call) => call.toolId === "read")).toMatchObject({
+        parentToolCallId: "child-call",
+      });
+      expect(await runsRepo.findArtifactsByRun("r1")).toContainEqual(
+        expect.objectContaining({
+          content: "Nested report",
+          metadata: expect.objectContaining({
+            agentId: "child",
+            parentToolUseId: "child-call",
+            isFromSubagent: true,
+          }),
+        }),
+      );
       // Membership can remove a parent relationship without an outcome change.
-      await project({ type: "system", subtype: "background_tasks_changed", tasks: [
-        { task_id: "child", run_id: "002", task_type: "local_agent", description: "Child", ambient: false },
-      ] });
-      const child = (await runsRepo.findToolCallsByRun("r1")).find((call) => call.toolId === "child-call");
+      await project({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [
+          {
+            task_id: "child",
+            run_id: "002",
+            task_type: "local_agent",
+            description: "Child",
+            ambient: false,
+          },
+        ],
+      });
+      const child = (await runsRepo.findToolCallsByRun("r1")).find(
+        (call) => call.toolId === "child-call",
+      );
       expect(child?.parentToolCallId).toBeNull();
       expect(child?.metadata?.parentToolUseId).toBeUndefined();
-      expect(child?.metadata?.task).toMatchObject({ status: "running", backgroundActive: true });
+      expect(child?.metadata?.task).toMatchObject({
+        status: "running",
+        backgroundActive: true,
+      });
       await session.finalize({ status: "succeeded" });
     });
 
     it("hydrates native execution ordering and clears the old outcome when the same agent runs again", async () => {
-      const id = await runsRepo.insertToolCall({ accountId: "default", runId: "r1", providerId: "copilot_cli", toolId: "spawn", toolName: "Agent", status: "done" });
-      await runsRepo.updateToolCall(id, { metadata: {
-        subagent: { phase: "failed", providerRunId: "002", agentId: "agent", model: "sonnet", error: "Old failure", result: "Old result" },
-        task: { phase: "completed", taskId: "agent", taskType: "local_agent", providerRunId: "002", status: "failed", error: "Old failure", outputFile: "/tmp/old.log", summary: "Old summary" },
-      } });
+      const id = await runsRepo.insertToolCall({
+        accountId: "default",
+        runId: "r1",
+        providerId: "copilot_cli",
+        toolId: "spawn",
+        toolName: "Agent",
+        status: "done",
+      });
+      await runsRepo.updateToolCall(id, {
+        metadata: {
+          subagent: {
+            phase: "failed",
+            providerRunId: "002",
+            agentId: "agent",
+            model: "sonnet",
+            error: "Old failure",
+            result: "Old result",
+          },
+          task: {
+            phase: "completed",
+            taskId: "agent",
+            taskType: "local_agent",
+            providerRunId: "002",
+            status: "failed",
+            error: "Old failure",
+            outputFile: "/tmp/old.log",
+            summary: "Old summary",
+          },
+        },
+      });
       const session = makeSession();
       await flushBackground();
-      await session.project({ type: "task", phase: "completed", taskId: "agent", toolCallId: "spawn", providerRunId: "001", status: "completed" });
-      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({ providerRunId: "002", status: "failed" });
-      await session.project({ type: "task", phase: "started", taskId: "agent", toolCallId: "spawn", providerRunId: "003", taskType: "local_agent", status: "running" });
-      await session.project({ type: "subagent", phase: "completed", agentType: "Explore", parentToolUseId: "spawn", providerRunId: "002", result: "Late old result" });
+      await session.project({
+        type: "task",
+        phase: "completed",
+        taskId: "agent",
+        toolCallId: "spawn",
+        providerRunId: "001",
+        status: "completed",
+      });
+      expect(
+        (await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task,
+      ).toMatchObject({ providerRunId: "002", status: "failed" });
+      await session.project({
+        type: "task",
+        phase: "started",
+        taskId: "agent",
+        toolCallId: "spawn",
+        providerRunId: "003",
+        taskType: "local_agent",
+        status: "running",
+      });
+      await session.project({
+        type: "subagent",
+        phase: "completed",
+        agentType: "Explore",
+        parentToolUseId: "spawn",
+        providerRunId: "002",
+        result: "Late old result",
+      });
       const call = (await runsRepo.findToolCallsByRun("r1"))[0];
-      expect(call.metadata?.task).toMatchObject({ providerRunId: "003", status: "running", phase: "started" });
-      for (const key of ["error", "outputFile", "summary"]) expect((call.metadata?.task as any)?.[key]).toBeUndefined();
-      expect(call.metadata?.subagent).toMatchObject({ providerRunId: "003", phase: "running", model: "sonnet", agentId: "agent" });
+      expect(call.metadata?.task).toMatchObject({
+        providerRunId: "003",
+        status: "running",
+        phase: "started",
+      });
+      for (const key of ["error", "outputFile", "summary"])
+        expect((call.metadata?.task as any)?.[key]).toBeUndefined();
+      expect(call.metadata?.subagent).toMatchObject({
+        providerRunId: "003",
+        phase: "running",
+        model: "sonnet",
+        agentId: "agent",
+      });
       expect((call.metadata?.subagent as any)?.result).toBeUndefined();
       expect((call.metadata?.subagent as any)?.error).toBeUndefined();
       await session.finalize({ status: "succeeded" });
@@ -986,21 +1404,76 @@ describe("RunSession", () => {
     it("persists full background replacement separately from the task's final outcome", async () => {
       const session = makeSession();
       await flushBackground();
-      const cs = { runId: "r1", state: { hasAssistantContent: false }, toolCallIndex: new Map(), taskIndex: new Map(),
-        permissionMode: createClaudePermissionModeRef("default") } as any;
+      const cs = {
+        runId: "r1",
+        state: { hasAssistantContent: false },
+        toolCallIndex: new Map(),
+        taskIndex: new Map(),
+        permissionMode: createClaudePermissionModeRef("default"),
+      } as any;
       async function project(msg: Record<string, unknown>) {
-        for (const event of mapSDKMessage({ session_id: "sdk", uuid: "u", ...msg } as any, cs)) await session.project(event);
+        for (const event of mapSDKMessage(
+          { session_id: "sdk", uuid: "u", ...msg } as any,
+          cs,
+        ))
+          await session.project(event);
       }
-      await project({ type: "assistant", parent_tool_use_id: null, message: { role: "assistant", content: [{ type: "tool_use", id: "spawn", name: "Agent", input: {} }] } });
-      const background = { task_id: "agent", run_id: "001", task_type: "local_agent", description: "Review" };
-      await project({ type: "system", subtype: "background_tasks_changed", tasks: [background] });
-      await project({ type: "system", subtype: "task_started", ...background, tool_use_id: "spawn" });
-      await project({ type: "system", subtype: "background_tasks_changed", tasks: [] });
-      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({ status: "running", backgroundActive: false });
-      await project({ type: "system", subtype: "task_notification", task_id: "agent", run_id: "001", status: "failed", summary: "Actual failure" });
-      await project({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+      await project({
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "spawn", name: "Agent", input: {} },
+          ],
+        },
+      });
+      const background = {
+        task_id: "agent",
+        run_id: "001",
+        task_type: "local_agent",
+        description: "Review",
+      };
+      await project({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [background],
+      });
+      await project({
+        type: "system",
+        subtype: "task_started",
+        ...background,
+        tool_use_id: "spawn",
+      });
+      await project({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [],
+      });
+      expect(
+        (await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task,
+      ).toMatchObject({ status: "running", backgroundActive: false });
+      await project({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "agent",
+        run_id: "001",
+        status: "failed",
+        summary: "Actual failure",
+      });
+      await project({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [],
+      });
       await session.finalize({ status: "succeeded" });
-      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({ status: "failed", error: "Actual failure", backgroundActive: false });
+      expect(
+        (await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task,
+      ).toMatchObject({
+        status: "failed",
+        error: "Actual failure",
+        backgroundActive: false,
+      });
     });
 
     it("persists provider call ids and parent linkage end-to-end", async () => {
@@ -1140,8 +1613,7 @@ describe("RunSession", () => {
         ts: 123,
       });
 
-      const [persistedTurn] =
-        await runsRepo.findTurnsByRun("r1");
+      const [persistedTurn] = await runsRepo.findTurnsByRun("r1");
       expect(persistedTurn.metadata).toEqual({
         existing: "keep",
         codexPlan: {
@@ -1166,8 +1638,7 @@ describe("RunSession", () => {
         ts: 456,
       });
 
-      const [persistedTurn] =
-        await runsRepo.findTurnsByRun("r1");
+      const [persistedTurn] = await runsRepo.findTurnsByRun("r1");
       expect(persistedTurn.metadata?.codexPlan).toEqual({
         providerTurnId: "turn-provider-early",
         steps: [{ step: "Start", status: "in_progress" }],
@@ -1190,8 +1661,15 @@ describe("RunSession", () => {
 
       await session.project({
         type: "subagent",
-        phase: "invoked", agentType: "general-purpose", agentId: "a26e6cd0", parentToolUseId: "toolu_agent",
-        model: "gpt-6.1-sol", reasoningEffort: "ultra", role: "reviewer", agentPath: "/root/review", ts: 900,
+        phase: "invoked",
+        agentType: "general-purpose",
+        agentId: "a26e6cd0",
+        parentToolUseId: "toolu_agent",
+        model: "gpt-6.1-sol",
+        reasoningEffort: "ultra",
+        role: "reviewer",
+        agentPath: "/root/review",
+        ts: 900,
       });
 
       await session.project({
@@ -1212,7 +1690,10 @@ describe("RunSession", () => {
         result: "Counted 42 files",
         updatedAt: 999,
         invokedAt: 900,
-        model: "gpt-6.1-sol", reasoningEffort: "ultra", role: "reviewer", agentPath: "/root/review",
+        model: "gpt-6.1-sol",
+        reasoningEffort: "ultra",
+        role: "reviewer",
+        agentPath: "/root/review",
       });
     });
 
@@ -1357,138 +1838,298 @@ describe("RunSession", () => {
       await flushBackground();
       await session.finalize({
         status: "succeeded",
-        usage: { totalCostUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        usage: {
+          totalCostUsd: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
       });
       const [turn] = await runsRepo.findTurnsByRun("r1");
-      expect(turn).toMatchObject({ status: "completed", costMicros: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
-    });
-
-    it.each([false, true])("does not recover raw Codex follow-ups after their completed message (suggestions only: %s)", async (suggestionsOnly) => {
-      const session = makeSession();
-      await flushBackground();
-      const state: CodexEventRunState = {
-        threadId: "thread-parent", turnId: null, currentMessageItemId: null,
-        agentMessageBuffer: "", emittedAgentMessageItemIds: new Set(),
-        emittedAsyncQuestionItemIds: new Set(), emittedContextCompactionItemIds: new Set(),
-        startedContextCompactionItemIds: new Set(), pendingFlush: [],
-        mainsCtx: { workspaceId: "w1", rootPath: null, runId: "r1" },
-        fileChangeBuffers: new Map(), fileChangeItems: new Map(), commandOutputBuffers: new Map(),
-        emittedImagePaths: new Set(), emittedDocPaths: new Set(), emittedVisualizationKeys: new Set(),
-        runStartedAt: Date.now(), planBuffers: new Map(), lastPlanSnapshot: null, subAgents: new Map(),
-      };
-      const mapper = createCodexEventMapper({
-        getRunState: () => state, onReviewCompleted: vi.fn(),
-        onParentThreadStarted: vi.fn(), getDefaultModel: () => "gpt-fixture",
+      expect(turn).toMatchObject({
+        status: "completed",
+        costMicros: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
       });
-      const directives = [
-        '- :codex-followup[Metni güçlendir]{prompt="CV’min metnini daha kısa ve güçlü şekilde yeniden yaz."}',
-        '- :codex-followup[Mobil role uyarla]{prompt="CV’mi mobil rol için düzenle."}',
-        '- :codex-followup[Etkiyi ortaya çıkar]{prompt="Deneyimlerim hakkında hedefli sorular sor."}',
-      ].join("\n");
-      const text = suggestionsOnly ? directives :
-        `CV için önerilerim.\n:codex-file-citation{purpose="source" path="/tmp/cv.pdf"}\n\n${directives}`;
-      for (const event of mapper.mapNotification("item/agentMessage/delta", {
-        threadId: "thread-parent", itemId: "message-final", delta: text,
-      }, "r1")) await session.project(event);
-      for (const event of mapper.mapNotification("item/completed", {
-        threadId: "thread-parent", item: { id: "message-final", type: "agentMessage", text },
-      }, "r1")) await session.project(event);
-      await session.finalize({ status: "succeeded" });
-
-      const artifacts = await runsRepo.findArtifactsByRun("r1");
-      expect(artifacts.filter((artifact) => artifact.kind === "report").map((artifact) => artifact.content))
-        .toEqual(suggestionsOnly ? [] : ["CV için önerilerim. [cv.pdf](/tmp/cv.pdf)"]);
-      expect(artifacts.slice(-3).map((artifact) => [artifact.kind, artifact.metadata?.label]))
-        .toEqual(["Metni güçlendir", "Mobil role uyarla", "Etkiyi ortaya çıkar"].map((label) => ["prompt_suggestion", label]));
-      if (!suggestionsOnly) {
-        expect(artifacts[0].metadata?.streamId).toEqual(expect.stringContaining("codex-msg-r1-message-final-"));
-      }
     });
 
-    it.each(["canceled", "failed", "succeeded"] as const)("preserves the latest streamed answer before publishing %s", async (status) => {
-      const session = makeSession();
-      await flushBackground();
-      const atStatus: Array<ReturnType<typeof runsRepo.findArtifactsByRun>> = [];
-      const off = registerEventSink({ kind: "test", send: (channel, payload) => {
-        if (channel === "runs:statusChanged" && (payload as { status: string }).status === status) {
-          atStatus.push(runsRepo.findArtifactsByRun("r1"));
-        }
-      } });
-      try {
-        for (const content of ["First chunk", "Received answer ".repeat(1000)]) {
-          await session.project({ type: "artifact", kind: "report", content, ephemeral: true,
-            streamId: "native-message", metadata: { source: "agent_message_streaming" } });
-        }
-        expect(await runsRepo.findArtifactsByRun("r1")).toEqual([]);
-        await session.finalize({ status });
-        await session.finalize({ status });
+    it.each([false, true])(
+      "does not recover raw Codex follow-ups after their completed message (suggestions only: %s)",
+      async (suggestionsOnly) => {
+        const session = makeSession();
+        await flushBackground();
+        const state: CodexEventRunState = {
+          threadId: "thread-parent",
+          turnId: null,
+          currentMessageItemId: null,
+          agentMessageBuffer: "",
+          emittedAgentMessageItemIds: new Set(),
+          emittedAsyncQuestionItemIds: new Set(),
+          emittedContextCompactionItemIds: new Set(),
+          startedContextCompactionItemIds: new Set(),
+          pendingFlush: [],
+          mainsCtx: { workspaceId: "w1", rootPath: null, runId: "r1" },
+          fileChangeBuffers: new Map(),
+          fileChangeItems: new Map(),
+          commandOutputBuffers: new Map(),
+          emittedImagePaths: new Set(),
+          emittedDocPaths: new Set(),
+          emittedVisualizationKeys: new Set(),
+          runStartedAt: Date.now(),
+          planBuffers: new Map(),
+          lastPlanSnapshot: null,
+          subAgents: new Map(),
+        };
+        const mapper = createCodexEventMapper({
+          getRunState: () => state,
+          onReviewCompleted: vi.fn(),
+          onParentThreadStarted: vi.fn(),
+          getDefaultModel: () => "gpt-fixture",
+        });
+        const directives = [
+          '- :codex-followup[Metni güçlendir]{prompt="CV’min metnini daha kısa ve güçlü şekilde yeniden yaz."}',
+          '- :codex-followup[Mobil role uyarla]{prompt="CV’mi mobil rol için düzenle."}',
+          '- :codex-followup[Etkiyi ortaya çıkar]{prompt="Deneyimlerim hakkında hedefli sorular sor."}',
+        ].join("\n");
+        const text = suggestionsOnly
+          ? directives
+          : `CV için önerilerim.\n:codex-file-citation{purpose="source" path="/tmp/cv.pdf"}\n\n${directives}`;
+        for (const event of mapper.mapNotification(
+          "item/agentMessage/delta",
+          {
+            threadId: "thread-parent",
+            itemId: "message-final",
+            delta: text,
+          },
+          "r1",
+        ))
+          await session.project(event);
+        for (const event of mapper.mapNotification(
+          "item/completed",
+          {
+            threadId: "thread-parent",
+            item: { id: "message-final", type: "agentMessage", text },
+          },
+          "r1",
+        ))
+          await session.project(event);
+        await session.finalize({ status: "succeeded" });
+
         const artifacts = await runsRepo.findArtifactsByRun("r1");
-        expect(artifacts).toHaveLength(1);
-        expect(artifacts[0]).toMatchObject({ kind: "report", content: "Received answer ".repeat(1000),
-          metadata: { streaming: false, interrupted: status !== "succeeded", streamId: expect.stringContaining("native-message-") } });
-        expect(atStatus).toHaveLength(1);
-        expect(await atStatus[0]).toEqual(artifacts);
-      } finally { off(); }
-    });
+        expect(
+          artifacts
+            .filter((artifact) => artifact.kind === "report")
+            .map((artifact) => artifact.content),
+        ).toEqual(
+          suggestionsOnly ? [] : ["CV için önerilerim. [cv.pdf](/tmp/cv.pdf)"],
+        );
+        expect(
+          artifacts
+            .slice(-3)
+            .map((artifact) => [artifact.kind, artifact.metadata?.label]),
+        ).toEqual(
+          ["Metni güçlendir", "Mobil role uyarla", "Etkiyi ortaya çıkar"].map(
+            (label) => ["prompt_suggestion", label],
+          ),
+        );
+        if (!suggestionsOnly) {
+          expect(artifacts[0].metadata?.streamId).toEqual(
+            expect.stringContaining("codex-msg-r1-message-final-"),
+          );
+        }
+      },
+    );
+
+    it.each(["canceled", "failed", "succeeded"] as const)(
+      "preserves the latest streamed answer before publishing %s",
+      async (status) => {
+        const session = makeSession();
+        await flushBackground();
+        const atStatus: Array<ReturnType<typeof runsRepo.findArtifactsByRun>> =
+          [];
+        const off = registerEventSink({
+          kind: "test",
+          send: (channel, payload) => {
+            if (
+              channel === "runs:statusChanged" &&
+              (payload as { status: string }).status === status
+            ) {
+              atStatus.push(runsRepo.findArtifactsByRun("r1"));
+            }
+          },
+        });
+        try {
+          for (const content of [
+            "First chunk",
+            "Received answer ".repeat(1000),
+          ]) {
+            await session.project({
+              type: "artifact",
+              kind: "report",
+              content,
+              ephemeral: true,
+              streamId: "native-message",
+              metadata: { source: "agent_message_streaming" },
+            });
+          }
+          expect(await runsRepo.findArtifactsByRun("r1")).toEqual([]);
+          await session.finalize({ status });
+          await session.finalize({ status });
+          const artifacts = await runsRepo.findArtifactsByRun("r1");
+          expect(artifacts).toHaveLength(1);
+          expect(artifacts[0]).toMatchObject({
+            kind: "report",
+            content: "Received answer ".repeat(1000),
+            metadata: {
+              streaming: false,
+              interrupted: status !== "succeeded",
+              streamId: expect.stringContaining("native-message-"),
+            },
+          });
+          expect(atStatus).toHaveLength(1);
+          expect(await atStatus[0]).toEqual(artifacts);
+        } finally {
+          off();
+        }
+      },
+    );
 
     it("does not recover completed messages, cleared previews, thinking, or tool status", async () => {
       const session = makeSession();
       await flushBackground();
-      await session.project({ type: "artifact", kind: "report", content: "Complete", ephemeral: true,
-        streamId: "done", metadata: { source: "agent_message_streaming" } });
-      await session.project({ type: "artifact", kind: "report", content: "Complete answer",
-        metadata: { source: "assistant.message" } });
-      await session.project({ type: "artifact", kind: "report", content: "Cleared", ephemeral: true,
-        streamId: "cleared", metadata: { source: "agent_message_streaming" } });
-      await session.project({ type: "artifact", kind: "report", content: "", ephemeral: true,
-        streamId: "cleared", metadata: { source: "agent_message_streaming" } });
-      for (const source of ["agent_thinking_streaming", "agent_thought_streaming", "codex_cmd_streaming", "codex_plan_streaming"]) {
-        await session.project({ type: "artifact", kind: "report", content: "Status", ephemeral: true, streamId: source, metadata: { source } });
+      await session.project({
+        type: "artifact",
+        kind: "report",
+        content: "Complete",
+        ephemeral: true,
+        streamId: "done",
+        metadata: { source: "agent_message_streaming" },
+      });
+      await session.project({
+        type: "artifact",
+        kind: "report",
+        content: "Complete answer",
+        metadata: { source: "assistant.message" },
+      });
+      await session.project({
+        type: "artifact",
+        kind: "report",
+        content: "Cleared",
+        ephemeral: true,
+        streamId: "cleared",
+        metadata: { source: "agent_message_streaming" },
+      });
+      await session.project({
+        type: "artifact",
+        kind: "report",
+        content: "",
+        ephemeral: true,
+        streamId: "cleared",
+        metadata: { source: "agent_message_streaming" },
+      });
+      for (const source of [
+        "agent_thinking_streaming",
+        "agent_thought_streaming",
+        "codex_cmd_streaming",
+        "codex_plan_streaming",
+      ]) {
+        await session.project({
+          type: "artifact",
+          kind: "report",
+          content: "Status",
+          ephemeral: true,
+          streamId: source,
+          metadata: { source },
+        });
       }
       await session.finalize({ status: "canceled" });
-      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({
-        content: "Complete answer", metadata: expect.objectContaining({ streamId: expect.stringContaining("done-") }),
-      })]);
+      expect(await runsRepo.findArtifactsByRun("r1")).toEqual([
+        expect.objectContaining({
+          content: "Complete answer",
+          metadata: expect.objectContaining({
+            streamId: expect.stringContaining("done-"),
+          }),
+        }),
+      ]);
     });
 
     it("gives reused provider block ids a new identity and preserves the interrupted block", async () => {
       const session = makeSession();
       await flushBackground();
       for (const content of ["First answer", "Second answer"]) {
-        await session.project({ type: "artifact", kind: "report", content, ephemeral: true,
-          streamId: "reused-block", metadata: { source: "agent_message_streaming" } });
-        if (content === "First answer") await session.project({ type: "artifact", kind: "report", content,
-          metadata: { source: "assistant.message" } });
+        await session.project({
+          type: "artifact",
+          kind: "report",
+          content,
+          ephemeral: true,
+          streamId: "reused-block",
+          metadata: { source: "agent_message_streaming" },
+        });
+        if (content === "First answer")
+          await session.project({
+            type: "artifact",
+            kind: "report",
+            content,
+            metadata: { source: "assistant.message" },
+          });
       }
       await session.finalize({ status: "canceled" });
       const artifacts = await runsRepo.findArtifactsByRun("r1");
-      expect(artifacts.map((artifact) => artifact.content)).toEqual(["First answer", "Second answer"]);
-      expect(artifacts[0].metadata?.streamId).not.toBe(artifacts[1].metadata?.streamId);
+      expect(artifacts.map((artifact) => artifact.content)).toEqual([
+        "First answer",
+        "Second answer",
+      ]);
+      expect(artifacts[0].metadata?.streamId).not.toBe(
+        artifacts[1].metadata?.streamId,
+      );
       expect(artifacts[1].metadata?.interrupted).toBe(true);
     });
 
     it("waits for an in-flight final message insert instead of duplicating the live answer", async () => {
       const session = makeSession();
       await flushBackground();
-      await session.project({ type: "artifact", kind: "report", content: "Partial", ephemeral: true,
-        streamId: "message", metadata: { source: "agent_message_streaming" } });
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => { release = resolve; });
-      const original = runsRepo.insertArtifact.bind(runsRepo);
-      const insert = vi.spyOn(runsRepo, "insertArtifact").mockImplementation(async (params) => {
-        await gate;
-        return original(params);
+      await session.project({
+        type: "artifact",
+        kind: "report",
+        content: "Partial",
+        ephemeral: true,
+        streamId: "message",
+        metadata: { source: "agent_message_streaming" },
       });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const original = runsRepo.insertArtifact.bind(runsRepo);
+      const insert = vi
+        .spyOn(runsRepo, "insertArtifact")
+        .mockImplementation(async (params) => {
+          await gate;
+          return original(params);
+        });
       try {
-        const writing = session.project({ type: "artifact", kind: "report", content: "Full answer",
-          metadata: { streamId: "message" } });
+        const writing = session.project({
+          type: "artifact",
+          kind: "report",
+          content: "Full answer",
+          metadata: { streamId: "message" },
+        });
         const finishing = session.finalize({ status: "canceled" });
         expect((await runsRepo.findRunById("r1"))?.status).toBe("running");
         release();
         await Promise.all([writing, finishing]);
         expect(insert).toHaveBeenCalledTimes(1);
-        expect(await runsRepo.findArtifactsByRun("r1")).toEqual([expect.objectContaining({ content: "Full answer" })]);
-      } finally { release(); insert.mockRestore(); }
+        expect(await runsRepo.findArtifactsByRun("r1")).toEqual([
+          expect.objectContaining({ content: "Full answer" }),
+        ]);
+      } finally {
+        release();
+        insert.mockRestore();
+      }
     });
 
     it("updates run status to the result status", async () => {
@@ -1518,7 +2159,10 @@ describe("RunSession", () => {
       await flushBackground();
 
       await session.finalize({ status: "succeeded" });
-      await session.finalize({ status: "failed", summary: "second call should not win" });
+      await session.finalize({
+        status: "failed",
+        summary: "second call should not win",
+      });
 
       const run = await runsRepo.findRunById("r1");
       expect(run!.status).toBe("succeeded");
@@ -1699,7 +2343,9 @@ describe("RunSession", () => {
         result: "Continued child result",
       } as any);
       calls = await runsRepo.findToolCallsByRun("r1");
-      expect((calls[0].metadata as Record<string, any>)?.subagent).toMatchObject({
+      expect(
+        (calls[0].metadata as Record<string, any>)?.subagent,
+      ).toMatchObject({
         phase: "completed",
         result: "Continued child result",
       });
@@ -1727,7 +2373,9 @@ describe("RunSession", () => {
         await session.finalize({ status: "canceled" });
 
         const calls = await runsRepo.findToolCallsByRun("r1");
-        expect((calls[0].metadata as Record<string, any>)?.task?.status).toBe(status);
+        expect((calls[0].metadata as Record<string, any>)?.task?.status).toBe(
+          status,
+        );
       },
     );
 
@@ -1812,7 +2460,9 @@ describe("RunSession", () => {
     });
 
     it("does not throw when adapter.abortRun rejects", async () => {
-      const abortRun = vi.fn().mockRejectedValue(new Error("adapter explosion"));
+      const abortRun = vi
+        .fn()
+        .mockRejectedValue(new Error("adapter explosion"));
       vi.mocked(createWorkAdapter).mockReturnValue({ abortRun } as any);
 
       const session = makeSession();
@@ -1907,5 +2557,4 @@ describe("RunSession", () => {
       expect(() => session.updateBaseRef("new-sha")).not.toThrow();
     });
   });
-
 });

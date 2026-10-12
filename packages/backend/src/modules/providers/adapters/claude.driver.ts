@@ -1767,6 +1767,23 @@ interface McpStatusServer {
   tools?: McpStatusTool[];
 }
 
+/** Wait for this server's initial connection without reconnecting or replaying a tool call. */
+export async function waitForClaudeMcpServer(
+  readStatuses: () => Promise<unknown[]>,
+  serverName: string,
+): Promise<unknown[]> {
+  const deadline = Date.now() + 30_000;
+  let statuses = await readStatuses();
+  while (
+    (statuses as McpStatusServer[]).find((server) => server?.name === serverName)?.status === "pending" &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, deadline - Date.now())));
+    statuses = await readStatuses();
+  }
+  return statuses;
+}
+
 function mcpToolResourceUri(tool: McpStatusTool): string | undefined {
   const uri = tool._meta?.ui?.resourceUri ?? tool._meta?.["ui/resourceUri"];
   return typeof uri === "string" && uri.startsWith("ui://") ? uri : undefined;
@@ -1797,18 +1814,44 @@ export function buildClaudeMcpCatalog(statuses: unknown[]): ClaudeMcpCatalog {
  * Shape an MCP tool result the way an app widget reads it. The CLI hands the
  * content over as a single string, where MCP has a list of content blocks.
  */
-export function toMcpCallToolResult(raw: unknown): McpAppCallToolResult | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+export function toMcpCallToolResult(raw: unknown, fallbackContent?: unknown): McpAppCallToolResult | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    // Text-only MCP tools may have no SDK result envelope. Their model-facing
+    // content is still the complete app result, without structured data to add.
+    const content = Array.isArray(raw) ? raw : fallbackContent;
+    if (Array.isArray(content)) return { content: [...content] };
+    if (typeof content === "string") return { content: [{ type: "text", text: content }] };
+    return undefined;
+  }
   const result = raw as Record<string, unknown>;
+  const body = result.content === undefined || result.content === "" ||
+    (Array.isArray(result.content) && result.content.length === 0)
+    ? fallbackContent ?? result.content : result.content;
+  const omitted = result.structuredContentOmitted === true;
   const content =
-    typeof result.content === "string"
-      ? [{ type: "text", text: result.content }]
-      : Array.isArray(result.content)
-        ? result.content
+    typeof body === "string"
+      ? [{ type: "text", text: body }]
+      : Array.isArray(body)
+        ? [...body]
         : [];
+  if (omitted && fallbackContent !== undefined) {
+    // The model-facing preview can name the saved full-result file even when
+    // the SDK's surviving text contains only the original output prefix.
+    const fallback = typeof fallbackContent === "string" ? [{ type: "text", text: fallbackContent }]
+      : Array.isArray(fallbackContent) ? fallbackContent : [];
+    const seen = new Set(content.flatMap((block) => block?.type === "text" && typeof block.text === "string" ? [block.text] : []));
+    for (const block of fallback) {
+      if (block?.type === "text" && typeof block.text === "string" && block.text && !seen.has(block.text)) {
+        content.push({ type: "text", text: block.text });
+        seen.add(block.text);
+      }
+    }
+  }
   return {
     content,
-    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    ...(!omitted && result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    ...(omitted ? { structuredContentOmitted: true } : {}),
+    ...(Array.isArray(result.resourceLinks) ? { resourceLinks: result.resourceLinks } : {}),
     ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
     ...(result._meta !== undefined ? { _meta: result._meta } : {}),
   };
@@ -2166,10 +2209,14 @@ export function mapSDKMessage(
           // The message-level result belongs to a block only when it is sole.
           if (!block.is_error && soleToolResult && isDetachedClaudeToolResult(userMsg.tool_use_result)) continue;
           const mcpApp = prev ? cs.mcpApps?.catalog.apps.get(prev.toolName) : undefined;
-          // An app widget renders from structuredContent, which only the
-          // message's tool_use_result keeps.
+          // The SDK's result carries app data and omission flags that the
+          // model-facing block drops. Ordinary MCP output keeps its old shape
+          // unless the SDK explicitly reports missing structured content.
+          const rawResult = userMsg.tool_use_result as Record<string, unknown> | undefined;
+          const omittedMcpResult = prev?.toolName.startsWith("mcp__") && rawResult?.structuredContentOmitted === true;
           const appResult =
-            mcpApp && soleToolResult ? toMcpCallToolResult(userMsg.tool_use_result) : undefined;
+            (mcpApp || omittedMcpResult) && soleToolResult
+              ? toMcpCallToolResult(userMsg.tool_use_result, block.content) : undefined;
           const output = appResult
             ? { ...appResult, ...(block.is_error ? { isError: true } : {}) }
             : block.content;
@@ -2846,9 +2893,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
           const toolResponse = input.tool_response;
           if (isDetachedClaudeToolResult(toolResponse)) return {};
 
-          // The first completion for a call is the one kept, and this one only
-          // has the tool's text. An app's call is completed from the tool_result
-          // message instead, whose tool_use_result keeps structuredContent.
+          // MCP results must use the SDK's user-message envelope: size caps
+          // and omission flags are applied after PostToolUse, and the first
+          // completion is the one retained by RunSession.
+          if (toolName.startsWith("mcp__")) return {};
           const session = liveSessions.get(runId);
           if (session && (await mcpAppToolFor(session, toolName))) return {};
 
@@ -2997,7 +3045,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     // Strip API key/auth token when using CLI (subscription mode) so the subprocess
     // uses CLI login session rather than API billing.
-    const cleanEnv: Record<string, string | undefined> = { ...process.env };
+    const cleanEnv: Record<string, string | undefined> = {
+      ...process.env,
+      // Advertise the host's MCP Apps support when the CLI connects to servers.
+      CLAUDE_CODE_MCP_APPS_HOST: "1",
+    };
     delete cleanEnv.ANTHROPIC_API_KEY;
     delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
 
@@ -4141,10 +4193,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async readMcpAppResource(request) {
-      const result = await withMcpQuery(request.runId, (query) => {
+      const result = await withMcpQuery(request.runId, async (query) => {
         if (typeof query.readMcpResource !== "function") {
           throw new Error("This Claude Code version cannot read MCP App resources");
         }
+        await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
         return query.readMcpResource(request.server, request.uri);
       });
       return { contents: result.contents ?? [], originCallId: request.originCallId ?? null };
@@ -4156,7 +4209,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         if (typeof query.request !== "function") {
           throw new Error("This Claude Code version cannot call MCP App tools");
         }
-        assertMcpToolCallableFromApp(await query.mcpServerStatus(), request.server, request.tool);
+        const statuses = await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
+        assertMcpToolCallableFromApp(statuses, request.server, request.tool);
         return query.request({
           subtype: "mcp_call",
           tool: mcpToolWireName(request.server, request.tool),

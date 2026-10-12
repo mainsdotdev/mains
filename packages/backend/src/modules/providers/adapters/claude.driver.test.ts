@@ -39,6 +39,7 @@ import {
   buildClaudeMcpCatalog,
   toMcpCallToolResult,
   assertMcpToolCallableFromApp,
+  waitForClaudeMcpServer,
 } from "./claude.driver";
 import type { ClaudeTaskIndex, SDKSystemMessage } from "./claude.driver";
 import fs from "node:fs";
@@ -2954,6 +2955,65 @@ describe("claude.driver / MCP Apps", () => {
     expect(supportsClaudeMcpApps(undefined)).toBe(false);
   });
 
+  it("waits for a pending app server before returning its tool inventory", async () => {
+    vi.useFakeTimers();
+    try {
+      const readStatuses = vi.fn()
+        .mockResolvedValueOnce([{ name: "demo", status: "pending" }])
+        .mockResolvedValue([demo]);
+      const ready = waitForClaudeMcpServer(readStatuses, "demo");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await ready).toEqual([demo]);
+      expect(readStatuses).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not wait for another server or a server requiring authentication", async () => {
+    for (const status of ["connected", "needs-auth", "failed", "disabled"]) {
+      const statuses = [{ ...demo, status }, { name: "other", status: "pending" }];
+      const readStatuses = vi.fn().mockResolvedValue(statuses);
+      expect(await waitForClaudeMcpServer(readStatuses, "demo")).toBe(statuses);
+      expect(readStatuses).toHaveBeenCalledOnce();
+    }
+    const missing = vi.fn().mockResolvedValue([]);
+    expect(await waitForClaudeMcpServer(missing, "demo")).toEqual([]);
+    expect(missing).toHaveBeenCalledOnce();
+  });
+
+  it("stops waiting when the connection fails and retains the refusal for app calls", async () => {
+    vi.useFakeTimers();
+    try {
+      const failed = [{ ...demo, status: "needs-auth" }];
+      const readStatuses = vi.fn()
+        .mockResolvedValueOnce([{ name: "demo", status: "pending" }])
+        .mockResolvedValue(failed);
+      const ready = waitForClaudeMcpServer(readStatuses, "demo");
+      await vi.advanceTimersByTimeAsync(1_000);
+      const statuses = await ready;
+      expect(statuses).toBe(failed);
+      expect(() => assertMcpToolCallableFromApp(statuses, "demo", "show_weather")).toThrow("is not connected");
+      expect(readStatuses).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the initial connection wait and propagates control-channel failures", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = [{ name: "demo", status: "pending" }];
+      const ready = waitForClaudeMcpServer(vi.fn().mockResolvedValue(pending), "demo");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await ready).toBe(pending);
+      const closed = new Error("Query closed");
+      await expect(waitForClaudeMcpServer(vi.fn().mockRejectedValue(closed), "demo")).rejects.toBe(closed);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("names tools the way tool_use blocks do", () => {
     expect(mcpToolWireName("demo", "show_weather")).toBe("mcp__demo__show_weather");
     expect(mcpToolWireName("plugin:documents:docs", "doc_export")).toBe(
@@ -3013,6 +3073,28 @@ describe("claude.driver / MCP Apps", () => {
     expect(toMcpCallToolResult({ content: blocks, isError: true })).toEqual({ content: blocks, isError: true });
     expect(toMcpCallToolResult("plain text")).toBeUndefined();
     expect(toMcpCallToolResult(null)).toBeUndefined();
+  });
+
+  it("keeps the omission marker, resource links and available text without synthesizing structured data", () => {
+    const links = [{ uri: "file:///tmp/result.json", name: "Full result" }];
+    expect(toMcpCallToolResult({ structuredContentOmitted: true, resourceLinks: links, _meta: { keep: true } }, "Text preview"))
+      .toEqual({ content: [{ type: "text", text: "Text preview" }], structuredContentOmitted: true, resourceLinks: links, _meta: { keep: true } });
+    expect(toMcpCallToolResult({ content: "Text preview", structuredContentOmitted: true, structuredContent: { incomplete: true } }))
+      .not.toHaveProperty("structuredContent");
+  });
+
+  it("requires an explicit boolean omission marker and accepts results without optional metadata", () => {
+    expect(toMcpCallToolResult({ content: "ok", structuredContentOmitted: "true", structuredContent: { count: 1 } }))
+      .toEqual({ content: [{ type: "text", text: "ok" }], structuredContent: { count: 1 } });
+  });
+
+  it("retains the model-facing cache-file note alongside surviving SDK text without duplicating it", () => {
+    const raw = { content: [{ type: "text", text: "Available rows" }], structuredContentOmitted: true };
+    expect(toMcpCallToolResult(raw, "Full result saved to /tmp/tool-result.json")?.content).toEqual([
+      { type: "text", text: "Available rows" }, { type: "text", text: "Full result saved to /tmp/tool-result.json" },
+    ]);
+    expect(toMcpCallToolResult(raw, "Available rows")?.content).toHaveLength(1);
+    expect(raw.content).toHaveLength(1);
   });
 
   it("lets an app call its server's tools unless one is kept for the model", () => {
@@ -3089,6 +3171,21 @@ describe("claude.driver / MCP Apps", () => {
       });
     });
 
+    it.each([
+      "2026-10-12T14:59:37.924Z",
+      [{ type: "text", text: "2026-10-12T14:59:37.924Z" }],
+    ])("wraps text-only app results when the SDK sends no result envelope", (content) => {
+      const cs = makeClaudeSession({ mcpApps: { catalog: buildClaudeMcpCatalog([demo]) } });
+      mapSDKMessage(toolUse, cs);
+      const [complete] = mapSDKMessage({ ...toolResult, tool_use_result: undefined, message: {
+        role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content }],
+      } }, cs);
+      expect(complete).toMatchObject({ output: {
+        content: [{ type: "text", text: "2026-10-12T14:59:37.924Z" }],
+      }, metadata: { phase: "complete", mcpApp } });
+      expect(complete).not.toHaveProperty("output.structuredContent");
+    });
+
     it("leaves every call as it was when the CLI cannot serve apps", () => {
       const cs = makeClaudeSession();
 
@@ -3098,6 +3195,34 @@ describe("claude.driver / MCP Apps", () => {
       expect(start).not.toHaveProperty("metadata.mcpApp");
       expect(complete).toMatchObject({ output: '{"city":"Istanbul","tempC":22}' });
       expect(complete).not.toHaveProperty("metadata.mcpApp");
+    });
+
+    it.each([true, false])("preserves omitted MCP result details with app support=%s", (hasApp) => {
+      const cs = makeClaudeSession(hasApp ? { mcpApps: { catalog: buildClaudeMcpCatalog([demo]) } } : {});
+      mapSDKMessage(toolUse, cs);
+      const [complete] = mapSDKMessage({ ...toolResult, tool_use_result: { structuredContentOmitted: true } }, cs);
+      expect(complete).toMatchObject({ type: "tool_call", toolName: "mcp__demo__show_weather", output: {
+        content: [{ type: "text", text: '{"city":"Istanbul","tempC":22}' }], structuredContentOmitted: true,
+      }, metadata: { phase: "complete", toolCallId: "toolu_1" } });
+      expect(complete).toHaveProperty("error", undefined);
+    });
+
+    it("does not attach a message-level omission flag to several tool result blocks", () => {
+      const cs = makeClaudeSession();
+      cs.toolCallIndex.set("toolu_1", { toolName: "mcp__demo__lookup" });
+      cs.toolCallIndex.set("toolu_2", { toolName: "mcp__demo__lookup" });
+      const events = mapSDKMessage({ ...toolResult, tool_use_result: { structuredContentOmitted: true }, message: {
+        role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "First" },
+          { type: "tool_result", tool_use_id: "toolu_2", content: "Second" }],
+      } }, cs);
+      expect(events.map((event) => event.type === "tool_call" ? event.output : null)).toEqual(["First", "Second"]);
+    });
+
+    it("does not interpret ordinary tool data as an SDK omission signal", () => {
+      const cs = makeClaudeSession();
+      cs.toolCallIndex.set("toolu_1", { toolName: "Read" });
+      const [complete] = mapSDKMessage({ ...toolResult, tool_use_result: { structuredContentOmitted: true } }, cs);
+      expect(complete).toMatchObject({ output: '{"city":"Istanbul","tempC":22}' });
     });
   });
 });
