@@ -16,6 +16,7 @@ export interface FlowToolCall {
   toolCallId: string | null;
   parentToolCallId: string | null;
   input: Record<string, unknown> | null;
+  metadata?: unknown;
   createdAt: unknown;
 }
 
@@ -81,9 +82,12 @@ export function buildSubagentFlow<TCall extends FlowToolCall>(args: {
   const anchorIds = new Set<string>([subagentId]);
   if (agentId) {
     for (const call of toolCalls) {
-      if (!isContinuationTool(call.toolName)) continue;
-      if (call.input?.to !== agentId) continue;
+      const task = parseArtifactMetadata(call.metadata).task as { taskId?: string; taskType?: string } | undefined;
+      const sameNativeAgent = task?.taskId === agentId && (!task.taskType || task.taskType === "local_agent");
+      const sameLegacyAgent = isContinuationTool(call.toolName) && call.input?.to === agentId;
+      if (!sameNativeAgent && !sameLegacyAgent) continue;
       if (call.toolCallId) anchorIds.add(call.toolCallId);
+      if (!isContinuationTool(call.toolName)) continue;
       const message = call.input?.message;
       if (typeof message === "string" && message.trim()) {
         items.push({
@@ -97,7 +101,9 @@ export function buildSubagentFlow<TCall extends FlowToolCall>(args: {
   }
 
   for (const call of toolCalls) {
-    if (!call.parentToolCallId || !anchorIds.has(call.parentToolCallId)) continue;
+    const metadata = parseArtifactMetadata(call.metadata);
+    const belongsToAgent = !!agentId && metadata.agentId === agentId;
+    if ((!call.parentToolCallId || !anchorIds.has(call.parentToolCallId)) && !belongsToAgent) continue;
     items.push({
       kind: "tool",
       key: `tool-${call.id}`,
@@ -110,7 +116,7 @@ export function buildSubagentFlow<TCall extends FlowToolCall>(args: {
     if (!artifact.content) continue;
     const metadata = parseArtifactMetadata(artifact.metadata);
     const parent = metadata.parentToolUseId;
-    if (typeof parent !== "string" || !anchorIds.has(parent)) continue;
+    if ((typeof parent !== "string" || !anchorIds.has(parent)) && (!agentId || metadata.agentId !== agentId)) continue;
     items.push({
       kind: "message",
       key: `msg-${artifact.id}`,

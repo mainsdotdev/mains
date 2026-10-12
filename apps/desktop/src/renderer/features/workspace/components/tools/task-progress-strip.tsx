@@ -49,7 +49,7 @@ function formatUsage(usage: TaskMetadata["usage"]): string {
   return parts.join(" · ");
 }
 
-export type Tone = "running" | "ok" | "warn" | "error";
+export type Tone = "running" | "idle" | "ok" | "warn" | "error";
 
 /** Derived from THE state synthesis, not re-encoded — one lifecycle truth. */
 const STATE_TONE: Record<SubagentLifecycleState, Tone> = {
@@ -57,6 +57,7 @@ const STATE_TONE: Record<SubagentLifecycleState, Tone> = {
   stopped: "warn",
   done: "ok",
   running: "running",
+  idle: "idle",
 };
 
 function toneOf(task: TaskMetadata): Tone {
@@ -65,6 +66,7 @@ function toneOf(task: TaskMetadata): Tone {
 
 const TONE_TEXT: Record<Tone, string> = {
   running: "text-primary-600 dark:text-primary-400",
+  idle: "text-primary-500",
   ok: "text-success dark:text-success",
   warn: "text-warning dark:text-warning",
   error: "text-danger dark:text-danger",
@@ -73,6 +75,7 @@ const TONE_TEXT: Record<Tone, string> = {
 /** Subagent tasks read as delegation; bash tasks read as backgrounded work. */
 function labelFor(task: TaskMetadata, tone: Tone): string {
   const isAgent = task.taskType === "local_agent" || !!task.subagentType;
+  if (tone === "idle") return isAgent ? "Subagent idle" : "Background task idle";
   if (tone === "running") {
     return isAgent ? "Subagent working" : "Running in background";
   }
@@ -112,7 +115,7 @@ export function selectTaskPresentation(
   subagent?: SubagentMetadata,
 ): TaskPresentation | null {
   if (!task && !subagent) return null;
-  if (task?.skipTranscript) return null;
+  if (task?.skipTranscript || task?.ambient) return null;
 
   const t: TaskMetadata = task ?? {};
   const tone = toneOf(t);

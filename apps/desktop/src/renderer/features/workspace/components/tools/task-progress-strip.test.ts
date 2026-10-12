@@ -31,6 +31,17 @@ const AGENT_TASK: TaskMetadata = {
 };
 
 describe("selectTaskPresentation", () => {
+  it("does not infer success when a background task leaves the live set", () => {
+    expect(selectTaskPresentation({ taskType: "local_agent", status: "running", isBackgrounded: true, backgroundActive: false }))
+      .toMatchObject({ tone: "idle", label: "Subagent idle" });
+    expect(selectTaskPresentation({ ...AGENT_TASK, isBackgrounded: true, backgroundActive: false }))
+      .toMatchObject({ tone: "ok", label: "Subagent finished" });
+  });
+
+  it("hides ambient activity without requiring skip_transcript", () => {
+    expect(selectTaskPresentation({ ...AGENT_TASK, ambient: true })).toBeNull();
+  });
+
   it("renders nothing without metadata", () => {
     expect(selectTaskPresentation(undefined, undefined)).toBeNull();
   });

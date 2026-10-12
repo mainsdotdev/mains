@@ -205,6 +205,7 @@ export interface CreateToolCallPayload {
 
 export interface UpdateToolCallPayload {
   status?: ToolCallStatus;
+  parentToolCallId?: string | null;
   input?: Record<string, unknown>;
   output?: unknown;
   error?: string;

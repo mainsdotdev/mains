@@ -1430,8 +1430,9 @@ describe("claude.driver / mapTaskMessage", () => {
       outputFile: "/tmp/claude-task-bflwfagyw.log",
       toolCallId: "toolu_bash",
     });
-    // Terminal: the anchor is released so a recycled id cannot reattach.
-    expect(index.has("bflwfagyw")).toBe(false);
+    // Keep identity for nested children and run ordering, but reject more live edges.
+    expect(index.get("bflwfagyw")?.terminal).toBe(true);
+    expect(mapTaskMessage(sys({ subtype: "task_progress", task_id: "bflwfagyw" }), index, TS)).toBeNull();
   });
 
   it("surfaces the summary as the error when a task fails", () => {
@@ -2332,6 +2333,113 @@ function makeClaudeSession(overrides: Record<string, unknown> = {}) {
     isInitial: true,
   } as any;
 }
+
+describe("mapSDKMessage native task identity", () => {
+  const system = (subtype: string, detail: Record<string, unknown>) => ({
+    type: "system", subtype, uuid: "u1", session_id: "s1", ...detail,
+  }) as any;
+  const start = (cs: any, taskId: string, toolId: string, runId = "002", parentTaskId?: string) =>
+    mapSDKMessage(system("task_started", { task_id: taskId, tool_use_id: toolId, run_id: runId,
+      task_type: "local_agent", subagent_type: "Explore", parent_task_id: parentTaskId }), cs);
+  const snapshot = (cs: any, tasks: Record<string, unknown>[]) =>
+    mapSDKMessage(system("background_tasks_changed", { tasks }), cs);
+
+  it("uses agent_id for child messages even without parent_tool_use_id", () => {
+    const cs = makeClaudeSession();
+    start(cs, "agent-1", "spawn-1");
+    const [report, tool] = mapSDKMessage({ type: "assistant", uuid: "child", session_id: "s1",
+      agent_id: "agent-1", parent_tool_use_id: null, message: { role: "assistant", model: "child-model", content: [
+        { type: "text", text: "Child report" }, { type: "tool_use", id: "read-1", name: "Read", input: {} },
+      ] } } as any, cs).filter((event) => event.type === "artifact" || event.type === "tool_call");
+    expect(report).toMatchObject({ metadata: { isFromSubagent: true, agentId: "agent-1", parentToolUseId: "spawn-1", providerRunId: "002" } });
+    expect(tool).toMatchObject({ metadata: { isFromSubagent: true, agentId: "agent-1", parentToolUseId: "spawn-1" } });
+    expect(cs.state.lastAssistantMessage).toBeUndefined();
+    expect(resolveClaudeTurnModel("main-model", { type: "assistant", agent_id: "agent-1",
+      parent_tool_use_id: null, message: { model: "child-model" } } as any)).toBe("main-model");
+  });
+
+  it("keeps a child's immediate parent after that parent has completed", () => {
+    const cs = makeClaudeSession();
+    start(cs, "parent", "spawn-parent");
+    mapSDKMessage(system("task_notification", { task_id: "parent", run_id: "002", status: "completed" }), cs);
+    expect(start(cs, "child", "spawn-child", "003", "parent")).toContainEqual(expect.objectContaining({
+      type: "task", parentTaskId: "parent", parentToolCallId: "spawn-parent", providerRunId: "003",
+    }));
+  });
+
+  it.each(["task_notification", "task_progress", "task_updated", "task_started"])("ignores a late %s from an earlier execution", (subtype) => {
+    const cs = makeClaudeSession();
+    start(cs, "agent", "spawn-old", "001");
+    start(cs, "agent", "send-new", "002");
+    expect(mapSDKMessage(system(subtype, { task_id: "agent", tool_use_id: "spawn-old", run_id: "001",
+      status: "failed", summary: "Old failure", patch: { status: "failed" } }), cs)).toEqual([]);
+    expect(mapSDKMessage(system("task_progress", { task_id: "agent", run_id: "002" }), cs)).toContainEqual(
+      expect.objectContaining({ type: "task", toolCallId: "send-new", status: "running", providerRunId: "002" }));
+  });
+
+  it("does not lend an old execution's tool anchor to a newer unanchored progress event", () => {
+    const cs = makeClaudeSession();
+    start(cs, "agent", "spawn-old", "001");
+    expect(mapSDKMessage(system("task_progress", { task_id: "agent", run_id: "002" }), cs)).toEqual([]);
+    expect(start(cs, "agent", "send-new", "002")).toContainEqual(expect.objectContaining({ toolCallId: "send-new" }));
+  });
+
+  it("resumes an agent recorded by an older CLI when its first native execution id arrives", () => {
+    const cs = makeClaudeSession();
+    mapSDKMessage(system("task_started", { task_id: "agent", tool_use_id: "spawn", task_type: "local_agent" }), cs);
+    mapSDKMessage(system("task_notification", { task_id: "agent", status: "failed" }), cs);
+    expect(mapSDKMessage(system("task_started", { task_id: "agent", run_id: "001", task_type: "local_agent" }), cs))
+      .toContainEqual(expect.objectContaining({ type: "task", status: "running", providerRunId: "001", toolCallId: "spawn" }));
+  });
+
+  it("replaces background membership without inferring a successful completion", () => {
+    const cs = makeClaudeSession();
+    const background = { task_id: "agent", run_id: "002", task_type: "local_agent", subagent_type: "Explore", description: "Review", ambient: false };
+    // The level may arrive before its start edge.
+    expect(snapshot(cs, [background])).toEqual([]);
+    expect(start(cs, "agent", "spawn")).toContainEqual(expect.objectContaining({
+      type: "task", backgroundActive: true, isBackgrounded: true, ambient: false,
+    }));
+    const removed = snapshot(cs, []);
+    expect(removed).toContainEqual(expect.objectContaining({ type: "task", backgroundActive: false, toolCallId: "spawn" }));
+    expect(removed.some((event) => event.type === "task" && (event.status === "completed" || event.phase === "completed"))).toBe(false);
+    expect(cs.backgroundTasks.size).toBe(0);
+  });
+
+  it("updates parent and ambient metadata from the full background snapshot", () => {
+    const cs = makeClaudeSession();
+    start(cs, "parent", "spawn-parent");
+    start(cs, "child", "spawn-child", "002", "parent");
+    expect(snapshot(cs, [{ task_id: "child", run_id: "002", task_type: "local_agent", description: "Watch", ambient: true }]))
+      .toContainEqual(expect.objectContaining({ type: "task", taskId: "child", parentTaskId: null,
+        parentToolCallId: null, ambient: true, backgroundActive: true }));
+  });
+
+  it("does not reopen a completed execution when its finishing snapshot arrives later", () => {
+    const cs = makeClaudeSession();
+    start(cs, "agent", "spawn");
+    snapshot(cs, [{ task_id: "agent", run_id: "002", task_type: "local_agent", description: "Review" }]);
+    mapSDKMessage(system("task_notification", { task_id: "agent", run_id: "002", status: "completed" }), cs);
+    snapshot(cs, []);
+    expect(mapSDKMessage(system("task_progress", { task_id: "agent", run_id: "002" }), cs)).toEqual([]);
+    expect(start(cs, "agent", "spawn", "001")).toEqual([]);
+    expect(start(cs, "agent", "send", "003")).toContainEqual(expect.objectContaining({ status: "running", toolCallId: "send" }));
+  });
+
+  it("tags native child tool results and user messages with the same agent identity", () => {
+    const cs = makeClaudeSession();
+    start(cs, "child", "spawn");
+    cs.toolCallIndex.set("read", { toolName: "Read" });
+    expect(mapSDKMessage({ type: "user", session_id: "s1", parent_tool_use_id: null, agent_id: "child",
+      message: { role: "user", content: [ { type: "tool_result", tool_use_id: "read", content: "ok" } ] } } as any, cs))
+      .toContainEqual(expect.objectContaining({ type: "tool_call", metadata: expect.objectContaining({
+        agentId: "child", parentToolUseId: "spawn", isFromSubagent: true,
+      }) }));
+    expect(mapSDKMessage({ type: "user", session_id: "s1", parent_tool_use_id: null, agent_id: "child",
+      message: { role: "user", content: "Child feedback" } } as any, cs))
+      .toContainEqual(expect.objectContaining({ type: "log", metadata: expect.objectContaining({ agentId: "child", isFromSubagent: true }) }));
+  });
+});
 
 describe("mapSDKMessage detached web results", () => {
   const toolResult = (toolUseId: string, output: unknown, raw?: unknown, isError = false) => ({

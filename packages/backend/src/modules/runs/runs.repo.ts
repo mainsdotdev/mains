@@ -559,6 +559,24 @@ export const runsRepo = {
     return rows.map(mapToolCallRowToResponse);
   },
 
+  /** Claude resume correlation, without reading historical tool inputs/outputs. */
+  async findClaudeTaskAnchorsByRun(runId: string) {
+    const taskId = sql<string | null>`COALESCE(json_extract(${toolCalls.metadata}, '$.task.taskId'), json_extract(${toolCalls.metadata}, '$.subagent.agentId'))`;
+    return getDb().select({
+      toolUseId: toolCalls.toolCallId,
+      taskId,
+      providerRunId: sql<string | null>`json_extract(${toolCalls.metadata}, '$.task.providerRunId')`,
+      parentTaskId: sql<string | null>`json_extract(${toolCalls.metadata}, '$.task.parentTaskId')`,
+      taskType: sql<string | null>`json_extract(${toolCalls.metadata}, '$.task.taskType')`,
+      subagentType: sql<string | null>`COALESCE(json_extract(${toolCalls.metadata}, '$.task.subagentType'), json_extract(${toolCalls.metadata}, '$.subagent.agentType'))`,
+      isBackgrounded: sql<number | null>`json_extract(${toolCalls.metadata}, '$.task.isBackgrounded')`,
+      ambient: sql<number | null>`json_extract(${toolCalls.metadata}, '$.task.ambient')`,
+      status: sql<string | null>`json_extract(${toolCalls.metadata}, '$.task.status')`,
+      phase: sql<string | null>`json_extract(${toolCalls.metadata}, '$.task.phase')`,
+    }).from(toolCalls).where(and(eq(toolCalls.runId, runId), sql`${taskId} IS NOT NULL`, sql`${toolCalls.toolCallId} IS NOT NULL`))
+      .orderBy(asc(toolCalls.id));
+  },
+
   async insertToolCall(payload: CreateToolCallPayload): Promise<number> {
     const db = getDb();
     const result = await db
@@ -584,6 +602,7 @@ export const runsRepo = {
     const updateData: Record<string, unknown> = {};
 
     if (payload.status !== undefined) updateData.status = payload.status;
+    if (payload.parentToolCallId !== undefined) updateData.parentToolCallId = payload.parentToolCallId;
     if (payload.input !== undefined) updateData.input = JSON.stringify(payload.input);
     if (payload.output !== undefined) updateData.output = JSON.stringify(payload.output);
     if (payload.error !== undefined) updateData.error = payload.error;

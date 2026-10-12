@@ -925,6 +925,84 @@ describe("RunSession", () => {
   // round-tripping: the spawning call's provider id and the child's link to
   // it. Projected through the real repo into the real (in-memory) DB.
   describe("project — subagent parent linkage", () => {
+    it("persists native task hierarchy and links child reports to their immediate agent", async () => {
+      const session = makeSession();
+      await flushBackground();
+      const cs = { runId: "r1", state: { hasAssistantContent: false }, toolCallIndex: new Map(), taskIndex: new Map(),
+        permissionMode: createClaudePermissionModeRef("default") } as any;
+      async function project(msg: Record<string, unknown>) {
+        for (const event of mapSDKMessage({ session_id: "sdk", uuid: "u", ...msg } as any, cs)) await session.project(event);
+      }
+      await project({ type: "assistant", parent_tool_use_id: null, message: { role: "assistant", content: [
+        { type: "tool_use", id: "parent-call", name: "Agent", input: {} },
+        { type: "tool_use", id: "child-call", name: "Agent", input: {} },
+      ] } });
+      await project({ type: "system", subtype: "task_started", task_id: "parent", run_id: "001", tool_use_id: "parent-call", task_type: "local_agent" });
+      await project({ type: "system", subtype: "task_notification", task_id: "parent", run_id: "001", status: "completed" });
+      await project({ type: "system", subtype: "task_started", task_id: "child", run_id: "002", tool_use_id: "child-call", task_type: "local_agent", parent_task_id: "parent" });
+      await project({ type: "assistant", parent_tool_use_id: null, agent_id: "child", message: { role: "assistant", content: [
+        { type: "text", text: "Nested report" }, { type: "tool_use", id: "read", name: "Read", input: {} },
+      ] } });
+      const calls = await runsRepo.findToolCallsByRun("r1");
+      expect(calls.find((call) => call.toolId === "child-call")).toMatchObject({ parentToolCallId: "parent-call", metadata: {
+        isFromSubagent: true, task: { taskId: "child", providerRunId: "002", parentTaskId: "parent" },
+      } });
+      expect(calls.find((call) => call.toolId === "read")).toMatchObject({ parentToolCallId: "child-call" });
+      expect(await runsRepo.findArtifactsByRun("r1")).toContainEqual(expect.objectContaining({ content: "Nested report", metadata: expect.objectContaining({
+        agentId: "child", parentToolUseId: "child-call", isFromSubagent: true,
+      }) }));
+      // Membership can remove a parent relationship without an outcome change.
+      await project({ type: "system", subtype: "background_tasks_changed", tasks: [
+        { task_id: "child", run_id: "002", task_type: "local_agent", description: "Child", ambient: false },
+      ] });
+      const child = (await runsRepo.findToolCallsByRun("r1")).find((call) => call.toolId === "child-call");
+      expect(child?.parentToolCallId).toBeNull();
+      expect(child?.metadata?.parentToolUseId).toBeUndefined();
+      expect(child?.metadata?.task).toMatchObject({ status: "running", backgroundActive: true });
+      await session.finalize({ status: "succeeded" });
+    });
+
+    it("hydrates native execution ordering and clears the old outcome when the same agent runs again", async () => {
+      const id = await runsRepo.insertToolCall({ accountId: "default", runId: "r1", providerId: "copilot_cli", toolId: "spawn", toolName: "Agent", status: "done" });
+      await runsRepo.updateToolCall(id, { metadata: {
+        subagent: { phase: "failed", providerRunId: "002", agentId: "agent", model: "sonnet", error: "Old failure", result: "Old result" },
+        task: { phase: "completed", taskId: "agent", taskType: "local_agent", providerRunId: "002", status: "failed", error: "Old failure", outputFile: "/tmp/old.log", summary: "Old summary" },
+      } });
+      const session = makeSession();
+      await flushBackground();
+      await session.project({ type: "task", phase: "completed", taskId: "agent", toolCallId: "spawn", providerRunId: "001", status: "completed" });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({ providerRunId: "002", status: "failed" });
+      await session.project({ type: "task", phase: "started", taskId: "agent", toolCallId: "spawn", providerRunId: "003", taskType: "local_agent", status: "running" });
+      await session.project({ type: "subagent", phase: "completed", agentType: "Explore", parentToolUseId: "spawn", providerRunId: "002", result: "Late old result" });
+      const call = (await runsRepo.findToolCallsByRun("r1"))[0];
+      expect(call.metadata?.task).toMatchObject({ providerRunId: "003", status: "running", phase: "started" });
+      for (const key of ["error", "outputFile", "summary"]) expect((call.metadata?.task as any)?.[key]).toBeUndefined();
+      expect(call.metadata?.subagent).toMatchObject({ providerRunId: "003", phase: "running", model: "sonnet", agentId: "agent" });
+      expect((call.metadata?.subagent as any)?.result).toBeUndefined();
+      expect((call.metadata?.subagent as any)?.error).toBeUndefined();
+      await session.finalize({ status: "succeeded" });
+    });
+
+    it("persists full background replacement separately from the task's final outcome", async () => {
+      const session = makeSession();
+      await flushBackground();
+      const cs = { runId: "r1", state: { hasAssistantContent: false }, toolCallIndex: new Map(), taskIndex: new Map(),
+        permissionMode: createClaudePermissionModeRef("default") } as any;
+      async function project(msg: Record<string, unknown>) {
+        for (const event of mapSDKMessage({ session_id: "sdk", uuid: "u", ...msg } as any, cs)) await session.project(event);
+      }
+      await project({ type: "assistant", parent_tool_use_id: null, message: { role: "assistant", content: [{ type: "tool_use", id: "spawn", name: "Agent", input: {} }] } });
+      const background = { task_id: "agent", run_id: "001", task_type: "local_agent", description: "Review" };
+      await project({ type: "system", subtype: "background_tasks_changed", tasks: [background] });
+      await project({ type: "system", subtype: "task_started", ...background, tool_use_id: "spawn" });
+      await project({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({ status: "running", backgroundActive: false });
+      await project({ type: "system", subtype: "task_notification", task_id: "agent", run_id: "001", status: "failed", summary: "Actual failure" });
+      await project({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+      await session.finalize({ status: "succeeded" });
+      expect((await runsRepo.findToolCallsByRun("r1"))[0].metadata?.task).toMatchObject({ status: "failed", error: "Actual failure", backgroundActive: false });
+    });
+
     it("persists provider call ids and parent linkage end-to-end", async () => {
       const session = makeSession();
       await flushBackground();

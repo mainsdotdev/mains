@@ -188,8 +188,10 @@ export interface WorkRunSubagentEvent {
   phase: "invoked" | "running" | "completed" | "failed" | "stopped";
   /** The name/type of the subagent (e.g., "code-reviewer", "general-purpose") */
   agentType: string;
-  /** Unique identifier for this subagent invocation */
+  /** Provider agent identity, stable across resumed executions. */
   agentId?: string;
+  /** Provider execution id; distinct from the Mains run id. */
+  providerRunId?: string;
   /** Provider-reported configuration; absent in older history. */
   model?: string;
   reasoningEffort?: string;
@@ -229,6 +231,12 @@ export interface WorkRunTaskEvent {
   phase: "started" | "progress" | "updated" | "completed";
   /** Provider task id, stable for the task's lifetime. */
   taskId: string;
+  /** Provider execution id. Claude ids sort lexically in execution order. */
+  providerRunId?: string;
+  /** Immediate parent task; null explicitly clears a previous parent. */
+  parentTaskId?: string | null;
+  /** Resolved spawning call of the immediate parent, when known. */
+  parentToolCallId?: string | null;
   /** tool_use_id of the spawning tool call — the correlation key. */
   toolCallId?: string;
   /** Terminal status (phase "completed") or patched status (phase "updated"). */
@@ -258,6 +266,12 @@ export interface WorkRunTaskEvent {
   error?: string;
   /** Ambient/housekeeping task — consumers should hide it from the inline transcript. */
   skipTranscript?: boolean;
+  /** Foreground/background execution, independent of its final outcome. */
+  isBackgrounded?: boolean;
+  /** Membership in the provider's latest full live-background snapshot. */
+  backgroundActive?: boolean;
+  /** Watcher/housekeeping task; excluded from activity indicators. */
+  ambient?: boolean;
   /** Timestamp */
   ts?: number;
 }

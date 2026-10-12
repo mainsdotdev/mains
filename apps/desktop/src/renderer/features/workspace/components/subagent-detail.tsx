@@ -42,6 +42,7 @@ function StateBadge({ state }: { state: SubagentLifecycleState }) {
   if (state === "done") return <Check className="size-4 text-success" />;
   if (state === "failed") return <Close className="size-4 text-danger" />;
   if (state === "stopped") return <Stop className="size-4 text-warning" />;
+  if (state === "idle") return <Text as="span" size="xs" tone="muted">Idle</Text>;
   return null;
 }
 
@@ -103,7 +104,7 @@ export function SubagentDetail({
 
   // The agent's continuation handle — SendMessage turns addressed to it are
   // part of THIS agent's session, not new agents.
-  const agentId = meta.agentId ?? meta.result?.match(AGENT_ID_IN_RESULT)?.[1];
+  const agentId = entry?.agentId ?? task?.taskId ?? meta.agentId ?? meta.result?.match(AGENT_ID_IN_RESULT)?.[1];
 
   const flow = useMemo(
     () =>
@@ -126,7 +127,11 @@ export function SubagentDetail({
   // A backgrounded agent has no tool_result report; its outcome arrives as
   // the task notification's summary, so that is the fallback. Dedup against
   // the flow's last message lives in the lib with the rest of the assembly.
-  const resultText = selectSubagentReport(meta.result ?? task?.summary, flow);
+  const currentCall = entry?.latestProviderCallId
+    ? toolCalls?.find((call) => call.toolCallId === entry.latestProviderCallId) : spawn;
+  const currentMeta = currentCall?.metadata?.subagent as SubagentLifecycleMeta | undefined;
+  const currentTask = currentCall?.metadata?.task as SubagentTaskMeta | undefined;
+  const resultText = selectSubagentReport(currentMeta?.result ?? currentTask?.summary, flow);
 
   return (
     <div className="flex h-full min-h-0 flex-col">

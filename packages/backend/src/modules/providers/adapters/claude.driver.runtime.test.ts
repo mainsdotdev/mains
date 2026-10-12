@@ -9,7 +9,8 @@ import {
   detectInstalledClis,
   resolveClaudeRuntime,
 } from "../providers.utils";
-import { createClaudeDriver } from "./claude.driver";
+import { createClaudeDriver, mapSDKMessage } from "./claude.driver";
+import { runsRepo } from "../../runs/runs.repo";
 import type { WorkRunEvent } from "../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
@@ -45,6 +46,7 @@ describe("Claude runtime without a system CLI", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(runsRepo, "findClaudeTaskAnchorsByRun").mockResolvedValue([]);
     clearClaudeCliCache();
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), "mains-claude-runtime-"));
     const appPath = path.join(fixture, "Okan's Mains.app", "app.asar");
@@ -106,6 +108,7 @@ esac
     clearClaudeCliCache();
     vi.unstubAllEnvs();
     fs.rmSync(fixture, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it("uses the bundled executable for runs, the live catalogue, commands and account probes", async () => {
@@ -166,6 +169,65 @@ esac
       ]);
     } finally {
       await driver.cleanup?.(acquired.session);
+    }
+  });
+
+  it("keeps native child messages and old task outcomes out of the parent turn's result", async () => {
+    const events: WorkRunEvent[] = [];
+    sdk.query.mockImplementation(({ options }) => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() {
+        const base = { session_id: options.sessionId, uuid: "u", parent_tool_use_id: null };
+        yield { ...base, type: "system", subtype: "init", model: "sonnet" };
+        yield { ...base, type: "system", subtype: "task_started", task_id: "child", run_id: "001", tool_use_id: "spawn", task_type: "local_agent" };
+        yield { ...base, type: "system", subtype: "task_started", task_id: "child", run_id: "002", tool_use_id: "send", task_type: "local_agent" };
+        yield { ...base, type: "assistant", agent_id: "child", error: "authentication_failed", message: {
+          role: "assistant", model: "child-model", content: [{ type: "text", text: "Child report" }],
+        } };
+        yield { ...base, type: "system", subtype: "task_notification", task_id: "child", run_id: "001", status: "failed", summary: "Old failure" };
+        yield { ...base, type: "result", subtype: "success", is_error: false, total_cost_usd: 0,
+          num_turns: 1, duration_ms: 1, modelUsage: {}, permission_denials: [], stop_reason: "end_turn", result: "Main answer" };
+      },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "native-child", accountId: "account-1", goal: "Review",
+      execution: { workspaceId: null, cwd: fixture } });
+    try {
+      const outcome = await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+      expect(outcome).toMatchObject({ status: "succeeded", usage: { model: "sonnet" } });
+      expect(events).toContainEqual(expect.objectContaining({ type: "artifact", content: "Main answer", metadata: { source: "result.message", messagePhase: "final_answer" } }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "artifact", content: "Child report", metadata: expect.objectContaining({ agentId: "child", parentToolUseId: "send", isFromSubagent: true }) }));
+      expect(events.some((event) => event.type === "task" && event.providerRunId === "001" && event.phase === "completed")).toBe(false);
+    } finally {
+      await driver.cleanup?.(acquired.session);
+    }
+  });
+
+  it("restores stable agent, parent and execution identities for resumed conversations", async () => {
+    const anchor = (taskId: string, toolUseId: string, providerRunId: string, parentTaskId: string | null = null) => ({
+      taskId, toolUseId, providerRunId, parentTaskId, taskType: "local_agent", subagentType: "Explore",
+      isBackgrounded: 1, ambient: 0, status: "completed", phase: "completed",
+    });
+    vi.mocked(runsRepo.findClaudeTaskAnchorsByRun).mockResolvedValue([
+      anchor("parent", "parent-spawn", "001"), anchor("child", "spawn", "001", "parent"),
+      anchor("child", "send", "002", "parent"), anchor("child", "late-old", "001", "parent"),
+    ]);
+    const driver = createClaudeDriver({ settingSources: [] });
+    const request = { runId: "resume-agents", accountId: "account-1", goal: "Review", execution: { workspaceId: null, cwd: fixture } };
+    const first = await driver.createSession(request);
+    const resumed = await driver.resumeSession!({ ...request, message: "Continue the review" });
+    try {
+      expect(runsRepo.findClaudeTaskAnchorsByRun).toHaveBeenCalledWith("resume-agents");
+      const cs = resumed.session as any;
+      expect(cs.taskIndex.get("child")).toMatchObject({ toolUseId: "send", providerRunId: "002", parentTaskId: "parent", terminal: true });
+      expect(cs.backgroundTasks).toBeUndefined();
+      const events = mapSDKMessage({ type: "system", subtype: "task_started", uuid: "u", session_id: "s",
+        task_id: "child", run_id: "003", task_type: "local_agent" } as any, cs);
+      expect(events).toContainEqual(expect.objectContaining({ type: "task", status: "running", providerRunId: "003", toolCallId: "spawn", parentToolCallId: "parent-spawn" }));
+      expect(mapSDKMessage({ type: "system", subtype: "task_notification", uuid: "u", session_id: "s",
+        task_id: "child", run_id: "001", status: "completed" } as any, cs)).toEqual([]);
+    } finally {
+      await driver.cleanup?.(first.session);
+      await driver.cleanup?.(resumed.session);
     }
   });
 
