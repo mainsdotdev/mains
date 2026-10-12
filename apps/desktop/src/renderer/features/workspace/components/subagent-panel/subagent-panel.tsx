@@ -19,6 +19,7 @@ import {
 import { PanelItem, PANEL_ROW_X } from "../session-panel/panel-item";
 import { selectSessionRunId } from "../session-panel/select-session-run";
 import type { SessionSubagent } from "@/features/workspace/lib/select-subagents";
+import { formatSubagentConfiguration } from "../../lib/subagent-configuration";
 
 /** Rows shown before "Show N more" — the panel is a corner box, not a page. */
 const COLLAPSED_LIMIT = 6;
@@ -326,8 +327,9 @@ function SubagentList({
 
       {visible.map((agent) => {
         const display = subagentDisplay(agent);
-        // Quiet while running — no live step, no type chatter; the twinkling
-        // glyph carries "working" and the secondary slot fills on completion.
+        const configuration = formatSubagentConfiguration(agent);
+        // Keep creation-time configuration stable while live steps change.
+        // The glyph carries activity; the task description stays in the tooltip.
         const secondary =
           agent.state === "running" ? undefined : display.detail;
         return (
@@ -340,18 +342,14 @@ function SubagentList({
                 className="size-3.5"
               />
             }
-            title={secondary ?? display.name}
+            title={[display.name, configuration, secondary].filter(Boolean).join(" — ")}
             // Old runs predate parent linkage — there is no detail to open, so
             // the row stays a plain status line (PanelItem without onClick).
             onClick={agent.providerCallId ? () => onSelect(agent) : undefined}
             label={
-              <span className="flex min-w-0 items-center gap-1.5">
+              <span className="flex min-w-0 flex-col items-start">
                 <span className="truncate">{display.name}</span>
-                {/* {secondary && (
-                  <span className="truncate font-normal text-primary-600 dark:text-primary-400">
-                    {secondary}
-                  </span>
-                )} */}
+                {configuration && <span className="max-w-full truncate text-xs font-normal text-primary-500">{configuration}</span>}
               </span>
             }
             trailing={

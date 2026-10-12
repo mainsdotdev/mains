@@ -10,6 +10,7 @@ import {
   ModelSelectDropdown,
   FileUploadDropdown,
   FastModeButton,
+  ServiceTierSelect,
   GoalButton,
   PermissionModeDropdown,
   FILE_TYPES,
@@ -23,6 +24,7 @@ import type { EffortLevel } from "@mains/contracts/effort-levels";
 import { Microphone, Plus } from "@/components/ui/icons";
 import { VoiceMuteButton } from "./voice-mute-button";
 import type { ComposerPrimaryAction } from "../lib/composer-controls";
+import type { ModelServiceTier } from "@mains/contracts/run-settings";
 
 interface InputToolbarProps {
   primaryAction: ComposerPrimaryAction & { onClick: () => void };
@@ -59,6 +61,9 @@ interface InputToolbarProps {
   fastMode: boolean;
   onFastModeToggle: () => void;
   supportsFastMode: boolean;
+  serviceTier?: string;
+  serviceTiers?: ModelServiceTier[];
+  onServiceTierChange?: (id: string) => void;
   // Effort level (Claude only)
   effortLevel: string;
   onEffortLevelChange: (level: string) => void;
@@ -100,6 +105,9 @@ export function InputToolbar({
   fastMode,
   onFastModeToggle,
   supportsFastMode,
+  serviceTier,
+  serviceTiers,
+  onServiceTierChange,
   effortLevel,
   onEffortLevelChange,
   supportedEffortLevels,
@@ -215,6 +223,10 @@ export function InputToolbar({
     </>
   );
 
+  const speedControl = serviceTiers && serviceTiers.length > 1 && onServiceTierChange
+    ? <ServiceTierSelect value={serviceTier ?? "default"} options={serviceTiers} onChange={onServiceTierChange} />
+    : supportsFastMode ? <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} /> : null;
+
   if (layout === "floating") {
     return (
       <div className="pointer-events-none absolute inset-x-2.5 bottom-1.5 flex items-center justify-between">
@@ -241,7 +253,7 @@ export function InputToolbar({
             variant={variant}
             iconOnly
           />
-          {supportsFastMode && <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} />}
+          {speedControl}
           {modeConfig.showPermissionControls && <PermissionModeDropdown
             permissionMode={permissionMode}
             onPermissionModeChange={onPermissionModeChange}
@@ -283,6 +295,9 @@ export function InputToolbar({
               fastMode={fastMode}
               onFastModeToggle={onFastModeToggle}
               supportsFastMode={supportsFastMode}
+              serviceTier={serviceTier}
+              serviceTiers={serviceTiers}
+              onServiceTierChange={onServiceTierChange}
             />
           ) : (
             <>
@@ -303,9 +318,7 @@ export function InputToolbar({
                 isLoading={isLoadingModels}
                 variant={variant}
               />
-              {supportsFastMode && (
-                <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} />
-              )}
+              {speedControl}
             </>
           )}
           {modeConfig.showPermissionControls && (

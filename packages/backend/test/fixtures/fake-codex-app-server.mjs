@@ -703,7 +703,9 @@ input.on("line", (line) => {
         notify("thread/realtime/transcript/delta", { threadId: params.threadId, role: "user", delta: "Calculate this" });
         notify("thread/realtime/itemAdded", { threadId: params.threadId, item: { type: "handoff_request", input_transcript: "Calculate this" } });
         const turnId = `voice-turn-${params.threadId}`;
-        notify("turn/started", { threadId: params.threadId, turn: { id: turnId, status: "inProgress" } });
+        notify("turn/started", { threadId: params.threadId, turn: { id: turnId, status: "inProgress",
+          ...(process.env.MAINS_CODEX_FIXTURE_LEGACY_TURN_LINEAGE === "1" ? {} : { rootTurnId: `voice-root-${params.threadId}` }),
+        } });
         notify("thread/realtime/transcript/done", { threadId: params.threadId, role: "user", text: "Calculate this" });
         notify("item/completed", { threadId: params.threadId, turnId, item: { type: "agentMessage", id: "voice-result", text: "The answer is 1387" } });
         notify("turn/completed", { threadId: params.threadId, turn: { id: turnId, status: "completed" } });
@@ -848,7 +850,7 @@ input.on("line", (line) => {
           inputModalities: ["text", "image"],
           supportsPersonality: true,
           additionalSpeedTiers: [],
-          serviceTiers: [{
+          serviceTiers: process.env.MAINS_CODEX_FIXTURE_SERVICE_TIERS ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_SERVICE_TIERS) : [{
             id: "fast",
             name: "Fast",
             description: "Priority fixture service.",

@@ -1083,6 +1083,12 @@ describe("RunSession", () => {
 
       await session.project({
         type: "subagent",
+        phase: "invoked", agentType: "general-purpose", agentId: "a26e6cd0", parentToolUseId: "toolu_agent",
+        model: "gpt-6.1-sol", reasoningEffort: "ultra", role: "reviewer", agentPath: "/root/review", ts: 900,
+      });
+
+      await session.project({
+        type: "subagent",
         phase: "completed",
         agentType: "general-purpose",
         agentId: "a26e6cd0",
@@ -1098,6 +1104,8 @@ describe("RunSession", () => {
         agentId: "a26e6cd0",
         result: "Counted 42 files",
         updatedAt: 999,
+        invokedAt: 900,
+        model: "gpt-6.1-sol", reasoningEffort: "ultra", role: "reviewer", agentPath: "/root/review",
       });
     });
 

@@ -1777,6 +1777,33 @@ describe("Codex subagent lifecycle projection", () => {
 });
 
 describe("Codex multi_agent v1 (subAgentActivity) projection", () => {
+  it("retains the resolved model and effort from creation through completion", () => {
+    const { mapper, state } = createHarness();
+    const events = mapper.mapNotification("item/completed", { threadId: "thread-parent", item: {
+      id: "configured-spawn", type: "subAgentActivity", kind: "started", agentThreadId: "thread-sub",
+      agentPath: "/root/security_review", model: "gpt-6.1-sol", reasoningEffort: "ultra",
+    } }, "run-1");
+    expect(events).toContainEqual(expect.objectContaining({ type: "subagent", phase: "invoked",
+      model: "gpt-6.1-sol", reasoningEffort: "ultra", agentPath: "/root/security_review" }));
+    expect(state.subAgents.get("thread-sub")).toMatchObject({ model: "gpt-6.1-sol", reasoningEffort: "ultra" });
+    const terminal = mapper.mapNotification("item/completed", { threadId: "thread-parent", item: {
+      id: "finished", type: "subAgentActivity", kind: "completed", agentThreadId: "thread-sub",
+    } }, "run-1");
+    expect(terminal).toContainEqual(expect.objectContaining({ type: "subagent", phase: "completed",
+      model: "gpt-6.1-sol", reasoningEffort: "ultra" }));
+  });
+
+  it("also preserves the collab runtime's model, effort and role", () => {
+    const { mapper, state } = createHarness();
+    state.subAgents.set("thread-sub", { threadId: "thread-sub", nickname: "review", role: "reviewer" });
+    const events = mapper.mapNotification("item/completed", { threadId: "thread-parent", item: {
+      id: "configured-collab", type: "collabAgentToolCall", tool: "spawnAgent", status: "completed",
+      receiverThreadIds: ["thread-sub"], model: "gpt-6.1-sol", reasoningEffort: "FutureEffort", agentsStates: {},
+    } }, "run-1");
+    expect(events).toContainEqual(expect.objectContaining({ type: "subagent", phase: "invoked",
+      role: "reviewer", model: "gpt-6.1-sol", reasoningEffort: "FutureEffort" }));
+  });
+
   function startedActivity(
     mapper: ReturnType<typeof createHarness>["mapper"],
     id = "call_1",

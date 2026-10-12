@@ -129,6 +129,10 @@ export interface SubagentLifecycleMeta {
   phase?: "invoked" | "running" | "completed" | "failed" | "stopped";
   agentType?: string;
   agentId?: string;
+  model?: string;
+  reasoningEffort?: string;
+  role?: string;
+  agentPath?: string;
   prompt?: string;
   result?: string;
   error?: string;

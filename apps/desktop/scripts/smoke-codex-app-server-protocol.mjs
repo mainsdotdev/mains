@@ -246,6 +246,9 @@ try {
   }
   if (compareVersions(versionOutput, "0.162.0") >= 0) {
     assertContains("MessagePhase.ts", ['"partial_answer"']);
+    assertContains("v2/Turn.ts", ["rootTurnId: string | null"]);
+    assertContains("v2/TurnStartParams.ts", ["parentTurnId?: string | null", "rootTurnId?: string | null"]);
+    assertContains("v2/ThreadItem.ts", ['"type": "subAgentActivity"', "model: string | null", "reasoningEffort: ReasoningEffort | null"]);
   }
   assertContains("v2/McpResourceReadParams.ts", [
     "threadId?: string | null",

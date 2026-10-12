@@ -75,7 +75,12 @@ export interface RunSessionContext {
   initialModel?: string;
   initialProviderTurnId?: string;
   /** Frozen at delegation, independent of whether the voice call stays open. */
-  initialTurnMetadata?: { inputSource: "voice"; realtimeSessionId: string };
+  initialTurnMetadata?: {
+    inputSource?: "voice";
+    realtimeSessionId?: string;
+    providerParentTurnId?: string;
+    providerRootTurnId?: string;
+  };
   /** Defaults to -1 (fresh run). continueRun passes the recovered max turn index. */
   seedTurnIndex?: number;
 }
@@ -885,6 +890,10 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       phase: event.phase,
       agentType: event.agentType,
       agentId: event.agentId,
+      model: event.model,
+      reasoningEffort: event.reasoningEffort,
+      role: event.role,
+      agentPath: event.agentPath,
       prompt: event.prompt,
       result: event.result,
       error: event.error,

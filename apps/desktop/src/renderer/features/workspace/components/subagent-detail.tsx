@@ -14,6 +14,7 @@ import {
 import { useRunEventRefetch } from "../hooks/use-run-event-refetch";
 import { mapToolCallToEvent } from "../lib/run-event-mappers";
 import { selectSubagentEntry } from "../lib/select-subagents";
+import { formatSubagentConfiguration } from "../lib/subagent-configuration";
 import {
   buildSubagentFlow,
   selectSubagentReport,
@@ -156,6 +157,9 @@ export function SubagentDetail({
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 noscrollbar">
+        {entry && formatSubagentConfiguration(entry) && (
+          <Text as="p" size="xs" tone="subtle">{formatSubagentConfiguration(entry)}</Text>
+        )}
         {display.detail && (
           <Text as="span" size="xs" tone="subtle" className="block">
             {display.detail}

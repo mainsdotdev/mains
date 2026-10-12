@@ -133,6 +133,7 @@ export function createWorkRunAdapter(driver: ProviderDriver): WorkRunAdapter {
           contextSkills: r.skills,
           runId,
           clientPromptId: r.clientPromptId,
+          providerTurnLineage: r.providerTurnLineage,
           // Only publish a provider-resolved model here. Requested values may
           // be aliases (for example `sonnet` → `claude-sonnet-5`) and would
           // create a false model-change marker until final usage canonicalizes

@@ -146,7 +146,9 @@ describe("Codex capabilities", () => {
     );
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
-    const server = await startServer(logPath);
+    const serviceTiers = [{ id: "ultrafast", name: "Ultrafast", description: "Fixture higher usage." },
+      { id: "future-speed", name: "Future speed", description: "Fixture future tier." }];
+    const server = await startServer(logPath, { MAINS_CODEX_FIXTURE_SERVICE_TIERS: JSON.stringify(serviceTiers) });
     const capabilities = createCodexCapabilities({
       ensureServer: async () => server,
       getRunningServer: () => server,
@@ -166,6 +168,7 @@ describe("Codex capabilities", () => {
         supportsEffort: true,
         supportedEffortLevels: ["medium"],
         supportsFastMode: true,
+        serviceTiers,
         capabilities: { vision: true },
       }),
     ]);

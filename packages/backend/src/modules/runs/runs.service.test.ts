@@ -184,10 +184,12 @@ describe("runsService", () => {
         await runsService.startRealtime(h.payload);
         const request = h.startRealtime.mock.calls[0][0];
         expect(request.voiceInstructions).toContain("separate working chat");
+        await h.work().onTurnStarted("coordinator-turn", "Refactor the hero", "gpt-6.1-sol", { rootTurnId: "spoken-root" });
         const args = { taskKey: "hero", title: "Hero refactor", prompt: "Refactor the hero, preserve the appearance." };
         await expect(request.voiceTools!.start(args)).resolves.toMatchObject({ runId: worker.id, reused: false });
         expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
           accountId: "default", providerId: "codex", goal: args.prompt,
+          providerTurnLineage: { parentTurnId: "coordinator-turn", rootTurnId: "spoken-root" },
           configSnapshot: request.configSnapshot, conversationSettings: expect.any(Object),
           initialContext: [{ kind: "note", content: expect.any(String), metadata: {
             voiceDelegation: { parentRunId: h.run.id, title: expect.any(String), taskKey: "hero" },
@@ -199,6 +201,7 @@ describe("runsService", () => {
         const prompts: any[] = [];
         await emitUserPromptArtifact(async (event) => { prompts.push(event); }, args.prompt, { context: execute.mock.calls[0][0].initialContext });
         expect(prompts[0].metadata.voiceDelegation).toMatchObject({ parentRunId: h.run.id });
+        await h.work().onCompleted({ status: "succeeded" });
         await runsService.stopRealtime(h.payload);
         await expect(request.voiceTools!.read({ runId: worker.id })).rejects.toThrow("ended");
         expect(cancel).not.toHaveBeenCalled();
@@ -266,7 +269,7 @@ describe("runsService", () => {
         await expect(runsService.continueRun({ runId: h.run.id, accountId: "default", message: "Competing text turn" })).rejects.toThrow("End voice chat");
 
         h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate", final: false });
-        await h.work().onTurnStarted("native-1", "Calculate this", "resolved-model");
+        await h.work().onTurnStarted("native-1", "Calculate this", "resolved-model", { rootTurnId: "spoken-root" });
         h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate this", final: true });
         h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate this", final: true });
         await h.work().onEvent({ type: "plan_update", providerTurnId: "native-1", steps: [{ step: "Calculate", status: "completed" }] });
@@ -274,7 +277,7 @@ describe("runsService", () => {
         h.voice({ type: "transcript", itemId: "reply-1", role: "assistant", text: "The answer is ready", final: true });
         await vi.waitFor(async () => expect((await runsRepo.findArtifactsByRun(h.run.id)).filter((artifact) => artifact.metadata?.voice)).toHaveLength(2));
         const input = (await runsRepo.findArtifactsByRun(h.run.id)).find((artifact) => artifact.metadata?.source === "user");
-        expect(input?.metadata).toMatchObject({ voice: true, providerTurnId: "native-1", realtimeSessionId: "voice-connection" });
+        expect(input?.metadata).toMatchObject({ voice: true, providerTurnId: "native-1", providerRootTurnId: "spoken-root", realtimeSessionId: "voice-connection" });
         expect(input?.metadata).not.toHaveProperty("delivery");
         expect(send.mock.calls.some(([channel]) => channel === CHANNELS.runs.eventPersisted)).toBe(true);
 
@@ -282,8 +285,9 @@ describe("runsService", () => {
         await h.work().onCompleted({ status: "succeeded" });
         const turns = await runsRepo.findTurnsByRun(h.run.id);
         expect(turns.map((turn) => turn.turnIndex)).toEqual([0, 1]);
-        expect(turns[0]).toMatchObject({ model: "resolved-model", promptContent: "Calculate this", metadata: { providerTurnId: "native-1", codexPlan: { providerTurnId: "native-1" } } });
+        expect(turns[0]).toMatchObject({ model: "resolved-model", promptContent: "Calculate this", metadata: { providerTurnId: "native-1", providerRootTurnId: "spoken-root", codexPlan: { providerTurnId: "native-1" } } });
         expect(turns[1]).toMatchObject({ model: "resolved-model", promptContent: "Another spoken request", metadata: { providerTurnId: "native-2" } });
+        expect(turns[1].metadata).not.toHaveProperty("providerRootTurnId");
         expect(turns.every((turn) => turn.endedAt !== null)).toBe(true);
         expect((await runsService.getRunById(h.run.id))?.goal).toBe("Existing conversation");
       } finally {

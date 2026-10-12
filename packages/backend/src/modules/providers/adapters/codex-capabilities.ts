@@ -908,7 +908,7 @@ export function createCodexCapabilities(
             supportsFastMode:
               serviceTiers?.some(
                 (tier) =>
-                  tier.id === "fast" || tier.id === "priority",
+                  tier.id === "fast" || tier.id === "priority" || tier.id === "ultrafast",
               ) ?? false,
             serviceTiers,
           };

@@ -132,6 +132,7 @@ afterEach(async () => {
   delete process.env.MAINS_CODEX_FIXTURE_MCP_RESUME_ACTIVE_WRITER;
   delete process.env.MAINS_CODEX_FIXTURE_OAUTH_ERROR;
   delete process.env.MAINS_CODEX_FIXTURE_LEGACY_OAUTH;
+  delete process.env.MAINS_CODEX_FIXTURE_LEGACY_TURN_LINEAGE;
   await Promise.all(drivers.splice(0).map((driver) => driver.shutdown?.()));
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -268,11 +269,12 @@ describe("codex.driver / app-server protocol", () => {
     expect(events).toContainEqual(expect.objectContaining({ type: "closed", reason: "ended" }));
   });
 
-  it("resumes native voice with the run's permissions and routes server-owned work without an extra turn/start", async () => {
+  it.each([false, true])("resumes native voice and routes server-owned work without an extra turn/start (legacy lineage=%s)", async (legacyLineage) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-voice-"));
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
     process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    if (legacyLineage) process.env.MAINS_CODEX_FIXTURE_LEGACY_TURN_LINEAGE = "1";
     const config = { binary: fixtureBinary, sandboxMode: "danger-full-access" as const, timeout: 2000, realtimeVoice: "cove" };
     const driver = createCodexDriver(config);
     drivers.push(driver);
@@ -297,7 +299,9 @@ describe("codex.driver / app-server protocol", () => {
       onEvent: async (event) => { events.push(event as unknown as Record<string, unknown>); },
     });
     await vi.waitFor(() => expect(onCompleted).toHaveBeenCalledOnce());
-    expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith(`voice-turn-${acquired.sessionId}`, "Calculate this", "native-work-model");
+    if (legacyLineage) expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith(`voice-turn-${acquired.sessionId}`, "Calculate this", "native-work-model");
+    else expect(onTurnStarted).toHaveBeenCalledExactlyOnceWith(`voice-turn-${acquired.sessionId}`, "Calculate this", "native-work-model",
+      { rootTurnId: `voice-root-${acquired.sessionId}` });
     expect(onCompleted).toHaveBeenCalledWith(expect.objectContaining({ status: "succeeded" }));
     expect(events).toContainEqual(expect.objectContaining({ type: "sdp", sdp: "fixture-answer", connectionId: "voice-attempt" }));
     expect(events).toContainEqual(expect.objectContaining({ type: "transcript", text: "Calculate this", final: true }));
@@ -1540,6 +1544,30 @@ describe("codex.driver / app-server protocol", () => {
       }
     },
   );
+
+  it.each(["ultrafast", "future-speed"])("forwards advertised speed %j and delegated turn lineage on start and resume", async (serviceTier) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-lineage-"));
+    tempDirs.push(tempDir);
+    const logPath = path.join(tempDir, "protocol.jsonl");
+    process.env.MAINS_CODEX_FIXTURE_LOG = logPath;
+    const driver = createCodexDriver({ binary: fixtureBinary, timeout: 1000 });
+    drivers.push(driver);
+    const base = request("delegated-worker");
+    const acquired = await driver.createSession({ ...base, configSnapshot: { serviceTier },
+      providerTurnLineage: { parentTurnId: "voice-parent", rootTurnId: "voice-root" } });
+    await driver.executePrompt(acquired.session, acquired.prompt, async () => {}, new AbortController().signal);
+    const resumed = await driver.resumeSession!({ ...base, message: "Continue", configSnapshot: { serviceTier },
+      providerTurnLineage: { parentTurnId: "later-parent", rootTurnId: "later-root" } });
+    await driver.executePrompt(resumed.session, resumed.prompt, async () => {}, new AbortController().signal);
+    const direct = await driver.resumeSession!({ ...base, message: "User request", configSnapshot: { serviceTier: "default" } });
+    await driver.executePrompt(direct.session, direct.prompt, async () => {}, new AbortController().signal);
+    const turns = readProtocolLog(logPath).filter((entry) => entry.method === "turn/start");
+    expect(turns[0].params).toMatchObject({ serviceTier, parentTurnId: "voice-parent", rootTurnId: "voice-root" });
+    expect(turns[1].params).toMatchObject({ serviceTier, parentTurnId: "later-parent", rootTurnId: "later-root" });
+    expect(turns[2].params).toMatchObject({ serviceTier: "default" });
+    expect(turns[2].params).not.toHaveProperty("parentTurnId");
+    expect(turns[2].params).not.toHaveProperty("rootTurnId");
+  });
 
   it("keeps a forked run out of plan mode when its snapshot says so", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-driver-"));

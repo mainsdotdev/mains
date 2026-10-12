@@ -1,4 +1,6 @@
 import { readReviewComments } from "@mains/contracts/review-comments";
+import type { ProviderTurnLineage } from "@mains/contracts/realtime";
+import { providerTurnLineageMetadata } from "../../../../shared/provider-turn-lineage";
 // ─────────────────────────────────────────────────────────────
 // Shared utilities for work run adapters (Claude & Copilot)
 // Pure functions with no SDK-specific dependencies.
@@ -523,6 +525,7 @@ export async function emitUserPromptArtifact(
   onEvent: WorkRunEventHandler,
   content: string,
   options?: {
+    providerTurnLineage?: ProviderTurnLineage;
     attachments?: FileAttachment[];
     context?: WorkRunContextItem[];
     contextIssues?: Array<{
@@ -596,6 +599,7 @@ export async function emitUserPromptArtifact(
     content,
     metadata: {
       source: "user",
+      ...providerTurnLineageMetadata(options?.providerTurnLineage),
       ...(options?.context?.find((item) => item.metadata?.voiceDelegation)?.metadata?.voiceDelegation
         ? { voiceDelegation: options.context.find((item) => item.metadata?.voiceDelegation)!.metadata!.voiceDelegation }
         : {}),

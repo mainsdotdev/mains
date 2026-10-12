@@ -26,6 +26,10 @@ export interface SessionSubagent {
   agentType: string;
   /** One-line task description, when the provider supplied one. */
   description?: string;
+  model?: string;
+  reasoningEffort?: string;
+  role?: string;
+  agentPath?: string;
   state: SubagentState;
 }
 
@@ -99,6 +103,8 @@ export function selectSessionSubagents(calls: ToolCall[]): SessionSubagent[] {
       task,
       subagent,
     });
+    const model = subagent?.model || (typeof input.model === "string" ? input.model : undefined);
+    const reasoningEffort = subagent?.reasoningEffort || (typeof input.reasoningEffort === "string" ? input.reasoningEffort : undefined);
 
     candidates.push({
       entry: {
@@ -107,6 +113,10 @@ export function selectSessionSubagents(calls: ToolCall[]): SessionSubagent[] {
         toolName: call.toolName,
         agentType,
         description,
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(subagent?.role ? { role: subagent.role } : {}),
+        ...(subagent?.agentPath ? { agentPath: subagent.agentPath } : {}),
         state,
       },
       agentId:

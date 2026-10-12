@@ -6,13 +6,14 @@
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
+import type { ModelServiceTier } from "@mains/contracts/run-settings";
 import type { StoredAttachment } from "@mains/contracts/runs";
 import type { ProviderCliInfo } from "@mains/contracts/provider-cli";
 import type { ConnectorOAuthStartResult } from "@mains/contracts/provider-connectors";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 export type { ConnectorOAuthStartResult } from "@mains/contracts/provider-connectors";
 export type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
-import type { RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
+import type { ProviderTurnLineage, RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { ModeToolPolicy } from "./mode-harness";
 import type {
@@ -58,6 +59,7 @@ export interface RunExecutionContext {
  * Request to start a work run
  */
 export interface WorkRunRequest {
+  providerTurnLineage?: ProviderTurnLineage;
   /** Display correlation only; does not alter provider input acceptance. */
   clientPromptId?: string;
   runId: string;
@@ -188,6 +190,11 @@ export interface WorkRunSubagentEvent {
   agentType: string;
   /** Unique identifier for this subagent invocation */
   agentId?: string;
+  /** Provider-reported configuration; absent in older history. */
+  model?: string;
+  reasoningEffort?: string;
+  role?: string;
+  agentPath?: string;
   /** The tool_use_id that spawned this subagent (correlates with parent agent) */
   parentToolUseId?: string;
   /** The prompt/task given to the subagent */
@@ -417,6 +424,7 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
  * Request to continue an existing run (resume session)
  */
 export interface WorkRunContinueRequest {
+  providerTurnLineage?: ProviderTurnLineage;
   clientPromptId?: string;
   /** Correlates a locally queued input with Codex's accepted userMessage. */
   clientUserMessageId?: string;
@@ -851,7 +859,7 @@ export interface DriverOutcome {
 
 /** Native voice can create work turns without a client issuing turn/start. */
 export interface RealtimeWorkHandlers {
-  onTurnStarted(providerTurnId: string, message?: string, model?: string): Promise<void>;
+  onTurnStarted(providerTurnId: string, message?: string, model?: string, lineage?: ProviderTurnLineage): Promise<void>;
   onEvent: WorkRunEventHandler;
   onCompleted(result: DriverOutcome): Promise<void>;
 }
@@ -1365,11 +1373,10 @@ export interface ModelInfo {
   /** Available effort levels for this model */
   supportedEffortLevels?: EffortLevel[];
   /**
-   * Provider-specific service tiers (e.g. Codex: `priority`, `flex`, `default`).
-   * When set, the UI exposes a tier picker so users can trade quality/cost
-   * vs. throughput per turn. The tier is passed to the provider on `turn/start`.
+   * Speed tiers advertised by the model (for example Fast and Ultrafast).
+   * Their ids and descriptions come from the provider, which validates access.
    */
-  serviceTiers?: Array<{ id: string; name: string; description?: string }>;
+  serviceTiers?: ModelServiceTier[];
   /** Model description */
   description?: string;
   // TODO: expose in UI — model supports auto mode selection

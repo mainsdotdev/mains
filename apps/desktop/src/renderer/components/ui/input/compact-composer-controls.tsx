@@ -11,6 +11,7 @@ import { formatModelDisplayName, selectableModelNames } from "@/lib/model-displa
 import type { ProviderVariant } from "@/lib/provider-variants";
 import { ULTRACODE_GRADIENT_TEXT } from "./ultracode-styles";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
+import type { ModelServiceTier } from "@mains/contracts/run-settings";
 
 interface CompactComposerControlsProps {
   variant: ProviderVariant;
@@ -27,6 +28,9 @@ interface CompactComposerControlsProps {
   fastMode: boolean;
   onFastModeToggle: () => void;
   supportsFastMode: boolean;
+  serviceTier?: string;
+  serviceTiers?: ModelServiceTier[];
+  onServiceTierChange?: (id: string) => void;
 }
 
 /** A heading between groups of rows in the menu. */
@@ -70,6 +74,9 @@ export function CompactComposerControls({
   fastMode,
   onFastModeToggle,
   supportsFastMode,
+  serviceTier,
+  serviceTiers,
+  onServiceTierChange,
 }: CompactComposerControlsProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -81,6 +88,8 @@ export function CompactComposerControls({
     !!supportedEffortLevels && supportedEffortLevels.length > 0;
   const selectedEffortLabel =
     thinkingMode && effortLevel ? formatEffortLevel(effortLevel) : "";
+  const selectedSpeedLabel = serviceTier && serviceTier !== "default"
+    ? serviceTiers?.find((tier) => tier.id === serviceTier)?.name : undefined;
 
   return (
     <div className="relative min-w-0 max-w-full animate-blur-reveal" ref={containerRef}>
@@ -108,6 +117,7 @@ export function CompactComposerControls({
             </span>
           )}
         </span>
+        {selectedSpeedLabel && <span className="text-xs font-medium text-accent">{selectedSpeedLabel}</span>}
         <ArrowUp className="size-3.5 shrink-0 rotate-180" />
       </Button>
 
@@ -236,7 +246,22 @@ export function CompactComposerControls({
             </>
           ) : null}
 
-          {supportsFastMode && (
+          {serviceTiers && serviceTiers.length > 1 && onServiceTierChange ? (
+            <>
+              <Section>Speed</Section>
+              {serviceTiers.map((tier) => (
+                <Button key={tier.id} type="button" role="menuitemradio" aria-checked={serviceTier === tier.id}
+                  onClick={() => { onServiceTierChange(tier.id); setIsOpen(false); }}
+                  className={`${ROW} ${serviceTier === tier.id ? ROW_ACTIVE : ROW_IDLE}`}>
+                  <span className="min-w-0 flex-1">
+                    <span className="block">{tier.name}</span>
+                    {tier.description && <span className="block text-xs text-primary-500">{tier.description}</span>}
+                  </span>
+                  {serviceTier === tier.id && <Check className="size-3.5 shrink-0" />}
+                </Button>
+              ))}
+            </>
+          ) : supportsFastMode && (
             <>
               <Section>Speed</Section>
               <Button

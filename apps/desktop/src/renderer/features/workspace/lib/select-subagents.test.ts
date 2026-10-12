@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { ToolCall } from "@/lib/redux/api";
 import { selectSessionSubagents, selectSubagentEntry } from "./select-subagents";
 import { subagentStateOf } from "./subagent-identity";
+import { formatSubagentConfiguration } from "./subagent-configuration";
 
 function call(partial: Partial<ToolCall> & { id: number }): ToolCall {
   return {
@@ -26,6 +27,17 @@ function call(partial: Partial<ToolCall> & { id: number }): ToolCall {
 }
 
 describe("selectSessionSubagents", () => {
+  it("shows the resolved configuration of a completed Codex agent after reload", () => {
+    const [agent] = selectSessionSubagents([call({ id: 1, toolName: "spawnAgent", status: "done",
+      input: { model: "requested-alias" }, metadata: { subagent: {
+        phase: "completed", agentType: "security_review", model: "gpt-6.1-sol", reasoningEffort: "ultra",
+        role: "reviewer", agentPath: "/root/security_review",
+      } } })]);
+    expect(agent).toMatchObject({ state: "done", model: "gpt-6.1-sol", reasoningEffort: "ultra", role: "reviewer", agentPath: "/root/security_review" });
+    expect(formatSubagentConfiguration(agent)).toBe("Reviewer · GPT 6.1 Sol · Ultra");
+    expect(selectSubagentEntry([call({ id: 1, toolCallId: "spawn", metadata: { subagent: { model: "gpt-6.1-sol" } } })], "spawn")?.model).toBe("gpt-6.1-sol");
+  });
+
   it("reads the agent type and description off subagent + task metadata", () => {
     const [agent] = selectSessionSubagents([
       call({

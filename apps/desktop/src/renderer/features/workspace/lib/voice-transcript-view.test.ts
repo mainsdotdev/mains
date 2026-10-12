@@ -15,6 +15,11 @@ function event(id: string, time: number, metadata: Record<string, unknown> = {})
 }
 
 describe("voice work provenance", () => {
+  it("keeps a separate worker's reply visible even when it shares the voice request's root", () => {
+    const workerTurn = { ...turn, metadata: { providerParentTurnId: "native", providerRootTurnId: "spoken-root" } };
+    const replies = [event("worker-result", 12_000, { providerParentTurnId: "native", providerRootTurnId: "spoken-root" })];
+    expect(projectVoiceTranscriptEvents(replies, [workerTurn])).toEqual(replies);
+  });
   it("keeps voice-only user and assistant replies in permanent history", () => {
     const speech = [event("user", 10_000, { voice: true, kind: "user-prompt", source: "user" }),
       event("greeting", 12_000, { voice: true, realtimeSessionId: "call" })];
