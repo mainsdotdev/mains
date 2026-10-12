@@ -1868,6 +1868,12 @@ export function removeClaudeRuntimeSettings(settingsPath?: string): void {
   }
 }
 
+/** A handoff acknowledgement, not the web tool's eventual output. */
+function isDetachedClaudeToolResult(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    (value as { detachedToolCall?: unknown }).detachedToolCall === true;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Event mapping: SDKMessage → WorkRunEvent[]
 //
@@ -2002,6 +2008,10 @@ export function mapSDKMessage(
           if (block?.type !== "tool_result") continue;
           const toolUseId: string = block.tool_use_id || "";
           const prev = toolUseId ? cs.toolCallIndex.get(toolUseId) : undefined;
+          // A priority message can detach a web call. Its real result follows
+          // in a later turn of this stream, still carrying the same call id.
+          // The message-level result belongs to a block only when it is sole.
+          if (!block.is_error && soleToolResult && isDetachedClaudeToolResult(userMsg.tool_use_result)) continue;
           const mcpApp = prev ? cs.mcpApps?.catalog.apps.get(prev.toolName) : undefined;
           // An app widget renders from structuredContent, which only the
           // message's tool_use_result keeps.
@@ -2496,6 +2506,7 @@ export function mapSDKMessage(
         const toolName = prev?.toolName || "unknown";
         const input = prev?.input;
         const output = anyMsg.content || anyMsg.result;
+        if (!anyMsg.is_error && isDetachedClaudeToolResult(anyMsg.tool_use_result ?? output)) break;
         const error = anyMsg.is_error ? String(output) : undefined;
 
         if (toolUseId) cs.toolCallIndex.delete(toolUseId);
@@ -2666,6 +2677,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         ): Promise<Record<string, unknown>> => {
           const toolName = (input.tool_name as string) || "unknown";
           const toolResponse = input.tool_response;
+          if (isDetachedClaudeToolResult(toolResponse)) return {};
 
           // The first completion for a call is the one kept, and this one only
           // has the tool's text. An app's call is completed from the tool_result

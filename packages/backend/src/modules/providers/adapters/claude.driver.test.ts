@@ -2333,6 +2333,73 @@ function makeClaudeSession(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
+describe("mapSDKMessage detached web results", () => {
+  const toolResult = (toolUseId: string, output: unknown, raw?: unknown, isError = false) => ({
+    type: "user" as const, uuid: "result-1", session_id: "session-1", parent_tool_use_id: null,
+    message: { role: "user" as const, content: [{ type: "tool_result", tool_use_id: toolUseId, content: output, is_error: isError }] },
+    tool_use_result: raw,
+  });
+
+  it.each(["WebFetch", "WebSearch"])("keeps %s open until its real result arrives in a later turn", (toolName) => {
+    const cs = makeClaudeSession();
+    const input = { query: "SDK docs" };
+    mapSDKMessage({ type: "assistant", uuid: "start-1", session_id: "session-1", parent_tool_use_id: null,
+      message: { role: "assistant", content: [{ type: "tool_use", id: "web-1", name: toolName, input }] } }, cs);
+
+    expect(mapSDKMessage(toolResult("web-1", "Result will follow", { detachedToolCall: true }), cs)).toEqual([]);
+    expect(cs.toolCallIndex.get("web-1")).toMatchObject({ toolName, input });
+    mapSDKMessage({ type: "result", subtype: "success", is_error: false, result: "", stop_reason: "end_turn",
+      total_cost_usd: 0, num_turns: 1, modelUsage: {}, permission_denials: [] } as any, cs);
+    expect(cs.toolCallIndex.has("web-1")).toBe(true);
+
+    const [complete] = mapSDKMessage(toolResult("web-1", "Fetched SDK docs"), cs);
+    expect(complete).toMatchObject({ type: "tool_call", toolName, input, output: "Fetched SDK docs",
+      metadata: { phase: "complete", toolCallId: "web-1" } });
+    expect(cs.toolCallIndex.has("web-1")).toBe(false);
+  });
+
+  it("settles a detached call as an error when the eventual result fails", () => {
+    const cs = makeClaudeSession();
+    cs.toolCallIndex.set("web-1", { toolName: "WebFetch", input: { url: "https://docs.test" } });
+    mapSDKMessage(toolResult("web-1", "Result will follow", { detachedToolCall: true }), cs);
+
+    const [complete] = mapSDKMessage(toolResult("web-1", "Fetch failed", undefined, true), cs);
+    expect(complete).toMatchObject({ toolName: "WebFetch", error: '"Fetch failed"',
+      metadata: { phase: "complete", toolCallId: "web-1" } });
+    expect(cs.toolCallIndex.has("web-1")).toBe(false);
+  });
+
+  it.each([undefined, { detachedToolCall: false }, { structuredContent: { detachedToolCall: true } }])(
+    "does not treat ordinary tool data as a detached signal (%j)", (raw) => {
+      const cs = makeClaudeSession();
+      cs.toolCallIndex.set("web-1", { toolName: "WebFetch" });
+      const [complete] = mapSDKMessage(toolResult("web-1", '{"detachedToolCall":true}', raw), cs);
+      expect(complete).toMatchObject({ output: '{"detachedToolCall":true}', metadata: { phase: "complete" } });
+      expect(cs.toolCallIndex.has("web-1")).toBe(false);
+    },
+  );
+
+  it("does not apply one message-level signal to several tool results", () => {
+    const cs = makeClaudeSession();
+    cs.toolCallIndex.set("web-1", { toolName: "WebFetch" });
+    cs.toolCallIndex.set("web-2", { toolName: "WebSearch" });
+    const msg = toolResult("web-1", "First result", { detachedToolCall: true });
+    msg.message.content.push({ type: "tool_result", tool_use_id: "web-2", content: "Second result", is_error: false });
+    const complete = mapSDKMessage(msg, cs);
+    expect(complete).toHaveLength(2);
+    expect(cs.toolCallIndex.size).toBe(0);
+  });
+
+  it("keeps a legacy result signal open until a real payload arrives", () => {
+    const cs = makeClaudeSession();
+    cs.toolCallIndex.set("web-1", { toolName: "WebFetch" });
+    expect(mapSDKMessage({ type: "tool_result", tool_use_id: "web-1", result: { detachedToolCall: true } }, cs)).toEqual([]);
+    expect(cs.toolCallIndex.has("web-1")).toBe(true);
+    const [complete] = mapSDKMessage({ type: "tool_result", tool_use_id: "web-1", result: "Real page" }, cs);
+    expect(complete).toMatchObject({ toolName: "WebFetch", output: "Real page", metadata: { phase: "complete" } });
+  });
+});
+
 describe("buildSubagentCompletionEvent", () => {
   it("treats a launch ack as still-running, not completion", () => {
     const event = buildSubagentCompletionEvent({

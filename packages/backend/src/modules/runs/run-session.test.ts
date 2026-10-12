@@ -83,6 +83,7 @@ import { createWorkAdapter, couldModifyFiles } from "../providers/adapters";
 import { gitService } from "../git/git.service";
 import { APP_WRITER, worktreeWrites } from "../git";
 import { registerEventSink } from "../../ipc-kit/event-bus";
+import { createClaudePermissionModeRef, mapSDKMessage } from "../providers/adapters/claude.driver";
 import {
   createCodexEventMapper,
   type CodexEventRunState,
@@ -619,6 +620,34 @@ describe("RunSession", () => {
   // project — tool_call events
   // ─────────────────────────────────────────────────────────────
   describe("project — tool_call events", () => {
+    it("keeps a detached Claude tool running and saves only its eventual output", async () => {
+      const session = makeSession();
+      await flushBackground();
+      const cs = { runId: "r1", state: { hasAssistantContent: false }, toolCallIndex: new Map(),
+        permissionMode: createClaudePermissionModeRef("default") } as any;
+      const base = { session_id: "sdk-session", parent_tool_use_id: null };
+      const messages = [
+        { ...base, type: "assistant", uuid: "start", message: { role: "assistant", content: [
+          { type: "tool_use", id: "web-1", name: "WebFetch", input: { url: "https://docs.test" } },
+        ] } },
+        { ...base, type: "user", uuid: "detached", tool_use_result: { detachedToolCall: true }, message: {
+          role: "user", content: [{ type: "tool_result", tool_use_id: "web-1", content: "Result will follow" }],
+        } },
+      ];
+      for (const msg of messages) for (const event of mapSDKMessage(msg as any, cs)) await session.project(event);
+      const [waiting] = await runsRepo.findToolCallsByRun("r1");
+      expect(waiting).toMatchObject({ status: "running", endedAt: null, output: null });
+
+      const msg = { ...base, type: "user", uuid: "real-result", message: {
+        role: "user", content: [{ type: "tool_result", tool_use_id: "web-1", content: "Actual page" }],
+      } };
+      for (const event of mapSDKMessage(msg as any, cs)) await session.project(event);
+      const [complete] = await runsRepo.findToolCallsByRun("r1");
+      expect(complete.id).toBe(waiting.id);
+      expect(complete).toMatchObject({ status: "done", output: "Actual page" });
+      expect(complete.endedAt).not.toBeNull();
+    });
+
     it("inserts a running tool_call on start", async () => {
       const session = makeSession();
       await flushBackground();

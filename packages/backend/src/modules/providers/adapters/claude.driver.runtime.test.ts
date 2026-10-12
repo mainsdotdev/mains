@@ -10,6 +10,7 @@ import {
   resolveClaudeRuntime,
 } from "../providers.utils";
 import { createClaudeDriver } from "./claude.driver";
+import type { WorkRunEvent } from "../../../../shared/adapter.types";
 
 const sdk = vi.hoisted(() => ({
   query: vi.fn(),
@@ -130,6 +131,42 @@ esac
     }
     expect(sdk.close).toHaveBeenCalledTimes(2);
     expect(cliCalls()).toContain("auth status --json");
+  });
+
+  it("delivers a deferred web result after an intermediate turn without completing the call early", async () => {
+    const events: WorkRunEvent[] = [];
+    sdk.query.mockImplementation(({ options }) => ({
+      close: sdk.close,
+      async *[Symbol.asyncIterator]() {
+        const base = { session_id: options.sessionId, parent_tool_use_id: null };
+        const result = { type: "result", subtype: "success", is_error: false, total_cost_usd: 0,
+          num_turns: 1, duration_ms: 1, modelUsage: {}, permission_denials: [], stop_reason: "end_turn", result: "" };
+        yield { ...base, type: "assistant", uuid: "start", message: { role: "assistant", content: [
+          { type: "tool_use", id: "web-1", name: "WebFetch", input: { url: "https://docs.test" } },
+        ] } };
+        yield { ...base, type: "user", uuid: "detached", tool_use_result: { detachedToolCall: true },
+          message: { role: "user", content: [{ type: "tool_result", tool_use_id: "web-1", content: "Result will follow" }] } };
+        yield { ...result, ...base, uuid: "turn-1" };
+        expect(events.filter((event) => event.type === "tool_call" && event.metadata?.phase === "complete")).toEqual([]);
+        yield { ...base, type: "user", uuid: "real-result", message: {
+          role: "user", content: [{ type: "tool_result", tool_use_id: "web-1", content: "Actual page" }],
+        } };
+        yield { ...result, ...base, uuid: "turn-2" };
+      },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "deferred-web", accountId: "account-1", goal: "Read the docs",
+      execution: { workspaceId: null, cwd: fixture } });
+    try {
+      const outcome = await driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+      expect(outcome.status).toBe("succeeded");
+      expect(events.filter((event) => event.type === "tool_call" && event.metadata?.phase === "complete")).toEqual([
+        expect.objectContaining({ toolName: "WebFetch", input: { url: "https://docs.test" }, output: "Actual page",
+          metadata: expect.objectContaining({ toolCallId: "web-1" }) }),
+      ]);
+    } finally {
+      await driver.cleanup?.(acquired.session);
+    }
   });
 
   it("reports a real signed-out state and runs login through a safely quoted bundled path", async () => {
