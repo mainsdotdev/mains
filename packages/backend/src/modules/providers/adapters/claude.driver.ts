@@ -45,6 +45,7 @@ import type {
   PluginListResponse,
   MarketplaceInfo,
   ProviderDriver,
+  RateLimitInfo,
   SkillInfo,
   WorkRunContextItem,
   WorkRunContextUsageCategory,
@@ -695,6 +696,26 @@ interface SDKRateLimitInfo {
   utilization?: number;
 }
 
+interface SDKUsageWindow {
+  /** The /usage response uses 0-100, unlike rate_limit_event's 0-1 share. */
+  utilization?: number | null;
+  resets_at?: string | null;
+}
+
+interface SDKUsageResponse {
+  subscription_type?: string | null;
+  rate_limits_available?: boolean;
+  rate_limits?: {
+    five_hour?: SDKUsageWindow | null;
+    seven_day?: SDKUsageWindow | null;
+    seven_day_oauth_apps?: SDKUsageWindow | null;
+    seven_day_opus?: SDKUsageWindow | null;
+    seven_day_sonnet?: SDKUsageWindow | null;
+    model_scoped?: Array<SDKUsageWindow & { display_name: string }>;
+    extra_usage?: { is_enabled: boolean; utilization?: number | null } | null;
+  } | null;
+}
+
 interface SDKRateLimitEvent {
   type: "rate_limit_event";
   rate_limit_info: SDKRateLimitInfo;
@@ -793,7 +814,7 @@ interface SDKQuery extends AsyncGenerator<SDKMessage, void> {
    * reach `mcp_call`, which the protocol declares but no public method wraps.
    */
   request?(request: Record<string, unknown>): Promise<unknown>;
-  /** The `/usage` control request, experimental in the SDK — see readClaudeSessionTotals. */
+  /** The `/usage` control request, experimental in the SDK. */
   usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(opts?: {
     skipBehaviors?: boolean;
   }): Promise<unknown>;
@@ -1551,6 +1572,64 @@ export function mapClaudeSessionTotals(response: unknown): ClaudeSessionTotals |
       ? (session.model_usage as Record<string, SDKModelUsage>)
       : {};
   return { costUsd: session.total_cost_usd, modelUsage };
+}
+
+/** Map account allowances separately from the /usage response's session totals. */
+export function mapClaudeRateLimits(response: unknown): RateLimitInfo | null {
+  const usage = response as SDKUsageResponse | null | undefined;
+  const limits = usage?.rate_limits;
+  if (usage?.rate_limits_available === false || !limits || typeof limits !== "object") return null;
+
+  const buckets: NonNullable<RateLimitInfo["rateLimitsByLimitId"]> = {};
+  function addWindow(
+    limitId: string,
+    label: string,
+    window: SDKUsageWindow | null | undefined,
+    windowDurationMins?: number,
+  ): void {
+    const percent = window?.utilization;
+    // Null means unknown, including on a plan that does not include this meter.
+    if (typeof percent !== "number" || !Number.isFinite(percent)) return;
+    const resetMs = typeof window?.resets_at === "string" ? Date.parse(window.resets_at) : NaN;
+    buckets[limitId] = {
+      limitId,
+      limitName: label,
+      primary: {
+        label,
+        usedPercent: Math.max(0, Math.min(100, Math.round(percent))),
+        ...(windowDurationMins !== undefined ? { windowDurationMins } : {}),
+        ...(Number.isFinite(resetMs) ? { resetsAt: Math.floor(resetMs / 1000) } : {}),
+      },
+    };
+  }
+
+  const weeklyMins = 7 * 24 * 60;
+  addWindow("five_hour", "5 hour usage limit", limits.five_hour, 5 * 60);
+  addWindow("seven_day", "Weekly usage limit", limits.seven_day, weeklyMins);
+  addWindow("seven_day_oauth_apps", "OAuth apps weekly usage limit", limits.seven_day_oauth_apps, weeklyMins);
+  addWindow("seven_day_opus", "Opus weekly usage limit", limits.seven_day_opus, weeklyMins);
+  addWindow("seven_day_sonnet", "Sonnet weekly usage limit", limits.seven_day_sonnet, weeklyMins);
+  if (Array.isArray(limits.model_scoped)) {
+    for (const window of limits.model_scoped) {
+      const name = typeof window?.display_name === "string" ? window.display_name.trim() : "";
+      if (!name) continue;
+      const model = name.toLowerCase();
+      // A scoped row may repeat an older named meter; keep only its fresh value.
+      const limitId = model === "opus" || model === "sonnet" ? `seven_day_${model}` : `model:${model}`;
+      addWindow(limitId, `${name} weekly usage limit`, window, weeklyMins);
+    }
+  }
+  if (limits.extra_usage?.is_enabled === true) {
+    addWindow("extra_usage", "Extra usage", limits.extra_usage);
+  }
+  if (Object.keys(buckets).length === 0) return null;
+
+  return {
+    ...(typeof usage?.subscription_type === "string" ? { planType: usage.subscription_type } : {}),
+    primary: buckets.five_hour?.primary,
+    secondary: buckets.seven_day?.primary,
+    rateLimitsByLimitId: buckets,
+  };
 }
 
 /** The fields that accumulate; `contextWindow` and `maxOutputTokens` describe the model. */
@@ -4418,6 +4497,24 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         throw new Error(`Plugin update failed: ${(stderr || stdout).trim() || `exit code ${code}`}`);
       }
       invalidatePluginCaches();
+    },
+
+    async getRateLimits(): Promise<RateLimitInfo | null> {
+      try {
+        return await withControlQuery(async (query) => {
+          // Older external CLIs may not expose the experimental usage request.
+          if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") {
+            return null;
+          }
+          const usage = await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+            skipBehaviors: true,
+          });
+          return mapClaudeRateLimits(usage);
+        });
+      } catch (error) {
+        logError("Failed to get usage:", error);
+        return null;
+      }
     },
 
     async getAccountInfo(): Promise<AccountInfo> {

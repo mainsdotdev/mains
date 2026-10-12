@@ -32,6 +32,7 @@ import {
   resolveClaudeDefaultModelId,
   resolveClaudeTurnModel,
   mapClaudeSessionTotals,
+  mapClaudeRateLimits,
   subtractClaudeSessionTotals,
   supportsClaudeMcpApps,
   mcpToolWireName,
@@ -2690,6 +2691,92 @@ describe("claude.driver / buildClaudePermissionModeOptions with a tool policy", 
       buildClaudePermissionModeOptions("default"),
     );
     expect(buildClaudePermissionModeOptions("default").disallowedTools).toBeUndefined();
+  });
+});
+
+describe("claude.driver / account usage", () => {
+  const resetsAt = "2026-10-12T18:00:00Z";
+  const resetSec = Date.parse(resetsAt) / 1000;
+
+  it("reads account percentages directly and keeps them separate from session token totals", () => {
+    const mapped = mapClaudeRateLimits({
+      session: { total_cost_usd: 12, model_usage: { opus: { inputTokens: 100_000 } } },
+      subscription_type: "max",
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 37, resets_at: resetsAt },
+        seven_day: { utilization: 0, resets_at: null },
+      },
+    });
+
+    expect(mapped).toMatchObject({
+      planType: "max",
+      primary: { usedPercent: 37, windowDurationMins: 300, resetsAt: resetSec },
+      secondary: { usedPercent: 0, windowDurationMins: 10080 },
+    });
+    expect(mapped?.secondary).not.toHaveProperty("resetsAt");
+    expect(Object.keys(mapped!.rateLimitsByLimitId!)).toEqual(["five_hour", "seven_day"]);
+  });
+
+  it("includes OAuth, model and enabled extra-usage meters without repeating named models", () => {
+    const mapped = mapClaudeRateLimits({
+      rate_limits_available: true,
+      rate_limits: {
+        seven_day_oauth_apps: { utilization: 20, resets_at: resetsAt },
+        seven_day_opus: { utilization: 10 },
+        seven_day_sonnet: { utilization: 30 },
+        model_scoped: [
+          { display_name: "Opus", utilization: 15, resets_at: resetsAt },
+          { display_name: "Fable", utilization: 45, resets_at: resetsAt },
+        ],
+        extra_usage: { is_enabled: true, utilization: 60 },
+      },
+    });
+    const buckets = mapped!.rateLimitsByLimitId!;
+    expect(Object.keys(buckets)).toEqual([
+      "seven_day_oauth_apps", "seven_day_opus", "seven_day_sonnet", "model:fable", "extra_usage",
+    ]);
+    expect(buckets.seven_day_opus.primary).toMatchObject({
+      label: "Opus weekly usage limit", usedPercent: 15, resetsAt: resetSec,
+    });
+    expect(buckets["model:fable"].primary).toMatchObject({
+      label: "Fable weekly usage limit", usedPercent: 45, windowDurationMins: 10080,
+    });
+    expect(buckets.extra_usage.primary).toEqual({ label: "Extra usage", usedPercent: 60 });
+  });
+
+  it("does not turn unavailable or unmeasured limits into a full allowance", () => {
+    for (const response of [
+      undefined,
+      null,
+      { session: { total_cost_usd: 1 } },
+      { rate_limits_available: false, rate_limits: { five_hour: { utilization: 0 } } },
+      { rate_limits_available: true, rate_limits: null },
+      { rate_limits: { five_hour: { utilization: null }, seven_day: { utilization: NaN } } },
+      { rate_limits: { extra_usage: { is_enabled: false, utilization: 50 } } },
+      { rate_limits: { model_scoped: [{ display_name: "", utilization: 20 }] } },
+    ]) {
+      expect(mapClaudeRateLimits(response)).toBeNull();
+    }
+  });
+
+  it("keeps valid meters when another is unknown and drops invalid reset dates", () => {
+    const mapped = mapClaudeRateLimits({ rate_limits: {
+      five_hour: { utilization: null },
+      seven_day: { utilization: 13.6, resets_at: "invalid" },
+      seven_day_opus: { utilization: Infinity },
+    } });
+    expect(mapped?.primary).toBeUndefined();
+    expect(mapped?.secondary).toEqual({
+      label: "Weekly usage limit", usedPercent: 14, windowDurationMins: 10080,
+    });
+    expect(Object.keys(mapped!.rateLimitsByLimitId!)).toEqual(["seven_day"]);
+  });
+
+  it("clamps reported percentages to the meter's range", () => {
+    expect(mapClaudeRateLimits({ rate_limits: {
+      five_hour: { utilization: -5 }, seven_day: { utilization: 105 },
+    } })).toMatchObject({ primary: { usedPercent: 0 }, secondary: { usedPercent: 100 } });
   });
 });
 

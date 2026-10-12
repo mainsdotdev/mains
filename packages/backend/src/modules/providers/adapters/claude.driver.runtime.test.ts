@@ -18,6 +18,7 @@ const sdk = vi.hoisted(() => ({
   supportedModels: vi.fn(),
   initializationResult: vi.fn(),
   accountInfo: vi.fn(),
+  usage: vi.fn(),
   close: vi.fn(),
 }));
 
@@ -92,10 +93,12 @@ esac
       commands: [{ name: "help", description: "Live command", argumentHint: "" }],
     });
     sdk.accountInfo.mockResolvedValue({ email: "legacy@example.test", subscriptionType: "Pro" });
+    sdk.usage.mockResolvedValue({ rate_limits_available: false, rate_limits: null });
     sdk.query.mockImplementation(() => ({
       supportedModels: sdk.supportedModels,
       initializationResult: sdk.initializationResult,
       accountInfo: sdk.accountInfo,
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: sdk.usage,
       close: sdk.close,
       async *[Symbol.asyncIterator]() {
         yield { type: "assistant", message: { content: [{ type: "text", text: "ok" }] } };
@@ -134,6 +137,38 @@ esac
     }
     expect(sdk.close).toHaveBeenCalledTimes(2);
     expect(cliCalls()).toContain("auth status --json");
+  });
+
+  it("reads plan usage through a control query using the selected runtime and releases it", async () => {
+    sdk.usage.mockResolvedValueOnce({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 25, resets_at: "2026-10-12T18:00:00Z" },
+        seven_day: { utilization: 60, resets_at: null },
+      },
+    });
+    const limits = await createClaudeDriver({ binary: configured }).getRateLimits!();
+    expect(limits).toMatchObject({ primary: { usedPercent: 25 }, secondary: { usedPercent: 60 } });
+    expect(sdk.usage).toHaveBeenCalledExactlyOnceWith({ skipBehaviors: true });
+    expect(sdk.query).toHaveBeenCalledExactlyOnceWith({
+      prompt: "",
+      options: expect.objectContaining({ pathToClaudeCodeExecutable: configured }),
+    });
+    expect(sdk.close).toHaveBeenCalledOnce();
+  });
+
+  it("releases the control query when usage cannot be fetched", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    sdk.usage.mockRejectedValueOnce(new Error("Usage unavailable"));
+    expect(await createClaudeDriver({}).getRateLimits!()).toBeNull();
+    expect(sdk.close).toHaveBeenCalledOnce();
+  });
+
+  it("returns no usage for older SDKs without the experimental method and releases the query", async () => {
+    sdk.query.mockReturnValueOnce({ close: sdk.close });
+    expect(await createClaudeDriver({}).getRateLimits!()).toBeNull();
+    expect(sdk.usage).not.toHaveBeenCalled();
+    expect(sdk.close).toHaveBeenCalledOnce();
   });
 
   it("delivers a deferred web result after an intermediate turn without completing the call early", async () => {

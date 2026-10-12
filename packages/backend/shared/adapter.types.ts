@@ -1066,7 +1066,7 @@ export interface RateLimitResetCreditInfo {
 export interface RateLimitInfo extends RateLimitSnapshotInfo {
   /** Whether the account may currently consume the ordinary Codex allowance. */
   ordinaryUsageAllowed?: boolean | null;
-  /** Complete multi-bucket view keyed by Codex's metered limit id. */
+  /** Complete multi-bucket view keyed by the provider's metered limit id. */
   rateLimitsByLimitId?: Record<string, RateLimitSnapshotInfo>;
   rateLimitResetCredits?: {
     availableCount: number;
