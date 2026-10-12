@@ -72,6 +72,8 @@ export const providers = sqliteTable(
     fastMode: integer("fast_mode", { mode: "boolean" }).notNull().default(false),
     goalMode: integer("goal_mode", { mode: "boolean" }).notNull().default(false),
     planMode: integer("plan_mode", { mode: "boolean" }).notNull().default(false),
+    /** Only allowlisted run-setting keys, used as a new conversation's fallback. */
+    runSettingsJson: text("run_settings_json"),
   },
   (t) => [primaryKey({ columns: [t.backendId, t.id] })],
 );
@@ -105,6 +107,7 @@ export const models = sqliteTable(
     /** JSON array of supported effort levels; null when the model has none. */
     effortLevels: text("effort_levels"),
     supportsFastMode: integer("supports_fast_mode", { mode: "boolean" }).notNull().default(false),
+    serviceTiersJson: text("service_tiers_json"),
     sortOrder: integer("sort_order").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.backendId, t.providerId, t.id] })],
@@ -155,8 +158,8 @@ export const commands = sqliteTable(
 );
 
 /**
- * The model this phone picked per provider — local state, like the desktop's
- * own selection: it rides on `runs:execute` / `runs:continue` as `model`.
+ * Legacy provider-wide phone model choices. Retained as a new-chat fallback
+ * while conversation and draft preferences replace them; no new writes.
  */
 export const modelChoices = sqliteTable(
   "model_choices",
@@ -166,6 +169,18 @@ export const modelChoices = sqliteTable(
     modelId: text("model_id").notNull(),
   },
   (t) => [primaryKey({ columns: [t.backendId, t.providerId] })],
+);
+
+/** Phone-owned draft preferences and last accepted defaults, isolated by backend/provider. */
+export const composerSettings = sqliteTable(
+  "composer_settings",
+  {
+    backendId: text("backend_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    kind: text("kind", { enum: ["draft", "defaults"] }).notNull(),
+    settingsJson: text("settings_json").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.backendId, t.providerId, t.kind] })],
 );
 
 /** The phone's remembered run target per space: which workspace / collection. */
@@ -225,6 +240,8 @@ export const runs = sqliteTable(
     mode: text("mode").notNull(),
     providerId: text("provider_id").notNull(),
     model: text("model"),
+    /** Allowlisted execution settings plus the backend-owned conversation preferences. */
+    configSnapshotJson: text("config_snapshot_json"),
     workspaceId: text("workspace_id"),
     collectionId: text("collection_id"),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),

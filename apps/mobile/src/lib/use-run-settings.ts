@@ -1,32 +1,49 @@
-import { useState } from "react";
+import { and, desc, eq } from "drizzle-orm";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
+import { useCallback, useState, useSyncExternalStore } from "react";
 
-import { backendSession } from "@/backend/backend-session";
-import type { UpdateRunSettingsPayload } from "@mains/contracts/runs";
+import { db } from "@/db/client";
+import { composerSettings, modelChoices, providers, runs, runTurns } from "@/db/schema";
+import { changeComposerSettings, composerSettingsKey, settingsWriter } from "@/backend/composer-settings";
+import { initialConversationSettings, parseConfig, parseSettings, type ComposerSettingsPatch } from "./conversation-settings";
 
-/**
- * Changing a provider's run settings on the Mac from a sheet: the patch shows
- * at once as `pending` while the round trip is out, then clears — the synced
- * value has landed by then — and a refusal comes back as a `hint` to show.
- */
-export function useRunSettings(providerId: string): {
-  pending: UpdateRunSettingsPayload;
-  hint: string | null;
-  apply: (patch: UpdateRunSettingsPayload) => Promise<void>;
-} {
-  const [pending, setPending] = useState<UpdateRunSettingsPayload>({});
-  const [hint, setHint] = useState<string | null>(null);
+/** Both the sheet and its composer observe durable settings plus one shared pending write. */
+export function useRunSettings(backendId: string, providerId: string, runId: string | null | undefined, defaultModel: string) {
+  const key = composerSettingsKey(backendId, providerId, runId);
+  const providerQuery = useCoalescedLiveQuery(db.select().from(providers).where(and(eq(providers.backendId, backendId), eq(providers.id, providerId))), providers, [backendId, providerId]);
+  const runQuery = useCoalescedLiveQuery(db.select().from(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId ?? ""))), runs, [backendId, runId]);
+  const turnQuery = useCoalescedLiveQuery(db.select({ model: runTurns.model }).from(runTurns).where(and(eq(runTurns.backendId, backendId), eq(runTurns.runId, runId ?? ""))).orderBy(desc(runTurns.turnIndex)).limit(1), runTurns, [backendId, runId]);
+  const choicesQuery = useCoalescedLiveQuery(db.select().from(composerSettings).where(and(eq(composerSettings.backendId, backendId), eq(composerSettings.providerId, providerId))), composerSettings, [backendId, providerId]);
+  const legacyQuery = useCoalescedLiveQuery(db.select().from(modelChoices).where(and(eq(modelChoices.backendId, backendId), eq(modelChoices.providerId, providerId))), modelChoices, [backendId, providerId]);
+  const getPending = useCallback(() => settingsWriter.getPending(key), [key]);
+  const pending = useSyncExternalStore(settingsWriter.subscribe, getPending, getPending);
+  const settings = pending ?? initialConversationSettings({
+    providerId,
+    providerConfig: parseConfig(providerQuery.data[0]?.runSettingsJson),
+    run: runId ? runQuery.data[0] ?? { model: null, configSnapshotJson: null } : null,
+    latestModel: turnQuery.data[0]?.model,
+    draft: parseSettings(choicesQuery.data.find((row) => row.kind === "draft")?.settingsJson),
+    remembered: parseSettings(choicesQuery.data.find((row) => row.kind === "defaults")?.settingsJson),
+    defaultModel: legacyQuery.data[0]?.modelId ?? defaultModel,
+  });
+  const [error, setError] = useState<{ key: string; message: string } | null>(null);
+  const ready = !!backendId && !!providerQuery.data[0] && (!runId || !!runQuery.data[0]);
 
-  const apply = async (patch: UpdateRunSettingsPayload) => {
-    setPending((current) => ({ ...current, ...patch }));
-    setHint(null);
-    const result = await backendSession.updateRunSettings(providerId, patch);
-    setPending((current) => {
-      const next = { ...current };
-      for (const key of Object.keys(patch) as (keyof UpdateRunSettingsPayload)[]) delete next[key];
-      return next;
-    });
-    if (!result.success) setHint(result.error);
+  const apply = async (patch: ComposerSettingsPatch): Promise<void> => {
+    if (!ready) return;
+    setError(null);
+    try {
+      await changeComposerSettings(backendId, providerId, runId, patch);
+    } catch (caught) {
+      setError({ key, message: caught instanceof Error ? caught.message : "Could not save conversation settings" });
+    }
   };
 
-  return { pending, hint, apply };
+  return {
+    settings,
+    ready,
+    saving: pending !== null,
+    hint: error?.key === key ? error.message : null,
+    apply,
+  };
 }

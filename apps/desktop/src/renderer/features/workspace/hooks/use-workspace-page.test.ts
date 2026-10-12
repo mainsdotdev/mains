@@ -756,7 +756,9 @@ describe("workspace conversations across renderers", () => {
       goalMode: toggle === "goalMode", planMode: toggle === "planMode",
     } };
     const existing = { ...run, providerId: "codex", workspaceId: "ws-1", mode: "developer", configSnapshot: { conversationSettings: settings } };
-    const created = { ...existing, id: "new-app-run" };
+    const expected = { ...settings, config: { ...settings.config, goalMode: false, planMode: false } };
+    // A fresh backend run contains the submitted new-chat settings.
+    const created = { ...existing, id: "new-app-run", configSnapshot: { conversationSettings: expected } };
     mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
     mocks.getById.mockImplementation(async (id) => ({ success: true, data: id === created.id ? created : existing }));
     mocks.executeRun.mockResolvedValue(created.id);
@@ -765,7 +767,6 @@ describe("workspace conversations across renderers", () => {
     await waitFor(() => expect(page.result.current.conversationSettingsReady).toBe(true));
     const previousOwner = page.result.current.ownerKey;
     await act(async () => { expect(await page.result.current.handleExecute("New app chat", { target: "new" })).toBe(created.id); });
-    const expected = { ...settings, config: { ...settings.config, goalMode: false, planMode: false } };
     expect(mocks.executeRun.mock.calls[0][8]).toEqual(expected);
     expect(page.result.current.conversationSettings).toEqual(expected);
     expect(page.store.getState().workspace.conversationSettingsByKey[previousOwner]).toEqual(settings);

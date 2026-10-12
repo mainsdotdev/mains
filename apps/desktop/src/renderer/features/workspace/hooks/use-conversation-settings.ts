@@ -3,6 +3,7 @@ import {
   conversationSettingsFrom, snapshotRunSettingConfig,
   type ConversationSettings, type RunSettingConfig, type SettingsChangeSource,
 } from "@mains/contracts/run-settings";
+import { CHANNELS } from "@mains/contracts/channels";
 import { useGetProviderByIdQuery } from "@/lib/redux/api/providersApi";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { beginRunSettingsIntent, rememberRunSettings, setConversationSettings } from "@/lib/redux/slices/workspaceSlice";
@@ -10,8 +11,12 @@ import { store } from "@/lib/redux";
 import { getTransport } from "@/lib/transport";
 import { toast } from "@/components/ui";
 import type { Run } from "../types";
-import { persistConversationSettings } from "../lib/conversation-settings-writer";
+import { hasPendingConversationSettings, persistConversationSettings } from "../lib/conversation-settings-writer";
 import { providerSettingsKey } from "../../../../shared/ui-state-keys";
+
+function settingsFingerprint(settings: ConversationSettings): string {
+  return JSON.stringify([settings.model, Object.entries(settings.config).sort(([a], [b]) => a.localeCompare(b))]);
+}
 
 export function useConversationSettings({ backendId = null, providerId, ownerKey, runId, run, latestModel, loadingRun, mirrorOnly = false }: {
   backendId?: string | null;
@@ -23,6 +28,7 @@ export function useConversationSettings({ backendId = null, providerId, ownerKey
   const owned = useAppSelector((state) => state.workspace.conversationSettingsByKey?.[ownerKey]);
   const remembered = useAppSelector((state) => state.workspace.lastRunSettingsByProvider?.[providerSettingsKey(backendId, providerId)]);
   const initializedOwner = useRef<{ key: string; backendId: string | null; providerId: string; draft: boolean } | null>(null);
+  const observedSavedSettings = useRef(new Map<string, string>());
   const legacyModel = useAppSelector((state) => state.workspace.selectedModelByProvider[providerId]);
   const saved = useMemo(() => conversationSettingsFrom(run?.configSnapshot), [run?.configSnapshot]);
   const initial = useMemo<ConversationSettings>(() => {
@@ -44,6 +50,15 @@ export function useConversationSettings({ backendId = null, providerId, ownerKey
 
   useLayoutEffect(() => {
     if (!ready || mirrorOnly) return;
+    if (runId && saved) {
+      const fingerprint = settingsFingerprint(saved);
+      const changed = observedSavedSettings.current.get(ownerKey) !== fingerprint;
+      observedSavedSettings.current.set(ownerKey, fingerprint);
+      if (changed && !hasPendingConversationSettings(getTransport(), runId)) {
+        dispatch(setConversationSettings({ key: ownerKey, settings: saved }));
+        return;
+      }
+    }
     const previousOwner = initializedOwner.current;
     const enteringDraft = !runId && previousOwner?.key !== ownerKey;
     initializedOwner.current = { key: ownerKey, backendId, providerId, draft: !runId };
@@ -89,7 +104,19 @@ export function useConversationSettings({ backendId = null, providerId, ownerKey
     // write is still in flight when the user opens New Run.
     if (revision !== undefined) rememberSettings(next, revision);
     try {
-      await persistConversationSettings(getTransport(), runId, next);
+      const transport = getTransport();
+      await persistConversationSettings(transport, runId, next);
+      if (!hasPendingConversationSettings(transport, runId)) {
+        // An event may have fetched an older write while another local edit
+        // was queued. Read the authoritative settings after the queue drains,
+        // including a phone edit that arrived while this save was in flight.
+        const result = await transport.invoke(CHANNELS.runs.getById, [runId]).catch(() => null);
+        const updated = result?.success ? result.data as Run | null : null;
+        const current = conversationSettingsFrom(updated?.configSnapshot);
+        if (current && !hasPendingConversationSettings(transport, runId)) {
+          dispatch(setConversationSettings({ key: ownerKey, settings: current }));
+        }
+      }
       return true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not save conversation settings");

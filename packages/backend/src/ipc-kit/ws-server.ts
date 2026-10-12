@@ -4,6 +4,7 @@ import {
   decodeWsMessage,
   encodeWireValue,
   encodeWsMessage,
+  MAX_DEVICE_MESSAGE_BYTES,
 } from "@mains/contracts/ws-protocol";
 import { invokeHandler, type IpcInvokeContext } from "./handler-registry";
 import type { WebSocketSink, WsClientConnection } from "./websocket-sink";
@@ -87,8 +88,14 @@ async function routeMessage(
   // The server only accepts client→server invokes; response/event are outbound.
   if (message.kind !== "invoke") return;
   const { channel, commandId } = message;
-  const reply = (result: ServiceResponse<unknown>) =>
-    conn.send(encodeWsMessage({ kind: "response", id: message.id, result }));
+  const reply = (result: ServiceResponse<unknown>) => {
+    let frame = encodeWsMessage({ kind: "response", id: message.id, result });
+    if (conn.deviceId && Buffer.byteLength(frame) > MAX_DEVICE_MESSAGE_BYTES) {
+      frame = encodeWsMessage({ kind: "response", id: message.id,
+        result: fail("This response exceeds the mobile data limit. Open the content on your computer.") });
+    }
+    conn.send(frame);
+  };
 
   // A paired device's allowlist is checked here, before any handler runs, so
   // no module has to know about devices to be safe from one. Mutations are

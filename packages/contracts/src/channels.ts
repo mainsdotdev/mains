@@ -403,6 +403,7 @@ export const CHANNELS = {
     getByWorkspace: "runs:getByWorkspace",
     getDetails: "runs:getDetails",
     getHistory: "runs:getHistory",
+    readHistoryContent: "runs:readHistoryContent",
     listActive: "runs:listActive",
     listPendingApprovals: "runs:listPendingApprovals",
     listRecent: "runs:listRecent",
@@ -415,6 +416,7 @@ export const CHANNELS = {
     toolApprovalResponse: "runs:toolApprovalResponse",
     unarchive: "runs:unarchive",
     update: "runs:update",
+    updateConversationSettings: "runs:updateConversationSettings",
     updated: "runs:updated",
   },
   shell: {

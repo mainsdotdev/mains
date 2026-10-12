@@ -1,7 +1,9 @@
 import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { ok } from "@mains/contracts/service-response";
+import type { IpcInvokeContext } from "../../ipc-kit/handler-registry";
 import { runsService } from "./runs.service";
+import { runForPairedDevice } from "./runs.device-projection";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -23,10 +25,12 @@ import {
   listPendingApprovals,
 } from "./user-input-broker";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { CreateRealtimeConversationPayload, RunRealtimeStartPayload, RunRealtimeStopPayload } from "@mains/contracts/realtime";
 import type {
   ReadArtifactImagePayload,
   ReadRunHistoryPayload,
+  ReadRunHistoryContentPayload,
   ReadAttachmentImagePayload,
   ResolveAttachmentPathPayload,
   ReadRunTextFilePayload,
@@ -40,15 +44,19 @@ import type {
 // IPC Handlers
 // ─────────────────────────────────────────────────────────────
 export function registerRunsIpc(): void {
-  ipcMain.handle(CHANNELS.runs.getHistory, handle((payload: ReadRunHistoryPayload) => runsService.getHistoryPage(payload)));
+  const getHistory = handle((payload: ReadRunHistoryPayload) => runsService.getHistoryPage(payload));
+  ipcMain.handle(CHANNELS.runs.getHistory, (ctx: IpcInvokeContext, payload: ReadRunHistoryPayload) =>
+    getHistory(ctx, ctx?.deviceId ? { ...payload, profile: "mobile" } : payload));
+  ipcMain.handle(CHANNELS.runs.readHistoryContent, handle((payload: ReadRunHistoryContentPayload) => runsService.readHistoryContent(payload)));
   ipcMain.handle(CHANNELS.runs.createRealtimeConversation, handle((payload: CreateRealtimeConversationPayload) => runsService.createRealtimeConversation(payload)));
   ipcMain.handle(CHANNELS.runs.startRealtime, handle((payload: RunRealtimeStartPayload) => runsService.startRealtime(payload)));
   ipcMain.handle(CHANNELS.runs.stopRealtime, handle((payload: RunRealtimeStopPayload) => runsService.stopRealtime(payload)));
   // Runs
-  ipcMain.handle(
-    CHANNELS.runs.getAll,
-    handle((limit?: number) => runsService.getAllRuns(limit)),
-  );
+  const getAll = handle((limit?: number) => runsService.getAllRuns(limit));
+  ipcMain.handle(CHANNELS.runs.getAll, async (ctx: IpcInvokeContext, limit?: number) => {
+    const result = await getAll(ctx, ctx?.deviceId ? Math.min(Math.max(limit ?? 100, 1), 100) : limit);
+    return ctx?.deviceId && result.success ? ok(result.data.map(runForPairedDevice)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.runs.listArchived,
@@ -82,10 +90,11 @@ export function registerRunsIpc(): void {
     ),
   );
 
-  ipcMain.handle(
-    CHANNELS.runs.getById,
-    handle((id: string) => runsService.getRunById(id)),
-  );
+  const getById = handle((id: string) => runsService.getRunById(id));
+  ipcMain.handle(CHANNELS.runs.getById, async (ctx: IpcInvokeContext, id: string) => {
+    const result = await getById(ctx, id);
+    return ctx?.deviceId && result.success && result.data ? ok(runForPairedDevice(result.data)) : result;
+  });
 
   ipcMain.handle(
     CHANNELS.runs.getByAccount,
@@ -112,6 +121,13 @@ export function registerRunsIpc(): void {
   ipcMain.handle(
     CHANNELS.runs.update,
     handle((id: string, payload: UpdateRunPayload) => runsService.updateRun(id, payload)),
+  );
+
+  ipcMain.handle(
+    CHANNELS.runs.updateConversationSettings,
+    handle((id: string, settings: ConversationSettings) =>
+      runsService.updateConversationSettings(id, settings),
+    ),
   );
 
   ipcMain.handle(
@@ -308,6 +324,7 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.getByStatus,
     CHANNELS.runs.create,
     CHANNELS.runs.update,
+    CHANNELS.runs.updateConversationSettings,
     CHANNELS.runs.moveToCollection,
     CHANNELS.runs.setPinned,
     CHANNELS.runs.start,
@@ -319,6 +336,7 @@ export function unregisterRunsIpc(): void {
     CHANNELS.runs.unarchive,
     CHANNELS.runs.getDetails,
     CHANNELS.runs.getHistory,
+    CHANNELS.runs.readHistoryContent,
     CHANNELS.runs.execute,
     CHANNELS.runs.abort,
     CHANNELS.runs.continue,

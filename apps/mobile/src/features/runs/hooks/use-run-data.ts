@@ -1,5 +1,4 @@
-import { and, asc, desc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { and, asc, eq } from "drizzle-orm";
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo } from "react";
 
@@ -10,6 +9,7 @@ import {
   useStreamingMessages,
 } from "@/backend/streaming-messages";
 import { db } from "@/db/client";
+import { cachedHistoryQueries } from "@/db/history-queries";
 import { useRunHistory } from "@/backend/run-history";
 import { pendingApprovals, runArtifacts, runs, toolCalls, workspaces } from "@/db/schema";
 import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
@@ -42,45 +42,41 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     }, [runId]),
   );
 
-  const runQuery = useLiveQuery(
+  const runQuery = useCoalescedLiveQuery(
     db.select().from(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).limit(1),
+    runs,
     [backendId, runId],
   );
   // Before the first remote page arrives, even an old/offline phone cache
   // must not materialize a whole conversation. Once synced, SQLite contains
   // only the selected backend window for this run.
-  const cachedArtifacts = db.select().from(runArtifacts)
-    .where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId)))
-    .orderBy(desc(runArtifacts.createdAt), desc(runArtifacts.id));
+  const cached = cachedHistoryQueries(db, backendId, runId);
   const artifactQuery = useCoalescedLiveQuery(
-    history.loaded ? cachedArtifacts : cachedArtifacts.limit(200), runArtifacts,
-    [backendId, runId, history.loaded],
+    cached.artifacts, runArtifacts, [backendId, runId],
   );
-  const cachedCalls = db.select().from(toolCalls)
-    .where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId)))
-    .orderBy(desc(toolCalls.createdAt), desc(toolCalls.id));
   const callQuery = useCoalescedLiveQuery(
-    history.loaded ? cachedCalls : cachedCalls.limit(200), toolCalls,
-    [backendId, runId, history.loaded],
+    cached.calls, toolCalls, [backendId, runId],
   );
-  const approvalQuery = useLiveQuery(
+  const approvalQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(pendingApprovals)
       .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId)))
       .orderBy(asc(pendingApprovals.requestedAt)),
+    pendingApprovals,
     [backendId, runId],
   );
 
   const run = runQuery.data[0];
   // Until the run row lands, retain the provider the initial send targeted.
   const providerId = run?.providerId ?? expectedProviderId ?? "";
-  const workspaceQuery = useLiveQuery(
+  const workspaceQuery = useCoalescedLiveQuery(
     db
       .select({ rootPath: workspaces.rootPath })
       .from(workspaces)
       .where(and(eq(workspaces.backendId, backendId), eq(workspaces.id, run?.workspaceId ?? "")))
       .limit(1),
+    workspaces,
     [backendId, run?.workspaceId],
   );
 
@@ -113,9 +109,21 @@ export function useRunData(runId: string, expectedProviderId: string | null) {
     [approvalQuery.data, now],
   );
   const thinking = useMemo(() => latestThinking([...artifactQuery.data].reverse()), [artifactQuery.data]);
-  const modelSelection = useModelSelection(backendId, providerId);
+  const modelSelection = useModelSelection(backendId, providerId, runId);
+
+  const readingCache = [runQuery, artifactQuery, callQuery].some(
+    (query) => !query.updatedAt && !query.error,
+  );
+  const hasCachedHistory = artifactQuery.data.length > 0 || callQuery.data.length > 0;
+  // A remote page is committed before the coalesced queries read it. Keep
+  // waiting for a nonempty page to reach those queries; a truly empty page
+  // can show the empty state. Existing cached messages stay visible on refresh.
+  const awaitingFirstPage = session.connection.kind === "connected" &&
+    !hasCachedHistory && !history.error &&
+    ((!history.loaded && (history.loading || Boolean(run))) || history.start !== null);
 
   return {
+    loading: Boolean(runId) && (readingCache || awaitingFirstPage),
     backend: {
       id: backendId,
       connected: session.connection.kind === "connected",

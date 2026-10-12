@@ -2,6 +2,7 @@ import {
   buildSubprotocols,
   decodeWsMessage,
   encodeWsMessage,
+  MAX_DEVICE_MESSAGE_BYTES,
   type ServiceResponse,
 } from "@mains/contracts/ws-protocol";
 
@@ -54,6 +55,8 @@ export function isConnectionLoss(error: unknown): boolean {
 }
 
 export interface WsTransportOptions {
+  /** Reject oversized frames before JSON materializes another copy. */
+  maxMessageChars?: number;
   /** Factory for the socket; defaults to the global `WebSocket`. Injectable for tests. */
   factory?: (url: string, protocols?: string[]) => WebSocketLike;
   /** Device (or shared pairing) token; sent as a WS subprotocol so the backend can authorize. */
@@ -82,6 +85,8 @@ interface PendingInvoke {
 
 export class WsTransport {
   readonly kind = "ws";
+  readonly url: string;
+  private readonly maxMessageChars: number;
 
   private socket: WebSocketLike | null = null;
   private currentStatus: TransportStatus = "offline";
@@ -108,9 +113,11 @@ export class WsTransport {
   private readonly schedule: (fn: () => void, ms: number) => void;
 
   constructor(
-    readonly url: string,
+    url: string,
     options: WsTransportOptions = {},
   ) {
+    this.url = url;
+    this.maxMessageChars = options.maxMessageChars ?? MAX_DEVICE_MESSAGE_BYTES;
     this.factory = options.factory ?? defaultFactory;
     this.token = options.token ?? null;
     this.invokeTimeoutMs = options.invokeTimeoutMs ?? 30_000;
@@ -206,9 +213,23 @@ export class WsTransport {
   }
 
   private handleMessage(data: unknown): void {
+    const frame = typeof data === "string" ? data : String(data);
+    if (frame.length > this.maxMessageChars) {
+      // The canonical wire encoder puts response kind/id first. Inspect only
+      // that tiny header, so unrelated concurrent commands retain their replies.
+      const header = /^\{"kind":"response","id":(\d+),/.exec(frame.slice(0, 128));
+      const id = header ? Number(header[1]) : null;
+      const entry = id === null ? null : this.pending.get(id);
+      if (entry && id !== null) {
+        if (entry.timer) clearTimeout(entry.timer);
+        this.pending.delete(id);
+        entry.reject(new Error("Mains returned a response exceeding the mobile data limit"));
+      }
+      return;
+    }
     let message;
     try {
-      message = decodeWsMessage(typeof data === "string" ? data : String(data));
+      message = decodeWsMessage(frame);
     } catch {
       return; // ignore malformed frames
     }

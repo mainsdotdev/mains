@@ -4,7 +4,6 @@ import { type BackendDescriptor } from "@mains/contracts/backend";
 import { CHANNELS } from "@mains/contracts/channels";
 import {
   APPROVAL_TIMEOUT_MS,
-  isTerminalRunStatus,
   type AccountResponse,
   type CollectionResponse,
   type CommandSummary,
@@ -22,6 +21,8 @@ import {
   type RunTurnResponse,
   type RunHistoryPage,
   type ReadRunHistoryPayload,
+  type ReadRunHistoryContentPayload,
+  type RunHistoryContentPage,
   type RunUpdatedEvent,
   type SkillSummary,
   type ToolApprovalRequest,
@@ -34,12 +35,13 @@ import {
   type RunTextFile,
 } from "@mains/contracts/runs";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
-import { db } from "@/db/client";
+import { projectionDb as db, projectionTransaction, runProjectionWrite } from "@/db/client";
 import {
   aiDataConsents,
   backends,
   collections,
   modelChoices,
+  composerSettings,
   commands,
   models,
   pendingApprovals,
@@ -58,6 +60,8 @@ import {
 
 import { parseShortstat } from "@/lib/format";
 import { runSettingsFromConfig } from "@/lib/models";
+import { parseConfig, projectRunConfig } from "@/lib/conversation-settings";
+import { snapshotRunSettingConfig, type ConversationSettings } from "@mains/contracts/run-settings";
 
 import { ProtocolMismatchError } from "./connection-supervisor";
 import type { WsTransport } from "./ws-transport";
@@ -118,7 +122,7 @@ export async function describeBackend(transport: WsTransport): Promise<BackendDe
 }
 
 export function upsertBackend(descriptor: BackendDescriptor): void {
-  db.insert(backends)
+  runProjectionWrite(backends, () => db.insert(backends)
     .values({
       backendId: descriptor.backendId,
       name: descriptor.name,
@@ -133,7 +137,7 @@ export function upsertBackend(descriptor: BackendDescriptor): void {
         protocolVersion: descriptor.protocolVersion,
       },
     })
-    .run();
+    .run());
 }
 
 // ── Row shaping ──
@@ -145,6 +149,7 @@ function upsertRun(backendId: string, run: RunResponse): void {
     mode: run.mode,
     providerId: run.providerId,
     model: run.model,
+    configSnapshotJson: toJson(projectRunConfig(run.configSnapshot)),
     workspaceId: run.workspaceId,
     collectionId: run.collectionId,
     startedAt: toDate(run.startedAt),
@@ -154,10 +159,10 @@ function upsertRun(backendId: string, run: RunResponse): void {
     createdAt: toDate(run.createdAt) ?? new Date(0),
     updatedAt: toDate(run.updatedAt) ?? new Date(0),
   };
-  db.insert(runs)
+  runProjectionWrite(runs, () => db.insert(runs)
     .values({ backendId, id: run.id, ...set })
     .onConflictDoUpdate({ target: [runs.backendId, runs.id], set })
-    .run();
+    .run());
 }
 
 function upsertWorkspace(backendId: string, workspace: WorkspaceResponse): void {
@@ -169,10 +174,10 @@ function upsertWorkspace(backendId: string, workspace: WorkspaceResponse): void 
     updatedAt: toDate(workspace.updatedAt),
     isArchived: Boolean(workspace.isArchived),
   };
-  db.insert(workspaces)
+  runProjectionWrite(workspaces, () => db.insert(workspaces)
     .values({ backendId, id: workspace.id, ...set })
     .onConflictDoUpdate({ target: [workspaces.backendId, workspaces.id], set })
-    .run();
+    .run());
 }
 
 function upsertTurn(backendId: string, turn: RunTurnResponse): void {
@@ -185,13 +190,13 @@ function upsertTurn(backendId: string, turn: RunTurnResponse): void {
     elapsedMs: turn.elapsedMs,
     model: turn.model,
   };
-  db.insert(runTurns)
+  runProjectionWrite(runTurns, () => db.insert(runTurns)
     .values({ backendId, runId: turn.runId, turnIndex: turn.turnIndex, ...set })
     .onConflictDoUpdate({
       target: [runTurns.backendId, runTurns.runId, runTurns.turnIndex],
       set,
     })
-    .run();
+    .run());
 }
 
 function upsertToolCall(backendId: string, runId: string, call: ToolCallResponse): void {
@@ -209,13 +214,13 @@ function upsertToolCall(backendId: string, runId: string, call: ToolCallResponse
     createdAt: toDate(call.createdAt) ?? new Date(0),
     updatedAt: toDate(call.updatedAt) ?? new Date(0),
   };
-  db.insert(toolCalls)
+  runProjectionWrite(toolCalls, () => db.insert(toolCalls)
     .values({ backendId, runId, id: call.id, ...set })
     .onConflictDoUpdate({
       target: [toolCalls.backendId, toolCalls.runId, toolCalls.id],
       set,
     })
-    .run();
+    .run());
 }
 
 function upsertArtifact(backendId: string, runId: string, artifact: RunArtifactResponse): void {
@@ -226,13 +231,13 @@ function upsertArtifact(backendId: string, runId: string, artifact: RunArtifactR
     metadataJson: toJson(artifact.metadata),
     createdAt: toDate(artifact.createdAt) ?? new Date(0),
   };
-  db.insert(runArtifacts)
+  runProjectionWrite(runArtifacts, () => db.insert(runArtifacts)
     .values({ backendId, runId, id: artifact.id, ...set })
     .onConflictDoUpdate({
       target: [runArtifacts.backendId, runArtifacts.runId, runArtifacts.id],
       set,
     })
-    .run();
+    .run());
 }
 
 function approvalRow(backendId: string, request: ToolApprovalRequest, expiresAt: number) {
@@ -259,20 +264,20 @@ function approvalRow(backendId: string, request: ToolApprovalRequest, expiresAt:
 
 /** Drop one request locally — right after the phone answered it. */
 export function deletePendingApproval(backendId: string, requestId: string): void {
-  db.delete(pendingApprovals)
+  runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals)
     .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.requestId, requestId)))
-    .run();
+    .run());
 }
 
 function upsertApproval(backendId: string, request: ToolApprovalRequest, expiresAt: number): void {
   const { backendId: _b, requestId: _r, ...set } = approvalRow(backendId, request, expiresAt);
-  db.insert(pendingApprovals)
+  runProjectionWrite(pendingApprovals, () => db.insert(pendingApprovals)
     .values(approvalRow(backendId, request, expiresAt))
     .onConflictDoUpdate({
       target: [pendingApprovals.backendId, pendingApprovals.requestId],
       set,
     })
-    .run();
+    .run());
 }
 
 /** The push carries no expiry; mirror the broker's rule (provider timeout, capped). */
@@ -288,30 +293,30 @@ function expiryFromRequest(request: ToolApprovalRequest): number {
 /** Replace the backend's pending set with what the Mac reports right now. */
 export async function syncPendingApprovals(transport: WsTransport, backendId: string): Promise<void> {
   const list = await invoke<PendingApproval[]>(transport, CHANNELS.runs.listPendingApprovals);
-  db.transaction(() => {
-    db.delete(pendingApprovals).where(eq(pendingApprovals.backendId, backendId)).run();
+  projectionTransaction(() => {
+    runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals).where(eq(pendingApprovals.backendId, backendId)).run());
     for (const request of list) upsertApproval(backendId, request, request.expiresAt);
   });
 }
 
 function deleteRunLocally(backendId: string, runId: string): void {
   forgetHistory(backendId, runId);
-  db.delete(pendingApprovals)
+  runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals)
     .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId)))
-    .run();
-  db.delete(runArtifacts)
+    .run());
+  runProjectionWrite(runArtifacts, () => db.delete(runArtifacts)
     .where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId)))
-    .run();
-  db.delete(toolCalls)
+    .run());
+  runProjectionWrite(toolCalls, () => db.delete(toolCalls)
     .where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId)))
-    .run();
-  db.delete(runTurns)
+    .run());
+  runProjectionWrite(runTurns, () => db.delete(runTurns)
     .where(and(eq(runTurns.backendId, backendId), eq(runTurns.runId, runId)))
-    .run();
-  db.delete(syncCursors)
+    .run());
+  runProjectionWrite(syncCursors, () => db.delete(syncCursors)
     .where(and(eq(syncCursors.backendId, backendId), eq(syncCursors.runId, runId)))
-    .run();
-  db.delete(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).run();
+    .run());
+  runProjectionWrite(runs, () => db.delete(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).run());
 }
 
 // ── Run targets: spaces, collections, providers ──
@@ -342,10 +347,10 @@ export async function syncTargets(transport: WsTransport, backendId: string): Pr
     invoke<unknown>(transport, CHANNELS.projects.list).then((d) => asList<ProjectResponse>(d, "projects")),
   ]);
 
-  db.transaction(() => {
-    db.delete(spaces).where(eq(spaces.backendId, backendId)).run();
+  projectionTransaction(() => {
+    runProjectionWrite(spaces, () => db.delete(spaces).where(eq(spaces.backendId, backendId)).run());
     for (const space of spaceList) {
-      db.insert(spaces)
+      runProjectionWrite(spaces, () => db.insert(spaces)
         .values({
           backendId,
           id: space.id,
@@ -357,11 +362,11 @@ export async function syncTargets(transport: WsTransport, backendId: string): Pr
           sortOrder: space.sortOrder ?? null,
           isArchived: Boolean(space.isArchived),
         })
-        .run();
+        .run());
     }
-    db.delete(collections).where(eq(collections.backendId, backendId)).run();
+    runProjectionWrite(collections, () => db.delete(collections).where(eq(collections.backendId, backendId)).run());
     for (const collection of collectionList) {
-      db.insert(collections)
+      runProjectionWrite(collections, () => db.insert(collections)
         .values({
           backendId,
           id: collection.id,
@@ -369,11 +374,11 @@ export async function syncTargets(transport: WsTransport, backendId: string): Pr
           icon: collection.icon ?? null,
           isArchived: Boolean(collection.isArchived),
         })
-        .run();
+        .run());
     }
-    db.delete(projects).where(eq(projects.backendId, backendId)).run();
+    runProjectionWrite(projects, () => db.delete(projects).where(eq(projects.backendId, backendId)).run());
     for (const project of projectList) {
-      db.insert(projects)
+      runProjectionWrite(projects, () => db.insert(projects)
         .values({
           backendId,
           id: project.id,
@@ -381,12 +386,12 @@ export async function syncTargets(transport: WsTransport, backendId: string): Pr
           icon: project.icon ?? null,
           isArchived: Boolean(project.isArchived),
         })
-        .run();
+        .run());
     }
-    db.delete(providers).where(eq(providers.backendId, backendId)).run();
+    runProjectionWrite(providers, () => db.delete(providers).where(eq(providers.backendId, backendId)).run());
     for (const provider of providerList) {
       const settings = runSettingsFromConfig(provider.id, provider.config);
-      db.insert(providers)
+      runProjectionWrite(providers, () => db.insert(providers)
         .values({
           backendId,
           id: provider.id,
@@ -398,15 +403,15 @@ export async function syncTargets(transport: WsTransport, backendId: string): Pr
           fastMode: settings.fastMode,
           goalMode: settings.goalMode,
           planMode: settings.planMode,
+          runSettingsJson: toJson(snapshotRunSettingConfig(provider.id, provider.config ?? {})),
         })
-        .run();
+        .run());
     }
   });
   const enabledIds = providerList.filter((p) => p.isEnabled !== false).map((p) => p.id);
   await syncModels(transport, backendId, enabledIds);
-  // Skills and commands change far less often than models and nothing waits on
-  // them, so a slow CLI listing must not hold the snapshot open.
-  syncContextSources(transport, backendId, enabledIds).catch(() => {});
+  // Context catalogues are fetched by the picker when opened. Do not compete
+  // with the initial snapshot by fetching every provider in the background.
 }
 
 /**
@@ -428,15 +433,15 @@ export async function syncModels(
       }
     }),
   );
-  db.transaction(() => {
+  projectionTransaction(() => {
     for (const result of results) {
       if (!result) continue;
-      db.delete(models)
+      runProjectionWrite(models, () => db.delete(models)
         .where(and(eq(models.backendId, backendId), eq(models.providerId, result.providerId)))
-        .run();
+        .run());
       result.list.forEach((model, index) => {
         const levels = model.supportedEffortLevels ?? [];
-        db.insert(models)
+        runProjectionWrite(models, () => db.insert(models)
           .values({
             backendId,
             providerId: result.providerId,
@@ -446,12 +451,13 @@ export async function syncModels(
             isDefault: Boolean(model.isDefault),
             effortLevels: levels.length > 0 ? JSON.stringify(levels) : null,
             supportsFastMode: model.supportsFastMode === true,
+            serviceTiersJson: toJson(model.serviceTiers),
             sortOrder: index,
           })
           // Macs up to 0.16 pass on Copilot's catalogue with every model twice;
           // the first copy wins.
           .onConflictDoNothing()
-          .run();
+          .run());
       });
     }
   });
@@ -552,18 +558,18 @@ export async function syncContextSources(
     }),
   );
 
-  db.transaction(() => {
+  projectionTransaction(() => {
     for (const { providerId, skillList, commandList } of results) {
       if (skillList) {
-        db.delete(skills)
+        runProjectionWrite(skills, () => db.delete(skills)
           .where(and(eq(skills.backendId, backendId), eq(skills.providerId, providerId)))
-          .run();
+          .run());
         // Model-invoked-only skills never appear in a picker, so they are
         // dropped here rather than filtered at every read.
         skillList
           .filter((skill) => skill.name && skill.userInvokable !== false)
           .forEach((skill, index) => {
-            db.insert(skills)
+            runProjectionWrite(skills, () => db.insert(skills)
               .values({
                 backendId,
                 providerId,
@@ -582,18 +588,18 @@ export async function syncContextSources(
               // Deduped above; this is the backstop that keeps a surprise
               // repeat from rolling back the whole provider's listing.
               .onConflictDoNothing()
-              .run();
+              .run());
           });
       }
 
       if (commandList) {
-        db.delete(commands)
+        runProjectionWrite(commands, () => db.delete(commands)
           .where(and(eq(commands.backendId, backendId), eq(commands.providerId, providerId)))
-          .run();
+          .run());
         commandList
           .filter((command) => command.name && command.userFacing !== false)
           .forEach((command, index) => {
-            db.insert(commands)
+            runProjectionWrite(commands, () => db.insert(commands)
               .values({
                 backendId,
                 providerId,
@@ -603,7 +609,7 @@ export async function syncContextSources(
                 sortOrder: index,
               })
               .onConflictDoNothing()
-              .run();
+              .run());
           });
       }
     }
@@ -625,7 +631,7 @@ export function attachTargetEvents(transport: WsTransport, backendId: string): (
   });
 }
 
-/** The model this phone picked for a provider, or null for the Mac's default. */
+/** A pre-conversation-settings phone's model choice, used only as a new-chat fallback. */
 export function getModelChoice(backendId: string, providerId: string): string | null {
   return (
     db
@@ -636,14 +642,23 @@ export function getModelChoice(backendId: string, providerId: string): string | 
   );
 }
 
-export function setModelChoice(backendId: string, providerId: string, modelId: string): void {
-  db.insert(modelChoices)
-    .values({ backendId, providerId, modelId })
-    .onConflictDoUpdate({
-      target: [modelChoices.backendId, modelChoices.providerId],
-      set: { modelId },
-    })
-    .run();
+export function setComposerSettings(backendId: string, providerId: string, kind: "draft" | "defaults", settings: ConversationSettings): void {
+  const settingsJson = JSON.stringify(settings);
+  runProjectionWrite(composerSettings, () => db.insert(composerSettings).values({ backendId, providerId, kind, settingsJson })
+    .onConflictDoUpdate({ target: [composerSettings.backendId, composerSettings.providerId, composerSettings.kind], set: { settingsJson } })
+    .run());
+}
+
+export function clearDraftSettings(): void {
+  runProjectionWrite(composerSettings, () => db.delete(composerSettings).where(eq(composerSettings.kind, "draft")).run());
+}
+
+export function applyConversationSettings(backendId: string, runId: string, settings: ConversationSettings): void {
+  const row = db.select().from(runs).where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).get();
+  if (!row) return;
+  const snapshot = parseConfig(row.configSnapshotJson);
+  runProjectionWrite(runs, () => db.update(runs).set({ configSnapshotJson: JSON.stringify({ ...snapshot, conversationSettings: settings }) })
+    .where(and(eq(runs.backendId, backendId), eq(runs.id, runId))).run());
 }
 
 export function getLastSpaceId(backendId: string): string | null {
@@ -657,7 +672,7 @@ export function getLastSpaceId(backendId: string): string | null {
 }
 
 export function setLastSpaceId(backendId: string, spaceId: string): void {
-  db.update(backends).set({ lastSpaceId: spaceId }).where(eq(backends.backendId, backendId)).run();
+  runProjectionWrite(backends, () => db.update(backends).set({ lastSpaceId: spaceId }).where(eq(backends.backendId, backendId)).run());
 }
 
 /** The first usable space, by the desktop's own ordering. */
@@ -681,10 +696,10 @@ export function setSpaceTarget(
     workspaceId: target.workspaceId ?? null,
     collectionId: target.collectionId ?? null,
   };
-  db.insert(spaceTargets)
+  runProjectionWrite(spaceTargets, () => db.insert(spaceTargets)
     .values({ backendId, spaceId, ...set })
     .onConflictDoUpdate({ target: [spaceTargets.backendId, spaceTargets.spaceId], set })
-    .run();
+    .run());
 }
 
 // ── Snapshot ──
@@ -701,7 +716,7 @@ export async function syncSnapshot(transport: WsTransport, backendId: string): P
   // was missed, and what a new run can be aimed at.
   await Promise.all([syncPendingApprovals(transport, backendId), syncTargets(transport, backendId)]);
 
-  db.transaction((tx) => {
+  projectionTransaction((tx) => {
     for (const workspace of workspaceList) upsertWorkspace(backendId, workspace);
     for (const run of runList) upsertRun(backendId, run);
 
@@ -719,10 +734,10 @@ export async function syncSnapshot(transport: WsTransport, backendId: string): P
       .all();
     for (const { id } of stale) deleteRunLocally(backendId, id);
 
-    tx.update(backends)
+    runProjectionWrite(backends, () => tx.update(backends)
       .set({ lastSyncedAt: new Date() })
       .where(eq(backends.backendId, backendId))
-      .run();
+      .run());
   });
 
   // What the Code sidebar prints beside each workspace. Both are best-effort:
@@ -738,16 +753,16 @@ export async function syncSnapshot(transport: WsTransport, backendId: string): P
 /** Every workspace's current branch (`workspace:listGitStates`, one call). */
 export async function syncGitStates(transport: WsTransport, backendId: string): Promise<void> {
   const states = await invoke<WorkspaceGitState[]>(transport, CHANNELS.workspace.listGitStates);
-  db.transaction(() => {
+  projectionTransaction(() => {
     for (const state of states) applyGitState(backendId, state);
   });
 }
 
 function applyGitState(backendId: string, state: WorkspaceGitState): void {
-  db.update(workspaces)
+  runProjectionWrite(workspaces, () => db.update(workspaces)
     .set({ branch: state.branch ?? null, pathExists: state.pathExists !== false })
     .where(and(eq(workspaces.backendId, backendId), eq(workspaces.id, state.workspaceId)))
-    .run();
+    .run());
 }
 
 /** The size of a workspace's last diff snapshot (`workspace:getLatestDiffSummary`). */
@@ -762,10 +777,10 @@ export async function syncDiffSummary(
     [workspaceId],
   );
   const { additions, deletions } = parseShortstat(summary?.stats?.shortstat);
-  db.update(workspaces)
+  runProjectionWrite(workspaces, () => db.update(workspaces)
     .set({ diffAdditions: additions, diffDeletions: deletions })
     .where(and(eq(workspaces.backendId, backendId), eq(workspaces.id, workspaceId)))
-    .run();
+    .run());
 }
 
 /** Longest side the phone asks an image artifact to be sent at. */
@@ -793,6 +808,10 @@ export function readRunTextFile(
   ]);
 }
 
+export function readHistoryContent(transport: WsTransport, request: ReadRunHistoryContentPayload): Promise<RunHistoryContentPage> {
+  return invoke<RunHistoryContentPage>(transport, CHANNELS.runs.readHistoryContent, [request]);
+}
+
 // ── Per-run ──
 
 const inFlight = new Map<string, Promise<void>>();
@@ -812,15 +831,15 @@ async function syncRunOnce(transport: WsTransport, backendId: string, runId: str
     ]);
     // These are disposable phone projections. Complete history remains on the
     // backend; replace only this run's local window in one SQLite transaction.
-    db.transaction(() => {
+    projectionTransaction(() => {
       upsertRun(backendId, run);
-      db.delete(runArtifacts).where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId))).run();
-      db.delete(toolCalls).where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId))).run();
-      db.delete(runTurns).where(and(eq(runTurns.backendId, backendId), eq(runTurns.runId, runId))).run();
+      runProjectionWrite(runArtifacts, () => db.delete(runArtifacts).where(and(eq(runArtifacts.backendId, backendId), eq(runArtifacts.runId, runId))).run());
+      runProjectionWrite(toolCalls, () => db.delete(toolCalls).where(and(eq(toolCalls.backendId, backendId), eq(toolCalls.runId, runId))).run());
+      runProjectionWrite(runTurns, () => db.delete(runTurns).where(and(eq(runTurns.backendId, backendId), eq(runTurns.runId, runId))).run());
       for (const artifact of page.artifacts) upsertArtifact(backendId, runId, artifact);
       for (const call of page.toolCalls) upsertToolCall(backendId, runId, call);
       for (const turn of page.turns) upsertTurn(backendId, turn);
-      db.delete(pendingApprovals).where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId))).run();
+      runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals).where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.runId, runId))).run());
       for (const request of approvals) upsertApproval(backendId, request, request.expiresAt);
     });
     historyLoaded(backendId, runId, page);
@@ -891,11 +910,11 @@ export function attachRunEvents(
   };
 
   const offStatus = transport.subscribe(CHANNELS.runs.statusChanged, (payload) => {
-    const { runId, status } = payload as RunStatusChangedEvent;
-    // A terminal status means the transcript settled: pull all of it, so a
-    // finished run is ready before the user opens it.
+    const { runId } = payload as RunStatusChangedEvent;
+    // Only the visible conversation needs history. Finishing background runs
+    // must not cause many transcripts to download concurrently.
     swallow(
-      isTerminalRunStatus(status) || options.isViewing(runId)
+      options.isViewing(runId)
         ? syncRun(transport, backendId, runId)
         : syncRunRow(transport, backendId, runId),
     );
@@ -913,7 +932,9 @@ export function attachRunEvents(
 
   const offUpdated = transport.subscribe(CHANNELS.runs.updated, (payload) => {
     const { runId } = payload as RunUpdatedEvent;
-    swallow(syncRunRow(transport, backendId, runId));
+    swallow(options.isViewing(runId)
+      ? syncRun(transport, backendId, runId)
+      : syncRunRow(transport, backendId, runId));
   });
 
   const offPersisted = transport.subscribe(CHANNELS.runs.eventPersisted, (payload) => {
@@ -937,9 +958,9 @@ export function attachRunEvents(
 
   const offApprovalResolved = transport.subscribe(CHANNELS.runs.toolApprovalResolved, (payload) => {
     const { requestId } = payload as ToolApprovalResolvedEvent;
-    db.delete(pendingApprovals)
+    runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals)
       .where(and(eq(pendingApprovals.backendId, backendId), eq(pendingApprovals.requestId, requestId)))
-      .run();
+      .run());
   });
 
   return () => {
@@ -969,24 +990,25 @@ export function runExists(backendId: string, runId: string): boolean {
 
 /** Drop everything cached for a backend (forgetting a Mac). */
 export function clearBackend(backendId: string): void {
-  db.transaction(() => {
-    db.delete(aiDataConsents).where(eq(aiDataConsents.backendId, backendId)).run();
-    db.delete(spaceTargets).where(eq(spaceTargets.backendId, backendId)).run();
-    db.delete(spaces).where(eq(spaces.backendId, backendId)).run();
-    db.delete(collections).where(eq(collections.backendId, backendId)).run();
-    db.delete(providers).where(eq(providers.backendId, backendId)).run();
-    db.delete(projects).where(eq(projects.backendId, backendId)).run();
-    db.delete(models).where(eq(models.backendId, backendId)).run();
-    db.delete(skills).where(eq(skills.backendId, backendId)).run();
-    db.delete(commands).where(eq(commands.backendId, backendId)).run();
-    db.delete(modelChoices).where(eq(modelChoices.backendId, backendId)).run();
-    db.delete(pendingApprovals).where(eq(pendingApprovals.backendId, backendId)).run();
-    db.delete(runArtifacts).where(eq(runArtifacts.backendId, backendId)).run();
-    db.delete(toolCalls).where(eq(toolCalls.backendId, backendId)).run();
-    db.delete(runTurns).where(eq(runTurns.backendId, backendId)).run();
-    db.delete(syncCursors).where(eq(syncCursors.backendId, backendId)).run();
-    db.delete(runs).where(eq(runs.backendId, backendId)).run();
-    db.delete(workspaces).where(eq(workspaces.backendId, backendId)).run();
-    db.delete(backends).where(eq(backends.backendId, backendId)).run();
+  projectionTransaction(() => {
+    runProjectionWrite(aiDataConsents, () => db.delete(aiDataConsents).where(eq(aiDataConsents.backendId, backendId)).run());
+    runProjectionWrite(spaceTargets, () => db.delete(spaceTargets).where(eq(spaceTargets.backendId, backendId)).run());
+    runProjectionWrite(spaces, () => db.delete(spaces).where(eq(spaces.backendId, backendId)).run());
+    runProjectionWrite(collections, () => db.delete(collections).where(eq(collections.backendId, backendId)).run());
+    runProjectionWrite(providers, () => db.delete(providers).where(eq(providers.backendId, backendId)).run());
+    runProjectionWrite(projects, () => db.delete(projects).where(eq(projects.backendId, backendId)).run());
+    runProjectionWrite(models, () => db.delete(models).where(eq(models.backendId, backendId)).run());
+    runProjectionWrite(skills, () => db.delete(skills).where(eq(skills.backendId, backendId)).run());
+    runProjectionWrite(commands, () => db.delete(commands).where(eq(commands.backendId, backendId)).run());
+    runProjectionWrite(modelChoices, () => db.delete(modelChoices).where(eq(modelChoices.backendId, backendId)).run());
+    runProjectionWrite(composerSettings, () => db.delete(composerSettings).where(eq(composerSettings.backendId, backendId)).run());
+    runProjectionWrite(pendingApprovals, () => db.delete(pendingApprovals).where(eq(pendingApprovals.backendId, backendId)).run());
+    runProjectionWrite(runArtifacts, () => db.delete(runArtifacts).where(eq(runArtifacts.backendId, backendId)).run());
+    runProjectionWrite(toolCalls, () => db.delete(toolCalls).where(eq(toolCalls.backendId, backendId)).run());
+    runProjectionWrite(runTurns, () => db.delete(runTurns).where(eq(runTurns.backendId, backendId)).run());
+    runProjectionWrite(syncCursors, () => db.delete(syncCursors).where(eq(syncCursors.backendId, backendId)).run());
+    runProjectionWrite(runs, () => db.delete(runs).where(eq(runs.backendId, backendId)).run());
+    runProjectionWrite(workspaces, () => db.delete(workspaces).where(eq(workspaces.backendId, backendId)).run());
+    runProjectionWrite(backends, () => db.delete(backends).where(eq(backends.backendId, backendId)).run());
   });
 }

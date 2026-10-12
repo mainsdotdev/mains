@@ -10,12 +10,34 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Desktop jobs run in apps/desktop; the standalone job overrides this default.
+# Desktop jobs run in apps/desktop; package jobs override this default.
 defaults:
   run:
     working-directory: apps/desktop
 
 jobs:
+  mobile:
+    name: Mobile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.20.0
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run lint
+      - name: Verify Expo package compatibility
+        run: npx expo install --check
+      - name: Export the iOS bundle
+        run: npx expo export --platform ios --output-dir "${{ runner.temp }}/mains-mobile-ios"
+
   backend:
     name: Shared backend
     runs-on: ubuntu-latest

@@ -1,5 +1,5 @@
 import { and, asc, desc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { useRouter, type Href } from "expo-router";
 import { useMemo, useState } from "react";
 import { FlatList, Pressable, ScrollView, View } from "react-native";
@@ -52,48 +52,54 @@ export function Sidebar({ navigation }: { navigation: { closeDrawer(): void } })
   const spaceId = session.selectedSpaceId ?? "";
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
 
-  const runList = useLiveQuery(
+  const runList = useCoalescedLiveQuery(
     db
       .select()
       .from(runs)
       .where(and(eq(runs.backendId, backendId), eq(runs.isArchived, false)))
       .orderBy(desc(runs.updatedAt))
       .limit(200),
+    runs,
     [backendId],
   );
-  const workspaceList = useLiveQuery(
+  const workspaceList = useCoalescedLiveQuery(
     db
       .select()
       .from(workspaces)
       .where(and(eq(workspaces.backendId, backendId), eq(workspaces.isArchived, false))),
+    workspaces,
     [backendId],
   );
-  const projectList = useLiveQuery(
+  const projectList = useCoalescedLiveQuery(
     db.select().from(projects).where(eq(projects.backendId, backendId)),
+    projects,
     [backendId],
   );
-  const collectionList = useLiveQuery(
+  const collectionList = useCoalescedLiveQuery(
     db
       .select()
       .from(collections)
       .where(and(eq(collections.backendId, backendId), eq(collections.isArchived, false)))
       .orderBy(asc(collections.name)),
+    collections,
     [backendId],
   );
-  const spaceList = useLiveQuery(
+  const spaceList = useCoalescedLiveQuery(
     db
       .select()
       .from(spaces)
       .where(and(eq(spaces.backendId, backendId), eq(spaces.isArchived, false)))
       .orderBy(asc(spaces.sortOrder), asc(spaces.name)),
+    spaces,
     [backendId],
   );
-  const targetQuery = useLiveQuery(
+  const targetQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(spaceTargets)
       .where(and(eq(spaceTargets.backendId, backendId), eq(spaceTargets.spaceId, spaceId)))
       .limit(1),
+    spaceTargets,
     [backendId, spaceId],
   );
 

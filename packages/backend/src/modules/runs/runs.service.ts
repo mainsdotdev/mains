@@ -1,4 +1,5 @@
 import { CHANNELS } from "@mains/contracts/channels";
+import { conversationSettingsFrom, type ConversationSettings } from "@mains/contracts/run-settings";
 import type {
   CreateRealtimeConversationPayload,
   CreateRealtimeConversationResponse,
@@ -21,8 +22,8 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { runsRepo } from "./runs.repo";
-import { validateHistoryRequest } from "./run-history";
-import type { ReadRunHistoryPayload } from "@mains/contracts/runs";
+import { validateHistoryContentRequest, validateHistoryRequest } from "./run-history";
+import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload } from "@mains/contracts/runs";
 import { providersService } from "../providers";
 import { collectionsService } from "../collections";
 import { projectsService } from "../projects";
@@ -1496,7 +1497,17 @@ export const runsService = {
     }
     const updated = await runsRepo.updateRun(id, patch);
     if (!updated) throw new Error("Run not found");
+    if (payload.conversationSettings !== undefined) {
+      emit(CHANNELS.runs.updated, { runId: id, ts: Date.now() });
+    }
     return updated;
+  },
+
+  /** A narrow paired-device write; never changes the active turn or provider defaults. */
+  async updateConversationSettings(id: string, settings: ConversationSettings): Promise<ConversationSettings> {
+    if (!settings) throw new Error("Invalid conversation settings");
+    const updated = await this.updateRun(id, { conversationSettings: settings });
+    return conversationSettingsFrom(updated.configSnapshot)!;
   },
 
   async moveRunToCollection(
@@ -1653,10 +1664,26 @@ export const runsService = {
     const run = await runsRepo.findRunById(payload.runId);
     if (!run) throw new Error("Conversation not found");
     const page = runsRepo.findHistoryPage(payload);
-    return {
+    const result = {
       ...page,
       artifacts: await selectedArtifacts(run, page.artifacts, page),
     };
+    if (payload.profile === "mobile") {
+      // Deliverable discovery may hydrate images that the bounded repo query
+      // omitted. Pixels are loaded through readImage, never in a transcript page.
+      result.artifacts = result.artifacts.map((artifact) => ({ ...artifact, blobData: null }));
+      if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) {
+        throw new Error("Conversation page exceeds the mobile data limit");
+      }
+    }
+    return result;
+  },
+
+  async readHistoryContent(payload: ReadRunHistoryContentPayload) {
+    validateHistoryContentRequest(payload);
+    const result = runsRepo.findHistoryContent(payload);
+    if (!result) throw new Error("Content not found in this conversation");
+    return result;
   },
 
   async getToolOutput(runId: string, toolId: number) {

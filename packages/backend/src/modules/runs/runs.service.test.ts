@@ -511,6 +511,31 @@ describe("runsService", () => {
 
   describe("conversation settings", () => {
     afterEach(() => { vi.mocked(gitService.getHeadSha).mockClear(); });
+    it("saves paired-device preferences without changing a running chat or another chat", async () => {
+      const original = { permissionMode: "default", apiKey: "private", additionalDirectories: ["/tmp"], conversationSettings: { model: "original", config: { permissionMode: "default" } } };
+      const first = createRun(db, { model: "original", status: "running", configSnapshot: JSON.stringify(original) });
+      const second = createRun(db, { model: "other", configSnapshot: JSON.stringify(original) });
+      const before = await runsService.getRunById(first.id);
+      const settings = { model: "next", config: { permissionMode: "plan", modelReasoningEffort: "high" } };
+      const events: unknown[] = [];
+      const detach = registerEventSink({ kind: "test", send(channel, payload) { if (channel === CHANNELS.runs.updated) events.push(payload); } });
+      try {
+        expect(await runsService.updateConversationSettings(first.id, settings)).toEqual(settings);
+        const updated = await runsService.getRunById(first.id);
+        expect(updated).toMatchObject({ model: "original", status: "running", updatedAt: before?.updatedAt, configSnapshot: { ...original, conversationSettings: settings } });
+        expect((await runsService.getRunById(second.id))?.configSnapshot).toEqual(original);
+        expect(events).toEqual([{ runId: first.id, ts: expect.any(Number) }]);
+      } finally { detach(); }
+    });
+
+    it("refuses missing or invalid paired-device settings before mutation", async () => {
+      const run = createRun(db);
+      await expect(runsService.updateConversationSettings("missing", { model: "m", config: {} })).rejects.toThrow("Run not found");
+      for (const settings of [undefined, null, { model: "m", config: { apiKey: "secret" } }, { model: "m", config: { permissionMode: "workspace-write" } }]) {
+        await expect(runsService.updateConversationSettings(run.id, settings as never)).rejects.toThrow();
+      }
+      expect((await runsService.getRunById(run.id))?.configSnapshot).toBeNull();
+    });
     it.each(["ultra", "FutureEffort"])("preserves Codex effort %j through saved settings, queued continuation, and fork", async (effort) => {
       createProvider(db, { id: "codex" });
       createWorkspace(db, { id: "codex-settings-workspace" });
@@ -531,7 +556,7 @@ describe("runsService", () => {
       expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(settings);
 
       const next = { ...settings, config: { ...settings.config, modelReasoningEffort: effort === "ultra" ? "FutureEffort" : "ultra" } };
-      await runsService.updateRun(created.runId, { conversationSettings: next });
+      await runsService.updateConversationSettings(created.runId, next);
       await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Queued", conversationSettings: settings, clientPromptId: "local-continue" });
       await flushBackground();
       expect(continueRun.mock.calls[0][0]).toMatchObject({ configSnapshot: settings.config, clientPromptId: "local-continue" });

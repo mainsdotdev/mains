@@ -237,6 +237,7 @@ export function useWorkspaceRuns(
         if (pendingRunIdRef.current === run.id) dispatch(clearPendingRunId());
         if (publishSelection) dispatch(setActiveTab(run.id));
         await loadRunDetails(run.id);
+        return run;
       } catch (err) {
         console.error("Failed to load routed run:", err);
         if (isCurrent()) setLoadedKey(`run:${runId}`);
@@ -251,19 +252,22 @@ export function useWorkspaceRuns(
   useEffect(() => {
     let current = true;
     const isCurrent = () => current;
+    let routedAccountId: string | undefined;
     const loading = (async () => {
       if (routeRunId) {
         clearState();
-        await loadRoutedRun(routeRunId, isCurrent);
+        const run = await loadRoutedRun(routeRunId, isCurrent);
+        routedAccountId = run?.accountId;
       } else if (workspaceId) {
         await loadWorkspaceRuns(workspaceId, isCurrent);
       }
     })();
-    // Voice coordination and other windows create runs through the backend.
-    // Add their tabs without selecting them. Wait for the initial list so a
-    // stale list response cannot overwrite a newly announced worker.
+    // Other clients create chats and edit their preferences. Refresh the
+    // relevant tabs without selecting them, including directly routed chats.
+    // Wait for the initial read so it cannot overwrite a newer notification.
     const revisions = new Map<string, number>();
-    const offUpdated = workspaceId && !routeRunId ? appEvents.runs.onUpdated(({ runId }) => {
+    const offUpdated = workspaceId || routeRunId ? appEvents.runs.onUpdated(({ runId }) => {
+      if (routeRunId && runId !== routeRunId) return;
       const revision = (revisions.get(runId) ?? 0) + 1;
       revisions.set(runId, revision);
       void (async () => {
@@ -272,7 +276,7 @@ export function useWorkspaceRuns(
         const result = await appApi.runs.getById(runId);
         if (!current || revisions.get(runId) !== revision || !result.success || !result.data) return;
         const run = result.data;
-        if (run.isArchived || run.workspaceId !== workspaceId ||
+        if (run.isArchived || (routeRunId ? run.accountId !== routedAccountId : run.workspaceId !== workspaceId) ||
             (providerId && run.providerId !== providerId) || (mode && run.mode !== mode)) return;
         setRuns((previous) => previous.some((item) => item.id === run.id)
           ? previous.map((item) => item.id === run.id ? run : item)

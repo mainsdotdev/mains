@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { decodeWsMessage } from "@mains/contracts/ws-protocol";
+import { decodeWsMessage, MAX_DEVICE_MESSAGE_BYTES } from "@mains/contracts/ws-protocol";
 import { WebSocketSink, type WsClientConnection } from "./websocket-sink";
 
 function fakeClient(id: string): WsClientConnection & { sent: string[] } {
@@ -70,6 +70,17 @@ describe("WebSocketSink", () => {
 });
 
 describe("event allowlist", () => {
+  it("keeps huge streaming events off phones while small status events continue", () => {
+    const sink = new WebSocketSink();
+    const device = fakeClient("phone"), owner = fakeClient("desktop");
+    sink.addClient({ ...device, eventChannels: new Set(["runs:ephemeralEvent", "runs:statusChanged"]) });
+    sink.addClient(owner);
+    sink.send("runs:ephemeralEvent", { text: "x".repeat(MAX_DEVICE_MESSAGE_BYTES) });
+    sink.send("runs:statusChanged", { runId: "r", status: "succeeded" });
+    expect(device.sent).toHaveLength(1);
+    expect(device.sent[0]).toContain("runs:statusChanged");
+    expect(owner.sent).toHaveLength(2);
+  });
   it("delivers only allowlisted events to a device connection", () => {
     const sink = new WebSocketSink();
     const device: string[] = [];

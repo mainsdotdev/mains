@@ -3,6 +3,7 @@ import { addDatabaseChangeListener } from "expo-sqlite";
 import { useEffect, useState, type DependencyList } from "react";
 
 import { createChangeRefreshCoalescer } from "./change-refresh-coalescer";
+import { projectionChanges } from "./projection-changes";
 
 type ArrayQuery = PromiseLike<readonly unknown[]>;
 
@@ -46,12 +47,16 @@ export function useCoalescedLiveQuery<TQuery extends ArrayQuery>(
     const subscription = addDatabaseChangeListener((event) => {
       if (event.tableName === tableName) coalescer.request();
     });
+    const unsubscribeProjection = projectionChanges.subscribe((tables) => {
+      if (tables.has(tableName)) coalescer.request();
+    });
     refresh();
 
     return () => {
       active = false;
       coalescer.dispose();
       subscription.remove();
+      unsubscribeProjection();
     };
     // The query object is recreated on render; callers provide its stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps

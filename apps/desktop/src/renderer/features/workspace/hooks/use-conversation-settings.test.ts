@@ -51,6 +51,73 @@ beforeEach(() => {
 });
 
 describe("conversation composer settings", () => {
+  it("follows a phone's saved settings for the same open chat without replacing new-chat defaults", () => {
+    const { wrapper, store } = setup();
+    const selected = run("paired-chat", "model-a", "workspace-write", "medium");
+    const ownerKey = runOwnerKey(null, selected.id);
+    store.dispatch(rememberRunSettings({ backendId: null, providerId: "codex", settings: {
+      model: "model-a", config: { modelReasoningEffort: "low", sandboxMode: "workspace-write" },
+    } }));
+    const defaults = store.getState().workspace.lastRunSettingsByProvider[providerSettingsKey(null, "codex")];
+    const { result, rerender } = renderHook(({ selected }: { selected: Run }) => useConversationSettings({
+      providerId: "codex", ownerKey, runId: selected.id, run: selected, loadingRun: false,
+    }), { wrapper, initialProps: { selected } });
+    expect(result.current.settings.model).toBe("model-a");
+
+    const fromPhone: ConversationSettings = { model: "model-b", config: {
+      modelReasoningEffort: "high", thinkingMode: true, sandboxMode: "read-only",
+      serviceTier: "fast", goalMode: false, planMode: true,
+    } };
+    rerender({ selected: { ...selected, configSnapshot: { conversationSettings: fromPhone } } });
+    expect(result.current.settings).toEqual(fromPhone);
+    expect(store.getState().workspace.conversationSettingsByKey[ownerKey]).toEqual(fromPhone);
+    const togglesChanged = { ...fromPhone, config: { ...fromPhone.config, planMode: false, goalMode: true } };
+    rerender({ selected: { ...selected, configSnapshot: { conversationSettings: togglesChanged } } });
+    expect(result.current.settings).toEqual(togglesChanged);
+    expect(store.getState().workspace.lastRunSettingsByProvider[providerSettingsKey(null, "codex")]).toBe(defaults);
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps an in-flight local choice visible and catches up to a phone edit after saving", async () => {
+    const { wrapper } = setup();
+    const selected = run("pending-phone-edit", "model-a", "workspace-write", "medium");
+    const ownerKey = runOwnerKey(null, selected.id);
+    const { result, rerender } = renderHook(({ selected }: { selected: Run }) => useConversationSettings({
+      providerId: "codex", ownerKey, runId: selected.id, run: selected, loadingRun: false,
+    }), { wrapper, initialProps: { selected } });
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const fromPhone: ConversationSettings = { model: "model-b", config: {
+      modelReasoningEffort: "high", sandboxMode: "read-only", serviceTier: "fast", planMode: true,
+    } };
+    mocks.invoke.mockImplementation(async (channel) => {
+      if (channel === "runs:getById") return { success: true, data: { ...selected, configSnapshot: { conversationSettings: fromPhone } } };
+      await pending;
+      return { success: true };
+    });
+    let saving!: Promise<boolean>;
+    act(() => { saving = result.current.changeModel("model-b"); });
+    rerender({ selected: { ...selected, configSnapshot: { conversationSettings: { model: "model-a", config: { modelReasoningEffort: "low" } } } } });
+    expect(result.current.settings).toMatchObject({ model: "model-b", config: { modelReasoningEffort: "medium" } });
+    await act(async () => { finish(); await saving; });
+    expect(result.current.settings).toEqual(fromPhone);
+  });
+
+  it("loads a phone's newer settings when returning to a previously visited chat", () => {
+    const { wrapper } = setup();
+    const a = run("phone-a", "model-a", "workspace-write", "medium");
+    const b = run("phone-b", "model-b", "read-only", "low");
+    const { result, rerender } = renderHook(({ selected }: { selected: Run }) => useConversationSettings({
+      providerId: "codex", ownerKey: runOwnerKey(null, selected.id), runId: selected.id, run: selected, loadingRun: false,
+    }), { wrapper, initialProps: { selected: a } });
+    rerender({ selected: b });
+    const updated = run(a.id, "model-b", "read-only", "high");
+    rerender({ selected: updated });
+    expect(result.current.settings).toEqual(updated.configSnapshot?.conversationSettings);
+    rerender({ selected: b });
+    expect(result.current.settings).toEqual(b.configSnapshot?.conversationSettings);
+  });
+
   it.each([
     ["retired-model", "high", "model-a", "high"],
     ["model-b", "FutureEffort", "model-b", "high"],
@@ -198,7 +265,9 @@ describe("conversation composer settings", () => {
       runId: draft ? null : selected.id, run: draft ? undefined : selected, loadingRun: false,
     }), { wrapper, initialProps: { draft: false } });
     let finish!: (result: { success: boolean }) => void;
-    mocks.invoke.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    mocks.invoke.mockImplementation((channel) => channel === "runs:getById"
+      ? Promise.resolve({ success: true, data: null })
+      : new Promise((resolve) => { finish = resolve; }));
     let saving!: Promise<boolean>;
     act(() => { saving = result.current.changeModel("model-b"); });
     rerender({ draft: true });
@@ -222,7 +291,7 @@ describe("conversation composer settings", () => {
     await act(async () => { await first.result.current.models.handleEffortLevelChange(effort); });
     const saved = first.result.current.conversation.settings;
     expect(saved.config.modelReasoningEffort).toBe(effort);
-    expect(mocks.invoke).toHaveBeenLastCalledWith("runs:update", [selected.id, { conversationSettings: saved }]);
+    expect(mocks.invoke).toHaveBeenCalledWith("runs:update", [selected.id, { conversationSettings: saved }]);
     first.unmount();
 
     selected.configSnapshot = { conversationSettings: saved };

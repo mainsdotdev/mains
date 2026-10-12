@@ -3,49 +3,40 @@ import { useState } from "react";
 import { ScrollView } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
-import { setModelChoice } from "@/backend/sync";
 import { Card, Row, SheetHeader, SheetHint, ThemedText, sheetContentStyle } from "@/components/ui";
 import {
   effortOffAllowed,
   formatEffortLevel,
   modelPrettyName,
-  parseEffortLevels,
-  pickDefaultEffort,
 } from "@/lib/models";
 import { useModelSelection } from "@/lib/use-model-selection";
-import { useRunSettings } from "@/lib/use-run-settings";
+import { modelSelectionPatch } from "@/lib/conversation-settings";
 import { spacing } from "@/theme";
 
 /**
  * The model sheet, in the shape of the Claude app's: the provider's models
  * with a line each and the one in effect checked, and under them Effort,
- * which unfolds into the levels the chosen model offers. The model is this
- * phone's choice (it rides on the next run); the effort is the Mac's provider
- * setting, shared with the desktop. How the agent may act — permissions and
+ * which unfolds into the levels the chosen model offers. Model and effort
+ * belong to this conversation. How the agent may act — permissions and
  * the fast / goal / plan switches — is the run options sheet's, next door,
  * so that its chip lands on those rows rather than under a list of models.
  */
 export default function ModelSheet() {
-  const { providerId: param } = useLocalSearchParams<{ providerId: string }>();
+  const { providerId: param, runId: runParam } = useLocalSearchParams<{ providerId: string; runId?: string }>();
   const providerId = typeof param === "string" ? param : "";
+  const runId = typeof runParam === "string" ? runParam : null;
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
-  const selection = useModelSelection(backendId, providerId);
-  const { pending, hint, apply } = useRunSettings(providerId);
+  const selection = useModelSelection(backendId, providerId, runId);
+  const { hint, apply } = selection;
   const [effortOpen, setEffortOpen] = useState(false);
 
   const chooseModel = (model: (typeof selection.models)[number]) => {
-    setModelChoice(backendId, providerId, model.id);
-    // Keep the effort within what the new model offers, as the desktop does.
-    const levels = parseEffortLevels(model.effortLevels);
-    const current = selection.effortLevel;
-    if (levels.length > 0 && current && current !== "ultracode" && !levels.includes(current)) {
-      void apply({ effortLevel: pickDefaultEffort(levels, current) });
-    }
+    void apply(modelSelectionPatch(providerId, selection.settings, model));
   };
 
   const effortOptions = [...(effortOffAllowed(providerId) ? [""] : []), ...selection.supportedLevels];
-  const shownEffort = pending.effortLevel ?? selection.effortLevel;
+  const shownEffort = selection.effortLevel;
 
   return (
     <ScrollView contentContainerStyle={sheetContentStyle}>
@@ -66,6 +57,7 @@ export default function ModelSheet() {
               title={modelPrettyName(model, providerId)}
               subtitle={model.description ?? undefined}
               selected={selection.selected?.id === model.id}
+              disabled={!selection.ready}
               onPress={() => chooseModel(model)}
             />
           ))
@@ -78,7 +70,7 @@ export default function ModelSheet() {
           title="Effort"
           value={selection.supportedLevels.length > 0 || shownEffort ? formatEffortLevel(shownEffort) : "—"}
           chevron={effortOpen ? "chevron.down" : "chevron.right"}
-          disabled={effortOptions.length === 0}
+          disabled={!selection.ready || effortOptions.length === 0}
           onPress={() => setEffortOpen((open) => !open)}
         />
         {effortOpen &&

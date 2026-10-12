@@ -4,14 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "../../../test/setup-db";
 import { createRun, createRunArtifact, createRunTurn, createToolCall } from "../../../test/factories";
 import type { DatabaseInstance } from "../../db/types";
-import type { RunHistoryCursor } from "@mains/contracts/runs";
+import type { ReadRunHistoryPayload, RunHistoryContentPage, RunHistoryCursor } from "@mains/contracts/runs";
 
 let db: DatabaseInstance;
 let cleanup: () => void;
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 import { runsRepo } from "./runs.repo";
 import { historyEndAfter } from "@mains/contracts/run-history";
-import { validateHistoryRequest } from "./run-history";
+import { validateHistoryContentRequest, validateHistoryRequest } from "./run-history";
 
 const at = (index: number, offset = 0) => new Date(1700000000000 + index * 10000 + offset);
 function turn(index: number, runId = "r") {
@@ -26,6 +26,71 @@ const prompts = (page: ReturnType<typeof runsRepo.findHistoryPage>) => page.arti
 describe("conversation history pages", () => {
   beforeEach(() => { ({ db, cleanup } = createTestDb()); createRun(db, { id: "r" }); });
   afterEach(() => cleanup());
+
+  it("bounds a phone page even when one prompt produces hundreds of large tool results", () => {
+    createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "one long-running prompt", createdAt: at(0) });
+    const output = JSON.stringify({ stdout: "x".repeat(128 * 1024) });
+    for (let i = 0; i < 300; i++) createToolCall(db, {
+      runId: "r", toolName: "mcp__large_result", status: "done", output,
+      createdAt: at(i, 1000), updatedAt: at(i, 2000),
+    });
+    const request = { runId: "r", profile: "mobile" } as ReadRunHistoryPayload;
+    const page = runsRepo.findHistoryPage(request);
+    const bytes = Buffer.byteLength(JSON.stringify(page));
+    console.info(`Phone history stress: ${page.toolCalls.length} tools, ${bytes} bytes`);
+    expect(page.artifacts.length + page.toolCalls.length).toBeLessThanOrEqual(200);
+    expect(bytes).toBeLessThanOrEqual(1024 * 1024);
+    expect(page.hasOlder).toBe(true);
+    expect(runsRepo.findToolOutput("r", page.toolCalls[0].id)?.output).toEqual(JSON.parse(output));
+  });
+
+  it("lets a phone traverse a tool-heavy prompt in both directions without gaps", () => {
+    const prompt = createRunArtifact(db, { runId: "r", kind: "user-prompt" as "report", content: "prompt", createdAt: at(0) });
+    const ids = new Set<string>([`artifact:${prompt.id}`]);
+    for (let i = 0; i < 425; i++) {
+      const call = createToolCall(db, { runId: "r", createdAt: at(0, 1000) });
+      ids.add(`tool:${call.id}`);
+    }
+    let page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile" });
+    const seen = new Set(page.toolCalls.map((call) => `tool:${call.id}`));
+    for (let i = 0; page.hasOlder && i < 5; i++) {
+      page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", direction: "older", cursor: page.start! });
+      page.artifacts.forEach((row) => seen.add(`artifact:${row.id}`));
+      page.toolCalls.forEach((row) => seen.add(`tool:${row.id}`));
+    }
+    expect(page.hasOlder).toBe(false);
+    expect(seen).toEqual(ids);
+    for (let i = 0; page.hasNewer && i < 5; i++) {
+      page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", direction: "newer", cursor: page.end! });
+    }
+    expect(page.hasNewer).toBe(false);
+    expect(page.toolCalls.at(-1)?.id).toBe(Number([...ids].at(-1)?.split(":")[1]));
+  });
+
+  it("bounds escaped Unicode bytes, excludes blobs and duplicate turn bodies, and leaves full text readable in chunks", () => {
+    const text = "😀\u0001".repeat(30_000);
+    const artifact = createRunArtifact(db, { runId: "r", kind: "report", content: text, blobData: Buffer.alloc(1024 * 1024), createdAt: at(0) });
+    createRunTurn(db, { runId: "r", promptContent: text, responseContent: text, startedAt: at(0), createdAt: at(0) });
+    for (let i = 0; i < 150; i++) createToolCall(db, { runId: "r", createdAt: at(i, 1000), output: JSON.stringify("\u0001".repeat(8000)) });
+    const page = runsRepo.findHistoryPage({ runId: "r", profile: "mobile" });
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(1024 * 1024);
+    expect(page.turns).toHaveLength(1);
+    expect(page.turns[0]).toMatchObject({ promptContent: null, responseContent: null });
+    let oldest = page;
+    while (oldest.hasOlder) oldest = runsRepo.findHistoryPage({ runId: "r", profile: "mobile", direction: "older", cursor: oldest.start! });
+    const preview = oldest.artifacts.find((row) => row.id === artifact.id)!;
+    expect(preview.blobData).toBeNull();
+    expect(preview.metadata?.mobileContentDeferred).toEqual({ chars: 60_000 });
+    let restored = "", offset: number | null = 0;
+    while (offset !== null) {
+      const chunk: RunHistoryContentPage = runsRepo.findHistoryContent({ runId: "r", source: "artifact", id: artifact.id, offset })!;
+      expect(Array.from(chunk.text)).toHaveLength(Math.min(8192, 60_000 - offset));
+      restored += chunk.text;
+      offset = chunk.nextOffset;
+    }
+    expect(restored).toBe(text);
+    expect(runsRepo.findHistoryContent({ runId: "other", source: "artifact", id: artifact.id })).toBeNull();
+  });
 
   it("defers large UI outputs without truncating storage, mobile history or another run's data", () => {
     const output = { stdout: "x".repeat(100_000) };
@@ -134,5 +199,6 @@ describe("conversation history pages", () => {
     const cursor: RunHistoryCursor = { timestamp: 1, source: "tool", id: 1 };
     expect(() => validateHistoryRequest({ runId: "r", cursor: { ...cursor, id: NaN } })).toThrow("Invalid history cursor");
     expect(() => validateHistoryRequest({ runId: "r", cursor, end: { ...cursor, timestamp: 0 } })).toThrow("Invalid history window");
+    expect(() => validateHistoryContentRequest({ runId: "r", source: "artifact", id: 1, offset: -1 })).toThrow("Invalid conversation content");
   });
 });

@@ -1,6 +1,6 @@
 import { MenuView } from "@expo/ui/community/menu";
 import { and, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { useNavigation, useRouter, type Href } from "expo-router";
 import { DrawerActions } from "expo-router/react-navigation";
 import { useState, type ComponentProps } from "react";
@@ -11,6 +11,7 @@ import { useAnimatedKeyboard } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { backendSession, useSession } from "@/backend/backend-session";
+import { beginSettingsIntent, rememberAcceptedSettings } from "@/backend/composer-settings";
 import { DEMO_SUGGESTED_PROMPT } from "@/backend/demo/demo-scenarios";
 import { startDemo } from "@/backend/demo/start";
 import { DEMO_BACKEND_ID } from "@/backend/demo/transport";
@@ -77,33 +78,39 @@ export default function NewRunScreen() {
   const connected = session.connection.kind === "connected";
   const isDemo = backendId === DEMO_BACKEND_ID;
 
-  const spaceQuery = useLiveQuery(
+  const spaceQuery = useCoalescedLiveQuery(
     db.select().from(spaces).where(and(eq(spaces.backendId, backendId), eq(spaces.id, spaceId))).limit(1),
+    spaces,
     [backendId, spaceId],
   );
-  const targetQuery = useLiveQuery(
+  const targetQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(spaceTargets)
       .where(and(eq(spaceTargets.backendId, backendId), eq(spaceTargets.spaceId, spaceId)))
       .limit(1),
+    spaceTargets,
     [backendId, spaceId],
   );
-  const workspaceQuery = useLiveQuery(
+  const workspaceQuery = useCoalescedLiveQuery(
     db.select().from(workspaces).where(eq(workspaces.backendId, backendId)),
+    workspaces,
     [backendId],
   );
-  const collectionQuery = useLiveQuery(
+  const collectionQuery = useCoalescedLiveQuery(
     db.select().from(collections).where(eq(collections.backendId, backendId)),
+    collections,
     [backendId],
   );
   // A workspace wears its project's icon, as it does in the sidebar's rows.
-  const projectQuery = useLiveQuery(
+  const projectQuery = useCoalescedLiveQuery(
     db.select().from(projects).where(eq(projects.backendId, backendId)),
+    projects,
     [backendId],
   );
-  const providerQuery = useLiveQuery(
+  const providerQuery = useCoalescedLiveQuery(
     db.select().from(providers).where(eq(providers.backendId, backendId)),
+    providers,
     [backendId],
   );
 
@@ -189,6 +196,8 @@ export default function NewRunScreen() {
     }
     const skills = attachedSkills(draft, contextSkills);
     const sentAttachments = attachments;
+    const sentSettings = modelSelection.settings;
+    const settingsRevision = beginSettingsIntent(backendId, space.providerId);
     setSending(true);
     setHint(null);
     try {
@@ -213,19 +222,20 @@ export default function NewRunScreen() {
         collectionId: collection?.id ?? null,
         attachments: serializedAttachments,
         contextSkills: skills,
-        model: modelSelection.selected?.id ?? null,
+        conversationSettings: sentSettings,
       });
       if (!result.success) {
-        homeRun.clear();
+        homeRun.clear(false);
         setHint(result.error);
         return;
       }
       setDraft("");
       setContextSkills([]);
       setAttachments([]);
+      rememberAcceptedSettings(backendId, space.providerId, sentSettings, settingsRevision);
       homeRun.started(result.data.runId);
     } catch (caught) {
-      homeRun.clear();
+      homeRun.clear(false);
       setHint(caught instanceof Error ? caught.message : "Could not start the run");
     } finally {
       setSending(false);
