@@ -98,10 +98,11 @@ function PromptImageAttachment({ attachment, runId, onPreview }: {
 interface InfoGroupProps {
   group: EventGroup;
   runId?: string;
+  providerId?: string;
   floatingChat?: boolean;
 }
 
-function InfoGroupImpl({ group, runId, floatingChat = false }: InfoGroupProps) {
+function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoGroupProps) {
   const event = group.events[0];
   const [previewAtt, setPreviewAtt] = useState<PromptPreview | null>(null);
   if (!event) return null;
@@ -222,7 +223,7 @@ function InfoGroupImpl({ group, runId, floatingChat = false }: InfoGroupProps) {
             {message && (
               <div className={`min-w-0 max-w-full px-3.5 py-2 rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}>
                 <div className="prose prose-sm dark:prose-invert max-w-none text-left">
-                  <PromptMarkdown skills={skills} files={files}>
+                  <PromptMarkdown skills={skills} files={files} providerId={providerId}>
                     {message}
                   </PromptMarkdown>
                 </div>

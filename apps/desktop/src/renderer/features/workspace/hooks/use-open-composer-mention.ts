@@ -6,7 +6,7 @@ import { appApi } from "@/lib/transport";
 import type { ContextSkill } from "../lib/composer-context";
 import { composerSkillDestination } from "../lib/composer-mention";
 
-export function useOpenComposerMention(skills: readonly ContextSkill[], providerId: string) {
+export function useOpenComposerMention(skills: readonly ContextSkill[], providerId?: string) {
   const navigate = useNavigate();
   const { open: openDocument } = useDocumentViewer();
 
@@ -15,7 +15,8 @@ export function useOpenComposerMention(skills: readonly ContextSkill[], provider
     const destination = skill && composerSkillDestination(skill);
     if (!destination) return;
     if (destination.kind === "plugin") {
-      const params = new URLSearchParams({ plugin: destination.pluginId, provider: providerId });
+      const params = new URLSearchParams({ plugin: destination.pluginId });
+      if (providerId) params.set("provider", providerId);
       navigate(`/plugins?${params}`);
       return;
     }
