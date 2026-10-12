@@ -291,6 +291,21 @@ describe("RunSession", () => {
     }
   });
 
+  it("opens exactly one boundary for a Claude send consumed after the previous native result", async () => {
+    const session = makeSession({ initialPromptContent: "original" }); await flushBackground();
+    const before = await runsRepo.findTurnsByRun("r1");
+    const input = { type: "artifact" as const, kind: "user-prompt", content: "late guidance",
+      metadata: { delivery: "queue", clientUserMessageId: "late-input", providerTurnId: "next-native-turn" } };
+    await Promise.all([session.project(input), session.project(input)]);
+    const after = await runsRepo.findTurnsByRun("r1");
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.at(-1)).toMatchObject({ promptContent: "late guidance" });
+    const prompts = (await runsRepo.findArtifactsByRun("r1")).filter((artifact) => artifact.metadata?.clientUserMessageId === "late-input");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].metadata).toMatchObject({ delivery: "queue", turnId: after.at(-1)!.id });
+    await session.finalize({ status: "succeeded" });
+  });
+
   it("persists steer input inside the current turn without a new Git boundary", async () => {
     const session = makeSession({ initialPromptContent: "original" });
     await flushBackground();

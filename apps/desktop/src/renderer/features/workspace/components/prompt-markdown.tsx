@@ -7,7 +7,7 @@ import {
   MarkdownLink,
   markdownComponents,
 } from "@/components/markdown-components";
-import { FileIconComponent, Sparkles } from "@/components/ui/icons";
+import { Apps, FileIconComponent } from "@/components/ui/icons";
 import { Button } from "@/components/ui";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
@@ -194,7 +194,7 @@ function PromptSkillChip({ skill, onOpen }: {
             onError={() => setFailed(true)}
           />
         ) : (
-          <Sparkles className="size-3 shrink-0" />
+          <Apps className="size-3 shrink-0" />
         )}
       </span>
       <span className="leading-none">{label}</span>

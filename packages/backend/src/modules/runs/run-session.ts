@@ -824,12 +824,20 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       const report = reportKey === undefined ? undefined : reportStreams.get(reportKey);
       if (report) event = { ...event, metadata: { ...event.metadata, streamId: report.streamId } };
     }
-    if (!await insertRunInputArtifact(runId, event)) return false;
+    // A Claude send that missed the previous native turn can already have
+    // started a new one. Deduplicate it before opening its boundary, and stamp
+    // the accepted prompt with the new turn rather than the one it just closed.
+    const startsQueuedTurn = event.kind === "user-prompt" && event.metadata?.delivery === "queue";
+    if (!await insertRunInputArtifact(runId, event, startsQueuedTurn ? async () => {
+      await startNextTurn(event.content);
+      event = { ...event, metadata: { ...event.metadata, turnId: activeTurnId } };
+      return event;
+    } : undefined)) return false;
     if (reportKey !== undefined) reportStreams.delete(reportKey);
 
     // Turn boundary side-effects
     const artifactKind = (event.metadata as Record<string, unknown> | undefined)?.kind;
-    if (artifactKind === "user-prompt" && event.metadata?.delivery !== "steer") {
+    if (artifactKind === "user-prompt" && event.metadata?.delivery !== "steer" && !startsQueuedTurn) {
       await startNextTurn(event.content);
     }
     if (event.kind === "user-prompt") {

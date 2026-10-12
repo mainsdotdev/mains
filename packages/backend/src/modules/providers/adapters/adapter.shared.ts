@@ -561,7 +561,7 @@ export async function emitUserPromptArtifact(
     clientUserMessageId?: string;
     clientPromptId?: string;
     providerTurnId?: string;
-    delivery?: "steer";
+    delivery?: "queue" | "steer";
     /** Resolved model for the turn this prompt starts. */
     model?: string;
   },

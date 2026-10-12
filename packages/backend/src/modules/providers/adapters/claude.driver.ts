@@ -54,6 +54,7 @@ import type {
   WorkRunEventHandler,
   WorkRunForkRequest,
   WorkRunRequest,
+  WorkRunSteerRequest,
   WorkRunTaskEvent,
   WorkRunToolPolicy,
   WorkRunUsage,
@@ -81,11 +82,13 @@ import {
   couldModifyFiles,
   resolveEffectiveAllowedTools,
   safeJson,
+  emitUserPromptArtifact,
   extractArtifactsFromToolOutput,
   formatContextSection,
   appendPromptSections,
   resolveCatalogDefaultId,
 } from "./adapter.shared";
+import { createClaudeTurnInput, isClaudeUserInput } from "./claude-turn-input";
 import type { MainsToolContext } from "./mains-tools.core";
 import { toClaudeTools } from "./mains-tools.registry";
 import { guardsService } from "../../guards/guards.service";
@@ -190,6 +193,7 @@ interface SDKOptions {
   settings?: string | Record<string, unknown>;
   promptSuggestions?: boolean;
   includePartialMessages?: boolean;
+  extraArgs?: Record<string, string | null>;
   plugins?: Array<{ type: "local"; path: string; skipMcpDiscovery?: boolean }>;
   canUseTool?: SDKCanUseTool;
   onElicitation?: SDKOnElicitation;
@@ -796,6 +800,8 @@ interface SDKSessionInfoLite {
 
 interface SDKQuery extends AsyncGenerator<SDKMessage, void> {
   interrupt(): Promise<void>;
+  /** Runtime control method, not yet exposed in the SDK's public type surface. */
+  cancelAsyncMessage?(uuid: string): Promise<boolean>;
   /** Forcefully ends the query and terminates the CLI subprocess. */
   close(): void;
   rewindFiles(userMessageUuid: string, options?: { dryRun?: boolean }): Promise<unknown>;
@@ -915,6 +921,9 @@ interface ClaudeSession {
   partialThinkingBuffers: Map<string, string>;
   /** SDK query — created lazily in executePrompt because the prompt is supplied there. */
   query?: SDKQuery;
+  input?: ReturnType<typeof createClaudeTurnInput>;
+  onEvent?: WorkRunEventHandler;
+  initialInput?: { uuid: string; onAccepted?: (turnId: string) => Promise<void> };
   /** True for start/fork (a fresh run that owns its title), false for continue. */
   isInitial: boolean;
   /**
@@ -2780,6 +2789,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   let getSessionInfoFn:
     | ((sessionId: string, options?: { dir?: string }) => Promise<SDKSessionInfoLite | undefined>)
     | null = null;
+  let getSessionMessagesFn:
+    | ((sessionId: string, options?: { dir?: string }) => Promise<Array<{
+        type: string; uuid: string; message: unknown; parent_tool_use_id?: string | null;
+        parent_agent_id?: string | null;
+      }>>)
+    | null = null;
   // Standalone SDK fn that removes a persisted session: `{sessionId}.jsonl` plus
   // the `{sessionId}/` subagent-transcript subdirectory. Clearing our own DB
   // column does not touch either, so without this the transcripts accumulate.
@@ -2864,6 +2879,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       createSdkMcpServerFn = (ClaudeSDK as any).createSdkMcpServer ?? null;
       toolFn = (ClaudeSDK as any).tool ?? null;
       getSessionInfoFn = (ClaudeSDK as any).getSessionInfo ?? null;
+      getSessionMessagesFn = (ClaudeSDK as any).getSessionMessages ?? null;
       deleteSdkSessionFn = (ClaudeSDK as any).deleteSession ?? null;
       sdkLoaded = true;
       logInfo("SDK loaded successfully");
@@ -3334,7 +3350,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     return prependPinnedSkillsToPrompt(prompt, request.skills);
   }
 
-  function buildContinuePrompt(request: WorkRunContinueRequest): string {
+  function buildContinuePrompt(request: WorkRunContinueRequest | WorkRunSteerRequest): string {
     let prompt = request.message;
     if (request.context && request.context.length > 0) {
       const contextParts = formatContextSection(request.context);
@@ -3818,7 +3834,50 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       // Prime sessionId so executePrompt's "first session_id" persistence is a no-op for resume;
       // the SDK keeps the same id when resuming.
       session.state.sessionId = sessionId;
+      if (request.clientUserMessageId) {
+        session.initialInput = { uuid: request.clientUserMessageId, onAccepted: request.onInputAccepted };
+      }
       return { session, prompt: buildContinuePrompt(request) };
+    },
+
+    async steerRun(request) {
+      // Capture the parent query before prompt preparation. Never retarget a
+      // late request onto another query acquired for this conversation.
+      const cs = liveSessions.get(request.runId);
+      const input = cs?.input;
+      if (!cs?.query || !input || !cs.onEvent || cs.abortController.signal.aborted) {
+        throw new Error("There is no active Claude turn to steer. The message stays queued.");
+      }
+      const onEvent = cs.onEvent;
+      const receipt = await input.send({
+        type: "user", uuid: request.clientUserMessageId,
+        session_id: cs.state.sessionId!, parent_tool_use_id: null,
+        message: { role: "user", content: buildContinuePrompt(request) }, priority: "now",
+      }, async ({ turnId, delivery }) => {
+        if (delivery === "queue") {
+          cs.state.hasAssistantContent = false;
+          cs.state.lastAssistantMessage = undefined;
+          cs.state.terminalToolNonExecutionKind = undefined;
+        }
+        await emitUserPromptArtifact(onEvent, request.message, {
+          ...request, contextSkills: request.skills, providerTurnId: turnId,
+          delivery,
+        });
+      });
+      return { turnId: receipt.turnId };
+    },
+
+    async getInputStatus(runId, clientUserMessageId, sessionId) {
+      const live = await liveSessions.get(runId)?.input?.getAcceptedStatus(clientUserMessageId);
+      if (live?.accepted) return live;
+      await ensureSDK();
+      const id = sessionId ?? await lookupSessionId(runId);
+      if (!id || !getSessionMessagesFn) return { accepted: false };
+      const cwd = runCwdMemo.get(runId);
+      const messages = await getSessionMessagesFn(id, cwd ? { dir: cwd } : undefined);
+      return { accepted: messages.some((message) => message.type === "user" &&
+        message.uuid === clientUserMessageId && !message.parent_tool_use_id &&
+        !message.parent_agent_id && isClaudeUserInput(message.message)) };
     },
 
     async forkSession(request: WorkRunForkRequest): Promise<AcquiredSession> {
@@ -3881,25 +3940,47 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const timeout = config.timeout ?? 3_600_000;
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
-      // Wire the incoming AbortSignal to fire BOTH the SDK's AbortController and query.interrupt().
+      cs.onEvent = onEvent;
+      cs.input = createClaudeTurnInput({
+        initial: {
+          type: "user", uuid: cs.initialInput?.uuid ?? randomUUID(),
+          session_id: cs.state.sessionId!, parent_tool_use_id: null,
+          message: { role: "user", content: prompt },
+        },
+        onInitialAccepted: cs.initialInput?.onAccepted,
+        cancel: async (uuid) => {
+          if (cs.query?.cancelAsyncMessage) return cs.query.cancelAsyncMessage(uuid);
+          if (!cs.query?.request) throw new Error("Claude input cancellation is unavailable");
+          const response = await cs.query.request({ subtype: "cancel_async_message", message_uuid: uuid });
+          const envelope = response as { response?: { cancelled?: boolean } };
+          return envelope?.response?.cancelled === true;
+        },
+      });
+
+      // Stop closes our input first, recalls queued native commands when the
+      // control channel is available, and aborts the process as a backstop.
       const onAbort = () => {
+        cs.input?.stop();
+        if (cs.query?.request) {
+          void cs.query.request({ subtype: "interrupt", cancel_queued: true }).catch(() => {});
+        } else if (cs.query?.interrupt) {
+          void cs.query.interrupt().catch(() => {});
+        }
         try {
           cs.abortController.abort();
         } catch (err) {
           logError("Error aborting controller:", err);
         }
-        if (cs.query?.interrupt) {
-          cs.query.interrupt().catch(() => {
-            /* shutdown interrupt is best-effort */
-          });
-        }
       };
       signal.addEventListener("abort", onAbort, { once: true });
 
       // Create the SDK query (this is when the prompt is bound to the session).
-      const query = queryFn({ prompt, options: cs.options });
+      const query = queryFn({ prompt: cs.input.stream, options: {
+        ...cs.options, extraArgs: { ...cs.options.extraArgs, "replay-user-messages": null },
+      } });
       cs.query = query;
       liveSessions.set(cs.runId, cs);
+      if (signal.aborted) onAbort();
       if (cs.options.cwd) runCwdMemo.set(cs.runId, cs.options.cwd);
       // A resumed or forked session's results continue from the totals its
       // transcript saved; read them as the query opens, before the first result.
@@ -3912,6 +3993,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const timeoutPromise = new Promise<void>((_, reject) => {
         timeoutId = setTimeout(() => {
           timedOut = true;
+          cs.input?.stop();
           cs.abortController.abort();
           reject(new Error(`Request timed out after ${timeout}ms`));
         }, timeout);
@@ -3966,6 +4048,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         const streamPromise = (async () => {
           for await (const msg of query) {
             if (signal.aborted || timedOut) break;
+            // Persist accepted inputs before projecting the reply they own.
+            // Result receipts close steering immediately, before any awaits.
+            await cs.input!.observe(msg as Parameters<ReturnType<typeof createClaudeTurnInput>["observe"]>[0]);
             primaryModel = resolveClaudeTurnModel(
               primaryModel,
               msg as unknown as ClaudeTurnModelMessage,
@@ -4096,7 +4181,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
               }
             }
 
-            const events = mapSDKMessage(msg, cs);
+            const replayedInput = msg.type === "user" && !msg.parent_tool_use_id && !msg.agent_id &&
+              typeof msg.uuid === "string" && cs.input!.getStatus(msg.uuid).accepted &&
+              isClaudeUserInput(msg.message);
+            const events = replayedInput ? [] : mapSDKMessage(msg, cs);
             for (const event of events) {
               await onEvent(event);
 
@@ -4168,6 +4256,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         });
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
+        cs.input?.finish();
         signal.removeEventListener("abort", onAbort);
         if (liveSessions.get(cs.runId) === cs) liveSessions.delete(cs.runId);
       }
@@ -4176,6 +4265,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     async cleanup(session): Promise<void> {
       // Per-run state lives on the Session object Core is about to drop.
       const cs = session as ClaudeSession;
+      cs.input?.finish();
 
       // The query normally auto-completes when the stream ends, so this is a
       // backstop: on an aborted or errored run the CLI subprocess can outlive
@@ -4279,12 +4369,20 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     async shutdown(): Promise<void> {
       sessionIdMemo.clear();
       for (const cwd of [...mcpHosts.keys()]) closeMcpHost(cwd);
+      for (const cs of liveSessions.values()) {
+        cs.input?.finish();
+        try {
+          cs.abortController.abort();
+          cs.query?.close();
+        } catch (err) { logWarn("Failed to close Claude query:", err instanceof Error ? err.message : String(err)); }
+      }
       liveSessions.clear();
       runCwdMemo.clear();
       sdkLoaded = false;
       loadError = null;
       queryFn = null;
       getSessionInfoFn = null;
+      getSessionMessagesFn = null;
       deleteSdkSessionFn = null;
       cachedModels = null;
       cachedModelsTimestamp = 0;

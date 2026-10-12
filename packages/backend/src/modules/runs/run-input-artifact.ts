@@ -9,6 +9,8 @@ const pendingInputs = new Map<string, Promise<boolean>>();
 export async function insertRunInputArtifact(
   runId: string,
   event: Extract<WorkRunEvent, { type: "artifact" }>,
+  /** Run only for a new input, e.g. to create and stamp its native turn boundary. */
+  prepare?: () => Promise<Extract<WorkRunEvent, { type: "artifact" }>>,
 ): Promise<boolean> {
   const id = event.kind === "user-prompt" && typeof event.metadata?.clientUserMessageId === "string"
     ? event.metadata.clientUserMessageId
@@ -22,6 +24,7 @@ export async function insertRunInputArtifact(
     if (id && (await runsRepo.findArtifactsByRun(runId)).some((artifact) => artifact.metadata?.clientUserMessageId === id)) {
       return false;
     }
+    if (prepare) event = await prepare();
     await runsRepo.insertArtifact({
       runId,
       kind: event.kind as RunArtifactKind,

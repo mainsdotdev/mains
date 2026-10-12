@@ -2377,7 +2377,7 @@ export const runsService = {
         });
         const waitForInput =
           !!payload.clientUserMessageId &&
-          run.providerId === PROVIDER_IDS.codex;
+          (run.providerId === PROVIDER_IDS.codex || run.providerId === PROVIDER_IDS.claude);
         const runPromise = adapter.continueRun(
           {
             runId,
@@ -2433,7 +2433,7 @@ export const runsService = {
             inputAccepted,
             runPromise.then((result) => {
               throw new Error(
-                result.summary || "Codex did not accept the queued message.",
+                result.summary || "The provider did not accept the queued message.",
               );
             }),
           ]);
@@ -2456,11 +2456,12 @@ export const runsService = {
       throw new Error("Run does not belong to this account");
     if (run.isArchived)
       throw new Error("Unarchive this conversation before sending a message.");
-    if (run.providerId !== PROVIDER_IDS.codex)
+    if (run.providerId !== PROVIDER_IDS.codex && run.providerId !== PROVIDER_IDS.claude)
       throw new Error("This provider does not support steering.");
-    if (!runSessionRegistry.get(run.id) || run.status !== "running") {
+    const activeSession = runSessionRegistry.get(run.id);
+    if (!activeSession || run.status !== "running") {
       throw new Error(
-        "There is no active Codex turn to steer. The message stays queued.",
+        "There is no active turn to steer. The message stays queued.",
       );
     }
     if (!payload.clientUserMessageId || typeof payload.message !== "string")
@@ -2470,7 +2471,7 @@ export const runsService = {
       await browserCaptureDir(),
     );
     const provider = await providersService.getById(run.providerId);
-    if (!provider?.isEnabled) throw new Error("Codex is not enabled.");
+    if (!provider?.isEnabled) throw new Error("The provider is not enabled.");
     const adapter = createWorkAdapter(provider);
     if (!adapter.steerRun)
       throw new Error("This provider does not support steering.");
@@ -2479,6 +2480,9 @@ export const runsService = {
       uploads,
       payload.clientUserMessageId,
     );
+    if (runSessionRegistry.get(run.id) !== activeSession) {
+      throw new Error("The active turn changed before sending. The message stays queued.");
+    }
     const { turnId } = await adapter.steerRun({
       runId: run.id,
       message: payload.message,
@@ -2519,6 +2523,7 @@ export const runsService = {
     )) ?? { accepted: false };
     if (result.accepted && payload.input) {
       const input = payload.input;
+      const delivery = result.delivery ?? payload.delivery;
       const uploads = sanitizeRunAttachments(
         input.attachments,
         await browserCaptureDir(),
@@ -2542,7 +2547,7 @@ export const runsService = {
           runId: run.id,
           clientUserMessageId: payload.clientUserMessageId,
           providerTurnId: result.turnId,
-          ...(payload.delivery === "steer" ? { delivery: "steer" } : {}),
+          ...(delivery ? { delivery } : {}),
           attachments,
           context: input.additionalContext,
           contextIssues: input.contextIssues,

@@ -285,11 +285,14 @@ describe("document previews across routes", () => {
 });
 
 describe("messages submitted during a run", () => {
-  it.each(["running", "queued"] as const)("queues a Codex follow-up with its attachments while the run is %s", async (status) => {
-    const active = { ...run, providerId: "codex", spaceId: "codex-space", status };
+  it.each([
+    ["codex", "running"], ["codex", "queued"], ["claude", "running"], ["claude", "queued"],
+  ] as const)("queues a %s follow-up with its attachments while the run is %s", async (variant, status) => {
+    const providerId = variant === "claude" ? "claude_code" : "codex";
+    const active = { ...run, providerId, spaceId: `${variant}-space`, status };
     mocks.getById.mockResolvedValue({ success: true, data: active });
     mocks.checkCanResume.mockResolvedValue(true);
-    const page = workspacePage("codex");
+    const page = workspacePage(providerId);
     act(() => page.store.dispatch(setActiveTab(active.id)));
     await waitFor(() => expect(page.result.current.composerRun?.status).toBe(status));
     await waitFor(() => expect(page.result.current.conversationSettingsReady).toBe(true));

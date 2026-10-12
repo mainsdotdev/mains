@@ -20,6 +20,7 @@ const sdk = vi.hoisted(() => ({
   accountInfo: vi.fn(),
   usage: vi.fn(),
   close: vi.fn(),
+  getSessionMessages: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -28,6 +29,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   tool: undefined,
   getSessionInfo: undefined,
   deleteSession: undefined,
+  getSessionMessages: sdk.getSessionMessages,
 }));
 vi.mock("../../guards/guards.service", () => ({
   guardsService: { buildClaudeGuardHook: vi.fn().mockResolvedValue(null) },
@@ -94,6 +96,7 @@ esac
     });
     sdk.accountInfo.mockResolvedValue({ email: "legacy@example.test", subscriptionType: "Pro" });
     sdk.usage.mockResolvedValue({ rate_limits_available: false, rate_limits: null });
+    sdk.getSessionMessages.mockResolvedValue([]);
     sdk.query.mockImplementation(() => ({
       supportedModels: sdk.supportedModels,
       initializationResult: sdk.initializationResult,
@@ -169,6 +172,115 @@ esac
     expect(await createClaudeDriver({}).getRateLimits!()).toBeNull();
     expect(sdk.usage).not.toHaveBeenCalled();
     expect(sdk.close).toHaveBeenCalledOnce();
+  });
+
+  it("steers the open parent query with native acceptance, preserving context and a single prompt artifact", async () => {
+    const events: WorkRunEvent[] = [];
+    let ready!: () => void; const initialized = new Promise<void>((resolve) => { ready = resolve; });
+    let release!: () => void; const accept = new Promise<void>((resolve) => { release = resolve; });
+    const cancel = vi.fn().mockResolvedValue(true);
+    sdk.query.mockImplementation(({ prompt, options }) => ({ close: sdk.close, cancelAsyncMessage: cancel,
+      async *[Symbol.asyncIterator]() {
+        expect(options.extraArgs).toEqual({ "replay-user-messages": null });
+        const input = prompt[Symbol.asyncIterator]();
+        const first = (await input.next()).value;
+        const base = { session_id: options.sessionId, parent_tool_use_id: null };
+        yield { ...base, type: "command_lifecycle", command_uuid: first.uuid, state: "started" };
+        yield { ...base, type: "system", subtype: "init", model: "sonnet", capabilities: ["msg_lifecycle_v1"] };
+        ready(); await accept;
+        const steer = (await input.next()).value;
+        expect(steer).toMatchObject({ type: "user", uuid: "client-steer", priority: "now", parent_tool_use_id: null });
+        expect(steer.message.content).toContain("Change the approach");
+        expect(steer.message.content).toContain("reference.ts");
+        expect(steer.message.content).toContain("Use the reference");
+        expect(steer.message.content).toContain("selected-skill");
+        expect(steer).not.toHaveProperty("model");
+        yield { ...base, type: "command_lifecycle", command_uuid: steer.uuid, state: "started" };
+        yield { ...steer, ...base }; // A second receipt cannot duplicate the prompt.
+        yield { ...base, type: "assistant", uuid: "answer", message: { role: "assistant", content: [{ type: "text", text: "Adjusted" }] },
+          user_message_uuids: [first.uuid, steer.uuid] };
+        yield { ...base, type: "result", subtype: "success", total_cost_usd: 0, num_turns: 1, duration_ms: 1,
+          stop_reason: "end_turn", user_message_uuids: [first.uuid, steer.uuid], result: "Adjusted", modelUsage: {} };
+        expect(await input.next()).toMatchObject({ done: true });
+      },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "steer", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const execution = driver.executePrompt(acquired.session, acquired.prompt, (event) => { events.push(event); }, new AbortController().signal);
+    await initialized;
+    const sending = driver.steerRun!({ runId: "steer", clientUserMessageId: "client-steer", message: "Change the approach @reference.ts",
+      context: [{ kind: "note", ref: "Use the reference" }],
+      contextFiles: [{ path: "reference.ts" }], skills: [{ name: "selected-skill" }] });
+    expect(events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toEqual([]);
+    release(); await expect(sending).resolves.toEqual({ turnId: expect.any(String) });
+    await expect(execution).resolves.toMatchObject({ status: "succeeded" });
+    const prompts = events.filter((event) => event.type === "artifact" && event.kind === "user-prompt");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatchObject({ content: "Change the approach @reference.ts", metadata: {
+      clientUserMessageId: "client-steer", delivery: "steer", files: [{ path: "reference.ts" }], skills: [{ name: "selected-skill" }],
+    } });
+    expect(events.some((event) => event.type === "log" && event.level === "sdk-user")).toBe(false);
+    expect(cancel).not.toHaveBeenCalled();
+    await expect(driver.steerRun!({ runId: "steer", clientUserMessageId: "late", message: "Late" })).rejects.toThrow("no active");
+    await driver.cleanup?.(acquired.session);
+  });
+
+  it("acknowledges a queued continuation by its client uuid before its assistant reply", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    const request = { runId: "continued", accountId: "account-1", execution: { workspaceId: null, cwd: fixture } };
+    const first = await driver.createSession({ ...request, goal: "Start" });
+    const accepted = vi.fn().mockResolvedValue(undefined);
+    const resumed = await driver.resumeSession!({ ...request, message: "Next", clientUserMessageId: "client-queue", onInputAccepted: accepted });
+    sdk.query.mockImplementation(({ prompt, options }) => ({ close: sdk.close,
+      async *[Symbol.asyncIterator]() {
+        const input = prompt[Symbol.asyncIterator](); const message = (await input.next()).value;
+        expect(message.uuid).toBe("client-queue"); expect(message.message.content).toBe("Next");
+        yield { type: "command_lifecycle", command_uuid: message.uuid, state: "queued", session_id: options.resume };
+        expect(accepted).not.toHaveBeenCalled();
+        yield { type: "command_lifecycle", command_uuid: message.uuid, state: "started", session_id: options.resume };
+        expect(accepted).toHaveBeenCalledExactlyOnceWith("client-queue");
+        yield { type: "assistant", parent_tool_use_id: null, message: { role: "assistant", content: [{ type: "text", text: "ok" }] }, session_id: options.resume };
+      },
+    }));
+    await expect(driver.executePrompt(resumed.session, resumed.prompt, () => {}, new AbortController().signal)).resolves.toMatchObject({ status: "succeeded" });
+    await driver.cleanup?.(first.session); await driver.cleanup?.(resumed.session);
+  });
+
+  it("recovers uncertain input from native history without accepting tool results or child messages", async () => {
+    const driver = createClaudeDriver({ settingSources: [] });
+    sdk.getSessionMessages.mockResolvedValue([
+      { type: "user", uuid: "child", parent_tool_use_id: "spawn", message: { content: "Child" } },
+      { type: "user", uuid: "tool", message: { content: [{ type: "tool_result", content: "Done" }] } },
+      { type: "user", uuid: "accepted", parent_tool_use_id: null, message: { content: "Guidance" } },
+    ]);
+    await expect(driver.getInputStatus!("run", "accepted", "native-session")).resolves.toEqual({ accepted: true });
+    await expect(driver.getInputStatus!("run", "child", "native-session")).resolves.toEqual({ accepted: false });
+    await expect(driver.getInputStatus!("run", "tool", "native-session")).resolves.toEqual({ accepted: false });
+    await expect(driver.getInputStatus!("run", "unknown", "native-session")).resolves.toEqual({ accepted: false });
+  });
+
+  it("stops pending native input along with the active query", async () => {
+    const request = vi.fn().mockResolvedValue({ response: { still_queued: [], cancelled: [] } });
+    let ready!: () => void; const initialized = new Promise<void>((resolve) => { ready = resolve; });
+    const abort = new AbortController();
+    sdk.query.mockImplementation(({ prompt, options }) => ({ close: sdk.close, request,
+      async *[Symbol.asyncIterator]() {
+        const input = prompt[Symbol.asyncIterator](); const first = (await input.next()).value;
+        yield { type: "command_lifecycle", command_uuid: first.uuid, state: "started", session_id: options.sessionId };
+        yield { type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"], session_id: options.sessionId };
+        ready(); await new Promise<void>((resolve) => options.abortController.signal.addEventListener("abort", () => resolve(), { once: true }));
+        expect(await input.next()).toMatchObject({ done: true });
+      },
+    }));
+    const driver = createClaudeDriver({ settingSources: [] });
+    const acquired = await driver.createSession({ runId: "stop", accountId: "account-1", goal: "Start", execution: { workspaceId: null, cwd: fixture } });
+    const execution = driver.executePrompt(acquired.session, acquired.prompt, () => {}, abort.signal);
+    await initialized;
+    const pending = driver.steerRun!({ runId: "stop", clientUserMessageId: "pending", message: "Guidance" });
+    const rejected = expect(pending).rejects.toThrow("connection closed"); abort.abort();
+    await expect(execution).resolves.toMatchObject({ status: "canceled" }); await rejected;
+    expect(request).toHaveBeenCalledWith({ subtype: "interrupt", cancel_queued: true });
+    await driver.cleanup?.(acquired.session);
   });
 
   it("delivers a deferred web result after an intermediate turn without completing the call early", async () => {

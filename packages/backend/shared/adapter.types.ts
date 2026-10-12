@@ -440,7 +440,7 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
 export interface WorkRunContinueRequest {
   providerTurnLineage?: ProviderTurnLineage;
   clientPromptId?: string;
-  /** Correlates a locally queued input with Codex's accepted userMessage. */
+  /** Correlates a locally queued input with the provider's accepted user message. */
   clientUserMessageId?: string;
   /** Backend-only callback; never serialized onto the wire. */
   onInputAccepted?: (turnId: string) => Promise<void>;
@@ -631,7 +631,7 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
    */
   continueRun?(request: WorkRunContinueRequest, onEvent: WorkRunEventHandler): Promise<WorkRunResult>;
   steerRun?(request: WorkRunSteerRequest): Promise<{ turnId: string }>;
-  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string }>;
+  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string; delivery?: "queue" | "steer" }>;
 
   /**
    * Fork an existing run's session into a new run.
@@ -922,7 +922,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   /** Resume an existing session by id and build the follow-up prompt. */
   resumeSession?(request: WorkRunContinueRequest): Promise<AcquiredSession>;
   steerRun?(request: WorkRunSteerRequest): Promise<{ turnId: string }>;
-  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string }>;
+  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string; delivery?: "queue" | "steer" }>;
 
   /** Fork an existing session into a new run and build the prompt. */
   forkSession?(request: WorkRunForkRequest): Promise<AcquiredSession>;

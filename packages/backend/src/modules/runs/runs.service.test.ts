@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { providersService } from "../providers";
 import {
   existsSync,
   lstatSync,
@@ -3377,9 +3378,9 @@ describe("runsService", () => {
   // continueRun
   // ─────────────────────────────────────────────────────────────
   describe("steer input delivery", () => {
-    it("forwards active input without model or directory overrides", async () => {
-      createProvider(db, { id: "codex" });
-      createRun(db, { id: "steer-run", providerId: "codex", accountId: "default", status: "running" });
+    it.each(["codex", "claude_code"])("forwards %s active input without model or directory overrides", async (providerId) => {
+      if (providerId === "codex") createProvider(db, { id: providerId });
+      createRun(db, { id: "steer-run", providerId, accountId: "default", status: "running" });
       runSessionRegistry.register("steer-run", { runId: "steer-run", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() });
       const steerRun = vi.fn().mockResolvedValue({ turnId: "native-turn" });
       vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
@@ -3409,12 +3410,41 @@ describe("runsService", () => {
       expect(getInputStatus).not.toHaveBeenCalled();
     });
 
+    it.each(["codex", "claude_code"])("never retargets %s input onto a replacement session during preflight", async (providerId) => {
+      if (providerId === "codex") createProvider(db, { id: providerId });
+      createRun(db, { id: "replaced-turn", providerId, accountId: "default", status: "running" });
+      const active = { runId: "replaced-turn", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() };
+      runSessionRegistry.register(active.runId, active);
+      const steerRun = vi.fn(); vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
+      const provider = (await providersService.getById(providerId))!;
+      const reading = vi.spyOn(providersService, "getById").mockImplementationOnce(async () => {
+        runSessionRegistry.unregister(active.runId);
+        runSessionRegistry.register(active.runId, { ...active });
+        return provider;
+      });
+      try {
+        await expect(runsService.steerRun({ runId: active.runId, accountId: "default", clientUserMessageId: "late", message: "guidance" })).rejects.toThrow("active turn changed");
+        expect(steerRun).not.toHaveBeenCalled();
+      } finally { reading.mockRestore(); runSessionRegistry.unregister(active.runId); }
+    });
+
     it("retains unconfirmed input without inventing transcript rows", async () => {
       createProvider(db, { id: "codex" });
       createRun(db, { id: "uncertain-run", providerId: "codex", accountId: "default" });
       vi.mocked(createWorkAdapter).mockReturnValue({ getInputStatus: vi.fn().mockResolvedValue({ accepted: false }) } as any);
       await expect(runsService.getInputStatus({ runId: "uncertain-run", accountId: "default", clientUserMessageId: "input", input: { message: "unconfirmed" } })).resolves.toEqual({ accepted: false });
       expect(await runsRepo.findArtifactsByRun("uncertain-run")).toEqual([]);
+    });
+
+    it("recovers a provider-reported continuation without labeling it as a steer", async () => {
+      createRun(db, { id: "late-claude", providerId: "claude_code", accountId: "default", status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ getInputStatus: vi.fn().mockResolvedValue({ accepted: true,
+        turnId: "next-native-turn", delivery: "queue" }) } as any);
+      await expect(runsService.getInputStatus({ runId: "late-claude", accountId: "default", clientUserMessageId: "late-input",
+        delivery: "steer", input: { message: "late guidance" } })).resolves.toEqual({ accepted: true });
+      expect(await runsRepo.findArtifactsByRun("late-claude")).toEqual([
+        expect.objectContaining({ content: "late guidance", metadata: expect.objectContaining({ delivery: "queue", providerTurnId: "next-native-turn" }) }),
+      ]);
     });
   });
 
@@ -3429,8 +3459,8 @@ describe("runsService", () => {
       expect((await runsRepo.findRunById("live-run"))?.status).toBe("running");
     });
 
-    it("returns a queued continuation only after native input acceptance", async () => {
-      createContinuableRun({ id: "queue-run", accountId: "default", providerId: "codex", mode: "work" });
+    it.each(["codex", "claude_code"])("returns a %s queued continuation only after native input acceptance", async (providerId) => {
+      createContinuableRun({ id: "queue-run", accountId: "default", providerId, mode: "work" });
       let accept!: (turnId: string) => Promise<void>;
       let finish!: (result: { status: "succeeded" }) => void;
       const pending = new Promise<{ status: "succeeded" }>((resolve) => { finish = resolve; });
