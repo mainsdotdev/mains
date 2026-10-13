@@ -9,14 +9,12 @@ import {
   type RefObject,
 } from "react";
 import {
-  DropdownMenuItem,
   Muted,
   SendButton,
   Text,
   Textarea,
   toast,
 } from "@/components/ui";
-import { Ellipsis } from "@/components/ui/icons";
 import {
   ActiveSpaceOverrideProvider,
   useActiveSpace,
@@ -57,7 +55,6 @@ import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
 import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import { useAtlasOwnerKey } from "../hooks/use-atlas-tabs";
 import { atlasError } from "../hooks/use-save-to-atlas";
-import { AtlasMenu } from "./atlas-menu";
 
 const EMPTY_CHAT: AtlasPageChatState = {
   runId: null,
@@ -426,25 +423,7 @@ function AtlasWorkingChat({
             sendLabel="Send page instruction"
           />
         }
-        actions={runId ? (
-          <AtlasMenu
-            label="Page chat options"
-            disabled={submitting}
-            className="size-7 rounded-full text-primary-500 hover:bg-primary/5"
-            trigger={<Ellipsis className="size-4" />}
-          >
-            {(close) => (
-              <DropdownMenuItem
-                onClick={() => {
-                  close();
-                  selectChat(null);
-                }}
-              >
-                New page chat
-              </DropdownMenuItem>
-            )}
-          </AtlasMenu>
-        ) : undefined}
+
       >
         {!!pageChats.error && (
           <Text role="alert" size="xs" className="px-4 pt-3">

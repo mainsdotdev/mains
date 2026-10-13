@@ -14,7 +14,7 @@ import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/shadcn";
 import "@blocknote/shadcn/style.css";
 import { PageShell } from "@/components/layout/page-shell";
-import { Button, Input, Modal, Muted, Text, toast } from "@/components/ui";
+import { Button, Input, Modal, Muted, Text, Textarea, toast } from "@/components/ui";
 import { Undo } from "@/components/ui/icons";
 import {
   useAtlasPageQuery,
@@ -496,18 +496,24 @@ function PageEditor({
               </div>
             </div>
           )}
-          <Input
+          <Textarea
             variant="bare"
             aria-label="Page title"
+            rows={1}
             value={name}
             placeholder="Untitled page"
             maxLength={240}
             disabled={trashing || !!page.item.trashedAt}
             onChange={(event) => {
-              setName(event.target.value);
-              schedule(event.target.value);
+              const title = event.target.value.replace(/[\r\n]+/g, " ");
+              setName(title);
+              schedule(title);
             }}
-            className="atlas-title mb-8 w-full bg-transparent px-0 font-semibold"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing)
+                event.preventDefault();
+            }}
+            className="atlas-title mb-8 block w-full resize-none overflow-hidden bg-transparent px-0 font-semibold"
           />
         </AtlasPageHeader>
         <div className="px-8 md:px-16">

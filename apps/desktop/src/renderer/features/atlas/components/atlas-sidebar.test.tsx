@@ -144,15 +144,17 @@ describe("Atlas Trash dropdown", () => {
     addTrash();
     const { store } = setup(undefined, "/atlas/deleted");
     store.dispatch(openAtlasPageTab({ ownerKey: '["backend","account"]', id: "deleted" }));
-    openTrash();
+    const trigger = openTrash();
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete Deleted notes permanently" }));
     expect(mocks.remove).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("alertdialog", { name: "Delete Deleted notes permanently?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Cancel/ }));
     expect(mocks.remove).not.toHaveBeenCalled();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
     openTrash();
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete Deleted notes permanently" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(mocks.remove).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "deleted" });
     expect(store.getState().atlas.byOwner['["backend","account"]'].tabs).toEqual([]);
     // Navigation commits as a transition, after the dialog has closed.
@@ -165,9 +167,9 @@ describe("Atlas Trash dropdown", () => {
     setup();
     openTrash();
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete Deleted notes permanently" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(mocks.error).toHaveBeenCalled());
-    expect(screen.getByRole("dialog", { name: "Delete Atlas item" })).toBeTruthy();
+    expect(screen.getByRole("alertdialog", { name: "Delete Deleted notes permanently?" })).toBeTruthy();
     expect(mocks.items.some((item) => item.id === "deleted")).toBe(true);
     expect(screen.getByTestId("route").textContent).toBe("/atlas/current");
   });

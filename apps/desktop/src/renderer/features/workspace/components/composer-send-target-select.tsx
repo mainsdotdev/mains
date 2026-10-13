@@ -105,7 +105,7 @@ export function ComposerSendTargetSelect({
                   onChange?.(option.runId);
                   trigger.current?.focus();
                 }}
-                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs ${
+                className={`flex w-full items-center gap-2 p-3 text-left text-xs ${
                   selected
                     ? "bg-primary-200/60 text-primary-950 dark:bg-primary-200/10 dark:text-primary"
                     : "text-primary-700 hover:bg-primary-200/30 dark:text-primary-300 dark:hover:bg-primary-800"

@@ -3,6 +3,7 @@ import {
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { Body, Muted } from "./text";
@@ -21,6 +22,7 @@ export interface AlertProps {
   onSecondary: () => void;
   isPrimaryLoading?: boolean;
   primaryButtonVariant?: "primary" | "danger";
+  returnFocusRef?: RefObject<HTMLElement | null>;
   /**
    * Extra content between the description and the buttons — an opt-in the
    * confirmation itself carries, such as "also remove the directory". Enter
@@ -57,6 +59,7 @@ export default function Alert({
   onSecondary,
   isPrimaryLoading = false,
   primaryButtonVariant = "primary",
+  returnFocusRef,
   children,
 }: AlertProps) {
   // Hide the native browser view while open so this alert isn't trapped behind it.
@@ -76,6 +79,7 @@ export default function Alert({
         ? secondaryButtonRef
         : primaryButtonRef,
     closeOnEscape: !isPrimaryLoading,
+    returnFocusRef,
   });
 
   /**

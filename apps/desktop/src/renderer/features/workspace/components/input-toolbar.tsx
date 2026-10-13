@@ -224,8 +224,8 @@ export function InputToolbar({
   );
 
   const speedControl = serviceTiers && serviceTiers.length > 1 && onServiceTierChange
-    ? <ServiceTierSelect value={serviceTier ?? "default"} options={serviceTiers} onChange={onServiceTierChange} />
-    : supportsFastMode ? <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} /> : null;
+    ? <ServiceTierSelect value={serviceTier ?? "default"} options={serviceTiers} onChange={onServiceTierChange} compact={layout === "floating"} />
+    : supportsFastMode ? <FastModeButton fastMode={fastMode} onToggle={onFastModeToggle} compact={layout === "floating"} /> : null;
 
   if (layout === "floating") {
     return (
@@ -234,7 +234,7 @@ export function InputToolbar({
           {uploadButton}
           {uploadInput}
         </div>
-        <div className="pointer-events-auto flex items-center gap-0.75">
+        <div className="pointer-events-auto flex items-center gap-0 *:shrink-0">
           <ModelSelectDropdown
             model={selectedModelDisplayName}
             models={modelDisplayNames}
@@ -266,7 +266,10 @@ export function InputToolbar({
             goalMode={goalMode}
             iconOnly
           />}
-          {actionButtons}
+          {/* Balance the visible gap beside the filled circle with the icon buttons' inset. */}
+          <div className="ml-3 flex items-center gap-1">
+            {actionButtons}
+          </div>
         </div>
       </div>
     );
