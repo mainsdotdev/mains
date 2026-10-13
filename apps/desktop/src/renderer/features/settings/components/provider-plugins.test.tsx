@@ -66,7 +66,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); mocks.listeners.clear(); });
 
 describe("plugin detail navigation", () => {
-  it("refreshes the connection on returning from hosted setup and replaces Set up with Connected", async () => {
+  it("refreshes the connection on returning from hosted setup and replaces Connect with Connected", async () => {
     const detail = {
       summary: plugin, skills: [], mcpServers: [], apps: [{
         id: "app-gmail", name: "Gmail", installed: true, runtimeEnabled: true, callable: false,
@@ -79,7 +79,7 @@ describe("plugin detail navigation", () => {
     try {
       const route = `/plugins?provider=codex&plugin=${encodeURIComponent(plugin.id)}`;
       const view = render(<MemoryRouter initialEntries={[route]}><ProviderPlugins providerId="codex" /></MemoryRouter>);
-      fireEvent.click(screen.getByRole("button", { name: "Set up" }));
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }));
       expect(mocks.open).toHaveBeenCalledWith("https://chatgpt.com/apps/gmail");
       expect(screen.getByText("Needs setup")).toBeTruthy();
       mocks.refetch.mockImplementation(() => {
@@ -91,7 +91,7 @@ describe("plugin detail navigation", () => {
       fireEvent.focus(window);
       expect(mocks.refetch).toHaveBeenCalledTimes(1);
       expect(screen.getByText("Connected")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Set up" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
       view.unmount();
       fireEvent.focus(window);
       expect(mocks.refetch).toHaveBeenCalledTimes(1);
