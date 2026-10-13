@@ -175,6 +175,14 @@ export function AtlasSidebar() {
           Projects
         </Text>
         <nav aria-label="Atlas projects" className="space-y-0.5">
+          <Button
+            className={itemClass(!view.collectionId)}
+            aria-pressed={!view.collectionId}
+            onClick={() => navigate(atlasLibraryHref())}
+          >
+            <Layers className="size-4 shrink-0" />
+            <span className="truncate">All projects</span>
+          </Button>
           {collections.map((collection) => (
             <Button
               key={collection.id}
@@ -185,7 +193,7 @@ export function AtlasSidebar() {
                   atlasLibraryHref(
                     "all",
                     "all",
-                    view.collectionId === collection.id ? "" : collection.id,
+                    collection.id,
                   ),
                 )
               }
