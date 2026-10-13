@@ -15,6 +15,7 @@ import { useCapabilities } from "@/lib/platform";
 import { DOC_VIEWER_LABELS, type DocType } from "@/lib/document-viewer";
 import { DOC_TYPE_ICONS } from "../document-viewer/doc-type-icons";
 import { Globe } from "@/components/ui/icons/space";
+import { documentPreviewLimit } from "@mains/contracts/output-files";
 
 /** Artifact card for a generated Office document. Mirrors `ImageArtifact` but
  * opens in the in-app document viewer panel instead of an image preview modal. */
@@ -23,11 +24,13 @@ export function DocumentArtifact({
   absPath,
   fileName,
   docType,
+  byteSize,
 }: {
   runId?: string;
   absPath: string;
   fileName: string;
   docType: DocType;
+  byteSize?: number;
 }) {
   const { open } = useDocumentViewer();
   const atlas = useSaveToAtlas();
@@ -49,7 +52,7 @@ export function DocumentArtifact({
 
   const openInMains = () => {
     setMenuOpen(false);
-    open({ path: absPath, fileName, docType });
+    open({ path: absPath, fileName, docType, byteSize });
   };
 
   const openMenu = (e: MouseEvent<HTMLButtonElement>) => {
@@ -120,6 +123,7 @@ export function DocumentArtifact({
         <Text as="div" size="xs" tone="subtle" className="mt-0.5">
           {DOC_VIEWER_LABELS[docType]}
           {ext ? ` · ${ext}` : ""}
+          {byteSize !== undefined && byteSize > documentPreviewLimit(docType) ? " · Too large for inline preview" : ""}
         </Text>
       </Button>
       <Button

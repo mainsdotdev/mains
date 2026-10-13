@@ -37,6 +37,7 @@ import {
   matchTurnsToGroups,
   matchModelChangesToPromptGroups,
   isUserPromptGroup,
+  lastPromptSuggestionIndex,
   type SessionInfo,
 } from "../lib/transcript-rows";
 
@@ -585,22 +586,7 @@ export function WorkspaceEvents({
     return last;
   }, [sessionTimes]);
 
-  // Last prompt_suggestion group index — only show if nothing comes after it
-  // (i.e. no user-prompt or other content after the suggestion)
-  const lastSuggestionIndex = useMemo(() => {
-    let last = -1;
-    for (let i = 0; i < eventGroups.length; i++) {
-      if (eventGroups[i].type === "prompt_suggestion") last = i;
-    }
-    // If there's any non-suggestion group after the last suggestion,
-    // it means the user already acted — hide the suggestion
-    if (last !== -1) {
-      for (let i = last + 1; i < eventGroups.length; i++) {
-        if (eventGroups[i].type !== "prompt_suggestion") return -1;
-      }
-    }
-    return last;
-  }, [eventGroups]);
+  const lastSuggestionIndex = useMemo(() => lastPromptSuggestionIndex(eventGroups), [eventGroups]);
 
   const handleFork = useCallback(
     (_responseContent: string) => {
@@ -786,13 +772,13 @@ export function WorkspaceEvents({
   const windowRows = useMemo<TranscriptWindowRow[]>(() => turnRenderRows.map((row, rowIndex) => {
     const first = row.kind === "flat" ? row.indices[0] : row.previousSegments[0]?.[0] ?? row.lastSegment[0];
     const id = `row-${row.kind === "flat" ? "flat" : "acc"}-${eventGroups[first]?.id}`;
-    const indices = row.kind === "flat" ? row.indices : row.lastSegment;
+    const indices = [...(row.kind === "flat" ? row.indices : row.lastSegment), ...(row.suggestionIndices ?? [])];
     const estimate = Math.min(1400, 64 + indices.reduce((total, index) => total + eventGroups[index].events.reduce((sum, event) => sum + Math.min(1000, 32 + Math.ceil(event.content.length / 90) * 20), 0), 0));
     return { id, groupIndex: row.kind === "flat" ? first : undefined, estimate,
       render: () => <TranscriptItemScope id={id}><div className="group/agent-turn space-y-4">{row.kind === "flat"
         ? row.indices.map(renderGroupAt)
         : <AgentTurnMessagesAccordion {...row} renderGroup={renderGroupAt}
-          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}</div></TranscriptItemScope> };
+          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}{row.suggestionIndices?.map(renderGroupAt)}</div></TranscriptItemScope> };
   }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
 
   const activeTool = useMemo(() => selectActiveTool(currentEvents), [currentEvents]);

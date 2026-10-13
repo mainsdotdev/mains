@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { verifySignedPath } from "./imageProxy.signing";
 import { isLocalImagePreviewSize } from "@mains/contracts/image-preview";
+import { DOCUMENT_PREVIEW_MAX_BYTES } from "@mains/contracts/output-files";
 import { MAX_PREVIEW_SOURCE_BYTES, readImagePreview, UnsupportedImagePreviewError } from "./image-previews";
 
 // Serving signed local files (`mains-localimg://` / `mains-localdoc://` in
@@ -12,7 +13,7 @@ import { MAX_PREVIEW_SOURCE_BYTES, readImagePreview, UnsupportedImagePreviewErro
 // allowlist. See imageProxy.signing.ts.
 
 export const MAX_IMAGE_SIZE = 32 * 1024 * 1024; // Codex image generation can return a 32 MB image.
-export const MAX_DOCUMENT_SIZE = 25 * 1024 * 1024; // 25 MB
+export const MAX_DOCUMENT_SIZE = DOCUMENT_PREVIEW_MAX_BYTES;
 
 const LOCALIMG_EXT_MIME: Record<string, string> = {
   ".png": "image/png",

@@ -497,7 +497,7 @@ export const runsRepo = {
       content: sql<string | null>`CASE WHEN ${runArtifacts.kind} = 'user-prompt' THEN ${runArtifacts.content}
         WHEN ${runArtifacts.kind} = 'report' AND length(trim(${runArtifacts.content})) > 0 THEN '[message]' ELSE NULL END` })
       .from(runArtifacts).where(and(eq(runArtifacts.runId, runId),
-        sql`${runArtifacts.kind} IN ('report', 'user-prompt', 'image')`))
+        sql`${runArtifacts.kind} IN ('report', 'user-prompt', 'image', 'document', 'file')`))
       .orderBy(asc(runArtifacts.id)).all().map(mapArtifactRowToResponse);
   },
 

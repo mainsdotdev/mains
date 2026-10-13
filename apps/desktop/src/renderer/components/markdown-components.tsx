@@ -12,18 +12,7 @@ import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { useOpenLink } from "@/hooks/use-open-link";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { atlasPageIdFromHref } from "@/features/atlas/lib/page-link";
-
-/**
- * Split a trailing line locator off a file href: `path.ts:114`,
- * `path.ts:114:7`, or `path.ts#L114-120` all resolve to `path.ts`.
- */
-function splitFileHref(href: string): { path: string; line?: number } {
-  const hash = href.match(/^(.*?)#L(\d+)(?:-\d+)?$/);
-  if (hash) return { path: hash[1], line: Number(hash[2]) };
-  const colon = href.match(/^(.*?):(\d+)(?::\d+)?$/);
-  if (colon) return { path: colon[1], line: Number(colon[2]) };
-  return { path: href };
-}
+import { localFileReference } from "@mains/contracts/local-file-reference";
 
 function decodeFileHrefPath(filePath: string): string {
   try {
@@ -87,7 +76,7 @@ export function MarkdownLink({
     );
   }
 
-  const target = href ? splitFileHref(href) : null;
+  const target = href ? localFileReference(href) : null;
   if (!isPageLink && href && target && isFileHref(target.path)) {
     const basename = target.path.split("/").pop() ?? target.path;
     const dotIdx = basename.lastIndexOf(".");
@@ -99,7 +88,7 @@ export function MarkdownLink({
     return (
       <Button
         onClick={() => {
-          const filePath = decodeFileHrefPath(target.path);
+          const filePath = target.path;
           if (isHtml && filePath.startsWith("/")) {
             void openHtmlFile(filePath).catch((error) => {
               toast.error(error instanceof Error ? error.message : "Failed to open HTML preview");

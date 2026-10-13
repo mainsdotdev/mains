@@ -22,6 +22,7 @@ import type { VoiceTaskTools } from "../../../../shared/voice-task-tools";
 import {
   StartVoiceTaskSchema, ListVoiceTasksSchema, ReadVoiceTaskSchema, WaitVoiceTaskSchema,
   SendVoiceTaskMessageSchema, StopVoiceTaskSchema, EndVoiceChatSchema,
+  RegisterDeliverableSchema,
 } from "./mains-tools.schemas";
 
 /**
@@ -39,6 +40,7 @@ export interface MainsToolContext {
 // ─────────────────────────────────────────────────────────────
 
 export const TOOL_DESCRIPTIONS = {
+  RegisterDeliverable: "Before your final reply, register each completed document, presentation, spreadsheet or image you are delivering to the user. This makes the file visible even without a Markdown link. Register the actual saved path; do not register project source files merely read or edited. Use working or preview for intermediate files. Final reply links take precedence over registered fallback outputs. The conversation and turn are automatically scoped by Mains; never supply another conversation's files.",
   SaveReview:
     "Create a new review record. Returns the generated review ID. Workspace and run are automatically set from the current session.",
   SaveFinding:
@@ -55,6 +57,14 @@ export const TOOL_DESCRIPTIONS = {
   StopVoiceTask: "Stop a linked working chat only when the user explicitly asks to stop that task. Ending the voice conversation does not stop its working chats.",
   EndVoiceChat: "End this voice call only when the user explicitly asks to end or close the voice conversation. Leaves working chats running. Do not end the call just because a task completes.",
 } as const;
+
+export async function handleRegisterDeliverable(input: unknown, ctx: MainsToolContext) {
+  const args = RegisterDeliverableSchema.parse(input);
+  if (!ctx.runId) throw new Error("Deliverables require an active conversation");
+  const { runsService } = await import("../../runs");
+  const output = await runsService.registerDeliverable(ctx.runId, args.path, args.role ?? "deliverable");
+  return { content: [{ type: "text" as const, text: JSON.stringify(output) }] };
+}
 
 async function voiceResult(ctx: MainsToolContext, call: (tools: VoiceTaskTools) => Promise<unknown>) {
   if (!ctx.voiceTools) throw new Error("Voice coordination is unavailable outside the active voice session.");

@@ -30,6 +30,65 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-deliverab
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("per-turn final-answer deliverables", () => {
+  it.each([
+    ["report (v2).pptx", "[Deck](report%20(v2).pptx)"],
+    ["Bob's report.docx", "Created `Bob's report.docx`."],
+    ["summary.md", "[Summary](summary.md#overview)"],
+    ["report.pdf", "[PDF](report.pdf?download=1)"],
+    ["summary#draft.md", "[Summary](summary%23draft.md)"],
+  ])("resolves the complete Markdown reference to %s", async (name, message) => {
+    file(name);
+    expect(outputs(await project([report(1, message)])).map((row) => row.metadata?.fileName)).toEqual([name]);
+  });
+  it("does not discover an unrelated basename inside a linked filename", async () => {
+    file("My report.docx"); file("report.docx");
+    expect(outputs(await project([report(1, "[Word](<My report.docx>)")])).map((row) => row.metadata?.fileName))
+      .toEqual(["My report.docx"]);
+  });
+  it("keeps a quoted prose path intact without discovering its basename", async () => {
+    file("My report.docx"); file("report.docx");
+    expect(outputs(await project([report(1, 'Created "My report.docx".')])).map((row) => row.metadata?.fileName))
+      .toEqual(["My report.docx"]);
+  });
+  it.each(["draft#v1.md", "report%20.docx", "notes?draft.md"])("retains the literal registered filename %s", async (name) => {
+    const target = file(name);
+    const artifact = { ...report(1, ""), kind: "document" as const, path: target,
+      metadata: { turnId: 1, path: target, outputRole: "deliverable" } };
+    expect(outputs(await project([artifact])).map((row) => row.path)).toEqual([fs.realpathSync(target)]);
+    expect(outputs(await project([report(1, `Created \`${name}\`.`)])).map((row) => row.path)).toEqual([fs.realpathSync(target)]);
+  });
+  it("derives an image ID when the original file artifact cannot serve image bytes", async () => {
+    const target = file("result.png");
+    const candidate = { ...report(1, ""), kind: "file" as const, path: target, metadata: { turnId: 1, path: target } };
+    const [output] = outputs(await project([candidate, report(2, "![Result](result.png)")]));
+    expect(output.id).toBeLessThan(0);
+    expect(output.kind).toBe("image");
+  });
+  it.each(["pptx", "docx", "pdf", "md"])("delivers registered %s outputs without a final file link", async (ext) => {
+    const target = file(`report.${ext}`);
+    const candidate = { ...report(1, ""), kind: "document" as const, path: target,
+      metadata: { turnId: 1, path: target, outputRole: "deliverable" } };
+    const selected = outputs(await project([candidate, report(2, "Your file is ready.")]));
+    expect(selected.map((row) => row.path)).toEqual([fs.realpathSync(target)]);
+    expect(outputs(await project([candidate])).map((row) => row.path)).toEqual([fs.realpathSync(target)]);
+    expect(outputs(await project([candidate], [turn(1, "active")], false))).toEqual([]);
+  });
+  it("does not deliver working files or previews and honors reclassification", async () => {
+    const target = file("preview.pdf");
+    const candidate = (id: number, outputRole: string) => ({ ...report(id, ""), kind: "document" as const,
+      path: target, metadata: { turnId: 1, path: target, outputRole } });
+    expect(outputs(await project([candidate(1, "deliverable"), candidate(2, "preview"), report(3, "Ready.")]))).toEqual([]);
+    expect(outputs(await project([candidate(1, "working"), report(2, "Ready.")]))).toEqual([]);
+  });
+  it("resolves a bare filename only from an unambiguous artifact of the same turn", async () => {
+    const target = file("outputs/report.pptx");
+    const candidate = { ...report(1, ""), kind: "document" as const, path: target, metadata: { turnId: 1, path: target } };
+    expect(outputs(await project([candidate, report(2, "[Deck](report.pptx)")])).map((row) => row.path))
+      .toEqual([fs.realpathSync(target)]);
+    const other = file("drafts/report.pptx");
+    expect(outputs(await project([candidate, { ...candidate, id: 2, path: other }, report(3, "[Deck](report.pptx)")]))).toEqual([]);
+    expect(outputs(await project([candidate, report(2, "Ready.", 1), report(3, "[Deck](report.pptx)", 2)], [turn(1), turn(2)]))).toEqual([]);
+  });
   it.each(["agent_message", "assistant", "result.message"])("uses confirmed final evidence despite later commentary (%s)", async (source) => {
     ["progress.md", "final.md", "CONTEXT.md"].forEach(file);
     const artifacts = [report(1, "progress.md"), report(2, "final.md", 1, { source, messagePhase: "final_answer" }),
@@ -73,15 +132,55 @@ describe("per-turn final-answer deliverables", () => {
       report(3, "part-two.md", 1, { providerMessageId: "last" })])).map((row) => row.metadata?.fileName))
       .toEqual(["part-one.md", "part-two.md"]);
   });
-  it("does not deliver registered documents or native generation results without a final reference", async () => {
+  it("does not deliver registered documents or scanned images without a final reference", async () => {
     const context = file("CONTEXT.md");
     const image = file("generated.png");
     const artifacts = [
       { ...report(1, ""), kind: "document" as const, path: context, metadata: { path: context } },
-      { ...report(2, ""), kind: "image" as const, path: image, metadata: { path: image, source: "codex_image_generation" } },
+      { ...report(2, ""), kind: "image" as const, path: image, metadata: { path: image } },
       report(3, "Done", 1, { messagePhase: "final_answer" }),
     ];
     expect(outputs(await project(artifacts))).toEqual([]);
+  });
+  it("delivers a native generated image when the final answer contains no file reference", async () => {
+    const image = file("generated.png");
+    const artifacts = [
+      report(1, "Creating the mosaic", 1, { messagePhase: "commentary" }),
+      { ...report(2, ""), kind: "image" as const, path: image,
+        metadata: { turnId: 1, path: image, source: "codex_image_generation", transparentBackground: false } },
+      report(3, "Created your ceramic mosaic mural in 16:9.", 1, { messagePhase: "final_answer" }),
+    ];
+    const result = outputs(await project(artifacts));
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: 2, kind: "image", path: fs.realpathSync(image),
+      metadata: { outputTurn: "turn:1", outputAnchor: { source: "artifact", id: 3 },
+        source: "codex_image_generation", transparentBackground: false } });
+  });
+  it("keeps native generation scoped to its completed turn during follow-ups", async () => {
+    const image = file("first.png");
+    const pending = file("pending.png");
+    const artifacts = [
+      { ...report(1, ""), kind: "image" as const, path: image,
+        metadata: { turnId: 1, path: image, source: "codex_image_generation" } },
+      report(2, "Created your image", 1),
+      report(3, "Here is some advice", 2),
+      { ...report(4, "", 3), kind: "image" as const, path: pending,
+        metadata: { turnId: 3, path: pending, source: "codex_image_generation" } },
+      report(5, "Working on the next image", 3),
+    ];
+    const result = outputs(await project(artifacts, [turn(1), turn(2), turn(3, "active")], false));
+    expect(result.map((row) => row.path)).toEqual([fs.realpathSync(image)]);
+    expect(result[0].metadata?.outputTurn).toBe("turn:1");
+  });
+  it.each(["report.md", "copy.png"])("prefers explicitly delivered files over native working images (%s)", async (name) => {
+    const image = file("generated.png");
+    const delivered = file(name);
+    const artifacts = [
+      { ...report(1, ""), kind: "image" as const, path: image,
+        metadata: { turnId: 1, path: image, source: "codex_image_generation" } },
+      report(2, `[Result](${name})`, 1, { messagePhase: "final_answer" }),
+    ];
+    expect(outputs(await project(artifacts)).map((row) => row.path)).toEqual([fs.realpathSync(delivered)]);
   });
   it("deduplicates canonical paths and keeps stable IDs when a file is delivered again", async () => {
     const target = file("My report.md");

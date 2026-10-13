@@ -340,7 +340,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       open({
         path: entry.path,
         fileName: entry.saved?.fileName ?? entry.title,
-        docType: classifyDocType(entry.path) ?? "md",
+        docType: classifyDocType(entry.path, true) ?? "md",
+        byteSize: entry.generated?.byteSize ?? entry.saved?.byteSize ?? undefined,
       });
   };
   const source = async (entry: Entry) => {

@@ -346,7 +346,7 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
       "document";
     const docType =
       (event.metadata?.docType as DocType | undefined) ??
-      classifyDocType(fileName);
+      classifyDocType(fileName, true);
     if (!docType) return null;
     return (
       <div className="overflow-hidden">
@@ -355,6 +355,7 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
           absPath={absPath}
           fileName={fileName}
           docType={docType}
+          byteSize={typeof event.metadata?.byteSize === "number" ? event.metadata.byteSize : undefined}
         />
       </div>
     );

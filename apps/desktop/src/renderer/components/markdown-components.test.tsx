@@ -59,6 +59,16 @@ describe("isRemoteImageSrc", () => {
 });
 
 describe("markdownComponents / images", () => {
+  it.each(["summary.md#overview", "summary.md?download=1"])("opens the local file behind %s", (href) => {
+    render(<MarkdownLink href={href}>Summary</MarkdownLink>);
+    fireEvent.click(screen.getByRole("button", { name: /Summary/ }));
+    expect(linkHarness.openFile).toHaveBeenCalledWith("summary.md");
+  });
+  it("preserves an encoded hash in a filename", () => {
+    render(<MarkdownLink href="summary%23draft.md">Summary</MarkdownLink>);
+    fireEvent.click(screen.getByRole("button", { name: /Summary/ }));
+    expect(linkHarness.openFile).toHaveBeenCalledWith("summary#draft.md");
+  });
   it("loads an encoded local image path through the signed image protocol", async () => {
     const signed = "mains-localimg://img/?path=preview&sig=test";
     linkHarness.signImage.mockResolvedValue({ success: true, data: signed });

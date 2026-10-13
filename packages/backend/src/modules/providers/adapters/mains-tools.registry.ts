@@ -23,13 +23,14 @@ import type { Tool as CopilotTool } from "@github/copilot-sdk";
 import { PROVIDER_IDS, type ProviderId } from "@mains/contracts/provider-ids";
 import type { JsonValue } from "./codex-app-server-protocol/generated/serde_json/JsonValue";
 import type { DynamicToolSpec } from "./codex-app-server-protocol/generated/v2/DynamicToolSpec";
-import { DEFAULT_MODE_ID, type ModeId } from "@mains/contracts/modes";
+import { DEFAULT_MODE_ID, providerSupportsMode, type ModeId } from "@mains/contracts/modes";
 import {
   TOOL_DESCRIPTIONS,
   handleSaveReview,
   handleSaveFinding,
   handleSaveFindings,
   handleCheckPackage,
+  handleRegisterDeliverable,
   handleStartVoiceTask, handleListVoiceTasks, handleReadVoiceTask, handleWaitVoiceTask,
   handleSendVoiceTaskMessage, handleStopVoiceTask, handleEndVoiceChat,
   type MainsToolContext,
@@ -40,6 +41,7 @@ import {
   SaveFindingSchema,
   SaveFindingsSchema,
   CheckPackageSchema,
+  RegisterDeliverableSchema,
   StartVoiceTaskSchema, ListVoiceTasksSchema, ReadVoiceTaskSchema, WaitVoiceTaskSchema,
   SendVoiceTaskMessageSchema, StopVoiceTaskSchema, EndVoiceChatSchema,
 } from "./mains-tools.schemas";
@@ -74,13 +76,17 @@ const REVIEW_FLOW: ProviderId[] = [
 // they need no explicit tool; Codex/Cursor cannot hook that path. Deliberate.
 const PACKAGE_GUARD: ProviderId[] = [PROVIDER_IDS.codex, PROVIDER_IDS.cursor];
 
-// Mode group. Ordinary mains tools belong to the developer experience: the
-// review flow needs a workspace, and package installs are a coding concern.
-// Work and chat expose none outside a voice session — the field stays per-tool so a future tool can
-// widen without reopening the drivers.
+// Review and package tools belong to Developer; file delivery also belongs
+// to Work. Availability is declared per tool and checked against provider modes.
 const DEVELOPER_ONLY: ModeId[] = ["developer"];
 
 export const MAINS_TOOLS: MainsToolDef[] = [
+  {
+    name: "RegisterDeliverable", description: TOOL_DESCRIPTIONS.RegisterDeliverable,
+    schema: RegisterDeliverableSchema, handler: handleRegisterDeliverable,
+    providers: [PROVIDER_IDS.codex, PROVIDER_IDS.claude, PROVIDER_IDS.copilot, PROVIDER_IDS.cursor],
+    modes: ["developer", "work"],
+  },
   {
     name: "AtlasReadPage",
     description: "Read an Atlas Page's title, canonical BlockNote blocks, Markdown projection and current version. Page IDs are provided by the user or AtlasCreatePage. Markdown is lossy for some block formats. Link to the Page using the returned pageHref as the Markdown destination; never prepend a localhost or web origin.",
@@ -151,7 +157,7 @@ function forProvider(
   scope?: "voice",
 ): MainsToolDef[] {
   return MAINS_TOOLS.filter(
-    (t) => t.scope === scope && t.providers.includes(provider) && (t.modes?.includes(mode) ?? true),
+    (t) => providerSupportsMode(provider, mode) && t.scope === scope && t.providers.includes(provider) && (t.modes?.includes(mode) ?? true),
   );
 }
 

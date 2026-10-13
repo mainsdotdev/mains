@@ -165,7 +165,7 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     const result = await atlasService.generated({ accountId: "default" });
     expect(result.items.map((item) => item.fileName).sort()).toEqual(["report.pdf", "summary.txt"]);
   });
-  it("projects and saves Codex images from the run's native thread folder", async () => {
+  it("projects and saves Codex images from the native thread folder without final file references", async () => {
     vi.spyOn(os, "homedir").mockReturnValue(directory);
     createRun(db, { id: "codex-run", providerId: "codex", mode: "work", sessionId: "native-thread", status: "succeeded" });
     const images = path.join(directory, ".codex", "generated_images", "native-thread");
@@ -183,8 +183,9 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     const unrelated = path.join(directory, ".codex", "generated_images", "other-thread", "private.png");
     fs.mkdirSync(path.dirname(unrelated));
     fs.writeFileSync(unrelated, "another thread");
-    createRunArtifact(db, { runId: "codex-run", kind: "image", path: unrelated });
-    createRunArtifact(db, { runId: "codex-run", kind: "report", content: `![Generated](<${registered}>)`,
+    createRunArtifact(db, { runId: "codex-run", kind: "image", path: unrelated,
+      metadata: JSON.stringify({ path: unrelated, source: "codex_image_generation" }) });
+    createRunArtifact(db, { runId: "codex-run", kind: "report", content: "Created your image.",
       metadata: JSON.stringify({ messagePhase: "final_answer" }) });
     const result = await atlasService.generated({ accountId: "default" });
     expect(result.items.map((item) => item.path)).toEqual([fs.realpathSync(registered)]);
@@ -193,15 +194,15 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(fs.readFileSync(saved.path!, "utf8")).toBe("generated image");
     await expect(atlasService.saveFile({ accountId: "default", runId: "codex-run", path: unrelated })).rejects.toThrow("outside");
   });
-  it("selects a native generated image only after the final reply references it", async () => {
+  it("selects a native generated image when the completed reply contains no file reference", async () => {
     createRun(db, { id: "inline-image", providerId: "codex", mode: "work", status: "succeeded" });
     const image = path.join(directory, "generated-images", "inline-image", "generated.png");
     fs.mkdirSync(path.dirname(image), { recursive: true });
     fs.writeFileSync(image, "native image output");
     createRunArtifact(db, { runId: "inline-image", kind: "image", path: image,
       metadata: JSON.stringify({ path: image, source: "codex_image_generation" }) });
-    expect((await atlasService.generated({ accountId: "default" })).items).toEqual([]);
-    createRunArtifact(db, { runId: "inline-image", kind: "report", content: `![Generated](<${image}>)`,
+    expect((await atlasService.generated({ accountId: "default" })).items.map((item) => item.path)).toEqual([fs.realpathSync(image)]);
+    createRunArtifact(db, { runId: "inline-image", kind: "report", content: "Created your image.",
       metadata: JSON.stringify({ messagePhase: "final_answer" }) });
     expect((await atlasService.generated({ accountId: "default" })).items.map((item) => item.path)).toEqual([fs.realpathSync(image)]);
   });

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { Text } from "@/components/ui";
-import { useLocalDocumentUrl } from "@/hooks/use-local-document-url";
+import { fetchLocalDocument, localDocumentUrlRevision, subscribeLocalDocumentUrls } from "@/lib/local-document-url";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 import { DocumentFallback } from "./document-fallback";
 
@@ -45,9 +45,16 @@ function loadPdfjs(): Promise<PdfJs> {
  * sized placeholder for the rest.
  */
 export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: number }) {
-  const url = useLocalDocumentUrl(doc.path);
+  const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>("loading");
+  const [failure, setFailure] = useState<string | undefined>();
+  const [loadedRevision, setLoadedRevision] = useState(revision);
+  if (loadedRevision !== revision) {
+    setLoadedRevision(revision);
+    setStatus("loading");
+    setFailure(undefined);
+  }
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [firstPageSize, setFirstPageSize] = useState<PageSize | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -63,17 +70,15 @@ export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: numbe
     return () => observer.disconnect();
   }, []);
 
-  // The panel keys this component by path, so `url` only ever goes from
-  // unsigned to signed — there is no previous document's state to reset.
+  // Reads are scoped to the current document and backend.
   useEffect(() => {
-    if (!url) return;
-
     let cancelled = false;
+    const controller = new AbortController();
     let loadingTask: PDFDocumentLoadingTask | null = null;
 
     void (async () => {
       try {
-        const res = await fetch(url);
+        const res = await fetchLocalDocument(doc.path, { signal: controller.signal });
         if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
         const data = new Uint8Array(await res.arrayBuffer());
         const pdfjs = await loadPdfjs();
@@ -89,15 +94,17 @@ export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: numbe
       } catch (err) {
         if (cancelled) return;
         console.error(`[document-viewer] failed to render pdf ${doc.path}`, err);
+        setFailure(err instanceof Error ? err.message : undefined);
         setStatus("error");
       }
     })();
 
     return () => {
       cancelled = true;
+      controller.abort();
       void loadingTask?.destroy();
     };
-  }, [url, doc.path]);
+  }, [revision, doc.path]);
 
   const scale =
     firstPageSize && containerWidth > 0
@@ -130,7 +137,7 @@ export function PdfDocument({ doc, zoom }: { doc: DocumentViewerDoc; zoom: numbe
         )}
         {status === "error" && (
           <div className="absolute inset-0">
-            <DocumentFallback doc={doc} />
+            <DocumentFallback doc={doc} message={failure} />
           </div>
         )}
       </div>

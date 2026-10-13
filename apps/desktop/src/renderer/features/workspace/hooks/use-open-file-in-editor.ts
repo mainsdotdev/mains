@@ -68,7 +68,7 @@ export function useOpenFileInEditor() {
         // render — markdown and Office documents — and everything else goes to
         // the OS rather than into a surface this mode never renders.
         if (!showTabs) {
-          const docType = classifyDocType(absolutePath);
+          const docType = classifyDocType(absolutePath, true);
           if (docType) {
             openDocument({ path: absolutePath, fileName: name, docType });
           } else {

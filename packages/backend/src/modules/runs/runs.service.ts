@@ -95,6 +95,8 @@ import { emit } from "../../ipc-kit";
 import { runSessionRegistry } from "./run-session-registry";
 import { withImageContentHashes } from "./run-image-content-hashes";
 import { deliverableReplies, projectRunDeliverables } from "./run-deliverables";
+import { resolveOutputFilePath } from "./run-output-references";
+import { OUTPUT_FILE_MAX_BYTES, OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS, TEXT_PREVIEW_MAX_BYTES, type OutputRole } from "@mains/contracts/output-files";
 import type {
   CreateRunPayload,
   UpdateRunPayload,
@@ -133,7 +135,7 @@ const ARTIFACT_IMAGE_MAX_SIDE = 1600;
 /** Node hosts send original bytes; Codex image generation can return up to 32 MiB. */
 const ARTIFACT_IMAGE_RAW_LIMIT = 32 * 1024 * 1024;
 /** Keep one document response comfortably below the WebSocket message ceiling. */
-const RUN_TEXT_FILE_MAX_BYTES = 2 * 1024 * 1024;
+const RUN_TEXT_FILE_MAX_BYTES = TEXT_PREVIEW_MAX_BYTES;
 /** A basename fallback is bounded so one malformed run directory cannot stall the host. */
 const RUN_TEXT_SEARCH_MAX_ENTRIES = 10_000;
 const RUN_TEXT_SEARCH_MAX_DEPTH = 12;
@@ -1658,6 +1660,37 @@ export const runsService = {
   async getOutputArtifacts(runId: string): Promise<RunArtifactResponse[]> {
     const run = await runsRepo.findRunById(runId);
     return run ? selectedOutputArtifacts(run) : [];
+  },
+  async registerDeliverable(runId: string, reference: string, role: OutputRole = "deliverable") {
+    const run = await runsRepo.findRunById(runId);
+    if (!run || run.status !== "running") throw new Error("Deliverables require an active conversation");
+    if (run.mode === "chat") throw new Error("Deliverables can only be registered in Code or Work mode");
+    if (!["deliverable", "working", "preview"].includes(role)) throw new Error("Invalid output role");
+    const turn = await runsRepo.findActiveTurnByRun(runId);
+    if (!turn) throw new Error("No active turn to register this file");
+    const root = await runsService.getRunExecutionRoot(runId);
+    const candidate = resolveOutputFilePath(reference, root);
+    if (!candidate) throw new Error("Supply a local output file path");
+    const extension = path.extname(candidate).slice(1).toLowerCase();
+    const image = OUTPUT_IMAGE_EXTENSIONS.has(extension);
+    if (!image && !Object.prototype.hasOwnProperty.call(OUTPUT_DOCUMENT_TYPES, extension)) throw new Error("Unsupported output file type");
+    const roots = [root, path.join(getBackendRuntime().getPath("userData"), "generated-images", runId)];
+    if (run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId))
+      roots.push(path.join(os.homedir(), ".codex", "generated_images", run.sessionId));
+    const stats = await fs.promises.lstat(candidate);
+    if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("Output must be a regular file");
+    if (stats.size === 0 || stats.size > OUTPUT_FILE_MAX_BYTES) throw new Error("Output must be nonempty and at most 100 MiB");
+    const real = await fs.promises.realpath(candidate);
+    const allowedRoots = await Promise.all(roots.map((value) => value ? fs.promises.realpath(value).catch(() => null) : null));
+    if (!allowedRoots.some((value) => value && real !== value && isWithin(value, real))) throw new Error("Output is outside this conversation's directories");
+    if ((await runsRepo.findActiveTurnByRun(runId))?.id !== turn.id) throw new Error("The conversation turn has changed");
+    const previous = runsRepo.findOutputArtifactKeys(runId).filter((row) => row.path === real && row.metadata?.turnId === turn.id).at(-1);
+    if (previous?.metadata?.outputRole === role) return { artifactId: previous.id, path: real, role };
+    const artifactId = await runsRepo.insertArtifact({ runId, kind: image ? "image" : "document", path: real,
+      metadata: { source: "mains_deliverable", turnId: turn.id, outputRole: role, path: real,
+        fileName: path.basename(real), byteSize: stats.size, docType: OUTPUT_DOCUMENT_TYPES[extension] } });
+    emit(CHANNELS.runs.eventPersisted, { runId, ts: Date.now() });
+    return { artifactId, path: real, role };
   },
   async getHistoryPage(payload: ReadRunHistoryPayload) {
     validateHistoryRequest(payload);
