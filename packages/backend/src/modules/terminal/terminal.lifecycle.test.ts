@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { get } from "node:http";
 import { createServer } from "node:net";
@@ -27,7 +28,11 @@ function availablePort(): Promise<number> {
   });
 }
 
-describe("real PTY server lifecycle", () => {
+// The terminal spawns zsh on macOS and Linux (terminal.service.ts), and these
+// tests drive it with zsh builtins; CI's Ubuntu runner has no zsh installed.
+const hasZsh = spawnSync("zsh", ["-c", "exit 0"]).status === 0;
+
+describe.skipIf(!hasZsh)("real PTY server lifecycle", () => {
   it("closes three idle tabs on hide while a server and another workspace keep running", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "mains-terminal-idle-test-"));
     const serverFile = path.join(directory, "server.cjs");
