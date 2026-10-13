@@ -7,6 +7,8 @@ import {
 } from "@/lib/composer-attachments";
 import { attachedSkills, composeGoal } from "@/lib/context-picker";
 import type { PromptSkill } from "@/lib/prompt-chips";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
+import { beginSettingsIntent, rememberAcceptedSettings, waitForComposerSettings } from "@/backend/composer-settings";
 import { useAiDataConsent } from "@/features/ai-data-consent";
 
 /** The desktop's opening line for a fork, kept word for word. */
@@ -51,11 +53,11 @@ function errorMessage(caught: unknown, fallback: string): string {
 export function useRunOperations({
   run,
   turnIsActive,
-  modelId,
+  conversationSettings,
 }: {
   run: RunOperationTarget | null;
   turnIsActive: boolean;
-  modelId: string | null;
+  conversationSettings: ConversationSettings;
 }) {
   const session = useSession();
   const { requestConsent } = useAiDataConsent();
@@ -84,11 +86,14 @@ export function useRunOperations({
 
       const skills = attachedSkills(input.sourceText, input.contextSkills);
       let optimisticStarted = false;
+      const settingsRevision = beginSettingsIntent(backendId, providerId);
       setSending(true);
       setError(null);
       try {
         const allowed = await requestConsent(backendId, providerId);
         if (!allowed) return;
+
+        await waitForComposerSettings(backendId, providerId, runId);
 
         const attachments = await serializeComposerAttachments(input.attachments);
         lifecycle.onOptimisticStart({ message, skills });
@@ -98,10 +103,13 @@ export function useRunOperations({
           runId,
           message,
           skills,
-          modelId,
+          conversationSettings,
           attachments,
         );
-        if (result.success) return;
+        if (result.success) {
+          rememberAcceptedSettings(backendId, providerId, conversationSettings, settingsRevision);
+          return;
+        }
 
         optimisticStarted = false;
         lifecycle.onOptimisticRollback();
@@ -116,7 +124,7 @@ export function useRunOperations({
         setSending(false);
       }
     },
-    [backendId, connected, modelId, providerId, requestConsent, run, runId, runIsLive, sending],
+    [backendId, connected, conversationSettings, providerId, requestConsent, run, runId, runIsLive, sending],
   );
 
   const forkRun = useCallback(async (): Promise<string | null> => {

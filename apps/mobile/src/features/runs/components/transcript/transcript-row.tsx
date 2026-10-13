@@ -34,6 +34,7 @@ import { MessageActions } from "./message-actions";
 import { PromptSegmentView } from "./prompt-chips";
 import { SubagentSummaryRow } from "../subagents/subagent-summary-row";
 import { ToolBlock } from "./tools/tool-block";
+import { HistoryContentLink } from "../history-content-link";
 
 /**
  * What the action row under an agent message may do. Threaded down from the
@@ -99,13 +100,13 @@ export function TranscriptRow({
   switch (item.kind) {
     case "prompt":
       return (
-        <PromptBubble
+        <View><PromptBubble
           item={item}
           providerId={providerId}
           animateEntry={animatePromptEntry}
           hidden={promptHidden}
           onMeasure={onPromptMeasure}
-        />
+        />{item.fullContent ? <HistoryContentLink {...item.fullContent} label="Read full message" /> : null}</View>
       );
     case "tools":
       return <ToolBlock calls={item.calls} onOpenFile={actions?.onOpenFile} />;
@@ -115,9 +116,9 @@ export function TranscriptRow({
       return <ImageGallery images={item.images} />;
     case "note":
       return (
-        <ThemedText variant="monoCaption" selectable>
+        <View><ThemedText variant="monoCaption" selectable>
           {item.text}
-        </ThemedText>
+        </ThemedText>{item.fullContent ? <HistoryContentLink {...item.fullContent} /> : null}</View>
       );
     case "response":
       // "Still working" is the transcript's footer loader, not a badge on the
@@ -150,6 +151,7 @@ function AgentMessage({
       ) : (
         <Markdown source={item.text} onOpenFile={actions?.onOpenFile} />
       )}
+      {item.fullContent ? <HistoryContentLink {...item.fullContent} label="Read full message" /> : null}
       {showActions ? (
         <MessageActions
           text={turn?.text ?? item.text}

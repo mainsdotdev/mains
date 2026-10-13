@@ -27,6 +27,7 @@ vi.mock("@/lib/transport", () => ({
     runUpdates.add(listener); return () => { runUpdates.delete(listener); };
   } } },
   appApi: {
+    account: { get: async () => ({ success: true, data: { id: "default" } }) },
     runs: {
       getByWorkspace: mocks.getByWorkspace,
       getById: mocks.getById,
@@ -114,6 +115,21 @@ beforeEach(() => {
 });
 
 describe("working chats created from voice", () => {
+  it("refreshes a directly opened chat when a phone changes its conversation settings", async () => {
+    const selected = { ...runA, accountId: "default", workspaceId: undefined, mode: "work" as const,
+      configSnapshot: { conversationSettings: { model: "model-a", config: { modelReasoningEffort: "medium" } } } };
+    mocks.getById.mockResolvedValue({ success: true, data: selected });
+    const view = renderHook(() => useWorkspaceRuns(undefined, "codex", "work", selected.id));
+    await waitFor(() => expect(view.result.current.runsLoaded).toBe(true));
+    expect(view.result.current.runs).toEqual([selected]);
+    const updated = { ...selected, configSnapshot: { conversationSettings: { model: "model-b", config: { modelReasoningEffort: "high" } } } };
+    mocks.getById.mockResolvedValue({ success: true, data: updated });
+    await act(async () => { for (const listener of runUpdates) listener({ runId: selected.id }); });
+    await waitFor(() => expect(view.result.current.runs[0].configSnapshot).toEqual(updated.configSnapshot));
+    expect(view.result.current.activeRunId).toBe(selected.id);
+    view.unmount(); expect(runUpdates.size).toBe(0);
+  });
+
   it("adds the new worker tab without a refresh or stealing the voice chat selection", async () => {
     mocks.getByWorkspace.mockResolvedValue({ success: true, data: [runA] });
     const worker = { ...runA, id: "voice-worker", status: "running", title: "Use case refactor" };

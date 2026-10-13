@@ -153,6 +153,36 @@ describe("listPendingApprovals", () => {
   });
 });
 
+describe("permission prompt restrictions", () => {
+  it("retains provider restrictions in both the push event and reconnect snapshot", async () => {
+    const send = vi.fn();
+    registerEventSink({ kind: "test", send });
+    const request = {
+      requestId: "restricted-1", runId: "run-1", kind: "tool_approval" as const,
+      toolName: "mcp__calendar__create_event", timestamp: Date.now(),
+      defaultToNo: true, suppressAlwaysAllowRule: true,
+    };
+    const response = requestToolApproval(request);
+    expect(send).toHaveBeenCalledWith(CHANNELS.runs.toolApprovalRequest, request, { runId: "run-1" });
+    expect(listPendingApprovals()[0]).toMatchObject(request);
+    handleToolApprovalResponse({ requestId: request.requestId, approved: true });
+    await expect(response).resolves.toMatchObject({ approved: true });
+  });
+
+  it.each([true, false])("keeps a run grant compatible with suppressAlwaysAllowRule=%s", async (suppressed) => {
+    const response = requestToolApproval({
+      requestId: "restricted-1", runId: "run-1", kind: "tool_approval",
+      toolName: "mcp__calendar__create_event", timestamp: Date.now(),
+      suppressAlwaysAllowRule: suppressed,
+    });
+    handleToolApprovalResponse({ requestId: "restricted-1", approved: true, answer: "acceptForSession" });
+    await expect(response).resolves.toEqual({
+      requestId: "restricted-1", approved: true,
+      ...(suppressed ? {} : { answer: "acceptForSession" }),
+    });
+  });
+});
+
 describe("user-input-broker", () => {
   it.each(["request", "run", "timeout", "shutdown"])("settles elicitation %s cancellation without treating it as a decline", async (reason) => {
     vi.useFakeTimers();

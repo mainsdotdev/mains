@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { createElement } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -29,12 +30,16 @@ describe("PromptMarkdown", () => {
 
     const { container } = render(
       createElement(
-        PromptMarkdown,
-        {
-          skills: [{ name: "research", displayName: "Research" }],
-          files: [{ fullPath: filePath, basename: "blog-page-client.tsx" }],
-        },
-        source,
+        MemoryRouter,
+        null,
+        createElement(
+          PromptMarkdown,
+          {
+            skills: [{ name: "research", displayName: "Research" }],
+            files: [{ fullPath: filePath, basename: "blog-page-client.tsx" }],
+          },
+          source,
+        ),
       ),
     );
 
@@ -49,9 +54,13 @@ describe("PromptMarkdown", () => {
     const tick = String.fromCharCode(96);
     const { container } = render(
       createElement(
-        PromptMarkdown,
-        { skills: [{ name: "research", displayName: "Research" }] },
-        tick + "$research" + tick,
+        MemoryRouter,
+        null,
+        createElement(
+          PromptMarkdown,
+          { skills: [{ name: "research", displayName: "Research" }] },
+          tick + "$research" + tick,
+        ),
       ),
     );
 

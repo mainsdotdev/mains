@@ -68,9 +68,9 @@ export function SheetHint({ text }: { text: string | null }) {
   );
 }
 
-export function Toggle({ value, onChange }: { value: boolean; onChange: (value: boolean) => void }) {
+export function Toggle({ value, onChange, label }: { value: boolean; onChange: (value: boolean) => void; label?: string }) {
   const brand = useBrandColors();
-  return <Switch value={value} onValueChange={onChange} trackColor={{ true: brand.accent }} />;
+  return <Switch accessibilityLabel={label} value={value} onValueChange={onChange} trackColor={{ true: brand.accent }} />;
 }
 
 export function Card({ children }: { children: React.ReactNode }) {
@@ -123,6 +123,7 @@ export function Row({
     <View>
       {!first && <View style={{ height: 1, marginLeft: spacing.md, backgroundColor: colors.separator }} />}
       <Pressable
+        accessible={Boolean(onPress)}
         accessibilityRole={onPress ? "button" : undefined}
         accessibilityState={{ selected, disabled }}
         disabled={disabled || !onPress}

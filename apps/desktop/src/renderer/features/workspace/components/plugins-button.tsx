@@ -1,6 +1,6 @@
 import { forwardRef, useState } from "react";
 import { Button } from "@/components/ui";
-import { Sparkles } from "@/components/ui/icons";
+import { Apps } from "@/components/ui/icons";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import type { SkillInfo } from "@/lib/redux/api/providersApi";
 
@@ -29,7 +29,7 @@ function StackedPluginIcon({ skill }: { skill: SkillInfo }) {
       className={`${frame} flex items-center justify-center bg-primary-200/60 dark:bg-primary/5 text-primary-600 dark:text-primary-400`}
       style={skill.brandColor ? { backgroundColor: skill.brandColor, color: "#fff" } : undefined}
     >
-      <Sparkles className="size-2.5" />
+      <Apps className="size-2.5" />
     </div>
   );
 }

@@ -257,6 +257,7 @@ export function groupEvents(events: RunEvent[]): EventGroup[] {
         });
       }
     } else if (event.type === "log") {
+      if (event.metadata?.isFromSubagent) continue;
       if (event.metadata?.source === "context_compaction") {
         flushToolGroup();
         const itemId = typeof event.metadata.itemId === "string" ? event.metadata.itemId : event.id;

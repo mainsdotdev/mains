@@ -34,7 +34,7 @@ export function SendButton({
   const submitting = loading && !stopping;
   const isDisabled = stopping ? stopDisabled : loading || disabled;
   const actionLabel = stopping ? stopLabel : label;
-  const sizing = compact ? "size-6.5 p-1" : "size-7.5 p-1";
+  const sizing = compact ? "size-7 p-1" : "size-7.5 p-1";
   const activeIcon = submitting ? "loading" : stopping ? "stop" : showCustomIcon && icon ? "custom" : "send";
   const iconLayer = "absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] data-[active=true]:opacity-100 motion-reduce:duration-75 [&>svg]:size-full [&>svg]:shrink-0 [&>svg]:text-inherit";
 

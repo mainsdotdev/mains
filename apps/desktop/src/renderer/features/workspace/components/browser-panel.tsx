@@ -36,7 +36,7 @@ import {
 } from "@/components/ui/icons";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { useMainHeader } from "@/hooks/use-main-header";
-import { usePreviewPanelTransition } from "@/hooks/use-preview-panel-transition";
+import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { isElectron } from "@/lib/platform";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setBrowserPanelWidth } from "@/lib/redux/slices/appSettingsSlice";
@@ -238,7 +238,7 @@ export function BrowserPanel({
     "browser.previousTab",
   );
 
-  const { isVisible, isAnimatedIn } = usePreviewPanelTransition(isOpen);
+  const { isVisible, isAnimatedIn } = usePanelAnimation(isOpen);
 
   const api = getBrowserApi();
   const browserPanelWidth = useAppSelector(
@@ -1441,7 +1441,7 @@ export function BrowserPanel({
   return (
     <div
       data-browser-panel=""
-      className="fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden transition-[width,transform,opacity] duration-300 ease-out"
+      className="fixed inset-y-0 right-0 z-(--z-overlay) overflow-hidden transition-[width,transform,opacity] duration-150 ease-out"
       style={{
         width: panelWidth,
         top: tabsInMainHeader ? "var(--shell-header-height)" : undefined,
@@ -1476,8 +1476,8 @@ export function BrowserPanel({
       )}
 
       {/* The tab strip shares the shell header surface. Browser content starts
-          below it, inside the inset rounded panel. */}
-      <div className="absolute inset-1.25 flex min-h-0 flex-col">
+          below it. Clip both at the inset content edge, keeping the outer gap clear. */}
+      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden">
       {tabsInMainHeader && browserTabsHost ? createPortal(tabStrip, browserTabsHost) : tabStrip}
 
       <div data-browser-content="" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">

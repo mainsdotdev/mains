@@ -15,13 +15,13 @@ import {
  * Singleton broker that manages pending tool-approval requests.
  *
  * Flow:
- *  1. The Claude adapter's PreToolUse hook calls `requestToolApproval(req)`.
+ *  1. A provider's permission callback calls `requestToolApproval(req)`.
  *  2. The broker creates a Promise, stores its resolve fn, and broadcasts
  *     the request to every open BrowserWindow via IPC push.
  *  3. The renderer displays a dialog; the user clicks Allow/Deny (or answers).
  *  4. The renderer calls `window.api.runs.respondToolApproval(response)`.
  *  5. The main-process IPC handler calls `handleToolApprovalResponse(resp)`.
- *  6. The stored resolve fn fires → the awaiting hook gets the result.
+ *  6. The stored resolve fn fires → the awaiting provider gets the result.
  *
  * The OS notification is a second place to answer from (see
  * `run-notifications.ts`): its buttons call `handleToolApprovalResponse` like
@@ -157,7 +157,13 @@ export function listPendingApprovals(runId?: string): PendingApproval[] {
 export function handleToolApprovalResponse(resp: ToolApprovalResponse): void {
   // The client that answered already dismissed its dialog; every other client
   // (a phone showing the same request) learns here that it is settled.
-  settle(resp.requestId, resp);
+  const req = pending.get(resp.requestId)?.request;
+  // Older or paired clients may still send the run-wide choice. The provider
+  // restriction also applies at the broker, regardless of the answering UI.
+  const response = req?.kind === "tool_approval" && req.suppressAlwaysAllowRule && resp.answer === "acceptForSession"
+    ? { requestId: resp.requestId, approved: resp.approved }
+    : resp;
+  settle(resp.requestId, response);
 }
 
 /** Resolve one provider-owned request as denied when the provider closes it. */

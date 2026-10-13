@@ -300,7 +300,7 @@ export function PrSection({
             value={prTitle}
             disabled={busy || generatingPr}
             onChange={(e) => setPrTitle(e.target.value)}
-            placeholder={generatingPr ? "" : "PR title (leave blank to generate)…"}
+            placeholder={generatingPr ? "" : "PR title (leave blank to auto generate)…"}
             className={expanded ? "w-full text-sm" : "w-full text-xs"}
           />
           {generatingPr && !prTitle && (

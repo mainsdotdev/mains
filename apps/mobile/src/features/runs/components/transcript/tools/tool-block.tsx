@@ -45,12 +45,7 @@ function Block({
   const [override, setOverride] = useState<boolean | null>(null);
   const expanded = override ?? summary.running;
 
-  const failed = calls.some((c) => c.status === "error" || c.status === "failed");
-  const tint = failed
-    ? statusColors.error
-    : summary.running
-      ? statusColors.running
-      : colors.secondaryLabel;
+  const tint = summary.running ? statusColors.running : colors.secondaryLabel;
 
   return (
     <View style={{ gap: spacing.sm }}>

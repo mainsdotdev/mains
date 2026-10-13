@@ -20,3 +20,7 @@ export function persistConversationSettings(transport: Transport, runId: string,
 export async function waitForConversationSettings(transport: Transport, runId: string): Promise<void> {
   await pending.get(transport)?.get(runId);
 }
+
+export function hasPendingConversationSettings(transport: Transport, runId: string): boolean {
+  return pending.get(transport)?.has(runId) ?? false;
+}

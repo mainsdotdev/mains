@@ -13,6 +13,11 @@ export function workspaceBrowserExpansionKey(backendId: string | null, workspace
   return JSON.stringify([backendId ?? "local", "browser-workspace", workspaceId]);
 }
 
+/** Reviewed patches are shared by conversations and spaces in one workspace. */
+export function workspaceReviewKey(backendId: string | null, workspaceId: string): string {
+  return JSON.stringify([backendId ?? "local", "review-workspace", workspaceId]);
+}
+
 function keyParts(key: string): unknown[] | null {
   try {
     const parts: unknown = JSON.parse(key);

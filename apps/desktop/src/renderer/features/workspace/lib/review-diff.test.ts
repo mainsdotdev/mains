@@ -67,6 +67,38 @@ describe("review diffs and comments", () => {
     expect(files.slice(1).every((file) => file.diff?.cacheKey && !file.error)).toBe(true);
   });
 
+  it("keeps binary patch identities independent of other files and changes them with the blob", () => {
+    const binary = `diff --git a/logo.png b/logo.png\nindex 1234567..7654321 100644\nBinary files a/logo.png and b/logo.png differ\n`;
+    const first = reviewFiles(patch + binary, ["src/a.ts", "logo.png"])[0];
+    const unrelated = reviewFiles(patch.replace("newValue", "changed") + binary, ["src/a.ts", "logo.png"])[0];
+    const changed = reviewFiles(patch + binary.replace("7654321", "abcdef0"), ["src/a.ts", "logo.png"])[0];
+    expect(first.path).toBe("logo.png");
+    expect(first.reviewUnavailable).not.toBe(true);
+    expect(unrelated.patchId).toBe(first.patchId);
+    expect(changed.patchId).not.toBe(first.patchId);
+  });
+
+  it("uses the malformed file's patch for fallback identity without invalidating it for unrelated edits", () => {
+    const broken = `diff --git a/broken.ts b/broken.ts\n--- a/broken.ts\n+++ b/broken.ts\n@@ -1 +1 @@\n?invalid hunk\n`;
+    const first = reviewFiles(patch + broken, ["src/a.ts", "broken.ts"])[0];
+    const unrelated = reviewFiles(patch.replace("newValue", "changed") + broken, ["src/a.ts", "broken.ts"])[0];
+    const changed = reviewFiles(patch + broken.replace("invalid hunk", "different hunk"), ["src/a.ts", "broken.ts"])[0];
+    expect(first.path).toBe("broken.ts");
+    expect(first.error).toBeTruthy();
+    expect(first.reviewUnavailable).not.toBe(true);
+    expect(unrelated.patchId).toBe(first.patchId);
+    expect(changed.patchId).not.toBe(first.patchId);
+  });
+
+  it("does not offer reviewed marks for absent patches or size-only binary stubs", () => {
+    const stub = "diff --git a/blob.bin b/blob.bin\nnew file\nBinary or large file (900000 bytes)\n";
+    const files = reviewFiles(patch + stub, ["src/a.ts", "blob.bin", "missing.png"]);
+    expect(files.find((file) => file.path === "blob.bin")?.reviewUnavailable).toBe(true);
+    expect(files.find((file) => file.path === "missing.png")?.reviewUnavailable).toBe(true);
+    const missing = files.find((file) => file.path === "missing.png")!;
+    expect(reviewFiles(patch.replace("newValue", "changed"), ["missing.png"]).find((file) => file.path === "missing.png")?.patchId).toBe(missing.patchId);
+  });
+
   it("retains both ends of a 10,000-row diff for virtual rendering and comment anchors", () => {
     const lines = 5000;
     const text = `diff --git a/large.ts b/large.ts\n--- a/large.ts\n+++ b/large.ts\n@@ -1,${lines} +1,${lines} @@\n` +

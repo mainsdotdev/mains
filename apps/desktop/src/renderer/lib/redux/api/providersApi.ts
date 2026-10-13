@@ -1,7 +1,10 @@
 import { baseApi } from "./baseApi";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
+import type { ModelServiceTier } from "@mains/contracts/run-settings";
 import type { DetectedClis, ProviderCliInfo } from "@mains/contracts/provider-cli";
 import type { RealtimeVoiceCatalog } from "@mains/contracts/realtime";
+import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
+export type { GoalSetParams } from "@mains/contracts/provider-goals";
 export type { DetectedClis } from "@mains/contracts/provider-cli";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type {
@@ -41,12 +44,6 @@ export interface GoalInfo {
   timeUsedSeconds?: number;
   createdAt?: number;
   updatedAt?: number;
-}
-
-export interface GoalSetParams {
-  objective?: string;
-  status?: string;
-  tokenBudget?: number;
 }
 
 export type ProviderKind = "llm_runtime" | "agent_runtime";
@@ -113,11 +110,9 @@ export interface ModelInfo {
   supportsEffort?: boolean;
   supportedEffortLevels?: EffortLevel[];
   /**
-   * Provider-specific service tiers (e.g. Codex: priority/flex/default).
-   * Mirrors the field on the main-process `ModelInfo`; populated from
-   * `model/list` responses so the settings UI can offer a tier picker.
+   * Speed options advertised by `model/list`, shared with the backend.
    */
-  serviceTiers?: Array<{ id: string; name: string; description?: string }>;
+  serviceTiers?: ModelServiceTier[];
   description?: string;
   metadata?: Record<string, unknown>;
 }
@@ -592,10 +587,10 @@ export const providersApi = baseApi.injectEndpoints({
       }),
     }),
 
-    clearProviderGoal: builder.mutation<boolean, { providerId: string; runId: string }>({
-      query: ({ providerId, runId }) => ({
+    clearProviderGoal: builder.mutation<boolean, { providerId: string; runId: string; origin?: GoalMutationOrigin }>({
+      query: ({ providerId, runId, origin = "user" }) => ({
         handler: CHANNELS.providers.clearGoal,
-        args: [providerId, runId],
+        args: [providerId, runId, origin],
       }),
     }),
 

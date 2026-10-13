@@ -1,5 +1,11 @@
 import type { ProviderVariant } from "./provider-variants";
 
+const CLAUDE_MODEL_FAMILIES = ["fable", "sonnet", "opus", "haiku"] as const;
+const USAGE_MODEL_LABELS = new Map([
+  ["codex-auto-review", "Codex Auto Review"],
+  ["<synthetic>", "Synthetic"],
+]);
+
 function formatCursorModelName(model: string): string {
   if (model === "default") return "Default";
   if (model === "composer-2" ) return "Composer 2 (Fast)";
@@ -43,10 +49,22 @@ function formatCursorModelName(model: string): string {
 
 function removeGptNameSeparators(model: string): string {
   if (!/^gpt-/i.test(model)) return model;
-  return model.replace(/^gpt-/i, "GPT ").replace(/-/g, " ");
+  return model.replace(/^gpt-/i, "GPT ").replace(/-/g, " ")
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
 }
 
 export function formatModelDisplayName(model: string, variant?: ProviderVariant): string {
+  const usageLabel = USAGE_MODEL_LABELS.get(model.toLowerCase());
+  if (usageLabel) return usageLabel;
+  if (variant === "claude") {
+    // Historical usage ids keep their recorded version; a rolling catalogue
+    // alias could otherwise label an older Opus release as today's model.
+    const canonical = /^claude-([a-z]+)-(\d+(?:[.-]\d{1,2})?)(?:-\d{8})?(\[1m\])?$/i.exec(model);
+    if (canonical && CLAUDE_MODEL_FAMILIES.some((family) => family === canonical[1].toLowerCase())) {
+      const family = canonical[1].toLowerCase();
+      return `${family[0].toUpperCase()}${family.slice(1)} ${canonical[2].replace("-", ".")}${canonical[3] ? " [1M]" : ""}`;
+    }
+  }
   const formatted =
     variant === "cursor" ? formatCursorModelName(model) : model;
   return removeGptNameSeparators(formatted);
@@ -82,8 +100,6 @@ type ModelDisplayInfo = {
   displayName: string;
   description?: string;
 };
-
-const CLAUDE_MODEL_FAMILIES = ["fable", "sonnet", "opus", "haiku"] as const;
 
 function claudeModelFamily(model: string): string | undefined {
   const tokens = model.toLowerCase().split(/[-_\s[\]]+/).filter(Boolean);

@@ -1,5 +1,5 @@
 {
-  "cliVersion": "0.160.0",
+  "cliVersion": "0.162.1",
   "files": [
     {
       "path": "AbsolutePathBuf.ts",
@@ -99,7 +99,7 @@
     },
     {
       "path": "MessagePhase.ts",
-      "sha256": "9b9cac40f1eb1d9c9c387b90fd9f87873727e010f46e478230aff17fd3ec460c"
+      "sha256": "3098622def58e651ca818dc07bed2239d4ac6c438d2fe1208f1b9c04753b6a1a"
     },
     {
       "path": "ModeKind.ts",
@@ -163,7 +163,7 @@
     },
     {
       "path": "ResponseItem.ts",
-      "sha256": "1dd5e9c56cdbf1140c4bd090e503dae701f60d4f1b4dad1557a4aa45e968bb68"
+      "sha256": "41697f3b742c4bb287a3e7331ac2fe0908edf0ccfc05fc7e19311b1542d51641"
     },
     {
       "path": "ResponseItemId.ts",
@@ -307,7 +307,7 @@
     },
     {
       "path": "v2/CodexErrorInfo.ts",
-      "sha256": "5fbe41b47418f8773c377e1a0c82c25fff69776a868ca36052f2758f33db9a5c"
+      "sha256": "28d52fe80c9ed96079286c0329a651fdc097b5aa7f577ea414d771d83e1da539"
     },
     {
       "path": "v2/CollabAgentState.ts",
@@ -375,7 +375,7 @@
     },
     {
       "path": "v2/CyberAccessProgram.ts",
-      "sha256": "548ceb087ce72560e54ac2d67843a415d483316a730feb190b8ea4ed3b10b890"
+      "sha256": "a8ee683015942f859a1daaba83b62586068ef9c381edf83e3b65837ac24e27e7"
     },
     {
       "path": "v2/DynamicToolCallOutputContentItem.ts",
@@ -498,12 +498,16 @@
       "sha256": "bffadacfff8f73e4e96879152b1746c91fea36b29224ac00f6eef872a70febc6"
     },
     {
+      "path": "v2/McpServerOauthLoginCompletedNotification.ts",
+      "sha256": "2cfe9c305d841f357ac7619c01ad70cdd73fc54d6c0667ed8baf53939a22868e"
+    },
+    {
       "path": "v2/McpServerOauthLoginParams.ts",
       "sha256": "19195d51b8c0d5147e93e1c3bddd53e54446fa93c6fe81a818aeacecadb020ce"
     },
     {
       "path": "v2/McpServerOauthLoginResponse.ts",
-      "sha256": "0a0fc60ee64195866fee1b99cc593854975bf8e2472fe24fa08fac23b5286c84"
+      "sha256": "9bc57591a18b10dc0b154b8cac4d384e654da40035892528b44ba138d762204e"
     },
     {
       "path": "v2/McpServerStatus.ts",
@@ -551,7 +555,7 @@
     },
     {
       "path": "v2/MisalignmentErrorDetails.ts",
-      "sha256": "355907f4fd3c628f14f6f8681839a6a4380a97c74de93ddff1111ade584fed4b"
+      "sha256": "b69c30eeb622b67ad849942a763b40dbf5c278e66ee1691170151fecb46a982f"
     },
     {
       "path": "v2/MisalignmentSteer.ts",
@@ -807,7 +811,7 @@
     },
     {
       "path": "v2/SkillMetadata.ts",
-      "sha256": "9d5f8585ce3388a1de59590e20e24de826260e2b0641a9dfa119ccc32df794cd"
+      "sha256": "e0c4f95c3ac617d879bedff6ad58a11c3617e47b7b0feb5d358dd752188a6251"
     },
     {
       "path": "v2/SkillScope.ts",
@@ -815,7 +819,7 @@
     },
     {
       "path": "v2/SkillSummary.ts",
-      "sha256": "d348466fdeb53b28e0e6c29c6115d7876745f5bce8f5f5d37b93ae1cc7996899"
+      "sha256": "2c8bc3f0e133f87590af14f8fa3576f57f6b34ffbe9cd8bee2e8b05812a29087"
     },
     {
       "path": "v2/SkillToolDependency.ts",
@@ -895,7 +899,7 @@
     },
     {
       "path": "v2/ThreadGoalClearParams.ts",
-      "sha256": "fd897540ed17861a0a1ab7d40c33c8ecde827dcf7ed4396215ff4187da5e4c93"
+      "sha256": "46d060d7e6674db1aa4637c2084f35199e8e653a0a9a40e4fcdc56b1b324e079"
     },
     {
       "path": "v2/ThreadGoalClearResponse.ts",
@@ -910,8 +914,12 @@
       "sha256": "de3fab4cecfa07addd9aeadc8f8d548707f05a12ac91cc90412a1658ae038586"
     },
     {
+      "path": "v2/ThreadGoalMutationOrigin.ts",
+      "sha256": "8582e6867ee7cd69709087d820904530486be20551d31dc3f7d587e9b502c3c9"
+    },
+    {
       "path": "v2/ThreadGoalSetParams.ts",
-      "sha256": "5178dc0788b66e0cbfd935ef6464c581a2a3e155e2733fbe52c0d43e72b8bd17"
+      "sha256": "0f6628f08fbe8b2adc0b4cab51d3e4728b41cccfeb2a4b005214efa71c6bc08e"
     },
     {
       "path": "v2/ThreadGoalSetResponse.ts",
@@ -927,7 +935,7 @@
     },
     {
       "path": "v2/ThreadItem.ts",
-      "sha256": "047df9febb13b40263fb5b0abe244171c4dcb5e83229bbf9efba31abae840746"
+      "sha256": "9eec6b2ee0ce090fa0c8976e0afa5eca07cc3b529bbbe75ead5520291ec9f7f0"
     },
     {
       "path": "v2/ThreadReadParams.ts",
@@ -1087,7 +1095,7 @@
     },
     {
       "path": "v2/Turn.ts",
-      "sha256": "a304905165c888f74ea402b6083175a27d100eab164657dd62a38e0965e28536"
+      "sha256": "6ca94cbd4890035e943056cac6d6d910285a412e34545697780d85993819a28f"
     },
     {
       "path": "v2/TurnEnvironmentParams.ts",
@@ -1111,7 +1119,7 @@
     },
     {
       "path": "v2/TurnStartParams.ts",
-      "sha256": "18a8492238c2b7476d1db5a96ec4dd57df6eb49e05e49f13820eb9298c412dfa"
+      "sha256": "849401f5c04842391cb2838c5bfa315b92c6ce85a059a8f032201ce83baa07ed"
     },
     {
       "path": "v2/TurnStartResponse.ts",

@@ -140,6 +140,14 @@ describe("responseFromNotification", () => {
     expect(responseFromNotification(req, { type: "action", index: 2 })).toBeNull();
   });
 
+  it("leaves defaultToNo decisions to the dialog without a notification approval shortcut", () => {
+    const req = request({ defaultToNo: true });
+    expect(describeApprovalNotification(req)).toMatchObject({
+      mode: "open", title: "Allow Bash?", actions: [], hasReply: false,
+    });
+    expect(responseFromNotification(req, { type: "action", index: 0 })).toBeNull();
+  });
+
   it("answers a choice with the option label, as the dialog does", () => {
     const req = request({
       kind: "ask_user",

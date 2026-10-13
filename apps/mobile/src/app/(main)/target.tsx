@@ -1,5 +1,5 @@
 import { and, asc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { useRouter } from "expo-router";
 import { Pressable, ScrollView, View } from "react-native";
 
@@ -20,32 +20,32 @@ export default function TargetSheet() {
   const backendId = session.backend?.backendId ?? "";
   const spaceId = session.selectedSpaceId ?? "";
 
-  const spaceQuery = useLiveQuery(
-    db.select().from(spaces).where(and(eq(spaces.backendId, backendId), eq(spaces.id, spaceId))).limit(1),
+  const spaceQuery = useCoalescedLiveQuery(
+    db.select().from(spaces).where(and(eq(spaces.backendId, backendId), eq(spaces.id, spaceId))).limit(1), spaces,
     [backendId, spaceId],
   );
-  const targetQuery = useLiveQuery(
+  const targetQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(spaceTargets)
       .where(and(eq(spaceTargets.backendId, backendId), eq(spaceTargets.spaceId, spaceId)))
-      .limit(1),
+      .limit(1), spaceTargets,
     [backendId, spaceId],
   );
-  const workspaceQuery = useLiveQuery(
+  const workspaceQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(workspaces)
       .where(and(eq(workspaces.backendId, backendId), eq(workspaces.isArchived, false)))
-      .orderBy(asc(workspaces.name)),
+      .orderBy(asc(workspaces.name)), workspaces,
     [backendId],
   );
-  const collectionQuery = useLiveQuery(
+  const collectionQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(collections)
       .where(and(eq(collections.backendId, backendId), eq(collections.isArchived, false)))
-      .orderBy(asc(collections.name)),
+      .orderBy(asc(collections.name)), collections,
     [backendId],
   );
 

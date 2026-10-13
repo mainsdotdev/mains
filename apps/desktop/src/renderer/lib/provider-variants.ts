@@ -132,7 +132,7 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     supportsPlugins: true,
     supportsAtlas: true,
     supportsMcpAppExtensions: false,
-    supportsTurnSteer: false,
+    supportsTurnSteer: true,
     supportsRealtime: false,
     planExit: { key: "permissionMode", planValue: "plan", nextValue: "acceptEdits" },
     enableForkRun: true,

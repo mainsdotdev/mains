@@ -17,6 +17,7 @@ import {
   runOwnerKey,
   providerSettingsKey,
   viewKeyBelongsToBackend,
+  workspaceReviewKey,
 } from "../../../../shared/ui-state-keys";
 
 export interface ReviewTab {
@@ -55,11 +56,19 @@ interface WorkspaceViewSnapshot {
   reviewRunId?: string | null;
 }
 
+export interface ReviewFileState {
+  patchId: string;
+  reviewed: boolean;
+  collapsed: boolean;
+}
+
 export interface WorkspaceState {
   activeWorkspaceId: string | null;
   /** The currently loaded local UI snapshot, distinct from the domain workspace. */
   workspaceViewKey: string | null;
   workspaceViews: Record<string, WorkspaceViewSnapshot>;
+  /** Review progress and accordion choices for each file's current patch. */
+  reviewFileStatesByWorkspace: Record<string, Record<string, ReviewFileState>>;
   /** A new workspace may land on its newest run; restored views keep their tab. */
   workspaceViewNeedsDefaultRun: boolean;
   activeWorkspaceIdByProvider: Record<string, string>;
@@ -138,6 +147,7 @@ const initialState: WorkspaceState = {
   activeWorkspaceId: null,
   workspaceViewKey: null,
   workspaceViews: {},
+  reviewFileStatesByWorkspace: {},
   workspaceViewNeedsDefaultRun: false,
   activeWorkspaceIdByProvider: {},
   selectedModelByProvider: {},
@@ -205,6 +215,18 @@ function restoreWorkspaceView(state: WorkspaceState, view?: WorkspaceViewSnapsho
   state.openNoteTabs = view?.openNoteTabs ?? [];
   state.reviewTabOpen = view?.reviewTabOpen ?? false;
   state.reviewRunId = view?.reviewRunId ?? null;
+}
+
+function saveReviewFileState(state: WorkspaceState, key: string, path: string, file: ReviewFileState): void {
+  if (file.reviewed || file.collapsed) {
+    // A computed own property also supports files named __proto__.
+    state.reviewFileStatesByWorkspace[key] = { ...state.reviewFileStatesByWorkspace[key], [path]: file };
+  } else {
+    const files = state.reviewFileStatesByWorkspace[key];
+    if (!files) return;
+    delete files[path];
+    if (!Object.keys(files).length) delete state.reviewFileStatesByWorkspace[key];
+  }
 }
 
 function detachRunFromViews(state: WorkspaceState, backendId: string, runId: string): void {
@@ -298,6 +320,7 @@ const workspaceSlice = createSlice({
     },
     forgetWorkspaceUiState: (state, action: PayloadAction<{ backendId: string; workspaceId: string }>) => {
       const { backendId, workspaceId } = action.payload;
+      delete state.reviewFileStatesByWorkspace[workspaceReviewKey(backendId, workspaceId)];
       for (const key of Object.keys(state.workspaceViews)) {
         if (isWorkspaceViewKey(key, backendId, workspaceId)) delete state.workspaceViews[key];
       }
@@ -435,6 +458,38 @@ const workspaceSlice = createSlice({
     },
     setReviewRunId: (state, action: PayloadAction<string | null>) => {
       state.reviewRunId = action.payload;
+    },
+    setReviewFileReviewed: (state, action: PayloadAction<{
+      backendId: string | null; workspaceId: string; path: string; patchId: string; reviewed: boolean;
+    }>) => {
+      const { backendId, workspaceId, path, patchId, reviewed } = action.payload;
+      const key = workspaceReviewKey(backendId, workspaceId);
+      if (!reviewed && state.reviewFileStatesByWorkspace[key]?.[path]?.patchId !== patchId) return;
+      // Collapse on the explicit check action, so manually reopening stays open.
+      saveReviewFileState(state, key, path, { patchId, reviewed, collapsed: reviewed });
+    },
+    setReviewFileCollapsed: (state, action: PayloadAction<{
+      backendId: string | null; workspaceId: string; path: string; patchId: string; collapsed: boolean;
+    }>) => {
+      const { backendId, workspaceId, path, patchId, collapsed } = action.payload;
+      const key = workspaceReviewKey(backendId, workspaceId);
+      const previous = state.reviewFileStatesByWorkspace[key]?.[path];
+      saveReviewFileState(state, key, path, { patchId, collapsed,
+        reviewed: previous?.patchId === patchId && previous.reviewed });
+    },
+    reconcileReviewFileStates: (state, action: PayloadAction<{
+      backendId: string | null; workspaceId: string; files: readonly { path: string; patchId: string; reviewUnavailable?: boolean }[];
+    }>) => {
+      const { backendId, workspaceId, files } = action.payload;
+      const key = workspaceReviewKey(backendId, workspaceId);
+      const saved = state.reviewFileStatesByWorkspace[key];
+      if (!saved) return;
+      const current = new Map(files.map((file) => [file.path, file]));
+      for (const [path, fileState] of Object.entries(saved)) {
+        const file = current.get(path);
+        if (file?.patchId !== fileState.patchId || (file.reviewUnavailable && fileState.reviewed)) delete saved[path];
+      }
+      if (!Object.keys(saved).length) delete state.reviewFileStatesByWorkspace[key];
     },
     /** Attach an item, unless the same one is already attached. */
     addContextItem: (state, action: PayloadAction<ContextItem>) => {
@@ -641,6 +696,9 @@ export const {
   openReviewTab,
   closeReviewTab,
   setReviewRunId,
+  setReviewFileReviewed,
+  setReviewFileCollapsed,
+  reconcileReviewFileStates,
   addContextItem,
   addContextItemForKey,
   setContextItemsForKey,

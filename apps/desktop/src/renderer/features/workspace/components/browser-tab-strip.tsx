@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui";
+import { useState } from "react";
+import { Button, TabStrip } from "@/components/ui";
 import { Plus, Web } from "@/components/ui/icons";
 import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
-import { useCapabilities } from "@/lib/platform";
+import { ShellHeader } from "@/components/layout/shell-header";
+import { useShellHeaderChrome } from "@/hooks/use-shell-header-chrome";
 import { proxiedImageSrc } from "@/lib/proxied-image-src";
-import { LAYOUT_TOGGLE_WIDTH_VAR } from "@/lib/layout";
 import { useMainHeader } from "@/hooks/use-main-header";
 import { BaseTab } from "./base-tab";
 
@@ -110,27 +110,26 @@ export function BrowserTabStrip({
   inMainHeader,
 }: BrowserTabStripProps) {
   const { header } = useMainHeader();
-  const { windowChrome } = useCapabilities();
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  useEffect(() => {
-    if (!windowChrome) return;
-    return window.api.app.onFullscreenChange(setIsFullscreen);
-  }, [windowChrome]);
-  const reserveTrafficLights = isExpanded && !inMainHeader && sidebarCollapsed && windowChrome && !isFullscreen;
+  const { previewInsetLeft } = useShellHeaderChrome(sidebarCollapsed);
+  const reserveTrafficLights = isExpanded && !inMainHeader && !!previewInsetLeft;
   const firstTabFlush = !reserveTrafficLights &&
     (!inMainHeader || (!header && !sidebarCollapsed)) &&
     tabs[0]?.tabId === activeTabId;
 
   return (
-    <div
+    <ShellHeader
       data-browser-flush-tab-active={firstTabFlush ? "true" : undefined}
-      className={`relative z-(--z-panel-toggle) flex h-(--shell-header-height) shrink-0 items-center pr-2 ${reserveTrafficLights ? "pl-20" : "pl-0"}`}
+      paddingLeft={reserveTrafficLights ? previewInsetLeft : undefined}
+      reserveWindowControls={reserveLayoutControls && !inMainHeader}
+      actions={<PreviewPanelControls label="browser" isExpanded={isExpanded}
+        onToggleExpanded={onToggleExpanded} onClose={reserveLayoutControls ? undefined : onClosePanel} />}
     >
-      {/* Direct flex children let the tabs share the space left by the add button. */}
-      <div
+      <TabStrip
+        activeKey={activeTabId}
         role="tablist"
         aria-label="Browser tabs"
-        className="-ml-3 flex min-w-0 flex-1 items-center overflow-x-auto pl-3 scrollbar-none [&::-webkit-scrollbar]:hidden"
+        createAction={<Button variant="icon" onClick={onCreate} tooltip="New tab" tooltipShortcut={newTabShortcutLabel}
+          tooltipPosition="bottom-left" aria-label="New browser tab"><Plus className="size-4" /></Button>}
       >
         {tabs.map((tab, index) => {
           const active = tab.tabId === activeTabId;
@@ -156,32 +155,7 @@ export function BrowserTabStrip({
             />
           );
         })}
-        <Button
-          variant="icon"
-          onClick={onCreate}
-          tooltip="New tab"
-          tooltipShortcut={newTabShortcutLabel}
-          tooltipPosition="bottom-left"
-          aria-label="New browser tab"
-        >
-          <Plus className="size-4" />
-        </Button>
-      </div>
-      {!reserveLayoutControls && (
-        <PreviewPanelControls
-          label="browser"
-          isExpanded={isExpanded}
-          onToggleExpanded={onToggleExpanded}
-          onClose={onClosePanel}
-        />
-      )}
-      {reserveLayoutControls && (
-        <div
-          aria-hidden="true"
-          className="shrink-0"
-          style={{ width: `var(${LAYOUT_TOGGLE_WIDTH_VAR}, 0px)` }}
-        />
-      )}
-    </div>
+      </TabStrip>
+    </ShellHeader>
   );
 }

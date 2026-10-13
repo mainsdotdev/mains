@@ -1,10 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Text } from "@/components/ui";
 import { appApi } from "@/lib/transport";
 import { markdownComponents } from "@/components/markdown-components";
+import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
 import { splitMarkdownFrontmatter } from "../../lib/markdown-frontmatter";
+
+/** Resolve README image references against the file, then use the signed image renderer. */
+function documentImageUrl(url: string, path: string): string {
+  const safeUrl = defaultUrlTransform(url);
+  if (!safeUrl) return safeUrl;
+  try {
+    // Normalize network URLs for the shared load gate.
+    if (safeUrl.startsWith("//")) return new URL(`https:${safeUrl}`).href;
+    if (/^https?:/i.test(safeUrl)) return new URL(safeUrl).href;
+    if (safeUrl.startsWith("/") || safeUrl.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(safeUrl) || !path.startsWith("/")) {
+      return safeUrl;
+    }
+    const base = `file://${path.split("/").map(encodeURIComponent).join("/")}`;
+    return new URL(safeUrl, base).pathname;
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Markdown in the viewer panel: React all the way down, unlike the Office
@@ -20,7 +41,7 @@ import { splitMarkdownFrontmatter } from "../../lib/markdown-frontmatter";
  * state starts empty and the panel never paints one file's body under
  * another's name.
  */
-export function MarkdownDocument({ path }: { path: string }) {
+export function MarkdownDocument({ path, docType = "md" }: { path: string; docType?: "md" | "txt" }) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const document = useMemo(() => content === null ? null : splitMarkdownFrontmatter(content), [content]);
@@ -78,7 +99,7 @@ export function MarkdownDocument({ path }: { path: string }) {
   }
 
   return (
-    <div className="flex-1 overflow-auto px-7 py-5">
+    <Text as="div" size="sm" className="flex-1 overflow-auto px-7 py-5">
       {document.frontmatter && (
         <section aria-label="Metadata" className="@container/metadata mb-6 rounded-2xl  bg-primary-100/50 p-3 glass-surface dark:bg-primary-900/50">
           <Text as="h2" size="xs" tone="subtle" weight="medium" className="mb-3">Metadata</Text>
@@ -96,9 +117,16 @@ export function MarkdownDocument({ path }: { path: string }) {
           )}
         </section>
       )}
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={docType === "md" ? [rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]] : []}
+        components={markdownComponents}
+        // A native picture source would bypass MarkdownImage's load action.
+        disallowedElements={["source"]}
+        urlTransform={(url, key) => key === "src" ? documentImageUrl(url, path) : defaultUrlTransform(url)}
+      >
         {document.body}
       </ReactMarkdown>
-    </div>
+    </Text>
   );
 }

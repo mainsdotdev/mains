@@ -17,7 +17,7 @@ export default function RunScreen() {
     <View style={{ flex: 1 }}>
       <Stack.Screen options={{ title: title ?? "Run" }} />
 
-      <RunView runId={runId} topInset={headerHeight} />
+      <RunView key={runId} runId={runId} topInset={headerHeight} />
 
       {process.env.EXPO_OS === "ios" && (
         <Stack.Toolbar placement="right">

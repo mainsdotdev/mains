@@ -63,6 +63,13 @@ export interface RunSettingConfig {
   planMode?: boolean;
 }
 
+/** A speed option advertised by the provider's model catalog. */
+export interface ModelServiceTier {
+  id: string;
+  name: string;
+  description?: string;
+}
+
 /** Preferences for the next message, stored in runs.configSnapshot.conversationSettings. */
 export interface ConversationSettings {
   model: string;

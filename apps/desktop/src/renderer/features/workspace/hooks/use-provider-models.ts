@@ -14,6 +14,7 @@ import {
   type ProviderVariant,
 } from "@/lib/provider-variants";
 import { resolveEffortSelection } from "@/features/workspace/lib/resolve-effort";
+import { resolveServiceTier, serviceTierOptions } from "../lib/resolve-service-tier";
 import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
 
 export function useProviderModels(
@@ -174,6 +175,20 @@ export function useProviderModels(
     return null;
   }, [providerModels, selectedModel]);
 
+  const serviceTiers = useMemo(() => caps.fastMode.kind === "serviceTier"
+    ? serviceTierOptions(selectedModelInfo?.serviceTiers) : [], [caps, selectedModelInfo]);
+  const serviceTier = resolveServiceTier(config.serviceTier, serviceTiers);
+  const handleServiceTierChange = useCallback(async (id: string, source: SettingsChangeSource = "user") => {
+    if (serviceTiers.some((tier) => tier.id === id)) await onConfigChange?.({ serviceTier: id }, source);
+  }, [serviceTiers, onConfigChange]);
+
+  useEffect(() => {
+    if (!settingsReady || caps.fastMode.kind !== "serviceTier" || !selectedModelInfo || isFetchingModels || modelsError) return;
+    if (config.serviceTier && config.serviceTier !== serviceTier) {
+      void handleServiceTierChange(serviceTier, "automatic");
+    }
+  }, [settingsReady, caps, selectedModelInfo, isFetchingModels, modelsError, config.serviceTier, serviceTier, handleServiceTierChange]);
+
   useEffect(() => {
     if (!settingsReady || !providerModels || providerModels.length === 0) return;
     const selectCatalogDefault = () => {
@@ -266,6 +281,9 @@ export function useProviderModels(
     handleThinkingModeToggle,
     fastMode,
     handleFastModeToggle,
+    serviceTier,
+    serviceTiers,
+    handleServiceTierChange,
     effortLevel,
     handleEffortLevelChange,
     supportsUltracode:

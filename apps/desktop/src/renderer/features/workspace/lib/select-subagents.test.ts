@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { ToolCall } from "@/lib/redux/api";
 import { selectSessionSubagents, selectSubagentEntry } from "./select-subagents";
 import { subagentStateOf } from "./subagent-identity";
+import { formatSubagentConfiguration } from "./subagent-configuration";
 
 function call(partial: Partial<ToolCall> & { id: number }): ToolCall {
   return {
@@ -26,6 +27,72 @@ function call(partial: Partial<ToolCall> & { id: number }): ToolCall {
 }
 
 describe("selectSessionSubagents", () => {
+  it("folds native task identity across resumes even when SendMessage uses a nickname", () => {
+    const agents = selectSessionSubagents([
+      call({ id: 1, toolCallId: "spawn", status: "done", metadata: {
+        task: { taskId: "native-agent", taskType: "local_agent", providerRunId: "001", status: "completed" },
+      } }),
+      call({ id: 2, toolCallId: "send", toolName: "SendMessage", status: "done", input: { to: "reviewer" }, metadata: {
+        task: { taskId: "native-agent", taskType: "local_agent", providerRunId: "002", status: "running" },
+      } }),
+    ]);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({ providerCallId: "spawn", agentId: "native-agent", providerRunId: "002", state: "running" });
+  });
+
+  it("lets the latest native execution decide state even if an old row has a later database id", () => {
+    const agents = selectSessionSubagents([
+      call({ id: 1, toolCallId: "spawn", status: "done", metadata: {
+        task: { taskId: "agent", taskType: "local_agent", providerRunId: "001", status: "completed" },
+      } }),
+      call({ id: 2, toolCallId: "new", toolName: "SendMessage", metadata: {
+        task: { taskId: "agent", taskType: "local_agent", providerRunId: "003", status: "running" },
+      } }),
+      call({ id: 3, toolCallId: "late-old", toolName: "SendMessage", metadata: {
+        task: { taskId: "agent", taskType: "local_agent", providerRunId: "002", status: "failed" },
+      } }),
+    ]);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({ state: "running", providerRunId: "003" });
+  });
+
+  it("places nested agents beneath their known immediate parent", () => {
+    const agents = selectSessionSubagents([
+      call({ id: 1, toolCallId: "root", metadata: { task: { taskId: "parent", taskType: "local_agent" } } }),
+      call({ id: 2, toolCallId: "child", metadata: { task: { taskId: "child", taskType: "local_agent", parentTaskId: "parent" } } }),
+      call({ id: 3, toolCallId: "other", metadata: { task: { taskId: "other", taskType: "local_agent", parentTaskId: "missing" } } }),
+    ]);
+    expect(agents.map((agent) => agent.providerCallId)).toEqual(["other", "root", "child"]);
+    expect(agents[2]).toMatchObject({ parentProviderCallId: "root", depth: 1 });
+  });
+
+  it("shows a background agent as idle after it leaves the live set without an outcome", () => {
+    const [agent] = selectSessionSubagents([call({ id: 1, status: "done", metadata: {
+      task: { taskId: "agent", taskType: "local_agent", status: "running", isBackgrounded: true, backgroundActive: false },
+      subagent: { phase: "running" },
+    } })]);
+    expect(agent.state).toBe("idle");
+  });
+
+  it("does not count ambient agents as activity or let a stale launch completion settle a new run", () => {
+    const [agent] = selectSessionSubagents([call({ id: 1, status: "done", metadata: {
+      task: { taskId: "agent", taskType: "local_agent", providerRunId: "002", status: "running", ambient: true },
+      subagent: { phase: "completed", providerRunId: "001" },
+    } })]);
+    expect(agent.state).toBe("idle");
+  });
+
+  it("shows the resolved configuration of a completed Codex agent after reload", () => {
+    const [agent] = selectSessionSubagents([call({ id: 1, toolName: "spawnAgent", status: "done",
+      input: { model: "requested-alias" }, metadata: { subagent: {
+        phase: "completed", agentType: "security_review", model: "gpt-6.1-sol", reasoningEffort: "ultra",
+        role: "reviewer", agentPath: "/root/security_review",
+      } } })]);
+    expect(agent).toMatchObject({ state: "done", model: "gpt-6.1-sol", reasoningEffort: "ultra", role: "reviewer", agentPath: "/root/security_review" });
+    expect(formatSubagentConfiguration(agent)).toBe("Reviewer · GPT 6.1 Sol · Ultra");
+    expect(selectSubagentEntry([call({ id: 1, toolCallId: "spawn", metadata: { subagent: { model: "gpt-6.1-sol" } } })], "spawn")?.model).toBe("gpt-6.1-sol");
+  });
+
   it("reads the agent type and description off subagent + task metadata", () => {
     const [agent] = selectSessionSubagents([
       call({

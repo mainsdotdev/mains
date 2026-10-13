@@ -403,6 +403,7 @@ export const CHANNELS = {
     getByWorkspace: "runs:getByWorkspace",
     getDetails: "runs:getDetails",
     getHistory: "runs:getHistory",
+    readHistoryContent: "runs:readHistoryContent",
     listActive: "runs:listActive",
     listPendingApprovals: "runs:listPendingApprovals",
     listRecent: "runs:listRecent",
@@ -415,6 +416,7 @@ export const CHANNELS = {
     toolApprovalResponse: "runs:toolApprovalResponse",
     unarchive: "runs:unarchive",
     update: "runs:update",
+    updateConversationSettings: "runs:updateConversationSettings",
     updated: "runs:updated",
   },
   shell: {
@@ -445,6 +447,7 @@ export const CHANNELS = {
     update: "space:update",
   },
   stats: {
+    getConsumption: "stats:getConsumption",
     getDashboard: "stats:getDashboard",
   },
   sync: {
@@ -458,9 +461,14 @@ export const CHANNELS = {
     update: "tasks:update",
   },
   terminal: {
+    attach: "terminal:attach",
+    changed: "terminal:changed",
     create: "terminal:create",
     data: "terminal:data",
     destroy: "terminal:destroy",
+    destroyIdle: "terminal:destroyIdle",
+    exit: "terminal:exit",
+    list: "terminal:list",
     resize: "terminal:resize",
     write: "terminal:write",
   },

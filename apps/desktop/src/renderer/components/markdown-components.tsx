@@ -76,9 +76,8 @@ export function MarkdownLink({
         onClick={(event) => {
           event.preventDefault();
           const id = decodeURIComponent(href.slice(1));
-          document
-            .getElementById(id)
-            ?.scrollIntoView({ behavior: "smooth", block: "center" });
+          const target = document.getElementById(id) ?? document.getElementById(`user-content-${id}`);
+          target?.scrollIntoView({ behavior: "smooth", block: "center" });
         }}
         title={href}
         className="document-link inline whitespace-normal wrap-break-word text-left"
@@ -199,7 +198,13 @@ export const MarkdownImagePreviewContext = createContext<((image: MarkdownImageP
  * protocol, while data: and app capture sources load directly. There is no
  * fallback to the raw URL on proxy error — that would reopen the channel.
  */
-function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
+function MarkdownImage({ src, alt, width, height, title }: {
+  src?: string;
+  alt?: string;
+  width?: number | string;
+  height?: number | string;
+  title?: string;
+}) {
   const onPreview = useContext(MarkdownImagePreviewContext);
   const [loadApproved, setLoadApproved] = useState(false);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
@@ -240,8 +245,11 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
     <img
       src={imageSrc}
       alt={alt || ""}
+      width={width}
+      height={height}
+      title={title}
       onError={() => setFailedSrc(src ?? "")}
-      className="document-image"
+      className={width !== undefined || height !== undefined ? "document-image inline-block" : "document-image"}
     />
   );
   if (!onPreview || !localPath) return image;
@@ -454,8 +462,8 @@ export const markdownComponents: Components = {
     </Text>
   ),
   hr: () => <hr className="document-divider" />,
-  img: ({ src, alt }) => (
-    <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />
+  img: ({ src, alt, width, height, title }) => (
+    <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} width={width} height={height} title={title} />
   ),
 };
 

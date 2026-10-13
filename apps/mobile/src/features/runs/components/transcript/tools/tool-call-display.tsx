@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { Pressable, View } from "react-native";
+import { isDeferredToolOutput } from "@mains/contracts/runs";
 
 import { ThemedText } from "@/components/ui";
 import type { ToolCallRow } from "@/db/schema";
@@ -22,6 +23,7 @@ import { resolveTool } from "@/lib/tool-registry";
 import { colors, spacing } from "@/theme";
 
 import { DiffStat, ToolCodeBody, ToolDetail, ToolDiffBody, ToolRow, ToolTextBody } from "./tool-row";
+import { HistoryContentLink } from "../../history-content-link";
 
 /**
  * A tool call in the transcript.
@@ -43,6 +45,8 @@ export function ToolCallDisplay({
   const tool = resolveTool(call.toolName);
   const params = parseToolInput(call.inputJson);
   const output = coerceToolOutput(call.outputJson);
+  const deferredOutput = isDeferredToolOutput(output) ? output : null;
+  const deferredInput = isDeferredToolOutput(params) ? params : null;
   const view = buildView(tool.kind, params, output, onOpenFile);
 
   return (
@@ -54,7 +58,8 @@ export function ToolCallDisplay({
       stat={view.stat}
       error={call.error}
     >
-      {view.body}
+      {deferredOutput ? <><ToolCodeBody text={deferredOutput.preview} /><HistoryContentLink runId={call.runId} id={call.id} source="tool-output" label="Read full output" /></> : view.body}
+      {deferredInput ? <HistoryContentLink runId={call.runId} id={call.id} source="tool-input" label="Read full input" /> : null}
     </ToolRow>
   );
 }

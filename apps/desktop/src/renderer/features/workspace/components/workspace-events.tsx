@@ -743,7 +743,12 @@ export function WorkspaceEvents({
               />
             )
           ) : (
-            <InfoGroup group={group} runId={activeRun?.id} floatingChat={floatingChat} />
+            <InfoGroup
+              group={group}
+              runId={activeRun?.id}
+              providerId={activeRun?.providerId ?? getProviderVariant(variant).providerId}
+              floatingChat={floatingChat}
+            />
           )}
           {group.type !== "prompt_suggestion" && turnChangesCard}
           {group.type !== "prompt_suggestion" && sessionBarForThis && (

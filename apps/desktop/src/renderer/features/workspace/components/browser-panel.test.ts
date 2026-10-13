@@ -72,7 +72,6 @@ function ConversationBrowser({ title, enabled }: { title: string | null; enabled
   const mainProps: Omit<ComponentProps<typeof MainContent>, "children"> = {
     marginLeft: "22rem",
     marginRight: browserTabsInHeader ? "0.375rem" : "38rem",
-    browserOpen: true,
     browserTabsInHeader,
     sidebarCollapsed: mocks.sidebarCollapsed,
     headerHidden: mocks.expanded && !enabled,
@@ -422,7 +421,6 @@ describe("BrowserPanel browser menu", () => {
       expect(getComputedStyle(workspaceSurface).borderTopLeftRadius).toBe("0px");
       fireEvent.mouseEnter(firstTab);
       expect(getComputedStyle(surface).borderTopLeftRadius).toBe("0px");
-      expect(firstTab.closest("main")!.classList.contains("overflow-visible")).toBe(true);
 
       const onStateChanged = api.onStateChanged.mock.calls[0][0];
       act(() => onStateChanged({ activeTabId: secondTab.tabId, tabs }));

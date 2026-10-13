@@ -149,6 +149,22 @@ describe("native browser chat window", () => {
     }
   });
 
+  it("relays submitted context snapshots only from the floating chat", () => {
+    registerBrowserChatWindowIpc();
+    browserChatWindow.update({ visible: true, bounds: { x: 0, y: 0, width: 800, height: 600 }, card: { x: 250, y: 300, width: 540, height: 280 } });
+    const post = harness.handlers.get(CHANNELS.browser.chatPostAction)!;
+    const action = { type: "contextSubmitted", ownerKey: "original-owner", items: [{ kind: "browser", id: "annotation", comment: "Remove this" }] };
+    for (const sender of [harness.parent.webContents, {}]) {
+      expect((post({ sender }, action) as { success: boolean }).success).toBe(false);
+    }
+    expect(harness.parent.webContents.send).not.toHaveBeenCalled();
+    expect((post({ sender: harness.child!.webContents }, action) as { success: boolean }).success).toBe(true);
+    expect(harness.parent.webContents.send).toHaveBeenCalledWith(CHANNELS.browser.chatAction, action);
+    for (const invalid of [{ ...action, ownerKey: null }, { ...action, items: null }, { ...action, items: {} }]) {
+      expect((post({ sender: harness.child!.webContents }, invalid) as { success: boolean }).success).toBe(false);
+    }
+  });
+
   it("preserves user versus automatic settings changes when relaying the floating composer", () => {
     registerBrowserChatWindowIpc();
     browserChatWindow.update({ visible: true, bounds: { x: 0, y: 0, width: 800, height: 600 }, card: { x: 250, y: 300, width: 540, height: 280 } });

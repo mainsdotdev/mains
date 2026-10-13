@@ -55,7 +55,11 @@ vi.mock("@/features/workspace/hooks/use-workspace-runs", () => ({
   },
 }));
 vi.mock("@/lib/transport", () => ({ getTransport: () => mocks.transport, appEvents: { providers: { onModelsUpdated: () => () => {} } } }));
-vi.mock("@/features/workspace/lib/conversation-settings-writer", () => ({ persistConversationSettings: (...args: unknown[]) => mocks.invoke(...args) }));
+vi.mock("@/features/workspace/lib/conversation-settings-writer", () => ({
+  persistConversationSettings: (...args: unknown[]) => mocks.invoke(...args),
+  waitForConversationSettings: async () => {},
+  hasPendingConversationSettings: () => false,
+}));
 vi.mock("@/features/workspace/lib/run-helpers", () => ({ serializeAttachments: (...args: unknown[]) => mocks.serialize(...args) }));
 vi.mock("@/features/workspace/hooks/use-tool-approval", () => ({ useToolApproval: () => ({ pendingApprovals: [], respond: vi.fn() }) }));
 vi.mock("@/features/workspace/hooks/use-plugin-logos", () => ({ PluginLogoProvider: ({ children }: { children: ReactNode }) => children }));

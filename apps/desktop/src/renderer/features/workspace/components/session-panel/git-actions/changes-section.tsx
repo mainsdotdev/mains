@@ -1,7 +1,10 @@
 import { useCallback, useState } from "react";
 import NumberFlow from "@number-flow/react";
-import { Diff, Undo } from "@/components/ui/icons";
-import { Alert, Text, toast } from "@/components/ui";
+import { Diff, FileIconComponent, Review, Undo } from "@/components/ui/icons";
+import { Alert, Button, Text, toast } from "@/components/ui";
+import { useAppDispatch } from "@/lib/redux/hooks";
+import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
+import { openReviewTab } from "@/lib/redux/slices/workspaceSlice";
 import {
   useResyncWorkspaceDiffMutation,
   useDiscardWorkspacePathsMutation,
@@ -14,7 +17,6 @@ import { useOpenFileInEditor } from "@/features/workspace/hooks/use-open-file-in
 import { useOpenDiffInEditor } from "@/features/workspace/hooks/use-open-diff-in-editor";
 import { parseFileDiffSegment } from "@/features/workspace/lib/parse-diff";
 import { describeDiscard } from "@/features/workspace/lib/describe-discard";
-import { FileIconComponent } from "@/components/ui/icons";
 import { PanelItem, PanelCollapse } from "../panel-item";
 import type { GitActionsPanel } from "./use-git-actions-panel";
 
@@ -28,6 +30,7 @@ interface DiscardRequest {
  * The working tree: its totals on the row, its files inside, and Undo on both.
  */
 export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
+  const dispatch = useAppDispatch();
   const {
     workspaceId,
     additions,
@@ -194,6 +197,20 @@ export function ChangesSection({ panel }: { panel: GitActionsPanel }) {
         }
       />
       <PanelCollapse isOpen={isSectionOpen("changes")}>
+        {hasChanges && (
+          <div className="p-1.5 pb-1">
+            <Button
+              onClick={() => {
+                dispatch(openReviewTab());
+                dispatch(setSessionPanelOpen(false));
+              }}
+              className="glass-button flex w-full items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium text-primary-900 transition-colors hover:bg-primary-100 dark:text-primary-100 dark:hover:bg-primary/5"
+            >
+              <Review className="size-3.5" />
+              Open Review mode
+            </Button>
+          </div>
+        )}
         {/* Capped like the subagent list — a big changeset shouldn't push the
             actions below it off the screen. */}
         <div className="max-h-56 overflow-y-auto noscrollbar">

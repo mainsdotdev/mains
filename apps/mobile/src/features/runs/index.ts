@@ -1,6 +1,7 @@
 export { ComposerBar, composerBottomPadding } from "./components/composer/composer-bar";
 export { loadImage } from "./components/transcript/artifact-image";
 export { RunView } from "./components/run-view";
+export { HistoryContentView } from "./components/history-content-view";
 export { MarkdownDocument } from "./components/document/markdown-document";
 export { SubagentsSheet } from "./components/subagents/subagents-sheet";
 export { goHome, homeRun, useHomeRun } from "./home-run";

@@ -579,6 +579,26 @@ describe("runsRepo", () => {
   });
 
   describe("insertToolCall", () => {
+    it("reads only task identities for Claude resumption, scoped to the owning run", async () => {
+      createRun(db, { id: "r1" });
+      createRun(db, { id: "r2" });
+      const id = await runsRepo.insertToolCall({ accountId: "default", runId: "r1", toolId: "spawn", toolName: "Agent" });
+      await runsRepo.updateToolCall(id, { input: { prompt: "Large private prompt" }, output: "Large private result", metadata: {
+        task: { taskId: "child", providerRunId: "002", parentTaskId: "parent", taskType: "local_agent", subagentType: "Explore", isBackgrounded: true, ambient: false, phase: "completed", status: "failed" },
+      } });
+      const legacy = await runsRepo.insertToolCall({ accountId: "default", runId: "r1", toolId: "legacy", toolName: "Agent" });
+      await runsRepo.updateToolCall(legacy, { metadata: { subagent: { agentId: "legacy-agent", agentType: "general-purpose" } } });
+      await runsRepo.insertToolCall({ accountId: "default", runId: "r1", toolId: "read", toolName: "Read" });
+      const other = await runsRepo.insertToolCall({ accountId: "default", runId: "r2", toolId: "other", toolName: "Agent" });
+      await runsRepo.updateToolCall(other, { metadata: { task: { taskId: "other-agent" } } });
+      expect(await runsRepo.findClaudeTaskAnchorsByRun("r1")).toEqual([
+        { toolUseId: "spawn", taskId: "child", providerRunId: "002", parentTaskId: "parent", taskType: "local_agent", subagentType: "Explore",
+          isBackgrounded: 1, ambient: 0, status: "failed", phase: "completed" },
+        { toolUseId: "legacy", taskId: "legacy-agent", providerRunId: null, parentTaskId: null, taskType: null, subagentType: "general-purpose",
+          isBackgrounded: null, ambient: null, status: null, phase: null },
+      ]);
+    });
+
     it("creates a tool call and returns id", async () => {
       const run = createRun(db, { id: "r1" });
       const id = await runsRepo.insertToolCall({

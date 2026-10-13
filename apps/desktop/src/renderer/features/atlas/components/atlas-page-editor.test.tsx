@@ -11,13 +11,17 @@ const mocks = vi.hoisted(() => ({
   page: null as AtlasPage | null, save: vi.fn(), update: vi.fn(), download: vi.fn(), copy: vi.fn(),
   error: vi.fn(), transport: "backend", acknowledged: vi.fn(),
   beforeSend: null as (() => Promise<boolean>) | null,
+  onEditorChange: null as (() => void) | null,
   editor: {
     document: [{ id: "original", type: "paragraph", content: "Existing content" }] as unknown[],
     blocksToMarkdownLossy: vi.fn(), replaceBlocks: vi.fn(), insertBlocks: vi.fn(), tryParseMarkdownToBlocks: vi.fn(),
   },
 }));
 vi.mock("@blocknote/react", () => ({ useCreateBlockNote: () => mocks.editor }));
-vi.mock("@blocknote/shadcn", () => ({ BlockNoteView: () => <div>Editor body</div> }));
+vi.mock("@blocknote/shadcn", () => ({ BlockNoteView: ({ onChange }: { onChange: () => void }) => {
+  mocks.onEditorChange = onChange;
+  return <div>Editor body</div>;
+} }));
 vi.mock("@/lib/redux/api", () => ({ useListCollectionsQuery: () => ({ data: [{ id: "project", name: "Launch" }] }) }));
 vi.mock("@/lib/redux/api/atlasApi", () => ({
   useAtlasPageQuery: () => ({ data: mocks.page, refetch: async () => ({ data: mocks.page }) }),
@@ -48,7 +52,7 @@ function setup(requestedAction?: AtlasPendingPageAction) {
     <AtlasPageEditor {...props} requestedAction={request} /><Location />
   </MemoryRouter>;
   const view = render(ui());
-  return { ref, rerender: () => view.rerender(ui()) };
+  return { ref, rerender: () => view.rerender(ui()), unmount: view.unmount };
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -68,7 +72,7 @@ beforeEach(() => {
   mocks.copy.mockResolvedValue(true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("Atlas Page menu actions", () => {
   it("waits for the latest editor draft to save before allowing a page-chat message", async () => {
@@ -134,9 +138,14 @@ describe("Atlas Page menu actions", () => {
     let operation!: Promise<void>;
     act(() => { operation = ref.current!.performAction({ type: "trash" }); });
     expect(mocks.update).not.toHaveBeenCalled();
+    let navigationReady = false;
+    const flushing = ref.current!.flush().then((saved) => { navigationReady = saved; return saved; });
+    await act(async () => { await Promise.resolve(); });
+    expect(navigationReady).toBe(false);
     await act(async () => {
       finish({ ...mocks.page!, item: { ...mocks.page!.item, title: "New title", version: 2 } });
       await operation;
+      expect(await flushing).toBe(true);
     });
     expect(mocks.save).toHaveBeenCalledWith(expect.objectContaining({ title: "New title", expectedVersion: 1 }));
     expect(mocks.update).toHaveBeenCalledExactlyOnceWith({ accountId: "account", id: "page", trashed: true });
@@ -152,6 +161,92 @@ describe("Atlas Page menu actions", () => {
     expect(mocks.update).not.toHaveBeenCalled();
     expect(screen.getByTestId("route").textContent).toBe("/atlas/page");
     expect(localStorage.getItem("mains:atlas:draft:account:page")).toContain("Unsaved title");
+  });
+
+  it("does not autosave late editor events when a trashed Page closes", async () => {
+    const { ref, unmount } = setup();
+    let finishTrash!: () => void;
+    const trash = new Promise<void>((resolve) => { finishTrash = resolve; });
+    let trashed = false;
+    const invalidSave = vi.fn();
+    mocks.save.mockImplementation(async (input) => {
+      if (trashed) {
+        const error = new Error("Page is in Trash or unavailable");
+        invalidSave(error);
+        throw error;
+      }
+      return { ...mocks.page!, item: { ...mocks.page!.item, title: input.title, version: 2 } };
+    });
+    mocks.update.mockImplementationOnce(async () => {
+      await trash;
+      trashed = true;
+      // A successful Trash mutation closes the tab before the Page read refreshes.
+      unmount();
+      return { ...mocks.page!.item, trashedAt: "2026-10-11" };
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Saved before Trash" } });
+    let operation!: Promise<void>;
+    await act(async () => { operation = ref.current!.performAction({ type: "trash" }); });
+    expect(mocks.update).toHaveBeenCalledOnce();
+    // BlockNote can still notify the old editor while the Trash request is pending.
+    act(() => mocks.onEditorChange!());
+    await act(async () => {
+      finishTrash();
+      await operation;
+    });
+    expect(invalidSave).not.toHaveBeenCalled();
+    expect(mocks.save).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a recovered draft local when opening a Page in Trash", async () => {
+    mocks.page!.item.trashedAt = "2026-10-11";
+    localStorage.setItem("mains:atlas:draft:account:page", JSON.stringify({
+      version: 1, draft: { title: "Recovered draft", blocks: mocks.editor.document },
+    }));
+    const { unmount } = setup();
+    await act(async () => {});
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", true);
+    unmount();
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(localStorage.getItem("mains:atlas:draft:account:page")).toContain("Recovered draft");
+  });
+
+  it("stops a pending autosave when a Page refresh reports Trash", async () => {
+    vi.useFakeTimers();
+    const { rerender, unmount } = setup();
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Local draft" } });
+    const lateChange = mocks.onEditorChange!;
+    mocks.page = { ...mocks.page!, item: { ...mocks.page!.item, trashedAt: "2026-10-11" } };
+    rerender();
+    act(() => lateChange());
+    await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    unmount();
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(localStorage.getItem("mains:atlas:draft:account:page")).toContain("Local draft");
+  });
+
+  it("resumes editing and autosave when moving to Trash fails", async () => {
+    vi.useFakeTimers();
+    const { ref } = setup();
+    let failTrash!: (error: Error) => void;
+    mocks.update.mockImplementationOnce(() => new Promise((_resolve, reject) => { failTrash = reject; }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "First draft" } });
+    let operation!: Promise<void>;
+    await act(async () => { operation = ref.current!.performAction({ type: "trash" }); });
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", true);
+    expect(await mocks.beforeSend!()).toBe(false);
+    act(() => mocks.onEditorChange!());
+    await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    expect(mocks.save).toHaveBeenCalledOnce();
+    await act(async () => {
+      failTrash(new Error("Could not move to Trash"));
+      await expect(operation).rejects.toThrow("Could not move to Trash");
+    });
+    expect(screen.getByRole("textbox", { name: "Page title" })).toHaveProperty("disabled", false);
+    fireEvent.change(screen.getByRole("textbox", { name: "Page title" }), { target: { value: "Still editing" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+    expect(mocks.save).toHaveBeenCalledTimes(2);
+    expect(mocks.save).toHaveBeenLastCalledWith(expect.objectContaining({ title: "Still editing", expectedVersion: 2 }));
   });
 
   it("moves the intended Page and rejects actions after its backend changes", async () => {

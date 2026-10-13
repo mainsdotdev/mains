@@ -4,7 +4,14 @@
  * Hand-written on purpose: the schema is small and phone-owned, and this
  * avoids a drizzle-kit/Metro `.sql` bundling setup for now.
  */
-export const MIGRATIONS: readonly string[] = [
+export interface MigrationDatabase {
+  execSync(source: string): void;
+  getFirstSync<T>(source: string): T | null;
+  getAllSync<T>(source: string): T[];
+  withTransactionSync(task: () => void): void;
+}
+
+export const MIGRATIONS: readonly (string | ((database: MigrationDatabase) => void))[] = [
   // v1 — backends, workspaces, runs, run_turns, tool_calls, sync_cursors
   `
   CREATE TABLE backends (
@@ -266,4 +273,41 @@ export const MIGRATIONS: readonly string[] = [
     value TEXT NOT NULL
   );
   `,
+  // v15 — conversation preferences, separate from provider-wide settings
+  `
+  ALTER TABLE providers ADD COLUMN run_settings_json TEXT;
+  ALTER TABLE runs ADD COLUMN config_snapshot_json TEXT;
+  ALTER TABLE models ADD COLUMN service_tiers_json TEXT;
+  CREATE TABLE composer_settings (
+    backend_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    settings_json TEXT NOT NULL,
+    PRIMARY KEY (backend_id, provider_id, kind)
+  );
+  `,
+  // v16 — early development installs ran v15 before it included service tiers.
+  // Leave the applied entry alone and only add the missing column. Complete
+  // v15 installs already have it and must retain their existing tier data.
+  (database) => {
+    const columns = database.getAllSync<{ name: string }>("PRAGMA table_info(models)");
+    if (!columns.some((column) => column.name === "service_tiers_json")) {
+      database.execSync("ALTER TABLE models ADD COLUMN service_tiers_json TEXT;");
+    }
+  },
 ];
+
+export function migrateDatabase(database: MigrationDatabase): void {
+  const row = database.getFirstSync<{ user_version: number }>("PRAGMA user_version");
+  let version = row?.user_version ?? 0;
+  while (version < MIGRATIONS.length) {
+    const next = version + 1;
+    database.withTransactionSync(() => {
+      const migration = MIGRATIONS[version];
+      if (typeof migration === "string") database.execSync(migration);
+      else migration(database);
+      database.execSync(`PRAGMA user_version = ${next}`);
+    });
+    version = next;
+  }
+}

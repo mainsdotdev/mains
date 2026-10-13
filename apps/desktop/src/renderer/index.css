@@ -113,6 +113,9 @@ html:not(.app-ready) *::after {
   --nav-rail-width: 3rem;
   --sidebar-width: 18rem;
   --shell-header-height: 2.5rem;
+  --shell-header-top: 0.2125rem;
+  --shell-tab-width: 11rem;
+  --shell-tab-min-width: 7rem;
   --panel-width: 22rem;
   --browser-panel-width: 38rem;
   --mcp-app-panel-width: 38rem;
@@ -130,7 +133,7 @@ html:not(.app-ready) *::after {
 
 /* The fixed controls follow a preview's layer for its entire visible
    lifetime, including the exit animation, without moving into the panel. */
-.app-root:has([data-browser-panel], [data-mcp-app-panel-visible]) [data-layout-toggle] {
+.app-root:has([data-browser-panel], [data-mcp-app-panel-visible], [data-document-viewer-panel]) [data-layout-toggle] {
   z-index: var(--z-modal);
 }
 
@@ -436,6 +439,20 @@ body[data-resizing] iframe {
   contain: layout style paint;
   backface-visibility: hidden;
   transform: translateZ(0);
+}
+
+/* A fixed overlay can reveal async rows by resizing its clipped viewport.
+   Keep text unscaled and retarget both height and anchor on the same clock. */
+.dropdown-scroll-menu[data-resize-ready="true"] {
+  transition: height 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    top 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    left 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dropdown-scroll-menu[data-resize-ready="true"] {
+    transition: none;
+  }
 }
 
 /* Closed-state pre-warm: keep the layer allocated so the first open is smooth */

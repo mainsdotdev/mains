@@ -169,7 +169,7 @@ export function CommitSection({
               placeholder={
                 generatingMessage
                   ? "Generating commit message…"
-                  : "Commit message (leave blank to generate)…"
+                  : "Commit message (leave blank to auto generate)…"
               }
               className="w-full resize-none text-xs pb-8"
             />

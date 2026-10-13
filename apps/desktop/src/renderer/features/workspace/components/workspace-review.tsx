@@ -1,13 +1,15 @@
-import { forwardRef, memo, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { LazyMotion, domAnimation, m } from "motion/react";
 import { FileDiff, Virtualizer, useVirtualizer, type DiffLineAnnotation } from "@pierre/diffs/react";
 import { DEFAULT_VIRTUAL_FILE_METRICS, type SelectedLineRange } from "@pierre/diffs";
 import type { ReviewComment } from "@mains/contracts/review-comments";
-import { Button, Text, Tooltip, toast } from "@/components/ui";
+import { Button, Checkbox, Text, Tooltip, toast } from "@/components/ui";
 import { ArrowUp, Chat, Refresh, FileIconComponent, Review } from "@/components/ui/icons";
 import { PreviewPanelControls } from "@/components/layout/preview-panel-controls";
 import { useGetLatestWorkspaceDiffQuery, useResyncWorkspaceDiffMutation } from "@/lib/redux/api";
-import { useAppSelector } from "@/lib/redux/hooks";
+import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
+import { reconcileReviewFileStates, setReviewFileReviewed, setReviewFileCollapsed, type ReviewFileState } from "@/lib/redux/slices/workspaceSlice";
+import { workspaceReviewKey } from "../../../../shared/ui-state-keys";
 import { useIsDarkMode } from "@/hooks/use-is-dark-mode";
 import { DIFF_TYPOGRAPHY_STYLE, patchDiffOptions } from "@/lib/diff-style";
 import { extractErrorMessage } from "@/lib/extract-error-message";
@@ -22,6 +24,7 @@ import { ReviewToolbar } from "./review-toolbar";
 
 interface DraftLine { side: ReviewComment["side"]; lineNumber: number; endLineNumber?: number; lineText: string }
 interface Annotation { comments: ReviewComment[]; draft?: DraftLine }
+const EMPTY_REVIEW_FILE_STATES: Readonly<Record<string, ReviewFileState>> = Object.freeze({});
 
 const ReviewGutterTooltip = forwardRef<{ attach: (button: HTMLButtonElement) => void }>(function ReviewGutterTooltip(_props, ref) {
   const [target, setTarget] = useState<HTMLButtonElement | null>(null);
@@ -31,18 +34,21 @@ const ReviewGutterTooltip = forwardRef<{ attach: (button: HTMLButtonElement) => 
     content="To comment on multiple lines, drag + from the first line to the last, or click the first line number, Shift-click the last, then click +." />;
 });
 
-const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPath, onCommentAdded, diffStyle, registerFile }: {
+const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPath, onCommentAdded, diffStyle, registerFile, reviewed, onReviewedChange, collapsed, onCollapsedChange }: {
   file: ReviewFile;
   workspaceId: string;
   rootPath: string;
   onCommentAdded: () => void;
   diffStyle: ReviewDiffStyle;
   registerFile: (path: string, target: ReviewFileTarget) => () => void;
+  reviewed: boolean;
+  onReviewedChange: (file: ReviewFile, reviewed: boolean) => void;
+  collapsed: boolean;
+  onCollapsedChange: (file: ReviewFile, collapsed: boolean) => void;
 }) {
   const section = useRef<HTMLElement>(null);
   const header = useRef<HTMLButtonElement>(null);
   const gutterTooltip = useRef<{ attach: (button: HTMLButtonElement) => void }>(null);
-  const [collapsed, setCollapsed] = useState(false);
   const [draft, setDraft] = useState<DraftLine | null>(null);
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(null);
   const reviewComments = useComposerReviewComments(workspaceId, file.path);
@@ -54,8 +60,8 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
   const comments = useMemo(() => reviewComments.filter((comment) => reviewCommentMatches(comment, workspaceId, file)), [reviewComments, workspaceId, file]);
   useLayoutEffect(() => {
     if (!section.current) return;
-    return registerFile(file.path, { element: section.current, expand: () => setCollapsed(false), focus: () => header.current?.focus({ preventScroll: true }) });
-  }, [file.path, registerFile]);
+    return registerFile(file.path, { element: section.current, expand: () => onCollapsedChange(file, false), focus: () => header.current?.focus({ preventScroll: true }) });
+  }, [file, registerFile, onCollapsedChange]);
   const annotations = useMemo(() => {
     const grouped = new Map<string, DiffLineAnnotation<Annotation>>();
     for (const comment of comments) {
@@ -88,17 +94,25 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
     setDraft({ side, lineNumber, ...(endLineNumber !== lineNumber ? { endLineNumber } : {}), lineText });
   };
   return <section ref={section} className="border-b border-primary-200/60 dark:border-primary-800/60" aria-label={`Changes in ${file.path}`}>
-    <Button ref={header} type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}
-      className="sticky top-0 z-10 flex w-full items-center gap-2.5 bg-primary px-4 py-3 text-left text-xs dark:bg-primary-950">
-      <ArrowUp className={`size-3.5 shrink-0 text-primary-500 transition-transform ${collapsed ? "rotate-90" : "rotate-180"}`} />
-      <FileIconComponent fileName={file.path} className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1 truncate text-primary-900 dark:text-primary-100" title={file.path}>
-        {file.diff?.prevName && <span className="text-primary-500">{file.diff.prevName} → </span>}{file.path}
-      </span>
-      {!!comments.length && <span className="flex items-center gap-1 text-primary-500"><Chat className="size-3" />{comments.length}</span>}
-      <span className="text-primary-500">{status}</span>
-      <span className="tabular-nums text-success">+{additions}</span><span className="tabular-nums text-danger">-{deletions}</span>
-    </Button>
+    <div className="sticky top-0 z-10 flex items-center bg-primary dark:bg-primary-950">
+      <Button ref={header} type="button" aria-label={`Toggle changes in ${file.path}`} aria-expanded={!collapsed} onClick={() => onCollapsedChange(file, !collapsed)}
+        className="flex min-w-0 flex-1 items-center gap-2.5 px-4 py-3 text-left text-xs">
+        <ArrowUp className={`size-3.5 shrink-0 text-primary-500 transition-transform ${collapsed ? "rotate-90" : "rotate-180"}`} />
+        <FileIconComponent fileName={file.path} className="size-4 shrink-0" />
+        <span className={`min-w-0 flex-1 truncate ${reviewed ? "text-primary-500" : "text-primary-900 dark:text-primary-100"}`} title={file.path}>
+          {file.diff?.prevName && <span className="text-primary-500">{file.diff.prevName} → </span>}{file.path}
+        </span>
+        {!!comments.length && <span className="flex items-center gap-1 text-primary-500"><Chat className="size-3" />{comments.length}</span>}
+        <span className="text-primary-500">{status}</span>
+        <span className="tabular-nums text-success">+{additions}</span><span className="tabular-nums text-danger">-{deletions}</span>
+      </Button>
+      <label className={`flex shrink-0 items-center gap-1.5 pr-4 text-xs text-primary-500 ${file.reviewUnavailable ? "cursor-not-allowed" : "cursor-pointer"}`}
+        title={file.reviewUnavailable ? "The file's changes cannot be verified. Refresh changes to try again." : undefined}>
+        <Checkbox checked={reviewed} disabled={file.reviewUnavailable} aria-label={`Reviewed ${file.path}`}
+          onChange={(checked) => onReviewedChange(file, checked)} />
+        <span>Reviewed</span>
+      </label>
+    </div>
     {!collapsed && <ReviewGutterTooltip ref={gutterTooltip} />}
     {!collapsed && (file.diff?.hunks.length ? <FileDiff fileDiff={file.diff}
       style={DIFF_TYPOGRAPHY_STYLE} metrics={metrics} lineAnnotations={annotations} selectedLines={selectedLines}
@@ -154,18 +168,27 @@ const ReviewFileDiff = memo(function ReviewFileDiff({ file, workspaceId, rootPat
   </section>;
 });
 
-const ReviewFileList = memo(function ReviewFileList({ files, workspaceId, rootPath, onCommentAdded, diffStyle, navigationRef }: {
+const ReviewFileList = memo(function ReviewFileList({ files, workspaceId, rootPath, onCommentAdded, diffStyle, navigationRef, fileStates, onReviewedChange, onCollapsedChange }: {
   files: readonly ReviewFile[];
   workspaceId: string;
   rootPath: string;
   onCommentAdded: () => void;
   diffStyle: ReviewDiffStyle;
   navigationRef: Ref<ReviewFileNavigation>;
+  fileStates: Readonly<Record<string, ReviewFileState>>;
+  onReviewedChange: (file: ReviewFile, reviewed: boolean) => void;
+  onCollapsedChange: (file: ReviewFile, collapsed: boolean) => void;
 }) {
   const registerFile = useReviewFileNavigation(useVirtualizer(), navigationRef);
-  return files.map((file) => <ReviewFileDiff key={`${workspaceId}:${file.path}:${file.patchId}`}
-    file={file} workspaceId={workspaceId} rootPath={rootPath} onCommentAdded={onCommentAdded}
-    diffStyle={diffStyle} registerFile={registerFile} />);
+  return files.map((file) => {
+    const saved = fileStates[file.path];
+    const current = saved?.patchId === file.patchId ? saved : undefined;
+    return <ReviewFileDiff key={`${workspaceId}:${file.path}:${file.patchId}`}
+      file={file} workspaceId={workspaceId} rootPath={rootPath} onCommentAdded={onCommentAdded}
+      diffStyle={diffStyle} registerFile={registerFile}
+      reviewed={!file.reviewUnavailable && !!current?.reviewed} onReviewedChange={onReviewedChange}
+      collapsed={!!current?.collapsed} onCollapsedChange={onCollapsedChange} />;
+  });
 });
 
 export function WorkspaceReview({ workspaceId, rootPath, isExpanded, onToggleExpanded, chatVisible, setChatHost, onCommentAdded }: {
@@ -180,12 +203,32 @@ export function WorkspaceReview({ workspaceId, rootPath, isExpanded, onToggleExp
 }) {
   const header = useRef<HTMLElement>(null);
   const navigation = useRef<ReviewFileNavigation>(null);
+  const dispatch = useAppDispatch();
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
+  const reviewKey = workspaceReviewKey(backendId, workspaceId);
+  const fileStates = useAppSelector((state) => state.workspace.reviewFileStatesByWorkspace[reviewKey] ?? EMPTY_REVIEW_FILE_STATES);
   const [diffStyle, setDiffStyle] = useState<ReviewDiffStyle>("unified");
   const { currentData: snapshot, isFetching } = useGetLatestWorkspaceDiffQuery(workspaceId);
   const sidebarCollapsed = useAppSelector((state) => state.appSettings.sidebarCollapsed);
   const { anchorRef, expandedBoundsRef, panelStyle, headerStyle, bodyStyle } = useReviewPanelTransition(isExpanded);
   const [resync, { isLoading: refreshing }] = useResyncWorkspaceDiffMutation();
+  useEffect(() => {
+    // Recompute the stored Git snapshot on open, just like the session panel.
+    void resync(workspaceId);
+  }, [resync, workspaceId]);
   const files = useMemo(() => reviewFiles(snapshot?.diffText ?? "", snapshot?.files ?? []), [snapshot]);
+  const reviewedCount = files.filter((file) => !file.reviewUnavailable && fileStates[file.path]?.patchId === file.patchId && fileStates[file.path].reviewed).length;
+  useEffect(() => {
+    // Undefined is still loading; null is an authoritative empty snapshot.
+    if (snapshot === undefined || isFetching) return;
+    dispatch(reconcileReviewFileStates({ backendId, workspaceId, files }));
+  }, [dispatch, backendId, workspaceId, snapshot, isFetching, files]);
+  const onReviewedChange = useCallback((file: ReviewFile, reviewed: boolean) => {
+    dispatch(setReviewFileReviewed({ backendId, workspaceId, path: file.path, patchId: file.patchId, reviewed }));
+  }, [dispatch, backendId, workspaceId]);
+  const onCollapsedChange = useCallback((file: ReviewFile, collapsed: boolean) => {
+    dispatch(setReviewFileCollapsed({ backendId, workspaceId, path: file.path, patchId: file.patchId, collapsed }));
+  }, [dispatch, backendId, workspaceId]);
   const reviewComments = useComposerReviewComments(workspaceId);
   const filesByPath = useMemo(() => new Map(files.map((file) => [file.path, file])), [files]);
   const stale = useMemo(() => reviewComments.filter((comment) => {
@@ -210,7 +253,7 @@ export function WorkspaceReview({ workspaceId, rootPath, isExpanded, onToggleExp
             style={headerStyle}>
             <InvertedCorner side="left" visible={isExpanded && sidebarCollapsed} />
             <Review className="size-4 text-primary-500" /><span className="text-sm font-medium text-primary-500">Review</span>
-            <span className="min-w-0 flex-1 truncate text-s ml-1 text-primary-500">Uncommitted changes · {files.length} file{files.length === 1 ? "" : "s"}</span>
+            <span className="min-w-0 flex-1 truncate text-s ml-1 text-primary-500">Uncommitted changes · {files.length} file{files.length === 1 ? "" : "s"} · {reviewedCount} reviewed</span>
             <ReviewToolbar files={files} anchorRef={header} onJump={(path) => navigation.current?.jumpToFile(path)}
               diffStyle={diffStyle} onStyleChange={setDiffStyle} />
             <Button variant="icon" type="button" aria-label="Refresh review changes" disabled={refreshing || isFetching} onClick={() => void refresh()}>
@@ -227,7 +270,8 @@ export function WorkspaceReview({ workspaceId, rootPath, isExpanded, onToggleExp
                   {stale.length} comment{stale.length === 1 ? " refers" : "s refer"} to an earlier diff. Their original code is kept in the chat attachment.
                 </p>}
                 <ReviewFileList files={files} workspaceId={workspaceId} rootPath={rootPath} onCommentAdded={onCommentAdded}
-                  diffStyle={diffStyle} navigationRef={navigation} />
+                  diffStyle={diffStyle} navigationRef={navigation} fileStates={fileStates}
+                  onReviewedChange={onReviewedChange} onCollapsedChange={onCollapsedChange} />
                 {!files.length && <div className="flex h-60 flex-col items-center justify-center gap-2 text-primary-500">
                   <Review className="size-5" /><p className="text-xs">{isFetching ? "Loading changes…" : "No changes detected."}</p>
                 </div>}

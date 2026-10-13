@@ -89,6 +89,7 @@ export const baseApi = createApi({
     'InstalledApps',
     'AppsForFile',
     'Stats',
+    'TerminalSessions',
     'WorkspaceActivity',
     'Automations',
     'Pulse',

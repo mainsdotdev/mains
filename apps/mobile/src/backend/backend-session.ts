@@ -5,6 +5,7 @@ import { AppState } from "react-native";
 import { toWebSocketUrl } from "@mains/contracts/backend";
 import { setHistoryFollowing } from "./run-history";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type {
   AccountResponse,
   ContinueRunPayload,
@@ -18,10 +19,11 @@ import type {
   StartRunPayload,
   StartRunResponse,
   ToolApprovalResponse,
-  UpdateRunSettingsPayload,
   ArtifactImage,
   RunTextFile,
   RunEphemeralEvent,
+  ReadRunHistoryContentPayload,
+  RunHistoryContentPage,
 } from "@mains/contracts/runs";
 import { db } from "@/db/client";
 import { runs, spaces } from "@/db/schema";
@@ -51,7 +53,6 @@ import {
   describeBackend,
   firstSpaceId,
   getLastSpaceId,
-  getModelChoice,
   setLastSpaceId,
   syncContextSources,
   type ContextSourcesResult,
@@ -62,6 +63,8 @@ import {
   readArtifactImage,
   readAttachmentImage,
   readRunTextFile,
+  readHistoryContent,
+  applyConversationSettings,
 } from "./sync";
 import { isConnectionLoss, WsTransport, type CloseInfo } from "./ws-transport";
 import {
@@ -332,19 +335,25 @@ class BackendSession {
     return result;
   }
 
-  /**
-   * Edit a provider's run settings on the Mac — the same settings the
-   * desktop's composer toolbar edits (effort, permission mode, fast / goal /
-   * plan). Only the keys in `patch` change.
-   */
-  async updateRunSettings(
-    providerId: string,
-    patch: UpdateRunSettingsPayload,
-  ): Promise<ServiceResponse<unknown>> {
-    const result = await this.command(CHANNELS.providers.updateRunSettings, [providerId, patch]);
-    const backendId = this.snapshot.backend?.backendId;
-    if (result.success && this.transport && backendId) {
-      await syncTargets(this.transport, backendId).catch(() => {});
+  /** Save only this conversation's next-message preferences. */
+  async updateConversationSettings(
+    backendId: string,
+    runId: string,
+    settings: ConversationSettings,
+  ): Promise<ServiceResponse<ConversationSettings>> {
+    if (this.snapshot.backend?.backendId !== backendId) {
+      return { success: false, error: "The connected computer changed" };
+    }
+    const result = await this.command<ConversationSettings>(
+      CHANNELS.runs.updateConversationSettings, [runId, settings], { backendId },
+    );
+    if (this.snapshot.backend?.backendId !== backendId) {
+      return { success: false, error: "The connected computer changed" };
+    }
+    if (result.success) {
+      applyConversationSettings(backendId, runId, result.data);
+      // Join the serialized pull before dropping the sheet's pending selection.
+      if (this.transport) await syncRun(this.transport, backendId, runId).catch(() => {});
     }
     return result;
   }
@@ -358,8 +367,8 @@ class BackendSession {
     contextSkills?: SkillSummary[];
     /** Phone-local files serialized for the Mac's attachment pipeline. */
     attachments?: FileAttachment[];
-    /** The model the composer shows — sent as is, so what you see is what runs. */
-    model?: string | null;
+    /** The exact model/config shown in this conversation's composer. */
+    conversationSettings: ConversationSettings;
   }): Promise<ServiceResponse<StartRunResponse>> {
     const { accountId, backend, selectedSpaceId } = this.snapshot;
     if (!accountId || !backend) {
@@ -385,12 +394,13 @@ class BackendSession {
         error: missingAiDataConsentMessage(space.providerId),
       };
     }
-    const model = input.model ?? getModelChoice(backend.backendId, space.providerId);
+    const model = input.conversationSettings.model;
     const payload: StartRunPayload = {
       accountId,
       spaceId: space.id,
       providerId: space.providerId,
       goal: input.goal,
+      conversationSettings: input.conversationSettings,
       // Only an explicit pick travels; otherwise the Mac uses the provider's default.
       ...(model ? { model } : {}),
       ...(space.mode === "developer" && input.workspaceId ? { workspaceId: input.workspaceId } : {}),
@@ -456,8 +466,8 @@ class BackendSession {
     runId: string,
     message: string,
     contextSkills?: SkillSummary[],
-    /** The model the composer shows; without one, the Mac keeps the run's. */
-    shownModel?: string | null,
+    /** Without a snapshot, the Mac keeps the conversation's saved preferences. */
+    settings?: ConversationSettings,
     /** Phone-local files serialized for the Mac's attachment pipeline. */
     attachments?: FileAttachment[],
   ): Promise<ServiceResponse<ContinueRunResponse>> {
@@ -482,12 +492,11 @@ class BackendSession {
         error: missingAiDataConsentMessage(run.providerId),
       };
     }
-    const model = shownModel ?? getModelChoice(backend.backendId, run.providerId);
     const payload: ContinueRunPayload = {
       runId,
       accountId,
       message,
-      ...(model ? { model } : {}),
+      ...(settings ? { conversationSettings: settings } : {}),
       ...(attachments?.length ? { attachments } : {}),
       ...(contextSkills?.length ? { contextSkills } : {}),
     };
@@ -577,6 +586,11 @@ class BackendSession {
     return readRunTextFile(this.transport, runId, filePath);
   }
 
+  readHistoryContent(request: ReadRunHistoryContentPayload): Promise<RunHistoryContentPage> {
+    if (!this.isConnected() || !this.transport) return Promise.reject(new Error("Connect to Mains to read the full content"));
+    return readHistoryContent(this.transport, request);
+  }
+
   /** The transcript on screen — its events trigger refetches; others wait. */
   async pageRunHistory(runId: string, direction: "older" | "newer" | "latest" | "refresh"): Promise<void> {
     const backendId = this.snapshot.backend?.backendId;
@@ -611,12 +625,15 @@ class BackendSession {
   async command<T = unknown>(
     channel: string,
     args: unknown[] = [],
-    options: { timeoutMs?: number } = {},
+    options: { timeoutMs?: number; backendId?: string } = {},
   ): Promise<ServiceResponse<T>> {
     const commandId = newCommandId();
     const deadline = Date.now() + (options.timeoutMs ?? 60_000);
     for (;;) {
       const transport = await this.waitForConnected(deadline);
+      if (options.backendId && this.snapshot.backend?.backendId !== options.backendId) {
+        throw new Error("The connected computer changed");
+      }
       try {
         return (await transport.invoke(channel, args, { commandId })) as ServiceResponse<T>;
       } catch (error) {

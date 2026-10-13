@@ -1,5 +1,5 @@
 import { and, asc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { Image } from "expo-image";
 import { useEffect, useMemo, useState } from "react";
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
@@ -64,20 +64,22 @@ export function ContextPicker({
   onSelect: (row: PickerRow) => void;
   onClose: () => void;
 }) {
-  const skillQuery = useLiveQuery(
+  const skillQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(skillsTable)
       .where(and(eq(skillsTable.backendId, backendId), eq(skillsTable.providerId, providerId)))
       .orderBy(asc(skillsTable.sortOrder)),
+    skillsTable,
     [backendId, providerId],
   );
-  const commandQuery = useLiveQuery(
+  const commandQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(commandsTable)
       .where(and(eq(commandsTable.backendId, backendId), eq(commandsTable.providerId, providerId)))
       .orderBy(asc(commandsTable.sortOrder)),
+    commandsTable,
     [backendId, providerId],
   );
 
@@ -93,8 +95,8 @@ export function ContextPicker({
     [skillQuery.data, commandQuery.data, trigger, bucket, filter],
   );
 
-  // The snapshot lists these once per connection; re-ask on open so a plugin
-  // installed on the Mac since then shows up.
+  // Fetch only when the picker opens, keeping provider catalogues out of the
+  // initial sync and showing newly installed plugins here.
   // Tagged with what was asked rather than cleared when the ask changes: a
   // synchronous reset inside the effect is the cascading render the lint rule
   // is about, and comparing the tag discards a stale answer just as well.

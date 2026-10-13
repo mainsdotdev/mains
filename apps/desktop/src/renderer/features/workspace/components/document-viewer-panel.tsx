@@ -1,6 +1,8 @@
-import { useEffect, useReducer, useRef, useState } from "react";
-import { Button, Text, toast } from "@/components/ui";
-import { Close, Document, Download } from "@/components/ui/icons";
+import { useId, useRef, useState } from "react";
+import { ShellHeader } from "@/components/layout/shell-header";
+import { usePanelAnimation } from "@/hooks/use-panel-animation";
+import { TabStrip, Text, toast } from "@/components/ui";
+import { Document } from "@/components/ui/icons";
 import { appApi } from "@/lib/transport";
 import { DOC_TYPE_ICONS } from "./document-viewer/doc-type-icons";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
@@ -13,25 +15,22 @@ import {
   DOC_VIEWER_PANEL_WIDTH_MIN,
   DOC_VIEWER_PANEL_WIDTH_MAX,
   DOC_VIEWER_PANEL_WIDTH_DEFAULT,
-  clamp,
 } from "@/lib/layout";
-import { DOC_VIEWER_LABELS, isTextDocType } from "@/lib/document-viewer";
+import { isTextDocType } from "@/lib/document-viewer";
+import { BaseTab } from "./base-tab";
 import { DocumentRenderHost } from "./document-viewer/document-render-host";
 import { MarkdownDocument } from "./document-viewer/markdown-document";
 import { PdfDocument } from "./document-viewer/pdf-document";
+import { DocumentViewerToolbar } from "./document-viewer/document-viewer-toolbar";
 
-type AnimationState = "closed" | "opening" | "open" | "closing";
-
-const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 2;
-const ZOOM_STEP = 0.1;
-
-export function DocumentViewerPanel() {
+export function DocumentViewerPanel({ reserveLayoutControls = false }: { reserveLayoutControls?: boolean }) {
   const { isOpen, currentDoc, close } = useDocumentViewer();
   const dispatch = useAppDispatch();
   const documentViewerWidth = useAppSelector((s) => s.appSettings.documentViewerWidth);
   const [zoom, setZoom] = useState(1);
   const [isSaving, setIsSaving] = useState(false);
+  const tabId = useId();
+  const contentId = `${tabId}-content`;
 
   // Reset zoom to 100% when a different document loads. Adjusting state during
   // render (React's supported pattern) instead of in an effect avoids a wasted
@@ -42,29 +41,7 @@ export function DocumentViewerPanel() {
     if (zoom !== 1) setZoom(1);
   }
 
-  const [animState, dispatchAnim] = useReducer(
-    (_: AnimationState, next: AnimationState) => next,
-    isOpen ? "open" : "closed",
-  );
-
-  useEffect(() => {
-    dispatchAnim(isOpen ? "opening" : "closing");
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (animState === "opening") {
-      const t = setTimeout(() => dispatchAnim("open"), 50);
-      return () => clearTimeout(t);
-    }
-    if (animState === "closing") {
-      const t = setTimeout(() => dispatchAnim("closed"), 300);
-      return () => clearTimeout(t);
-    }
-    return undefined;
-  }, [animState]);
-
-  const isVisible = animState !== "closed";
-  const isAnimatedIn = animState === "open";
+  const { isVisible, isAnimatedIn } = usePanelAnimation(isOpen);
 
   if (!isVisible) return null;
 
@@ -91,14 +68,13 @@ export function DocumentViewerPanel() {
     }
   };
 
-  const zoomOut = () => setZoom((z) => clamp(+(z - ZOOM_STEP).toFixed(2), ZOOM_MIN, ZOOM_MAX));
-  const zoomIn = () => setZoom((z) => clamp(+(z + ZOOM_STEP).toFixed(2), ZOOM_MIN, ZOOM_MAX));
-
   const DocIcon = currentDoc ? DOC_TYPE_ICONS[currentDoc.docType] : Document;
+  const title = currentDoc?.fileName ?? "Document";
 
   return (
     <div
-      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[transform,opacity] duration-300 ease-out"
+      data-document-viewer-panel=""
+      className="fixed inset-y-0 right-0 z-9999 overflow-hidden transition-[transform,opacity] duration-150 ease-out"
       style={{
         width: "var(--doc-viewer-panel-width)",
         transform: isAnimatedIn ? "translateX(0)" : "translateX(100%)",
@@ -121,104 +97,40 @@ export function DocumentViewerPanel() {
 
       {/* Keep the full lane width for resizing while the inset surface leaves
           the translucent app frame visible on every side. */}
-      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden rounded-2xl bg-primary dark:bg-primary-950">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-primary-200/60 dark:border-primary-800/50">
-        <DocIcon className="size-4 shrink-0 " />
-        <div className="flex-1 min-w-0">
-          <Text as="div" size="xs" tone="default" weight="medium" className="truncate">
-            {currentDoc?.fileName ?? "Document"}
-          </Text>
-          {currentDoc && (
-            <Text as="div" size="t" tone="subtle" className="-mt-px">
-              {DOC_VIEWER_LABELS[currentDoc.docType]}
+      <div className="absolute inset-1.25 flex min-h-0 flex-col overflow-hidden">
+        <ShellHeader reserveWindowControls={reserveLayoutControls}>
+          <TabStrip activeKey={currentDoc?.path} role="tablist" aria-label="Document tabs">
+            <BaseTab id={tabId} ariaControls={contentId} isActive isFirst showLeadingCorner={false}
+              role="tab" ariaLabel={title} icon={<DocIcon className="size-3.5" />} label={title} tooltip={title}
+              onClick={() => {}} closeLabel="Close document viewer"
+              onClose={(event) => { event.stopPropagation(); close(); }} />
+          </TabStrip>
+        </ShellHeader>
+        <div id={contentId} role="tabpanel" aria-labelledby={tabId} data-document-viewer-content=""
+          className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl rounded-tl-none bg-primary dark:bg-primary-950">
+          <DocumentViewerToolbar doc={currentDoc} zoom={zoom} onZoomChange={setZoom}
+            isSaving={isSaving} onSaveCopy={() => void saveCopy()} />
+
+          {/* Body — text formats render as React, PDFs as pdf.js canvases, Office
+              bytes go to the shadow host. They never mix, so the branch lives here
+              rather than inside the host. */}
+          {currentDoc ? (
+            isTextDocType(currentDoc.docType) ? (
+              <MarkdownDocument key={currentDoc.path} path={currentDoc.path} docType={currentDoc.docType} />
+            ) : currentDoc.docType === "pdf" ? (
+              <PdfDocument key={currentDoc.path} doc={currentDoc} zoom={zoom} />
+            ) : (
+              <DocumentRenderHost
+                doc={{ ...currentDoc, docType: currentDoc.docType }}
+                zoom={zoom}
+              />
+            )
+          ) : (
+            <Text as="div" size="xs" tone="subtle" className="flex-1 flex items-center justify-center">
+              No document selected
             </Text>
           )}
         </div>
-
-        {/* Zoom controls — rendered documents only. Text sets its own type
-            from the app's scale, so there is nothing here to scale. */}
-        {currentDoc && !isTextDocType(currentDoc.docType) && (
-          <Text as="div" size="inherit" tone="muted" className="flex items-center gap-0.5">
-            <Button
-              variant="icon"
-              iconSize="sm"
-              tooltip="Zoom out"
-              tooltipPosition="bottom"
-              onClick={zoomOut}
-              disabled={zoom <= ZOOM_MIN}
-              aria-label="Zoom out"
-            >
-              <Text as="span" size="sm" tone="inherit" className="leading-none">−</Text>
-            </Button>
-            <Button
-              tooltip="Reset zoom"
-              tooltipPosition="bottom"
-              onClick={() => setZoom(1)}
-              className="min-w-10 px-1 text-xxs tabular-nums rounded-full cursor-pointer hover:bg-primary-200/60 dark:hover:bg-primary-800/60"
-              aria-label="Reset zoom"
-            >
-              {Math.round(zoom * 100)}%
-            </Button>
-            <Button
-              variant="icon"
-              iconSize="sm"
-              tooltip="Zoom in"
-              tooltipPosition="bottom"
-              onClick={zoomIn}
-              disabled={zoom >= ZOOM_MAX}
-              aria-label="Zoom in"
-            >
-              <Text as="span" size="sm" tone="inherit" className="leading-none">+</Text>
-            </Button>
-          </Text>
-        )}
-
-        {/* A draft attachment from the composer is a blob URL — not a file on
-            disk yet, so there is nothing to copy. */}
-        {!currentDoc?.path.startsWith("blob:") && (
-          <Button
-            variant="icon"
-            tooltip="Save a copy…"
-            tooltipPosition="bottom"
-            onClick={() => void saveCopy()}
-            disabled={!currentDoc || isSaving}
-            aria-label="Save a copy of this document"
-          >
-            <Download className="size-4" />
-          </Button>
-        )}
-
-        <Button
-          variant="icon"
-          tooltip="Close"
-          tooltipPosition="bottom-left"
-          onClick={close}
-          aria-label="Close document viewer"
-        >
-          <Close className="size-4" />
-        </Button>
-      </div>
-
-      {/* Body — text formats render as React, PDFs as pdf.js canvases, Office
-          bytes go to the shadow host. They never mix, so the branch lives here
-          rather than inside the host. */}
-      {currentDoc ? (
-        isTextDocType(currentDoc.docType) ? (
-          <MarkdownDocument key={currentDoc.path} path={currentDoc.path} />
-        ) : currentDoc.docType === "pdf" ? (
-          <PdfDocument key={currentDoc.path} doc={currentDoc} zoom={zoom} />
-        ) : (
-          <DocumentRenderHost
-            doc={{ ...currentDoc, docType: currentDoc.docType }}
-            zoom={zoom}
-          />
-        )
-      ) : (
-        <Text as="div" size="xs" tone="subtle" className="flex-1 flex items-center justify-center">
-          No document selected
-        </Text>
-      )}
       </div>
     </div>
   );

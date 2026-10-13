@@ -6,6 +6,7 @@ import {
   ProviderAccountSection,
   ProviderCliSection,
   ProviderSettingsLayout,
+  ProviderUsageSection,
   selectedSchemaLabel,
   useProviderSettings,
 } from "./provider-settings-shared";
@@ -13,7 +14,11 @@ import { StructuredOutputsModal } from "./structured-outputs-modal";
 import type { ClaudeCodeAdapterConfig } from "../../../../shared/adapter.types";
 import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import { getProviderVariant } from "@/lib/provider-variants";
-import { useGetProviderAccountInfoQuery } from "@/lib/redux/api";
+import {
+  useGetProviderAccountInfoQuery,
+  useGetProviderRateLimitsQuery,
+} from "@/lib/redux/api";
+import { buildClaudeUsageRows } from "../lib/claude-usage";
 import { CLAUDE_PERMISSION_MODES } from "@/lib/provider-modes";
 import {
   DEFAULT_CLAUDE_PERMISSION_MODE,
@@ -76,6 +81,11 @@ export default function ClaudeSettings() {
     useGetProviderAccountInfoQuery(PROVIDER_IDS.claude);
   const account = accountInfo?.account;
   const cli = accountInfo?.cli;
+  const { data: rateLimits, isLoading: isLoadingRateLimits } =
+    useGetProviderRateLimitsQuery(PROVIDER_IDS.claude, {
+      pollingInterval: 60000,
+    });
+  const usageRows = buildClaudeUsageRows(rateLimits);
 
   const permissionMode = config.permissionMode ?? DEFAULT_CLAUDE_PERMISSION_MODE;
   const outputStyle = config.outputStyle ?? "";
@@ -311,6 +321,12 @@ export default function ClaudeSettings() {
         </SettingsRow>
         </SettingsSection>
       )}
+
+      <ProviderUsageSection
+        isLoading={isLoadingRateLimits}
+        rows={usageRows}
+        readout="percentLeft"
+      />
 
       <StructuredOutputsModal
         isOpen={isStructuredOutputsModalOpen}

@@ -34,6 +34,7 @@ export const PAIRED_DEVICE_CHANNELS: ReadonlySet<string> = new Set([
   CHANNELS.runs.getById,
   CHANNELS.runs.getDetails,
   CHANNELS.runs.getHistory,
+  CHANNELS.runs.readHistoryContent,
   CHANNELS.runs.getByWorkspace,
   // A single Markdown link, resolved and contained inside that Work/Chat run's
   // managed directory. This deliberately does not expose fileExplorer:*.
@@ -89,6 +90,8 @@ export const PAIRED_DEVICE_COMMANDS: ReadonlySet<string> = new Set([
   // Stopping a run you can already start and continue takes nothing further —
   // it only ends work the device itself asked for.
   CHANNELS.runs.abort,
+  // Only next-message model/config preferences; general runs:update stays private.
+  CHANNELS.runs.updateConversationSettings,
   // The desktop's mode picker is a space update; the phone's works the same way.
   CHANNELS.space.update,
   // The composer toolbar's settings (effort, permission mode, fast / goal /

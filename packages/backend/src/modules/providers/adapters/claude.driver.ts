@@ -45,6 +45,7 @@ import type {
   PluginListResponse,
   MarketplaceInfo,
   ProviderDriver,
+  RateLimitInfo,
   SkillInfo,
   WorkRunContextItem,
   WorkRunContextUsageCategory,
@@ -53,6 +54,8 @@ import type {
   WorkRunEventHandler,
   WorkRunForkRequest,
   WorkRunRequest,
+  WorkRunSteerRequest,
+  WorkRunTaskEvent,
   WorkRunToolPolicy,
   WorkRunUsage,
 } from "../../../../shared/adapter.types";
@@ -79,11 +82,13 @@ import {
   couldModifyFiles,
   resolveEffectiveAllowedTools,
   safeJson,
+  emitUserPromptArtifact,
   extractArtifactsFromToolOutput,
   formatContextSection,
   appendPromptSections,
   resolveCatalogDefaultId,
 } from "./adapter.shared";
+import { createClaudeTurnInput, isClaudeUserInput } from "./claude-turn-input";
 import type { MainsToolContext } from "./mains-tools.core";
 import { toClaudeTools } from "./mains-tools.registry";
 import { guardsService } from "../../guards/guards.service";
@@ -188,6 +193,7 @@ interface SDKOptions {
   settings?: string | Record<string, unknown>;
   promptSuggestions?: boolean;
   includePartialMessages?: boolean;
+  extraArgs?: Record<string, string | null>;
   plugins?: Array<{ type: "local"; path: string; skipMcpDiscovery?: boolean }>;
   canUseTool?: SDKCanUseTool;
   onElicitation?: SDKOnElicitation;
@@ -294,6 +300,8 @@ interface SDKCanUseToolOptions {
   title?: string;
   displayName?: string;
   description?: string;
+  defaultToNo?: boolean;
+  suppressAlwaysAllowRule?: boolean;
   toolUseID: string;
   agentID?: string;
   requestId: string;
@@ -391,6 +399,9 @@ interface SDKAssistantMessage {
   session_id: string;
   message: { id?: string; role: "assistant"; model?: string; content: SDKMessageContent[] };
   parent_tool_use_id: string | null;
+  /** Stable subagent task id; absent on main-thread messages. */
+  agent_id?: string;
+  subagent_type?: string;
   /**
    * Set when the API call behind this turn failed. Without it an auth or
    * billing failure is indistinguishable from the agent saying nothing.
@@ -417,6 +428,7 @@ interface SDKUserMessage {
         }>;
   };
   parent_tool_use_id: string | null;
+  agent_id?: string;
   tool_result_meta?: Array<{
     id: string;
     non_execution_kind: string;
@@ -501,6 +513,7 @@ interface ClaudeTurnModelMessage {
   subtype?: unknown;
   scope?: unknown;
   parent_tool_use_id?: unknown;
+  agent_id?: unknown;
   message?: { model?: unknown };
   model?: unknown;
   fallback_model?: unknown;
@@ -517,7 +530,7 @@ export function resolveClaudeTurnModel(
   message: ClaudeTurnModelMessage,
   configuredModel?: string,
 ): string | undefined {
-  if (message.type === "assistant" && message.parent_tool_use_id === null) {
+  if (message.type === "assistant" && message.parent_tool_use_id === null && !message.agent_id) {
     const assistantModel = cleanModel(message.message?.model);
     if (assistantModel) return assistantModel;
   }
@@ -579,6 +592,7 @@ export interface SDKSystemMessage {
     | "task_progress"
     | "task_updated"
     | "task_notification"
+    | "background_tasks_changed"
     | "model_refusal_fallback"
     | "model_refusal_no_fallback"
     | "permission_denied"
@@ -626,6 +640,10 @@ export interface SDKSystemMessage {
   error?: string;
   // subtypes: "task_started" | "task_progress" | "task_updated" | "task_notification"
   task_id?: string;
+  run_id?: string;
+  parent_task_id?: string;
+  is_backgrounded?: boolean;
+  ambient?: boolean;
   tool_use_id?: string;
   description?: string;
   subagent_type?: string;
@@ -643,6 +661,8 @@ export interface SDKSystemMessage {
     error?: string;
     is_backgrounded?: boolean;
   };
+  // subtype: "background_tasks_changed" — full replacement, not a delta
+  tasks?: SDKBackgroundTask[];
   // subtypes: "model_refusal_fallback" | "model_refusal_no_fallback"
   original_model?: string;
   fallback_model?: string;
@@ -663,11 +683,41 @@ export interface SDKSystemMessage {
   priority?: "low" | "medium" | "high" | "immediate";
 }
 
+interface SDKBackgroundTask {
+  task_id: string;
+  run_id?: string;
+  task_type: string;
+  subagent_type?: string;
+  description: string;
+  parent_task_id?: string;
+  ambient?: boolean;
+}
+
 interface SDKRateLimitInfo {
   status: "allowed" | "allowed_warning" | "rejected";
   resetsAt?: number;
   rateLimitType?: "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet" | "overage";
   utilization?: number;
+}
+
+interface SDKUsageWindow {
+  /** The /usage response uses 0-100, unlike rate_limit_event's 0-1 share. */
+  utilization?: number | null;
+  resets_at?: string | null;
+}
+
+interface SDKUsageResponse {
+  subscription_type?: string | null;
+  rate_limits_available?: boolean;
+  rate_limits?: {
+    five_hour?: SDKUsageWindow | null;
+    seven_day?: SDKUsageWindow | null;
+    seven_day_oauth_apps?: SDKUsageWindow | null;
+    seven_day_opus?: SDKUsageWindow | null;
+    seven_day_sonnet?: SDKUsageWindow | null;
+    model_scoped?: Array<SDKUsageWindow & { display_name: string }>;
+    extra_usage?: { is_enabled: boolean; utilization?: number | null } | null;
+  } | null;
 }
 
 interface SDKRateLimitEvent {
@@ -750,6 +800,8 @@ interface SDKSessionInfoLite {
 
 interface SDKQuery extends AsyncGenerator<SDKMessage, void> {
   interrupt(): Promise<void>;
+  /** Runtime control method, not yet exposed in the SDK's public type surface. */
+  cancelAsyncMessage?(uuid: string): Promise<boolean>;
   /** Forcefully ends the query and terminates the CLI subprocess. */
   close(): void;
   rewindFiles(userMessageUuid: string, options?: { dryRun?: boolean }): Promise<unknown>;
@@ -768,7 +820,7 @@ interface SDKQuery extends AsyncGenerator<SDKMessage, void> {
    * reach `mcp_call`, which the protocol declares but no public method wraps.
    */
   request?(request: Record<string, unknown>): Promise<unknown>;
-  /** The `/usage` control request, experimental in the SDK — see readClaudeSessionTotals. */
+  /** The `/usage` control request, experimental in the SDK. */
   usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(opts?: {
     skipBehaviors?: boolean;
   }): Promise<unknown>;
@@ -785,14 +837,20 @@ interface SDKQuery extends AsyncGenerator<SDKMessage, void> {
 // Per-run session state (handed back to Core as opaque `session`)
 // ─────────────────────────────────────────────────────────────
 
-/**
- * taskId → the tool_use_id that spawned it, remembered from `task_started`
- * because later task phases don't all repeat it.
- */
-export type ClaudeTaskIndex = Map<
-  string,
-  { toolUseId?: string; description?: string; subagentType?: string }
->;
+/** Stable task identity, current execution and its call anchor, including ended parents. */
+export type ClaudeTaskIndex = Map<string, {
+  toolUseId?: string;
+  originalToolUseId?: string;
+  providerRunId?: string;
+  description?: string;
+  subagentType?: string;
+  taskType?: string;
+  parentTaskId?: string | null;
+  isBackgrounded?: boolean;
+  ambient?: boolean;
+  terminal?: boolean;
+  notified?: boolean;
+}>;
 
 type ClaudeSDKPermissionMode = NonNullable<SDKOptions["permissionMode"]>;
 
@@ -855,12 +913,17 @@ interface ClaudeSession {
    * to the right tool call.
    */
   taskIndex: ClaudeTaskIndex;
+  /** Full live-background level; absent until this CLI reports one. */
+  backgroundTasks?: Map<string, SDKBackgroundTask>;
   /** Per-(runId, blockIndex) streaming text buffers. */
   partialTextBuffers: Map<string, string>;
   /** Per-(runId, blockIndex) streaming thinking buffers. */
   partialThinkingBuffers: Map<string, string>;
   /** SDK query — created lazily in executePrompt because the prompt is supplied there. */
   query?: SDKQuery;
+  input?: ReturnType<typeof createClaudeTurnInput>;
+  onEvent?: WorkRunEventHandler;
+  initialInput?: { uuid: string; onAccepted?: (turnId: string) => Promise<void> };
   /** True for start/fork (a fresh run that owns its title), false for continue. */
   isInitial: boolean;
   /**
@@ -941,12 +1004,15 @@ export function buildSubagentCompletionEvent(args: {
   output?: unknown;
   error?: string;
   toolUseId?: string;
+  agentId?: string;
+  providerRunId?: string;
   ts: number;
 }): WorkRunEvent {
   const { input, output, error, toolUseId, ts } = args;
   const taskInput = input as Record<string, unknown> | undefined;
   const subagentType = (taskInput?.subagent_type as string) || "general-purpose";
-  const { text, agentId } = normalizeSubagentOutput(output);
+  const { text, agentId: parsedAgentId } = normalizeSubagentOutput(output);
+  const agentId = args.agentId ?? parsedAgentId;
 
   // A backgrounded agent's tool_result is only the LAUNCH ACK — the agent is
   // still working, and its real outcome arrives later as a task_notification.
@@ -965,6 +1031,7 @@ export function buildSubagentCompletionEvent(args: {
       phase: "running",
       agentType: subagentType,
       agentId,
+      providerRunId: args.providerRunId,
       parentToolUseId: toolUseId || undefined,
       ts,
       metadata: { toolCallId: toolUseId || undefined },
@@ -976,6 +1043,7 @@ export function buildSubagentCompletionEvent(args: {
     phase: error ? "failed" : "completed",
     agentType: subagentType,
     agentId,
+    providerRunId: args.providerRunId,
     parentToolUseId: toolUseId || undefined,
     result: text,
     error,
@@ -1029,7 +1097,7 @@ export function createClaudePermissionBridge({
   async function decide(
     toolName: string,
     toolInput: Record<string, unknown>,
-    context: { signal: AbortSignal; requestId?: string },
+    context: SDKCanUseToolOptions,
   ): Promise<PermissionDecision> {
     const isAskUser = toolName === "AskUserQuestion";
     const isPlanReview = toolName === "ExitPlanMode";
@@ -1048,7 +1116,11 @@ export function createClaudePermissionBridge({
     const bypass = mode === "bypassPermissions" && !isAskUser && !isPlanReview;
     const mcpTrusted = !restrictedToolset && toolName.startsWith("mcp__");
     const planGated = mode === "plan" && couldModifyFiles(toolName);
-    if (!planGated && (bypass || allowedTools.has(toolName) || mcpTrusted)) {
+    // A provider's guarded prompt or an explicit ask rule still needs the
+    // user's decision, including managed connectors in a bypass run.
+    const requiresUserApproval = context.defaultToNo === true ||
+      context.suppressAlwaysAllowRule === true || !!context.matchedAskRule;
+    if (!planGated && !requiresUserApproval && (bypass || allowedTools.has(toolName) || mcpTrusted)) {
       return { allowed: true, updatedInput: toolInput };
     }
 
@@ -1064,6 +1136,11 @@ export function createClaudePermissionBridge({
       toolName,
       toolInput,
       kind: isAskUser ? "ask_user" : "tool_approval",
+      header: context.displayName,
+      question: context.title,
+      description: context.description ?? context.decisionReason,
+      defaultToNo: context.defaultToNo,
+      suppressAlwaysAllowRule: context.suppressAlwaysAllowRule,
       timestamp: Date.now(),
     };
 
@@ -1145,10 +1222,7 @@ export function createClaudePermissionBridge({
   }
 
   const canUseTool: SDKCanUseTool = async (toolName, toolInput, options) => {
-    const decision = await decide(toolName, toolInput, {
-      signal: options.signal,
-      requestId: options.requestId,
-    });
+    const decision = await decide(toolName, toolInput, options);
     if (!decision.allowed) {
       return {
         behavior: "deny",
@@ -1459,11 +1533,11 @@ export function mapContextUsageResponse(
  * passed through unclamped — it can exceed the window, and the meter clamps.
  */
 export function buildContextUsageEvent(
-  msg: { context_usage?: SDKContextUsage; parent_tool_use_id: string | null },
+  msg: { context_usage?: SDKContextUsage; parent_tool_use_id: string | null; agent_id?: string },
   ts: number,
 ): WorkRunEvent | null {
   const ctx = msg.context_usage;
-  if (!ctx || msg.parent_tool_use_id || !(ctx.raw_max_tokens > 0)) return null;
+  if (!ctx || msg.parent_tool_use_id || msg.agent_id || !(ctx.raw_max_tokens > 0)) return null;
   // Unknown kinds are dropped rather than widening the renderer's union — a row
   // it can't classify has no place to go.
   const categories = ctx.categories
@@ -1507,6 +1581,64 @@ export function mapClaudeSessionTotals(response: unknown): ClaudeSessionTotals |
       ? (session.model_usage as Record<string, SDKModelUsage>)
       : {};
   return { costUsd: session.total_cost_usd, modelUsage };
+}
+
+/** Map account allowances separately from the /usage response's session totals. */
+export function mapClaudeRateLimits(response: unknown): RateLimitInfo | null {
+  const usage = response as SDKUsageResponse | null | undefined;
+  const limits = usage?.rate_limits;
+  if (usage?.rate_limits_available === false || !limits || typeof limits !== "object") return null;
+
+  const buckets: NonNullable<RateLimitInfo["rateLimitsByLimitId"]> = {};
+  function addWindow(
+    limitId: string,
+    label: string,
+    window: SDKUsageWindow | null | undefined,
+    windowDurationMins?: number,
+  ): void {
+    const percent = window?.utilization;
+    // Null means unknown, including on a plan that does not include this meter.
+    if (typeof percent !== "number" || !Number.isFinite(percent)) return;
+    const resetMs = typeof window?.resets_at === "string" ? Date.parse(window.resets_at) : NaN;
+    buckets[limitId] = {
+      limitId,
+      limitName: label,
+      primary: {
+        label,
+        usedPercent: Math.max(0, Math.min(100, Math.round(percent))),
+        ...(windowDurationMins !== undefined ? { windowDurationMins } : {}),
+        ...(Number.isFinite(resetMs) ? { resetsAt: Math.floor(resetMs / 1000) } : {}),
+      },
+    };
+  }
+
+  const weeklyMins = 7 * 24 * 60;
+  addWindow("five_hour", "5 hour usage limit", limits.five_hour, 5 * 60);
+  addWindow("seven_day", "Weekly usage limit", limits.seven_day, weeklyMins);
+  addWindow("seven_day_oauth_apps", "OAuth apps weekly usage limit", limits.seven_day_oauth_apps, weeklyMins);
+  addWindow("seven_day_opus", "Opus weekly usage limit", limits.seven_day_opus, weeklyMins);
+  addWindow("seven_day_sonnet", "Sonnet weekly usage limit", limits.seven_day_sonnet, weeklyMins);
+  if (Array.isArray(limits.model_scoped)) {
+    for (const window of limits.model_scoped) {
+      const name = typeof window?.display_name === "string" ? window.display_name.trim() : "";
+      if (!name) continue;
+      const model = name.toLowerCase();
+      // A scoped row may repeat an older named meter; keep only its fresh value.
+      const limitId = model === "opus" || model === "sonnet" ? `seven_day_${model}` : `model:${model}`;
+      addWindow(limitId, `${name} weekly usage limit`, window, weeklyMins);
+    }
+  }
+  if (limits.extra_usage?.is_enabled === true) {
+    addWindow("extra_usage", "Extra usage", limits.extra_usage);
+  }
+  if (Object.keys(buckets).length === 0) return null;
+
+  return {
+    ...(typeof usage?.subscription_type === "string" ? { planType: usage.subscription_type } : {}),
+    primary: buckets.five_hour?.primary,
+    secondary: buckets.seven_day?.primary,
+    rateLimitsByLimitId: buckets,
+  };
 }
 
 /** The fields that accumulate; `contextWindow` and `maxOutputTokens` describe the model. */
@@ -1644,6 +1776,23 @@ interface McpStatusServer {
   tools?: McpStatusTool[];
 }
 
+/** Wait for this server's initial connection without reconnecting or replaying a tool call. */
+export async function waitForClaudeMcpServer(
+  readStatuses: () => Promise<unknown[]>,
+  serverName: string,
+): Promise<unknown[]> {
+  const deadline = Date.now() + 30_000;
+  let statuses = await readStatuses();
+  while (
+    (statuses as McpStatusServer[]).find((server) => server?.name === serverName)?.status === "pending" &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, deadline - Date.now())));
+    statuses = await readStatuses();
+  }
+  return statuses;
+}
+
 function mcpToolResourceUri(tool: McpStatusTool): string | undefined {
   const uri = tool._meta?.ui?.resourceUri ?? tool._meta?.["ui/resourceUri"];
   return typeof uri === "string" && uri.startsWith("ui://") ? uri : undefined;
@@ -1674,18 +1823,44 @@ export function buildClaudeMcpCatalog(statuses: unknown[]): ClaudeMcpCatalog {
  * Shape an MCP tool result the way an app widget reads it. The CLI hands the
  * content over as a single string, where MCP has a list of content blocks.
  */
-export function toMcpCallToolResult(raw: unknown): McpAppCallToolResult | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+export function toMcpCallToolResult(raw: unknown, fallbackContent?: unknown): McpAppCallToolResult | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    // Text-only MCP tools may have no SDK result envelope. Their model-facing
+    // content is still the complete app result, without structured data to add.
+    const content = Array.isArray(raw) ? raw : fallbackContent;
+    if (Array.isArray(content)) return { content: [...content] };
+    if (typeof content === "string") return { content: [{ type: "text", text: content }] };
+    return undefined;
+  }
   const result = raw as Record<string, unknown>;
+  const body = result.content === undefined || result.content === "" ||
+    (Array.isArray(result.content) && result.content.length === 0)
+    ? fallbackContent ?? result.content : result.content;
+  const omitted = result.structuredContentOmitted === true;
   const content =
-    typeof result.content === "string"
-      ? [{ type: "text", text: result.content }]
-      : Array.isArray(result.content)
-        ? result.content
+    typeof body === "string"
+      ? [{ type: "text", text: body }]
+      : Array.isArray(body)
+        ? [...body]
         : [];
+  if (omitted && fallbackContent !== undefined) {
+    // The model-facing preview can name the saved full-result file even when
+    // the SDK's surviving text contains only the original output prefix.
+    const fallback = typeof fallbackContent === "string" ? [{ type: "text", text: fallbackContent }]
+      : Array.isArray(fallbackContent) ? fallbackContent : [];
+    const seen = new Set(content.flatMap((block) => block?.type === "text" && typeof block.text === "string" ? [block.text] : []));
+    for (const block of fallback) {
+      if (block?.type === "text" && typeof block.text === "string" && block.text && !seen.has(block.text)) {
+        content.push({ type: "text", text: block.text });
+        seen.add(block.text);
+      }
+    }
+  }
   return {
     content,
-    ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    ...(!omitted && result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}),
+    ...(omitted ? { structuredContentOmitted: true } : {}),
+    ...(Array.isArray(result.resourceLinks) ? { resourceLinks: result.resourceLinks } : {}),
     ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
     ...(result._meta !== undefined ? { _meta: result._meta } : {}),
   };
@@ -1719,100 +1894,137 @@ export function assertMcpToolCallableFromApp(
   }
 }
 
+/** Identity outlives completion: ended parents and later runs still reference it. */
+function taskEventBase(taskId: string, taskIndex: ClaudeTaskIndex, ts: number) {
+  const task = taskIndex.get(taskId);
+  return {
+    type: "task" as const,
+    taskId,
+    toolCallId: task?.toolUseId,
+    providerRunId: task?.providerRunId,
+    parentTaskId: task?.parentTaskId,
+    parentToolCallId: task?.parentTaskId === null
+      ? null : task?.parentTaskId ? taskIndex.get(task.parentTaskId)?.toolUseId : undefined,
+    description: task?.description,
+    subagentType: task?.subagentType,
+    taskType: task?.taskType,
+    isBackgrounded: task?.isBackgrounded,
+    ambient: task?.ambient,
+    ts,
+  };
+}
+
 /**
- * Map a `system:task_*` message to a WorkRunTaskEvent.
- *
- * The CLI runs long tool calls as tasks: a Bash command that outlives the
- * foreground timeout is backgrounded, and every Agent call is a task. The
- * spawning tool call returns immediately, so the task's real outcome arrives
- * later — sometimes after the `result` message — via `task_notification`.
- *
- * Only `task_started` and `task_notification` carry `tool_use_id`; the rest are
- * resolved through the session's taskIndex, which `task_started` populates.
- * Returns null when the anchor is unknown (a task whose start was never seen),
- * because an event with no tool call to attach to has nowhere to land.
+ * Map task edges using both stable task identity and native execution identity.
+ * Progress from a later run cannot borrow the earlier run's call anchor.
+ * Older CLIs without run_id retain the task_started/tool_use_id fallback.
  */
 export function mapTaskMessage(
   msg: SDKSystemMessage,
   taskIndex: ClaudeTaskIndex,
   ts: number,
-): WorkRunEvent | null {
+): WorkRunTaskEvent | null {
   const taskId = msg.task_id;
   if (!taskId) return null;
-
-  if (msg.subtype === "task_started") {
-    taskIndex.set(taskId, {
-      toolUseId: msg.tool_use_id,
-      description: msg.description,
-      subagentType: msg.subagent_type,
-    });
-  }
-
   const known = taskIndex.get(taskId);
-  const toolCallId = msg.tool_use_id ?? known?.toolUseId;
-  if (!toolCallId) return null;
+  if (msg.run_id && known?.providerRunId && msg.run_id < known.providerRunId) return null;
+  if (!msg.run_id && known?.providerRunId && msg.tool_use_id && known.toolUseId && msg.tool_use_id !== known.toolUseId) return null;
 
-  const base = {
-    type: "task" as const,
-    taskId,
-    toolCallId,
-    description: msg.description ?? known?.description,
-    subagentType: msg.subagent_type ?? known?.subagentType,
-    skipTranscript: msg.skip_transcript,
-    ts,
-  };
+  const newExecution = !!(msg.run_id && known && (!known.providerRunId || msg.run_id > known.providerRunId));
+  const legacyStart = msg.subtype === "task_started" && !msg.run_id && !known?.providerRunId;
+  const task: NonNullable<ReturnType<ClaudeTaskIndex["get"]>> = legacyStart ? {} : newExecution
+    ? { originalToolUseId: known?.originalToolUseId ?? known?.toolUseId,
+      parentTaskId: known?.parentTaskId, taskType: known?.taskType, subagentType: known?.subagentType }
+    : { ...known };
+  if (task.terminal && msg.subtype !== "task_notification") return null;
+  if (task.notified && msg.subtype === "task_notification") return null;
 
+  task.providerRunId = msg.run_id ?? task.providerRunId;
+  task.toolUseId = msg.tool_use_id ?? task.toolUseId ??
+    (msg.subtype === "task_started" && msg.run_id ? task.originalToolUseId : undefined);
+  task.originalToolUseId ??= task.toolUseId;
+  task.description = msg.patch?.description ?? msg.description ?? task.description;
+  task.subagentType = msg.subagent_type ?? task.subagentType;
+  task.taskType = msg.task_type ?? task.taskType;
+  task.parentTaskId = msg.parent_task_id ?? task.parentTaskId;
+  task.isBackgrounded = msg.patch?.is_backgrounded ?? msg.is_backgrounded ?? task.isBackgrounded;
+  task.ambient = msg.ambient ?? task.ambient;
+  if (msg.subtype === "task_notification") {
+    task.terminal = true;
+    task.notified = true;
+  } else if (msg.subtype === "task_updated" && ["completed", "failed", "killed"].includes(msg.patch?.status ?? "")) {
+    task.terminal = true;
+  }
+  taskIndex.set(taskId, task);
+  if (!task.toolUseId) return null;
+
+  const base = { ...taskEventBase(taskId, taskIndex, ts), skipTranscript: msg.skip_transcript };
   const usage = msg.usage
-    ? {
-        totalTokens: msg.usage.total_tokens,
-        toolUses: msg.usage.tool_uses,
-        durationMs: msg.usage.duration_ms,
-      }
+    ? { totalTokens: msg.usage.total_tokens, toolUses: msg.usage.tool_uses, durationMs: msg.usage.duration_ms }
     : undefined;
-
   switch (msg.subtype) {
     case "task_started":
-      return { ...base, phase: "started", status: "running", taskType: msg.task_type };
-
+      return { ...base, phase: "started", status: "running" };
     case "task_progress":
-      return {
-        ...base,
-        phase: "progress",
-        status: "running",
-        usage,
-        lastToolName: msg.last_tool_name,
-        summary: msg.summary,
-      };
-
+      return { ...base, phase: "progress", status: "running", usage, lastToolName: msg.last_tool_name, summary: msg.summary };
     case "task_updated":
-      return {
-        ...base,
-        phase: "updated",
-        status: msg.patch?.status,
-        description: msg.patch?.description ?? base.description,
-        error: msg.patch?.error,
-      };
-
+      return { ...base, phase: "updated", status: msg.patch?.status, error: msg.patch?.error };
     case "task_notification": {
-      // Terminal for this task — drop the anchor so a later message carrying a
-      // recycled id cannot reattach to a tool call that is already settled.
-      taskIndex.delete(taskId);
-      const raw = msg.status;
-      const status =
-        raw === "completed" || raw === "failed" || raw === "stopped" ? raw : undefined;
-      return {
-        ...base,
-        phase: "completed",
-        status,
-        summary: msg.summary,
-        outputFile: msg.output_file,
-        usage,
-        error: status === "failed" ? msg.summary : undefined,
-      };
+      const status = msg.status === "completed" || msg.status === "failed" || msg.status === "stopped" ? msg.status : undefined;
+      return { ...base, phase: "completed", status, summary: msg.summary, outputFile: msg.output_file,
+        usage, error: status === "failed" ? msg.summary : undefined };
     }
+    default:
+      return null;
   }
+}
 
-  return null;
+function sameTaskExecution(task: { providerRunId?: string }, background: SDKBackgroundTask): boolean {
+  return task.providerRunId === background.run_id;
+}
+
+/** Full membership is independent of edge ordering; absence supplies no outcome. */
+function mapBackgroundTasksMessage(msg: SDKSystemMessage, cs: ClaudeSession, ts: number): WorkRunTaskEvent[] {
+  const events: WorkRunTaskEvent[] = [];
+  cs.backgroundTasks = new Map((msg.tasks ?? []).map((task) => [task.task_id, task]));
+  for (const background of cs.backgroundTasks.values()) {
+    const known = cs.taskIndex.get(background.task_id);
+    if (background.run_id && known?.providerRunId && background.run_id < known.providerRunId) continue;
+    const newExecution = !!(background.run_id && known && (!known.providerRunId || background.run_id > known.providerRunId));
+    cs.taskIndex.set(background.task_id, {
+      ...(newExecution ? { originalToolUseId: known?.originalToolUseId ?? known?.toolUseId } : known),
+      providerRunId: background.run_id ?? known?.providerRunId,
+      description: background.description,
+      subagentType: background.subagent_type ?? known?.subagentType,
+      taskType: background.task_type,
+      parentTaskId: background.parent_task_id ?? null,
+      isBackgrounded: true,
+      ambient: background.ambient ?? false,
+    });
+  }
+  for (const [taskId, task] of cs.taskIndex) {
+    if (!task.toolUseId) continue;
+    const background = cs.backgroundTasks.get(taskId);
+    // A stale snapshot member cannot update the current execution's activity.
+    if (background && !sameTaskExecution(task, background)) continue;
+    if (!background && !task.isBackgrounded) continue;
+    events.push({ ...taskEventBase(taskId, cs.taskIndex, ts), phase: task.notified ? "completed" : "updated", backgroundActive: !!background });
+  }
+  return events;
+}
+
+/** Native agent identity also classifies messages whose legacy parent field is absent. */
+function claudeMessageOrigin(msg: { agent_id?: string; parent_tool_use_id: string | null }, cs: ClaudeSession) {
+  const task = msg.agent_id ? cs.taskIndex?.get(msg.agent_id) : undefined;
+  const parentToolUseId = msg.parent_tool_use_id || task?.toolUseId;
+  return {
+    isFromSubagent: !!(msg.agent_id || msg.parent_tool_use_id),
+    parentToolUseId,
+    ...(msg.agent_id ? { agentId: msg.agent_id } : {}),
+    // A message explicitly anchored to an older call must not inherit the new run id.
+    ...(task && (!msg.parent_tool_use_id || msg.parent_tool_use_id === task.toolUseId)
+      ? { providerRunId: task.providerRunId, parentTaskId: task.parentTaskId } : {}),
+  };
 }
 
 /**
@@ -1860,6 +2072,12 @@ export function removeClaudeRuntimeSettings(settingsPath?: string): void {
   }
 }
 
+/** A handoff acknowledgement, not the web tool's eventual output. */
+function isDetachedClaudeToolResult(value: unknown): boolean {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    (value as { detachedToolCall?: unknown }).detachedToolCall === true;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Event mapping: SDKMessage → WorkRunEvent[]
 //
@@ -1878,7 +2096,8 @@ export function mapSDKMessage(
   switch (msg.type) {
     case "assistant": {
       const assistantMsg = msg as SDKAssistantMessage;
-      const isFromSubagent = !!assistantMsg.parent_tool_use_id;
+      const origin = claudeMessageOrigin(assistantMsg, cs);
+      const { isFromSubagent } = origin;
       const providerMessageId = assistantMsg.message?.id || assistantMsg.uuid;
       // The CLI can emit several blocks sharing one API message id. A child
       // message must not replace the main agent's final-answer candidate.
@@ -1901,10 +2120,11 @@ export function mapSDKMessage(
         },
         ts,
       );
-      if (errorEvent) events.push(errorEvent);
+      if (errorEvent) events.push(errorEvent.type === "log" && isFromSubagent
+        ? { ...errorEvent, metadata: { ...errorEvent.metadata, ...origin } } : errorEvent);
       // A turn that came back clean ends the episode, so the next failure of the
       // same kind is reported again instead of being read as a repeat.
-      cs.state.lastAssistantError = assistantMsg.error;
+      if (!isFromSubagent) cs.state.lastAssistantError = assistantMsg.error;
 
       if (assistantMsg.message?.content) {
         for (const block of assistantMsg.message.content) {
@@ -1916,8 +2136,7 @@ export function mapSDKMessage(
               metadata: {
                 source: "assistant.message",
                 ...(providerMessageId ? { providerMessageId, messagePhase: "commentary" } : {}),
-                isFromSubagent,
-                parentToolUseId: assistantMsg.parent_tool_use_id || undefined,
+                ...origin,
               },
             });
           }
@@ -1939,8 +2158,7 @@ export function mapSDKMessage(
                 phase: "start",
                 toolCallId,
                 rawType: msg.type,
-                parentToolUseId: assistantMsg.parent_tool_use_id || undefined,
-                isFromSubagent,
+                ...origin,
                 ...(mcpApp ? { mcpApp: { ...mcpApp, originCallId: toolCallId } } : {}),
               },
             });
@@ -1975,6 +2193,7 @@ export function mapSDKMessage(
     case "user": {
       const userMsg = msg as SDKUserMessage;
       const content = userMsg.message?.content;
+      const origin = claudeMessageOrigin(userMsg, cs);
 
       let userContent: string | undefined;
       if (typeof content === "string") {
@@ -1985,7 +2204,7 @@ export function mapSDKMessage(
         // calls — they never trigger the PostToolUse hook — so without this
         // they stay `running` in the DB until the run-end sweep. Emit a
         // `complete` event per block so the status flips running → done.
-        const isFromSubagent = !!(userMsg as any).parent_tool_use_id;
+        const { isFromSubagent } = origin;
         // `tool_use_result` is one per message, so it belongs to a block only
         // when the message carries a single result.
         const soleToolResult =
@@ -1994,11 +2213,19 @@ export function mapSDKMessage(
           if (block?.type !== "tool_result") continue;
           const toolUseId: string = block.tool_use_id || "";
           const prev = toolUseId ? cs.toolCallIndex.get(toolUseId) : undefined;
+          // A priority message can detach a web call. Its real result follows
+          // in a later turn of this stream, still carrying the same call id.
+          // The message-level result belongs to a block only when it is sole.
+          if (!block.is_error && soleToolResult && isDetachedClaudeToolResult(userMsg.tool_use_result)) continue;
           const mcpApp = prev ? cs.mcpApps?.catalog.apps.get(prev.toolName) : undefined;
-          // An app widget renders from structuredContent, which only the
-          // message's tool_use_result keeps.
+          // The SDK's result carries app data and omission flags that the
+          // model-facing block drops. Ordinary MCP output keeps its old shape
+          // unless the SDK explicitly reports missing structured content.
+          const rawResult = userMsg.tool_use_result as Record<string, unknown> | undefined;
+          const omittedMcpResult = prev?.toolName.startsWith("mcp__") && rawResult?.structuredContentOmitted === true;
           const appResult =
-            mcpApp && soleToolResult ? toMcpCallToolResult(userMsg.tool_use_result) : undefined;
+            (mcpApp || omittedMcpResult) && soleToolResult
+              ? toMcpCallToolResult(userMsg.tool_use_result, block.content) : undefined;
           const output = appResult
             ? { ...appResult, ...(block.is_error ? { isError: true } : {}) }
             : block.content;
@@ -2025,8 +2252,7 @@ export function mapSDKMessage(
               phase: "complete",
               toolCallId: toolUseId || undefined,
               rawType: msg.type,
-              isFromSubagent,
-              parentToolUseId: userMsg.parent_tool_use_id || undefined,
+              ...origin,
               nonExecutionKind,
               userFeedback: resultMeta?.user_feedback,
               ...(mcpApp ? { mcpApp: { ...mcpApp, originCallId: toolUseId } } : {}),
@@ -2038,12 +2264,15 @@ export function mapSDKMessage(
           // branch below also builds this event, but for a message shape the
           // SDK does not send, so this is the path that actually fires.
           if (prev?.toolName === SUBAGENT_TOOL_NAME) {
+            const task = [...(cs.taskIndex ?? [])].find(([, entry]) => entry.toolUseId === toolUseId);
             events.push(
               buildSubagentCompletionEvent({
                 input: prev.input,
                 output,
                 error,
                 toolUseId,
+                agentId: task?.[0],
+                providerRunId: task?.[1].providerRunId,
                 ts,
               }),
             );
@@ -2059,7 +2288,7 @@ export function mapSDKMessage(
             type: "artifact",
             kind: "report",
             content: userContent,
-            metadata: { source: "continuation-summary" },
+            metadata: { source: "continuation-summary", ...origin },
           });
         } else {
           events.push({
@@ -2067,6 +2296,7 @@ export function mapSDKMessage(
             message: userContent,
             level: "sdk-user",
             ts,
+            ...(origin.isFromSubagent ? { metadata: origin } : {}),
           });
         }
       }
@@ -2083,6 +2313,8 @@ export function mapSDKMessage(
         setClaudePermissionMode(cs.permissionMode, systemMsg.permissionMode);
       }
       if (systemMsg.subtype === "init") {
+        // A new CLI process has no inherited live-background membership.
+        cs.backgroundTasks = undefined;
         const plugins = systemMsg.plugins ?? [];
         const pluginPart = plugins.length
           ? ` · ${plugins.length} plugin${plugins.length === 1 ? "" : "s"}: ${plugins.map((p) => p.name).join(", ")}`
@@ -2177,8 +2409,17 @@ export function mapSDKMessage(
         systemMsg.subtype === "task_updated" ||
         systemMsg.subtype === "task_notification"
       ) {
-        const taskEvent = mapTaskMessage(systemMsg, cs.taskIndex, ts);
-        if (taskEvent) events.push(taskEvent);
+        const background = systemMsg.task_id ? cs.backgroundTasks?.get(systemMsg.task_id) : undefined;
+        const matchingBackground = background && background.run_id === systemMsg.run_id;
+        const taskEvent = mapTaskMessage(matchingBackground ? {
+          ...systemMsg,
+          parent_task_id: systemMsg.parent_task_id ?? background.parent_task_id,
+          is_backgrounded: systemMsg.is_backgrounded ?? true,
+          ambient: systemMsg.ambient ?? background.ambient ?? false,
+        } : systemMsg, cs.taskIndex, ts);
+        if (taskEvent) events.push({ ...taskEvent, ...(matchingBackground ? { backgroundActive: true } : {}) });
+      } else if (systemMsg.subtype === "background_tasks_changed") {
+        events.push(...mapBackgroundTasksMessage(systemMsg, cs, ts));
       } else if (systemMsg.subtype === "model_refusal_fallback") {
         // The model declined and the CLI moved the turn to another one. Without
         // this the swap is invisible and the run silently answers on a model the
@@ -2488,6 +2729,7 @@ export function mapSDKMessage(
         const toolName = prev?.toolName || "unknown";
         const input = prev?.input;
         const output = anyMsg.content || anyMsg.result;
+        if (!anyMsg.is_error && isDetachedClaudeToolResult(anyMsg.tool_use_result ?? output)) break;
         const error = anyMsg.is_error ? String(output) : undefined;
 
         if (toolUseId) cs.toolCallIndex.delete(toolUseId);
@@ -2546,6 +2788,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
   // auto-generated aiTitle) from the JSONL transcript. Used for run titling.
   let getSessionInfoFn:
     | ((sessionId: string, options?: { dir?: string }) => Promise<SDKSessionInfoLite | undefined>)
+    | null = null;
+  let getSessionMessagesFn:
+    | ((sessionId: string, options?: { dir?: string }) => Promise<Array<{
+        type: string; uuid: string; message: unknown; parent_tool_use_id?: string | null;
+        parent_agent_id?: string | null;
+      }>>)
     | null = null;
   // Standalone SDK fn that removes a persisted session: `{sessionId}.jsonl` plus
   // the `{sessionId}/` subagent-transcript subdirectory. Clearing our own DB
@@ -2631,6 +2879,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       createSdkMcpServerFn = (ClaudeSDK as any).createSdkMcpServer ?? null;
       toolFn = (ClaudeSDK as any).tool ?? null;
       getSessionInfoFn = (ClaudeSDK as any).getSessionInfo ?? null;
+      getSessionMessagesFn = (ClaudeSDK as any).getSessionMessages ?? null;
       deleteSdkSessionFn = (ClaudeSDK as any).deleteSession ?? null;
       sdkLoaded = true;
       logInfo("SDK loaded successfully");
@@ -2658,10 +2907,12 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         ): Promise<Record<string, unknown>> => {
           const toolName = (input.tool_name as string) || "unknown";
           const toolResponse = input.tool_response;
+          if (isDetachedClaudeToolResult(toolResponse)) return {};
 
-          // The first completion for a call is the one kept, and this one only
-          // has the tool's text. An app's call is completed from the tool_result
-          // message instead, whose tool_use_result keeps structuredContent.
+          // MCP results must use the SDK's user-message envelope: size caps
+          // and omission flags are applied after PostToolUse, and the first
+          // completion is the one retained by RunSession.
+          if (toolName.startsWith("mcp__")) return {};
           const session = liveSessions.get(runId);
           if (session && (await mcpAppToolFor(session, toolName))) return {};
 
@@ -2810,7 +3061,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
     // Strip API key/auth token when using CLI (subscription mode) so the subprocess
     // uses CLI login session rather than API billing.
-    const cleanEnv: Record<string, string | undefined> = { ...process.env };
+    const cleanEnv: Record<string, string | undefined> = {
+      ...process.env,
+      // Advertise the host's MCP Apps support when the CLI connects to servers.
+      CLAUDE_CODE_MCP_APPS_HOST: "1",
+    };
     delete cleanEnv.ANTHROPIC_API_KEY;
     delete cleanEnv.ANTHROPIC_AUTH_TOKEN;
 
@@ -3095,7 +3350,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     return prependPinnedSkillsToPrompt(prompt, request.skills);
   }
 
-  function buildContinuePrompt(request: WorkRunContinueRequest): string {
+  function buildContinuePrompt(request: WorkRunContinueRequest | WorkRunSteerRequest): string {
     let prompt = request.message;
     if (request.context && request.context.length > 0) {
       const contextParts = formatContextSection(request.context);
@@ -3555,10 +3810,74 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
 
       const session = newSession(request.runId, options, abortController, false, permissionModeRef,
         typeof request.configSnapshot?.fastMode === "boolean" ? request.configSnapshot.fastMode : undefined);
+      try {
+        for (const anchor of await runsRepo.findClaudeTaskAnchorsByRun(request.runId)) {
+          if (typeof anchor.taskId !== "string" || !anchor.taskId || !anchor.toolUseId) continue;
+          const known = session.taskIndex.get(anchor.taskId);
+          if (known?.providerRunId && (!anchor.providerRunId || anchor.providerRunId < known.providerRunId)) continue;
+          session.taskIndex.set(anchor.taskId, {
+            toolUseId: anchor.toolUseId,
+            originalToolUseId: known?.originalToolUseId ?? anchor.toolUseId,
+            providerRunId: anchor.providerRunId ?? undefined,
+            parentTaskId: anchor.parentTaskId ?? undefined,
+            taskType: anchor.taskType ?? (anchor.subagentType ? "local_agent" : undefined),
+            subagentType: anchor.subagentType ?? undefined,
+            isBackgrounded: anchor.isBackgrounded === null ? undefined : !!anchor.isBackgrounded,
+            ambient: anchor.ambient === null ? undefined : !!anchor.ambient,
+            terminal: anchor.phase === "completed" || ["completed", "failed", "killed", "stopped"].includes(anchor.status ?? ""),
+            notified: anchor.phase === "completed",
+          });
+        }
+      } catch (error) {
+        logWarn("Could not restore Claude task identities:", error instanceof Error ? error.message : String(error));
+      }
       // Prime sessionId so executePrompt's "first session_id" persistence is a no-op for resume;
       // the SDK keeps the same id when resuming.
       session.state.sessionId = sessionId;
+      if (request.clientUserMessageId) {
+        session.initialInput = { uuid: request.clientUserMessageId, onAccepted: request.onInputAccepted };
+      }
       return { session, prompt: buildContinuePrompt(request) };
+    },
+
+    async steerRun(request) {
+      // Capture the parent query before prompt preparation. Never retarget a
+      // late request onto another query acquired for this conversation.
+      const cs = liveSessions.get(request.runId);
+      const input = cs?.input;
+      if (!cs?.query || !input || !cs.onEvent || cs.abortController.signal.aborted) {
+        throw new Error("There is no active Claude turn to steer. The message stays queued.");
+      }
+      const onEvent = cs.onEvent;
+      const receipt = await input.send({
+        type: "user", uuid: request.clientUserMessageId,
+        session_id: cs.state.sessionId!, parent_tool_use_id: null,
+        message: { role: "user", content: buildContinuePrompt(request) }, priority: "now",
+      }, async ({ turnId, delivery }) => {
+        if (delivery === "queue") {
+          cs.state.hasAssistantContent = false;
+          cs.state.lastAssistantMessage = undefined;
+          cs.state.terminalToolNonExecutionKind = undefined;
+        }
+        await emitUserPromptArtifact(onEvent, request.message, {
+          ...request, contextSkills: request.skills, providerTurnId: turnId,
+          delivery,
+        });
+      });
+      return { turnId: receipt.turnId };
+    },
+
+    async getInputStatus(runId, clientUserMessageId, sessionId) {
+      const live = await liveSessions.get(runId)?.input?.getAcceptedStatus(clientUserMessageId);
+      if (live?.accepted) return live;
+      await ensureSDK();
+      const id = sessionId ?? await lookupSessionId(runId);
+      if (!id || !getSessionMessagesFn) return { accepted: false };
+      const cwd = runCwdMemo.get(runId);
+      const messages = await getSessionMessagesFn(id, cwd ? { dir: cwd } : undefined);
+      return { accepted: messages.some((message) => message.type === "user" &&
+        message.uuid === clientUserMessageId && !message.parent_tool_use_id &&
+        !message.parent_agent_id && isClaudeUserInput(message.message)) };
     },
 
     async forkSession(request: WorkRunForkRequest): Promise<AcquiredSession> {
@@ -3621,25 +3940,47 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const timeout = config.timeout ?? 3_600_000;
       if (!queryFn) throw new Error("Claude SDK not properly initialized");
 
-      // Wire the incoming AbortSignal to fire BOTH the SDK's AbortController and query.interrupt().
+      cs.onEvent = onEvent;
+      cs.input = createClaudeTurnInput({
+        initial: {
+          type: "user", uuid: cs.initialInput?.uuid ?? randomUUID(),
+          session_id: cs.state.sessionId!, parent_tool_use_id: null,
+          message: { role: "user", content: prompt },
+        },
+        onInitialAccepted: cs.initialInput?.onAccepted,
+        cancel: async (uuid) => {
+          if (cs.query?.cancelAsyncMessage) return cs.query.cancelAsyncMessage(uuid);
+          if (!cs.query?.request) throw new Error("Claude input cancellation is unavailable");
+          const response = await cs.query.request({ subtype: "cancel_async_message", message_uuid: uuid });
+          const envelope = response as { response?: { cancelled?: boolean } };
+          return envelope?.response?.cancelled === true;
+        },
+      });
+
+      // Stop closes our input first, recalls queued native commands when the
+      // control channel is available, and aborts the process as a backstop.
       const onAbort = () => {
+        cs.input?.stop();
+        if (cs.query?.request) {
+          void cs.query.request({ subtype: "interrupt", cancel_queued: true }).catch(() => {});
+        } else if (cs.query?.interrupt) {
+          void cs.query.interrupt().catch(() => {});
+        }
         try {
           cs.abortController.abort();
         } catch (err) {
           logError("Error aborting controller:", err);
         }
-        if (cs.query?.interrupt) {
-          cs.query.interrupt().catch(() => {
-            /* shutdown interrupt is best-effort */
-          });
-        }
       };
       signal.addEventListener("abort", onAbort, { once: true });
 
       // Create the SDK query (this is when the prompt is bound to the session).
-      const query = queryFn({ prompt, options: cs.options });
+      const query = queryFn({ prompt: cs.input.stream, options: {
+        ...cs.options, extraArgs: { ...cs.options.extraArgs, "replay-user-messages": null },
+      } });
       cs.query = query;
       liveSessions.set(cs.runId, cs);
+      if (signal.aborted) onAbort();
       if (cs.options.cwd) runCwdMemo.set(cs.runId, cs.options.cwd);
       // A resumed or forked session's results continue from the totals its
       // transcript saved; read them as the query opens, before the first result.
@@ -3652,6 +3993,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
       const timeoutPromise = new Promise<void>((_, reject) => {
         timeoutId = setTimeout(() => {
           timedOut = true;
+          cs.input?.stop();
           cs.abortController.abort();
           reject(new Error(`Request timed out after ${timeout}ms`));
         }, timeout);
@@ -3706,6 +4048,9 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         const streamPromise = (async () => {
           for await (const msg of query) {
             if (signal.aborted || timedOut) break;
+            // Persist accepted inputs before projecting the reply they own.
+            // Result receipts close steering immediately, before any awaits.
+            await cs.input!.observe(msg as Parameters<ReturnType<typeof createClaudeTurnInput>["observe"]>[0]);
             primaryModel = resolveClaudeTurnModel(
               primaryModel,
               msg as unknown as ClaudeTurnModelMessage,
@@ -3727,13 +4072,14 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
             // Track whether any assistant text content has been streamed (for result-message dedup).
             if (msg.type === "assistant") {
               const aMsg = msg as SDKAssistantMessage;
-              if (aMsg.message?.content?.some((b: any) => b.type === "text" && b.text)) {
+              const isMainMessage = !aMsg.parent_tool_use_id && !aMsg.agent_id;
+              if (isMainMessage && aMsg.message?.content?.some((b: any) => b.type === "text" && b.text)) {
                 cs.state.hasAssistantContent = true;
               }
               // (1) Ask the CLI where the window stands. Driven off assistant
               // messages so a long tool-using turn keeps the meter live rather
               // than updating it once at the end.
-              if (!aMsg.parent_tool_use_id) refreshContextUsage();
+              if (isMainMessage) refreshContextUsage();
 
               // (2) The `/context` reply, when a run happens to invoke it.
               const ctxEvent = buildContextUsageEvent(aMsg, Date.now());
@@ -3752,7 +4098,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
               const u = (aMsg.message as any)?.usage as
                 | { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
                 | undefined;
-              if (u && !aMsg.parent_tool_use_id) {
+              if (u && isMainMessage) {
                 const snapshot =
                   (u.input_tokens ?? 0) +
                   (u.cache_read_input_tokens ?? 0) +
@@ -3813,10 +4159,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
                 totalCostUsd: own.costUsd,
                 durationMs: resultMsg.duration_ms,
                 numTurns: resultMsg.num_turns,
-                inputTokens: inputTokens || undefined,
-                outputTokens: outputTokens || undefined,
-                cacheReadTokens: cacheRead || undefined,
-                cacheWriteTokens: cacheWrite || undefined,
+                inputTokens: Object.keys(own.modelUsage).length ? inputTokens : undefined,
+                outputTokens: Object.keys(own.modelUsage).length ? outputTokens : undefined,
+                cacheReadTokens: Object.keys(own.modelUsage).length ? cacheRead : undefined,
+                cacheWriteTokens: Object.keys(own.modelUsage).length ? cacheWrite : undefined,
                 model: primaryModel,
                 modelUsage: resultMsg.modelUsage ? own.modelUsage : undefined,
               };
@@ -3835,7 +4181,10 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
               }
             }
 
-            const events = mapSDKMessage(msg, cs);
+            const replayedInput = msg.type === "user" && !msg.parent_tool_use_id && !msg.agent_id &&
+              typeof msg.uuid === "string" && cs.input!.getStatus(msg.uuid).accepted &&
+              isClaudeUserInput(msg.message);
+            const events = replayedInput ? [] : mapSDKMessage(msg, cs);
             for (const event of events) {
               await onEvent(event);
 
@@ -3907,6 +4256,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         });
       } finally {
         if (timeoutId) clearTimeout(timeoutId);
+        cs.input?.finish();
         signal.removeEventListener("abort", onAbort);
         if (liveSessions.get(cs.runId) === cs) liveSessions.delete(cs.runId);
       }
@@ -3915,6 +4265,7 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     async cleanup(session): Promise<void> {
       // Per-run state lives on the Session object Core is about to drop.
       const cs = session as ClaudeSession;
+      cs.input?.finish();
 
       // The query normally auto-completes when the stream ends, so this is a
       // backstop: on an aborted or errored run the CLI subprocess can outlive
@@ -3932,10 +4283,11 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     },
 
     async readMcpAppResource(request) {
-      const result = await withMcpQuery(request.runId, (query) => {
+      const result = await withMcpQuery(request.runId, async (query) => {
         if (typeof query.readMcpResource !== "function") {
           throw new Error("This Claude Code version cannot read MCP App resources");
         }
+        await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
         return query.readMcpResource(request.server, request.uri);
       });
       return { contents: result.contents ?? [], originCallId: request.originCallId ?? null };
@@ -3947,7 +4299,8 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         if (typeof query.request !== "function") {
           throw new Error("This Claude Code version cannot call MCP App tools");
         }
-        assertMcpToolCallableFromApp(await query.mcpServerStatus(), request.server, request.tool);
+        const statuses = await waitForClaudeMcpServer(() => query.mcpServerStatus(), request.server);
+        assertMcpToolCallableFromApp(statuses, request.server, request.tool);
         return query.request({
           subtype: "mcp_call",
           tool: mcpToolWireName(request.server, request.tool),
@@ -4016,12 +4369,20 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
     async shutdown(): Promise<void> {
       sessionIdMemo.clear();
       for (const cwd of [...mcpHosts.keys()]) closeMcpHost(cwd);
+      for (const cs of liveSessions.values()) {
+        cs.input?.finish();
+        try {
+          cs.abortController.abort();
+          cs.query?.close();
+        } catch (err) { logWarn("Failed to close Claude query:", err instanceof Error ? err.message : String(err)); }
+      }
       liveSessions.clear();
       runCwdMemo.clear();
       sdkLoaded = false;
       loadError = null;
       queryFn = null;
       getSessionInfoFn = null;
+      getSessionMessagesFn = null;
       deleteSdkSessionFn = null;
       cachedModels = null;
       cachedModelsTimestamp = 0;
@@ -4288,6 +4649,24 @@ export function createClaudeDriver(config: ClaudeCodeAdapterConfig): ProviderDri
         throw new Error(`Plugin update failed: ${(stderr || stdout).trim() || `exit code ${code}`}`);
       }
       invalidatePluginCaches();
+    },
+
+    async getRateLimits(): Promise<RateLimitInfo | null> {
+      try {
+        return await withControlQuery(async (query) => {
+          // Older external CLIs may not expose the experimental usage request.
+          if (typeof query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") {
+            return null;
+          }
+          const usage = await query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+            skipBehaviors: true,
+          });
+          return mapClaudeRateLimits(usage);
+        });
+      } catch (error) {
+        logError("Failed to get usage:", error);
+        return null;
+      }
     },
 
     async getAccountInfo(): Promise<AccountInfo> {

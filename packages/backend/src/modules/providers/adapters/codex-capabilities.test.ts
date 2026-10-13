@@ -60,6 +60,23 @@ afterEach(async () => {
 });
 
 describe("Codex capabilities", () => {
+  it("reads current app connection state after authorization completed outside app-server", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-plugin-external-auth-"));
+    tempDirs.push(dir);
+    const server = await startServer(path.join(dir, "protocol.jsonl"), { MAINS_CODEX_FIXTURE_APP_AUTH_CONNECTED: "1" });
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server,
+      getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.162.1", channel: null, outdated: false, compatibility: "supported" }),
+    });
+    await capabilities.listPlugins();
+    await expect(server.sendRequest("app/installed", { forceRefresh: false })).resolves.toMatchObject({
+      apps: [{ id: "fixture-app", callable: false }],
+    });
+    const detail = await capabilities.readPlugin("fixture-plugin@fixture-remote", "");
+    expect(detail.apps).toMatchObject([{ id: "fixture-app", installed: true, runtimeEnabled: true, callable: true }]);
+  });
+
   it("reads memory values, inverts the tool-assisted setting, and resets through App Server", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-memory-"));
     tempDirs.push(tempDir);
@@ -129,7 +146,9 @@ describe("Codex capabilities", () => {
     );
     tempDirs.push(tempDir);
     const logPath = path.join(tempDir, "protocol.jsonl");
-    const server = await startServer(logPath);
+    const serviceTiers = [{ id: "ultrafast", name: "Ultrafast", description: "Fixture higher usage." },
+      { id: "future-speed", name: "Future speed", description: "Fixture future tier." }];
+    const server = await startServer(logPath, { MAINS_CODEX_FIXTURE_SERVICE_TIERS: JSON.stringify(serviceTiers) });
     const capabilities = createCodexCapabilities({
       ensureServer: async () => server,
       getRunningServer: () => server,
@@ -149,6 +168,7 @@ describe("Codex capabilities", () => {
         supportsEffort: true,
         supportedEffortLevels: ["medium"],
         supportsFastMode: true,
+        serviceTiers,
         capabilities: { vision: true },
       }),
     ]);

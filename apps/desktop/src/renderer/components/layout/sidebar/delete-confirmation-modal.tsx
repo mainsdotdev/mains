@@ -1,4 +1,5 @@
 import { Alert } from "@/components/ui";
+import type { RefObject } from "react";
 
 interface DeleteConfirmationModalProps {
     isOpen: boolean;
@@ -7,6 +8,7 @@ interface DeleteConfirmationModalProps {
     onCancel: () => void;
     title?: string;
     description?: string;
+    returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 export default function DeleteConfirmationModal({
@@ -16,6 +18,7 @@ export default function DeleteConfirmationModal({
     onCancel,
     title = "Delete",
     description = "This action cannot be undone. The workspace will be permanently deleted.",
+    returnFocusRef,
 }: DeleteConfirmationModalProps) {
     return (
         <Alert
@@ -28,6 +31,7 @@ export default function DeleteConfirmationModal({
             onSecondary={onCancel}
             isPrimaryLoading={isDeleting}
             primaryButtonVariant="danger"
+            returnFocusRef={returnFocusRef}
         />
     );
 }

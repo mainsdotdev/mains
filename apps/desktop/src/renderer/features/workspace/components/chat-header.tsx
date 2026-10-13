@@ -5,6 +5,7 @@ import { useGetRunByIdQuery } from "@/lib/redux/api";
 import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { ChatActionsMenu } from "./chat-actions-menu";
 import { BaseTab } from "./base-tab";
+import { TabStrip } from "@/components/ui";
 
 export function ChatHeader({ runId, variant, fallbackRun }: {
   runId: string;
@@ -22,7 +23,8 @@ export function ChatHeader({ runId, variant, fallbackRun }: {
   const { icon: Icon, accentClassName } = getProviderVariant(variant);
 
   return (
-    <div
+    <TabStrip
+      activeKey={runId}
       role="tablist"
       aria-label="Chat tabs"
       className="relative z-(--z-panel-toggle) hidden h-(--shell-header-height) min-w-0 items-end md:flex"
@@ -38,6 +40,6 @@ export function ChatHeader({ runId, variant, fallbackRun }: {
         tooltip={title}
         trailingAction={<ChatActionsMenu key={runId} aboveBrowser={browserOpen} />}
       />
-    </div>
+    </TabStrip>
   );
 }

@@ -217,11 +217,11 @@ describe("local run queue delivery", () => {
     expect(h.messages()).toEqual([]);
   });
 
-  it("reconciles uncertain delivery without retrying or discarding its input", async () => {
+  it.each(["RPC timeout: turn/steer", "Delivery is unknown: Claude accepted the message but could not save its receipt."])("reconciles uncertain delivery without resending: %s", async (error) => {
     const h = harness(); h.add("input");
     const normal = h.invoke.getMockImplementation()!;
     h.invoke.mockImplementation((channel, args) => channel === CHANNELS.runs.steer
-      ? Promise.reject(new Error("RPC timeout: turn/steer")) : normal(channel, args));
+      ? Promise.reject(new Error(error)) : normal(channel, args));
     await h.controller.send(h.ownerKey, "input", "steer");
     expect(h.messages()[0]?.status).toBe("unknown");
     await h.controller.pump();

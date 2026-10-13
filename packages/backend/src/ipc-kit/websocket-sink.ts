@@ -1,4 +1,4 @@
-import { encodeWsMessage } from "@mains/contracts/ws-protocol";
+import { encodeWsMessage, MAX_DEVICE_MESSAGE_BYTES } from "@mains/contracts/ws-protocol";
 import type { EventScope, EventSink } from "./event-bus";
 
 /** A connected client the sink can write event frames to. */
@@ -35,6 +35,7 @@ export class WebSocketSink implements EventSink {
 
   send(channel: string, payload: unknown, scope?: EventScope): void {
     const frame = encodeWsMessage({ kind: "event", channel, payload });
+    const oversized = Buffer.byteLength(frame) > MAX_DEVICE_MESSAGE_BYTES;
     for (const client of this.clients.values()) {
       // scope.clientId, when present, targets a single client (e.g. terminal
       // output); otherwise the event is broadcast to everyone.
@@ -43,6 +44,9 @@ export class WebSocketSink implements EventSink {
       // else on the bus (terminal output, settings, window chrome) stays
       // between the desktop's own processes.
       if (client.eventChannels && !client.eventChannels.has(channel)) continue;
+      // Persisted-event/status pushes still trigger a bounded transcript read.
+      // Do not stream an unbounded cumulative message onto a phone meanwhile.
+      if (client.eventChannels && oversized) continue;
       try {
         client.send(frame);
       } catch {

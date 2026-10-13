@@ -58,4 +58,5 @@ export type BrowserChatAction =
   | { type: "openMcpApp"; ownerKey: string; result: McpAppToolOpen; automatic: boolean }
   | { type: "providerChanged"; providerId: string }
   | { type: "uploads"; ownerKey: string; uploads: BrowserChatUpload[] }
+  | { type: "contextSubmitted"; ownerKey: string; items: unknown[] }
   | { type: "contextItems"; ownerKey: string; items: unknown[] };

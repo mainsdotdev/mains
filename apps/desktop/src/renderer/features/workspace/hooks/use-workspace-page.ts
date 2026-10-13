@@ -36,7 +36,7 @@ import { serializeAttachments } from "@/features/workspace/lib/run-helpers";
 import { collectionIdForVisibleRun } from "@/features/workspace/lib/run-collection-context";
 import { store } from "@/lib/redux";
 import { useMcpAppPanel } from "@/hooks/use-mcp-app-panel";
-import { contextItemKey } from "../lib/composer-context";
+import { withoutSubmittedContext } from "../lib/composer-context";
 import type { McpAppMessageOptions } from "../lib/mcp-app-context";
 import { workspaceBrowserExpansionKey } from "../../../../shared/ui-state-keys";
 import { useConversationSettings } from "./use-conversation-settings";
@@ -531,11 +531,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       const nextOwnerKey = composerOwnerKey(contextParts, nextRunId);
       const state = store.getState().workspace;
       const current = state.composerContextKey === ownerKey ? state.contextItems : state.contextItemsByKey[ownerKey] ?? [];
-      const remaining = current.filter((item) => !submitted.some((sent) =>
-        item.kind === sent.kind && contextItemKey(item) === contextItemKey(sent) &&
-        (item.kind !== "mcp-app" || sent.kind !== "mcp-app" || item.updateId === sent.updateId) &&
-        (item.kind !== "browser" || sent.kind !== "browser" || item.comment === sent.comment) &&
-        (item.kind !== "review" || sent.kind !== "review" || item.comment === sent.comment)));
+      const remaining = withoutSubmittedContext(current, submitted);
       const draft = state.draftTextByKey[ownerKey] ?? "";
       const remainingDraft = message === undefined && draft.trim() === text ? "" : draft;
       dispatch(setContextItemsForKey({ key: ownerKey, items: remaining }));

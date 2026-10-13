@@ -1,4 +1,5 @@
 import { buildCodexTurnInput } from "./codex-turn-input";
+import { resolveProviderTurnLineage } from "../../../../shared/provider-turn-lineage";
 import type {
   AcquiredSession,
   CodexAdapterConfig,
@@ -446,6 +447,7 @@ export function createCodexSessionAcquisition(
     const outputSchema = resolveOutputSchema(config);
     const turnStartParams: CodexTurnStartParams = {
       threadId: threadId ?? "",
+      ...resolveProviderTurnLineage(request.providerTurnLineage),
       input: buildCodexTurnInput(request.goal, request),
       ...(model ? { model } : {}),
       ...(effort !== undefined ? { effort: effort || null } : {}),
@@ -567,6 +569,7 @@ export function createCodexSessionAcquisition(
     const outputSchema = resolveOutputSchema(config);
     const turnStartParams: CodexTurnStartParams = {
       threadId: currentThreadId,
+      ...resolveProviderTurnLineage(request.providerTurnLineage),
       input: buildCodexTurnInput(
         message,
         request,

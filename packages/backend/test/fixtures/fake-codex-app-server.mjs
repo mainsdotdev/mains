@@ -6,7 +6,7 @@ import process from "node:process";
 import { setTimeout } from "node:timers";
 
 const fixtureCliVersion =
-  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.153.0";
+  process.env.MAINS_CODEX_FIXTURE_VERSION ?? "0.162.1";
 
 if (process.argv.includes("--version")) {
   process.stdout.write(`codex-cli ${fixtureCliVersion}\n`);
@@ -19,6 +19,9 @@ const activeThreads = new Set();
 let nextDynamicToolId = 1000;
 const pendingDynamicTools = new Map();
 const memoryConfig = { features: { memories: false }, memories: null };
+const threadGoals = new Map();
+let nextOAuthLoginId = 1;
+let appRuntimeCallable = false;
 
 function log(message) {
   if (!logPath) return;
@@ -647,6 +650,44 @@ input.on("line", (line) => {
       break;
     }
 
+    case "thread/goal/get":
+      respond(id, { goal: threadGoals.get(params.threadId) ?? null });
+      break;
+
+    case "thread/goal/set": {
+      const previous = threadGoals.get(params.threadId);
+      const goal = {
+        threadId: params.threadId,
+        objective: params.objective ?? previous?.objective ?? "Fixture goal",
+        status: params.status ?? previous?.status ?? "active",
+        tokenBudget: params.tokenBudget ?? previous?.tokenBudget ?? null,
+        tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1,
+      };
+      threadGoals.set(params.threadId, goal);
+      respond(id, { goal });
+      notify("thread/goal/updated", { threadId: params.threadId, goal });
+      break;
+    }
+
+    case "thread/goal/clear": {
+      const cleared = threadGoals.delete(params.threadId);
+      respond(id, { cleared });
+      if (cleared) notify("thread/goal/cleared", { threadId: params.threadId });
+      break;
+    }
+
+    case "mcpServer/oauth/login": {
+      const loginId = process.env.MAINS_CODEX_FIXTURE_LEGACY_OAUTH === "1"
+        ? undefined : `fixture-login-${nextOAuthLoginId++}`;
+      const error = process.env.MAINS_CODEX_FIXTURE_OAUTH_ERROR;
+      respond(id, { authorizationUrl: `https://example.com/oauth/${params.name}`, ...(loginId ? { loginId } : {}) });
+      notify("mcpServer/oauthLogin/completed", {
+        name: params.name, threadId: null, ...(loginId ? { loginId } : {}),
+        success: !error, ...(error ? { error } : {}),
+      });
+      break;
+    }
+
     case "thread/realtime/listVoices":
       respond(id, { voices: {
         v1: ["cove", "maple", "juniper"], v2: ["marin", "cedar"],
@@ -662,7 +703,9 @@ input.on("line", (line) => {
         notify("thread/realtime/transcript/delta", { threadId: params.threadId, role: "user", delta: "Calculate this" });
         notify("thread/realtime/itemAdded", { threadId: params.threadId, item: { type: "handoff_request", input_transcript: "Calculate this" } });
         const turnId = `voice-turn-${params.threadId}`;
-        notify("turn/started", { threadId: params.threadId, turn: { id: turnId, status: "inProgress" } });
+        notify("turn/started", { threadId: params.threadId, turn: { id: turnId, status: "inProgress",
+          ...(process.env.MAINS_CODEX_FIXTURE_LEGACY_TURN_LINEAGE === "1" ? {} : { rootTurnId: `voice-root-${params.threadId}` }),
+        } });
         notify("thread/realtime/transcript/done", { threadId: params.threadId, role: "user", text: "Calculate this" });
         notify("item/completed", { threadId: params.threadId, turnId, item: { type: "agentMessage", id: "voice-result", text: "The answer is 1387" } });
         notify("turn/completed", { threadId: params.threadId, turn: { id: turnId, status: "completed" } });
@@ -807,7 +850,7 @@ input.on("line", (line) => {
           inputModalities: ["text", "image"],
           supportsPersonality: true,
           additionalSpeedTiers: [],
-          serviceTiers: [{
+          serviceTiers: process.env.MAINS_CODEX_FIXTURE_SERVICE_TIERS ? JSON.parse(process.env.MAINS_CODEX_FIXTURE_SERVICE_TIERS) : [{
             id: "fast",
             name: "Fast",
             description: "Priority fixture service.",
@@ -842,6 +885,19 @@ input.on("line", (line) => {
           errors: [],
         }],
       });
+      break;
+
+    case "mcpServerStatus/list":
+      respond(id, { data: [], nextCursor: null });
+      break;
+
+    case "app/installed":
+      if (params.forceRefresh && process.env.MAINS_CODEX_FIXTURE_APP_AUTH_CONNECTED === "1") {
+        appRuntimeCallable = true;
+      }
+      respond(id, { apps: [{
+        id: "fixture-app", runtimeName: "Fixture App", enabled: true, callable: appRuntimeCallable,
+      }] });
       break;
 
     case "plugin/list":

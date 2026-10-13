@@ -363,4 +363,9 @@
 }
 /* Base UI renders its decorative arrow as a div; older skins used an SVG. */
 .bn-root.bn-shadcn [data-slot="tooltip-content"] > :is(svg, [aria-hidden="true"]) { display: none; }
-.atlas-page .atlas-title { font-size: 2.25rem; line-height: 1.25; }
+.atlas-page .atlas-title {
+  font-size: 2.25rem;
+  line-height: 1.25;
+  field-sizing: content;
+  overflow-wrap: anywhere;
+}

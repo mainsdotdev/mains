@@ -285,11 +285,14 @@ describe("document previews across routes", () => {
 });
 
 describe("messages submitted during a run", () => {
-  it.each(["running", "queued"] as const)("queues a Codex follow-up with its attachments while the run is %s", async (status) => {
-    const active = { ...run, providerId: "codex", spaceId: "codex-space", status };
+  it.each([
+    ["codex", "running"], ["codex", "queued"], ["claude", "running"], ["claude", "queued"],
+  ] as const)("queues a %s follow-up with its attachments while the run is %s", async (variant, status) => {
+    const providerId = variant === "claude" ? "claude_code" : "codex";
+    const active = { ...run, providerId, spaceId: `${variant}-space`, status };
     mocks.getById.mockResolvedValue({ success: true, data: active });
     mocks.checkCanResume.mockResolvedValue(true);
-    const page = workspacePage("codex");
+    const page = workspacePage(providerId);
     act(() => page.store.dispatch(setActiveTab(active.id)));
     await waitFor(() => expect(page.result.current.composerRun?.status).toBe(status));
     await waitFor(() => expect(page.result.current.conversationSettingsReady).toBe(true));
@@ -753,7 +756,9 @@ describe("workspace conversations across renderers", () => {
       goalMode: toggle === "goalMode", planMode: toggle === "planMode",
     } };
     const existing = { ...run, providerId: "codex", workspaceId: "ws-1", mode: "developer", configSnapshot: { conversationSettings: settings } };
-    const created = { ...existing, id: "new-app-run" };
+    const expected = { ...settings, config: { ...settings.config, goalMode: false, planMode: false } };
+    // A fresh backend run contains the submitted new-chat settings.
+    const created = { ...existing, id: "new-app-run", configSnapshot: { conversationSettings: expected } };
     mocks.getByWorkspace.mockResolvedValue({ success: true, data: [existing] });
     mocks.getById.mockImplementation(async (id) => ({ success: true, data: id === created.id ? created : existing }));
     mocks.executeRun.mockResolvedValue(created.id);
@@ -762,7 +767,6 @@ describe("workspace conversations across renderers", () => {
     await waitFor(() => expect(page.result.current.conversationSettingsReady).toBe(true));
     const previousOwner = page.result.current.ownerKey;
     await act(async () => { expect(await page.result.current.handleExecute("New app chat", { target: "new" })).toBe(created.id); });
-    const expected = { ...settings, config: { ...settings.config, goalMode: false, planMode: false } };
     expect(mocks.executeRun.mock.calls[0][8]).toEqual(expected);
     expect(page.result.current.conversationSettings).toEqual(expected);
     expect(page.store.getState().workspace.conversationSettingsByKey[previousOwner]).toEqual(settings);

@@ -7,8 +7,11 @@ import {
   MarkdownLink,
   markdownComponents,
 } from "@/components/markdown-components";
-import { FileIconComponent, Sparkles } from "@/components/ui/icons";
+import { Apps, FileIconComponent } from "@/components/ui/icons";
+import { Button } from "@/components/ui";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
+import { useOpenComposerMention } from "../hooks/use-open-composer-mention";
+import { composerSkillDestination } from "../lib/composer-mention";
 
 export interface PromptMarkdownSkill {
   name: string;
@@ -154,17 +157,28 @@ function createPromptContextPlugin(skillNames: string[], filePaths: string[]) {
   };
 }
 
-function PromptSkillChip({ skill }: { skill: PromptMarkdownSkill }) {
+function PromptSkillChip({ skill, onOpen }: {
+  skill: PromptMarkdownSkill;
+  onOpen: (name: string) => void;
+}) {
   const [failed, setFailed] = useState(false);
   const iconPath = skill.iconLarge || skill.iconSmall;
   const resolved = useLocalImageUrl(iconPath);
   const label = skill.displayName || skill.name;
   const tooltip = skill.shortDescription || skill.description || label;
+  const clickable = composerSkillDestination(skill)?.kind === "plugin";
+  const Chip = clickable ? Button : "span";
 
   return (
-    <span
-      className="inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none  text-accent hover:decoration-dotted hover:underline "
+    <Chip
+      className={`inline-flex align-middle items-center gap-1 mb-0.5 h-6 mx-0.5 rounded-lg text-s font-medium leading-none select-none text-accent hover:decoration-dotted hover:underline ${clickable ? "focus-visible:ring-2 focus-visible:ring-accent/40" : "cursor-default"}`}
+      style={
+        skill.brandColor
+          ? { color: `color-mix(in srgb, ${skill.brandColor} 60%, var(--color-primary))` }
+          : undefined
+      }
       title={tooltip}
+      onClick={clickable ? () => onOpen(skill.name) : undefined}
     >
       <span className="inline-flex items-center justify-center size-3.5 shrink-0 rounded-sm overflow-hidden">
         {iconPath && resolved && !failed ? (
@@ -180,11 +194,11 @@ function PromptSkillChip({ skill }: { skill: PromptMarkdownSkill }) {
             onError={() => setFailed(true)}
           />
         ) : (
-          <Sparkles className="size-3 shrink-0" />
+          <Apps className="size-3 shrink-0" />
         )}
       </span>
       <span className="leading-none">{label}</span>
-    </span>
+    </Chip>
   );
 }
 
@@ -249,13 +263,16 @@ interface PromptMarkdownProps {
   children?: string;
   skills?: PromptMarkdownSkill[];
   files?: PromptMarkdownFile[];
+  providerId?: string;
 }
 
 export function PromptMarkdown({
   children = "",
   skills = [],
   files = [],
+  providerId,
 }: PromptMarkdownProps) {
+  const openSkillMention = useOpenComposerMention(skills, providerId);
   const skillsByToken = useMemo(
     () => new Map(skills.map((skill) => [
       skill.scope === "computer" ? `@${skill.displayName || skill.name}` : `$${skill.name}`,
@@ -282,7 +299,7 @@ export function PromptMarkdown({
         const context = parseContextHref(href);
         if (context?.kind === "skill") {
           const skill = skillsByToken.get(context.value);
-          if (skill) return <PromptSkillChip skill={skill} />;
+          if (skill) return <PromptSkillChip skill={skill} onOpen={openSkillMention} />;
         }
         if (context?.kind === "file") {
           const file = filesByPath.get(context.value);
@@ -298,7 +315,7 @@ export function PromptMarkdown({
         );
       },
     }),
-    [filesByPath, skillsByToken],
+    [filesByPath, skillsByToken, openSkillMention],
   );
 
   return (

@@ -80,6 +80,7 @@ export default function MainLayout() {
             name="search"
             options={{ presentation: "fullScreenModal", animation: "fade", headerShown: false }}
           />
+          <Stack.Screen name="history-content" options={{ title: "Full content", headerLargeTitle: false }} />
           <Stack.Screen
             name="image/[artifactId]"
             options={{

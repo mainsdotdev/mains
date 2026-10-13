@@ -6,9 +6,14 @@
 import type { ClaudePermissionMode } from "@mains/contracts/claude-permission-modes";
 import type { EffortLevel } from "@mains/contracts/effort-levels";
 import type { ModeId } from "@mains/contracts/modes";
+import type { ModelServiceTier } from "@mains/contracts/run-settings";
 import type { StoredAttachment } from "@mains/contracts/runs";
 import type { ProviderCliInfo } from "@mains/contracts/provider-cli";
-import type { RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
+import type { ConnectorOAuthStartResult } from "@mains/contracts/provider-connectors";
+import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
+export type { ConnectorOAuthStartResult } from "@mains/contracts/provider-connectors";
+export type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
+import type { ProviderTurnLineage, RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
 import type { ModeToolPolicy } from "./mode-harness";
 import type {
@@ -54,6 +59,7 @@ export interface RunExecutionContext {
  * Request to start a work run
  */
 export interface WorkRunRequest {
+  providerTurnLineage?: ProviderTurnLineage;
   /** Display correlation only; does not alter provider input acceptance. */
   clientPromptId?: string;
   runId: string;
@@ -182,8 +188,15 @@ export interface WorkRunSubagentEvent {
   phase: "invoked" | "running" | "completed" | "failed" | "stopped";
   /** The name/type of the subagent (e.g., "code-reviewer", "general-purpose") */
   agentType: string;
-  /** Unique identifier for this subagent invocation */
+  /** Provider agent identity, stable across resumed executions. */
   agentId?: string;
+  /** Provider execution id; distinct from the Mains run id. */
+  providerRunId?: string;
+  /** Provider-reported configuration; absent in older history. */
+  model?: string;
+  reasoningEffort?: string;
+  role?: string;
+  agentPath?: string;
   /** The tool_use_id that spawned this subagent (correlates with parent agent) */
   parentToolUseId?: string;
   /** The prompt/task given to the subagent */
@@ -218,6 +231,12 @@ export interface WorkRunTaskEvent {
   phase: "started" | "progress" | "updated" | "completed";
   /** Provider task id, stable for the task's lifetime. */
   taskId: string;
+  /** Provider execution id. Claude ids sort lexically in execution order. */
+  providerRunId?: string;
+  /** Immediate parent task; null explicitly clears a previous parent. */
+  parentTaskId?: string | null;
+  /** Resolved spawning call of the immediate parent, when known. */
+  parentToolCallId?: string | null;
   /** tool_use_id of the spawning tool call — the correlation key. */
   toolCallId?: string;
   /** Terminal status (phase "completed") or patched status (phase "updated"). */
@@ -247,6 +266,12 @@ export interface WorkRunTaskEvent {
   error?: string;
   /** Ambient/housekeeping task — consumers should hide it from the inline transcript. */
   skipTranscript?: boolean;
+  /** Foreground/background execution, independent of its final outcome. */
+  isBackgrounded?: boolean;
+  /** Membership in the provider's latest full live-background snapshot. */
+  backgroundActive?: boolean;
+  /** Watcher/housekeeping task; excluded from activity indicators. */
+  ambient?: boolean;
   /** Timestamp */
   ts?: number;
 }
@@ -345,7 +370,7 @@ export interface WorkRunMessagePhaseEvent {
   type: "message_phase";
   /** Correlates with report metadata.providerMessageId, including split text blocks. */
   messageId: string;
-  phase: "commentary" | "final_answer";
+  phase: "commentary" | "partial_answer" | "final_answer";
   ts?: number;
 }
 
@@ -413,8 +438,9 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
  * Request to continue an existing run (resume session)
  */
 export interface WorkRunContinueRequest {
+  providerTurnLineage?: ProviderTurnLineage;
   clientPromptId?: string;
-  /** Correlates a locally queued input with Codex's accepted userMessage. */
+  /** Correlates a locally queued input with the provider's accepted user message. */
   clientUserMessageId?: string;
   /** Backend-only callback; never serialized onto the wire. */
   onInputAccepted?: (turnId: string) => Promise<void>;
@@ -570,6 +596,9 @@ export interface McpAppCallToolRequest {
 export interface McpAppCallToolResult {
   content: unknown[];
   structuredContent?: unknown;
+  /** The provider left structured data out of this result; content remains usable. */
+  structuredContentOmitted?: boolean;
+  resourceLinks?: unknown[];
   isError?: boolean;
   _meta?: unknown;
 }
@@ -602,7 +631,7 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
    */
   continueRun?(request: WorkRunContinueRequest, onEvent: WorkRunEventHandler): Promise<WorkRunResult>;
   steerRun?(request: WorkRunSteerRequest): Promise<{ turnId: string }>;
-  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string }>;
+  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string; delivery?: "queue" | "steer" }>;
 
   /**
    * Fork an existing run's session into a new run.
@@ -731,7 +760,7 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
   /** Read the current goal for a run's thread (null if none). */
   getGoal?(runId: string): Promise<GoalInfo | null>;
   /** Clear the goal on a run's thread. Returns true if cleared. */
-  clearGoal?(runId: string): Promise<boolean>;
+  clearGoal?(runId: string, origin?: GoalMutationOrigin): Promise<boolean>;
 
   /**
    * Read account info from the provider.
@@ -847,7 +876,7 @@ export interface DriverOutcome {
 
 /** Native voice can create work turns without a client issuing turn/start. */
 export interface RealtimeWorkHandlers {
-  onTurnStarted(providerTurnId: string, message?: string, model?: string): Promise<void>;
+  onTurnStarted(providerTurnId: string, message?: string, model?: string, lineage?: ProviderTurnLineage): Promise<void>;
   onEvent: WorkRunEventHandler;
   onCompleted(result: DriverOutcome): Promise<void>;
 }
@@ -893,7 +922,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   /** Resume an existing session by id and build the follow-up prompt. */
   resumeSession?(request: WorkRunContinueRequest): Promise<AcquiredSession>;
   steerRun?(request: WorkRunSteerRequest): Promise<{ turnId: string }>;
-  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string }>;
+  getInputStatus?(runId: string, clientUserMessageId: string, sessionId?: string): Promise<{ accepted: boolean; turnId?: string; delivery?: "queue" | "steer" }>;
 
   /** Fork an existing session into a new run and build the prompt. */
   forkSession?(request: WorkRunForkRequest): Promise<AcquiredSession>;
@@ -984,7 +1013,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   /** Read the current goal for a run's thread (null if none). */
   getGoal?(runId: string): Promise<GoalInfo | null>;
   /** Clear the goal on a run's thread. Returns true if cleared. */
-  clearGoal?(runId: string): Promise<boolean>;
+  clearGoal?(runId: string, origin?: GoalMutationOrigin): Promise<boolean>;
 }
 
 /**
@@ -1001,13 +1030,6 @@ export interface GoalInfo {
   timeUsedSeconds?: number;
   createdAt?: number;
   updatedAt?: number;
-}
-
-/** Params for {@link ProviderDriver.setGoal}. All fields optional (partial update). */
-export interface GoalSetParams {
-  objective?: string;
-  status?: string;
-  tokenBudget?: number;
 }
 
 /**
@@ -1047,7 +1069,7 @@ export interface RateLimitResetCreditInfo {
 export interface RateLimitInfo extends RateLimitSnapshotInfo {
   /** Whether the account may currently consume the ordinary Codex allowance. */
   ordinaryUsageAllowed?: boolean | null;
-  /** Complete multi-bucket view keyed by Codex's metered limit id. */
+  /** Complete multi-bucket view keyed by the provider's metered limit id. */
   rateLimitsByLimitId?: Record<string, RateLimitSnapshotInfo>;
   rateLimitResetCredits?: {
     availableCount: number;
@@ -1368,11 +1390,10 @@ export interface ModelInfo {
   /** Available effort levels for this model */
   supportedEffortLevels?: EffortLevel[];
   /**
-   * Provider-specific service tiers (e.g. Codex: `priority`, `flex`, `default`).
-   * When set, the UI exposes a tier picker so users can trade quality/cost
-   * vs. throughput per turn. The tier is passed to the provider on `turn/start`.
+   * Speed tiers advertised by the model (for example Fast and Ultrafast).
+   * Their ids and descriptions come from the provider, which validates access.
    */
-  serviceTiers?: Array<{ id: string; name: string; description?: string }>;
+  serviceTiers?: ModelServiceTier[];
   /** Model description */
   description?: string;
   // TODO: expose in UI — model supports auto mode selection
@@ -2122,8 +2143,4 @@ export interface ConnectorOverview {
   supported: boolean;
   apps: ConnectorInfo[];
   mcpServers: ConnectorMcpServerInfo[];
-}
-
-export interface ConnectorOAuthStartResult {
-  authorizationUrl: string;
 }

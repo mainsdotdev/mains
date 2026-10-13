@@ -1,7 +1,9 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Text } from "@/components/ui";
 import { useAppSelector } from "@/lib/redux/hooks";
 import { isPreviewableImagePath } from "../lib/previewable-image";
+import type { ReviewDiffStyle } from "../lib/review-diff";
+import { DiffLayoutToggle } from "./diff-layout-toggle";
 import { ImageViewer } from "./image-viewer";
 
 const CodeViewer = lazy(() =>
@@ -16,6 +18,7 @@ interface EditorContentProps {
 }
 
 export function EditorContent({ className = "" }: EditorContentProps) {
+  const [diffStyle, setDiffStyle] = useState<ReviewDiffStyle>("unified");
   const activeWorkspaceId = useAppSelector((state) => state.workspace.activeWorkspaceId);
   const selectedFile = useAppSelector((state) => state.workspace.selectedFile);
   const selectedFileContent = useAppSelector((state) => state.workspace.selectedFileContent);
@@ -126,10 +129,14 @@ export function EditorContent({ className = "" }: EditorContentProps) {
   if (selectedFile.extension === "diff") {
     return (
       <div className={`flex flex-col h-full noscrollbar ${className}`}>
+        <div className="flex shrink-0 items-center justify-end px-3 pt-1">
+          <DiffLayoutToggle diffStyle={diffStyle} onStyleChange={setDiffStyle} />
+        </div>
         <div className="flex-1 min-h-0 my-2 overflow-hidden noscrollbar">
           <Suspense fallback={null}>
             <DiffViewer
               diffText={selectedFileContent.content}
+              diffStyle={diffStyle}
               className="h-full noscrollbar"
               workspaceId={activeWorkspaceId ?? undefined}
               filePath={selectedFile.fullPath}
