@@ -4,6 +4,7 @@
 
 import type { ModeId } from "@mains/contracts/modes";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { ProviderTurnLineage } from "@mains/contracts/realtime";
 import type { FileAttachment } from "@mains/contracts/runs";
 import type { TreeDiffFile } from "../git";
 
@@ -204,6 +205,7 @@ export interface CreateToolCallPayload {
 
 export interface UpdateToolCallPayload {
   status?: ToolCallStatus;
+  parentToolCallId?: string | null;
   input?: Record<string, unknown>;
   output?: unknown;
   error?: string;
@@ -358,6 +360,7 @@ export interface StartRunContextItem {
 
 /** Payload for starting a new work run */
 export interface StartRunPayload {
+  providerTurnLineage?: ProviderTurnLineage;
   /** Correlates immediate local feedback with the persisted prompt. */
   clientPromptId?: string;
   conversationSettings?: ConversationSettings;
@@ -408,6 +411,7 @@ export interface StartRunResponse {
 
 /** Payload for continuing an existing run (resume session) */
 export interface ContinueRunPayload {
+  providerTurnLineage?: ProviderTurnLineage;
   clientPromptId?: string;
   conversationSettings?: ConversationSettings;
   clientUserMessageId?: string;
@@ -548,6 +552,10 @@ export interface ToolApprovalRequest {
   requestedSchema?: Record<string, unknown>;
   /** Longer subtitle from the requester's permission-display metadata. */
   description?: string;
+  /** Start on decline and disable implicit keyboard approval. */
+  defaultToNo?: boolean;
+  /** Only this call can be approved; offer no persistent permission grant. */
+  suppressAlwaysAllowRule?: boolean;
   timestamp: number;
 }
 

@@ -75,7 +75,12 @@ export interface RunSessionContext {
   initialModel?: string;
   initialProviderTurnId?: string;
   /** Frozen at delegation, independent of whether the voice call stays open. */
-  initialTurnMetadata?: { inputSource: "voice"; realtimeSessionId: string };
+  initialTurnMetadata?: {
+    inputSource?: "voice";
+    realtimeSessionId?: string;
+    providerParentTurnId?: string;
+    providerRootTurnId?: string;
+  };
   /** Defaults to -1 (fresh run). continueRun passes the recovered max turn index. */
   seedTurnIndex?: number;
 }
@@ -172,6 +177,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   // once the foreground call already returned "running in background"), so they
   // need an anchor that outlives it.
   const resolvedToolCalls = new Map<string, number>();
+  const taskRunIds = new Map<string, string>();
   // callKey → the files a running tool call named at start, claimed for the
   // turn only when it completes successfully (see noteToolWrites).
   const pendingToolWrites = new Map<string, string[]>();
@@ -187,6 +193,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       for (const call of calls) {
         if (call.toolId) {
           resolvedToolCalls.set(call.toolId, call.id);
+          const task = call.metadata?.task as { providerRunId?: string } | undefined;
+          if (task?.providerRunId) taskRunIds.set(call.toolId, task.providerRunId);
         }
       }
     } catch (err) {
@@ -440,7 +448,7 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
         outputTokens: usage?.outputTokens,
         cacheReadTokens: usage?.cacheReadTokens,
         cacheWriteTokens: usage?.cacheWriteTokens,
-        costMicros: usage?.totalCostUsd
+        costMicros: usage?.totalCostUsd !== undefined
           ? Math.round(usage.totalCostUsd * 1_000_000)
           : undefined,
         model: usage?.model,
@@ -816,12 +824,20 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
       const report = reportKey === undefined ? undefined : reportStreams.get(reportKey);
       if (report) event = { ...event, metadata: { ...event.metadata, streamId: report.streamId } };
     }
-    if (!await insertRunInputArtifact(runId, event)) return false;
+    // A Claude send that missed the previous native turn can already have
+    // started a new one. Deduplicate it before opening its boundary, and stamp
+    // the accepted prompt with the new turn rather than the one it just closed.
+    const startsQueuedTurn = event.kind === "user-prompt" && event.metadata?.delivery === "queue";
+    if (!await insertRunInputArtifact(runId, event, startsQueuedTurn ? async () => {
+      await startNextTurn(event.content);
+      event = { ...event, metadata: { ...event.metadata, turnId: activeTurnId } };
+      return event;
+    } : undefined)) return false;
     if (reportKey !== undefined) reportStreams.delete(reportKey);
 
     // Turn boundary side-effects
     const artifactKind = (event.metadata as Record<string, unknown> | undefined)?.kind;
-    if (artifactKind === "user-prompt" && event.metadata?.delivery !== "steer") {
+    if (artifactKind === "user-prompt" && event.metadata?.delivery !== "steer" && !startsQueuedTurn) {
       await startNextTurn(event.content);
     }
     if (event.kind === "user-prompt") {
@@ -862,6 +878,8 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     toolUseId: string | undefined,
     key: "subagent" | "task",
     detail: Record<string, unknown>,
+    parentToolCallId?: string | null,
+    extraMetadata?: Record<string, unknown>,
   ): Promise<boolean> {
     if (!toolUseId) return false;
     let toolCallId = resolvedToolCalls.get(toolUseId);
@@ -874,17 +892,32 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
     const clean = Object.fromEntries(
       Object.entries(detail).filter(([, v]) => v !== undefined),
     );
-    await runsRepo.updateToolCall(toolCallId, { metadata: { [key]: clean } });
+    await runsRepo.updateToolCall(toolCallId, {
+      parentToolCallId,
+      metadata: {
+        ...extraMetadata,
+        [key]: clean,
+        ...(parentToolCallId !== undefined ? { parentToolUseId: parentToolCallId, isFromSubagent: !!parentToolCallId } : {}),
+      },
+    });
     return true;
   }
 
   async function projectSubagent(
     event: Extract<WorkRunEvent, { type: "subagent" }>,
   ): Promise<boolean> {
+    if (resolvedToolCallsReady) await resolvedToolCallsReady;
+    const taskRunId = event.parentToolUseId ? taskRunIds.get(event.parentToolUseId) : undefined;
+    if (event.providerRunId && taskRunId && event.providerRunId < taskRunId) return false;
     return patchToolCallMetadata(event.parentToolUseId, "subagent", {
       phase: event.phase,
       agentType: event.agentType,
       agentId: event.agentId,
+      providerRunId: event.providerRunId,
+      model: event.model,
+      reasoningEffort: event.reasoningEffort,
+      role: event.role,
+      agentPath: event.agentPath,
       prompt: event.prompt,
       result: event.result,
       error: event.error,
@@ -898,23 +931,39 @@ export function createRunSession(ctx: RunSessionContext): RunSession {
   async function projectTask(
     event: Extract<WorkRunEvent, { type: "task" }>,
   ): Promise<boolean> {
-    return patchToolCallMetadata(event.toolCallId, "task", {
+    if (resolvedToolCallsReady) await resolvedToolCallsReady;
+    const previousRunId = event.toolCallId ? taskRunIds.get(event.toolCallId) : undefined;
+    if (event.providerRunId && previousRunId && event.providerRunId < previousRunId) return false;
+    const newExecution = !!(event.providerRunId && event.providerRunId !== previousRunId);
+    const didPersist = await patchToolCallMetadata(event.toolCallId, "task", {
+      // json_patch merges partial updates. Explicitly remove the previous
+      // execution's outcome so a resumed task cannot inherit its failure.
       phase: event.phase,
       taskId: event.taskId,
-      status: event.status,
+      providerRunId: event.providerRunId,
+      parentTaskId: event.parentTaskId,
+      parentToolCallId: event.parentToolCallId,
+      status: event.status ?? (newExecution ? null : undefined),
       description: event.description,
       subagentType: event.subagentType,
       taskType: event.taskType,
-      summary: event.summary,
+      summary: event.summary ?? (newExecution ? null : undefined),
       // Where a backgrounded command's real output landed. The run itself never
       // carries that output, so this path is the only handle on it.
-      outputFile: event.outputFile,
-      lastToolName: event.lastToolName,
-      usage: event.usage,
-      error: event.error,
-      skipTranscript: event.skipTranscript,
+      outputFile: event.outputFile ?? (newExecution ? null : undefined),
+      lastToolName: event.lastToolName ?? (newExecution ? null : undefined),
+      usage: event.usage ?? (newExecution ? null : undefined),
+      error: event.error ?? (newExecution ? null : undefined),
+      skipTranscript: event.skipTranscript ?? (newExecution ? null : undefined),
+      isBackgrounded: event.isBackgrounded ?? (newExecution ? null : undefined),
+      backgroundActive: event.backgroundActive ?? (newExecution ? null : undefined),
+      ambient: event.ambient ?? (newExecution ? null : undefined),
       updatedAt: event.ts ?? Date.now(),
-    });
+    }, event.parentToolCallId, newExecution && (event.taskType === "local_agent" || event.subagentType) ? {
+      subagent: { phase: "running", agentId: event.taskId, providerRunId: event.providerRunId, result: null, error: null },
+    } : undefined);
+    if (didPersist && event.toolCallId && event.providerRunId) taskRunIds.set(event.toolCallId, event.providerRunId);
+    return didPersist;
   }
 
   async function projectPromptSuggestion(

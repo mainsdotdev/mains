@@ -4,6 +4,25 @@ Domain vocabulary for the native control surface that follows a run on a paired 
 
 ## Language
 
+**History window**:
+A disposable, bounded page of chronological artifacts and tool calls for the
+conversation being viewed. Phone windows are bounded by row count and encoded
+bytes, including a single prompt with many tools. Large bodies use previews and
+an explicit chunk reader; full history remains on the backend. Startup and
+background status events synchronize conversation metadata rather than history.
+_Avoid_: Downloading all history, treating a prompt-count limit as a data-size
+limit, accumulating full tool output while reading chunks.
+
+**Conversation settings**:
+The model, reasoning effort, permissions, speed, Plan and Goal selected for the
+next message in one conversation. Existing chats read and write the backend's
+`runs.configSnapshot.conversationSettings`; editing them leaves the active turn
+and provider defaults untouched. A new chat has phone-owned draft preferences.
+New drafts inherit the last accepted preferences for their backend/provider,
+with Plan and Goal off. Opening an older chat does not replace those defaults.
+_Avoid_: Provider-wide composer settings, using a new-chat model when resuming a
+chat, caching credentials as conversation preferences.
+
 **Optimistic prompt**:
 A phone-local prompt shown from send until the backend's durable copy can replace it without a visible jump.
 _Avoid_: Temporary message, fake prompt

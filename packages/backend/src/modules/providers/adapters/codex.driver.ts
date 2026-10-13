@@ -26,6 +26,8 @@ import { findCodexBinaryPath } from "../providers.utils";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../../ipc-kit";
 import { PROVIDER_IDS } from "@mains/contracts/provider-ids";
+import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
+import type { McpServerOauthLoginCompletedNotification } from "./codex-app-server-protocol/generated/v2/McpServerOauthLoginCompletedNotification";
 import { getBackendRuntime } from "../../../runtime/backend-runtime";
 import type {
   CliUpdateResult,
@@ -33,6 +35,7 @@ import type {
   CodexAdapterConfig,
   DriverOutcome,
   GoalInfo,
+  GoalMutationOrigin,
   GoalSetParams,
   ProviderDriver,
   RateLimitInfo,
@@ -80,7 +83,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.160.0";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.162.1";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
@@ -341,7 +344,7 @@ async function maybeSetThreadGoal(
   }
   const objective = relativizeGoalMentions(rawObjective, rootPath);
   await server
-    .sendRequest("thread/goal/set", { threadId, objective })
+    .sendRequest("thread/goal/set", { threadId, objective, origin: "automatic" })
     .catch((err) => logWarn("thread/goal/set failed:", err instanceof Error ? err.message : err));
 }
 
@@ -769,9 +772,19 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         method === "mcpServer/oauthLogin/completed" ||
         method === "mcpServer/startupStatus/updated"
       ) {
-        emit(CHANNELS.providers.connectorsUpdated, {
+        const update: ProviderConnectorsUpdatedEvent = {
           providerId: PROVIDER_IDS.codex,
-        });
+        };
+        if (method === "mcpServer/oauthLogin/completed") {
+          const completed = params as McpServerOauthLoginCompletedNotification;
+          update.oauthLogin = {
+            serverName: completed.name,
+            ...(completed.loginId ? { loginId: completed.loginId } : {}),
+            success: completed.success,
+            ...(completed.error ? { error: completed.error } : {}),
+          };
+        }
+        emit(CHANNELS.providers.connectorsUpdated, update);
       }
 
       // Live goal updates — push to the renderer so the goal card above the
@@ -1092,6 +1105,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         const server = await ensureServer();
         const goalParams: CodexAppServerParams<"thread/goal/set"> = {
           threadId,
+          origin: params.origin ?? "user",
           ...(params.objective !== undefined ? { objective: params.objective } : {}),
           ...(params.status !== undefined
             ? { status: params.status as CodexGoalStatus }
@@ -1133,7 +1147,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       }
     },
 
-    async clearGoal(runId: string): Promise<boolean> {
+    async clearGoal(runId: string, origin?: GoalMutationOrigin): Promise<boolean> {
       try {
         const threadId =
           runCoordinator.getSessionThread(runId) ??
@@ -1143,6 +1157,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         const server = await ensureServer();
         const result = await server.sendRequest("thread/goal/clear", {
           threadId,
+          origin: origin ?? "user",
         });
         const cleared = result.cleared;
         if (cleared) broadcastGoal(PROVIDER_IDS.codex, runId, null);

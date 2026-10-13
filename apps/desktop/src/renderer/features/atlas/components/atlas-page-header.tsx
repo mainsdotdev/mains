@@ -350,7 +350,7 @@ export function AtlasPageHeader({
                 disabled={disabled}
                 aria-label="Change page icon"
                 aria-expanded={iconOpen}
-                className="flex size-20 items-center justify-center rounded-3xl bg-primary-50 shadow-sm hover:bg-primary-100 dark:bg-primary-950 dark:hover:bg-primary-900 focus-visible:ring-2 focus-visible:ring-accent"
+                className="flex size-20 items-center justify-center rounded-3xl bg-primary-50  hover:bg-primary-100 dark:bg-primary-950 dark:hover:bg-primary-900 focus-visible:ring-2 focus-visible:ring-accent"
                 onClick={() => {
                   setIconMode(iconParts.mode);
                   setIconColor(iconParts.color);
@@ -449,7 +449,7 @@ export function AtlasPageHeader({
         isOpen={choosingCover}
         onClose={() => setChoosingCover(false)}
         aria-label="Choose page cover"
-        className="max-w-2xl p-6"
+        className="max-w-2xl p-5 rounded-3xl"
       >
         <div className="flex items-center justify-between gap-4">
           <Text weight="medium">Page cover</Text>
@@ -461,7 +461,7 @@ export function AtlasPageHeader({
             {readingFile || uploading.isLoading ? "Uploading…" : "Upload image"}
           </Button>
         </div>
-        <Muted className="mt-2">
+        <Muted className="mt-4">
           Upload an image or choose one saved in Atlas.
         </Muted>
         {images.error != null && (
@@ -494,9 +494,9 @@ export function AtlasPageHeader({
           !images.data?.some(
             (image) => image.kind === "image" && !image.trashedAt && image.path,
           ) && (
-            <Muted className="mt-4">
+            <Text variant="muted" tone="faint" size="xs" className="mt-4">
               No saved images yet. Upload your first cover.
-            </Muted>
+            </Text>
           )}
       </Modal>
     </>

@@ -80,6 +80,9 @@ export const appApi = {
     ),
   },
   terminal: {
+    destroyIdle: method<typeof window.api.terminal.destroyIdle>(CHANNELS.terminal.destroyIdle),
+    attach: method<typeof window.api.terminal.attach>(CHANNELS.terminal.attach),
+    list: method<typeof window.api.terminal.list>(CHANNELS.terminal.list),
     create: method<typeof window.api.terminal.create>(CHANNELS.terminal.create),
     write: method<typeof window.api.terminal.write>(CHANNELS.terminal.write),
     resize: method<typeof window.api.terminal.resize>(CHANNELS.terminal.resize),

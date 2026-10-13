@@ -270,6 +270,9 @@ export function WorkspaceInput({
     handleThinkingModeToggle,
     fastMode,
     handleFastModeToggle,
+    serviceTier,
+    serviceTiers,
+    handleServiceTierChange,
     effortLevel,
     handleEffortLevelChange,
     supportsUltracode,
@@ -954,6 +957,9 @@ export function WorkspaceInput({
       onThinkingModeToggle={handleThinkingModeToggle}
       fastMode={fastMode}
       onFastModeToggle={handleFastModeToggle}
+      serviceTier={serviceTier}
+      serviceTiers={serviceTiers}
+      onServiceTierChange={handleServiceTierChange}
       supportsFastMode={selectedModelInfo?.supportsFastMode ?? false}
       effortLevel={effortLevel}
       onEffortLevelChange={handleEffortLevelChange}

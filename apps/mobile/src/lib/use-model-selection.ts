@@ -1,61 +1,56 @@
 import { and, asc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 
 import { db } from "@/db/client";
-import { modelChoices, models, providers } from "@/db/schema";
+import { models } from "@/db/schema";
+import { useRunSettings } from "./use-run-settings";
 
 import {
   dedupeModelsByPrettyName,
   formatEffortLevel,
   modelPrettyName,
   parseEffortLevels,
+  parseServiceTiers,
   permissionModesFor,
   permissionShortLabel,
   supportsGoalMode,
   supportsPlanToggle,
+  runSettingsFromConfig,
 } from "./models";
 
 /**
  * What the composer's model pill and the model sheet both need for one
- * provider: the pickable models, the one in effect (the phone's choice, else
- * the provider's default), and the provider's effort as the Mac holds it.
+ * conversation: its saved model and next-message preferences. Without a run
+ * id these are the phone's draft preferences for a new conversation.
  */
-export function useModelSelection(backendId: string, providerId: string) {
-  const modelQuery = useLiveQuery(
+export function useModelSelection(backendId: string, providerId: string, runId?: string | null) {
+  const modelQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(models)
       .where(and(eq(models.backendId, backendId), eq(models.providerId, providerId)))
       .orderBy(asc(models.sortOrder)),
+    models,
     [backendId, providerId],
   );
-  const choiceQuery = useLiveQuery(
-    db
-      .select()
-      .from(modelChoices)
-      .where(and(eq(modelChoices.backendId, backendId), eq(modelChoices.providerId, providerId)))
-      .limit(1),
-    [backendId, providerId],
-  );
-  const providerQuery = useLiveQuery(
-    db
-      .select()
-      .from(providers)
-      .where(and(eq(providers.backendId, backendId), eq(providers.id, providerId)))
-      .limit(1),
-    [backendId, providerId],
-  );
-
-  const list = dedupeModelsByPrettyName(modelQuery.data, providerId);
-  const choice = choiceQuery.data[0]?.modelId;
+  const conversation = useRunSettings(backendId, providerId, runId, modelQuery.data.find((model) => model.isDefault)?.id ?? modelQuery.data[0]?.id ?? "");
+  const choice = conversation.settings.model;
+  const list = dedupeModelsByPrettyName(modelQuery.data, providerId, choice);
   const selected =
-    list.find((m) => m.id === choice) ?? list.find((m) => m.isDefault) ?? list[0] ?? null;
-  const provider = providerQuery.data[0];
-  const effortLevel = provider?.effortLevel ?? "";
+    list.find((m) => m.id === choice) ?? (choice ? {
+      backendId, providerId, id: choice, displayName: choice, description: null,
+      isDefault: false, effortLevels: null, supportsFastMode: false, serviceTiersJson: null, sortOrder: -1,
+    } : null);
+  const settings = runSettingsFromConfig(providerId, conversation.settings.config as Record<string, unknown>);
+  const effortLevel = settings.effortLevel;
   const supportedLevels = parseEffortLevels(selected?.effortLevels);
-  const permissionMode = provider?.permissionMode ?? "";
+  const permissionMode = settings.permissionMode;
+  const serviceTiers = parseServiceTiers(selected?.serviceTiersJson).filter((tier) => tier.id !== "default");
+  const storedTier = conversation.settings.config.serviceTier ?? "";
+  const serviceTier = storedTier === "priority" && serviceTiers.some((tier) => tier.id === "fast") ? "fast" : storedTier;
 
   return {
+    ...conversation,
     models: list,
     selected,
     label: selected ? modelPrettyName(selected, providerId) : null,
@@ -66,11 +61,13 @@ export function useModelSelection(backendId: string, providerId: string) {
     permissionMode,
     permissionLabel: permissionMode ? permissionShortLabel(providerId, permissionMode) : null,
     permissionOptions: permissionModesFor(providerId),
-    fastMode: provider?.fastMode ?? false,
+    fastMode: settings.fastMode,
     supportsFastMode: selected?.supportsFastMode ?? false,
-    goalMode: provider?.goalMode ?? false,
+    serviceTier,
+    serviceTiers,
+    goalMode: settings.goalMode,
     supportsGoalMode: supportsGoalMode(providerId),
-    planMode: provider?.planMode ?? false,
+    planMode: settings.planMode,
     supportsPlanMode: supportsPlanToggle(providerId),
   };
 }

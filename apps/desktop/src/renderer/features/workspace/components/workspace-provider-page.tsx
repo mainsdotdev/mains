@@ -12,6 +12,7 @@ import {
   WorkspaceInput,
   WorkspaceTabs,
   TerminalSection,
+  WorkspaceTerminal,
   GoalSummaryBar,
   TodoSummaryBar,
 } from "@/features/workspace/components";
@@ -34,6 +35,7 @@ import {
 } from "@/lib/redux/api";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setContextItemsForKey } from "@/lib/redux/slices/workspaceSlice";
+import { withoutSubmittedContext } from "../lib/composer-context";
 import { transferRightPaneContext } from "@/lib/redux/slices/appSettingsSlice";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
 import { useSetMainHeader } from "@/hooks/use-main-header";
@@ -322,6 +324,16 @@ export function WorkspaceProviderPage({
             dispatch(setContextItemsForKey({ key: action.ownerKey, items: action.items as ContextItem[] }));
           }
           break;
+        case "contextSubmitted": {
+          // An accepted send owns its original composer even after navigation.
+          // Consume that snapshot rather than replacing newer parent context.
+          const state = store.getState().workspace;
+          const items = state.composerContextKey === action.ownerKey
+            ? state.contextItems : state.contextItemsByKey[action.ownerKey] ?? [];
+          dispatch(setContextItemsForKey({ key: action.ownerKey,
+            items: withoutSubmittedContext(items, action.items as ContextItem[]) }));
+          break;
+        }
         case "providerChanged":
           if (action.providerId === providerId) {
             dispatch(baseApi.util.invalidateTags([{ type: "Providers", id: providerId }]));
@@ -623,10 +635,8 @@ export function WorkspaceProviderPage({
           const current = store.getState().workspace;
           if ((current.draftTextByKey[browserOwnerKey] ?? "") === draft) handleBrowserDraftChange("");
           const currentItems = current.composerContextKey === browserOwnerKey ? current.contextItems : current.contextItemsByKey[browserOwnerKey] ?? [];
-          if (currentItems === items) {
-            dispatch(setContextItemsForKey({ key: browserOwnerKey, items: [] }));
-            void window.api.browserChat.postAction({ type: "contextItems", ownerKey: browserOwnerKey, items: [] });
-          }
+          dispatch(setContextItemsForKey({ key: browserOwnerKey, items: withoutSubmittedContext(currentItems, items) }));
+          void window.api.browserChat.postAction({ type: "contextSubmitted", ownerKey: browserOwnerKey, items });
           if (getTransientUploadsForOwner(browserOwnerKey) === files) handleBrowserUploadsChange([]);
         }
       } catch (error) {
@@ -637,8 +647,16 @@ export function WorkspaceProviderPage({
       }
       return;
     }
+    const before = store.getState().workspace;
+    const submittedContext = before.composerContextKey === browserOwnerKey
+      ? before.contextItems : before.contextItemsByKey[browserOwnerKey] ?? [];
     const submittedRunId = await executeChat();
     if (!browserChatOnly) return;
+    if (submittedRunId && submittedContext.length) {
+      // The child clears its own composer, but the parent is the authoritative
+      // context publisher. Leaving its old snapshot would reattach annotations.
+      void window.api.browserChat.postAction({ type: "contextSubmitted", ownerKey: browserOwnerKey, items: submittedContext });
+    }
     const currentDraft = store.getState().workspace.draftTextByKey[browserOwnerKey] ?? "";
     void window.api.browserChat.postAction({
       type: "draft", ownerKey: browserOwnerKey, draft: currentDraft,
@@ -989,31 +1007,18 @@ export function WorkspaceProviderPage({
       </div>
       </div>
 
-      {(activeAuthTerminal || showWorkspaceTerminal) && (
+      {activeAuthTerminal ? (
         <TerminalSection
-          id={
-            activeAuthTerminal
-              ? `auth-${providerId}`
-              : ws.currentWorkspace!.id
-          }
-          rootPath={
-            activeAuthTerminal
-              ? undefined
-              : ws.currentWorkspace!.rootPath
-          }
-          isOpen={activeAuthTerminal ? true : bottomTerminal.isOpen}
-          title={
-            activeAuthTerminal
-              ? `Sign in to ${providerLabel}`
-              : "Terminal"
-          }
-          pendingCommand={activeAuthTerminal?.pendingCommand}
+          id={`auth-${providerId}`}
+          isOpen
+          title={`Sign in to ${providerLabel}`}
+          pendingCommand={activeAuthTerminal.pendingCommand}
           onPendingCommandSent={authTerminal.markCommandSent}
-          onClose={
-            activeAuthTerminal ? authTerminal.close : bottomTerminal.close
-          }
+          onClose={authTerminal.close}
         />
-      )}
+      ) : showWorkspaceTerminal && <WorkspaceTerminal workspaceId={ws.currentWorkspace!.id}
+        workspaceName={ws.currentWorkspace!.name} rootPath={ws.currentWorkspace!.rootPath}
+        isOpen={bottomTerminal.isOpen} onHide={bottomTerminal.close} />}
     </div>
     </PluginLogoProvider>
   );

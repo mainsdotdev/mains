@@ -87,6 +87,7 @@ function validAction(value: unknown): value is BrowserChatAction {
     }
     case "providerChanged": return typeof action.providerId === "string" && action.providerId.length > 0;
     case "uploads": return typeof action.ownerKey === "string" && Array.isArray(action.uploads);
+    case "contextSubmitted":
     case "contextItems": return typeof action.ownerKey === "string" && Array.isArray(action.items);
     default: return false;
   }

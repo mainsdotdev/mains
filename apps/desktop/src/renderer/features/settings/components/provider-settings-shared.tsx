@@ -363,7 +363,7 @@ function UsageRateLimitRow({
   );
 }
 
-/** Usage / rate-limit section shared by Codex and Copilot. */
+/** Usage / rate-limit section shared by provider settings. */
 export function ProviderUsageSection({
   isLoading,
   rows,

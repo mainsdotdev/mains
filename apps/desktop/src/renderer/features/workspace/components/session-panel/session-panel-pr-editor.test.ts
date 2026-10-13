@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/redux/api", () => ({
+  useGetTerminalSessionsQuery: () => ({ currentData: [] }),
   useListWorkspacesQuery: () => ({ data: [{ id: "workspace-1", projectId: "project-1", rootPath: "/repos/mains" }] }),
   useListProjectsQuery: () => ({ data: [{ id: "project-1", name: "mains" }] }),
 }));
@@ -39,6 +40,7 @@ vi.mock("@/hooks/use-mode-config", () => ({
     showGitActions: true,
     showSources: false,
     showDeliverables: false,
+    showTerminal: false,
   }),
 }));
 

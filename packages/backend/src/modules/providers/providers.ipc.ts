@@ -148,7 +148,7 @@ export function registerProvidersIpc(): void {
 
   ipcMain.handle(
     CHANNELS.providers.clearGoal,
-    handle((id: string, runId: string) => providersService.clearGoal(id, runId)),
+    handle((id: string, runId: string, origin?: import("@mains/contracts/provider-goals").GoalMutationOrigin) => providersService.clearGoal(id, runId, origin)),
   );
 
   ipcMain.handle(

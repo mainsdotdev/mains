@@ -7,12 +7,13 @@ const page = (start, end = null) => ({ artifacts: [], toolCalls: [], turns: [], 
 
 test("mobile opens on latest and refreshes the selected bounds", () => {
   forgetHistory("b", "r");
-  assert.deepEqual(historyRequest("b", "r", "refresh"), { runId: "r", direction: "latest" });
+  const base = { runId: "r", profile: "mobile", deferToolOutput: true };
+  assert.deepEqual(historyRequest("b", "r", "refresh"), { ...base, direction: "latest" });
   historyLoaded("b", "r", page(90));
-  assert.deepEqual(historyRequest("b", "r", "older"), { runId: "r", direction: "older", cursor: cursor(90) });
+  assert.deepEqual(historyRequest("b", "r", "older"), { ...base, direction: "older", cursor: cursor(90) });
   historyLoaded("b", "r", page(60, 90));
-  assert.deepEqual(historyRequest("b", "r", "refresh"), { runId: "r", direction: "refresh", cursor: cursor(60), end: cursor(90) });
-  assert.deepEqual(historyRequest("b", "r", "newer"), { runId: "r", direction: "newer", cursor: cursor(90) });
+  assert.deepEqual(historyRequest("b", "r", "refresh"), { ...base, direction: "refresh", cursor: cursor(60), end: cursor(90) });
+  assert.deepEqual(historyRequest("b", "r", "newer"), { ...base, direction: "newer", cursor: cursor(90) });
 });
 
 test("reading freezes the tail while the complete backend advances", () => {

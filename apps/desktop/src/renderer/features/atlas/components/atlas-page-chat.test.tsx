@@ -30,8 +30,8 @@ const mocks = vi.hoisted(() => ({
   settings: { model: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } },
   provider: { defaultModel: "test-model", config: { modelReasoningEffort: "medium", serviceTier: "" } },
   models: [
-    { id: "test-model", displayName: "Test Model", supportedEffortLevels: ["low", "medium", "high"], supportsFastMode: true },
-    { id: "other-model", displayName: "Other Model", supportedEffortLevels: ["low", "medium", "high"], supportsFastMode: true },
+    { id: "test-model", displayName: "Test Model", supportedEffortLevels: ["low", "medium", "high"], supportsFastMode: true, serviceTiers: [{ id: "fast", name: "Fast" }] },
+    { id: "other-model", displayName: "Other Model", supportedEffortLevels: ["low", "medium", "high"], supportsFastMode: true, serviceTiers: [{ id: "fast", name: "Fast" }] },
   ],
   empty: [],
 }));
@@ -86,7 +86,11 @@ vi.mock("@/features/workspace/hooks/use-context-usage", () => ({ useContextUsage
 vi.mock("@/features/workspace/hooks/use-open-file-in-editor", () => ({ useOpenFileInEditor: () => vi.fn() }));
 vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => ({ open: vi.fn() }) }));
 vi.mock("@/features/workspace/components/unified-context-dropdown", () => ({ UnifiedContextDropdown: () => null }));
-vi.mock("@/features/workspace/lib/conversation-settings-writer", () => ({ persistConversationSettings: (...args: unknown[]) => mocks.invoke(...args) }));
+vi.mock("@/features/workspace/lib/conversation-settings-writer", () => ({
+  persistConversationSettings: (...args: unknown[]) => mocks.invoke(...args),
+  waitForConversationSettings: async () => {},
+  hasPendingConversationSettings: () => false,
+}));
 
 function typeInstruction(text: string) {
   const input = screen.getByRole("textbox", { name: "Page instruction" });
@@ -285,16 +289,13 @@ describe("Atlas floating page chat", () => {
     expect(mocks.execute).toHaveBeenCalledOnce();
   });
 
-  it("starts a fresh page conversation from the header menu without reopening or deleting the old chat", async () => {
+  it("starts a fresh page conversation from the chat title without reopening or deleting the old chat", async () => {
     const { store } = setup(true);
     typeInstruction("Edit this page");
     fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
     await screen.findByText("Page conversation");
-    fireEvent.click(screen.getByRole("button", { name: "Page chat options" }));
-    expect(screen.queryByRole("button", { name: "Open chat" })).toBeNull();
-    expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
-    expect(screen.queryByText("Codex Work")).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "New page chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit page" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "New page chat" }));
     expect(store.getState().atlas.byOwner['["local","account"]'].chats.one).toMatchObject({
       runId: null, spaceId: "work-space", mode: "details",
     });
@@ -318,17 +319,12 @@ describe("Atlas floating page chat", () => {
       patch: { spaceId: "claude-work", runId: "old-claude-run" } })));
     expect(mocks.chatProvider).toHaveBeenLastCalledWith("codex");
     expect(screen.queryByText("Page conversation")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Page chat options" })).toBeNull();
     typeInstruction("Keep this instruction");
     fireEvent.click(screen.getByRole("button", { name: "Send page instruction" }));
     await waitFor(() => expect(mocks.execute).toHaveBeenCalledOnce());
     expect(mocks.execute.mock.calls[0][2]).toBe("codex");
     expect(mocks.continue).not.toHaveBeenCalled();
     expect(store.getState().atlas.byOwner['["local","account"]'].chats.one.spaceId).toBe("work-space");
-    fireEvent.click(screen.getByRole("button", { name: "Page chat options" }));
-    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
-    expect(screen.getByRole("menuitem", { name: "New page chat" })).toBeTruthy();
-    expect(screen.queryAllByRole("menuitemradio")).toHaveLength(0);
     expect(screen.queryByText("Claude Work")).toBeNull();
   });
 
@@ -390,7 +386,9 @@ describe("Atlas floating page chat", () => {
     expect(screen.queryByRole("button", { name: "Permission mode" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Model and effort" }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /Other Model/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Fast/ }));
+    // Codex advertises Fast as a service tier, chosen from the Speed menu.
+    fireEvent.click(screen.getByRole("button", { name: /^Speed:/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Fast/ }));
     fireEvent.click(screen.getByRole("textbox", { name: "Page instruction" }));
     expect(screen.queryByRole("button", { name: "Permission mode" })).toBeNull();
     typeInstruction("Write a summary");

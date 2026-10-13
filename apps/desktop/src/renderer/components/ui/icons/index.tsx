@@ -31,6 +31,7 @@ export { default as Feed } from "./feed";
 export { default as General } from "./general";
 export { default as Home } from "./home";
 export { default as Inbox } from "./inbox";
+export { default as Info } from "./info";
 export { default as Lock } from "./lock";
 export { default as Microphone } from "./microphone";
 export { default as MicrophoneToggle } from "./microphone-toggle";

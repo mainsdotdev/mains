@@ -101,6 +101,12 @@ export { AGENT_ID_IN_RESULT } from "../../../../shared/subagent";
 export interface SubagentTaskMeta {
   phase?: "started" | "progress" | "updated" | "completed";
   taskId?: string;
+  providerRunId?: string;
+  parentTaskId?: string | null;
+  parentToolCallId?: string;
+  isBackgrounded?: boolean;
+  backgroundActive?: boolean;
+  ambient?: boolean;
   status?:
     | "pending"
     | "running"
@@ -129,6 +135,11 @@ export interface SubagentLifecycleMeta {
   phase?: "invoked" | "running" | "completed" | "failed" | "stopped";
   agentType?: string;
   agentId?: string;
+  providerRunId?: string;
+  model?: string;
+  reasoningEffort?: string;
+  role?: string;
+  agentPath?: string;
   prompt?: string;
   result?: string;
   error?: string;
@@ -136,7 +147,7 @@ export interface SubagentLifecycleMeta {
   updatedAt?: number;
 }
 
-export type SubagentLifecycleState = "running" | "done" | "failed" | "stopped";
+export type SubagentLifecycleState = "running" | "idle" | "done" | "failed" | "stopped";
 
 /**
  * Tools whose call stays open for the agent's whole life, making the call's
@@ -158,7 +169,11 @@ export function subagentStateOf(args: {
   task?: SubagentTaskMeta;
   subagent?: SubagentLifecycleMeta;
 }): SubagentLifecycleState {
-  const { toolName, callStatus, task, subagent } = args;
+  const { toolName, callStatus, task } = args;
+  // A stable Claude agent can run again on the same spawning row. Its old
+  // lifecycle cannot decide the outcome of the current native execution.
+  const subagent = task?.providerRunId && args.subagent?.providerRunId &&
+    task.providerRunId !== args.subagent.providerRunId ? undefined : args.subagent;
 
   // EXPLICIT lifecycle first — everything the provider/finalizer actually
   // said about the agent outranks anything inferred from the raw call status.
@@ -178,6 +193,10 @@ export function subagentStateOf(args: {
   ) {
     return "done";
   }
+
+  // The full background level says whether work is live, never whether it
+  // succeeded. Ambient watchers also contribute no activity.
+  if (task?.ambient || (task?.isBackgrounded && task.backgroundActive === false)) return "idle";
 
   // Only now the inferred signals from the call row itself.
   if (callStatus === "error") return "failed";

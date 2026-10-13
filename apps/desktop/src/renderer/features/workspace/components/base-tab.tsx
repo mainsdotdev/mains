@@ -1,6 +1,5 @@
 import { Button, Text, Tooltip } from "@/components/ui";
 import { Close } from "@/components/ui/icons";
-import { useAppSelector } from "@/lib/redux/hooks";
 
 
 interface BaseTabProps {
@@ -50,8 +49,6 @@ export function BaseTab({
   ariaLabel,
   tooltip,
 }: BaseTabProps) {
-  const sidebarCollapsed = useAppSelector((state) => state.appSettings.sidebarCollapsed);
-
   const title = (
     <Text
       as="span"
@@ -71,6 +68,7 @@ export function BaseTab({
       aria-controls={ariaControls}
       aria-label={ariaLabel}
       aria-selected={role === "tab" ? isActive : undefined}
+      data-tab-active={isActive ? "true" : undefined}
       tabIndex={tabIndex}
       onClick={onClick}
       onKeyDown={(e) => {
@@ -80,10 +78,8 @@ export function BaseTab({
           onClick();
         }
       }}
-      // `w-44` is the ideal width; tabs shrink from there as the strip fills up.
-      // `min-w-28` is the floor (past it the strip scrolls) and is also what lets
-      // them shrink at all — otherwise the flex auto minimum pins them at `w-44`.
-      className={`group relative flex items-center gap-1 pl-2.5 ${trailingAction ? "pr-1.5" : "pr-6"} py-1.5 cursor-pointer w-44 min-w-28 min-h-10`}
+      // A shared basis makes every tab shrink equally, including the active one.
+      className={`group relative flex shrink items-center gap-1 pl-2.5 ${trailingAction ? "pr-1.5" : "pr-6"} py-1.5 cursor-pointer basis-(--shell-tab-width) min-w-(--shell-tab-min-width) min-h-10`}
     >
       {/* Active background layer — always rendered, opacity transitions */}
       <div
@@ -99,7 +95,9 @@ export function BaseTab({
       />
 
       {/* Inverted corners — always rendered, opacity transitions */}
-      <InvertedCorner side="left" visible={isActive && (showLeadingCorner ?? (!isFirst || sidebarCollapsed))} />
+      <InvertedCorner side="left" visible={isActive} opacity={showLeadingCorner === undefined
+        ? isFirst ? "var(--tab-leading-corner-opacity, 0)" : 1
+        : showLeadingCorner ? 1 : 0} />
       <InvertedCorner side="right" visible={isActive} />
 
       {/* Content */}
@@ -136,7 +134,7 @@ export function BaseTab({
   );
 }
 
-export function InvertedCorner({ side, visible }: { side: "left" | "right"; visible: boolean }) {
+export function InvertedCorner({ side, visible, opacity }: { side: "left" | "right"; visible: boolean; opacity?: string | number }) {
   const isLeft = side === "left";
 
   return (
@@ -144,12 +142,14 @@ export function InvertedCorner({ side, visible }: { side: "left" | "right"; visi
       <div
         className={`absolute bottom-0 ${isLeft ? "-left-3" : "-right-3"} size-3 block dark:hidden transition-opacity duration-150 ease-out ${visible ? "opacity-100" : "opacity-0"}`}
         style={{
+          opacity: visible ? opacity : 0,
           background: `radial-gradient(circle at ${isLeft ? "top left" : "top right"}, transparent 12px, ${COLORS.light} 12px)`,
         }}
       />
       <div
         className={`absolute bottom-0 ${isLeft ? "-left-3" : "-right-3"} size-3 hidden dark:block transition-opacity duration-150 ease-out ${visible ? "opacity-100" : "opacity-0"}`}
         style={{
+          opacity: visible ? opacity : 0,
           background: `radial-gradient(circle at ${isLeft ? "top left" : "top right"}, transparent 12px, ${COLORS.dark} 12px)`,
         }}
       />

@@ -1,11 +1,13 @@
 import { useToolExpansion } from "../../lib/transcript-view-state";
-import { Text } from "@/components/ui";
 import { resolveTool } from "../../lib/resolve-tool";
 import { ToolHeader, ToolCollapse, type ToolStatus } from "./_shared";
-import {
-  type McpAppToolMetadata,
-} from "./mcp-app-display";
+import { type McpAppToolMetadata } from "./mcp-app-display";
 import { McpAppLauncher } from "./mcp-app-launcher";
+import { McpResultNotice, McpResultText } from "./mcp-result-notice";
+import {
+  mcpOutputSegments,
+  mcpStructuredContentOmitted,
+} from "../../lib/mcp-output";
 
 interface McpDisplayProps {
   displayName: string;
@@ -20,61 +22,19 @@ interface McpDisplayProps {
   mcpApp?: McpAppToolMetadata;
 }
 
-/** Pulls `{ type: "text", text }` bodies from MCP-style `content` arrays. */
-function extractMcpContentTexts(value: unknown): string[] {
-  if (!value || typeof value !== "object") return [];
-  const content = (value as Record<string, unknown>).content;
-  if (!Array.isArray(content)) return [];
-  const out: string[] = [];
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const t = item as { type?: string; text?: string };
-    if (t.type === "text" && typeof t.text === "string") {
-      out.push(t.text);
-    }
-  }
-  return out;
-}
-
-/**
- * Collect every renderable segment from an MCP result. Newer codex builds put a
- * generic ack ("Action completed.") in `content[].text` and the *real* payload
- * in `structuredContent` — which is either a nested MCP envelope
- * (`{ content: [{ type:"text", text:"<json>" }] }`) or a plain data object. We
- * surface both, ack first, so the expanded row shows the ack and the details
- * together instead of dropping the data.
- */
-function extractMcpOutputSegments(value: unknown): string[] {
-  if (!value || typeof value !== "object") return [];
-  const obj = value as Record<string, unknown>;
-  const segments = [...extractMcpContentTexts(obj)];
-
-  const structured = obj.structuredContent;
-  if (structured && typeof structured === "object") {
-    const nested = extractMcpContentTexts(structured);
-    if (nested.length > 0) {
-      segments.push(...nested);
-    } else {
-      try {
-        segments.push(JSON.stringify(structured, null, 2));
-      } catch {
-        /* non-serializable structured payload → skip */
-      }
-    }
-  }
-  return segments;
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
 /** An app resource is tied to a completed, successful originating tool call. */
 function hasUsableMcpAppResult(output: unknown): boolean {
+  // Older Claude transcripts store text-only tools as their MCP content blocks.
+  if (Array.isArray(output)) return output.length > 0;
   const result = asRecord(output);
-  if (!result || result.isError === true) return false;
+  if (!result || result.isError === true || mcpStructuredContentOmitted(output))
+    return false;
 
   const structured = asRecord(result.structuredContent);
   if (typeof structured?.error_code === "string") return false;
@@ -103,11 +63,7 @@ function formatCodePayload(raw: string): string {
  */
 function McpOutput({ segments }: { segments: string[] }) {
   const body = segments.map(formatCodePayload).join("\n\n");
-  return (
-    <Text as="pre" size="xs" tone="contrast" className="noscrollbar whitespace-pre-wrap font-mono bg-primary-50 dark:bg-primary/5 rounded-md p-2 max-h-64 overflow-y-auto">
-      <code>{body}</code>
-    </Text>
-  );
+  return <McpResultText body={body} />;
 }
 
 /**
@@ -160,20 +116,23 @@ export function McpDisplay({
         isExpanded={isExpanded}
         onToggle={() => setIsExpanded((v) => !v)}
         isCompact={isCompact}
-      >
+      ></ToolHeader>
 
-      </ToolHeader>
+      <McpResultNotice output={output} />
 
-      {runId && mcpApp && status === "done" && hasUsableMcpAppResult(output) && (
-        <McpAppLauncher
-          icon={resolvedIcon}
-          runId={runId}
-          app={mcpApp}
-          input={params}
-          output={output}
-          title={displayName}
-        />
-      )}
+      {runId &&
+        mcpApp &&
+        status === "done" &&
+        hasUsableMcpAppResult(output) && (
+          <McpAppLauncher
+            icon={resolvedIcon}
+            runId={runId}
+            app={mcpApp}
+            input={params}
+            output={output}
+            title={displayName}
+          />
+        )}
 
       {hasOutput && (
         <ToolCollapse isExpanded={isExpanded}>
@@ -187,5 +146,6 @@ export function McpDisplay({
 }
 
 function McpDetails({ output }: { output: unknown }) {
-  return <McpOutput segments={extractMcpOutputSegments(output)} />;
+  const segments = mcpOutputSegments(output);
+  return segments.length > 0 ? <McpOutput segments={segments} /> : null;
 }

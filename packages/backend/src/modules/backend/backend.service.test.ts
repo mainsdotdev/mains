@@ -159,11 +159,13 @@ describe("backendService", () => {
         "runs:execute",
         "runs:fork",
         "runs:toolApprovalResponse",
+        "runs:updateConversationSettings",
         "space:update",
       ]);
       for (const channel of PAIRED_DEVICE_COMMANDS) {
         expect(PAIRED_DEVICE_CHANNELS.has(channel)).toBe(false);
       }
+      expect(PAIRED_DEVICE_COMMANDS.has("runs:update")).toBe(false);
     });
 
     it("counts toward a paired device's capabilities", async () => {

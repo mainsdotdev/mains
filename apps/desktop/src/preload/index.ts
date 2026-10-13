@@ -1,5 +1,8 @@
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
+import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
+import type { DashboardQuery, ProviderFilter } from "@mains/contracts/stats";
 import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
 import { contextBridge, ipcRenderer } from "electron";
 import type { RunExperienceOptions, RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
@@ -18,6 +21,7 @@ import type {
 import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
+import type { TerminalCreateOptions, TerminalDataEvent, TerminalExitEvent, TerminalSession, TerminalSnapshot } from "@mains/contracts/terminal";
 import type { CreatePrPayload, CreatePrResult, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
 import type {
@@ -490,10 +494,10 @@ const api = {
       return () => ipcRenderer.removeListener(CHANNELS.providers.rateLimitsUpdated, listener);
     },
     // Thread goal controls (Codex `thread/goal/*`), keyed by runId.
-    setGoal: (id: string, runId: string, params: { objective?: string; status?: string; tokenBudget?: number }) =>
+    setGoal: (id: string, runId: string, params: GoalSetParams) =>
       ipcRenderer.invoke(CHANNELS.providers.setGoal, id, runId, params),
     getGoal: (id: string, runId: string) => ipcRenderer.invoke(CHANNELS.providers.getGoal, id, runId),
-    clearGoal: (id: string, runId: string) => ipcRenderer.invoke(CHANNELS.providers.clearGoal, id, runId),
+    clearGoal: (id: string, runId: string, origin?: GoalMutationOrigin) => ipcRenderer.invoke(CHANNELS.providers.clearGoal, id, runId, origin),
     // Fired when a thread goal changes (set/updated/cleared); goal === null on clear.
     onGoalUpdated: (callback: (data: { providerId: string; runId: string | null; goal: unknown }) => void) => {
       const listener = (_: any, data: any) => callback(data);
@@ -508,8 +512,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.providers.getConnectors, id, forceRefresh),
     startConnectorOAuth: (id: string, serverName: string) =>
       ipcRenderer.invoke(CHANNELS.providers.startConnectorOAuth, id, serverName),
-    onConnectorsUpdated: (callback: (data: { providerId: string }) => void) => {
-      const listener = (_: any, data: { providerId: string }) => callback(data);
+    onConnectorsUpdated: (callback: (data: ProviderConnectorsUpdatedEvent) => void) => {
+      const listener = (_: any, data: ProviderConnectorsUpdatedEvent) => callback(data);
       ipcRenderer.on(CHANNELS.providers.connectorsUpdated, listener);
       return () =>
         ipcRenderer.removeListener(CHANNELS.providers.connectorsUpdated, listener);
@@ -1048,18 +1052,31 @@ const api = {
   },
   // Terminal operations
   terminal: {
-    create: (payload: { id: string; cwd?: string }) =>
+    create: (payload: TerminalCreateOptions): Promise<ServiceResponse<TerminalSnapshot>> =>
       ipcRenderer.invoke(CHANNELS.terminal.create, payload),
+    attach: (id: string): Promise<ServiceResponse<TerminalSnapshot>> => ipcRenderer.invoke(CHANNELS.terminal.attach, id),
+    list: (): Promise<ServiceResponse<TerminalSession[]>> => ipcRenderer.invoke(CHANNELS.terminal.list),
     write: (id: string, data: string) =>
       ipcRenderer.invoke(CHANNELS.terminal.write, id, data),
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.invoke(CHANNELS.terminal.resize, id, cols, rows),
     destroy: (id: string) => ipcRenderer.invoke(CHANNELS.terminal.destroy, id),
-    onData: (callback: (data: { id: string; data: string }) => void) => {
-      const listener = (_: any, data: { id: string; data: string }) =>
+    destroyIdle: (workspaceId: string): Promise<ServiceResponse<string[]>> =>
+      ipcRenderer.invoke(CHANNELS.terminal.destroyIdle, workspaceId),
+    onData: (callback: (data: TerminalDataEvent) => void) => {
+      const listener = (_: any, data: TerminalDataEvent) =>
         callback(data);
       ipcRenderer.on(CHANNELS.terminal.data, listener);
       return () => ipcRenderer.removeListener(CHANNELS.terminal.data, listener);
+    },
+    onExit: (callback: (data: TerminalExitEvent) => void) => {
+      const listener = (_: unknown, data: TerminalExitEvent) => callback(data);
+      ipcRenderer.on(CHANNELS.terminal.exit, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.terminal.exit, listener);
+    },
+    onChanged: (callback: () => void) => {
+      ipcRenderer.on(CHANNELS.terminal.changed, callback);
+      return () => ipcRenderer.removeListener(CHANNELS.terminal.changed, callback);
     },
   },
   platform: {
@@ -1102,7 +1119,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.shell.openFileWithBundle, filePath, bundleId),
   },
   stats: {
-    getDashboard: (filter?: string) => ipcRenderer.invoke(CHANNELS.stats.getDashboard, filter),
+    getConsumption: (query?: DashboardQuery) => ipcRenderer.invoke(CHANNELS.stats.getConsumption, query),
+    getDashboard: (query?: DashboardQuery | ProviderFilter) => ipcRenderer.invoke(CHANNELS.stats.getDashboard, query),
   },
   app: {
     quit: () => ipcRenderer.invoke(CHANNELS.app.quit),

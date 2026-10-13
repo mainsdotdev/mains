@@ -6,7 +6,7 @@ import {
   useState,
   type FunctionComponent,
 } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -92,6 +92,23 @@ const RowWithMenu: FunctionComponent = () => {
 };
 
 describe("DropdownMenu focus handoff", () => {
+  it("can show a hover preview without moving or restoring the composer focus", () => {
+    const content = (isOpen: boolean) => createElement("div", null,
+      createElement("input", { "aria-label": "Prompt" }),
+      createElement(DropdownMenu, { isOpen, position: { x: 0, y: 0 }, onClose() {}, initialFocus: "none", "aria-label": "Preview" },
+        createElement(DropdownMenuItem, { onClick() {} }, "Server")),
+    );
+    const view = render(content(false));
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    view.rerender(content(true));
+    expect(screen.getByRole("menuitem", { name: "Server" })).toBeTruthy();
+    expect(document.activeElement).toBe(prompt);
+    view.rerender(content(false));
+    flushFrames();
+    expect(document.activeElement).toBe(prompt);
+  });
+
   it("returns focus to the trigger when an item's action leaves focus behind", async () => {
     const user = userEvent.setup();
     render(createElement(RowWithMenu));
@@ -290,5 +307,93 @@ describe("DropdownMenu viewport placement", () => {
     await waitFor(() => expect(submenu.style.top).toBe("332px"));
     expect(submenu.style.left).toBe(submenuLeft);
     expect(submenu.style.transformOrigin).toBe(transformOrigin);
+  });
+});
+
+describe("scrollable async menus", () => {
+  let contentHeight = 180;
+  const scrollBy = vi.fn();
+  beforeEach(() => {
+    contentHeight = 180;
+    scrollBy.mockReset();
+    vi.stubGlobal("innerHeight", 800);
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(288);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute("data-dropdown-content") ? contentHeight : Number.parseFloat(this.style.height) || contentHeight;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+      if (!this.hasAttribute("data-dropdown-scroll")) return this.offsetHeight;
+      const height = Number.parseFloat(this.closest<HTMLElement>('[role="menu"]')!.style.height) || contentHeight;
+      return height;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(600);
+  });
+  const menu = (label = "Loading applications…", isOpen = true) => createElement(DropdownMenu, {
+    isOpen, scrollable: true, className: "w-72", origin: "right",
+    position: { x: 500, y: 760, anchorTop: 730 }, onClose: () => undefined, "aria-label": "Applications",
+  }, createElement(DropdownMenuItem, { onClick: () => undefined }, label));
+
+  it("resizes after loading while keeping the same side of its trigger", () => {
+    const view = render(menu());
+    const surface = screen.getByRole("menu");
+    expect(surface.style.height).toBe("180px");
+    expect(surface.style.top).toBe("550px");
+    expect(surface.style.transformOrigin).toBe("bottom right");
+    flushFrames();
+    expect(surface.getAttribute("data-resize-ready")).toBe("true");
+    contentHeight = 600;
+    view.rerender(menu("Open with Viewer"));
+    expect(surface.style.height).toBe("384px");
+    expect(surface.style.top).toBe("346px");
+    expect(surface.style.transformOrigin).toBe("bottom right");
+  });
+
+  it("shows arrows only toward remaining content and keeps keyboard focus on a menu row", () => {
+    contentHeight = 600;
+    render(menu("Open with Viewer"));
+    const viewport = document.querySelector<HTMLElement>('[data-dropdown-scroll="true"]')!;
+    viewport.scrollBy = scrollBy;
+    const item = screen.getByRole("menuitem");
+    expect(screen.queryByRole("button", { name: "Scroll menu up" })).toBeNull();
+    const down = screen.getByRole("button", { name: "Scroll menu down" });
+    fireEvent.mouseDown(down);
+    fireEvent.click(down);
+    expect(scrollBy).toHaveBeenCalledWith({ top: 384 * 0.7, behavior: "smooth" });
+    expect(document.activeElement).toBe(item);
+    viewport.scrollTop = 120;
+    fireEvent.scroll(viewport);
+    expect(screen.getByRole("button", { name: "Scroll menu up" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Scroll menu down" })).toBeTruthy();
+    viewport.scrollTop = 216;
+    fireEvent.scroll(viewport);
+    expect(screen.queryByRole("button", { name: "Scroll menu down" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Scroll menu up" })).toBeTruthy();
+  });
+
+  it("does not offer arrows for short menus and respects a small viewport", () => {
+    const view = render(menu());
+    expect(screen.queryByRole("button", { name: /Scroll menu/ })).toBeNull();
+    vi.stubGlobal("innerHeight", 300);
+    contentHeight = 600;
+    view.rerender(menu("Open with Viewer"));
+    expect(screen.getByRole("menu").style.height).toBe("284px");
+    expect(screen.getByRole("menu").style.top).toBe("8px");
+  });
+
+  it("uses instant arrow scrolling with reduced motion and resets size on reopening", () => {
+    contentHeight = 600;
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    const view = render(menu("Open with Viewer"));
+    const viewport = document.querySelector<HTMLElement>('[data-dropdown-scroll="true"]')!;
+    viewport.scrollBy = scrollBy;
+    fireEvent.click(screen.getByRole("button", { name: "Scroll menu down" }));
+    expect(scrollBy).toHaveBeenCalledWith(expect.objectContaining({ behavior: "auto" }));
+    view.rerender(menu("Open with Viewer", false));
+    contentHeight = 180;
+    view.rerender(menu());
+    expect(screen.getByRole("menu").style.height).toBe("180px");
+    expect(screen.queryByRole("button", { name: /Scroll menu/ })).toBeNull();
   });
 });

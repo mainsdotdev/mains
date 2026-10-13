@@ -4,6 +4,9 @@ import reducer, {
   openReviewTab,
   closeReviewTab,
   setReviewRunId,
+  setReviewFileReviewed,
+  setReviewFileCollapsed,
+  reconcileReviewFileStates,
   addContextItem,
   addContextItemForKey,
   clearContextItems,
@@ -21,7 +24,7 @@ import reducer, {
   toggleExplorerPath,
 } from "./workspaceSlice";
 import type { ContextItem } from "@/features/workspace/lib/composer-context";
-import { runOwnerKey } from "../../../../shared/ui-state-keys";
+import { runOwnerKey, workspaceReviewKey } from "../../../../shared/ui-state-keys";
 
 describe("workspaceSlice — provider auth terminal", () => {
   const opened = () =>
@@ -280,5 +283,77 @@ describe("workspace review tab", () => {
     state = reducer(state, closeReviewTab());
     expect(state.reviewTabOpen).toBe(false);
     expect(state.activeTab).toBe("editor");
+  });
+});
+
+describe("reviewed workspace files", () => {
+  const mark = (path: string, patchId = "patch-a", backendId: string | null = null, workspaceId = "ws-a", reviewed = true) =>
+    setReviewFileReviewed({ backendId, workspaceId, path, patchId, reviewed });
+  const key = workspaceReviewKey(null, "ws-a");
+
+  it("keeps marks across tabs and spaces while isolating backends and workspaces", () => {
+    let state = reducer(undefined, mark("a.ts"));
+    state = reducer(state, mark("a.ts", "remote-patch", "remote"));
+    state = reducer(state, mark("a.ts", "other-patch", null, "ws-b"));
+    state = reducer(state, activateWorkspaceView({ key: "another-space", workspaceId: "ws-a", providerId: "claude_code" }));
+    state = reducer(state, openReviewTab());
+    state = reducer(state, closeReviewTab());
+    expect(state.reviewFileStatesByWorkspace).toEqual({
+      [key]: { "a.ts": { patchId: "patch-a", reviewed: true, collapsed: true } },
+      [workspaceReviewKey("remote", "ws-a")]: { "a.ts": { patchId: "remote-patch", reviewed: true, collapsed: true } },
+      [workspaceReviewKey(null, "ws-b")]: { "a.ts": { patchId: "other-patch", reviewed: true, collapsed: true } },
+    });
+    state = reducer(state, mark("a.ts", "patch-a", null, "ws-a", false));
+    expect(state.reviewFileStatesByWorkspace[key]).toBeUndefined();
+  });
+
+  it("invalidates only changed, removed and unverifiable files without reviving old marks", () => {
+    let state = reducer(undefined, mark("a.ts"));
+    state = reducer(state, mark("kept.ts", "kept"));
+    state = reducer(state, mark("removed.ts"));
+    state = reducer(state, mark("unavailable.bin"));
+    state = reducer(state, reconcileReviewFileStates({ backendId: null, workspaceId: "ws-a", files: [
+      { path: "a.ts", patchId: "changed" }, { path: "kept.ts", patchId: "kept" },
+      { path: "unavailable.bin", patchId: "patch-a", reviewUnavailable: true },
+    ] }));
+    expect(state.reviewFileStatesByWorkspace[key]).toEqual({ "kept.ts": { patchId: "kept", reviewed: true, collapsed: true } });
+    state = reducer(state, reconcileReviewFileStates({ backendId: null, workspaceId: "ws-a", files: [
+      { path: "a.ts", patchId: "patch-a" }, { path: "kept.ts", patchId: "kept" },
+    ] }));
+    expect(state.reviewFileStatesByWorkspace[key]).toEqual({ "kept.ts": { patchId: "kept", reviewed: true, collapsed: true } });
+  });
+
+  it("clears a clean or deleted workspace without clearing a remote workspace with the same id", () => {
+    let state = reducer(undefined, mark("a.ts"));
+    state = reducer(state, mark("a.ts", "remote", "remote"));
+    state = reducer(state, reconcileReviewFileStates({ backendId: null, workspaceId: "ws-a", files: [] }));
+    expect(state.reviewFileStatesByWorkspace[key]).toBeUndefined();
+    state = reducer(state, mark("a.ts"));
+    state = reducer(state, forgetWorkspaceUiState({ backendId: "local", workspaceId: "ws-a" }));
+    expect(state.reviewFileStatesByWorkspace).toEqual({ [workspaceReviewKey("remote", "ws-a")]: { "a.ts": { patchId: "remote", reviewed: true, collapsed: true } } });
+  });
+
+  it("supports special file names and does not let a stale uncheck remove a newer reviewed patch", () => {
+    let state = reducer(undefined, mark("__proto__"));
+    state = reducer(state, mark("__proto__", "new-patch"));
+    state = reducer(state, mark("__proto__", "patch-a", null, "ws-a", false));
+    expect(Object.entries(state.reviewFileStatesByWorkspace[key])).toEqual([["__proto__", { patchId: "new-patch", reviewed: true, collapsed: true }]]);
+  });
+
+  it("stores manual accordion choices independently of the reviewed flag and resets changed patches", () => {
+    const collapse = (path: string, collapsed: boolean) => setReviewFileCollapsed({ backendId: null, workspaceId: "ws-a", path, patchId: "patch-a", collapsed });
+    let state = reducer(undefined, mark("a.ts"));
+    state = reducer(state, collapse("a.ts", false));
+    state = reducer(state, collapse("unreviewed.ts", true));
+    expect(state.reviewFileStatesByWorkspace[key]).toEqual({
+      "a.ts": { patchId: "patch-a", reviewed: true, collapsed: false },
+      "unreviewed.ts": { patchId: "patch-a", reviewed: false, collapsed: true },
+    });
+    state = reducer(state, reconcileReviewFileStates({ backendId: null, workspaceId: "ws-a", files: [
+      { path: "a.ts", patchId: "changed" }, { path: "unreviewed.ts", patchId: "patch-a" },
+    ] }));
+    expect(state.reviewFileStatesByWorkspace[key]["a.ts"]).toBeUndefined();
+    state = reducer(state, collapse("unreviewed.ts", false));
+    expect(state.reviewFileStatesByWorkspace[key]).toBeUndefined();
   });
 });

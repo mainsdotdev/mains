@@ -1,7 +1,6 @@
 import { SidebarOpen, SidebarClose } from "@/components/ui/icons";
 import { Button } from "@/components/ui";
-import { useState, useEffect } from "react";
-import { useCapabilities } from "@/lib/platform";
+import { useShellHeaderChrome } from "@/hooks/use-shell-header-chrome";
 import { useKeyboardShortcutBinding } from "@/providers/keyboard-shortcuts-provider";
 import { keyboardShortcutLabel } from "../../../../shared/keyboard-shortcuts";
 
@@ -16,8 +15,7 @@ export function SidebarToggleButton({
   browserExpanded,
   onClick,
 }: SidebarToggleButtonProps) {
-  const { windowChrome } = useCapabilities();
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const { sidebarToggleLeft } = useShellHeaderChrome();
   const shortcut = keyboardShortcutLabel(
     useKeyboardShortcutBinding("app.toggleSidebar"),
   );
@@ -25,19 +23,12 @@ export function SidebarToggleButton({
     shortcut ? ` (${shortcut})` : ""
   }`;
 
-  useEffect(() => {
-    return window.api.app.onFullscreenChange(setIsFullscreen);
-  }, []);
-
-  // Clear the macOS traffic lights only with native chrome and not fullscreen.
-  const reserveTrafficLights = windowChrome && !isFullscreen;
-
   return (
     <div
-      className={`fixed flex h-7 items-center gap-1 transition-all duration-300 ease-out ${browserExpanded ? "z-10000" : "z-(--z-panel-toggle)"}`}
+      className={`fixed flex h-(--shell-header-height) items-center gap-1 transition-all duration-150 ease-out ${browserExpanded ? "z-10000" : "z-(--z-panel-toggle)"}`}
       style={{
-        top: "calc(0.5875rem + env(safe-area-inset-top))",
-        left: reserveTrafficLights ? "5.25rem" : "0.75rem",
+        top: "calc(var(--shell-header-top) + env(safe-area-inset-top))",
+        left: sidebarToggleLeft,
       }}
     >
       <div className="rounded-full ">

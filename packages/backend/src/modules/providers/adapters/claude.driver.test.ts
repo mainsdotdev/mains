@@ -32,12 +32,14 @@ import {
   resolveClaudeDefaultModelId,
   resolveClaudeTurnModel,
   mapClaudeSessionTotals,
+  mapClaudeRateLimits,
   subtractClaudeSessionTotals,
   supportsClaudeMcpApps,
   mcpToolWireName,
   buildClaudeMcpCatalog,
   toMcpCallToolResult,
   assertMcpToolCallableFromApp,
+  waitForClaudeMcpServer,
 } from "./claude.driver";
 import type { ClaudeTaskIndex, SDKSystemMessage } from "./claude.driver";
 import fs from "node:fs";
@@ -433,6 +435,63 @@ describe("claude.driver / permission bridge", () => {
       toolUseID: "tool-mcp-1",
     });
     expect(requestApproval).not.toHaveBeenCalled();
+  });
+
+  it.each(["default", "bypassPermissions"] as const)(
+    "honors required connector approval in %s mode even for an allowlisted MCP tool",
+    async (mode) => {
+      const requestApproval = vi.fn().mockResolvedValue({ requestId: "managed-1", approved: false });
+      const toolName = "mcp__calendar__create_event";
+      const bridge = createClaudePermissionBridge({
+        runId: "run-managed", allowedTools: new Set([toolName]),
+        permissionMode: createClaudePermissionModeRef(mode), requestApproval,
+      });
+
+      const decision = await bridge.canUseTool(toolName, { title: "Team sync" }, {
+        signal: new AbortController().signal, toolUseID: "tool-managed", requestId: "managed-1",
+        suppressAlwaysAllowRule: true, title: "Allow creating this event?",
+        displayName: "Create calendar event", description: "Your organization requires approval.",
+      });
+
+      expect(requestApproval).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        requestId: "managed-1", kind: "tool_approval", toolName, toolInput: { title: "Team sync" },
+        suppressAlwaysAllowRule: true, question: "Allow creating this event?",
+        header: "Create calendar event", description: "Your organization requires approval.",
+      }));
+      expect(decision).toMatchObject({ behavior: "deny", toolUseID: "tool-managed" });
+    },
+  );
+
+  it("requires an explicit decision for a pre-approved tool with defaultToNo", async () => {
+    const requestApproval = vi.fn().mockResolvedValue({ requestId: "careful-1", approved: true });
+    const bridge = createClaudePermissionBridge({
+      runId: "run-careful", allowedTools: new Set(["Read"]),
+      permissionMode: createClaudePermissionModeRef("bypassPermissions"), requestApproval,
+    });
+
+    const decision = await bridge.canUseTool("Read", { file_path: "/tmp/file.ts" }, {
+      signal: new AbortController().signal, toolUseID: "tool-careful", requestId: "careful-1",
+      defaultToNo: true,
+    });
+
+    expect(requestApproval).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ defaultToNo: true }));
+    expect(decision).toEqual({ behavior: "allow", updatedInput: { file_path: "/tmp/file.ts" }, toolUseID: "tool-careful" });
+  });
+
+  it.each(["default", "bypassPermissions"] as const)("honors a user's ask rule in %s mode", async (mode) => {
+    const requestApproval = vi.fn().mockResolvedValue({ requestId: "ask-rule-1", approved: false });
+    const bridge = createClaudePermissionBridge({
+      runId: "run-ask-rule", allowedTools: new Set(["Read"]),
+      permissionMode: createClaudePermissionModeRef(mode), requestApproval,
+    });
+
+    const decision = await bridge.canUseTool("Read", { file_path: "/tmp/file.ts" }, {
+      signal: new AbortController().signal, toolUseID: "tool-ask-rule", requestId: "ask-rule-1",
+      matchedAskRule: { source: "user", toolName: "Read", ruleContent: "Read(**)" },
+    });
+
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(decision?.behavior).toBe("deny");
   });
 
   it("stops trusting MCP tools once a mode replaces the toolset", async () => {
@@ -1373,8 +1432,9 @@ describe("claude.driver / mapTaskMessage", () => {
       outputFile: "/tmp/claude-task-bflwfagyw.log",
       toolCallId: "toolu_bash",
     });
-    // Terminal: the anchor is released so a recycled id cannot reattach.
-    expect(index.has("bflwfagyw")).toBe(false);
+    // Keep identity for nested children and run ordering, but reject more live edges.
+    expect(index.get("bflwfagyw")?.terminal).toBe(true);
+    expect(mapTaskMessage(sys({ subtype: "task_progress", task_id: "bflwfagyw" }), index, TS)).toBeNull();
   });
 
   it("surfaces the summary as the error when a task fails", () => {
@@ -2276,6 +2336,180 @@ function makeClaudeSession(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
+describe("mapSDKMessage native task identity", () => {
+  const system = (subtype: string, detail: Record<string, unknown>) => ({
+    type: "system", subtype, uuid: "u1", session_id: "s1", ...detail,
+  }) as any;
+  const start = (cs: any, taskId: string, toolId: string, runId = "002", parentTaskId?: string) =>
+    mapSDKMessage(system("task_started", { task_id: taskId, tool_use_id: toolId, run_id: runId,
+      task_type: "local_agent", subagent_type: "Explore", parent_task_id: parentTaskId }), cs);
+  const snapshot = (cs: any, tasks: Record<string, unknown>[]) =>
+    mapSDKMessage(system("background_tasks_changed", { tasks }), cs);
+
+  it("uses agent_id for child messages even without parent_tool_use_id", () => {
+    const cs = makeClaudeSession();
+    start(cs, "agent-1", "spawn-1");
+    const [report, tool] = mapSDKMessage({ type: "assistant", uuid: "child", session_id: "s1",
+      agent_id: "agent-1", parent_tool_use_id: null, message: { role: "assistant", model: "child-model", content: [
+        { type: "text", text: "Child report" }, { type: "tool_use", id: "read-1", name: "Read", input: {} },
+      ] } } as any, cs).filter((event) => event.type === "artifact" || event.type === "tool_call");
+    expect(report).toMatchObject({ metadata: { isFromSubagent: true, agentId: "agent-1", parentToolUseId: "spawn-1", providerRunId: "002" } });
+    expect(tool).toMatchObject({ metadata: { isFromSubagent: true, agentId: "agent-1", parentToolUseId: "spawn-1" } });
+    expect(cs.state.lastAssistantMessage).toBeUndefined();
+    expect(resolveClaudeTurnModel("main-model", { type: "assistant", agent_id: "agent-1",
+      parent_tool_use_id: null, message: { model: "child-model" } } as any)).toBe("main-model");
+  });
+
+  it("keeps a child's immediate parent after that parent has completed", () => {
+    const cs = makeClaudeSession();
+    start(cs, "parent", "spawn-parent");
+    mapSDKMessage(system("task_notification", { task_id: "parent", run_id: "002", status: "completed" }), cs);
+    expect(start(cs, "child", "spawn-child", "003", "parent")).toContainEqual(expect.objectContaining({
+      type: "task", parentTaskId: "parent", parentToolCallId: "spawn-parent", providerRunId: "003",
+    }));
+  });
+
+  it.each(["task_notification", "task_progress", "task_updated", "task_started"])("ignores a late %s from an earlier execution", (subtype) => {
+    const cs = makeClaudeSession();
+    start(cs, "agent", "spawn-old", "001");
+    start(cs, "agent", "send-new", "002");
+    expect(mapSDKMessage(system(subtype, { task_id: "agent", tool_use_id: "spawn-old", run_id: "001",
+      status: "failed", summary: "Old failure", patch: { status: "failed" } }), cs)).toEqual([]);
+    expect(mapSDKMessage(system("task_progress", { task_id: "agent", run_id: "002" }), cs)).toContainEqual(
+      expect.objectContaining({ type: "task", toolCallId: "send-new", status: "running", providerRunId: "002" }));
+  });
+
+  it("does not lend an old execution's tool anchor to a newer unanchored progress event", () => {
+    const cs = makeClaudeSession();
+    start(cs, "agent", "spawn-old", "001");
+    expect(mapSDKMessage(system("task_progress", { task_id: "agent", run_id: "002" }), cs)).toEqual([]);
+    expect(start(cs, "agent", "send-new", "002")).toContainEqual(expect.objectContaining({ toolCallId: "send-new" }));
+  });
+
+  it("resumes an agent recorded by an older CLI when its first native execution id arrives", () => {
+    const cs = makeClaudeSession();
+    mapSDKMessage(system("task_started", { task_id: "agent", tool_use_id: "spawn", task_type: "local_agent" }), cs);
+    mapSDKMessage(system("task_notification", { task_id: "agent", status: "failed" }), cs);
+    expect(mapSDKMessage(system("task_started", { task_id: "agent", run_id: "001", task_type: "local_agent" }), cs))
+      .toContainEqual(expect.objectContaining({ type: "task", status: "running", providerRunId: "001", toolCallId: "spawn" }));
+  });
+
+  it("replaces background membership without inferring a successful completion", () => {
+    const cs = makeClaudeSession();
+    const background = { task_id: "agent", run_id: "002", task_type: "local_agent", subagent_type: "Explore", description: "Review", ambient: false };
+    // The level may arrive before its start edge.
+    expect(snapshot(cs, [background])).toEqual([]);
+    expect(start(cs, "agent", "spawn")).toContainEqual(expect.objectContaining({
+      type: "task", backgroundActive: true, isBackgrounded: true, ambient: false,
+    }));
+    const removed = snapshot(cs, []);
+    expect(removed).toContainEqual(expect.objectContaining({ type: "task", backgroundActive: false, toolCallId: "spawn" }));
+    expect(removed.some((event) => event.type === "task" && (event.status === "completed" || event.phase === "completed"))).toBe(false);
+    expect(cs.backgroundTasks.size).toBe(0);
+  });
+
+  it("updates parent and ambient metadata from the full background snapshot", () => {
+    const cs = makeClaudeSession();
+    start(cs, "parent", "spawn-parent");
+    start(cs, "child", "spawn-child", "002", "parent");
+    expect(snapshot(cs, [{ task_id: "child", run_id: "002", task_type: "local_agent", description: "Watch", ambient: true }]))
+      .toContainEqual(expect.objectContaining({ type: "task", taskId: "child", parentTaskId: null,
+        parentToolCallId: null, ambient: true, backgroundActive: true }));
+  });
+
+  it("does not reopen a completed execution when its finishing snapshot arrives later", () => {
+    const cs = makeClaudeSession();
+    start(cs, "agent", "spawn");
+    snapshot(cs, [{ task_id: "agent", run_id: "002", task_type: "local_agent", description: "Review" }]);
+    mapSDKMessage(system("task_notification", { task_id: "agent", run_id: "002", status: "completed" }), cs);
+    snapshot(cs, []);
+    expect(mapSDKMessage(system("task_progress", { task_id: "agent", run_id: "002" }), cs)).toEqual([]);
+    expect(start(cs, "agent", "spawn", "001")).toEqual([]);
+    expect(start(cs, "agent", "send", "003")).toContainEqual(expect.objectContaining({ status: "running", toolCallId: "send" }));
+  });
+
+  it("tags native child tool results and user messages with the same agent identity", () => {
+    const cs = makeClaudeSession();
+    start(cs, "child", "spawn");
+    cs.toolCallIndex.set("read", { toolName: "Read" });
+    expect(mapSDKMessage({ type: "user", session_id: "s1", parent_tool_use_id: null, agent_id: "child",
+      message: { role: "user", content: [ { type: "tool_result", tool_use_id: "read", content: "ok" } ] } } as any, cs))
+      .toContainEqual(expect.objectContaining({ type: "tool_call", metadata: expect.objectContaining({
+        agentId: "child", parentToolUseId: "spawn", isFromSubagent: true,
+      }) }));
+    expect(mapSDKMessage({ type: "user", session_id: "s1", parent_tool_use_id: null, agent_id: "child",
+      message: { role: "user", content: "Child feedback" } } as any, cs))
+      .toContainEqual(expect.objectContaining({ type: "log", metadata: expect.objectContaining({ agentId: "child", isFromSubagent: true }) }));
+  });
+});
+
+describe("mapSDKMessage detached web results", () => {
+  const toolResult = (toolUseId: string, output: unknown, raw?: unknown, isError = false) => ({
+    type: "user" as const, uuid: "result-1", session_id: "session-1", parent_tool_use_id: null,
+    message: { role: "user" as const, content: [{ type: "tool_result", tool_use_id: toolUseId, content: output, is_error: isError }] },
+    tool_use_result: raw,
+  });
+
+  it.each(["WebFetch", "WebSearch"])("keeps %s open until its real result arrives in a later turn", (toolName) => {
+    const cs = makeClaudeSession();
+    const input = { query: "SDK docs" };
+    mapSDKMessage({ type: "assistant", uuid: "start-1", session_id: "session-1", parent_tool_use_id: null,
+      message: { role: "assistant", content: [{ type: "tool_use", id: "web-1", name: toolName, input }] } }, cs);
+
+    expect(mapSDKMessage(toolResult("web-1", "Result will follow", { detachedToolCall: true }), cs)).toEqual([]);
+    expect(cs.toolCallIndex.get("web-1")).toMatchObject({ toolName, input });
+    mapSDKMessage({ type: "result", subtype: "success", is_error: false, result: "", stop_reason: "end_turn",
+      total_cost_usd: 0, num_turns: 1, modelUsage: {}, permission_denials: [] } as any, cs);
+    expect(cs.toolCallIndex.has("web-1")).toBe(true);
+
+    const [complete] = mapSDKMessage(toolResult("web-1", "Fetched SDK docs"), cs);
+    expect(complete).toMatchObject({ type: "tool_call", toolName, input, output: "Fetched SDK docs",
+      metadata: { phase: "complete", toolCallId: "web-1" } });
+    expect(cs.toolCallIndex.has("web-1")).toBe(false);
+  });
+
+  it("settles a detached call as an error when the eventual result fails", () => {
+    const cs = makeClaudeSession();
+    cs.toolCallIndex.set("web-1", { toolName: "WebFetch", input: { url: "https://docs.test" } });
+    mapSDKMessage(toolResult("web-1", "Result will follow", { detachedToolCall: true }), cs);
+
+    const [complete] = mapSDKMessage(toolResult("web-1", "Fetch failed", undefined, true), cs);
+    expect(complete).toMatchObject({ toolName: "WebFetch", error: '"Fetch failed"',
+      metadata: { phase: "complete", toolCallId: "web-1" } });
+    expect(cs.toolCallIndex.has("web-1")).toBe(false);
+  });
+
+  it.each([undefined, { detachedToolCall: false }, { structuredContent: { detachedToolCall: true } }])(
+    "does not treat ordinary tool data as a detached signal (%j)", (raw) => {
+      const cs = makeClaudeSession();
+      cs.toolCallIndex.set("web-1", { toolName: "WebFetch" });
+      const [complete] = mapSDKMessage(toolResult("web-1", '{"detachedToolCall":true}', raw), cs);
+      expect(complete).toMatchObject({ output: '{"detachedToolCall":true}', metadata: { phase: "complete" } });
+      expect(cs.toolCallIndex.has("web-1")).toBe(false);
+    },
+  );
+
+  it("does not apply one message-level signal to several tool results", () => {
+    const cs = makeClaudeSession();
+    cs.toolCallIndex.set("web-1", { toolName: "WebFetch" });
+    cs.toolCallIndex.set("web-2", { toolName: "WebSearch" });
+    const msg = toolResult("web-1", "First result", { detachedToolCall: true });
+    msg.message.content.push({ type: "tool_result", tool_use_id: "web-2", content: "Second result", is_error: false });
+    const complete = mapSDKMessage(msg, cs);
+    expect(complete).toHaveLength(2);
+    expect(cs.toolCallIndex.size).toBe(0);
+  });
+
+  it("keeps a legacy result signal open until a real payload arrives", () => {
+    const cs = makeClaudeSession();
+    cs.toolCallIndex.set("web-1", { toolName: "WebFetch" });
+    expect(mapSDKMessage({ type: "tool_result", tool_use_id: "web-1", result: { detachedToolCall: true } }, cs)).toEqual([]);
+    expect(cs.toolCallIndex.has("web-1")).toBe(true);
+    const [complete] = mapSDKMessage({ type: "tool_result", tool_use_id: "web-1", result: "Real page" }, cs);
+    expect(complete).toMatchObject({ toolName: "WebFetch", output: "Real page", metadata: { phase: "complete" } });
+  });
+});
+
 describe("buildSubagentCompletionEvent", () => {
   it("treats a launch ack as still-running, not completion", () => {
     const event = buildSubagentCompletionEvent({
@@ -2461,6 +2695,92 @@ describe("claude.driver / buildClaudePermissionModeOptions with a tool policy", 
   });
 });
 
+describe("claude.driver / account usage", () => {
+  const resetsAt = "2026-10-12T18:00:00Z";
+  const resetSec = Date.parse(resetsAt) / 1000;
+
+  it("reads account percentages directly and keeps them separate from session token totals", () => {
+    const mapped = mapClaudeRateLimits({
+      session: { total_cost_usd: 12, model_usage: { opus: { inputTokens: 100_000 } } },
+      subscription_type: "max",
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 37, resets_at: resetsAt },
+        seven_day: { utilization: 0, resets_at: null },
+      },
+    });
+
+    expect(mapped).toMatchObject({
+      planType: "max",
+      primary: { usedPercent: 37, windowDurationMins: 300, resetsAt: resetSec },
+      secondary: { usedPercent: 0, windowDurationMins: 10080 },
+    });
+    expect(mapped?.secondary).not.toHaveProperty("resetsAt");
+    expect(Object.keys(mapped!.rateLimitsByLimitId!)).toEqual(["five_hour", "seven_day"]);
+  });
+
+  it("includes OAuth, model and enabled extra-usage meters without repeating named models", () => {
+    const mapped = mapClaudeRateLimits({
+      rate_limits_available: true,
+      rate_limits: {
+        seven_day_oauth_apps: { utilization: 20, resets_at: resetsAt },
+        seven_day_opus: { utilization: 10 },
+        seven_day_sonnet: { utilization: 30 },
+        model_scoped: [
+          { display_name: "Opus", utilization: 15, resets_at: resetsAt },
+          { display_name: "Fable", utilization: 45, resets_at: resetsAt },
+        ],
+        extra_usage: { is_enabled: true, utilization: 60 },
+      },
+    });
+    const buckets = mapped!.rateLimitsByLimitId!;
+    expect(Object.keys(buckets)).toEqual([
+      "seven_day_oauth_apps", "seven_day_opus", "seven_day_sonnet", "model:fable", "extra_usage",
+    ]);
+    expect(buckets.seven_day_opus.primary).toMatchObject({
+      label: "Opus weekly usage limit", usedPercent: 15, resetsAt: resetSec,
+    });
+    expect(buckets["model:fable"].primary).toMatchObject({
+      label: "Fable weekly usage limit", usedPercent: 45, windowDurationMins: 10080,
+    });
+    expect(buckets.extra_usage.primary).toEqual({ label: "Extra usage", usedPercent: 60 });
+  });
+
+  it("does not turn unavailable or unmeasured limits into a full allowance", () => {
+    for (const response of [
+      undefined,
+      null,
+      { session: { total_cost_usd: 1 } },
+      { rate_limits_available: false, rate_limits: { five_hour: { utilization: 0 } } },
+      { rate_limits_available: true, rate_limits: null },
+      { rate_limits: { five_hour: { utilization: null }, seven_day: { utilization: NaN } } },
+      { rate_limits: { extra_usage: { is_enabled: false, utilization: 50 } } },
+      { rate_limits: { model_scoped: [{ display_name: "", utilization: 20 }] } },
+    ]) {
+      expect(mapClaudeRateLimits(response)).toBeNull();
+    }
+  });
+
+  it("keeps valid meters when another is unknown and drops invalid reset dates", () => {
+    const mapped = mapClaudeRateLimits({ rate_limits: {
+      five_hour: { utilization: null },
+      seven_day: { utilization: 13.6, resets_at: "invalid" },
+      seven_day_opus: { utilization: Infinity },
+    } });
+    expect(mapped?.primary).toBeUndefined();
+    expect(mapped?.secondary).toEqual({
+      label: "Weekly usage limit", usedPercent: 14, windowDurationMins: 10080,
+    });
+    expect(Object.keys(mapped!.rateLimitsByLimitId!)).toEqual(["seven_day"]);
+  });
+
+  it("clamps reported percentages to the meter's range", () => {
+    expect(mapClaudeRateLimits({ rate_limits: {
+      five_hour: { utilization: -5 }, seven_day: { utilization: 105 },
+    } })).toMatchObject({ primary: { usedPercent: 0 }, secondary: { usedPercent: 100 } });
+  });
+});
+
 describe("claude.driver / session totals", () => {
   const HAIKU = "claude-haiku-4-5-20251001";
   const usage = (
@@ -2635,6 +2955,65 @@ describe("claude.driver / MCP Apps", () => {
     expect(supportsClaudeMcpApps(undefined)).toBe(false);
   });
 
+  it("waits for a pending app server before returning its tool inventory", async () => {
+    vi.useFakeTimers();
+    try {
+      const readStatuses = vi.fn()
+        .mockResolvedValueOnce([{ name: "demo", status: "pending" }])
+        .mockResolvedValue([demo]);
+      const ready = waitForClaudeMcpServer(readStatuses, "demo");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await ready).toEqual([demo]);
+      expect(readStatuses).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not wait for another server or a server requiring authentication", async () => {
+    for (const status of ["connected", "needs-auth", "failed", "disabled"]) {
+      const statuses = [{ ...demo, status }, { name: "other", status: "pending" }];
+      const readStatuses = vi.fn().mockResolvedValue(statuses);
+      expect(await waitForClaudeMcpServer(readStatuses, "demo")).toBe(statuses);
+      expect(readStatuses).toHaveBeenCalledOnce();
+    }
+    const missing = vi.fn().mockResolvedValue([]);
+    expect(await waitForClaudeMcpServer(missing, "demo")).toEqual([]);
+    expect(missing).toHaveBeenCalledOnce();
+  });
+
+  it("stops waiting when the connection fails and retains the refusal for app calls", async () => {
+    vi.useFakeTimers();
+    try {
+      const failed = [{ ...demo, status: "needs-auth" }];
+      const readStatuses = vi.fn()
+        .mockResolvedValueOnce([{ name: "demo", status: "pending" }])
+        .mockResolvedValue(failed);
+      const ready = waitForClaudeMcpServer(readStatuses, "demo");
+      await vi.advanceTimersByTimeAsync(1_000);
+      const statuses = await ready;
+      expect(statuses).toBe(failed);
+      expect(() => assertMcpToolCallableFromApp(statuses, "demo", "show_weather")).toThrow("is not connected");
+      expect(readStatuses).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the initial connection wait and propagates control-channel failures", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = [{ name: "demo", status: "pending" }];
+      const ready = waitForClaudeMcpServer(vi.fn().mockResolvedValue(pending), "demo");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await ready).toBe(pending);
+      const closed = new Error("Query closed");
+      await expect(waitForClaudeMcpServer(vi.fn().mockRejectedValue(closed), "demo")).rejects.toBe(closed);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("names tools the way tool_use blocks do", () => {
     expect(mcpToolWireName("demo", "show_weather")).toBe("mcp__demo__show_weather");
     expect(mcpToolWireName("plugin:documents:docs", "doc_export")).toBe(
@@ -2694,6 +3073,28 @@ describe("claude.driver / MCP Apps", () => {
     expect(toMcpCallToolResult({ content: blocks, isError: true })).toEqual({ content: blocks, isError: true });
     expect(toMcpCallToolResult("plain text")).toBeUndefined();
     expect(toMcpCallToolResult(null)).toBeUndefined();
+  });
+
+  it("keeps the omission marker, resource links and available text without synthesizing structured data", () => {
+    const links = [{ uri: "file:///tmp/result.json", name: "Full result" }];
+    expect(toMcpCallToolResult({ structuredContentOmitted: true, resourceLinks: links, _meta: { keep: true } }, "Text preview"))
+      .toEqual({ content: [{ type: "text", text: "Text preview" }], structuredContentOmitted: true, resourceLinks: links, _meta: { keep: true } });
+    expect(toMcpCallToolResult({ content: "Text preview", structuredContentOmitted: true, structuredContent: { incomplete: true } }))
+      .not.toHaveProperty("structuredContent");
+  });
+
+  it("requires an explicit boolean omission marker and accepts results without optional metadata", () => {
+    expect(toMcpCallToolResult({ content: "ok", structuredContentOmitted: "true", structuredContent: { count: 1 } }))
+      .toEqual({ content: [{ type: "text", text: "ok" }], structuredContent: { count: 1 } });
+  });
+
+  it("retains the model-facing cache-file note alongside surviving SDK text without duplicating it", () => {
+    const raw = { content: [{ type: "text", text: "Available rows" }], structuredContentOmitted: true };
+    expect(toMcpCallToolResult(raw, "Full result saved to /tmp/tool-result.json")?.content).toEqual([
+      { type: "text", text: "Available rows" }, { type: "text", text: "Full result saved to /tmp/tool-result.json" },
+    ]);
+    expect(toMcpCallToolResult(raw, "Available rows")?.content).toHaveLength(1);
+    expect(raw.content).toHaveLength(1);
   });
 
   it("lets an app call its server's tools unless one is kept for the model", () => {
@@ -2770,6 +3171,21 @@ describe("claude.driver / MCP Apps", () => {
       });
     });
 
+    it.each([
+      "2026-10-12T14:59:37.924Z",
+      [{ type: "text", text: "2026-10-12T14:59:37.924Z" }],
+    ])("wraps text-only app results when the SDK sends no result envelope", (content) => {
+      const cs = makeClaudeSession({ mcpApps: { catalog: buildClaudeMcpCatalog([demo]) } });
+      mapSDKMessage(toolUse, cs);
+      const [complete] = mapSDKMessage({ ...toolResult, tool_use_result: undefined, message: {
+        role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content }],
+      } }, cs);
+      expect(complete).toMatchObject({ output: {
+        content: [{ type: "text", text: "2026-10-12T14:59:37.924Z" }],
+      }, metadata: { phase: "complete", mcpApp } });
+      expect(complete).not.toHaveProperty("output.structuredContent");
+    });
+
     it("leaves every call as it was when the CLI cannot serve apps", () => {
       const cs = makeClaudeSession();
 
@@ -2779,6 +3195,34 @@ describe("claude.driver / MCP Apps", () => {
       expect(start).not.toHaveProperty("metadata.mcpApp");
       expect(complete).toMatchObject({ output: '{"city":"Istanbul","tempC":22}' });
       expect(complete).not.toHaveProperty("metadata.mcpApp");
+    });
+
+    it.each([true, false])("preserves omitted MCP result details with app support=%s", (hasApp) => {
+      const cs = makeClaudeSession(hasApp ? { mcpApps: { catalog: buildClaudeMcpCatalog([demo]) } } : {});
+      mapSDKMessage(toolUse, cs);
+      const [complete] = mapSDKMessage({ ...toolResult, tool_use_result: { structuredContentOmitted: true } }, cs);
+      expect(complete).toMatchObject({ type: "tool_call", toolName: "mcp__demo__show_weather", output: {
+        content: [{ type: "text", text: '{"city":"Istanbul","tempC":22}' }], structuredContentOmitted: true,
+      }, metadata: { phase: "complete", toolCallId: "toolu_1" } });
+      expect(complete).toHaveProperty("error", undefined);
+    });
+
+    it("does not attach a message-level omission flag to several tool result blocks", () => {
+      const cs = makeClaudeSession();
+      cs.toolCallIndex.set("toolu_1", { toolName: "mcp__demo__lookup" });
+      cs.toolCallIndex.set("toolu_2", { toolName: "mcp__demo__lookup" });
+      const events = mapSDKMessage({ ...toolResult, tool_use_result: { structuredContentOmitted: true }, message: {
+        role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "First" },
+          { type: "tool_result", tool_use_id: "toolu_2", content: "Second" }],
+      } }, cs);
+      expect(events.map((event) => event.type === "tool_call" ? event.output : null)).toEqual(["First", "Second"]);
+    });
+
+    it("does not interpret ordinary tool data as an SDK omission signal", () => {
+      const cs = makeClaudeSession();
+      cs.toolCallIndex.set("toolu_1", { toolName: "Read" });
+      const [complete] = mapSDKMessage({ ...toolResult, tool_use_result: { structuredContentOmitted: true } }, cs);
+      expect(complete).toMatchObject({ output: '{"city":"Istanbul","tempC":22}' });
     });
   });
 });

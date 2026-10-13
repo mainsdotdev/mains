@@ -1,5 +1,9 @@
-import { useEffect, useRef, useMemo, useState } from "react";
-import { appApi, appEvents } from "@/lib/transport";
+import { useEffect, useRef, useMemo, useState, useSyncExternalStore } from "react";
+import { getTransport, onTransportChange } from "@/lib/transport";
+import { CHANNELS } from "@mains/contracts/channels";
+import type { TerminalDataEvent, TerminalExitEvent, TerminalSnapshot } from "@mains/contracts/terminal";
+import { Button, Text } from "@/components/ui";
+import { createTerminalReplay } from "../lib/terminal-replay";
 import { Terminal, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { useDarkMode } from "@/hooks/use-dark-mode";
@@ -95,6 +99,8 @@ function terminalTheme(scale: ScaleValues, isDark: boolean): ITheme {
 
 interface XtermTerminalProps {
   id: string;
+  /** Workspace PTYs outlive their views; login PTYs remain temporary. */
+  persistent?: boolean;
   /** Undefined asks the backend to start the PTY in its own home directory. */
   rootPath?: string;
   pendingCommand?: string | null;
@@ -103,6 +109,7 @@ interface XtermTerminalProps {
 
 export function XtermTerminal({
   id,
+  persistent = false,
   rootPath,
   pendingCommand,
   onPendingCommandSent,
@@ -110,9 +117,12 @@ export function XtermTerminal({
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const cleanupRef = useRef<(() => void) | null>(null);
+  const transport = useSyncExternalStore(onTransportChange, getTransport);
   const { darkMode } = useDarkMode();
   const [ptyReady, setPtyReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [exitCode, setExitCode] = useState<number | null>(null);
+  const [retry, setRetry] = useState(0);
 
   const scale = useThemeTokens(SCALE_TOKENS);
   const theme = useMemo(() => terminalTheme(scale, darkMode), [scale, darkMode]);
@@ -136,8 +146,8 @@ export function XtermTerminal({
     term.options.fontFamily = fontFamily;
     fitAddonRef.current?.fit();
     const dims = fitAddonRef.current?.proposeDimensions();
-    if (dims) appApi.terminal.resize(id, dims.cols, dims.rows);
-  }, [fontFamily, id]);
+    if (dims) void transport.invoke(CHANNELS.terminal.resize, [id, dims.cols, dims.rows]).catch(() => {});
+  }, [fontFamily, id, transport]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -160,80 +170,117 @@ export function XtermTerminal({
 
     term.open(container);
 
-    // Slight delay to let the container settle before fitting
-    requestAnimationFrame(() => {
-      fitAddon.fit();
-    });
-
-    // Create the PTY backend. Readiness is tracked so queued one-shot commands
-    // aren't written into a PTY that doesn't exist yet.
     let disposed = false;
+    let generation = 0;
+    let frame = 0;
+    let ready = false;
+    let observedExit: number | null = null;
+    const replay = createTerminalReplay((data) => { if (!disposed && data) term.write(data); });
     setPtyReady(false);
-    void Promise.resolve(appApi.terminal.create({ id, cwd: rootPath })).then(
-      () => {
-        if (!disposed) setPtyReady(true);
-      },
-    );
+    setError(null);
+    setExitCode(null);
+
+    const fit = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (disposed || !container.clientWidth || !container.clientHeight) return;
+        fitAddon.fit();
+        const dims = fitAddon.proposeDimensions();
+        if (dims && ready) void transport.invoke(CHANNELS.terminal.resize, [id, dims.cols, dims.rows]).catch(() => {});
+      });
+    };
+    const connect = async () => {
+      const attempt = ++generation;
+      ready = false;
+      observedExit = null;
+      setPtyReady(false);
+      replay.begin();
+      try {
+        const result = await transport.invoke(persistent ? CHANNELS.terminal.attach : CHANNELS.terminal.create,
+          persistent ? [id] : [{ id, cwd: rootPath }]);
+        if (disposed || attempt !== generation) return;
+        if (!result.success) throw new Error(result.error);
+        const snapshot = result.data as TerminalSnapshot | undefined;
+        if (!snapshot || snapshot.session?.id !== id || typeof snapshot.data !== "string" || !Number.isSafeInteger(snapshot.sequence)) {
+          throw new Error("Could not connect to terminal. Restart Mains and try again.");
+        }
+        term.reset();
+        replay.restore(snapshot);
+        ready = observedExit === null && snapshot.session.status === "running";
+        setPtyReady(ready);
+        setExitCode(observedExit ?? snapshot.session.exitCode);
+        setError(null);
+        fit();
+      } catch (err) {
+        if (!disposed && attempt === generation) setError(err instanceof Error ? err.message : "Could not connect to terminal.");
+      }
+    };
 
     // PTY output → xterm
-    const removeDataListener = appEvents.terminal.onData(
-      (payload: { id: string; data: string }) => {
-        if (payload.id === id) {
-          term.write(payload.data);
-        }
+    const removeDataListener = transport.subscribe(CHANNELS.terminal.data,
+      (value) => {
+        const payload = value as TerminalDataEvent;
+        if (!disposed && payload.id === id) replay.push(payload);
       },
     );
+    const removeExitListener = transport.subscribe(CHANNELS.terminal.exit, (value) => {
+      const payload = value as TerminalExitEvent;
+      if (disposed || payload.id !== id) return;
+      ready = false;
+      observedExit = payload.exitCode;
+      setPtyReady(false);
+      setExitCode(payload.exitCode);
+    });
 
     // xterm input → PTY
     const onDataDisposable = term.onData((data) => {
-      appApi.terminal.write(id, data);
+      if (ready) void transport.invoke(CHANNELS.terminal.write, [id, data]).catch(() => {});
     });
 
     // Auto-fit on resize
-    const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(() => {
-        if (fitAddonRef.current) {
-          fitAddonRef.current.fit();
-          const dims = fitAddonRef.current.proposeDimensions();
-          if (dims) {
-            appApi.terminal.resize(id, dims.cols, dims.rows);
-          }
-        }
-      });
-    });
+    const resizeObserver = new ResizeObserver(fit);
     resizeObserver.observe(container);
+    const removeStatus = transport.onStatusChange((status) => {
+      if (status === "connected") void connect();
+      else { generation += 1; ready = false; setPtyReady(false); }
+    });
+    void connect();
+    fit();
 
-    cleanupRef.current = () => {
+    return () => {
       disposed = true;
+      cancelAnimationFrame(frame);
       resizeObserver.disconnect();
       onDataDisposable.dispose();
       removeDataListener();
+      removeExitListener();
+      removeStatus();
       term.dispose();
-      appApi.terminal.destroy(id);
-    };
-
-    return () => {
-      cleanupRef.current?.();
-      cleanupRef.current = null;
+      // Hiding, changing tabs/workspaces, and renderer reloads only detach a
+      // managed view. Stop actions and backend shutdown own PTY destruction.
+      if (!persistent) void transport.invoke(CHANNELS.terminal.destroy, [id]).catch(() => {});
       termRef.current = null;
       fitAddonRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, rootPath]);
+  }, [id, rootPath, persistent, transport, retry]);
 
   // Write any queued one-shot command once the PTY exists. The shell buffers
   // input arriving before its prompt, so a write right after create is safe.
   useEffect(() => {
     if (!ptyReady || !pendingCommand) return;
-    appApi.terminal.write(id, `${pendingCommand}\r`);
-    onPendingCommandSent?.();
-  }, [ptyReady, pendingCommand, id, onPendingCommandSent]);
+    let cancelled = false;
+    void transport.invoke(CHANNELS.terminal.write, [id, `${pendingCommand}\r`]).then((result) => {
+      if (!cancelled && result.success) onPendingCommandSent?.();
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [ptyReady, pendingCommand, id, onPendingCommandSent, transport]);
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full min-h-30"
-      style={{ padding: "6px 4px" }}
-    />
+    <div className="flex h-full w-full min-h-0 flex-col">
+      {error && <div role="alert" className="flex shrink-0 items-center gap-2 px-1 py-1"><Text size="s" tone="danger">{error}</Text><Button variant="bare" className="text-s text-accent" onClick={() => setRetry((value) => value + 1)}>Retry</Button></div>}
+      {exitCode !== null && <Text size="s" tone="faint" className="px-1 py-1">Process exited ({exitCode})</Text>}
+      <div ref={containerRef} className="min-h-0 w-full flex-1" style={{ padding: "6px 4px" }} />
+    </div>
   );
 }

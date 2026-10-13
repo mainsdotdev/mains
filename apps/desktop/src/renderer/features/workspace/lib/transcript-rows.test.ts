@@ -363,9 +363,9 @@ describe("final-answer transcript layout", () => {
   const prompt = () => ev({ id: "prompt", metadata: { kind: "user-prompt" } });
   const report = (id: string, messagePhase?: string) => ev({ id, content: id, metadata: { kind: "report", messagePhase } });
 
-  it("keeps the confirmed final answer outside even when commentary arrives afterward", () => {
+  it.each(["commentary", "partial_answer"])("keeps the confirmed final answer outside even when %s arrives afterward", (phase) => {
     const rows = buildTurnRenderRows(groupEvents([prompt(), report("progress", "commentary"),
-      report("final", "final_answer"), report("late", "commentary")]));
+      report("final", "final_answer"), report("late", phase)]));
     const row = rows[1];
     expect(row.kind).toBe("accordion");
     if (row.kind !== "accordion") return;
@@ -397,7 +397,7 @@ describe("final-answer transcript layout", () => {
     expect(row.lastSegment).toEqual([2]);
   });
 
-  it.each([undefined, "commentary", "unknown"])("falls back to the latest reply without confirmed final evidence (%s)", (phase) => {
+  it.each([undefined, "commentary", "partial_answer", "unknown"])("falls back to the latest reply without confirmed final evidence (%s)", (phase) => {
     const rows = buildTurnRenderRows(groupEvents([prompt(), report("first", phase), report("last", phase)]));
     const row = rows[1];
     expect(row.kind).toBe("accordion");
@@ -408,6 +408,42 @@ describe("final-answer transcript layout", () => {
 });
 
 describe("matchTurnsToGroups", () => {
+  it.each([true, false])("puts the footer after the visible final answer when a later image breaks out (backend turn: %s)", (withTurn) => {
+    const groups = groupEvents([
+      ev({ id: "prompt", timestamp: new Date(1000), metadata: { kind: "user-prompt" } }),
+      ev({ id: "progress", timestamp: new Date(2000), content: "Working", metadata: { kind: "report", messagePhase: "commentary" } }),
+      ev({ id: "tool", timestamp: new Date(3000), type: "tool_call", metadata: { status: "done" } }),
+      ev({ id: "final", timestamp: new Date(4000), content: "Updated all three sections", metadata: { kind: "report", messagePhase: "final_answer" } }),
+      ev({ id: "image", timestamp: new Date(4000), content: "/tmp/generated.png", metadata: { kind: "image", outputSelected: true } }),
+    ]);
+    const row = buildTurnRenderRows(groups)[1];
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    const final = groups.findIndex((g) => g.events.some((e) => e.id === "final"));
+    const image = groups.findIndex((g) => g.events.some((e) => e.id === "image"));
+    expect(row.messageBreakoutIndices).toEqual([image]);
+    expect(row.lastSegment).toEqual([final]);
+    const turns = withTurn ? [{ ...turn(0, "codex"), elapsedMs: 3000, endedAt: 4 }] : [];
+    const sessions = matchTurnsToGroups(groups, turns, new Date(1000), true);
+    expect([...sessions.keys()]).toEqual([final]);
+    expect(sessions.get(final)?.responseContent).toContain("Updated all three sections");
+  });
+  it("keeps each turn's footer outside collapsed late commentary and before the next prompt", () => {
+    const groups = groupEvents([
+      ev({ id: "u1", timestamp: new Date(1000), metadata: { kind: "user-prompt" } }),
+      ev({ id: "final1", timestamp: new Date(2000), content: "First answer", metadata: { kind: "report", messagePhase: "final_answer" } }),
+      ev({ id: "late", timestamp: new Date(3000), content: "Late commentary", metadata: { kind: "report", messagePhase: "commentary" } }),
+      ev({ id: "u2", timestamp: new Date(4000), metadata: { kind: "user-prompt" } }),
+      ev({ id: "final2", timestamp: new Date(5000), content: "Second answer", metadata: { kind: "report", messagePhase: "final_answer" } }),
+      ev({ id: "document", timestamp: new Date(5000), metadata: { kind: "document", path: "/tmp/report.pdf", outputSelected: true } }),
+    ]);
+    const at = (id: string) => groups.findIndex((g) => g.events.some((e) => e.id === id));
+    const sessions = matchTurnsToGroups(groups, [
+      { ...turn(0, "codex"), elapsedMs: 2000, endedAt: 3 },
+      { ...turn(1, "codex"), elapsedMs: 1000, endedAt: 5 },
+    ], undefined, true);
+    expect([...sessions.keys()]).toEqual([at("final1"), at("final2")]);
+  });
   // A continue that died before the provider emitted anything leaves a short
   // turn row with no prompt of its own in the transcript. Its bar must not
   // land on the previous turn's reply — that reply's own duration belongs

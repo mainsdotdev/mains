@@ -2,6 +2,9 @@ import type { ServiceResponse } from "./service-response";
 
 export type { ServiceResponse } from "./service-response";
 
+/** Phones must not receive arbitrarily large snapshots or streaming events. */
+export const MAX_DEVICE_MESSAGE_BYTES = 4 * 1024 * 1024;
+
 /**
  * Wire protocol for the renderer↔backend WebSocket transport. It mirrors the
  * Electron IPC seam exactly:

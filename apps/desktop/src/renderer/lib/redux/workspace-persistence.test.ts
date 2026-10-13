@@ -9,8 +9,11 @@ import workspaceReducer, {
   rememberRunSettings,
   beginRunSettingsIntent,
   setSelectedFile,
+  setReviewFileReviewed,
+  setReviewFileCollapsed,
 } from "./slices/workspaceSlice";
 import { workspacePersistConfig } from "./workspace-persistence";
+import { workspaceReviewKey } from "../../../shared/ui-state-keys";
 
 const diffFile = {
   name: "example.ts.diff",
@@ -109,6 +112,58 @@ describe("workspace persistence — removed UI state", () => {
     expect(restored.store.getState().draftTextByKey[draft]).toBeUndefined();
     expect(restored.store.getState().conversationSettingsByKey[draft]).toBeUndefined();
     expect(restored.store.getState().workspaceViewKey).toBeNull();
+    restored.persistor.pause();
+  });
+});
+
+describe("workspace persistence — reviewed files", () => {
+  it("restores reviewed patches after restart and persists workspace cleanup", async () => {
+    const storage = memoryStorage();
+    const key = workspaceReviewKey(null, "ws-a");
+    const first = await persistedWorkspace(storage);
+    first.store.dispatch(setReviewFileReviewed({ backendId: null, workspaceId: "ws-a", path: "a.ts", patchId: "patch", reviewed: true }));
+    first.store.dispatch(setReviewFileCollapsed({ backendId: null, workspaceId: "ws-a", path: "a.ts", patchId: "patch", collapsed: false }));
+    first.store.dispatch(setReviewFileCollapsed({ backendId: null, workspaceId: "ws-a", path: "b.ts", patchId: "patch-b", collapsed: true }));
+    await first.persistor.flush();
+    first.persistor.pause();
+
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().reviewFileStatesByWorkspace[key]).toEqual({
+      "a.ts": { patchId: "patch", reviewed: true, collapsed: false },
+      "b.ts": { patchId: "patch-b", reviewed: false, collapsed: true },
+    });
+    restored.store.dispatch(forgetWorkspaceUiState({ backendId: "local", workspaceId: "ws-a" }));
+    await restored.persistor.flush();
+    restored.persistor.pause();
+
+    const cleaned = await persistedWorkspace(storage);
+    expect(cleaned.store.getState().reviewFileStatesByWorkspace).toEqual({});
+    cleaned.persistor.pause();
+  });
+
+  it("initializes reviewed files when restoring an older saved state", async () => {
+    const storage = memoryStorage();
+    await storage.setItem("persist:workspace", JSON.stringify({
+      activeTab: JSON.stringify("review"),
+      _persist: JSON.stringify({ version: 0, rehydrated: true }),
+    }));
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().reviewFileStatesByWorkspace).toEqual({});
+    restored.persistor.pause();
+  });
+
+  it("migrates existing reviewed marks to collapsed file states without keeping the old ledger", async () => {
+    const storage = memoryStorage();
+    const key = workspaceReviewKey(null, "ws-a");
+    await storage.setItem("persist:workspace", JSON.stringify({
+      reviewedFilesByWorkspace: JSON.stringify({ [key]: { "a.ts": "patch-a" } }),
+      _persist: JSON.stringify({ version: 0, rehydrated: true }),
+    }));
+    const restored = await persistedWorkspace(storage);
+    expect(restored.store.getState().reviewFileStatesByWorkspace[key]).toEqual({ "a.ts": { patchId: "patch-a", reviewed: true, collapsed: true } });
+    expect(restored.store.getState()).not.toHaveProperty("reviewedFilesByWorkspace");
+    await restored.persistor.flush();
+    expect(JSON.parse((await storage.getItem("persist:workspace"))!)).not.toHaveProperty("reviewedFilesByWorkspace");
     restored.persistor.pause();
   });
 });

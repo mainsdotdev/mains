@@ -362,6 +362,17 @@ describe("appendPromptSections", () => {
 });
 
 describe("emitUserPromptArtifact", () => {
+  it("links browser annotations to their durable screenshot attachment", async () => {
+    const onEvent = vi.fn().mockResolvedValue(undefined);
+    await emitUserPromptArtifact(onEvent, "change it", {
+      context: [{ kind: "selection", metadata: { source: "browser", id: "abcdef-annotation", url: "http://localhost:3000",
+        elements: [{ tagName: "h1", selector: "h1" }] } }],
+      attachments: [{ attachmentId: "durable-screenshot", name: "browser-localhost-annotation-abcdef.png", type: "image",
+        mimeType: "image/png", byteSize: 10, sourcePath: "/durable/capture.png" }],
+    });
+    expect(onEvent.mock.calls[0][0].metadata.browserAnnotations).toEqual([expect.objectContaining({ screenshotAttachmentId: "durable-screenshot" })]);
+    expect(JSON.stringify(onEvent.mock.calls[0][0])).not.toContain("/durable/");
+  });
   it("emits artifact event with correct type", async () => {
     const onEvent = vi.fn().mockResolvedValue(undefined);
     await emitUserPromptArtifact(onEvent, "Hello world");

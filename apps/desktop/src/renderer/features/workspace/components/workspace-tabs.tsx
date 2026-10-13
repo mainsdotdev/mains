@@ -8,7 +8,7 @@ import { BaseTab } from "./base-tab";
 import type { Run } from "../types";
 import type { IssueWithEntity, SignalWithEntity } from "@/lib/redux/api";
 import type { ReviewTab as ReviewTabType } from "@/lib/redux/slices/workspaceSlice";
-import { Button } from "@/components/ui";
+import { Button, TabStrip } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { getProviderVariant } from "@/lib/provider-variants";
 import { useIsMobile } from "@/lib/platform";
@@ -162,9 +162,11 @@ export function WorkspaceTabs({
   }
 
   return (
-    <div className="-ml-3 flex min-w-0 items-end">
-      {/* The first tab starts at the content edge; later tabs can curve over the sidebar. */}
-      <div className="relative flex min-w-0 items-end overflow-x-auto px-3 noscrollbar">
+    <TabStrip activeKey={activeTab} createAction={
+      <Button variant="icon" onClick={onNewRun} className="p-1! rounded-lg hover:bg-primary/5!" title="New run" aria-label="New run">
+        <Plus className="size-4.5" />
+      </Button>
+    }>
         {hasSelectedFile && (
           <EditorTab
             isActive={activeTab === "editor"}
@@ -237,7 +239,7 @@ export function WorkspaceTabs({
           />
         ))}
         {showNewRunTab && (
-          <div className="animate-slide-in-left flex w-44 min-w-28">
+          <div className="animate-slide-in-left flex shrink basis-(--shell-tab-width) min-w-(--shell-tab-min-width)">
             <NewRunTab
               variant={variant!}
               isActive={activeTab === "new-run"}
@@ -247,16 +249,7 @@ export function WorkspaceTabs({
             />
           </div>
         )}
-      </div>
-      <Button
-        variant="icon"
-        onClick={onNewRun}
-        className="mb-1.5 mr-8 p-1! -ml-2 rounded-lg hover:bg-primary/5!"
-        title="New run"
-      >
-        <Plus className="size-4.5" />
-      </Button>
-    </div>
+    </TabStrip>
   );
 }
 

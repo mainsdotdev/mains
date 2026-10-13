@@ -1,6 +1,6 @@
 import { useRouter, type Href } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, View, Pressable, type NativeScrollEvent } from "react-native";
+import { ActivityIndicator, ScrollView, View, Pressable, type NativeScrollEvent } from "react-native";
 import Animated, { FadeIn, FadeOut, useAnimatedStyle } from "react-native-reanimated";
 // Not Reanimated's: its own hook is deprecated (iOS bugs) and points here.
 import { useAnimatedKeyboard } from "react-native-keyboard-controller";
@@ -83,11 +83,12 @@ export function RunView({
   // Two sheets behind the composer's two chips: the model (and its effort)
   // behind the model chip, how the agent may act behind the permission chip.
   const openModel = (providerId: string) =>
-    router.push({ pathname: "/model", params: { providerId } } as Href);
+    router.push({ pathname: "/model", params: { providerId, runId } } as Href);
   const openRunOptions = (providerId: string) =>
-    router.push({ pathname: "/run-options", params: { providerId } } as Href);
+    router.push({ pathname: "/run-options", params: { providerId, runId } } as Href);
 
   const {
+    loading: initialLoading,
     backend: { id: backendId, connected },
     run: { record: run, isLive: runIsLive, providerId, mode, workspacePath },
     transcript: { items, streamingItems, thinking, history },
@@ -219,7 +220,7 @@ export function RunView({
   } = useRunOperations({
     run: run ?? null,
     turnIsActive,
-    modelId: modelSelection.selected?.id ?? null,
+    conversationSettings: modelSelection.settings,
   });
 
   const send = (origin: ComposerSendOrigin | null) => {
@@ -455,6 +456,30 @@ export function RunView({
           ? "Starting the run…"
           : "Loading run…"
         : "Continue this run…";
+
+  if (initialLoading && pending === null) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          alignItems: "center",
+          justifyContent: "center",
+          paddingTop: topInset + topPadding,
+          paddingBottom: insets.bottom,
+          backgroundColor: colors.systemBackground,
+        }}
+      >
+        <ActivityIndicator
+          size="small"
+          color={colors.secondaryLabel}
+          accessibilityLabel="Loading run"
+          accessibilityRole="progressbar"
+          accessibilityState={{ busy: true }}
+        />
+      </View>
+    );
+  }
+
   return (
     <View ref={rootRef} collapsable={false} style={{ flex: 1 }}>
       {/* Whole turns keep their fold state within a bounded 30-turn window. */}

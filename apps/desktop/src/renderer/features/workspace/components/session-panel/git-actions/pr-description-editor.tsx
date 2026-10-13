@@ -83,7 +83,7 @@ export function PrDescriptionEditor({ value, onChange, expanded, disabled, gener
             onChange={(event) => { onChange(event.target.value); rememberSelection(event.target); }}
             onSelect={(event) => rememberSelection(event.currentTarget)} onBlur={(event) => rememberSelection(event.currentTarget)}
             disabled={disabled} rows={expanded ? 10 : 5}
-            placeholder={generating ? "" : "Description (optional, leave blank to generate)…"}
+            placeholder={generating ? "" : "Description (optional, leave blank to auto generate)…"}
             className={cn("block w-full resize-y px-3 py-3 leading-relaxed", expanded ? "h-full min-h-0 resize-none text-sm" : "min-h-32 text-xs")}
             onPaste={(event) => { if (event.clipboardData.files.length) { event.preventDefault(); rememberSelection(event.currentTarget); add(Array.from(event.clipboardData.files)); } }}
             onKeyDown={(event) => {

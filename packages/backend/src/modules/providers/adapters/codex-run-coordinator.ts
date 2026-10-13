@@ -427,7 +427,11 @@ export function createCodexRunCoordinator(
         state.aborted = false;
         state.timeoutError = undefined;
         const prompt = realtime.getPrompt?.();
-        const beginning = realtime.tail.then(() => realtime.work.onTurnStarted(turnId, prompt, realtime.model));
+        const turn = (params as { turn?: { rootTurnId?: string | null } }).turn;
+        const lineage = typeof turn?.rootTurnId === "string" ? { rootTurnId: turn.rootTurnId } : undefined;
+        const beginning = realtime.tail.then(() => lineage
+          ? realtime.work.onTurnStarted(turnId, prompt, realtime.model, lineage)
+          : realtime.work.onTurnStarted(turnId, prompt, realtime.model));
         // Install synchronously: the next stdout line may already be a tool
         // request. Preparation and projection then share this sink's queue.
         const completion = waitForTurnCompletion(server, runId, realtime.model,

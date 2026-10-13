@@ -6,6 +6,7 @@ const { mockPty } = vi.hoisted(() => {
     resize: vi.fn(),
     kill: vi.fn(),
     onData: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+    onExit: vi.fn().mockReturnValue({ dispose: vi.fn() }),
   };
   return { mockPty };
 });
@@ -71,18 +72,16 @@ describe("terminalService", () => {
       // Simulate data event
       const dataHandler = mockPty.onData.mock.calls[0][0];
       dataHandler("hello");
-      expect(onData).toHaveBeenCalledWith("t1", "hello");
+      expect(onData).toHaveBeenCalledWith("t1", "hello", 1);
     });
 
-    it("destroys existing instance before creating new one", () => {
+    it("reattaches an existing instance without killing its server", () => {
       const onData = vi.fn();
       terminalService.create("t1", "/tmp", onData);
       terminalService.create("t1", "/tmp", onData);
 
-      // First instance should have been killed
-      expect(mockPty.kill).toHaveBeenCalledTimes(1);
-      // spawn called twice
-      expect(pty.spawn).toHaveBeenCalledTimes(2);
+      expect(mockPty.kill).not.toHaveBeenCalled();
+      expect(pty.spawn).toHaveBeenCalledTimes(1);
     });
 
     it("filters sensitive env vars", () => {
@@ -102,6 +101,87 @@ describe("terminalService", () => {
 
       // Restore
       process.env = originalEnv;
+    });
+  });
+
+  describe("persistent sessions", () => {
+    it("keeps independent tabs and workspaces discoverable", () => {
+      terminalService.create("a1", "/tmp", vi.fn(), { workspaceId: "a", workspaceName: "Website" });
+      terminalService.create("a2", "/tmp", vi.fn(), { workspaceId: "a" });
+      terminalService.create("b1", "/tmp", vi.fn(), { workspaceId: "b" });
+      terminalService.create("auth", undefined, vi.fn());
+      expect(terminalService.list().map((session) => [session.id, session.title, session.workspaceId])).toEqual([
+        ["a1", "Terminal 1", "a"], ["a2", "Terminal 2", "a"], ["b1", "Terminal 1", "b"],
+      ]);
+      terminalService.destroy("a1");
+      expect(terminalService.list().map((session) => session.id)).toEqual(["a2", "b1"]);
+      expect(mockPty.kill).toHaveBeenCalledOnce();
+    });
+
+    it("replays hidden output once and routes new output to the attached view", () => {
+      const firstView = vi.fn();
+      terminalService.create("t", "/tmp", firstView);
+      const data = mockPty.onData.mock.calls[0][0];
+      data("server ready\r\n");
+      data("request received\r\n");
+      const nextView = vi.fn();
+      expect(terminalService.attach("t", nextView)).toMatchObject({ data: "server ready\r\nrequest received\r\n", sequence: 2 });
+      data("response\r\n");
+      expect(nextView).toHaveBeenCalledWith("t", "response\r\n", 3);
+      expect(firstView).toHaveBeenCalledTimes(2);
+      expect(mockPty.kill).not.toHaveBeenCalled();
+    });
+
+    it("bounds background output and preserves its latest sequence", () => {
+      terminalService.create("t", "/tmp", vi.fn());
+      const data = mockPty.onData.mock.calls[0][0];
+      for (let index = 0; index < 10; index++) data("x".repeat(20_000));
+      data("latest");
+      const result = terminalService.attach("t", vi.fn());
+      expect(result.data.length).toBeLessThanOrEqual(128 * 1024);
+      expect(result.data.endsWith("latest")).toBe(true);
+      expect(result.sequence).toBe(11);
+    });
+
+    it("retains exited output without resurrecting or killing an exited process", () => {
+      const exit = vi.fn();
+      terminalService.create("t", "/tmp", vi.fn(), { workspaceId: "a" }, exit);
+      mockPty.onData.mock.calls[0][0]("finished");
+      mockPty.onExit.mock.calls[0][0]({ exitCode: 2 });
+      expect(exit).toHaveBeenCalledWith("t", 2);
+      expect(terminalService.list()[0]).toMatchObject({ status: "exited", exitCode: 2 });
+      expect(terminalService.attach("t", vi.fn()).data).toBe("finished");
+      terminalService.write("t", "ignored");
+      terminalService.create("t", "/tmp", vi.fn());
+      expect(mockPty.write).not.toHaveBeenCalled();
+      expect(pty.spawn).toHaveBeenCalledTimes(1);
+      terminalService.destroy("t");
+      expect(mockPty.kill).not.toHaveBeenCalled();
+    });
+
+    it("does not recreate a stopped terminal when a stale view tries to attach", () => {
+      terminalService.create("t", "/tmp", vi.fn());
+      terminalService.destroy("t");
+      expect(() => terminalService.attach("t", vi.fn())).toThrow("Terminal no longer exists");
+      expect(pty.spawn).toHaveBeenCalledOnce();
+    });
+
+    it("ignores late callbacks from a stopped process with a reused id", () => {
+      terminalService.create("t", "/tmp", vi.fn());
+      const oldData = mockPty.onData.mock.calls[0][0];
+      const oldExit = mockPty.onExit.mock.calls[0][0];
+      terminalService.destroy("t");
+      terminalService.create("t", "/tmp", vi.fn());
+      oldData("obsolete");
+      oldExit({ exitCode: 1 });
+      expect(terminalService.attach("t", vi.fn())).toMatchObject({ data: "", session: { status: "running" } });
+    });
+
+    it("rejects invalid ids and ignores hidden-pane resize dimensions", () => {
+      expect(() => terminalService.create("", "/tmp", vi.fn())).toThrow("Invalid terminal id");
+      terminalService.create("t", "/tmp", vi.fn());
+      for (const [cols, rows] of [[0, 0], [NaN, 24], [80, Infinity], [80, -1]]) terminalService.resize("t", cols, rows);
+      expect(mockPty.resize).not.toHaveBeenCalled();
     });
   });
 

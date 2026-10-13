@@ -1,5 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { Stack, useLocalSearchParams, useRouter, type Href } from "expo-router";
 import { useMemo, useRef, useState } from "react";
 import { FlatList, Pressable, TextInput, View } from "react-native";
@@ -38,32 +38,32 @@ export default function WorkspaceScreen() {
   const backendId = session.backend?.backendId ?? "";
   const spaceId = session.selectedSpaceId ?? "";
 
-  const workspaceQuery = useLiveQuery(
+  const workspaceQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(workspaces)
       .where(and(eq(workspaces.backendId, backendId), eq(workspaces.id, workspaceId)))
-      .limit(1),
+      .limit(1), workspaces,
     [backendId, workspaceId],
   );
-  const runQuery = useLiveQuery(
+  const runQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(runs)
       .where(and(eq(runs.backendId, backendId), eq(runs.workspaceId, workspaceId), eq(runs.isArchived, false)))
-      .orderBy(desc(runs.updatedAt)),
+      .orderBy(desc(runs.updatedAt)), runs,
     [backendId, workspaceId],
   );
-  const spaceQuery = useLiveQuery(
-    db.select().from(spaces).where(and(eq(spaces.backendId, backendId), eq(spaces.id, spaceId))).limit(1),
+  const spaceQuery = useCoalescedLiveQuery(
+    db.select().from(spaces).where(and(eq(spaces.backendId, backendId), eq(spaces.id, spaceId))).limit(1), spaces,
     [backendId, spaceId],
   );
-  const targetQuery = useLiveQuery(
+  const targetQuery = useCoalescedLiveQuery(
     db
       .select()
       .from(spaceTargets)
       .where(and(eq(spaceTargets.backendId, backendId), eq(spaceTargets.spaceId, spaceId)))
-      .limit(1),
+      .limit(1), spaceTargets,
     [backendId, spaceId],
   );
 

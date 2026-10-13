@@ -33,6 +33,7 @@ export * from "./shellApi";
 export * from "./signalsApi";
 export * from "./spaceApi";
 export * from "./statsApi";
+export * from "./terminalApi";
 export * from "./syncApi";
 export * from "./toolsApi";
 export * from "./updatesApi";

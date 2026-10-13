@@ -137,12 +137,12 @@ describe("floating chat overlay", () => {
     expect(screen.getByText("Composer")).toBe(composer);
   });
 
-  it("uses the same width for the input and details while details grow to half the stage height", () => {
+  it("uses the same width for the input and details while details grow to 60% of the stage height", () => {
     const stage = { width: 1200, height: 800 };
     expect(floatingChatSize("input", stage)).toEqual({ width: 540, height: 48 });
     expect(floatingChatSize("input", stage, 76)).toEqual({ width: 540, height: 76 });
-    expect(floatingChatSize("details", stage)).toEqual({ width: 540, height: 400 });
-    expect(floatingChatSize("details", stage, 76)).toEqual({ width: 540, height: 428 });
+    expect(floatingChatSize("details", stage)).toEqual({ width: 540, height: 480 });
+    expect(floatingChatSize("details", stage, 76)).toEqual({ width: 540, height: 508 });
     expect(floatingChatSize("icon", stage)).toEqual({ width: 48, height: 48 });
     expect(floatingChatSize("input", { width: 520, height: 800 }).width).toBe(
       floatingChatSize("details", { width: 520, height: 800 }).width,

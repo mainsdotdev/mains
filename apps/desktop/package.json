@@ -2,7 +2,7 @@
   "name": "mains",
   "type": "commonjs",
   "productName": "Mains",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "AI-powered developer workspace",
   "main": ".vite/build/main.js",
   "publish": {
@@ -114,7 +114,7 @@
     "vitest": "^4.1.11"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.286",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.296",
     "@anthropic-ai/sdk": "^0.124.0",
     "@blocknote/core": "0.55.0",
     "@blocknote/react": "0.55.0",

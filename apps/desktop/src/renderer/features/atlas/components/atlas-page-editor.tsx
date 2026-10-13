@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
   type Ref,
@@ -13,7 +14,7 @@ import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/shadcn";
 import "@blocknote/shadcn/style.css";
 import { PageShell } from "@/components/layout/page-shell";
-import { Button, Input, Modal, Muted, Text, toast } from "@/components/ui";
+import { Button, Input, Modal, Muted, Text, Textarea, toast } from "@/components/ui";
 import { Undo } from "@/components/ui/icons";
 import {
   useAtlasPageQuery,
@@ -144,6 +145,9 @@ function PageEditor({
   });
   const applying = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTrashed = useRef(!!page.item.trashedAt);
+  const trashPhase = useRef<"idle" | "saving" | "trashing">("idle");
+  const [trashing, setTrashing] = useState(false);
   const [initialVersion] = useState(page.item.version);
   const uploadFile = async (file: File) => {
     try {
@@ -212,15 +216,28 @@ function PageEditor({
       onState: setSaveState,
     }),
   );
+  useLayoutEffect(() => {
+    isTrashed.current = !!page.item.trashedAt;
+    if (isTrashed.current && timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, [page.item.trashedAt]);
+  const flush = useCallback(() => {
+    // Trash can close the tab before its query refreshes. Cleanup and delayed
+    // callbacks must observe that transition rather than the old Page props.
+    if (trashPhase.current === "trashing" || isTrashed.current) return Promise.resolve(true);
+    return queue.flush();
+  }, [queue]);
   useEffect(() => {
     onTitleChange(name || "Untitled page");
   }, [name, onTitleChange]);
   const schedule = (title: string = queue.draft.title) => {
-    if (applying.current || page.item.trashedAt) return;
+    if (applying.current || trashPhase.current !== "idle" || isTrashed.current) return;
     queue.edit({ title, blocks: editor.document });
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
-      void queue.flush();
+      void flush();
     }, 700);
   };
   useEffect(() => {
@@ -230,13 +247,13 @@ function PageEditor({
         queue.block(
           "A newer version exists. Your recovered draft is kept here; export it or save it as a new Page.",
         );
-      else void queue.flush();
+      else void flush();
     }
     return () => {
       if (timer.current) clearTimeout(timer.current);
-      void queue.flush();
+      void flush();
     };
-  }, [queue, recovered, initialVersion]);
+  }, [queue, recovered, initialVersion, flush]);
   useEffect(() => {
     let cancelled = false;
     // The backend query is an external document source; apply after this render.
@@ -309,10 +326,26 @@ function PageEditor({
               collectionId: action.collectionId,
             }).unwrap();
           break;
-        case "trash":
-          if (page.item.trashedAt || !(await queue.flush())) return;
-          await updateItem({ accountId, id, trashed: true }).unwrap();
+        case "trash": {
+          if (isTrashed.current || trashPhase.current !== "idle") return;
+          trashPhase.current = "saving";
+          setTrashing(true);
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = null;
+          let trashed = false;
+          try {
+            if (!(await queue.flush())) return;
+            trashPhase.current = "trashing";
+            await updateItem({ accountId, id, trashed: true }).unwrap();
+            trashed = true;
+          } finally {
+            if (!trashed) {
+              trashPhase.current = "idle";
+              setTrashing(false);
+            }
+          }
           break;
+        }
       }
     },
     [
@@ -330,11 +363,11 @@ function PageEditor({
   useImperativeHandle(
     handleRef,
     () => ({
-      flush: queue.flush,
+      flush,
       collectionId: page.item.collectionId,
       performAction,
     }),
-    [queue, page.item.collectionId, performAction],
+    [flush, page.item.collectionId, performAction],
   );
   const handledAction = useRef<string | null>(null);
   useEffect(() => {
@@ -373,11 +406,11 @@ function PageEditor({
     }
   };
   const beforeSend = useCallback(async () => {
-    if (page.item.trashedAt || saveState.error) return false;
-    return queue.flush();
-  }, [page.item.trashedAt, saveState.error, queue]);
+    if (trashPhase.current !== "idle" || isTrashed.current || saveState.error) return false;
+    return flush();
+  }, [saveState.error, flush]);
   const backToPages = () => {
-    void queue.flush().then((saved) => {
+    void flush().then((saved) => {
       if (saved) navigate("/atlas?type=page");
     });
   };
@@ -463,18 +496,24 @@ function PageEditor({
               </div>
             </div>
           )}
-          <Input
+          <Textarea
             variant="bare"
             aria-label="Page title"
+            rows={1}
             value={name}
             placeholder="Untitled page"
             maxLength={240}
-            disabled={!!page.item.trashedAt}
+            disabled={trashing || !!page.item.trashedAt}
             onChange={(event) => {
-              setName(event.target.value);
-              schedule(event.target.value);
+              const title = event.target.value.replace(/[\r\n]+/g, " ");
+              setName(title);
+              schedule(title);
             }}
-            className="atlas-title mb-8 w-full bg-transparent px-0 font-semibold"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing)
+                event.preventDefault();
+            }}
+            className="atlas-title mb-8 block w-full resize-none overflow-hidden bg-transparent px-0 font-semibold"
           />
         </AtlasPageHeader>
         <div className="px-8 md:px-16">
@@ -482,7 +521,7 @@ function PageEditor({
             <BlockNoteView
               editor={editor}
               theme={useIsDarkMode() ? "dark" : "light"}
-              editable={!page.item.trashedAt}
+              editable={!trashing && !page.item.trashedAt}
               onChange={() => schedule()}
             />
           </div>

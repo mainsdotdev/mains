@@ -99,6 +99,19 @@ describe("createWorkRunAdapter", () => {
   });
 
   describe("startRun lifecycle", () => {
+    it.each(["start", "continue"])("persists delegated provenance in the %s prompt", async (operation) => {
+      const fake = createFakeDriver();
+      fake.enable("resumeSession");
+      const adapter = createWorkRunAdapter(fake.driver);
+      const events: WorkRunEvent[] = [];
+      const providerTurnLineage = { parentTurnId: "native-parent", rootTurnId: "native-root" };
+      const publish = (event: WorkRunEvent) => { events.push(event); };
+      if (operation === "start") await adapter.startRun(makeStartReq({ providerTurnLineage }), publish);
+      else await adapter.continueRun!(makeContinueReq({ providerTurnLineage }), publish);
+      const prompt = events.find((event) => event.type === "artifact" && event.kind === "user-prompt");
+      expect(prompt).toMatchObject({ metadata: { providerParentTurnId: "native-parent", providerRootTurnId: "native-root" } });
+    });
+
     it.each(["start", "continue"])("preserves local prompt identity after delayed %s acquisition without opting into provider acceptance", async (operation) => {
       const fake = createFakeDriver({ model: "resolved-model" });
       fake.enable("resumeSession");

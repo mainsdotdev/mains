@@ -5,11 +5,11 @@ import {
   Button,
   DropdownMenu,
   Input,
-  Modal,
   Muted,
   Text,
   toast,
 } from "@/components/ui";
+import DeleteConfirmationModal from "@/components/layout/sidebar/delete-confirmation-modal";
 import { Search, Trash, Undo } from "@/components/ui/icons";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
 import { classifyDocType } from "@/lib/document-viewer";
@@ -154,7 +154,7 @@ export function AtlasTrashMenu({
         openUpward
         origin="bottom-left"
         minWidth={0}
-        className="flex w-[min(440px,calc(100vw-16px))] max-h-[min(560px,calc(100vh-16px))] flex-col p-2"
+        className="flex w-[min(320px,calc(100vw-16px))] max-h-[min(560px,calc(100vh-16px))] flex-col p-2"
       >
         <div className="relative m-1 mb-3 shrink-0">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-primary-500" />
@@ -261,36 +261,17 @@ export function AtlasTrashMenu({
           onClose={() => setPreview(null)}
         />
       )}
-      <Modal
+      <DeleteConfirmationModal
         isOpen={!!deleting}
-        onClose={() => {
+        isDeleting={removing.isLoading}
+        onConfirm={() => void deleteItem()}
+        onCancel={() => {
           if (!removing.isLoading) setDeleting(null);
         }}
-        aria-label="Delete Atlas item"
-        className="max-w-md p-6"
+        title={`Delete ${deleting?.title ?? "item"} permanently?`}
+        description="This permanently removes the item from Atlas."
         returnFocusRef={triggerRef}
-      >
-        <Text weight="medium">Delete {deleting?.title} permanently?</Text>
-        <Muted className="mt-3">
-          This permanently removes the item from Atlas.
-        </Muted>
-        <div className="mt-6 flex justify-end gap-3">
-          <Button
-            variant="ghost"
-            disabled={removing.isLoading}
-            onClick={() => setDeleting(null)}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="danger"
-            isLoading={removing.isLoading}
-            onClick={() => void deleteItem()}
-          >
-            Delete permanently
-          </Button>
-        </div>
-      </Modal>
+      />
     </>
   );
 }

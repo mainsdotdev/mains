@@ -2152,7 +2152,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/cli@57.0.24
+@expo/cli@57.0.29
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2208,7 +2208,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/config-plugins@57.0.9
+@expo/config-plugins@57.0.10
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2264,7 +2264,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/config@57.0.9
+@expo/config@57.0.10
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2292,12 +2292,33 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/devcert@1.2.1
+@expo/devcert@1.2.2
 License: MIT
 Repository: git+https://github.com/expo/devcert.git
 ========================================================================
 
-(No license file shipped in the package; see the repository above for the full MIT text.)
+The MIT License (MIT)
+
+Copyright (c) 2017 Dave Wasmer
+Copyright (c) 2021-present 650 Industries, Inc. (aka Expo)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ========================================================================
 @expo/devtools@57.0.1
@@ -2412,7 +2433,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/fingerprint@0.20.13
+@expo/fingerprint@0.20.14
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2440,7 +2461,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/image-utils@0.11.5
+@expo/image-utils@0.11.6
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2468,7 +2489,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/inline-modules@0.1.7
+@expo/inline-modules@0.1.8
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2524,7 +2545,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/local-build-cache-provider@57.0.8
+@expo/local-build-cache-provider@57.0.9
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2579,7 +2600,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/metro-config@57.0.12
+@expo/metro-config@57.0.13
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2607,7 +2628,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/metro-file-map@57.0.3
+@expo/metro-file-map@57.0.4
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2635,7 +2656,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/metro-runtime@57.0.15
+@expo/metro-runtime@57.0.16
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2776,7 +2797,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/prebuild-config@57.0.16
+@expo/prebuild-config@57.0.18
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2804,7 +2825,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/require-utils@57.0.5
+@expo/require-utils@57.0.6
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2832,7 +2853,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/router-server@57.0.9
+@expo/router-server@57.0.12
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2951,7 +2972,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@expo/ui@57.0.18
+@expo/ui@57.0.23
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -2959,19 +2980,60 @@ Repository: https://github.com/expo/expo.git
 (No license file shipped in the package; see the repository above for the full MIT text.)
 
 ========================================================================
-@expo/ws-tunnel@2.0.0
+@expo/ws-tunnel@2.0.1
 License: MIT
 ========================================================================
 
-(No license file shipped in the package; see the repository above for the full MIT text.)
+The MIT License (MIT)
+
+Copyright (c) 2025-present 650 Industries, Inc. (aka Expo)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ========================================================================
-@expo/xcpretty@4.4.5
-License: BSD-3-Clause
-Repository: https://github.com/expo/expo-cli.git
+@expo/xcpretty@4.4.6
+License: MIT
+Repository: https://github.com/expo/expo.git
 ========================================================================
 
-(No license file shipped in the package; see the repository above for the full BSD-3-Clause text.)
+The MIT License (MIT)
+
+Copyright (c) 2013-2016 Marin Usalj
+Copyright (c) 2021-present 650 Industries, Inc. (aka Expo)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ========================================================================
 @isaacs/ttlcache@1.4.1
@@ -5461,9 +5523,9 @@ Repository: git+https://github.com/facebook/react.git
 (No license file shipped in the package; see the repository above for the full MIT text.)
 
 ========================================================================
-babel-plugin-react-native-web@0.21.2
+babel-plugin-react-native-web@0.21.4
 License: MIT
-Repository: git://github.com/necolas/react-native-web.git
+Repository: git+https://github.com/necolas/react-native-web.git
 ========================================================================
 
 MIT License
@@ -5545,7 +5607,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-babel-preset-expo@57.0.11
+babel-preset-expo@57.0.15
 License: MIT
 Repository: git+https://github.com/expo/expo.git
 ========================================================================
@@ -8973,7 +9035,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-asset@57.0.17
+expo-asset@57.0.19
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9029,7 +9091,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-camera@57.0.5
+expo-camera@57.0.6
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9085,7 +9147,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-constants@57.0.18
+expo-constants@57.0.21
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9113,7 +9175,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-dev-client@57.0.19
+expo-dev-client@57.0.20
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9141,7 +9203,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-dev-launcher@57.0.20
+expo-dev-launcher@57.0.21
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9197,7 +9259,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-dev-menu@57.0.18
+expo-dev-menu@57.0.20
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9225,7 +9287,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-eas-client@57.0.4
+expo-eas-client@57.0.5
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9309,7 +9371,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-glass-effect@57.0.3
+expo-glass-effect@57.0.4
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9393,7 +9455,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-image-picker@57.0.17
+expo-image-picker@57.0.20
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9505,7 +9567,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-linking@57.0.10
+expo-linking@57.0.12
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9589,7 +9651,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-modules-autolinking@57.0.13
+expo-modules-autolinking@57.0.15
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9617,7 +9679,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-modules-core@57.0.18
+expo-modules-core@57.0.22
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9645,7 +9707,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-modules-jsi@57.1.0
+expo-modules-jsi@57.1.2
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9701,7 +9763,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-router@57.0.21
+expo-router@57.0.26
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9765,7 +9827,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-splash-screen@57.0.9
+expo-splash-screen@57.0.10
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9793,7 +9855,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-sqlite@57.0.3
+expo-sqlite@57.0.4
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9941,7 +10003,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-expo-updates@57.0.22
+expo-updates@57.0.26
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -9949,7 +10011,7 @@ Repository: https://github.com/expo/expo.git
 (No license file shipped in the package; see the repository above for the full MIT text.)
 
 ========================================================================
-expo@57.0.22
+expo@57.0.28
 License: MIT
 Repository: https://github.com/expo/expo.git
 ========================================================================
@@ -15736,7 +15798,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-nanoid@3.3.18
+nanoid@3.3.20
 License: MIT
 Repository: ai/nanoid
 ========================================================================
@@ -16887,7 +16949,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-postcss@8.5.28
+postcss@8.5.29
 License: MIT
 Repository: postcss/postcss
 ========================================================================
@@ -18807,7 +18869,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-source-map-js@1.2.1
+source-map-js@1.2.2
 License: BSD-3-Clause
 Repository: 7rulnik/source-map-js
 ========================================================================
@@ -20810,7 +20872,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-ws@8.21.3
+ws@8.22.0
 License: MIT
 Repository: git+https://github.com/websockets/ws.git
 ========================================================================

@@ -1,50 +1,22 @@
-import { useState, useEffect } from "react";
-import NumberFlow from "@number-flow/react";
-import { Caption, Heading2 } from "@/components/ui";
-import type { DashboardSummary } from "@/lib/redux/api";
+import { Heading2, Text, Tooltip } from "@/components/ui";
+import type { ConsumptionTotals, DashboardSummary } from "@mains/contracts/stats";
+import { formatEstimatedCost, formatTokens, usageCoverage } from "../lib/dashboard-format";
 
-interface SummaryCardsProps {
-  summary: DashboardSummary;
-}
-
-export default function SummaryCards({ summary }: SummaryCardsProps) {
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    requestAnimationFrame(() => setMounted(true));
-  }, []);
-
+export default function SummaryCards({ summary, consumption }: { summary: DashboardSummary; consumption?: ConsumptionTotals }) {
+  const cost = consumption?.estimatedCostUsd ?? summary.estimatedCostUsd;
+  const costCoverage = consumption ? `${consumption.costEstimatedRecords} of ${consumption.records} records priced` : usageCoverage(summary, "cost");
   const cards = [
-    { label: "Projects", value: summary.totalProjects },
-    { label: "Runs Today", value: summary.runsToday },
-    { label: "Total Sessions", value: summary.totalSessions },
-    { label: "Est. Cost", value: summary.estimatedCostUsd, isCost: true },
+    { label: "Sessions", value: summary.totalSessions.toLocaleString(), detail: "Active in the selected period", partial: false },
+    { label: "Turns", value: summary.totalTurns.toLocaleString(), detail: `${summary.completedTurns.toLocaleString()} completed`, partial: false },
+    { label: "Tokens", value: formatTokens(summary.totalTokens), detail: usageCoverage(summary), partial: summary.totalTokens !== null && summary.tokenReportedTurns < summary.completedTurns },
+    { label: "API estimate", value: formatEstimatedCost(cost), detail: costCoverage, partial: cost !== null && (consumption ? consumption.costEstimatedRecords < consumption.records : summary.costReportedTurns < summary.completedTurns) },
   ];
-
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-      {cards.map((card) => (
-        <div
-          key={card.label}
-          className="rounded-3xl glass-surface px-4 py-3.5 text-center"
-        >
-          <Heading2>
-            <NumberFlow
-              value={mounted ? card.value : 0}
-              format={
-                card.isCost
-                  ? { style: "currency", currency: "USD", minimumFractionDigits: 2 }
-                  : undefined
-              }
-              transformTiming={{ duration: 600, easing: "ease-out" }}
-              spinTiming={{ duration: 600, easing: "ease-out" }}
-            />
-          </Heading2>
-          <Caption>
-            {card.label}
-          </Caption>
-        </div>
-      ))}
-    </div>
-  );
+  return <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+    {cards.map((card) => <Tooltip key={card.label} content={card.detail}>
+      <div tabIndex={0} aria-label={`${card.label}: ${card.value}`} title={card.detail} className="rounded-3xl glass-surface p-5 min-w-0 focus-visible:outline-2 focus-visible:outline-accent">
+        <Text size="sm" tone="subtle">{card.label}</Text>
+        <Heading2 size="3xl" className="mt-2 tabular-nums">{card.value}{card.partial && <Text as="span" size="sm" tone="warning" className="ml-1" aria-hidden="true">*</Text>}</Heading2>
+      </div>
+    </Tooltip>)}
+  </div>;
 }

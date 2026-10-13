@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { useListProjectsQuery, useListWorkspacesQuery } from "@/lib/redux/api";
+import { useGetTerminalSessionsQuery, useListProjectsQuery, useListWorkspacesQuery } from "@/lib/redux/api";
 import { setSessionPanelOpen } from "@/lib/redux/slices/appSettingsSlice";
 import { usePanelAnimation } from "@/hooks/use-panel-animation";
 import { useIsMobile } from "@/lib/platform";
@@ -9,6 +9,7 @@ import { Text } from "@/components/ui";
 import { useModeConfig } from "@/hooks/use-mode-config";
 import { GitActionsSection } from "./git-actions";
 import { SessionResourcesSection } from "./session-resources-section";
+import { SessionServersSection } from "./session-servers-section";
 
 /** Overshoots slightly past full size — the "pop" as the box inflates. */
 const POP_EASE = "cubic-bezier(0.34, 1.56, 0.64, 1)";
@@ -35,7 +36,7 @@ interface SessionPanelProps {
 /**
  * The session box: the active workspace's environment plus the sources and
  * deliverables belonging to the open run. Sections are mode-driven: Code gets
- * Environment + Sources; Work gets Sources + Deliverables.
+ * Environment + Running servers + Sources; Work gets Sources + Deliverables.
  *
  * A standalone box pinned to the top-right corner. It always sits *over* the
  * content surface rather than taking a column out of it — shrinking the content
@@ -63,10 +64,18 @@ export function SessionPanel({
   const [prEditorOpen, setPrEditorOpen] = useState(false);
   const [prTransitioning, setPrTransitioning] = useState(false);
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-  const { showGitActions, showSources, showDeliverables } = useModeConfig();
+  const { showGitActions, showSources, showDeliverables, showTerminal } = useModeConfig();
   const showEnvironment = showGitActions && !!activeWorkspaceId;
   const { data: workspaces = [] } = useListWorkspacesQuery(undefined, { skip: !showEnvironment });
   const { data: projects = [] } = useListProjectsQuery(undefined, { skip: !showEnvironment });
+  const { currentData: terminals } = useGetTerminalSessionsQuery(undefined, { skip: !showTerminal });
+  const serverSessions = useMemo(
+    () => showTerminal ? (terminals ?? [])
+      .filter((session) => session.workspaceId && session.status === "running" && (session.servers?.length ?? 0) > 0)
+      .sort((a, b) => Number(b.workspaceId === activeWorkspaceId) - Number(a.workspaceId === activeWorkspaceId)) : [],
+    [terminals, showTerminal, activeWorkspaceId],
+  );
+  const showServers = serverSessions.length > 0;
   const workspace = workspaces.find((item) => item.id === activeWorkspaceId);
   const project = projects.find((item) => item.id === workspace?.projectId);
   const repositoryName = project?.name ?? workspace?.rootPath.split("/").filter(Boolean).at(-1) ?? "Repository";
@@ -164,13 +173,16 @@ export function SessionPanel({
             />
           </section>
         )}
+        {showServers && (
+          <SessionServersSection sessions={serverSessions} separated={showEnvironment} />
+        )}
         {showRunResources && runId && (
           <SessionResourcesSection
             key={runId}
             runId={runId}
             showDeliverables={showDeliverables}
             hideWhenEmpty={showGitActions}
-            separated={showEnvironment}
+            separated={showEnvironment || showServers}
           />
         )}
       </div>

@@ -7,6 +7,12 @@ export interface RealtimeVoiceCatalog {
   defaultVoice: string;
 }
 
+/** Native provider turn ids linking delegated work to the request that caused it. */
+export interface ProviderTurnLineage {
+  parentTurnId?: string;
+  rootTurnId?: string;
+}
+
 export type VoiceOrbColor = "theme" | "blue" | "violet" | "rose" | "amber" | "mint";
 export type VoiceOrbStyle = "cloud" | "sphere" | "aurora";
 

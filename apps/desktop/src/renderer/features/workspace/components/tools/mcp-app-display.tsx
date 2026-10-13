@@ -17,10 +17,17 @@ import { useDialogFocus } from "@/components/ui";
 import { Maximize, Minimize } from "@/components/ui/icons";
 import type { ServiceResponse } from "@mains/contracts/service-response";
 import type { McpAppToolMetadata } from "@mains/contracts/mcp-apps";
-import { mcpAppMessageOptions, mcpAppMessageText, type McpAppMessageOptions, type McpAppModelContextState } from "../../lib/mcp-app-context";
+import {
+  mcpAppMessageOptions,
+  mcpAppMessageText,
+  type McpAppMessageOptions,
+  type McpAppModelContextState,
+} from "../../lib/mcp-app-context";
 import { useMcpAppMessagePreview } from "../../hooks/use-mcp-app-message-preview";
 import { McpAppMessageDialog } from "./mcp-app-message-dialog";
 import { mcpAppToolName } from "../../lib/mcp-app-panel";
+import { mcpStructuredContentOmitted } from "../../lib/mcp-output";
+import { McpAppResultFallback } from "./mcp-result-notice";
 
 type McpAppDisplayMode = "inline" | "fullscreen";
 type McpAppPresentation = McpAppDisplayMode | "collapsed";
@@ -32,8 +39,16 @@ const APP_MESSAGE_REQUEST = McpUiMessageRequestSchema.extend({
 });
 
 class McpAppBridge extends AppBridge {
-  setMessageHandler(handler: (content: unknown, meta?: unknown, signal?: AbortSignal) => Promise<Record<string, unknown>>) {
-    this.replaceRequestHandler(APP_MESSAGE_REQUEST, async ({ params }, extra) => handler(params.content, params._meta, extra.signal));
+  setMessageHandler(
+    handler: (
+      content: unknown,
+      meta?: unknown,
+      signal?: AbortSignal,
+    ) => Promise<Record<string, unknown>>,
+  ) {
+    this.replaceRequestHandler(APP_MESSAGE_REQUEST, async ({ params }, extra) =>
+      handler(params.content, params._meta, extra.signal),
+    );
   }
 }
 
@@ -84,8 +99,13 @@ interface McpAppDisplayProps {
   output?: unknown;
   title: string;
   /** A page can submit its first message through the same composer as typed text. */
-  onMessage?: (content: unknown, options?: McpAppMessageOptions) => Promise<void>;
-  onModelContextChange?: (context: unknown) => Promise<McpAppModelContextState | null>;
+  onMessage?: (
+    content: unknown,
+    options?: McpAppMessageOptions,
+  ) => Promise<void>;
+  onModelContextChange?: (
+    context: unknown,
+  ) => Promise<McpAppModelContextState | null>;
   modelContext?: McpAppModelContextState | null;
 }
 
@@ -111,16 +131,40 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function normalizeToolResult(value: unknown): CallToolResult {
-  const result = objectRecord(value) ?? {};
+  const envelope = objectRecord(value);
+  const result = envelope ?? {};
+  let content = envelope ? result.content : value;
+  if (!envelope && typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) content = parsed;
+    } catch { /* A legacy text-only result is already MCP text content. */ }
+  }
+  const omitted = mcpStructuredContentOmitted(value);
   return {
-    content: Array.isArray(result.content)
-      ? (result.content as CallToolResult["content"])
-      : [],
-    ...(result.structuredContent && typeof result.structuredContent === "object"
-      ? { structuredContent: result.structuredContent as Record<string, unknown> }
+    content: Array.isArray(content)
+      ? (content as CallToolResult["content"])
+      : typeof content === "string"
+        ? [{ type: "text", text: content }]
+        : [],
+    ...(!omitted &&
+    result.structuredContent &&
+    typeof result.structuredContent === "object"
+      ? {
+          structuredContent: result.structuredContent as Record<
+            string,
+            unknown
+          >,
+        }
+      : {}),
+    ...(omitted ? { structuredContentOmitted: true } : {}),
+    ...(Array.isArray(result.resourceLinks)
+      ? { resourceLinks: result.resourceLinks }
       : {}),
     ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
-    ...(objectRecord(result._meta) ? { _meta: objectRecord(result._meta)! } : {}),
+    ...(objectRecord(result._meta)
+      ? { _meta: objectRecord(result._meta)! }
+      : {}),
   };
 }
 
@@ -141,9 +185,13 @@ function hostContext(
       touch: navigator.maxTouchPoints > 0,
       hover: window.matchMedia("(hover: hover)").matches,
     },
-    containerDimensions: displayMode === "fullscreen"
-      ? { maxHeight: Math.max(120, window.innerHeight - 56), maxWidth: window.innerWidth }
-      : { maxHeight: 1_200, maxWidth: 1_200 },
+    containerDimensions:
+      displayMode === "fullscreen"
+        ? {
+            maxHeight: Math.max(120, window.innerHeight - 56),
+            maxWidth: window.innerWidth,
+          }
+        : { maxHeight: 1_200, maxWidth: 1_200 },
   };
 }
 
@@ -182,7 +230,20 @@ function compatibilityOutput(result: CallToolResult): unknown {
   return result.structuredContent ?? result.content;
 }
 
-export function McpAppDisplay({
+export function McpAppDisplay(props: McpAppDisplayProps) {
+  if (mcpStructuredContentOmitted(props.output)) {
+    return (
+      <McpAppResultFallback
+        output={props.output}
+        title={props.app.appName ?? props.title}
+        isPage={props.presentation === "page"}
+      />
+    );
+  }
+  return <McpAppRuntime {...props} />;
+}
+
+function McpAppRuntime({
   runId,
   resourceRunId: sourceRunId,
   sessionId,
@@ -203,7 +264,7 @@ export function McpAppDisplay({
   const isPage = pagePresentation === "page";
   const isPanel = panelDisplayMode !== undefined;
   const resourceOwner = sessionId ?? sourceRunId ?? runId;
-  const resourceRunId = sessionId ? undefined : sourceRunId ?? runId;
+  const resourceRunId = sessionId ? undefined : (sourceRunId ?? runId);
   const resourceKey = `${resourceOwner}:${app.server}:${app.resourceUri}:${app.originCallId ?? ""}`;
   const messagePreview = useMcpAppMessagePreview(resourceKey);
   const { review: reviewMessage, cancel: cancelMessage } = messagePreview;
@@ -224,26 +285,55 @@ export function McpAppDisplay({
   const initializedRef = useRef(false);
   // The window.openai shim can be ready without a standard MCP handshake.
   const compatibilityReadyRef = useRef(false);
-  useEffect(() => registerBeforeSuspend?.(async () => {
-    if (!initializedRef.current || !bridgeRef.current) return;
-    try {
-      await bridgeRef.current.teardownResource({}, { timeout: 1_500 });
-    } catch {
-      // Compatibility apps may not implement teardown. Their widget state is
-      // already saved by setWidgetState; the conversation lives in the host.
-    }
-  }), [registerBeforeSuspend]);
-  const latestContextRef = useRef<{ content?: unknown; structuredContent?: unknown } | null>(null);
-  const conversationRef = useRef({ runId, onMessage, onModelContextChange, modelContext, unsupportedTools });
+  useEffect(
+    () =>
+      registerBeforeSuspend?.(async () => {
+        if (!initializedRef.current || !bridgeRef.current) return;
+        try {
+          await bridgeRef.current.teardownResource({}, { timeout: 1_500 });
+        } catch {
+          // Compatibility apps may not implement teardown. Their widget state is
+          // already saved by setWidgetState; the conversation lives in the host.
+        }
+      }),
+    [registerBeforeSuspend],
+  );
+  const latestContextRef = useRef<{
+    content?: unknown;
+    structuredContent?: unknown;
+  } | null>(null);
+  const conversationRef = useRef({
+    runId,
+    onMessage,
+    onModelContextChange,
+    modelContext,
+    unsupportedTools,
+  });
   const browserOpenRef = useRef(openBrowserUrl);
   const displayModeChangeRef = useRef(onDisplayModeChange);
   useLayoutEffect(() => {
-    conversationRef.current = { runId, onMessage, onModelContextChange, modelContext, unsupportedTools };
+    conversationRef.current = {
+      runId,
+      onMessage,
+      onModelContextChange,
+      modelContext,
+      unsupportedTools,
+    };
     if (onModelContextChange) latestContextRef.current = modelContext ?? null;
     browserOpenRef.current = openBrowserUrl;
     displayModeChangeRef.current = onDisplayModeChange;
-  }, [runId, onMessage, onModelContextChange, modelContext, unsupportedTools, openBrowserUrl, onDisplayModeChange]);
-  useEffect(() => { if (!isActive) cancelMessage(); }, [isActive, cancelMessage]);
+  }, [
+    runId,
+    onMessage,
+    onModelContextChange,
+    modelContext,
+    unsupportedTools,
+    openBrowserUrl,
+    onDisplayModeChange,
+  ]);
+  useEffect(() => {
+    if (!isActive) cancelMessage();
+  }, [isActive, cancelMessage]);
   const latestInputRef = useRef(input ?? {});
   const latestResultRef = useRef(toolResult);
   const hasResultRef = useRef(hasResult);
@@ -258,6 +348,10 @@ export function McpAppDisplay({
     error?: string;
   }>({ key: "" });
   const [height, setHeight] = useState(280);
+  const [omittedCall, setOmittedCall] = useState<{
+    key: string;
+    output: unknown;
+  } | null>(null);
   const [isNativeFullscreen, setIsNativeFullscreen] = useState(false);
   const [presentationOverride, setPresentationOverride] = useState<{
     key: string;
@@ -267,25 +361,32 @@ export function McpAppDisplay({
     key: string;
     modes: McpAppDisplayMode[];
   } | null>(null);
-  const resource = loadState.key === resourceKey ? loadState.resource ?? null : null;
-  const error = loadState.key === resourceKey ? loadState.error ?? null : null;
-  const appDisplayModes = capabilityModes?.key === resourceKey
-    ? capabilityModes.modes
-    : resource?.meta.availableDisplayModes ?? (
-      app.preferredModelDisplayMode === "fullscreen"
-        ? HOST_DISPLAY_MODES
-        : INLINE_DISPLAY_MODES
-    );
-  const initialDisplayMode = resource && appDisplayModes.includes("fullscreen") &&
-    (app.preferredModelDisplayMode === "fullscreen" || !appDisplayModes.includes("inline"))
-    ? "fullscreen"
-    : "inline";
-  const presentation = presentationOverride?.key === resourceKey
-    ? presentationOverride.mode
-    : initialDisplayMode;
+  const resource =
+    loadState.key === resourceKey ? (loadState.resource ?? null) : null;
+  const error =
+    loadState.key === resourceKey ? (loadState.error ?? null) : null;
+  const appDisplayModes =
+    capabilityModes?.key === resourceKey
+      ? capabilityModes.modes
+      : (resource?.meta.availableDisplayModes ??
+        (app.preferredModelDisplayMode === "fullscreen"
+          ? HOST_DISPLAY_MODES
+          : INLINE_DISPLAY_MODES));
+  const initialDisplayMode =
+    resource &&
+    appDisplayModes.includes("fullscreen") &&
+    (app.preferredModelDisplayMode === "fullscreen" ||
+      !appDisplayModes.includes("inline"))
+      ? "fullscreen"
+      : "inline";
+  const presentation =
+    presentationOverride?.key === resourceKey
+      ? presentationOverride.mode
+      : initialDisplayMode;
   const isFullscreen = !isPage && presentation === "fullscreen";
   const isCollapsed = !isPage && presentation === "collapsed";
-  const displayMode: McpAppDisplayMode = panelDisplayMode ?? (isPage || isFullscreen ? "fullscreen" : "inline");
+  const displayMode: McpAppDisplayMode =
+    panelDisplayMode ?? (isPage || isFullscreen ? "fullscreen" : "inline");
   const displayModeRef = useRef(displayMode);
   const appDisplayModesRef = useRef(appDisplayModes);
   const hasDeclaredDisplayModesRef = useRef(false);
@@ -316,7 +417,8 @@ export function McpAppDisplay({
   useEffect(() => {
     displayModeRef.current = displayMode;
     appDisplayModesRef.current = appDisplayModes;
-    hasDeclaredDisplayModesRef.current = capabilityModes?.key === resourceKey ||
+    hasDeclaredDisplayModesRef.current =
+      capabilityModes?.key === resourceKey ||
       resource?.meta.availableDisplayModes !== undefined;
   }, [displayMode, appDisplayModes, capabilityModes, resourceKey, resource]);
 
@@ -354,7 +456,16 @@ export function McpAppDisplay({
     return () => {
       cancelled = true;
     };
-  }, [resourceKey, resourceRunId, sessionId, app.server, app.resourceUri, app.originCallId, app.connectorId, app.linkId]);
+  }, [
+    resourceKey,
+    resourceRunId,
+    sessionId,
+    app.server,
+    app.resourceUri,
+    app.originCallId,
+    app.connectorId,
+    app.linkId,
+  ]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -364,6 +475,7 @@ export function McpAppDisplay({
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let frameReadyTimer: ReturnType<typeof setTimeout> | null = null;
     let connectionStarted = false;
+    let toolCallSequence = 0;
     const frameReadyDeadline = Date.now() + 10_000;
     initializedRef.current = false;
     compatibilityReadyRef.current = false;
@@ -379,8 +491,15 @@ export function McpAppDisplay({
       meta?: Record<string, unknown>,
     ): Promise<CallToolResult> => {
       const unsupportedTools = conversationRef.current.unsupportedTools;
-      const unsupported = unsupportedTools?.[tool] ?? unsupportedTools?.[tool.split(".").at(-1) ?? ""];
-      if (unsupported) return { isError: true, content: [{ type: "text", text: unsupported }] };
+      const unsupported =
+        unsupportedTools?.[tool] ??
+        unsupportedTools?.[tool.split(".").at(-1) ?? ""];
+      if (unsupported)
+        return {
+          isError: true,
+          content: [{ type: "text", text: unsupported }],
+        };
+      const sequence = ++toolCallSequence;
       const response = (await window.api.mcpApps.callTool({
         runId: resourceRunId ?? conversationRef.current.runId,
         sessionId,
@@ -390,21 +509,44 @@ export function McpAppDisplay({
         meta,
       })) as ServiceResponse<unknown>;
       if (!response.success) throw new Error(response.error);
+      if (!disposed && sequence === toolCallSequence) {
+        setOmittedCall(
+          mcpStructuredContentOmitted(response.data)
+            ? { key: resourceKey, output: response.data }
+            : null,
+        );
+      }
       return normalizeToolResult(response.data);
     };
 
-    const sendMessage = async (content: unknown, meta?: unknown, signal?: AbortSignal) => {
+    const sendMessage = async (
+      content: unknown,
+      meta?: unknown,
+      signal?: AbortSignal,
+    ) => {
       const options = mcpAppMessageOptions(meta);
       const text = mcpAppMessageText(content);
       if (!conversationRef.current.onMessage) {
-        if (options.target === "new") throw new Error("Open the plugin page to start a new app conversation");
-        if (!conversationRef.current.runId) throw new Error("Open this app in a conversation to send a message");
+        if (options.target === "new")
+          throw new Error(
+            "Open the plugin page to start a new app conversation",
+          );
+        if (!conversationRef.current.runId)
+          throw new Error("Open this app in a conversation to send a message");
       }
-      const approvedText = await reviewMessage(text, options.target === "new", signal);
-      if (approvedText === null || disposed || signal?.aborted) return { isError: true };
+      const approvedText = await reviewMessage(
+        text,
+        options.target === "new",
+        signal,
+      );
+      if (approvedText === null || disposed || signal?.aborted)
+        return { isError: true };
       const approvedContent = [{ type: "text" as const, text: approvedText }];
       const { runId, onMessage } = conversationRef.current;
-      if (onMessage) { await onMessage(approvedContent, options); return {}; }
+      if (onMessage) {
+        await onMessage(approvedContent, options);
+        return {};
+      }
       const response = (await window.api.mcpApps.sendMessage({
         runId,
         content: approvedContent,
@@ -419,8 +561,16 @@ export function McpAppDisplay({
       if (update) {
         const attached = await update(context);
         latestContextRef.current = attached;
-        publishHostContext(bridgeRef.current, bridgeHostContextRef, { "openai/modelContext": attached });
-        return { _meta: { "openai/modelContext": { updateId: attached?.updateId ?? crypto.randomUUID() } } };
+        publishHostContext(bridgeRef.current, bridgeHostContextRef, {
+          "openai/modelContext": attached,
+        });
+        return {
+          _meta: {
+            "openai/modelContext": {
+              updateId: attached?.updateId ?? crypto.randomUUID(),
+            },
+          },
+        };
       }
       latestContextRef.current = objectRecord(context);
       return {};
@@ -435,12 +585,20 @@ export function McpAppDisplay({
     };
 
     const initialHostContext: McpUiHostContext = {
-      ...hostContext(latestIsDarkRef.current, displayModeRef.current, isPage && !isPanel),
+      ...hostContext(
+        latestIsDarkRef.current,
+        displayModeRef.current,
+        isPage && !isPanel,
+      ),
       toolInfo: {
         id: app.originCallId ?? sessionId,
         tool: { name: app.tool, inputSchema: { type: "object" } },
       },
-      ...(hasContextHost ? { "openai/modelContext": conversationRef.current.modelContext ?? null } : {}),
+      ...(hasContextHost
+        ? {
+            "openai/modelContext": conversationRef.current.modelContext ?? null,
+          }
+        : {}),
     };
     bridgeHostContextRef.current = initialHostContext;
     const bridge = new McpAppBridge(
@@ -449,16 +607,28 @@ export function McpAppDisplay({
       {
         openLinks: {},
         serverTools: {},
-        ...(hasConversationHost || resourceRunId ? { message: { text: {} } } : {}),
-        updateModelContext: { text: {}, structuredContent: {},
-          ...(hasContextHost ? { image: {}, resourceLink: {}, resource: {} } : {}) },
-        ...((hasContextHost || hasConversationHost) ? { experimental: {
-          ...(hasContextHost ? { "openai/modelContext": {} } : {}),
-          ...(hasConversationHost ? { "openai/message": {} } : {}),
-        } } : {}),
+        ...(hasConversationHost || resourceRunId
+          ? { message: { text: {} } }
+          : {}),
+        updateModelContext: {
+          text: {},
+          structuredContent: {},
+          ...(hasContextHost
+            ? { image: {}, resourceLink: {}, resource: {} }
+            : {}),
+        },
+        ...(hasContextHost || hasConversationHost
+          ? {
+              experimental: {
+                ...(hasContextHost ? { "openai/modelContext": {} } : {}),
+                ...(hasConversationHost ? { "openai/message": {} } : {}),
+              },
+            }
+          : {}),
         sandbox: {
           csp: resource.meta.csp as McpUiResourceCsp | undefined,
-          permissions: resource.meta.permissions as McpUiResourcePermissions | undefined,
+          permissions: resource.meta.permissions as
+            McpUiResourcePermissions | undefined,
         },
       },
       { hostContext: initialHostContext },
@@ -466,16 +636,15 @@ export function McpAppDisplay({
     bridgeRef.current = bridge;
 
     bridge.oncalltool = ({ name, arguments: args, _meta }) =>
-      callServerTool(
-        name,
-        args,
-        objectRecord(_meta) ?? undefined,
-      );
+      callServerTool(name, args, objectRecord(_meta) ?? undefined);
     bridge.onopenlink = ({ url }) => openLink(url);
     bridge.setMessageHandler(sendMessage);
     bridge.onupdatemodelcontext = updateModelContext;
     const requestDisplayMode = (requested: unknown): McpAppDisplayMode => {
-      if (displayModeChangeRef.current && (requested === "inline" || requested === "fullscreen")) {
+      if (
+        displayModeChangeRef.current &&
+        (requested === "inline" || requested === "fullscreen")
+      ) {
         displayModeRef.current = requested;
         displayModeChangeRef.current(requested);
         return requested;
@@ -512,14 +681,30 @@ export function McpAppDisplay({
         appDisplayModesRef.current = declaredModes;
         hasDeclaredDisplayModesRef.current = true;
         setCapabilityModes({ key: resourceKey, modes: declaredModes });
-        if (declaredModes.length > 0 && !declaredModes.includes(displayModeRef.current)) {
-          const fallback = declaredModes.includes("inline") ? "inline" : "fullscreen";
+        if (
+          declaredModes.length > 0 &&
+          !declaredModes.includes(displayModeRef.current)
+        ) {
+          const fallback = declaredModes.includes("inline")
+            ? "inline"
+            : "fullscreen";
           displayModeRef.current = fallback;
           setPresentationOverride({ key: resourceKey, mode: fallback });
         }
       }
-      publishHostContext(bridge, bridgeHostContextRef, hostContext(latestIsDarkRef.current, displayModeRef.current, isPage && !isPanel));
-      if (hasContextHost) publishHostContext(bridge, bridgeHostContextRef, { "openai/modelContext": conversationRef.current.modelContext ?? null });
+      publishHostContext(
+        bridge,
+        bridgeHostContextRef,
+        hostContext(
+          latestIsDarkRef.current,
+          displayModeRef.current,
+          isPage && !isPanel,
+        ),
+      );
+      if (hasContextHost)
+        publishHostContext(bridge, bridgeHostContextRef, {
+          "openai/modelContext": conversationRef.current.modelContext ?? null,
+        });
       lastSentInputRef.current = JSON.stringify(latestInputRef.current);
       void bridge.sendToolInput({ arguments: latestInputRef.current });
       if (hasResultRef.current) {
@@ -552,18 +737,31 @@ export function McpAppDisplay({
         },
         "*",
       );
-      lastCompatibilityInputRef.current = JSON.stringify(latestInputRef.current);
-      lastCompatibilityResultRef.current = hasResultRef.current ? resultSignature(latestResultRef.current) : null;
+      lastCompatibilityInputRef.current = JSON.stringify(
+        latestInputRef.current,
+      );
+      lastCompatibilityResultRef.current = hasResultRef.current
+        ? resultSignature(latestResultRef.current)
+        : null;
     };
 
-    const respond = (id: number | undefined, result?: unknown, responseError?: unknown) => {
+    const respond = (
+      id: number | undefined,
+      result?: unknown,
+      responseError?: unknown,
+    ) => {
       if (id === undefined) return;
       iframe.contentWindow?.postMessage(
         {
           type: "mains:mcp-app-response",
           id,
           ...(responseError
-            ? { error: responseError instanceof Error ? responseError.message : String(responseError) }
+            ? {
+                error:
+                  responseError instanceof Error
+                    ? responseError.message
+                    : String(responseError),
+              }
             : { result: result ?? {} }),
         },
         "*",
@@ -613,7 +811,10 @@ export function McpAppDisplay({
         case "mains/set-widget-state":
           task = Promise.resolve().then(() => {
             try {
-              localStorage.setItem(widgetStateKey, JSON.stringify(params.state ?? null));
+              localStorage.setItem(
+                widgetStateKey,
+                JSON.stringify(params.state ?? null),
+              );
             } catch {
               // Widget state persistence is optional.
             }
@@ -621,7 +822,9 @@ export function McpAppDisplay({
           });
           break;
         default:
-          task = Promise.reject(new Error(`Unsupported MCP App request: ${message.method}`));
+          task = Promise.reject(
+            new Error(`Unsupported MCP App request: ${message.method}`),
+          );
       }
       void task.then(
         (result) => respond(message.id, result),
@@ -631,11 +834,18 @@ export function McpAppDisplay({
 
     const connectFrame = () => {
       if (disposed || connectionStarted) return;
-      if (frameReadyTimer) { clearTimeout(frameReadyTimer); frameReadyTimer = null; }
+      if (frameReadyTimer) {
+        clearTimeout(frameReadyTimer);
+        frameReadyTimer = null;
+      }
       const target = iframe.contentWindow;
       if (!target) {
         if (Date.now() >= frameReadyDeadline) {
-          setLoadState({ key: resourceKey, error: "The app frame could not start. Reload the app to try again." });
+          setLoadState({
+            key: resourceKey,
+            error:
+              "The app frame could not start. Reload the app to try again.",
+          });
           return;
         }
         frameReadyTimer = setTimeout(connectFrame, 50);
@@ -644,10 +854,15 @@ export function McpAppDisplay({
       connectionStarted = true;
       const transport = new PostMessageTransport(target, target);
       void bridge.connect(transport).then(
-        () => { if (!disposed) iframe.src = resource.url; },
+        () => {
+          if (!disposed) iframe.src = resource.url;
+        },
         (reason: unknown) => {
-          if (!disposed) setLoadState({ key: resourceKey,
-            error: reason instanceof Error ? reason.message : String(reason) });
+          if (!disposed)
+            setLoadState({
+              key: resourceKey,
+              error: reason instanceof Error ? reason.message : String(reason),
+            });
         },
       );
     };
@@ -718,7 +933,9 @@ export function McpAppDisplay({
 
   useEffect(() => {
     if (hasContextHost && initializedRef.current) {
-      publishHostContext(bridgeRef.current, bridgeHostContextRef, { "openai/modelContext": modelContext ?? null });
+      publishHostContext(bridgeRef.current, bridgeHostContextRef, {
+        "openai/modelContext": modelContext ?? null,
+      });
     }
   }, [modelContext, hasContextHost]);
 
@@ -729,7 +946,11 @@ export function McpAppDisplay({
       lastSentInputRef.current = signature;
       void bridgeRef.current?.sendToolInput({ arguments: args });
     }
-    if (!compatibilityReadyRef.current || signature === lastCompatibilityInputRef.current) return;
+    if (
+      !compatibilityReadyRef.current ||
+      signature === lastCompatibilityInputRef.current
+    )
+      return;
     lastCompatibilityInputRef.current = signature;
     iframeRef.current?.contentWindow?.postMessage(
       { type: "mains:mcp-app-globals", globals: { toolInput: args } },
@@ -742,11 +963,19 @@ export function McpAppDisplay({
     if (!hasResultRef.current) return;
     const result = latestResultRef.current;
     const signature = resultSignature(result);
-    if (bridge && initializedRef.current && signature !== lastSentResultRef.current) {
+    if (
+      bridge &&
+      initializedRef.current &&
+      signature !== lastSentResultRef.current
+    ) {
       lastSentResultRef.current = signature;
       void bridge.sendToolResult(result);
     }
-    if (!compatibilityReadyRef.current || signature === lastCompatibilityResultRef.current) return;
+    if (
+      !compatibilityReadyRef.current ||
+      signature === lastCompatibilityResultRef.current
+    )
+      return;
     lastCompatibilityResultRef.current = signature;
     iframeRef.current?.contentWindow?.postMessage(
       {
@@ -767,7 +996,14 @@ export function McpAppDisplay({
         const rect = iframeRef.current?.getBoundingClientRect();
         publishHostContext(bridgeRef.current, bridgeHostContextRef, {
           ...hostContext(isDark, displayMode, isPage && !onDisplayModeChange),
-          ...(rect && rect.width > 0 && rect.height > 0 ? { containerDimensions: { maxWidth: rect.width, maxHeight: rect.height } } : {}),
+          ...(rect && rect.width > 0 && rect.height > 0
+            ? {
+                containerDimensions: {
+                  maxWidth: rect.width,
+                  maxHeight: rect.height,
+                },
+              }
+            : {}),
         });
       }
       iframeRef.current?.contentWindow?.postMessage(
@@ -782,15 +1018,23 @@ export function McpAppDisplay({
       );
     };
     updateHostContext();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateHostContext);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(updateHostContext);
     if (iframeRef.current) observer?.observe(iframeRef.current);
     window.addEventListener("resize", updateHostContext);
-    return () => { observer?.disconnect(); window.removeEventListener("resize", updateHostContext); };
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateHostContext);
+    };
   }, [isDark, displayMode, isPage, onDisplayModeChange]);
 
   useEffect(() => {
     if (!isCollapsed) return;
-    const frame = requestAnimationFrame(() => collapsedButtonRef.current?.focus());
+    const frame = requestAnimationFrame(() =>
+      collapsedButtonRef.current?.focus(),
+    );
     return () => cancelAnimationFrame(frame);
   }, [isCollapsed]);
 
@@ -802,7 +1046,11 @@ export function McpAppDisplay({
     );
   }
 
-  if (resource && (appDisplayModes.length === 0 || (isPage && !appDisplayModes.includes("fullscreen")))) {
+  if (
+    resource &&
+    (appDisplayModes.length === 0 ||
+      (isPage && !appDisplayModes.includes("fullscreen")))
+  ) {
     return (
       <div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-700 dark:text-red-300">
         This app does not support a display mode available in Mains.
@@ -816,7 +1064,9 @@ export function McpAppDisplay({
         ref={collapsedButtonRef}
         type="button"
         className="mt-2 flex w-full items-center justify-between rounded-xl border border-primary-200 bg-primary-50 px-3 py-2.5 text-left text-sm text-primary-800 hover:bg-primary-100 dark:border-primary-800 dark:bg-primary-900 dark:text-primary-100 dark:hover:bg-primary-800"
-        onClick={() => setPresentationOverride({ key: resourceKey, mode: "fullscreen" })}
+        onClick={() =>
+          setPresentationOverride({ key: resourceKey, mode: "fullscreen" })
+        }
       >
         <span className="truncate">{app.appName ?? title}</span>
         <span className="ml-3 inline-flex shrink-0 items-center gap-1.5 text-xs font-medium">
@@ -836,16 +1086,22 @@ export function McpAppDisplay({
       ref={dialogRef}
       role={isFullscreen ? "dialog" : undefined}
       aria-modal={isFullscreen ? true : undefined}
-      aria-label={isFullscreen ? `${app.appName ?? title} interactive app` : undefined}
+      aria-label={
+        isFullscreen ? `${app.appName ?? title} interactive app` : undefined
+      }
       tabIndex={isFullscreen ? -1 : undefined}
       onKeyDown={isFullscreen ? handleDialogKeyDown : undefined}
-      className={isPage
-        ? "flex h-full min-h-0 flex-col overflow-hidden bg-primary dark:bg-primary-950"
-        : isFullscreen
-        ? "fixed inset-0 z-(--z-modal) flex min-h-0 flex-col bg-white shadow-2xl outline-none dark:bg-primary-950"
-        : `mt-2 min-h-28 overflow-hidden bg-primary-50/50 dark:bg-primary/5 ${
-          resource?.meta.prefersBorder === false ? "rounded-lg" : "rounded-xl"
-        }`}
+      className={
+        isPage
+          ? "flex h-full min-h-0 flex-col overflow-hidden bg-primary dark:bg-primary-950"
+          : isFullscreen
+            ? "fixed inset-0 z-(--z-modal) flex min-h-0 flex-col bg-white shadow-2xl outline-none dark:bg-primary-950"
+            : `mt-2 min-h-28 overflow-hidden bg-primary-50/50 dark:bg-primary/5 ${
+                resource?.meta.prefersBorder === false
+                  ? "rounded-lg"
+                  : "rounded-xl"
+              }`
+      }
     >
       {!resource && (
         <div className="flex h-28 items-center justify-center gap-2 text-xs text-primary-500">
@@ -854,14 +1110,20 @@ export function McpAppDisplay({
         </div>
       )}
       {!isPage && resource && appDisplayModes.includes("fullscreen") && (
-        <div className={`flex shrink-0 items-center justify-between border-b border-primary-200/70 dark:border-primary-800/70 ${
-          isFullscreen
-            ? `h-14 pr-5 ${windowChrome && !isNativeFullscreen ? "pl-24" : "pl-5"}`
-            : "min-h-9 px-3"
-        }`}>
-          <span className={`min-w-0 truncate font-medium text-primary-800 dark:text-primary-100 ${
-            isFullscreen ? "text-sm" : "text-xs"
-          }`}>{app.appName ?? title}</span>
+        <div
+          className={`flex shrink-0 items-center justify-between border-b border-primary-200/70 dark:border-primary-800/70 ${
+            isFullscreen
+              ? `h-14 pr-5 ${windowChrome && !isNativeFullscreen ? "pl-24" : "pl-5"}`
+              : "min-h-9 px-3"
+          }`}
+        >
+          <span
+            className={`min-w-0 truncate font-medium text-primary-800 dark:text-primary-100 ${
+              isFullscreen ? "text-sm" : "text-xs"
+            }`}
+          >
+            {app.appName ?? title}
+          </span>
           <button
             ref={closeButtonRef}
             type="button"
@@ -877,11 +1139,21 @@ export function McpAppDisplay({
             type="button"
             aria-label={`Expand ${app.appName ?? title}`}
             className={`${isFullscreen ? "hidden" : "inline-flex"} ml-3 shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-100 hover:text-primary-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300 dark:hover:bg-primary-800 dark:hover:text-white`}
-            onClick={() => setPresentationOverride({ key: resourceKey, mode: "fullscreen" })}
+            onClick={() =>
+              setPresentationOverride({ key: resourceKey, mode: "fullscreen" })
+            }
           >
             <Maximize aria-hidden="true" className="size-3.5" />
             Expand
           </button>
+        </div>
+      )}
+      {omittedCall?.key === resourceKey && (
+        <div className="shrink-0">
+          <McpAppResultFallback
+            output={omittedCall.output}
+            title={app.appName ?? title}
+          />
         </div>
       )}
       <iframe
@@ -889,21 +1161,25 @@ export function McpAppDisplay({
         // Start on an inert document; a made-up protocol URL creates a Chromium error frame.
         src="about:blank"
         title={`${title} interactive app`}
-        className={resource
-          ? `block w-full border-0 bg-transparent ${isPage || isFullscreen ? "min-h-0 flex-1" : ""}`
-          : "hidden"}
+        className={
+          resource
+            ? `block w-full border-0 bg-transparent ${isPage || isFullscreen ? "min-h-0 flex-1" : ""}`
+            : "hidden"
+        }
         style={isPage || isFullscreen ? undefined : { height }}
         sandbox="allow-scripts allow-forms allow-same-origin"
         allow={allow || undefined}
         referrerPolicy="no-referrer"
       />
-      {messagePreview.preview && <McpAppMessageDialog
-        key={messagePreview.preview.id}
-        appName={app.appName ?? title}
-        preview={messagePreview.preview}
-        onCancel={cancelMessage}
-        onSend={messagePreview.confirm}
-      />}
+      {messagePreview.preview && (
+        <McpAppMessageDialog
+          key={messagePreview.preview.id}
+          appName={app.appName ?? title}
+          preview={messagePreview.preview}
+          onCancel={cancelMessage}
+          onSend={messagePreview.confirm}
+        />
+      )}
     </div>
   );
 }

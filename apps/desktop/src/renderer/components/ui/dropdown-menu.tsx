@@ -129,12 +129,17 @@ interface DropdownMenuBaseProps {
   className?: string;
   /** `right` keeps the horizontal animation anchor while allowing upward placement. */
   origin?: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "right" | "auto";
-  /** Which enabled row receives focus when the menu opens. */
-  initialFocus?: "first" | "selected";
+  /** `none` lets hover previews preserve the user's current input focus. */
+  initialFocus?: "first" | "selected" | "none";
+  onMouseEnter?: React.MouseEventHandler<HTMLDivElement>;
+  onMouseLeave?: React.MouseEventHandler<HTMLDivElement>;
   /** A search field can receive focus before the selectable rows. */
   initialFocusRef?: React.RefObject<HTMLElement | null>;
   /** Prefer the space above the trigger even when the menu would fit below. */
   openUpward?: boolean;
+  /** Bounded scrolling, edge arrows and a smooth resize as async rows arrive. */
+  scrollable?: boolean;
+  maxHeight?: number;
 }
 
 export type DropdownMenuProps = DropdownMenuBaseProps &
@@ -153,11 +158,19 @@ export function DropdownMenu({
   origin = "auto",
   initialFocus = "first",
   initialFocusRef,
+  onMouseEnter,
+  onMouseLeave,
   openUpward = false,
+  scrollable = false,
+  maxHeight = 384,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
 }: DropdownMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [scrollOverflow, setScrollOverflow] = useState(false);
+  const [scrollEdges, setScrollEdges] = useState({ up: false, down: false });
   const submenuRefs = useRef<Set<HTMLElement>>(new Set());
   const previouslyFocused = useRef<HTMLElement | null>(null);
   const shouldRestoreFocus = useRef(true);
@@ -177,7 +190,7 @@ export function DropdownMenu({
   useLayoutEffect(() => {
     if (!isOpen) return;
     previouslyFocused.current = document.activeElement as HTMLElement | null;
-    shouldRestoreFocus.current = true;
+    shouldRestoreFocus.current = initialFocus !== "none";
     const enabledItems = getEnabledMenuItems(menuRef.current);
     const selectedItem = enabledItems.find(
       (item) => item.getAttribute("aria-checked") === "true",
@@ -186,7 +199,7 @@ export function DropdownMenu({
       initialFocus === "selected"
         ? (selectedItem ?? enabledItems[0])
         : enabledItems[0];
-    (initialFocusRef?.current ?? itemToFocus)?.focus();
+    if (initialFocus !== "none" || initialFocusRef) (initialFocusRef?.current ?? itemToFocus)?.focus();
 
     return () => {
       const target = previouslyFocused.current;
@@ -206,17 +219,59 @@ export function DropdownMenu({
 
   useLayoutEffect(() => {
     if (!isOpen || !menuRef.current) return;
+    const measure = () => {
+      const menu = menuRef.current;
+      if (!menu) return;
+      // Measure natural content, not the animated viewport's intermediate size.
+      const width = menu.offsetWidth;
+      const naturalHeight = scrollable && contentRef.current
+        ? contentRef.current.offsetHeight + menu.offsetHeight - menu.clientHeight
+        : menu.offsetHeight;
+      const height = scrollable
+        ? Math.min(naturalHeight, maxHeight, window.innerHeight - VIEWPORT_PADDING * 2)
+        : naturalHeight;
+      if (width <= 0 || height <= 0) return;
+      setMenuSize((current) =>
+        current?.width === width && current.height === height ? current : { width, height },
+      );
+      if (scrollable) setScrollOverflow(naturalHeight > height);
+    };
+    measure();
+    if (!scrollable || !contentRef.current) return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(contentRef.current);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [children, isOpen, minWidth, scrollable, maxHeight]);
 
-    // Layout dimensions ignore the scale used by the opening animation.
-    const { offsetWidth: width, offsetHeight: height } = menuRef.current;
-    if (width <= 0 || height <= 0) return;
+  const updateScrollEdges = useCallback(() => {
+    const viewport = scrollRef.current;
+    if (!viewport) return;
+    const up = viewport.scrollTop > 1;
+    const down = viewport.scrollTop + viewport.clientHeight < viewport.scrollHeight - 1;
+    setScrollEdges((current) => current.up === up && current.down === down ? current : { up, down });
+  }, []);
 
-    setMenuSize((current) =>
-      current?.width === width && current.height === height
-        ? current
-        : { width, height },
-    );
-  }, [children, isOpen, minWidth]);
+  useLayoutEffect(() => {
+    if (!isOpen || !scrollable || !scrollRef.current) return;
+    updateScrollEdges();
+    const observer = new ResizeObserver(updateScrollEdges);
+    observer.observe(scrollRef.current);
+    return () => observer.disconnect();
+  }, [isOpen, scrollable, scrollOverflow, menuSize, updateScrollEdges]);
+
+  useEffect(() => {
+    if (!isOpen || !scrollable) return;
+    // Initial placement settles before transitions are enabled. Later content
+    // changes retarget the current height/position without scaling the text.
+    const frame = requestAnimationFrame(() => {
+      menuRef.current?.setAttribute("data-resize-ready", "true");
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, scrollable]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -276,7 +331,13 @@ export function DropdownMenu({
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen) {
+    // The next opening starts with its own content, rather than the previous
+    // file's dimensions. Reset while closed, before measuring the next portal.
+    if (scrollable && menuSize !== null) setMenuSize(null);
+    if (scrollable && scrollOverflow) setScrollOverflow(false);
+    return null;
+  }
 
   const viewportPadding = VIEWPORT_PADDING;
   const menuWidth = Math.max(minWidth, menuSize?.width ?? minWidth);
@@ -286,7 +347,12 @@ export function DropdownMenu({
   const spaceBelow = window.innerHeight - viewportPadding - position.y;
   const upwardAnchor = position.anchorTop ?? position.y;
   const spaceAbove = upwardAnchor - viewportPadding;
-  const opensUpward = openUpward || (menuHeight > spaceBelow && spaceAbove > spaceBelow);
+  // Async menus choose their side using the eventual height so loading apps
+  // does not flip the menu across its trigger halfway through opening.
+  const placementHeight = scrollable
+    ? Math.min(maxHeight, window.innerHeight - viewportPadding * 2)
+    : menuHeight;
+  const opensUpward = openUpward || (placementHeight > spaceBelow && spaceAbove > spaceBelow);
   const desiredY = opensUpward ? upwardAnchor - menuHeight : position.y;
   const adjustedPosition = {
     x: Math.max(
@@ -319,6 +385,33 @@ export function DropdownMenu({
     return "top left";
   };
 
+  const scrollArrow = (direction: "up" | "down") => (
+    <div className={cn("pointer-events-none absolute inset-x-0 z-10 flex h-5 items-center justify-center", direction === "up" ? "top-0" : "bottom-0")}>
+      {scrollEdges[direction] && (
+        <Button
+          variant="bare"
+          tabIndex={-1}
+          aria-label={`Scroll menu ${direction}`}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            const viewport = scrollRef.current;
+            if (!viewport) return;
+            viewport.scrollBy({
+              top: (direction === "up" ? -1 : 1) * viewport.clientHeight * 0.7,
+              behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+            });
+          }}
+          className="pointer-events-auto flex h-5 w-full cursor-pointer items-center justify-center text-primary-500 hover:text-primary-900 dark:hover:text-primary-100"
+        >
+          <ArrowUp aria-hidden="true" className={cn("size-3", direction === "down" && "rotate-180")} />
+        </Button>
+      )}
+    </div>
+  );
+  const scrollMask = `linear-gradient(to bottom, ${
+    scrollOverflow && scrollEdges.up ? "transparent, black 1.5rem" : "black"
+  }, ${scrollOverflow && scrollEdges.down ? "black calc(100% - 1.5rem), transparent" : "black"})`;
+
   return createPortal(
     <DropdownContext.Provider value={{ registerSubmenu, unregisterSubmenu }}>
       <div
@@ -327,18 +420,36 @@ export function DropdownMenu({
         aria-label={ariaLabel}
         aria-labelledby={ariaLabelledBy}
         onKeyDown={handleMenuKeyDown}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
         className={cn(
-          "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in p-1.25 space-y-0.5",
+          "fixed z-(--z-dropdown) overflow-hidden rounded-2xl glass-surface animate-dropdown-in",
+          scrollable ? "dropdown-scroll-menu" : "p-1.25 space-y-0.5",
           className,
         )}
         style={{
           left: adjustedPosition.x,
           top: adjustedPosition.y,
-          minWidth,
+          minWidth: scrollable ? Math.min(minWidth, window.innerWidth - viewportPadding * 2) : minWidth,
+          ...(scrollable ? {
+            height: menuSize?.height,
+            maxHeight: Math.min(maxHeight, window.innerHeight - viewportPadding * 2),
+            maxWidth: window.innerWidth - viewportPadding * 2,
+          } : {}),
           transformOrigin: getTransformOrigin(),
         }}
       >
-        {children}
+        {scrollable ? (
+          <div className="flex h-full min-h-0 flex-col">
+            <div ref={scrollRef} data-dropdown-scroll="true" onScroll={updateScrollEdges}
+              className="noscrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+              style={{ maskImage: scrollMask, WebkitMaskImage: scrollMask, scrollPaddingBlock: "1.5rem" }}>
+              <div ref={contentRef} data-dropdown-content="true" className="p-1.25 space-y-0.5">{children}</div>
+            </div>
+            {scrollOverflow && scrollArrow("up")}
+            {scrollOverflow && scrollArrow("down")}
+          </div>
+        ) : children}
       </div>
     </DropdownContext.Provider>,
     document.body,

@@ -83,6 +83,8 @@ export const appEvents = {
     ),
   },
   terminal: {
+    onChanged: bind<typeof window.api.terminal.onChanged>(CHANNELS.terminal.changed),
+    onExit: bind<typeof window.api.terminal.onExit>(CHANNELS.terminal.exit),
     onData: bind<typeof window.api.terminal.onData>(CHANNELS.terminal.data),
   },
 };

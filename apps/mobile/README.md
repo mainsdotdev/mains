@@ -16,6 +16,7 @@ Install dependencies and verify the project:
 ```bash
 npm install
 npm run doctor
+npm test
 npm run typecheck
 npm run lint
 ```
@@ -73,7 +74,50 @@ npm run release
 
 This project uses Expo Continuous Native Generation. The `ios/` directory is generated and ignored. Keep native configuration in `app.config.ts` or config plugins so a clean prebuild remains reproducible.
 
+After upgrading native Expo/React Native packages, an existing `ios/Podfile.lock`
+can still pin the previous versions. If `npm run ios` fails at `pod install`
+with a changed local podspec, regenerate the development native project:
 
-## Current vertical slice
+```bash
+npm run ios:prebuild
+npm run ios
+```
 
-The initial shell includes the connection empty state and a real QR camera surface. It validates and redacts a Mains pairing URL but intentionally does not persist its token until the backend's device-session exchange is implemented.
+`ios:prebuild` replaces the generated `ios/` directory from the app config. Keep
+native customizations in config plugins so they survive regeneration.
+
+
+## Current features
+
+The app pairs with a backend through its QR code, stores its device token in
+the iOS Keychain, reconnects automatically, and maintains a disposable SQLite
+projection of runs, workspaces, models, and conversation history. It can start,
+continue, fork, and stop runs, answer approval requests, and attach photos and
+skills. Demo Mode works on the phone without a backend.
+
+Model, effort, permissions, speed, Plan, and Goal belong to each conversation.
+Existing chats load and persist their next-message preferences through
+`runs.configSnapshot.conversationSettings`. Saving preferences does not change
+the active turn or provider defaults. New chats inherit the phone's last
+accepted preferences for that backend/provider, with Plan and Goal off.
+The paired backend must support `runs:updateConversationSettings` to save edits
+from the model and run-options sheets.
+
+Startup sync fetches conversation metadata, targets and models. Provider context
+catalogues wait until the picker opens; history is fetched only for the visible
+conversation. Bulk writes coalesce sidebar/composer refreshes instead of running
+a query for every changed row.
+
+Phone history uses chronological pages of at most 200 rows and 1 MiB, including
+conversations with many tools under a single prompt. Image pixels and duplicate
+turn bodies are excluded. Large messages and tool bodies are previews; their
+full text stays on the backend and is read through `runs:readHistoryContent` in
+8,192-character chunks without accumulating previous chunks on the phone. Old
+phone caches also project bounded previews before the first render. Use a
+backend containing these handlers when testing this behavior; older backends
+may not support the full-content reader. Oversized responses/events have a
+separate device transport limit.
+
+CI installs the mobile lockfile, runs its tests, typecheck and lint, verifies
+Expo package compatibility, and exports an iOS JavaScript bundle. Native builds
+and device pairing still need the development client or an EAS build.

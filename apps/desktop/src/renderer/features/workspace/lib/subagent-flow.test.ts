@@ -19,6 +19,28 @@ function call(partial: Partial<FlowToolCall> & { id: number }): FlowToolCall {
 }
 
 describe("buildSubagentFlow", () => {
+  it("uses native task identity to include nickname-addressed continuation turns", () => {
+    const flow = buildSubagentFlow({ subagentId: "spawn", agentId: "native-agent", artifacts: [], toolCalls: [
+      call({ id: 1, toolName: "SendMessage", toolCallId: "send", input: { to: "reviewer", message: "Continue" },
+        metadata: { task: { taskId: "native-agent", taskType: "local_agent" } } }),
+      call({ id: 2, parentToolCallId: "send" }),
+      call({ id: 3, parentToolCallId: "other-send" }),
+    ] });
+    expect(flow.map((item) => item.key)).toEqual(["prompt-1", "tool-2"]);
+  });
+
+  it("uses agent_id when a child's legacy parent anchor is unavailable, without mixing nested agents", () => {
+    const flow = buildSubagentFlow({ subagentId: "spawn", agentId: "parent-agent", toolCalls: [
+      call({ id: 1, toolName: "Agent", metadata: { agentId: "parent-agent", task: { taskId: "child-agent", taskType: "local_agent" } } }),
+      call({ id: 2, metadata: { agentId: "parent-agent" } }),
+      call({ id: 3, metadata: { agentId: "child-agent" } }),
+    ], artifacts: [
+      { id: 1, content: "Parent report", metadata: { agentId: "parent-agent" }, createdAt: 100 },
+      { id: 2, content: "Child report", metadata: { agentId: "child-agent" }, createdAt: 100 },
+    ] });
+    expect(flow.map((item) => item.key)).toEqual(["tool-1", "tool-2", "msg-1"]);
+  });
+
   it("includes only children anchored to the spawn call", () => {
     const flow = buildSubagentFlow({
       subagentId: "toolu_spawn",

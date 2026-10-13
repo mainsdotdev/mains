@@ -1,4 +1,6 @@
 import { readReviewComments } from "@mains/contracts/review-comments";
+import type { ProviderTurnLineage } from "@mains/contracts/realtime";
+import { providerTurnLineageMetadata } from "../../../../shared/provider-turn-lineage";
 // ─────────────────────────────────────────────────────────────
 // Shared utilities for work run adapters (Claude & Copilot)
 // Pure functions with no SDK-specific dependencies.
@@ -6,7 +8,7 @@ import { readReviewComments } from "@mains/contracts/review-comments";
 
 import fs from "node:fs";
 import path from "node:path";
-import type { BrowserAnnotation } from "@mains/contracts/browser-annotations";
+import { browserAnnotationAttachmentName, type BrowserAnnotation } from "@mains/contracts/browser-annotations";
 import type {
   WorkRunEvent,
   WorkRunEventHandler,
@@ -523,6 +525,7 @@ export async function emitUserPromptArtifact(
   onEvent: WorkRunEventHandler,
   content: string,
   options?: {
+    providerTurnLineage?: ProviderTurnLineage;
     attachments?: FileAttachment[];
     context?: WorkRunContextItem[];
     contextIssues?: Array<{
@@ -558,7 +561,7 @@ export async function emitUserPromptArtifact(
     clientUserMessageId?: string;
     clientPromptId?: string;
     providerTurnId?: string;
-    delivery?: "steer";
+    delivery?: "queue" | "steer";
     /** Resolved model for the turn this prompt starts. */
     model?: string;
   },
@@ -576,9 +579,15 @@ export async function emitUserPromptArtifact(
       }];
     });
     if (!elements.length) return [];
+    const id = typeof metadata.id === "string" ? metadata.id : `browser-${index}`;
+    const url = typeof metadata.url === "string" ? metadata.url : ref ?? "";
+    // Captures are appended after explicit uploads. Prefer that final match
+    // when a user-supplied file happens to have the same name.
+    const screenshot = [...options?.attachments ?? []].reverse().find((file) =>
+      file.type === "image" && file.name === browserAnnotationAttachmentName({ id, url }));
     return [{
-      id: typeof metadata.id === "string" ? metadata.id : `browser-${index}`,
-      url: typeof metadata.url === "string" ? metadata.url : ref ?? "",
+      id, url,
+      ...(screenshot?.attachmentId ? { screenshotAttachmentId: screenshot.attachmentId } : {}),
       ...(typeof metadata.title === "string" ? { title: metadata.title } : {}),
       ...(typeof metadata.comment === "string" ? { comment: metadata.comment } : {}),
       elements,
@@ -590,6 +599,7 @@ export async function emitUserPromptArtifact(
     content,
     metadata: {
       source: "user",
+      ...providerTurnLineageMetadata(options?.providerTurnLineage),
       ...(options?.context?.find((item) => item.metadata?.voiceDelegation)?.metadata?.voiceDelegation
         ? { voiceDelegation: options.context.find((item) => item.metadata?.voiceDelegation)!.metadata!.voiceDelegation }
         : {}),

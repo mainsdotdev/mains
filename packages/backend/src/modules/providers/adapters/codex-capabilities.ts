@@ -908,7 +908,7 @@ export function createCodexCapabilities(
             supportsFastMode:
               serviceTiers?.some(
                 (tier) =>
-                  tier.id === "fast" || tier.id === "priority",
+                  tier.id === "fast" || tier.id === "priority" || tier.id === "ultrafast",
               ) ?? false,
             serviceTiers,
           };
@@ -1174,7 +1174,10 @@ export function createCodexCapabilities(
     if (apps.length > 0) {
       try {
         const result = await server.sendRequest("app/installed", {
-          forceRefresh: false,
+          // Hosted setup completes in ChatGPT, without a local MCP OAuth event.
+          // Connection management needs a fresh runtime snapshot, including
+          // when this process has not loaded a tool-using conversation yet.
+          forceRefresh: true,
         });
         const runtimeById = new Map(
           result.apps.map((app) => [app.id, app] as const),

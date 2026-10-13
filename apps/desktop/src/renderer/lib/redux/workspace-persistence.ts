@@ -2,6 +2,7 @@ import { createMigrate, createTransform, type PersistedState } from "redux-persi
 import storage from "redux-persist/lib/storage";
 import type { FileNode } from "@/features/workspace/types/file-explorer";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { ReviewFileState } from "./slices/workspaceSlice";
 
 // Conversation preferences are canonical backend data; drafts and the last-used
 // new-run defaults also survive renderer restarts locally.
@@ -32,12 +33,26 @@ const workspaceMigrations = {
     delete (next as { selectedSubagentIdByRun?: unknown }).selectedSubagentIdByRun;
     return next;
   },
+  1: (state: PersistedState): PersistedState => {
+    if (!state) return state;
+    const next = { ...state } as NonNullable<PersistedState> & {
+      reviewedFilesByWorkspace?: Record<string, Record<string, string>>;
+      reviewFileStatesByWorkspace?: Record<string, Record<string, ReviewFileState>>;
+    };
+    next.reviewFileStatesByWorkspace ??= Object.fromEntries(
+      Object.entries(next.reviewedFilesByWorkspace ?? {}).map(([key, files]) => [key,
+        Object.fromEntries(Object.entries(files).map(([path, patchId]) => [path, { patchId, reviewed: true, collapsed: true }])),
+      ]),
+    );
+    delete next.reviewedFilesByWorkspace;
+    return next;
+  },
 };
 
 export const workspacePersistConfig = {
   key: "workspace",
   storage,
-  version: 0,
+  version: 1,
   migrate: createMigrate(workspaceMigrations),
   transforms: [selectedFileTransform, conversationSettingsTransform],
   whitelist: [
@@ -49,6 +64,7 @@ export const workspacePersistConfig = {
     "activeWorkspaceIdByProvider",
     "workspaceViewKey",
     "workspaceViews",
+    "reviewFileStatesByWorkspace",
     "selectedFile",
     "explorerExpandedPaths",
     "sidebarTab",

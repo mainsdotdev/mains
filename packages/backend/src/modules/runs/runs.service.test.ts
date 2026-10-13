@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { providersService } from "../providers";
 import {
   existsSync,
   lstatSync,
@@ -184,10 +185,12 @@ describe("runsService", () => {
         await runsService.startRealtime(h.payload);
         const request = h.startRealtime.mock.calls[0][0];
         expect(request.voiceInstructions).toContain("separate working chat");
+        await h.work().onTurnStarted("coordinator-turn", "Refactor the hero", "gpt-6.1-sol", { rootTurnId: "spoken-root" });
         const args = { taskKey: "hero", title: "Hero refactor", prompt: "Refactor the hero, preserve the appearance." };
         await expect(request.voiceTools!.start(args)).resolves.toMatchObject({ runId: worker.id, reused: false });
         expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
           accountId: "default", providerId: "codex", goal: args.prompt,
+          providerTurnLineage: { parentTurnId: "coordinator-turn", rootTurnId: "spoken-root" },
           configSnapshot: request.configSnapshot, conversationSettings: expect.any(Object),
           initialContext: [{ kind: "note", content: expect.any(String), metadata: {
             voiceDelegation: { parentRunId: h.run.id, title: expect.any(String), taskKey: "hero" },
@@ -199,6 +202,7 @@ describe("runsService", () => {
         const prompts: any[] = [];
         await emitUserPromptArtifact(async (event) => { prompts.push(event); }, args.prompt, { context: execute.mock.calls[0][0].initialContext });
         expect(prompts[0].metadata.voiceDelegation).toMatchObject({ parentRunId: h.run.id });
+        await h.work().onCompleted({ status: "succeeded" });
         await runsService.stopRealtime(h.payload);
         await expect(request.voiceTools!.read({ runId: worker.id })).rejects.toThrow("ended");
         expect(cancel).not.toHaveBeenCalled();
@@ -266,7 +270,7 @@ describe("runsService", () => {
         await expect(runsService.continueRun({ runId: h.run.id, accountId: "default", message: "Competing text turn" })).rejects.toThrow("End voice chat");
 
         h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate", final: false });
-        await h.work().onTurnStarted("native-1", "Calculate this", "resolved-model");
+        await h.work().onTurnStarted("native-1", "Calculate this", "resolved-model", { rootTurnId: "spoken-root" });
         h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate this", final: true });
         h.voice({ type: "transcript", itemId: "user-1", role: "user", text: "Calculate this", final: true });
         await h.work().onEvent({ type: "plan_update", providerTurnId: "native-1", steps: [{ step: "Calculate", status: "completed" }] });
@@ -274,7 +278,7 @@ describe("runsService", () => {
         h.voice({ type: "transcript", itemId: "reply-1", role: "assistant", text: "The answer is ready", final: true });
         await vi.waitFor(async () => expect((await runsRepo.findArtifactsByRun(h.run.id)).filter((artifact) => artifact.metadata?.voice)).toHaveLength(2));
         const input = (await runsRepo.findArtifactsByRun(h.run.id)).find((artifact) => artifact.metadata?.source === "user");
-        expect(input?.metadata).toMatchObject({ voice: true, providerTurnId: "native-1", realtimeSessionId: "voice-connection" });
+        expect(input?.metadata).toMatchObject({ voice: true, providerTurnId: "native-1", providerRootTurnId: "spoken-root", realtimeSessionId: "voice-connection" });
         expect(input?.metadata).not.toHaveProperty("delivery");
         expect(send.mock.calls.some(([channel]) => channel === CHANNELS.runs.eventPersisted)).toBe(true);
 
@@ -282,8 +286,9 @@ describe("runsService", () => {
         await h.work().onCompleted({ status: "succeeded" });
         const turns = await runsRepo.findTurnsByRun(h.run.id);
         expect(turns.map((turn) => turn.turnIndex)).toEqual([0, 1]);
-        expect(turns[0]).toMatchObject({ model: "resolved-model", promptContent: "Calculate this", metadata: { providerTurnId: "native-1", codexPlan: { providerTurnId: "native-1" } } });
+        expect(turns[0]).toMatchObject({ model: "resolved-model", promptContent: "Calculate this", metadata: { providerTurnId: "native-1", providerRootTurnId: "spoken-root", codexPlan: { providerTurnId: "native-1" } } });
         expect(turns[1]).toMatchObject({ model: "resolved-model", promptContent: "Another spoken request", metadata: { providerTurnId: "native-2" } });
+        expect(turns[1].metadata).not.toHaveProperty("providerRootTurnId");
         expect(turns.every((turn) => turn.endedAt !== null)).toBe(true);
         expect((await runsService.getRunById(h.run.id))?.goal).toBe("Existing conversation");
       } finally {
@@ -506,6 +511,31 @@ describe("runsService", () => {
 
   describe("conversation settings", () => {
     afterEach(() => { vi.mocked(gitService.getHeadSha).mockClear(); });
+    it("saves paired-device preferences without changing a running chat or another chat", async () => {
+      const original = { permissionMode: "default", apiKey: "private", additionalDirectories: ["/tmp"], conversationSettings: { model: "original", config: { permissionMode: "default" } } };
+      const first = createRun(db, { model: "original", status: "running", configSnapshot: JSON.stringify(original) });
+      const second = createRun(db, { model: "other", configSnapshot: JSON.stringify(original) });
+      const before = await runsService.getRunById(first.id);
+      const settings = { model: "next", config: { permissionMode: "plan", modelReasoningEffort: "high" } };
+      const events: unknown[] = [];
+      const detach = registerEventSink({ kind: "test", send(channel, payload) { if (channel === CHANNELS.runs.updated) events.push(payload); } });
+      try {
+        expect(await runsService.updateConversationSettings(first.id, settings)).toEqual(settings);
+        const updated = await runsService.getRunById(first.id);
+        expect(updated).toMatchObject({ model: "original", status: "running", updatedAt: before?.updatedAt, configSnapshot: { ...original, conversationSettings: settings } });
+        expect((await runsService.getRunById(second.id))?.configSnapshot).toEqual(original);
+        expect(events).toEqual([{ runId: first.id, ts: expect.any(Number) }]);
+      } finally { detach(); }
+    });
+
+    it("refuses missing or invalid paired-device settings before mutation", async () => {
+      const run = createRun(db);
+      await expect(runsService.updateConversationSettings("missing", { model: "m", config: {} })).rejects.toThrow("Run not found");
+      for (const settings of [undefined, null, { model: "m", config: { apiKey: "secret" } }, { model: "m", config: { permissionMode: "workspace-write" } }]) {
+        await expect(runsService.updateConversationSettings(run.id, settings as never)).rejects.toThrow();
+      }
+      expect((await runsService.getRunById(run.id))?.configSnapshot).toBeNull();
+    });
     it.each(["ultra", "FutureEffort"])("preserves Codex effort %j through saved settings, queued continuation, and fork", async (effort) => {
       createProvider(db, { id: "codex" });
       createWorkspace(db, { id: "codex-settings-workspace" });
@@ -526,7 +556,7 @@ describe("runsService", () => {
       expect((await runsService.getRunById(created.runId))?.configSnapshot?.conversationSettings).toMatchObject(settings);
 
       const next = { ...settings, config: { ...settings.config, modelReasoningEffort: effort === "ultra" ? "FutureEffort" : "ultra" } };
-      await runsService.updateRun(created.runId, { conversationSettings: next });
+      await runsService.updateConversationSettings(created.runId, next);
       await runsService.continueRun({ runId: created.runId, accountId: "default", message: "Queued", conversationSettings: settings, clientPromptId: "local-continue" });
       await flushBackground();
       expect(continueRun.mock.calls[0][0]).toMatchObject({ configSnapshot: settings.config, clientPromptId: "local-continue" });
@@ -2519,7 +2549,7 @@ describe("runsService", () => {
   });
 
   describe("listRunOutputFiles", () => {
-    it("hydrates only the last two logical calls, including a path beyond the deferred preview", async () => {
+    it("selects only final-message files even when tail tool calls mention other documents", async () => {
       createRun(db, { id: "tail-tools", mode: "work", status: "succeeded" });
       const root = managedRunDir("tail-tools", "work");
       mkdirSync(root, { recursive: true });
@@ -2527,14 +2557,30 @@ describe("runsService", () => {
       for (let i = 0; i < 20; i++) createToolCall(db, { runId: "tail-tools", toolName: "Bash", status: "done",
         output: JSON.stringify(i === 18 ? { stdout: "x".repeat(20_000) + "\n[Output](delivered.md)" }
           : i === 19 ? { path: "CONTEXT.md" } : { path: "early.md" }) });
-      const hydrate = vi.spyOn(runsRepo, "findOutputToolCall");
+      createRunArtifact(db, { runId: "tail-tools", kind: "report", content: "[Final](delivered.md)",
+        metadata: JSON.stringify({ messagePhase: "final_answer" }) });
+      createRunArtifact(db, { runId: "tail-tools", kind: "report", content: "CONTEXT.md",
+        metadata: JSON.stringify({ messagePhase: "commentary" }) });
       try {
         const history = await runsService.getHistoryPage({ runId: "tail-tools", deferToolOutput: true });
-        expect(hydrate).toHaveBeenCalledTimes(2);
         const output = history.artifacts.filter((row) => row.metadata?.outputSelected);
-        expect(output.map((row) => row.metadata?.fileName)).toEqual(["delivered.md", "CONTEXT.md"]);
+        expect(output.map((row) => row.metadata?.fileName)).toEqual(["delivered.md"]);
         expect((await runsService.getOutputArtifacts("tail-tools")).map((row) => row.id)).toEqual(output.map((row) => row.id));
-      } finally { hydrate.mockRestore(); rmSync(root, { recursive: true, force: true }); }
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+    it("does not promote tool-only documents when the last agent message has no file reference", async () => {
+      createRun(db, { id: "tool-only-outputs", mode: "work", status: "succeeded" });
+      const root = managedRunDir("tool-only-outputs", "work");
+      mkdirSync(root, { recursive: true }); writeFileSync(join(root, "CONTEXT.md"), "project context");
+      createToolCall(db, { runId: "tool-only-outputs", toolName: "Read", status: "done",
+        input: JSON.stringify({ path: "CONTEXT.md" }), output: JSON.stringify({ path: "CONTEXT.md" }) });
+      createRunArtifact(db, { runId: "tool-only-outputs", kind: "report", content: "Review now refreshes the diff." });
+      try {
+        expect(await runsService.getOutputArtifacts("tool-only-outputs")).toEqual([]);
+        expect(await runsService.listRunOutputFiles("tool-only-outputs")).toEqual([]);
+        const history = await runsService.getHistoryPage({ runId: "tool-only-outputs" });
+        expect(history.artifacts.some((row) => row.metadata?.outputSelected)).toBe(false);
+      } finally { rmSync(root, { recursive: true, force: true }); }
     });
     it("keeps turn selection global when steering prompts fall outside a history page", async () => {
       createRun(db, { id: "steered-outputs", mode: "work", status: "succeeded" });
@@ -2544,7 +2590,8 @@ describe("runsService", () => {
       const at = (second: number) => new Date((1_700_000_000 + second) * 1000);
       createRunArtifact(db, { runId: "steered-outputs", kind: "user-prompt" as "report", content: "Start", createdAt: at(0) });
       for (let i = 1; i <= 35; i++) {
-        createRunArtifact(db, { runId: "steered-outputs", kind: "report", content: i < 35 ? "early.md" : "final.md", createdAt: at(i * 2) });
+        createRunArtifact(db, { runId: "steered-outputs", kind: "report", content: i < 35 ? "early.md" : "final.md", createdAt: at(i * 2),
+          metadata: i === 35 ? JSON.stringify({ messagePhase: "final_answer" }) : undefined });
         if (i < 35) createRunArtifact(db, { runId: "steered-outputs", kind: "user-prompt" as "report", content: "Steer",
           metadata: JSON.stringify({ delivery: "steer" }), createdAt: at(i * 2 + 1) });
       }
@@ -2570,7 +2617,7 @@ describe("runsService", () => {
         await expect(runsService.readArtifactImage({ artifactId: output.id, runId: "other" })).rejects.toThrow("not found");
       } finally { rmSync(root, { recursive: true, force: true }); }
     });
-    it("shares tail-selected outputs across history, chat and the file shelf", async () => {
+    it("shares final-message outputs across history, chat and the file shelf", async () => {
       createRun(db, {
         id: "run-outputs",
         providerId: "claude_code",
@@ -2591,7 +2638,8 @@ describe("runsService", () => {
       symlinkSync(outside, `${root}/linked.md`);
       createRunArtifact(db, { runId: "run-outputs", kind: "report", content: ".mains/sources/brief.pdf project-resources/source-1/brief.pdf" });
       createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "Working" });
-      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "[Notes](notes.md) [Chart](outputs/chart.csv) linked.md" });
+      createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "[Notes](notes.md) [Chart](outputs/chart.csv) linked.md",
+        metadata: JSON.stringify({ messagePhase: "final_answer" }) });
       createRunArtifact(db, { runId: "run-outputs", kind: "report", content: "Done" });
 
       try {
@@ -3355,9 +3403,9 @@ describe("runsService", () => {
   // continueRun
   // ─────────────────────────────────────────────────────────────
   describe("steer input delivery", () => {
-    it("forwards active input without model or directory overrides", async () => {
-      createProvider(db, { id: "codex" });
-      createRun(db, { id: "steer-run", providerId: "codex", accountId: "default", status: "running" });
+    it.each(["codex", "claude_code"])("forwards %s active input without model or directory overrides", async (providerId) => {
+      if (providerId === "codex") createProvider(db, { id: providerId });
+      createRun(db, { id: "steer-run", providerId, accountId: "default", status: "running" });
       runSessionRegistry.register("steer-run", { runId: "steer-run", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() });
       const steerRun = vi.fn().mockResolvedValue({ turnId: "native-turn" });
       vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
@@ -3387,12 +3435,41 @@ describe("runsService", () => {
       expect(getInputStatus).not.toHaveBeenCalled();
     });
 
+    it.each(["codex", "claude_code"])("never retargets %s input onto a replacement session during preflight", async (providerId) => {
+      if (providerId === "codex") createProvider(db, { id: providerId });
+      createRun(db, { id: "replaced-turn", providerId, accountId: "default", status: "running" });
+      const active = { runId: "replaced-turn", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() };
+      runSessionRegistry.register(active.runId, active);
+      const steerRun = vi.fn(); vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
+      const provider = (await providersService.getById(providerId))!;
+      const reading = vi.spyOn(providersService, "getById").mockImplementationOnce(async () => {
+        runSessionRegistry.unregister(active.runId);
+        runSessionRegistry.register(active.runId, { ...active });
+        return provider;
+      });
+      try {
+        await expect(runsService.steerRun({ runId: active.runId, accountId: "default", clientUserMessageId: "late", message: "guidance" })).rejects.toThrow("active turn changed");
+        expect(steerRun).not.toHaveBeenCalled();
+      } finally { reading.mockRestore(); runSessionRegistry.unregister(active.runId); }
+    });
+
     it("retains unconfirmed input without inventing transcript rows", async () => {
       createProvider(db, { id: "codex" });
       createRun(db, { id: "uncertain-run", providerId: "codex", accountId: "default" });
       vi.mocked(createWorkAdapter).mockReturnValue({ getInputStatus: vi.fn().mockResolvedValue({ accepted: false }) } as any);
       await expect(runsService.getInputStatus({ runId: "uncertain-run", accountId: "default", clientUserMessageId: "input", input: { message: "unconfirmed" } })).resolves.toEqual({ accepted: false });
       expect(await runsRepo.findArtifactsByRun("uncertain-run")).toEqual([]);
+    });
+
+    it("recovers a provider-reported continuation without labeling it as a steer", async () => {
+      createRun(db, { id: "late-claude", providerId: "claude_code", accountId: "default", status: "succeeded" });
+      vi.mocked(createWorkAdapter).mockReturnValue({ getInputStatus: vi.fn().mockResolvedValue({ accepted: true,
+        turnId: "next-native-turn", delivery: "queue" }) } as any);
+      await expect(runsService.getInputStatus({ runId: "late-claude", accountId: "default", clientUserMessageId: "late-input",
+        delivery: "steer", input: { message: "late guidance" } })).resolves.toEqual({ accepted: true });
+      expect(await runsRepo.findArtifactsByRun("late-claude")).toEqual([
+        expect.objectContaining({ content: "late guidance", metadata: expect.objectContaining({ delivery: "queue", providerTurnId: "next-native-turn" }) }),
+      ]);
     });
   });
 
@@ -3407,8 +3484,8 @@ describe("runsService", () => {
       expect((await runsRepo.findRunById("live-run"))?.status).toBe("running");
     });
 
-    it("returns a queued continuation only after native input acceptance", async () => {
-      createContinuableRun({ id: "queue-run", accountId: "default", providerId: "codex", mode: "work" });
+    it.each(["codex", "claude_code"])("returns a %s queued continuation only after native input acceptance", async (providerId) => {
+      createContinuableRun({ id: "queue-run", accountId: "default", providerId, mode: "work" });
       let accept!: (turnId: string) => Promise<void>;
       let finish!: (result: { status: "succeeded" }) => void;
       const pending = new Promise<{ status: "succeeded" }>((resolve) => { finish = resolve; });

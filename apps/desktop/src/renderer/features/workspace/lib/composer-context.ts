@@ -157,6 +157,16 @@ export function isSameContextItem(a: ContextItem, b: ContextItem): boolean {
   return contextItemKey(a) === contextItemKey(b);
 }
 
+/** Consume the accepted snapshot by identity and editable version, including
+ * IPC-cloned items. Context added or edited during the send stays attached. */
+export function withoutSubmittedContext(current: readonly ContextItem[], submitted: readonly ContextItem[]): ContextItem[] {
+  return current.filter((item) => !submitted.some((sent) =>
+    item.kind === sent.kind && contextItemKey(item) === contextItemKey(sent) &&
+    (item.kind !== "mcp-app" || sent.kind !== "mcp-app" || item.updateId === sent.updateId) &&
+    (item.kind !== "browser" || sent.kind !== "browser" || item.comment === sent.comment) &&
+    (item.kind !== "review" || sent.kind !== "review" || item.comment === sent.comment)));
+}
+
 /** Read-only by contract: these are views onto store state, never buffers. */
 export interface GroupedContext {
   readonly files: readonly ContextFileItem[];

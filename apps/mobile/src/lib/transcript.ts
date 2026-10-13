@@ -7,6 +7,8 @@ import { partitionSubagentCalls, type SessionSubagent } from "./subagents";
 
 export type { PromptImage } from "./prompt-images";
 
+type FullContent = { runId: string; id: number; source: "artifact" };
+
 /**
  * The phone's transcript layout — a port of the rules in the desktop's
  * `group-events.ts`: artifacts and tool calls interleaved by time, each
@@ -31,6 +33,7 @@ export type TranscriptItem =
       key: string;
       kind: "prompt";
       text: string;
+      fullContent?: FullContent;
       at: number;
       /** Structured context the prompt carried — what its chips are drawn from. */
       skills: PromptSkill[];
@@ -38,7 +41,7 @@ export type TranscriptItem =
       /** Image attachments shown above the user's text bubble. */
       images: PromptImage[];
     }
-  | { key: string; kind: "response"; text: string; at: number }
+  | { key: string; kind: "response"; text: string; at: number; fullContent?: FullContent }
   | { key: string; kind: "tools"; calls: ToolCallRow[]; at: number }
   | {
       key: string;
@@ -48,7 +51,7 @@ export type TranscriptItem =
       at: number;
     }
   | { key: string; kind: "images"; images: TranscriptImage[]; at: number }
-  | { key: string; kind: "note"; text: string; at: number };
+  | { key: string; kind: "note"; text: string; at: number; fullContent?: FullContent };
 
 /** One image an agent produced. The Mac holds the file; the phone asks for pixels by id. */
 export interface TranscriptImage {
@@ -64,6 +67,7 @@ type FlatItem =
   | { key: string; kind: "image"; image: TranscriptImage; at: number };
 
 interface ArtifactMetadata {
+  mobileContentDeferred?: unknown;
   level?: unknown;
   voice?: unknown;
   voiceStartedAt?: unknown;
@@ -92,6 +96,8 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
   const at = meta.voice === true && typeof meta.voiceStartedAt === "number" && Number.isFinite(meta.voiceStartedAt)
     ? Math.trunc(meta.voiceStartedAt) : artifact.createdAt.getTime();
   const key = `artifact-${artifact.id}`;
+  const fullContent = meta.mobileContentDeferred && artifact.id > 0
+    ? { runId: artifact.runId, id: artifact.id, source: "artifact" as const } : undefined;
 
   if (meta.isFromSubagent || typeof meta.parentToolUseId === "string") return null;
 
@@ -105,7 +111,7 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
     case "log": {
       const level = typeof meta.level === "string" ? meta.level : "";
       if (level !== "error" || !artifact.content) return null;
-      return { key, kind: "note", text: artifact.content, at };
+      return { key, kind: "note", text: artifact.content, at, ...(fullContent ? { fullContent } : {}) };
     }
     case "thinking":
     case "prompt_suggestion":
@@ -117,6 +123,7 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
             key,
             kind: "prompt",
             text: artifact.content ?? "",
+            ...(fullContent ? { fullContent } : {}),
             at,
             skills: promptSkills(meta),
             files: promptFiles(meta),
@@ -134,7 +141,7 @@ function artifactItem(artifact: RunArtifactRow): FlatItem | null {
     }
     default: {
       const text = artifact.content ?? artifact.path ?? "";
-      return text ? { key, kind: "response", text, at } : null;
+      return text ? { key, kind: "response", text, at, ...(fullContent ? { fullContent } : {}) } : null;
     }
   }
 }

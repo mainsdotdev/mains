@@ -20,7 +20,7 @@ interface QueueControllerDeps {
 }
 
 function isUncertainError(error: string): boolean {
-  return /timeout|timed out|disconnect|offline|exited|stopping|socket|connection|transport/i.test(error);
+  return /timeout|timed out|disconnect|offline|exited|stopping|socket|connection|transport|delivery is unknown/i.test(error);
 }
 
 /** One consumer per renderer; UI mounts and duplicate status events cannot race it. */

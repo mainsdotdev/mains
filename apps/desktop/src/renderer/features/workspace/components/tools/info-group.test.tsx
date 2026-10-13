@@ -50,6 +50,51 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
 }
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
+describe("Codex async questions", () => {
+  it("renders persisted structured questions through the question display", () => {
+    const group = groupEvents([mapArtifactToEvent({
+      id: 1, runId: "run", kind: "report",
+      content: "**Which environment?**\n- Staging\n- Production\n\n**Anything else?**",
+      metadata: {
+        source: "codex_async_questions", itemId: "message-async", delivery: "async",
+        questions: [
+          { title: "Which environment?", options: ["Staging", "Production"] },
+          { title: "Anything else?", options: null },
+        ],
+      },
+    })])[0];
+
+    const view = render(<InfoGroup group={group} />);
+
+    expect(screen.getByRole("button", { name: /Question.*Which environment/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Question.*Which environment/ }));
+    expect(screen.getByText("Staging")).toBeTruthy();
+    expect(screen.getByText("Production")).toBeTruthy();
+    expect(screen.getByText("Anything else?")).toBeTruthy();
+    expect(view.container.querySelector(".prose")).toBeNull();
+  });
+
+  it("keeps the report fallback when structured questions are missing or invalid", () => {
+    const group = groupEvents([mapArtifactToEvent({
+      id: 1, runId: "run", kind: "report", content: "Continue?",
+      metadata: { source: "codex_async_questions", questions: [null, { title: " " }] },
+    })])[0];
+    render(<InfoGroup group={group} />);
+    expect(screen.getByText("Continue?")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Question/ })).toBeNull();
+  });
+
+  it("keeps the accompanying agent message separate from its question artifact", () => {
+    const group = groupEvents([mapArtifactToEvent({
+      id: 1, runId: "run", kind: "report", content: "Review finished.",
+      metadata: { source: "agent_message", questions: [{ title: "Continue?", options: ["Yes", "No"] }] },
+    })])[0];
+    render(<InfoGroup group={group} />);
+    expect(screen.getByText("Review finished.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Question/ })).toBeNull();
+  });
+});
+
 describe("assistant image previews", () => {
   it("shows each screenshot once when the final answer embeds two Markdown images", () => {
     const content = "İki çizgili ikon artık tıklayınca animasyonla çarpıya dönüşüyor. Menü de 300 ms’lik yumuşak bir hareketle aşağı açılıyor.\n\nMobil ve klavye kontrolleri, lint ve TypeScript geçti.\n\n![Kapalı menü ikonu](/private/tmp/header-menu-closed.jpg)\n![Açık menü ve çarpı ikonu](/private/tmp/header-menu-open.jpg)";

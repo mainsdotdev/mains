@@ -118,6 +118,47 @@ describe("Copilot tool approval presentation", () => {
   });
 });
 
+describe("permission prompt restrictions", () => {
+  const toolRequest = (overrides: Partial<ToolApprovalRequest> = {}): ToolApprovalRequest => ({
+    requestId: "restricted-1", runId: "run-1", kind: "tool_approval",
+    toolName: "mcp__calendar__create_event", timestamp: 1, ...overrides,
+  });
+
+  it("starts defaultToNo on Cancel so a stray Enter cannot allow the call", async () => {
+    const onRespond = vi.fn();
+    render(<ToolApprovalDialog request={toolRequest({ defaultToNo: true })} onRespond={onRespond} variant="claude" />);
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.setup().keyboard("{Enter}");
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", false);
+  });
+
+  it("discards a selected run grant when the request becomes approval-once only", async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    const { rerender } = render(<ToolApprovalDialog request={toolRequest()} onRespond={onRespond} variant="codex" />);
+    await user.click(screen.getByRole("checkbox"));
+
+    rerender(<ToolApprovalDialog request={toolRequest({ suppressAlwaysAllowRule: true })} onRespond={onRespond} variant="codex" />);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Allow" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", true, undefined);
+  });
+
+  it("keeps a defaultToNo question from submitting through the input's Enter shortcut", async () => {
+    const user = userEvent.setup();
+    const onRespond = vi.fn();
+    render(<ToolApprovalDialog request={toolRequest({ kind: "ask_user", question: "Which account?", defaultToNo: true })}
+      onRespond={onRespond} variant="claude" />);
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Dismiss" }));
+    await user.type(screen.getByRole("textbox", { name: "Custom answer" }), "work{Enter}");
+    expect(onRespond).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    expect(onRespond).toHaveBeenCalledExactlyOnceWith("restricted-1", true, "work");
+  });
+});
+
 describe("MCP form approval dialog", () => {
   it("fills defaults, shows titled choices and sends typed values with a multiple selection", async () => {
     const user = userEvent.setup();

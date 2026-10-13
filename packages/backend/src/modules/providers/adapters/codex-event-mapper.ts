@@ -183,6 +183,10 @@ type SubAgentRunMeta = NonNullable<
   ReturnType<CodexEventRunState["subAgents"]["get"]>
 >;
 
+function subAgentConfiguration(meta: SubAgentRunMeta) {
+  return { model: meta.model, reasoningEffort: meta.reasoningEffort, role: meta.role, agentPath: meta.agentPath };
+}
+
 /**
  * The ONE constructor for a sub-agent's terminal lifecycle event. Guards the
  * anchor and the once-only settlement (`terminalEmitted`) and shapes the
@@ -209,6 +213,7 @@ function settleSubAgent(
     phase,
     agentType: meta.nickname ?? meta.role ?? "agent",
     agentId: threadId,
+    ...subAgentConfiguration(meta),
     parentToolUseId: meta.spawnItemId,
     result: opts.result,
     error: opts.error,
@@ -364,6 +369,9 @@ export interface CodexSubAgentRunMeta {
   threadId: string;
   nickname?: string;
   role?: string;
+  model?: string;
+  reasoningEffort?: string;
+  agentPath?: string;
   prompt?: string;
   /**
    * Id of the collabAgentToolCall item (spawnAgent, or resumeAgent for
@@ -3066,6 +3074,9 @@ export function createCodexEventMapper(
         if (!runStateV1 || !agentThreadId) break;
 
         const agentPath = (item.agentPath ?? item.agent_path) as string | undefined;
+        const agentModel = typeof item.model === "string" ? item.model : undefined;
+        const reasoningEffort = typeof (item.reasoningEffort ?? item.reasoning_effort) === "string"
+          ? (item.reasoningEffort ?? item.reasoning_effort) as string : undefined;
         // Persisted RAW — display-time humanization (subagent-identity) owns
         // presentation; a main-side copy drifted (no camelCase handling) and
         // baked mis-cased names into the DB.
@@ -3078,6 +3089,9 @@ export function createCodexEventMapper(
             ...existing,
             threadId: agentThreadId,
             nickname: existing?.nickname ?? pathName,
+            agentPath,
+            model: agentModel,
+            reasoningEffort,
             spawnItemId: item.id,
             settleOnTurnEnd: true,
           };
@@ -3088,7 +3102,7 @@ export function createCodexEventMapper(
           // v1 has no spawn tool call on the wire, so synthesize the
           // start/complete pair — the persisted row is what the session
           // panel's subagent list and flow view anchor to.
-          const spawnInput = { agentPath, receiverThreadIds: [agentThreadId] };
+          const spawnInput = { agentPath, receiverThreadIds: [agentThreadId], model: agentModel, reasoningEffort };
           const spawnMeta = {
             toolCallId: item.id,
             itemId: item.id,
@@ -3107,7 +3121,7 @@ export function createCodexEventMapper(
               toolName: "spawnAgent",
               input: spawnInput,
               output: {
-                subAgents: [{ threadId: agentThreadId, nickname: meta.nickname }],
+                subAgents: [{ threadId: agentThreadId, nickname: meta.nickname, ...subAgentConfiguration(meta) }],
                 collabTool: "spawnAgent",
               },
               endedAt: ts,
@@ -3118,6 +3132,7 @@ export function createCodexEventMapper(
               phase: "invoked",
               agentType: meta.nickname ?? "agent",
               agentId: agentThreadId,
+              ...subAgentConfiguration(meta),
               parentToolUseId: item.id,
               ts,
               metadata: { toolCallId: item.id, threadId: agentThreadId, agentPath },
@@ -3177,6 +3192,7 @@ export function createCodexEventMapper(
         const receiverThreadIds = ((item.receiverThreadIds ?? item.receiver_thread_ids) as string[] | undefined) ?? [];
         const prompt = item.prompt as string | undefined;
         const collabModel = item.model as string | undefined;
+        const collabEffort = (item.reasoningEffort ?? item.reasoning_effort) as string | undefined;
         const agentsStates = (item.agentsStates ?? item.agents_states) as
           | Record<string, { status?: string; message?: string | null } | undefined>
           | undefined;
@@ -3189,6 +3205,8 @@ export function createCodexEventMapper(
             threadId: id,
             nickname: meta?.nickname,
             role: meta?.role,
+            model: meta?.model ?? collabModel,
+            reasoningEffort: meta?.reasoningEffort ?? collabEffort,
             status: agentsStates?.[id]?.status,
           };
         });
@@ -3254,8 +3272,8 @@ export function createCodexEventMapper(
           events.push({
             type: "tool_call",
             toolName,
-            input: { prompt, model: collabModel, receiverThreadIds },
-            output: { subAgents, prompt, model: collabModel, collabTool: tool },
+            input: { prompt, model: collabModel, reasoningEffort: collabEffort, receiverThreadIds },
+            output: { subAgents, prompt, model: collabModel, reasoningEffort: collabEffort, collabTool: tool },
             error: status === "failed" ? (errorByVariant[tool] ?? "Collab tool failed") : undefined,
             terminalStatus:
               status === "interrupted"
@@ -3309,6 +3327,8 @@ export function createCodexEventMapper(
                   threadId,
                   spawnItemId: item.id,
                   prompt,
+                  model: collabModel ?? existing?.model,
+                  reasoningEffort: collabEffort ?? existing?.reasoningEffort,
                 };
                 runStateCollab.subAgents.set(threadId, meta);
                 events.push({
@@ -3316,6 +3336,7 @@ export function createCodexEventMapper(
                   phase: "invoked",
                   agentType: meta.nickname ?? meta.role ?? "agent",
                   agentId: threadId,
+                  ...subAgentConfiguration(meta),
                   parentToolUseId: item.id,
                   prompt,
                   ts,

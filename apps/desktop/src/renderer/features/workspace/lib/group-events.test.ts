@@ -264,6 +264,17 @@ describe("groupEvents — subagent machinery stays out of the chat", () => {
     expect(groups[0].events[0].id).toBe("r1");
   });
 
+  it("keeps native child feedback and errors in the agent detail without splitting parent activity", () => {
+    const groups = groupEvents([
+      ev({ id: "t1", type: "tool_call", content: "Read: a.ts" }),
+      ev({ id: "child-user", type: "log", content: "Child feedback", metadata: { level: "sdk-user", agentId: "child", isFromSubagent: true } }),
+      ev({ id: "child-error", type: "log", content: "Child error", metadata: { level: "error", agentId: "child", isFromSubagent: true } }),
+      ev({ id: "t2", type: "tool_call", content: "Read: b.ts" }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].events.map((event) => event.id)).toEqual(["t1", "t2"]);
+  });
+
   it("drops a subagent's own tool calls without splitting the accordion", () => {
     const groups = groupEvents([
       ev({ id: "t1", type: "tool_call", content: "Bash: git status" }),

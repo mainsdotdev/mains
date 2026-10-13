@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { decodeWsMessage } from "@mains/contracts/ws-protocol";
+import { decodeWsMessage, MAX_DEVICE_MESSAGE_BYTES } from "@mains/contracts/ws-protocol";
 import { clearHandlers, registerHandler } from "./handler-registry";
 import { WebSocketSink } from "./websocket-sink";
 import { serveConnection, type WsConnection } from "./ws-server";
@@ -34,6 +34,21 @@ const invokeFrame = (id: number, channel: string, args: unknown[]) =>
 describe("serveConnection", () => {
   afterEach(() => {
     clearHandlers();
+  });
+
+  it("rejects oversized device responses before transmission and leaves owner responses available", async () => {
+    registerHandler("runs:getHistory", async () => ({ success: true, data: "😀".repeat(MAX_DEVICE_MESSAGE_BYTES / 4) }));
+    const device = Object.assign(fakeConn("phone"), { deviceId: "paired", allowedChannels: new Set(["runs:getHistory"]) });
+    const owner = fakeConn("desktop");
+    const sink = new WebSocketSink();
+    serveConnection(device, sink);
+    serveConnection(owner, sink);
+    device.emit(invokeFrame(1, "runs:getHistory", []));
+    owner.emit(invokeFrame(2, "runs:getHistory", []));
+    await Promise.resolve(); await Promise.resolve();
+    expect(Buffer.byteLength(device.sent[0])).toBeLessThan(1024);
+    expect(decodeWsMessage(device.sent[0])).toMatchObject({ kind: "response", id: 1, result: { success: false } });
+    expect(decodeWsMessage(owner.sent[0])).toMatchObject({ kind: "response", id: 2, result: { success: true } });
   });
 
   it("registers the client with the sink and removes it on close", () => {

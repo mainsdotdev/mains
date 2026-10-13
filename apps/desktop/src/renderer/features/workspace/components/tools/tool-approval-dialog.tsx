@@ -245,6 +245,7 @@ function ToolApprovalDialogContents({
 }: ToolApprovalDialogProps) {
   const isCursor = variant === "cursor";
   const isCodex = variant === "codex";
+  const canAllowForSession = isCodex && !request.suppressAlwaysAllowRule;
   const pluginLogos = usePluginLogoMap();
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
   const [freeText, setFreeText] = useState("");
@@ -292,9 +293,9 @@ function ToolApprovalDialogContents({
     onRespond(
       request.requestId,
       true,
-      allowForSession ? "acceptForSession" : undefined,
+      canAllowForSession && allowForSession ? "acceptForSession" : undefined,
     );
-  }, [request.requestId, allowForSession, onRespond]);
+  }, [request.requestId, canAllowForSession, allowForSession, onRespond]);
 
   const handleDeny = useCallback(() => {
     onRespond(request.requestId, false);
@@ -385,6 +386,7 @@ function ToolApprovalDialogContents({
               variant="primary"
               className="min-w-18 text-primary-700 hover:bg-primary-200/40 dark:text-primary-300 dark:hover:bg-primary-800/50"
               onClick={handleDeny}
+              autoFocus={request.defaultToNo}
             >
               Decline
             </Button>
@@ -497,7 +499,10 @@ function ToolApprovalDialogContents({
                     value={freeText}
                     onChange={(e) => setFreeText(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") handleSubmitAnswer();
+                      if (e.key !== "Enter") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (!request.defaultToNo) handleSubmitAnswer();
                     }}
                     placeholder="Type a custom answer…"
                     className="w-full rounded-xl glass-input  px-3 py-2 text-xs text-primary-900 transition-colors placeholder:text-primary-500 focus:outline-none dark:bg-primary-800/50 dark:text-primary-100 dark:placeholder:text-primary-500"
@@ -509,6 +514,7 @@ function ToolApprovalDialogContents({
                   variant="primary"
                   className="min-w-18  text-primary-700 hover:bg-primary-200/40  dark:text-primary-300 dark:hover:bg-primary-800/50"
                   onClick={handleDeny}
+                  autoFocus={request.defaultToNo}
                 >
                   Dismiss
                 </Button>
@@ -660,7 +666,7 @@ function ToolApprovalDialogContents({
       )}
 
       <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-2">
-        {isCodex ? (
+        {canAllowForSession ? (
           <Text
             as="label"
             size="xs"
@@ -677,7 +683,7 @@ function ToolApprovalDialogContents({
           <span />
         )}
         <div className="flex items-center gap-2 mb-2">
-          <Button variant="secondary" onClick={handleDeny}>
+          <Button variant="secondary" onClick={handleDeny} autoFocus={request.defaultToNo}>
             Cancel
           </Button>
           <Button variant="submit" onClick={handleAllow}>

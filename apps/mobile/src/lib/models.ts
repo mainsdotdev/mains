@@ -1,4 +1,5 @@
 import { EFFORT_LEVELS } from "@mains/contracts/runs";
+import type { ModelServiceTier } from "@mains/contracts/run-settings";
 
 /**
  * Model and effort helpers — the phone's half of the desktop's
@@ -129,7 +130,7 @@ export function runSettingsFromConfig(
   const permissionKey = PERMISSION_KEYS[providerId];
   const permissionMode = (permissionKey && str(c[permissionKey])) || PERMISSION_DEFAULTS[providerId] || "";
   const fastMode =
-    providerId === "codex" ? ["fast", "priority"].includes(str(c.serviceTier)) : c.fastMode === true;
+    providerId === "codex" ? ["fast", "priority", "ultrafast"].includes(str(c.serviceTier)) : c.fastMode === true;
   return {
     ...effort,
     permissionMode,
@@ -218,16 +219,21 @@ function claudeDescribedName(displayName: string, description: string): string |
 }
 
 /** Keeps the first model when several share a label. */
-export function dedupeModelsByPrettyName<T extends { displayName: string; description?: string | null }>(
+export function dedupeModelsByPrettyName<T extends { id?: string; displayName: string; description?: string | null }>(
   list: T[],
   providerId: string,
+  selectedModelId?: string,
 ): T[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   const result: T[] = [];
   for (const model of list) {
     const pretty = modelPrettyName(model, providerId);
-    if (seen.has(pretty)) continue;
-    seen.add(pretty);
+    const existing = seen.get(pretty);
+    if (existing !== undefined) {
+      if (model.id === selectedModelId) result[existing] = model;
+      continue;
+    }
+    seen.set(pretty, result.length);
     result.push(model);
   }
   return result;
@@ -283,4 +289,14 @@ export function parseEffortLevels(json: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+export function parseServiceTiers(json: string | null | undefined): ModelServiceTier[] {
+  if (!json) return [];
+  try {
+    const value: unknown = JSON.parse(json);
+    return Array.isArray(value) ? value.filter((tier): tier is ModelServiceTier =>
+      !!tier && typeof tier === "object" && typeof tier.id === "string" && typeof tier.name === "string",
+    ) : [];
+  } catch { return []; }
 }

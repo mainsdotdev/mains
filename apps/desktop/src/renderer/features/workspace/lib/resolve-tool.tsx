@@ -85,8 +85,12 @@ function titleCase(s: string): string {
   return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
 }
 
+function ownEntry<T>(entries: Record<string, T> | undefined, key: string): T | undefined {
+  return entries && Object.prototype.hasOwnProperty.call(entries, key) ? entries[key] : undefined;
+}
+
 function getVerbInfo(vendor: VendorInfo, verb: string): VerbInfo | undefined {
-  return vendor.verbs?.[verb] ?? DEFAULT_VERBS[verb];
+  return ownEntry(vendor.verbs, verb) ?? ownEntry(DEFAULT_VERBS, verb);
 }
 
 function resolveVendorTool(vendor: VendorInfo, rest: string): ResolvedTool {
@@ -96,7 +100,7 @@ function resolveVendorTool(vendor: VendorInfo, rest: string): ResolvedTool {
 
   // Special tools (Mains: savefindings → "SaveFindings", …). These bypass the
   // generic MCP renderer because tool-call-item.tsx has dedicated displays.
-  const special = vendor.specialTools?.[trimmed];
+  const special = ownEntry(vendor.specialTools, trimmed);
   if (special) {
     return {
       displayName: special,
@@ -187,7 +191,7 @@ function resolveUnknownMcp(lower: string): ResolvedTool {
     if (firstUnderscore > 0) {
       const candidate = toolName.slice(0, firstUnderscore);
       const rest = toolName.slice(firstUnderscore + 1);
-      if (!DEFAULT_VERBS[candidate]) {
+      if (!ownEntry(DEFAULT_VERBS, candidate)) {
         providerLabel = titleCase(candidate);
         providerSlug = candidate;
         verbAndEntity = rest;
@@ -200,7 +204,7 @@ function resolveUnknownMcp(lower: string): ResolvedTool {
   const ueIdx = verbAndEntity.indexOf("_");
   const rawVerb = ueIdx > 0 ? verbAndEntity.slice(0, ueIdx) : verbAndEntity;
   const rawEntity = ueIdx > 0 ? verbAndEntity.slice(ueIdx + 1) : "";
-  const verbInfo = DEFAULT_VERBS[rawVerb];
+  const verbInfo = ownEntry(DEFAULT_VERBS, rawVerb);
   const icon = <GenericTool className="size-4" />;
 
   if (verbInfo) {

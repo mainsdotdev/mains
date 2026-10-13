@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { FileAttachment as UploadAttachment, StoredAttachment } from "@mains/contracts/runs";
+import { browserAnnotationAttachmentName } from "@mains/contracts/browser-annotations";
 import type { FileAttachment } from "../../../shared/adapter.types";
 import type { runAttachments } from "../../db/schema";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
@@ -138,10 +139,29 @@ export async function resolveRunAttachment(runId: string, attachmentId: string):
 
 /** A read-only projection of this run's verified originals, without loading bytes. */
 export async function listRunAttachmentFiles(runId: string) {
-  const result: Array<{ attachmentId: string; path: string; type: AttachmentRow["type"] }> = [];
-  for (const attachment of runsRepo.listAttachments(runId)) {
+  const attachments = runsRepo.listAttachments(runId);
+  if (!attachments.length) return [];
+  const annotationIds = new Set<string>();
+  for (const metadata of runsRepo.listAttachmentPromptMetadata(runId)) {
+    if (!Array.isArray(metadata?.browserAnnotations)) continue;
+    for (const annotation of metadata.browserAnnotations) {
+      if (!annotation || !Array.isArray(annotation.elements) || !annotation.elements.length) continue;
+      if (typeof annotation.screenshotAttachmentId === "string") {
+        annotationIds.add(annotation.screenshotAttachmentId);
+      } else if (typeof annotation.id === "string" && typeof annotation.url === "string" && Array.isArray(metadata.attachments)) {
+        // Legacy matching requires the annotation and its own prompt descriptor;
+        // an ordinary upload's filename alone never marks it as context.
+        const name = browserAnnotationAttachmentName(annotation);
+        const screenshot = [...metadata.attachments].reverse().find((file) => file?.type === "image" && file.name === name);
+        if (typeof screenshot?.attachmentId === "string") annotationIds.add(screenshot.attachmentId);
+      }
+    }
+  }
+  const result: Array<{ attachmentId: string; path: string; type: AttachmentRow["type"]; contentHash: string; isBrowserAnnotation: boolean }> = [];
+  for (const attachment of attachments) {
     try {
-      result.push({ attachmentId: attachment.id, type: attachment.type, path: await originalPath(attachment) });
+      result.push({ attachmentId: attachment.id, type: attachment.type, path: await originalPath(attachment),
+        contentHash: attachment.contentHash, isBrowserAnnotation: annotationIds.has(attachment.id) });
     } catch { /* Missing legacy originals must not hide the remaining library. */ }
   }
   return result;

@@ -56,6 +56,7 @@ import type {
   ConsumeRateLimitResetCreditParams,
   RateLimitInfo,
   GoalInfo,
+  GoalMutationOrigin,
   GoalSetParams,
 } from "../../../shared/adapter.types";
 
@@ -273,9 +274,9 @@ export const providersService = {
     return getGoalForProvider(provider, runId);
   },
 
-  async clearGoal(id: string, runId: string): Promise<boolean> {
+  async clearGoal(id: string, runId: string, origin?: GoalMutationOrigin): Promise<boolean> {
     const provider = await requireEnabledProvider(id);
-    return clearGoalForProvider(provider, runId);
+    return clearGoalForProvider(provider, runId, origin);
   },
 
   async getAccountInfo(id: string): Promise<AccountInfo> {

@@ -28,6 +28,18 @@ describe("formatModelDisplayName", () => {
       "Claude Sonnet 4.5",
     );
   });
+
+  it("formats canonical usage ids with the picker style while preserving different Claude versions", () => {
+    expect(formatModelDisplayName("claude-opus-5-5", "claude")).toBe("Opus 5.5");
+    expect(formatModelDisplayName("claude-opus-5", "claude")).toBe("Opus 5");
+    expect(formatModelDisplayName("claude-haiku-4-5-20251001", "claude")).toBe("Haiku 4.5");
+    expect(formatModelDisplayName("claude-sonnet-4-6[1m]", "claude")).toBe("Sonnet 4.6 [1M]");
+    expect(formatModelDisplayName("gpt-6.1-sol", "codex")).toBe("GPT 6.1 Sol");
+    expect(formatModelDisplayName("gpt-5.4-mini", "codex")).toBe("GPT 5.4 Mini");
+    expect(formatModelDisplayName("codex-auto-review", "codex")).toBe("Codex Auto Review");
+    expect(formatModelDisplayName("<synthetic>", "claude")).toBe("Synthetic");
+    expect(formatModelDisplayName("vendor-mystery-1", "codex")).toBe("vendor-mystery-1");
+  });
 });
 
 describe("selectableModelNames", () => {

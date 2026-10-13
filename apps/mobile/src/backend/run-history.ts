@@ -24,11 +24,12 @@ export function historyState(backendId: string, runId: string): HistoryState {
 }
 export function historyRequest(backendId: string, runId: string, direction: ReadRunHistoryPayload["direction"]): ReadRunHistoryPayload {
   const state = historyState(backendId, runId);
-  if (!state.loaded) return { runId, direction: "latest" };
-  if (direction === "older") return { runId, direction, cursor: state.start ?? undefined };
-  if (direction === "newer") return { runId, direction, cursor: state.end ?? undefined };
-  if (direction === "refresh") return { runId, direction, cursor: state.start ?? undefined, end: state.end };
-  return { runId, direction: "latest" };
+  const base = { runId, profile: "mobile" as const, deferToolOutput: true };
+  if (!state.loaded) return { ...base, direction: "latest" };
+  if (direction === "older") return { ...base, direction, cursor: state.start ?? undefined };
+  if (direction === "newer") return { ...base, direction, cursor: state.end ?? undefined };
+  if (direction === "refresh") return { ...base, direction, cursor: state.start ?? undefined, end: state.end };
+  return { ...base, direction: "latest" };
 }
 export function historyLoading(backendId: string, runId: string, loading: boolean, error: string | null = null) {
   states.set(keyFor(backendId, runId), { ...historyState(backendId, runId), loading, error });

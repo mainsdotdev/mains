@@ -7,6 +7,7 @@ import type {
   PendingApproval,
   ReadArtifactImagePayload,
   ReadRunHistoryPayload,
+  ReadRunHistoryContentPayload,
   RunHistoryCursor,
   ReadRunTextFilePayload,
   RunTextFile,
@@ -18,6 +19,7 @@ import type {
 } from "@mains/contracts/runs";
 import { historyWindow, compareHistoryCursors } from "@mains/contracts/run-history";
 import { WS_PROTOCOL_VERSION } from "@mains/contracts/ws-protocol";
+import { conversationSettingsFrom, snapshotRunSettingConfig, type ConversationSettings } from "@mains/contracts/run-settings";
 
 import type { DemoHandler } from "./demo-socket";
 import rawSnapshot from "./demo-snapshot.json";
@@ -432,11 +434,25 @@ export class DemoBackend implements DemoHandler {
       }
       case CHANNELS.runs.getById:
         return this.runs.find((run) => run.id === args[0]) ?? null;
+      case CHANNELS.runs.updateConversationSettings:
+        return this.updateConversationSettings(String(args[0]), args[1] as ConversationSettings);
       case CHANNELS.runs.listPendingApprovals: {
         const runId = typeof args[0] === "string" ? args[0] : null;
         return [...this.approvals.values()].filter(
           (approval) => !runId || approval.runId === runId,
         );
+      }
+      case CHANNELS.runs.readHistoryContent: {
+        const request = args[0] as ReadRunHistoryContentPayload;
+        const artifact = this.artifacts.get(request.runId)?.find((row) => row.id === request.id);
+        const call = this.toolCalls.get(request.runId)?.find((row) => row.id === request.id);
+        if (request.source === "artifact" ? !artifact : !call) throw new Error("Content not found in this conversation");
+        const text = request.source === "artifact" ? String(artifact?.content ?? "")
+          : JSON.stringify((request.source === "tool-input" ? call?.input : call?.output) ?? null);
+        const characters = Array.from(text);
+        const offset = request.offset ?? 0;
+        return { text: characters.slice(offset, offset + 8192).join(""), offset,
+          nextOffset: offset + 8192 < characters.length ? offset + 8192 : null, totalChars: characters.length };
       }
       case CHANNELS.runs.getHistory: {
         const request = args[0] as ReadRunHistoryPayload;
@@ -509,6 +525,16 @@ export class DemoBackend implements DemoHandler {
 
   // ── Settings ─────────────────────────────────────────────────────────────
 
+  private updateConversationSettings(runId: string, settings: ConversationSettings): ConversationSettings {
+    const run = this.runs.find((row) => row.id === runId);
+    if (!run) throw new Error("Run not found");
+    const valid = conversationSettingsFrom({ conversationSettings: settings });
+    if (!valid) throw new Error("Invalid conversation settings");
+    run.configSnapshot = { ...(run.configSnapshot as Json ?? {}), conversationSettings: valid };
+    this.push(CHANNELS.runs.updated, { runId, ts: Date.now() });
+    return valid;
+  }
+
   private updateSpace(spaceId: string, patch: Partial<SpaceModePayload>): Json {
     const space = this.spaces.find((s) => s.id === spaceId);
     if (!space) throw new Error("Space not found");
@@ -552,6 +578,10 @@ export class DemoBackend implements DemoHandler {
     this.runCounter += 1;
     const runId = `demo-run-${Date.now()}-${this.runCounter}`;
     const space = this.spaces.find((s) => s.id === payload.spaceId);
+    const settings = payload.conversationSettings ?? {
+      model: payload.model ?? "",
+      config: snapshotRunSettingConfig(payload.providerId, this.providers.find((p) => p.id === payload.providerId)?.config),
+    };
     const run: DemoRun = {
       id: runId,
       accountId: "demo-account",
@@ -560,7 +590,8 @@ export class DemoBackend implements DemoHandler {
       spaceId: payload.spaceId,
       providerId: payload.providerId,
       mode: (space?.mode as string | undefined) ?? "chat",
-      model: payload.model ?? null,
+      model: settings.model || null,
+      configSnapshot: { ...settings.config, conversationSettings: settings },
       title: null,
       goal: payload.goal,
       status: "running",
@@ -591,6 +622,9 @@ export class DemoBackend implements DemoHandler {
     run.status = "running";
     run.endedAt = null;
     run.updatedAt = now();
+    const previous = (run.configSnapshot as Json | undefined) ?? {};
+    const settings = payload.conversationSettings ?? conversationSettingsFrom(previous);
+    if (settings) run.configSnapshot = { ...previous, ...settings.config, conversationSettings: conversationSettingsFrom(previous) ?? settings };
     this.startReplay(
       run,
       payload.message,
@@ -607,6 +641,7 @@ export class DemoBackend implements DemoHandler {
       spaceId: String(source?.spaceId ?? this.spaces[0]?.id ?? ""),
       providerId: source?.providerId ?? "codex",
       goal: payload.message,
+      ...(source ? { conversationSettings: conversationSettingsFrom(source.configSnapshot as Json) ?? undefined } : {}),
       ...(source?.workspaceId ? { workspaceId: source.workspaceId } : {}),
       ...(source?.collectionId ? { collectionId: source.collectionId } : {}),
     });

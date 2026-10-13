@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { Alert, ScrollView, View } from "react-native";
 
 import { useSession } from "@/backend/backend-session";
@@ -18,8 +18,8 @@ import { colors, spacing } from "@/theme";
 export default function AiDataSharingScreen() {
   const session = useSession();
   const backendId = session.backend?.backendId ?? "";
-  const consentQuery = useLiveQuery(
-    db.select().from(aiDataConsents).where(eq(aiDataConsents.backendId, backendId)),
+  const consentQuery = useCoalescedLiveQuery(
+    db.select().from(aiDataConsents).where(eq(aiDataConsents.backendId, backendId)), aiDataConsents,
     [backendId],
   );
 

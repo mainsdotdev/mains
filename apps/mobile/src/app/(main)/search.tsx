@@ -1,5 +1,5 @@
 import { and, asc, desc, eq } from "drizzle-orm";
-import { useLiveQuery } from "drizzle-orm/expo-sqlite";
+import { useCoalescedLiveQuery } from "@/db/use-coalesced-live-query";
 import { useRouter, type Href } from "expo-router";
 import { useMemo, useState } from "react";
 import { Pressable, ScrollView, TextInput, View } from "react-native";
@@ -40,32 +40,32 @@ export default function SearchScreen() {
   const [query, setQuery] = useState("");
   const needle = query.trim().toLowerCase();
 
-  const runList = useLiveQuery(
+  const runList = useCoalescedLiveQuery(
     db
       .select()
       .from(runs)
       .where(and(eq(runs.backendId, backendId), eq(runs.isArchived, false)))
-      .orderBy(desc(runs.updatedAt)),
+      .orderBy(desc(runs.updatedAt)), runs,
     [backendId],
   );
-  const workspaceList = useLiveQuery(
+  const workspaceList = useCoalescedLiveQuery(
     db
       .select()
       .from(workspaces)
       .where(and(eq(workspaces.backendId, backendId), eq(workspaces.isArchived, false)))
-      .orderBy(desc(workspaces.updatedAt)),
+      .orderBy(desc(workspaces.updatedAt)), workspaces,
     [backendId],
   );
-  const projectList = useLiveQuery(
-    db.select().from(projects).where(eq(projects.backendId, backendId)),
+  const projectList = useCoalescedLiveQuery(
+    db.select().from(projects).where(eq(projects.backendId, backendId)), projects,
     [backendId],
   );
-  const collectionList = useLiveQuery(
+  const collectionList = useCoalescedLiveQuery(
     db
       .select()
       .from(collections)
       .where(and(eq(collections.backendId, backendId), eq(collections.isArchived, false)))
-      .orderBy(asc(collections.name)),
+      .orderBy(asc(collections.name)), collections,
     [backendId],
   );
 

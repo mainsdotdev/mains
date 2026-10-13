@@ -2,6 +2,7 @@ import { router, type Href } from "expo-router";
 import { useSyncExternalStore } from "react";
 
 import type { PendingPrompt } from "./types";
+import { clearDraftSettings } from "@/backend/sync";
 
 /**
  * The run the home screen is showing, if any.
@@ -41,7 +42,8 @@ export const homeRun = {
     update({ ...current, runId });
   },
   /** Back to the empty composer — the run itself carries on, on the Mac. */
-  clear(): void {
+  clear(resetSettings = true): void {
+    if (resetSettings) clearDraftSettings();
     if (current !== EMPTY) update(EMPTY);
   },
 };

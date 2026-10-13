@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { appEvents } from "@/lib/transport";
+import type { GoalMutationOrigin } from "@mains/contracts/provider-goals";
 import {
   useLazyGetProviderGoalQuery,
   useSetProviderGoalMutation,
@@ -62,7 +63,7 @@ export function useCodexGoal(
   const updateObjective = useCallback(
     async (objective: string) => {
       if (!runId || !objective.trim()) return;
-      const g = await setGoalMut({ providerId, runId, params: { objective } })
+      const g = await setGoalMut({ providerId, runId, params: { objective, origin: "user" } })
         .unwrap()
         .catch(() => null);
       if (g) setEntry({ runId, goal: g });
@@ -70,18 +71,19 @@ export function useCodexGoal(
     [providerId, runId, setGoalMut],
   );
 
-  const clear = useCallback(async () => {
+  const clearWithOrigin = useCallback(async (origin: GoalMutationOrigin) => {
     if (!runId) return;
-    await clearGoalMut({ providerId, runId }).unwrap().catch(() => false);
+    await clearGoalMut({ providerId, runId, origin }).unwrap().catch(() => false);
     setEntry({ runId, goal: null });
   }, [providerId, runId, clearGoalMut]);
+  const clear = useCallback(() => clearWithOrigin("user"), [clearWithOrigin]);
 
   // Flip the goal's status (Codex `thread/goal/set`). pause → "paused" (the run
   // keeps running; only the goal flag changes), resume → "active".
   const setStatus = useCallback(
     async (status: "paused" | "active") => {
       if (!runId) return;
-      const g = await setGoalMut({ providerId, runId, params: { status } })
+      const g = await setGoalMut({ providerId, runId, params: { status, origin: "user" } })
         .unwrap()
         .catch(() => null);
       if (g) setEntry({ runId, goal: g });
@@ -104,10 +106,10 @@ export function useCodexGoal(
     if (autoClearedRef.current === runId) return;
     const t = setTimeout(() => {
       autoClearedRef.current = runId;
-      clear();
+      void clearWithOrigin("automatic");
     }, 3000);
     return () => clearTimeout(t);
-  }, [runId, goal?.status, clear]);
+  }, [runId, goal?.status, clearWithOrigin]);
 
   return { goal, updateObjective, clear, pause, resume, isBusy: isSetting || isClearing };
 }

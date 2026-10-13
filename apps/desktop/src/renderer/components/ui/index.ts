@@ -5,6 +5,7 @@ export { CopyButton } from "./copy-button";
 export { AgentGlyph } from "./agent-glyph";
 
 // Segmented tabs
+export { TabStrip } from "./tab-strip";
 export {
   getNextSegmentedValue,
   getSegmentedTabId,
@@ -70,6 +71,7 @@ export { FileUploadDropdown, FILE_TYPES } from "./input/file-upload-dropdown";
 export type { UploadedFile } from "./input/file-upload-dropdown";
 export { ModelSelectDropdown } from "./input/model-select-dropdown";
 export { FastModeButton } from "./input/fast-mode-button";
+export { ServiceTierSelect } from "./input/service-tier-select";
 export { GoalButton } from "./input/goal-button";
 export { PermissionModeDropdown } from "./input/permission-mode-dropdown";
 export { CompactComposerControls } from "./input/compact-composer-controls";

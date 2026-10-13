@@ -10,6 +10,7 @@
 export { MODE_IDS, providerModes } from "./modes";
 export type { ModeId } from "./modes";
 import type { ModeId } from "./modes";
+import type { ConversationSettings, ModelServiceTier } from "./run-settings";
 
 export function modeLabel(mode: ModeId): string {
   switch (mode) {
@@ -50,6 +51,23 @@ export interface ReadRunHistoryPayload {
   end?: RunHistoryCursor | null;
   /** Desktop transcript may fetch large command/read outputs on expansion. */
   deferToolOutput?: boolean;
+  /** Bounded row/byte pages and deferred large bodies for phones. */
+  profile?: "mobile";
+}
+
+export interface ReadRunHistoryContentPayload {
+  runId: string;
+  source: "artifact" | "tool-input" | "tool-output";
+  id: number;
+  /** SQLite character offset, returned by the previous page. */
+  offset?: number;
+}
+
+export interface RunHistoryContentPage {
+  text: string;
+  offset: number;
+  nextOffset: number | null;
+  totalChars: number;
 }
 
 export interface DeferredToolOutput {
@@ -112,6 +130,8 @@ export interface RunResponse {
   providerId: string;
   mode: ModeId;
   model: string | null;
+  /** Includes the conversation's next-message preferences and legacy execution settings. */
+  configSnapshot?: Record<string, unknown> | null;
   title: string | null;
   goal: string | null;
   status: RunStatus;
@@ -306,7 +326,6 @@ export interface ProviderSummary {
 /** Reasoning-effort levels, low → high (mirror of mains `shared/effort-levels.ts`). */
 export { EFFORT_LEVELS } from "./effort-levels";
 export type { EffortLevel } from "./effort-levels";
-import type { EffortLevel } from "./effort-levels";
 
 /** `providers:getModels` row — the subset of the desktop's `ModelInfo` the picker shows. */
 export interface ModelInfo {
@@ -315,8 +334,9 @@ export interface ModelInfo {
   description?: string;
   isDefault?: boolean;
   supportsEffort?: boolean;
-  supportedEffortLevels?: EffortLevel[];
+  supportedEffortLevels?: string[];
   supportsFastMode?: boolean;
+  serviceTiers?: ModelServiceTier[];
 }
 
 /** `providers:modelsUpdated` push. */
@@ -383,6 +403,7 @@ export interface CommandSummary {
 }
 
 export interface StartRunPayload {
+  conversationSettings?: ConversationSettings;
   accountId: string;
   spaceId: string;
   providerId: string;
@@ -510,6 +531,10 @@ export interface ToolApprovalRequest {
   requestedSchema?: Record<string, unknown>;
   url?: string;
   description?: string;
+  /** Start on decline and disable implicit keyboard approval. */
+  defaultToNo?: boolean;
+  /** Only this call can be approved; offer no persistent permission grant. */
+  suppressAlwaysAllowRule?: boolean;
   timestamp: number;
 }
 
@@ -542,13 +567,14 @@ export interface AccountResponse {
 
 /** The subset of `runs:continue`'s payload the phone sends. */
 export interface ContinueRunPayload {
+  conversationSettings?: ConversationSettings;
   runId: string;
   accountId: string;
   /** The follow-up message to send. */
   message: string;
   /** Optional Page identity for a page-chat continuation. */
   atlasPageId?: string;
-  /** Model for this continuation; omitted = the provider's default. */
+  /** Legacy model override; omitted = the conversation's saved model. */
   model?: string | null;
   /** Images/documents picked on the phone. */
   attachments?: FileAttachment[];
