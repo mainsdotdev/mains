@@ -80,9 +80,11 @@ export async function showApprovalNotification(
     title: spec.title,
     ...(spec.subtitle ? { subtitle: spec.subtitle } : {}),
     body: spec.body,
-    actions: spec.actions.map((text) => ({ type: "button" as const, text })),
-    hasReply: spec.hasReply,
-    ...(spec.hasReply ? { replyPlaceholder: "Type your answer" } : {}),
+    ...(process.platform === "darwin" ? {
+      actions: spec.actions.map((text) => ({ type: "button" as const, text })),
+      hasReply: spec.hasReply,
+      ...(spec.hasReply ? { replyPlaceholder: "Type your answer" } : {}),
+    } : {}),
   });
 
   const answer = (interaction: NotificationInteraction) => {

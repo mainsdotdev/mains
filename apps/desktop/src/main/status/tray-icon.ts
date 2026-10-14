@@ -51,6 +51,10 @@ export function drawBadge(bitmap: Buffer, width: number, height: number): Buffer
  * own icons until it was recoloured.
  */
 function resolveIconPath(): string {
+  if (process.platform !== "darwin") {
+    return app.isPackaged ? path.join(process.resourcesPath, "icon.png")
+      : path.join(app.getAppPath(), "src/renderer/public/icon.png");
+  }
   if (!app.isPackaged) {
     return path.join(app.getAppPath(), "src/renderer/public/menu-iconTemplate.png");
   }

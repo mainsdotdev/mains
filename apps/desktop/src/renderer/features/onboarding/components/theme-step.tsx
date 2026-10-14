@@ -111,7 +111,7 @@ export function ThemeStep({
       </fieldset>
       <p className="onboarding-panel-note">
         {theme === "system"
-          ? "Auto follows your Mac’s appearance."
+          ? "Auto follows your system’s appearance."
           : "A look that feels like you."}{" "}
         This becomes your default theme.
       </p>

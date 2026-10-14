@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { localFileReference } from "@mains/contracts/local-file-reference";
 import { OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS } from "@mains/contracts/output-files";
@@ -7,6 +8,11 @@ import { OUTPUT_DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS } from "@mains/contracts
 export function resolveOutputReference(reference: string, root: string | null): string | null {
   let value = localFileReference(reference)?.path;
   if (!value) return null;
+  const href = reference.trim().replace(/^<|>$/g, "");
+  if (/^file:/i.test(href)) {
+    try { value = fileURLToPath(href.replace(/(?:#L\d+(?:-\d+)?|:\d+(?::\d+)?)$/, "")); }
+    catch { return null; }
+  }
   if (value.startsWith("~/")) value = path.join(os.homedir(), value.slice(2));
   return path.isAbsolute(value) ? path.resolve(value) : root ? path.resolve(root, value) : null;
 }
@@ -16,7 +22,7 @@ export function resolveOutputFilePath(reference: string, root: string | null): s
   let value = reference;
   if (!value || value.includes("\0") || value.length > 4096) return null;
   if (/^file:/i.test(value)) return resolveOutputReference(value, root);
-  if (/^[a-z][\w+.-]*:/i.test(value)) return null;
+  if (!/^[a-z]:[\\/]/i.test(value) && /^[a-z][\w+.-]*:/i.test(value)) return null;
   if (value.startsWith("~/")) value = path.join(os.homedir(), value.slice(2));
   return path.isAbsolute(value) ? path.resolve(value) : root ? path.resolve(root, value) : null;
 }

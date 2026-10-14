@@ -10,6 +10,7 @@ import { Text } from "@/components/ui";
 import { normalizeMathMarkdown, remarkStreamingMath } from "@/lib/math-markdown";
 import { remarkStreamingLinks } from "@/lib/streaming-links";
 import { rehypeStreamingText } from "@/lib/streaming-text";
+import { markdownFileUrlTransform } from "@/lib/file-path";
 
 import {
   agentMarkdownComponents,
@@ -36,6 +37,7 @@ export function AgentMarkdown({
     <Text as="div" size="sm" className={className}>
       <MarkdownImagePreviewContext.Provider value={onImagePreview}>
         <ReactMarkdown
+          urlTransform={markdownFileUrlTransform}
           components={agentMarkdownComponents}
           remarkPlugins={[
             remarkGfm,

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { RunArtifactResponse } from "./runs.dto";
 import type { RunTurnResponse } from "@mains/contracts/runs";
 import { projectRunDeliverables } from "./run-deliverables";
@@ -30,6 +31,13 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "mains-deliverab
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
 describe("per-turn final-answer deliverables", () => {
+  it("selects native absolute paths and file URLs with spaces and percent signs", async () => {
+    const absolute = file("Türkçe report 100%.pdf");
+    for (const reference of [absolute, pathToFileURL(absolute).href]) {
+      const result = outputs(await project([report(1, `[Report](<${reference}>)`)]));
+      expect(result.map(row => row.path)).toEqual([fs.realpathSync.native(absolute)]);
+    }
+  });
   it.each([
     ["report (v2).pptx", "[Deck](report%20(v2).pptx)"],
     ["Bob's report.docx", "Created `Bob's report.docx`."],
@@ -50,12 +58,12 @@ describe("per-turn final-answer deliverables", () => {
     expect(outputs(await project([report(1, 'Created "My report.docx".')])).map((row) => row.metadata?.fileName))
       .toEqual(["My report.docx"]);
   });
-  it.each(["draft#v1.md", "report%20.docx", "notes?draft.md"])("retains the literal registered filename %s", async (name) => {
+  it.each(["draft#v1.md", "report%20.docx", "notes?draft.md"].filter((name) => process.platform !== "win32" || !name.includes("?")))("retains the literal registered filename %s", async (name) => {
     const target = file(name);
     const artifact = { ...report(1, ""), kind: "document" as const, path: target,
       metadata: { turnId: 1, path: target, outputRole: "deliverable" } };
-    expect(outputs(await project([artifact])).map((row) => row.path)).toEqual([fs.realpathSync(target)]);
-    expect(outputs(await project([report(1, `Created \`${name}\`.`)])).map((row) => row.path)).toEqual([fs.realpathSync(target)]);
+    expect(outputs(await project([artifact])).map((row) => row.path)).toEqual([fs.realpathSync.native(target)]);
+    expect(outputs(await project([report(1, `Created \`${name}\`.`)])).map((row) => row.path)).toEqual([fs.realpathSync.native(target)]);
   });
   it("derives an image ID when the original file artifact cannot serve image bytes", async () => {
     const target = file("result.png");
@@ -69,8 +77,8 @@ describe("per-turn final-answer deliverables", () => {
     const candidate = { ...report(1, ""), kind: "document" as const, path: target,
       metadata: { turnId: 1, path: target, outputRole: "deliverable" } };
     const selected = outputs(await project([candidate, report(2, "Your file is ready.")]));
-    expect(selected.map((row) => row.path)).toEqual([fs.realpathSync(target)]);
-    expect(outputs(await project([candidate])).map((row) => row.path)).toEqual([fs.realpathSync(target)]);
+    expect(selected.map((row) => row.path)).toEqual([fs.realpathSync.native(target)]);
+    expect(outputs(await project([candidate])).map((row) => row.path)).toEqual([fs.realpathSync.native(target)]);
     expect(outputs(await project([candidate], [turn(1, "active")], false))).toEqual([]);
   });
   it("does not deliver working files or previews and honors reclassification", async () => {
@@ -84,7 +92,7 @@ describe("per-turn final-answer deliverables", () => {
     const target = file("outputs/report.pptx");
     const candidate = { ...report(1, ""), kind: "document" as const, path: target, metadata: { turnId: 1, path: target } };
     expect(outputs(await project([candidate, report(2, "[Deck](report.pptx)")])).map((row) => row.path))
-      .toEqual([fs.realpathSync(target)]);
+      .toEqual([fs.realpathSync.native(target)]);
     const other = file("drafts/report.pptx");
     expect(outputs(await project([candidate, { ...candidate, id: 2, path: other }, report(3, "[Deck](report.pptx)")]))).toEqual([]);
     expect(outputs(await project([candidate, report(2, "Ready.", 1), report(3, "[Deck](report.pptx)", 2)], [turn(1), turn(2)]))).toEqual([]);
@@ -152,7 +160,7 @@ describe("per-turn final-answer deliverables", () => {
     ];
     const result = outputs(await project(artifacts));
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ id: 2, kind: "image", path: fs.realpathSync(image),
+    expect(result[0]).toMatchObject({ id: 2, kind: "image", path: fs.realpathSync.native(image),
       metadata: { outputTurn: "turn:1", outputAnchor: { source: "artifact", id: 3 },
         source: "codex_image_generation", transparentBackground: false } });
   });
@@ -169,7 +177,7 @@ describe("per-turn final-answer deliverables", () => {
       report(5, "Working on the next image", 3),
     ];
     const result = outputs(await project(artifacts, [turn(1), turn(2), turn(3, "active")], false));
-    expect(result.map((row) => row.path)).toEqual([fs.realpathSync(image)]);
+    expect(result.map((row) => row.path)).toEqual([fs.realpathSync.native(image)]);
     expect(result[0].metadata?.outputTurn).toBe("turn:1");
   });
   it.each(["report.md", "copy.png"])("prefers explicitly delivered files over native working images (%s)", async (name) => {
@@ -180,7 +188,7 @@ describe("per-turn final-answer deliverables", () => {
         metadata: { turnId: 1, path: image, source: "codex_image_generation" } },
       report(2, `[Result](${name})`, 1, { messagePhase: "final_answer" }),
     ];
-    expect(outputs(await project(artifacts)).map((row) => row.path)).toEqual([fs.realpathSync(delivered)]);
+    expect(outputs(await project(artifacts)).map((row) => row.path)).toEqual([fs.realpathSync.native(delivered)]);
   });
   it("deduplicates canonical paths and keeps stable IDs when a file is delivered again", async () => {
     const target = file("My report.md");
@@ -188,7 +196,7 @@ describe("per-turn final-answer deliverables", () => {
     const artifacts = [candidate, report(2, `[Report](<${target}>) [Again](My%20report.md) ./My%20report.md`)];
     const result = outputs(await project(artifacts));
     expect(result).toHaveLength(1);
-    expect(result[0].path).toBe(fs.realpathSync(target));
+    expect(result[0].path).toBe(fs.realpathSync.native(target));
     expect(outputs(await project([...artifacts, report(3, `[Delivered](<${target}>)`)]))[0].id).toBe(result[0].id);
   });
   it("retains each completed turn's final outputs while a follow-up is still running", async () => {

@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyKeyboardShortcutUpdate,
   requireKeyboardShortcutUpdate,
 } from "./keyboardShortcuts.validation";
+
+vi.mock("../../../shared/runtime-platform", () => ({ getRuntimeOS: () => "darwin" }));
 
 describe("keyboard shortcut updates", () => {
   it("normalizes a valid custom binding", () => {
@@ -23,7 +25,7 @@ describe("keyboard shortcut updates", () => {
         { id: "app.openSettings", binding: "Command+Q" },
         {},
       ),
-    ).toThrow("reserved by macOS");
+    ).toThrow("reserved by the operating system");
 
     expect(() =>
       requireKeyboardShortcutUpdate(

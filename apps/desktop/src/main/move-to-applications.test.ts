@@ -28,7 +28,7 @@ beforeEach(() => {
   userData = fs.mkdtempSync(path.join(os.tmpdir(), "mains-move-"));
   mocks.app.isPackaged = true;
   mocks.app.getPath.mockReturnValue(userData);
-  mocks.app.isInApplicationsFolder.mockReturnValue(false);
+  mocks.app.isInApplicationsFolder.mockReset().mockReturnValue(false);
   mocks.app.moveToApplicationsFolder.mockReset();
   mocks.dialog.showMessageBox.mockReset();
   mocks.dialog.showMessageBoxSync.mockReset();
@@ -51,9 +51,20 @@ describe("shouldOfferMove", () => {
     expect(shouldOfferMove(base)).toBe(true);
     expect(shouldOfferMove({ ...base, isPackaged: false })).toBe(false);
     expect(shouldOfferMove({ ...base, platform: "linux" })).toBe(false);
+    expect(shouldOfferMove({ ...base, platform: "win32" })).toBe(false);
     expect(shouldOfferMove({ ...base, inApplicationsFolder: true })).toBe(false);
     expect(shouldOfferMove({ ...base, declined: true })).toBe(false);
   });
+});
+
+it.runIf(!onMac)("keeps starting without reading macOS-only Electron APIs", async () => {
+  mocks.app.isInApplicationsFolder.mockImplementation(() => {
+    throw new TypeError("app.isInApplicationsFolder is not a function");
+  });
+  await expect(offerMoveToApplications()).resolves.toBe(false);
+  expect(mocks.app.isInApplicationsFolder).not.toHaveBeenCalled();
+  expect(mocks.app.getPath).not.toHaveBeenCalled();
+  expect(mocks.dialog.showMessageBox).not.toHaveBeenCalled();
 });
 
 describe.runIf(onMac)("offerMoveToApplications", () => {

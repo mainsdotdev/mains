@@ -31,6 +31,8 @@ async function verifyRuntimeAssets(command) {
       '@blocknote/server-util', 'y-prosemirror', 'converter-dependency',
       'better-sqlite3', 'node-addon-api', 'node-pty', 'vscode-jsonrpc', 'zod', 'ws',
       '@anthropic-ai/claude-agent-sdk', '@github/copilot-sdk', '@github/copilot', '@vscode/ripgrep',
+      '@anthropic-ai/claude-agent-sdk-win32-x64', '@github/copilot-sdk-win32-x64',
+      '@github/copilot-win32-x64', '@vscode/ripgrep-win32-x64',
     ]) {
       const directory = path.join(desktop, 'node_modules', name);
       write(path.join(directory, 'package.json'), JSON.stringify({
@@ -48,7 +50,9 @@ async function verifyRuntimeAssets(command) {
       'main.js',
       'db/migrations/0000_initial.sql',
       'db/migrations/meta/_journal.json',
-      ...['better-sqlite3', 'node-pty', 'ws', '@blocknote/server-util', 'converter-dependency', '@github/copilot-sdk']
+      ...['better-sqlite3', 'node-pty', 'ws', '@blocknote/server-util', 'converter-dependency', '@github/copilot-sdk',
+        '@anthropic-ai/claude-agent-sdk-win32-x64', '@github/copilot-sdk-win32-x64',
+        '@github/copilot-win32-x64', '@vscode/ripgrep-win32-x64']
         .map(name => `node_modules/${name}/index.js`),
     ];
 

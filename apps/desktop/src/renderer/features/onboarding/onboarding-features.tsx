@@ -118,7 +118,7 @@ export const CORE_FEATURES: CoreFeature[] = [
   {
     id: "connect",
     title: "Mains Connect",
-    blurb: "Remote-control your Mac's agents from your phone",
+    blurb: "Remote-control your computer's agents from your phone",
     Icon: Relay,
     accent: "default",
     previewPlacement: "center",

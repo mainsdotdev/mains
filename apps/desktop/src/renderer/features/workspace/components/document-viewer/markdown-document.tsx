@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import ReactMarkdown from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
@@ -7,25 +7,39 @@ import { Text } from "@/components/ui";
 import { appApi } from "@/lib/transport";
 import { markdownComponents } from "@/components/markdown-components";
 import { markdownSanitizeSchema } from "@/lib/markdown-sanitize";
+import { isAbsoluteFilePath, markdownFileUrlTransform, resolveDocumentImagePath } from "@/lib/file-path";
 import { splitMarkdownFrontmatter } from "../../lib/markdown-frontmatter";
 
 /** Resolve README image references against the file, then use the signed image renderer. */
 function documentImageUrl(url: string, path: string): string {
-  const safeUrl = defaultUrlTransform(url);
+  const safeUrl = markdownFileUrlTransform(url);
   if (!safeUrl) return safeUrl;
   try {
     // Normalize network URLs for the shared load gate.
     if (safeUrl.startsWith("//")) return new URL(`https:${safeUrl}`).href;
     if (/^https?:/i.test(safeUrl)) return new URL(safeUrl).href;
-    if (safeUrl.startsWith("/") || safeUrl.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(safeUrl) || !path.startsWith("/")) {
-      return safeUrl;
-    }
-    const base = `file://${path.split("/").map(encodeURIComponent).join("/")}`;
-    return new URL(safeUrl, base).pathname;
+    const resolved = resolveDocumentImagePath(safeUrl, path);
+    // The shared image component decodes its href once. Keep literal percent
+    // sequences in native filenames encoded until that boundary.
+    return isAbsoluteFilePath(resolved)
+      ? encodeURI(resolved).replace(/#/g, "%23").replace(/\?/g, "%3F")
+      : resolved;
   } catch {
     return "";
   }
 }
+
+// Local documents can name a Windows drive or a file URL. The URL transform
+// still admits only absolute file paths; script/data schemes stay blocked.
+const fileProtocols = ["file", ..."abcdefghijklmnopqrstuvwxyz"];
+const documentSanitizeSchema = {
+  ...markdownSanitizeSchema,
+  protocols: {
+    ...markdownSanitizeSchema.protocols,
+    href: [...(markdownSanitizeSchema.protocols?.href ?? []), ...fileProtocols],
+    src: [...(markdownSanitizeSchema.protocols?.src ?? []), ...fileProtocols],
+  },
+};
 
 /**
  * Markdown in the viewer panel: React all the way down, unlike the Office
@@ -119,11 +133,11 @@ export function MarkdownDocument({ path, docType = "md" }: { path: string; docTy
       )}
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={docType === "md" ? [rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]] : []}
+        rehypePlugins={docType === "md" ? [rehypeRaw, [rehypeSanitize, documentSanitizeSchema]] : []}
         components={markdownComponents}
         // A native picture source would bypass MarkdownImage's load action.
         disallowedElements={["source"]}
-        urlTransform={(url, key) => key === "src" ? documentImageUrl(url, path) : defaultUrlTransform(url)}
+        urlTransform={(url, key) => key === "src" ? documentImageUrl(url, path) : markdownFileUrlTransform(url)}
       >
         {document.body}
       </ReactMarkdown>

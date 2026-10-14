@@ -46,6 +46,8 @@ describe("isRemoteImageSrc", () => {
   it.each([
     ["https://evil.example/x.png?d=secret", true],
     ["http://evil.example/x.png", true],
+    ["\\\\server\\share\\chart.png", true],
+    ["%5C%5Cserver%5Cshare%5Cchart.png", true],
     ["mains-capture://shot-1.png", false],
     ["mains-img://proxy?url=…", false],
     ["data:image/png;base64,AAAA", false],
@@ -68,6 +70,24 @@ describe("markdownComponents / images", () => {
     render(<MarkdownLink href="summary%23draft.md">Summary</MarkdownLink>);
     fireEvent.click(screen.getByRole("button", { name: /Summary/ }));
     expect(linkHarness.openFile).toHaveBeenCalledWith("summary#draft.md");
+  });
+  it("loads a Windows network image only after the user approves it", async () => {
+    linkHarness.signImage.mockResolvedValue({ success: true, data: "mains-localimg://img/?path=network&sig=test" });
+    renderMarkdown("![Shared chart](%5C%5Cserver%5Cshare%5Cchart.png)");
+    expect(screen.queryByRole("img", { name: "Shared chart" })).toBeNull();
+    expect(linkHarness.signImage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /remote image from server/ }));
+    await waitFor(() => expect(linkHarness.signImage).toHaveBeenCalledWith("\\\\server\\share\\chart.png"));
+  });
+  it("keeps literal percent escapes in Windows image filenames", async () => {
+    linkHarness.signImage.mockResolvedValue({ success: true, data: "mains-localimg://img/?path=windows&sig=test" });
+    renderMarkdown("![Percent preview](C:/Test%20User/chart%2520.png)");
+    await waitFor(() => expect(linkHarness.signImage).toHaveBeenCalledWith("C:/Test User/chart%20.png"));
+  });
+  it("signs Windows image paths without treating a drive letter as a URL scheme", async () => {
+    linkHarness.signImage.mockResolvedValue({ success: true, data: "mains-localimg://img/?path=windows&sig=test" });
+    renderMarkdown("![Windows preview](C:/Test%20User/chart.png)");
+    await waitFor(() => expect(linkHarness.signImage).toHaveBeenCalledWith("C:/Test User/chart.png"));
   });
   it("loads an encoded local image path through the signed image protocol", async () => {
     const signed = "mains-localimg://img/?path=preview&sig=test";
@@ -93,6 +113,32 @@ describe("markdownComponents / images", () => {
     fireEvent.click(screen.getByRole("button", { name: /remote image from example.com/ }));
     expect(screen.getByRole("img", { name: "Remote preview" }).getAttribute("src"))
       .toContain(encodeURIComponent("https://example.com/image.png?token=secret"));
+  });
+});
+
+describe("Windows markdown links", () => {
+  it.each([
+    "C:/Test%20User/report%23draft.pdf#overview",
+    "file:///C:/Test%20User/report%23draft.pdf#overview",
+  ])("preserves encoded filename characters while removing the navigation suffix in %s", (href) => {
+    renderMarkdown(`[Report](${href})`);
+    fireEvent.click(screen.getByRole("button", { name: /Report/ }));
+    expect(linkHarness.openFile).toHaveBeenCalledWith("C:/Test User/report#draft.pdf");
+  });
+  it("retains a literal percent escape and strips the line locator in a Windows path", () => {
+    renderMarkdown("[Report](C:/Test%20User/report%2520.pdf:114:7)");
+    fireEvent.click(screen.getByRole("button", { name: /Report/ }));
+    expect(linkHarness.openFile).toHaveBeenCalledWith("C:/Test User/report%20.pdf");
+  });
+  it("decodes a Windows file link exactly once", () => {
+    renderMarkdown("[Percent report](file:///C:/Test%20User/report%2520.pdf)");
+    fireEvent.click(screen.getByRole("button", { name: /Percent report/ }));
+    expect(linkHarness.openFile).toHaveBeenCalledWith("C:/Test User/report%20.pdf");
+  });
+  it("opens a Windows file reference at its native path", () => {
+    renderMarkdown("[Report](C:/Test%20User/report.pdf)");
+    fireEvent.click(screen.getByRole("button", { name: /Report/ }));
+    expect(linkHarness.openFile).toHaveBeenCalledWith("C:/Test User/report.pdf");
   });
 });
 

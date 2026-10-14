@@ -11,9 +11,10 @@ export function localFileReference(reference: string): { path: string; line?: nu
       const url = new URL(value);
       if (url.hostname && url.hostname !== "localhost") return null;
       value = url.pathname;
+      if (/^\/[a-z]:\//i.test(value)) value = value.slice(1);
     } catch { return null; }
   } else {
-    if (/^[a-z][\w+.-]*:/i.test(value)) return null;
+    if (!/^[a-z]:[\\/]/i.test(value) && /^[a-z][\w+.-]*:/i.test(value)) return null;
     value = value.split(/[?#]/, 1)[0];
   }
   try { value = decodeURIComponent(value); } catch { /* Literal percent in a filename. */ }

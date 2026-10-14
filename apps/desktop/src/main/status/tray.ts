@@ -25,7 +25,7 @@ let unsubscribe: (() => void) | null = null;
 /** Title, tooltip and badge — what the menu bar shows without opening the menu. */
 function applyToIcon(snapshot: TraySnapshot): void {
   if (!tray || tray.isDestroyed()) return;
-  tray.setTitle(trayTitle(snapshot), { fontType: "monospacedDigit" });
+  if (process.platform === "darwin") tray.setTitle(trayTitle(snapshot), { fontType: "monospacedDigit" });
   tray.setToolTip(trayTooltip(snapshot));
   const attention = needsAttention(snapshot);
   if (icons && attention !== showingAttention) {
