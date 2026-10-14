@@ -4,7 +4,8 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { app, type BrowserWindow } from "electron";
+import { app, nativeTheme, type BrowserWindow } from "electron";
+import os from "node:os";
 import Database from "better-sqlite3";
 import * as pty from "node-pty";
 import { rgPath } from "@vscode/ripgrep";
@@ -68,4 +69,34 @@ export async function runPackageSmoke(window: BrowserWindow): Promise<void> {
   const renderer = await window.webContents.executeJavaScript("({ os: window.api.platform.os, hasTransport: !!window.mainTransport, mounted: !!document.getElementById('root')?.childElementCount })");
   assert.equal(renderer.os, process.platform, "Packaged preload OS is missing");
   assert(renderer.hasTransport && renderer.mounted, "Packaged renderer failed to mount");
+
+  if (process.platform === "win32") {
+    const appearance = {
+      light: { translucent: false, backgroundColor: "#f7f7f6" },
+      dark: { translucent: true, backgroundColor: "#141414" },
+    };
+    const previousSource = nativeTheme.themeSource;
+    try {
+      nativeTheme.themeSource = "dark";
+      const result = await window.webContents.executeJavaScript(`window.api.app.setWindowAppearance(${JSON.stringify(appearance)})`);
+      assert(result.success, "Packaged window appearance IPC failed");
+      const supported = Number(os.release().split(".")[2]) >= 22621;
+      // BrowserWindow's getter returns RGB only; its alpha is deliberately
+      // omitted. The DWM query below verifies the native Acrylic material.
+      assert.equal(window.getBackgroundColor(), supported ? "#000000" : "#141414");
+      if (supported) {
+        // Read the actual DWM attribute, rather than trusting the JS setter.
+        const hwnd = window.getNativeWindowHandle().readBigUInt64LE().toString();
+        const script = `Add-Type 'using System; using System.Runtime.InteropServices; public static class MainsDwmSmoke { [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size); }'; $value=0; $status=[MainsDwmSmoke]::DwmGetWindowAttribute([IntPtr]${hwnd},38,[ref]$value,4); if($status -ne 0){throw "DWM query failed: $status"}; Write-Output $value`;
+        const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { timeout: 30_000, windowsHide: true });
+        assert.equal(stdout.trim(), "3", "Windows did not enable Acrylic (DWMSBT_TRANSIENTWINDOW)");
+      }
+      const off = { ...appearance, dark: { ...appearance.dark, translucent: false } };
+      assert((await window.webContents.executeJavaScript(`window.api.app.setWindowAppearance(${JSON.stringify(off)})`)).success);
+      assert.equal(window.getBackgroundColor(), "#141414", "Disabling Acrylic must restore an opaque surface");
+      console.log("Window appearance smoke passed: Acrylic DWM attribute and opaque toggle.");
+    } finally {
+      nativeTheme.themeSource = previousSource;
+    }
+  }
 }

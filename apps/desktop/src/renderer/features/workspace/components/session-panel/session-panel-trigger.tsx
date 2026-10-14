@@ -52,7 +52,7 @@ export function SessionPanelTrigger({
       tooltipPosition="left"
       className={isOpen ? "text-primary-700 dark:text-primary-300" : undefined}
     >
-      <Menu className="size-4" fill={isOpen ? "currentColor" : "none"} />
+      <Menu className="size-4 mb-" fill={isOpen ? "currentColor" : "none"} />
     </Button>
   );
 }

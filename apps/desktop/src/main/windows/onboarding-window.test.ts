@@ -87,6 +87,7 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("./crash-recovery", () => ({ attachCrashRecovery: vi.fn() }));
+vi.mock("./window-appearance", () => ({ attachWindowAppearance: vi.fn(), windowsWindowAppearanceOptions: () => ({}) }));
 vi.mock("./dock-icon", () => ({ getAppIconPath: () => "icon.png", getSavedDockIcon: () => "default" }));
 vi.mock("./splashWindow", () => ({ createSplashWindow: mocks.createSplashWindow, closeSplashWindow: mocks.closeSplashWindow }));
 
@@ -109,7 +110,7 @@ beforeEach(() => {
   mocks.reducedMotion = false;
   mocks.deferResize = false;
   mocks.createSplashWindow.mockClear();
-  mocks.closeSplashWindow.mockClear();
+  mocks.closeSplashWindow.mockReset();
   fs.writeFileSync(statePath(), JSON.stringify(savedState));
 });
 afterEach(() => {
@@ -122,6 +123,47 @@ afterEach(() => {
 });
 
 describe("native onboarding window", () => {
+  it.each(["darwin", "win32"])("keeps the splash until the main window is shown on %s", async (platform) => {
+    Object.defineProperty(process, "platform", { ...hostPlatform, value: platform });
+    const transitions: string[] = [];
+    const window = createWindow({
+      showStartupSplash: true,
+      onReadyToShow: (readyWindow: BrowserWindow) => {
+        transitions.push("show main");
+        readyWindow.show();
+      },
+    });
+    mocks.closeSplashWindow.mockImplementation(() => {
+      transitions.push(window.isVisible() ? "close splash" : "close splash while main hidden");
+    });
+    await setMainWindowOnboarding(false, false);
+    window.emit("ready-to-show");
+    await setMainWindowOnboarding(false);
+    await vi.waitFor(() => expect(window.show).toHaveBeenCalledOnce());
+    expect(transitions).toEqual(["show main", "close splash"]);
+  });
+
+  it("retains the splash when React mounts before the native first paint", async () => {
+    const window = createWindow({ showStartupSplash: true });
+    await setMainWindowOnboarding(false, false);
+    await setMainWindowOnboarding(false);
+    expect(mocks.closeSplashWindow).not.toHaveBeenCalled();
+    expect(window.show).not.toHaveBeenCalled();
+    window.emit("ready-to-show");
+    await vi.waitFor(() => expect(window.show).toHaveBeenCalledOnce());
+    expect(window.show.mock.invocationCallOrder[0]).toBeLessThan(mocks.closeSplashWindow.mock.invocationCallOrder[0]);
+  });
+
+  it("shows the recovery window before dismissing a splash on the readiness timeout", async () => {
+    vi.useFakeTimers();
+    const window = createWindow({ showStartupSplash: true });
+    await setMainWindowOnboarding(false, false);
+    window.emit("ready-to-show");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(window.show).toHaveBeenCalledOnce();
+    expect(window.show.mock.invocationCallOrder[0]).toBeLessThan(mocks.closeSplashWindow.mock.invocationCallOrder[0]);
+  });
+
   it("ignores stale completion hints and waits for mounted onboarding without creating a splash", async () => {
     fs.writeFileSync(path.join(mocks.userData, "onboarding-startup.json"), JSON.stringify({ completed: true }));
     const onReadyToShow = vi.fn();

@@ -6,10 +6,10 @@ describe("desktop OS capabilities", () => {
     expect(getCapabilities(true, "win32")).toMatchObject({
       nativeDialogs: true, terminal: true, localImages: true, embeddedBrowser: true,
       nativeNotifications: true, windowChrome: true, preventSleep: true,
-      dockIcon: false, macWindowChrome: false, appshots: false, openWithApp: false, autoUpdate: false,
+      dockIcon: false, macWindowChrome: false, windowsWindowChrome: true, appshots: false, openWithApp: false, autoUpdate: false,
     });
     expect(getCapabilities(true, "darwin")).toMatchObject({
-      dockIcon: true, macWindowChrome: true, appshots: true, openWithApp: true, autoUpdate: true,
+      dockIcon: true, macWindowChrome: true, windowsWindowChrome: false, appshots: true, openWithApp: true, autoUpdate: true,
     });
   });
   it("keeps web capabilities independent of the backend host's OS", () => {

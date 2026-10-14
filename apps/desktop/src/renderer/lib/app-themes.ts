@@ -134,7 +134,7 @@ export interface AppearanceChoice {
   readonly foreground?: string;
   readonly contrast?: number;
   /**
-   * Whether the frame lets the macOS vibrancy through. Unset is opaque so
+   * Whether the frame lets the native window backdrop through. Unset is opaque so
    * the frame matches the workspace composer fill in every theme.
    */
   readonly translucent?: boolean;

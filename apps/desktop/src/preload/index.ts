@@ -4,6 +4,7 @@ import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provide
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 import type { DashboardQuery, ProviderFilter } from "@mains/contracts/stats";
 import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
+import type { WindowAppearance } from "@mains/contracts/window-appearance";
 import { contextBridge, ipcRenderer } from "electron";
 import type { RunExperienceOptions, RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
 import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
@@ -1143,6 +1144,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.app.setMenuBarIconVisible, visible),
     setThemeSource: (theme: "system" | "light" | "dark") =>
       ipcRenderer.invoke(CHANNELS.app.setThemeSource, theme),
+    setWindowAppearance: (appearance: WindowAppearance): Promise<ServiceResponse<null>> =>
+      ipcRenderer.invoke(CHANNELS.app.setWindowAppearance, appearance),
     setOnboardingWindow: (onboarding: boolean, contentReady = true): Promise<ServiceResponse<null>> =>
       ipcRenderer.invoke(CHANNELS.app.setOnboardingWindow, onboarding, contentReady),
     onFlushAndQuit: (callback: () => void) => {

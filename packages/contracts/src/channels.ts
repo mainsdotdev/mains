@@ -19,6 +19,7 @@ export const CHANNELS = {
     setMenuBarIconVisible: "app:setMenuBarIconVisible",
     setOnboardingWindow: "app:setOnboardingWindow",
     setThemeSource: "app:setThemeSource",
+    setWindowAppearance: "app:setWindowAppearance",
     setUnsavedChanges: "app:setUnsavedChanges",
     windowRequest: "app:windowRequest",
   },

@@ -100,6 +100,8 @@ import {
   applySavedThemeSource,
   registerThemeSourceIpc,
   unregisterThemeSourceIpc,
+  registerWindowAppearanceIpc,
+  unregisterWindowAppearanceIpc,
   registerOnboardingWindowIpc,
   unregisterOnboardingWindowIpc,
   applySavedDockIcon,
@@ -1059,6 +1061,7 @@ async function initializeApp() {
     }));
     registerWindowRequestIpc();
     registerThemeSourceIpc();
+    registerWindowAppearanceIpc();
     registerOnboardingWindowIpc();
     registerDockIconIpc();
 
@@ -1155,8 +1158,6 @@ async function initializeApp() {
       // The renderer's early storage read permits this only for completed users.
       showStartupSplash: !SMOKE_TEST,
       onReadyToShow: (window) => {
-        // Close splash and show main window
-        closeSplashWindow();
         if (SMOKE_TEST) {
           void runPackageSmoke(window).then(() => finishPackageSmoke(), finishPackageSmoke);
           return;
@@ -1283,6 +1284,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.app.getFullscreen);
     unregisterWindowRequestIpc();
     unregisterThemeSourceIpc();
+    unregisterWindowAppearanceIpc();
     unregisterOnboardingWindowIpc();
     unregisterDockIconIpc();
 

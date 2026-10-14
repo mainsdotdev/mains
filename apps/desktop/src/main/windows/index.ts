@@ -16,6 +16,8 @@ export { openAboutWindow, getAboutWindow } from "./aboutWindow";
 
 export { watchChildProcesses } from "./crash-recovery";
 
+export { registerWindowAppearanceIpc, unregisterWindowAppearanceIpc } from "./window-appearance";
+
 export {
   registerOnboardingWindowIpc,
   unregisterOnboardingWindowIpc,

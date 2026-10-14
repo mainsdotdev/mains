@@ -67,6 +67,17 @@ the target architecture. The Windows icon reuses the existing iconset:
 
 ## Automated checks
 
+The translucent-sidebar setting uses native Acrylic on Windows 11 22H2 and
+newer. A client-drawn title bar with native Window Controls Overlay preserves
+caption buttons, resizing and snap behavior. The renderer reserves that row
+above its content viewport. The active provider's light/dark translucency and
+opaque frame colors are sent over local Electron IPC; the native theme selects
+the active appearance. The last resolved appearance is saved as a startup hint.
+Older Windows builds fall back to the opaque theme color. Windows can also
+replace Acrylic with its own opaque fallback when system transparency is off.
+The package smoke reads the real DWM Acrylic attribute and checks that disabling
+translucency restores an opaque backing surface.
+
 Windows CI checks lint/types, build asset copying, keyboard and document UI,
 native provider discovery/probes, literal CLI argv and process-tree cleanup,
 real PowerShell invocation, MCP stdio/named-pipe isolation, Git behavior and

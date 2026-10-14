@@ -26,6 +26,8 @@ export interface Capabilities {
   windowChrome: boolean;
   /** The macOS traffic lights share the renderer header. */
   macWindowChrome: boolean;
+  /** Native Windows buttons over the client-drawn title bar. */
+  windowsWindowChrome: boolean;
   /** Native Dock icon customization. */
   dockIcon: boolean;
   /** Keep the host machine awake during runs (local power management). */
@@ -50,6 +52,7 @@ const ELECTRON: Capabilities = {
   autoUpdate: true,
   windowChrome: true,
   macWindowChrome: true,
+  windowsWindowChrome: false,
   dockIcon: true,
   preventSleep: true,
   nativeNotifications: true,
@@ -68,6 +71,7 @@ const WEB: Capabilities = {
   autoUpdate: false,
   windowChrome: false,
   macWindowChrome: false,
+  windowsWindowChrome: false,
   dockIcon: false,
   preventSleep: false,
   nativeNotifications: false,
@@ -79,7 +83,7 @@ const WEB: Capabilities = {
 export function getCapabilities(electron: boolean, os: string): Capabilities {
   if (!electron) return { ...WEB };
   const mac = os === "darwin";
-  return { ...ELECTRON, openWithApp: mac, appshots: mac, macWindowChrome: mac, dockIcon: mac,
+  return { ...ELECTRON, openWithApp: mac, appshots: mac, macWindowChrome: mac, windowsWindowChrome: os === "win32", dockIcon: mac,
     // Windows beta upgrades use the installer while its release feed is validated.
     autoUpdate: mac };
 }

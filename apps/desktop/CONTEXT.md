@@ -375,6 +375,8 @@ _Avoid_: adding a panel to `components/layout/` because that's where panels used
 **shell header**:
 The shared top row above the main working area and preview panels. `components/layout/shell-header.tsx` owns the row, contextual action space and measured reservation for fixed window controls. `use-shell-header-chrome.ts` owns native window/fullscreen spacing.
 
+The Windows main window uses native Window Controls Overlay above the renderer's content viewport. `MainLayout` reserves its CSS environment height and gives fixed panels a layout containing block below that row; the existing drag region and action stacking remain within that viewport. The active provider's resolved light/dark frame colors and translucency are mirrored through local-only `app:setWindowAppearance`. Windows 11 22H2+ uses Acrylic when the current appearance is translucent and an opaque theme color otherwise. A validated `window-appearance.json` startup hint restores the last resolved appearance before construction; `nativeTheme` changes select the matching appearance and native button color. macOS retains Vibrancy. The startup splash closes after the prepared main window has been shown.
+
 - The sidebar toggle anchors to the window's left edge, accounting for native window controls and fullscreen, independently of sidebar panel width.
 - Session details and sources anchor to the main working area's right edge and follow that edge as adjacent panels change its width. Chat options belong to their conversation tab; each tab group's create action belongs to that group.
 - Preview expand/restore, reload and close actions anchor to their own preview header's right edge and move with that preview.
