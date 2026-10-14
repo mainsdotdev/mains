@@ -23,7 +23,7 @@ try {
   const result = existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, 'utf8')) : null;
   assert.equal(code, 0, `Packaged app exited ${code}: ${output}`);
   assert(result?.success, `Package smoke failed: ${result?.error ?? output}`);
-  console.log(`Package smoke passed (${result.platform}-${result.arch}): SQLite, PTY, providers, search, preload, renderer.`);
+  console.log(`Package smoke passed (${result.platform}-${result.arch}): SQLite, Git init/clone, PTY, providers, search, preload, renderer.`);
 } finally {
   clearTimeout(timeout);
   if (child.exitCode === null) child.kill();

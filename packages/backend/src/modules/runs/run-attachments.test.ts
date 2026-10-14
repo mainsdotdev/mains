@@ -100,8 +100,18 @@ describe("sanitizeRunAttachments", () => {
 
   it("refuses a symlink inside the directory that points outside it", () => {
     const link = path.join(captureDir, "link.png");
-    fs.symlinkSync(outside, link);
-    expect(() => sanitizeRunAttachments([image({ sourcePath: link })], captureDir)).toThrow(
+    let sourcePath = link;
+    if (process.platform === "win32") {
+      // Directory junctions exercise the same escape without symlink privileges.
+      const external = path.join(root, "external");
+      fs.mkdirSync(external);
+      fs.copyFileSync(outside, path.join(external, "secret.txt"));
+      fs.symlinkSync(external, link, "junction");
+      sourcePath = path.join(link, "secret.txt");
+    } else {
+      fs.symlinkSync(outside, link);
+    }
+    expect(() => sanitizeRunAttachments([image({ sourcePath })], captureDir)).toThrow(
       "trusted Mains capture",
     );
   });

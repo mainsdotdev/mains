@@ -781,10 +781,11 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
 
   /**
    * List installed plugins without loading the full remote marketplace.
+   * Include the workspace when discovering repository-local marketplaces.
    * Providers without a dedicated installed-only surface may fall back to
    * filtering listPlugins() in the adapter factory.
    */
-  listInstalledPlugins?(): Promise<PluginListResponse>;
+  listInstalledPlugins?(workspacePath?: string): Promise<PluginListResponse>;
 
   /**
    * Read detailed plugin info including skills, apps, and MCP servers.
@@ -983,7 +984,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   getAccountInfo?(): Promise<AccountInfo>;
   updateCli?(): Promise<CliUpdateResult>;
   listPlugins?(): Promise<PluginListResponse>;
-  listInstalledPlugins?(): Promise<PluginListResponse>;
+  listInstalledPlugins?(workspacePath?: string): Promise<PluginListResponse>;
   readPlugin?(pluginName: string, marketplacePath: string): Promise<PluginDetail>;
   installPlugin?(pluginId: string, scope?: PluginScope): Promise<void>;
   uninstallPlugin?(pluginId: string): Promise<void>;

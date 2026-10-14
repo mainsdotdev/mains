@@ -93,6 +93,12 @@ function providerPathDirectories(): string[] {
       path.join(localData, "cursor-agent"),
       path.join(localData, "Microsoft", "WinGet", "Links"),
       path.join(process.env.ProgramFiles ?? "C:\\Program Files", "nodejs"),
+      // Explorer can retain the PATH from before Git was installed. Use only
+      // Git's cmd directory so its Unix utilities cannot shadow Windows tools.
+      path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "cmd"),
+      ...(process.env.ProgramW6432 ? [path.join(process.env.ProgramW6432, "Git", "cmd")] : []),
+      ...(process.env["ProgramFiles(x86)"] ? [path.join(process.env["ProgramFiles(x86)"]!, "Git", "cmd")] : []),
+      path.join(localData, "Programs", "Git", "cmd"),
       ...(process.env.NVM_SYMLINK ? [process.env.NVM_SYMLINK] : [])];
   }
   const directories = [path.join(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin",

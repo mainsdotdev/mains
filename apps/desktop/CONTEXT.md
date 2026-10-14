@@ -313,6 +313,7 @@ _Avoid_: reconstructing `thread/start|resume|fork`, `turn/start`, or `review/sta
 
 **Codex capability module**:
 The deep discovery/management module in `codex-capabilities.ts`, created through `createCodexCapabilities(...)`. It owns Codex model, account, rate-limit, skill, and plugin operations; maps their app-server responses into shared adapter types; and hides plugin feature gating, TTL/in-flight cache deduplication, marketplace reference indexing, mutation invalidation, and connector-directory enrichment behind a small object interface. `codex.driver.ts` supplies the live app-server and CLI-health dependencies, delegates `ProviderDriver` capability methods to this module, and retains app-server and goal lifecycle orchestration.
+Composer plugin discovery passes the selected workspace to `plugin/installed.cwds`. Installed-plugin values and in-flight requests are cached by workspace, keeping repository-local marketplaces separate from each other and from the home-scoped catalog. Plugin mutations and server closure invalidate every workspace cache. Locally installed plugin and skill files belong to the selected backend host's Codex profile.
 _Avoid_: reintroducing capability response mapping, plugin catalog caches, feature-gate state, or remote plugin identity resolution inside `codex.driver.ts`; moving run/thread notification semantics into the capability module.
 
 **native voice session**:

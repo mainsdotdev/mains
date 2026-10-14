@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
+import { augmentPathForPackagedApp } from "../providers/providers.utils";
 
 // ─────────────────────────────────────────────────────────────
 // git module tests — real temporary repos, no simple-git mock.
@@ -403,7 +405,29 @@ describe("initRepo", () => {
   });
 });
 
-describe("cloneRepo — URL hardening", () => {
+describe("cloneRepo", () => {
+  it.runIf(process.platform === "win32")("clones with the stale PATH inherited from Windows Explorer", async () => {
+    const source = makeRepo();
+    const url = "https://mains-test.invalid/fixture.git";
+    const config = path.join(sandbox, "clone-config");
+    // Redirect this fixture URL locally so the regression needs no network or auth.
+    git(sandbox, "config", "--file", config, `url.${pathToFileURL(source).href}.insteadOf`, url);
+    git(sandbox, "config", "--file", config, "core.autocrlf", "false");
+    const parent = path.join(sandbox, "Türkçe clone parent");
+    fs.mkdirSync(parent);
+    vi.stubEnv("GIT_CONFIG_GLOBAL", config);
+    vi.stubEnv("PATH", path.join(process.env.SystemRoot ?? "C:\\Windows", "System32"));
+    try {
+      augmentPathForPackagedApp(true);
+      const result = await gitService.cloneRepo(url, parent);
+      expect(result).toEqual({ clonedPath: path.join(parent, "fixture"), defaultBranch: "main", originUrl: url });
+      expect(fs.readFileSync(path.join(result.clonedPath, "README.md"), "utf8")).toBe("# test\n");
+      expect(await gitService.getCurrentBranch(result.clonedPath)).toBe("main");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects option-injection and non-transport URLs", async () => {
     await expect(
       gitService.cloneRepo("-oProxyCommand=evil", sandbox),

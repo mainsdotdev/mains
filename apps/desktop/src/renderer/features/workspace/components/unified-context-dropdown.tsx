@@ -13,6 +13,7 @@ import { PROVIDER_IDS } from "../../../../shared/provider-ids";
 import { getProviderVariantById } from "@/lib/provider-variants";
 import { ProviderIcon } from "./provider-icon";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
+import { isAbsoluteFilePath, isWindowsAbsolutePath } from "@/lib/file-path";
 
 /**
  * "@" and "/" open the full combined menu (skills, files, issues, commands);
@@ -48,29 +49,35 @@ function fetchReducer(state: FetchState, action: FetchAction): FetchState {
   }
 }
 
-function parseFileFilterText(filterText: string): { dirPath: string; nameFilter: string } {
-  const lastSlash = filterText.lastIndexOf("/");
+function parseFileFilterText(filterText: string, workspacePath?: string): { dirPath: string; nameFilter: string } {
+  const text = workspacePath && isWindowsAbsolutePath(workspacePath)
+    ? filterText.replace(/\\/g, "/") : filterText;
+  const lastSlash = text.lastIndexOf("/");
   if (lastSlash === -1) {
-    return { dirPath: "", nameFilter: filterText };
+    return { dirPath: "", nameFilter: text };
   }
   return {
-    dirPath: filterText.slice(0, lastSlash + 1),
-    nameFilter: filterText.slice(lastSlash + 1),
+    dirPath: text.slice(0, lastSlash + 1),
+    nameFilter: text.slice(lastSlash + 1),
   };
 }
 
-/** Lowercase relative path from workspace root, using / */
+/** Backend-relative display/navigation path, using / and preserving filename case. */
 function workspaceRelativePath(fullPath: string, workspacePath: string): string {
-  const root = workspacePath.replace(/\/$/, "");
-  if (!fullPath.startsWith(root)) return fullPath;
-  return fullPath.slice(root.length).replace(/^\//, "");
+  const windows = isWindowsAbsolutePath(workspacePath);
+  const root = (windows ? workspacePath.replace(/\\/g, "/") : workspacePath).replace(/\/+$/, "");
+  const file = windows ? fullPath.replace(/\\/g, "/") : fullPath;
+  const comparableRoot = windows ? root.toLowerCase() : root;
+  const comparableFile = windows ? file.toLowerCase() : file;
+  if (comparableFile === comparableRoot) return "";
+  if (!comparableFile.startsWith(`${comparableRoot}/`)) return fullPath;
+  return file.slice(root.length + 1);
 }
 
 function workspaceRelativeDir(fullPath: string, workspacePath?: string): string {
   if (!workspacePath) return "";
-  const root = workspacePath.replace(/\/$/, "");
-  if (!fullPath.startsWith(root)) return "";
-  const rel = fullPath.slice(root.length).replace(/^\//, "");
+  const rel = workspaceRelativePath(fullPath, workspacePath);
+  if (rel === fullPath) return "";
   return rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
 }
 
@@ -81,10 +88,11 @@ function abbreviateHome(path: string): string {
 function formatFileLocation(fullPath: string, workspacePath?: string): string | null {
   const rel = workspaceRelativeDir(fullPath, workspacePath);
   if (rel) return rel;
-  if (workspacePath && fullPath.startsWith(workspacePath.replace(/\/$/, ""))) {
+  if (workspacePath && workspaceRelativePath(fullPath, workspacePath) !== fullPath) {
     return null;
   }
-  const dir = fullPath.includes("/") ? fullPath.slice(0, fullPath.lastIndexOf("/")) : fullPath;
+  const normalized = isWindowsAbsolutePath(fullPath) ? fullPath.replace(/\\/g, "/") : fullPath;
+  const dir = normalized.includes("/") ? normalized.slice(0, normalized.lastIndexOf("/")) : normalized;
   return abbreviateHome(dir);
 }
 
@@ -324,7 +332,7 @@ export function UnifiedContextDropdown({
     triggerRef,
   );
 
-  const { dirPath, nameFilter } = useMemo(() => parseFileFilterText(filterText), [filterText]);
+  const { dirPath, nameFilter } = useMemo(() => parseFileFilterText(filterText, workspacePath), [filterText, workspacePath]);
 
   const isWorkspaceFileSearch = dirPath === "" && nameFilter.length > 0;
 
@@ -335,8 +343,12 @@ export function UnifiedContextDropdown({
       let cancelled = false;
       dispatchFetch({ type: "fetch_start" });
 
+      const windows = isWindowsAbsolutePath(workspacePath);
+      const separator = windows ? "\\" : "/";
+      const root = workspacePath.replace(windows ? /[\\/]+$/ : /\/+$/, "");
+      const relativeDir = dirPath.replace(/\/$/, "");
       const fullDirPath = dirPath
-        ? `${workspacePath}/${dirPath.replace(/\/$/, "")}`
+        ? `${root}${separator}${windows ? relativeDir.replace(/\//g, "\\") : relativeDir}`
         : workspacePath;
 
       window.api.fileExplorer
@@ -559,8 +571,10 @@ export function UnifiedContextDropdown({
 
   const navigateToDirectory = useCallback(
     (entry: DirEntry, currentDirPath: string) => {
+      const relative = workspaceRelativePath(entry.fullPath, workspacePath ?? "");
+      if (isWorkspaceFileSearch && isAbsoluteFilePath(relative)) return;
       const nextDirPath = isWorkspaceFileSearch
-        ? `${workspaceRelativePath(entry.fullPath, workspacePath ?? "").replace(/\/$/, "")}/`
+        ? `${relative.replace(/\/$/, "")}/`
         : `${currentDirPath}${entry.name}/`;
       onNavigateFile(nextDirPath);
     },
@@ -579,13 +593,13 @@ export function UnifiedContextDropdown({
 
   const isLoading =
     flatRows.length === 0 &&
-    (wantsMacApps && isSearchingMacApps
+    ((wantsSkills && isLoadingSkills) || (wantsMacApps && isSearchingMacApps
       ? true
       : trigger === "$" || pluginsOnly
       ? isLoadingSkills
       : trigger === "#"
         ? Boolean(projectId) && isLoadingIssues
-        : fetchState.loading || (Boolean(projectId) && isLoadingIssues));
+        : fetchState.loading || (Boolean(projectId) && isLoadingIssues)));
 
   const emptyText = pluginsOnly
     ? "No plugins installed"

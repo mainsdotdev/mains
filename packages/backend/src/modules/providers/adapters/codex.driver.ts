@@ -1405,7 +1405,7 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
     },
 
     listPlugins: capabilities.listPlugins,
-    listInstalledPlugins: capabilities.listInstalledPlugins,
+    listInstalledPlugins: (workspacePath) => capabilities.listInstalledPlugins(false, workspacePath),
     readPlugin: capabilities.readPlugin,
     installPlugin: capabilities.installPlugin,
     uninstallPlugin: capabilities.uninstallPlugin,

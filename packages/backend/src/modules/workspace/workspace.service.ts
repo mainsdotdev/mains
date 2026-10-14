@@ -203,9 +203,14 @@ export async function clearWorkspaceDiff(workspaceId: string): Promise<boolean> 
 // projects.service imports the workspace barrel.
 // ─────────────────────────────────────────────────────────────
 
-/** Last path segment, e.g. `/a/b/my-repo` → `my-repo`. */
+/** Keep POSIX filenames literal while recognizing drive and UNC paths. */
+function repoPathApi(p: string): typeof path.posix {
+  return path.win32.isAbsolute(p) && !p.startsWith("/") ? path.win32 : path.posix;
+}
+
+/** Last path segment, e.g. `/a/b/my-repo` or `C:\\a\\b\\my-repo` → `my-repo`. */
 function basename(p: string): string {
-  return p.split("/").pop() || "Untitled";
+  return repoPathApi(p).basename(p) || "Untitled";
 }
 
 /** Honor the global worktree preference (off unless the user turned it on). */
@@ -226,7 +231,7 @@ async function readOriginUrl(rootPath: string): Promise<string | null> {
 
 /** A project's worktree dir is the parent of its first worktree. */
 function deriveWorkspacesPath(worktreePath: string): string {
-  return worktreePath.substring(0, worktreePath.lastIndexOf("/"));
+  return repoPathApi(worktreePath).dirname(worktreePath);
 }
 
 /**

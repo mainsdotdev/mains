@@ -3,12 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { app, type BrowserWindow } from "electron";
 import Database from "better-sqlite3";
 import * as pty from "node-pty";
 import { rgPath } from "@vscode/ripgrep";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
 import { resolveClaudeRuntime, resolveCopilotRuntime } from "@mains/backend/modules/providers/providers.utils";
+import { gitService } from "@mains/backend/modules/git";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +20,22 @@ export async function runPackageSmoke(window: BrowserWindow): Promise<void> {
   const database = new Database(":memory:");
   try { assert.equal((database.prepare("SELECT 42 AS value").get() as { value: number }).value, 42); }
   finally { database.close(); }
+
+  const repo = await gitService.initRepo("Git Türkçe smoke", app.getPath("userData"));
+  const cloneUrl = "https://mains-smoke.invalid/git-smoke.git";
+  const gitConfig = path.join(app.getPath("userData"), "git-smoke.config");
+  // Exercise the real clone command with a local fixture, without auth/network.
+  fs.writeFileSync(gitConfig, `[url "${pathToFileURL(repo.rootPath).href}"]\n\tinsteadOf = ${cloneUrl}\n`);
+  const previousGitConfig = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = gitConfig;
+  try {
+    const clone = await gitService.cloneRepo(cloneUrl, app.getPath("userData"));
+    assert.equal(clone.defaultBranch, "main");
+    assert(fs.existsSync(path.join(clone.clonedPath, "README.md")));
+  } finally {
+    if (previousGitConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGitConfig;
+  }
 
   await new Promise<void>((resolve, reject) => {
     const windows = process.platform === "win32";

@@ -54,8 +54,15 @@ the target architecture. The Windows icon reuses the existing iconset:
   network images, including UNC shares, keep explicit click-to-load. File URLs
   decode through native URL handling in the backend. Git write identities stay repository-relative
   with forward slashes, including outside-tree/different-drive rejection.
-- Lens, Dock icon customization and macOS Open With integration are hidden on
-  Windows. Tray icons use the color app icon, notifications open the requesting
+- Composer plugin/skill discovery uses the Windows provider profile. Local
+  plugins and personal skills need installation on that host; the Windows
+  installer does not include Mac Codex plugin caches. Repository-local Codex
+  marketplaces are discovered with the selected workspace's `cwds`.
+- Workspace Open With offers File Explorer, PowerShell and installed VS Code,
+  Cursor, Windsurf and Sublime Text. Detection checks per-user/system installs
+  and executable PATH entries; launching uses native executables with literal
+  workspace arguments. File-handler discovery, Lens and Dock icon customization
+  remain macOS-only. Tray icons use the color app icon, notifications open the requesting
   chat, and the Squirrel AppUserModelID is registered.
 
 ## Automated checks
