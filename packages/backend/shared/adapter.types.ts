@@ -15,6 +15,7 @@ export type { ConnectorOAuthStartResult } from "@mains/contracts/provider-connec
 export type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderTurnLineage, RealtimeVoiceCatalog, VoiceOrbColor, VoiceOrbStyle } from "@mains/contracts/realtime";
 import type { McpAppEntrypoint } from "@mains/contracts/mcp-apps";
+import type { AsyncQuestionReply } from "@mains/contracts/async-questions";
 import type { ModeToolPolicy } from "./mode-harness";
 import type {
   PluginAvailability,
@@ -438,6 +439,7 @@ export type WorkRunEventHandler = (event: WorkRunEvent) => void | Promise<void>;
  * Request to continue an existing run (resume session)
  */
 export interface WorkRunContinueRequest {
+  asyncQuestionReply?: AsyncQuestionReply;
   providerTurnLineage?: ProviderTurnLineage;
   clientPromptId?: string;
   /** Correlates a locally queued input with the provider's accepted user message. */
@@ -500,7 +502,7 @@ export interface WorkRunContinueRequest {
 
 /** Input added to the existing active turn; no turn-level overrides. */
 export type WorkRunSteerRequest = Pick<WorkRunContinueRequest,
-  "runId" | "message" | "context" | "attachments" | "contextIssues" |
+  "runId" | "message" | "asyncQuestionReply" | "context" | "attachments" | "contextIssues" |
   "contextSignals" | "contextFiles" | "skills"> & { clientUserMessageId: string };
 
 /**
@@ -781,10 +783,11 @@ export interface WorkRunAdapter extends RealtimeAdapterControls {
 
   /**
    * List installed plugins without loading the full remote marketplace.
+   * Include the workspace when discovering repository-local marketplaces.
    * Providers without a dedicated installed-only surface may fall back to
    * filtering listPlugins() in the adapter factory.
    */
-  listInstalledPlugins?(): Promise<PluginListResponse>;
+  listInstalledPlugins?(workspacePath?: string): Promise<PluginListResponse>;
 
   /**
    * Read detailed plugin info including skills, apps, and MCP servers.
@@ -983,7 +986,7 @@ export interface ProviderDriver extends RealtimeAdapterControls {
   getAccountInfo?(): Promise<AccountInfo>;
   updateCli?(): Promise<CliUpdateResult>;
   listPlugins?(): Promise<PluginListResponse>;
-  listInstalledPlugins?(): Promise<PluginListResponse>;
+  listInstalledPlugins?(workspacePath?: string): Promise<PluginListResponse>;
   readPlugin?(pluginName: string, marketplacePath: string): Promise<PluginDetail>;
   installPlugin?(pluginId: string, scope?: PluginScope): Promise<void>;
   uninstallPlugin?(pluginId: string): Promise<void>;

@@ -6,7 +6,7 @@
 //
 // Architecture:
 //   Cursor ACP  ──spawns──▶  temp MCP script (stdin/stdout)
-//                                 │ Unix socket IPC
+//                                 │ Named pipe / Unix socket IPC
 //                                 ▼
 //                         Bridge (backend process)
 //                                 │
@@ -22,7 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import type { MainsToolContext } from "./mains-tools.core";
 import type { WorkRunEventHandler } from "../../../../shared/adapter.types";
 import type { ModeId } from "@mains/contracts/modes";
@@ -41,6 +41,7 @@ function buildMcpScript(toolDefs: McpToolDef[]): string {
   return `"use strict";
 const net = require("net");
 const SOCKET_PATH = process.env.MAINS_IPC_SOCKET;
+const SOCKET_TOKEN = process.env.MAINS_IPC_TOKEN;
 const TOOLS = ${JSON.stringify(toolDefs, null, 2)};
 
 // ── Stdio JSON-RPC transport ──
@@ -71,7 +72,7 @@ function callBridge(toolName, args) {
   return new Promise((resolve, reject) => {
     const reqId = Math.random().toString(36).slice(2);
     const client = net.createConnection(SOCKET_PATH, () => {
-      client.write(JSON.stringify({ id: reqId, tool: toolName, args }) + "\\n");
+      client.write(JSON.stringify({ id: reqId, token: SOCKET_TOKEN, tool: toolName, args }) + "\\n");
     });
     let buf = "";
     client.on("data", (chunk) => {
@@ -147,8 +148,8 @@ process.stderr.write("[mains-mcp] Server started, socket: " + SOCKET_PATH + "\\n
 // Find Node.js binary
 //
 // In packaged Electron apps, `node` may not be on PATH.
-// Use ELECTRON_RUN_AS_NODE=1 with the Electron binary itself
-// as the primary strategy — it makes Electron act as plain Node.js.
+// The packaged app disables Electron's RunAsNode fuse. Use a real Node.js
+// installation for the bridge and fail explicitly when it is absent.
 // ─────────────────────────────────────────────────────────────
 
 interface NodeBinaryInfo {
@@ -161,14 +162,20 @@ function findNodeBinary(): NodeBinaryInfo {
 
   // 1. Direct `which node` (works in dev mode / terminal-launched apps)
   try {
-    const result = execSync("which node", { encoding: "utf-8", timeout: 3000 }).trim();
+    const result = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["node"],
+      { encoding: "utf-8", timeout: 3000, windowsHide: true })
+      .split(/\r?\n/).find(line => line.trim() && fs.existsSync(line.trim()))?.trim();
     if (result && fs.existsSync(result)) {
       return { command: result, extraEnv: {} };
     }
   } catch { /* not found */ }
 
   // 2. Common absolute paths (brew Intel/ARM)
-  const staticCandidates = [
+  const staticCandidates = process.platform === "win32" ? [
+    path.join(process.env.ProgramFiles ?? "C:\\Program Files", "nodejs", "node.exe"),
+    ...(process.env.NVM_SYMLINK ? [path.join(process.env.NVM_SYMLINK, "node.exe")] : []),
+    path.join(homedir, ".volta", "bin", "node.exe"),
+  ] : [
     "/usr/local/bin/node",
     "/opt/homebrew/bin/node",
     "/usr/bin/node",
@@ -220,11 +227,8 @@ function findNodeBinary(): NodeBinaryInfo {
     }
   } catch { /* fnm not installed */ }
 
-  // 6. Fallback: Electron binary with ELECTRON_RUN_AS_NODE=1
-  return {
-    command: process.execPath,
-    extraEnv: { ELECTRON_RUN_AS_NODE: "1" },
-  };
+  if (!process.versions.electron) return { command: process.execPath, extraEnv: {} };
+  throw new Error("Install Node.js and restart Mains to use the provider's MCP tools");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -237,6 +241,7 @@ export class MainsMcpStdioServer {
   private socketPath: string;
   private scriptPath: string;
   private nodeInfo: NodeBinaryInfo;
+  private bridgeToken = crypto.randomBytes(32).toString("hex");
   private onEvent: WorkRunEventHandler | null = null;
 
   constructor(
@@ -244,9 +249,11 @@ export class MainsMcpStdioServer {
     private mode?: ModeId,
     private availability: { provider: ProviderId; scope?: "voice" } = { provider: PROVIDER_IDS.cursor },
   ) {
-    const id = crypto.randomUUID().slice(0, 8);
+    const id = crypto.randomUUID();
     const tmpDir = os.tmpdir();
-    this.socketPath = path.join(tmpDir, `mains-mcp-${id}.sock`);
+    this.socketPath = process.platform === "win32"
+      ? `\\\\.\\pipe\\mains-mcp-${id}`
+      : path.join(tmpDir, `mains-mcp-${id}.sock`);
     this.scriptPath = path.join(tmpDir, `mains-mcp-${id}.cjs`);
     this.nodeInfo = findNodeBinary();
   }
@@ -258,7 +265,7 @@ export class MainsMcpStdioServer {
     const script = buildMcpScript(tools);
     fs.writeFileSync(this.scriptPath, script, { encoding: "utf8", mode: 0o600 });
 
-    // 2. Start the Unix socket bridge
+    // 2. Start a named pipe on Windows, a Unix socket on other hosts.
     const ctx = this.ctx;
     this.socketServer = net.createServer((conn) => {
       this.sockets.add(conn);
@@ -277,11 +284,15 @@ export class MainsMcpStdioServer {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
 
-        let req: { id: string; tool: string; args: Record<string, unknown> };
+        let req: { id: string; token?: string; tool: string; args: Record<string, unknown> };
         try {
           req = JSON.parse(line);
         } catch {
           conn.end(JSON.stringify({ id: null, content: [{ type: "text", text: "Parse error" }], isError: true }) + "\n");
+          return;
+        }
+        if (req.token !== this.bridgeToken) {
+          conn.end(JSON.stringify({ id: req.id, content: [{ type: "text", text: "Unauthorized bridge request" }], isError: true }) + "\n");
           return;
         }
         if (!allowed.has(req.tool)) {
@@ -332,13 +343,15 @@ export class MainsMcpStdioServer {
     });
 
     // Clean up stale socket file if exists
-    try { fs.unlinkSync(this.socketPath); } catch { /* doesn't exist */ }
+    if (process.platform !== "win32") {
+      try { fs.unlinkSync(this.socketPath); } catch { /* doesn't exist */ }
+    }
 
     await new Promise<void>((resolve, reject) => {
       this.socketServer!.listen(this.socketPath, () => resolve());
       this.socketServer!.on("error", reject);
     });
-    fs.chmodSync(this.socketPath, 0o600);
+    if (process.platform !== "win32") fs.chmodSync(this.socketPath, 0o600);
 
   }
 
@@ -355,7 +368,9 @@ export class MainsMcpStdioServer {
     }
 
     // Clean up temp files
-    try { fs.unlinkSync(this.socketPath); } catch { /* ok */ }
+    if (process.platform !== "win32") {
+      try { fs.unlinkSync(this.socketPath); } catch { /* ok */ }
+    }
     try { fs.unlinkSync(this.scriptPath); } catch { /* ok */ }
   }
 
@@ -378,6 +393,7 @@ export class MainsMcpStdioServer {
   } {
     const envEntries: Array<{ name: string; value: string }> = [
       { name: "MAINS_IPC_SOCKET", value: this.socketPath },
+      { name: "MAINS_IPC_TOKEN", value: this.bridgeToken },
     ];
     for (const [k, v] of Object.entries(this.nodeInfo.extraEnv)) {
       envEntries.push({ name: k, value: v });

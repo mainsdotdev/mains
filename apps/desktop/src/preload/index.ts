@@ -1,11 +1,13 @@
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
+import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
 import type { DashboardQuery, ProviderFilter } from "@mains/contracts/stats";
 import type { LocalImagePreviewSize } from "@mains/contracts/image-preview";
+import type { WindowAppearance } from "@mains/contracts/window-appearance";
 import { contextBridge, ipcRenderer } from "electron";
 import type { RunExperienceOptions, RunSteerPayload, RunInputStatusPayload } from "@mains/contracts/runs";
+import type { AnswerAsyncQuestionsPayload, AnswerAsyncQuestionsResponse, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import type { CreateRealtimeConversationPayload, CreateRealtimeConversationResponse, RunRealtimeStartPayload, RunRealtimeStopPayload, RunRealtimeEvent } from "@mains/contracts/realtime";
 import os from "node:os";
 import { CHANNELS } from "../shared/ipc-kit/channels";
@@ -21,6 +23,7 @@ import type {
 import type { AppIconId } from "../shared/app-icons";
 import type { TextSearchQuery } from "@mains/contracts/text-search";
 import type { ServiceResponse } from "@mains/contracts/service-response";
+import type { CancelWorkspaceClonePayload } from "@mains/contracts/workspace-intake";
 import type { TerminalCreateOptions, TerminalDataEvent, TerminalExitEvent, TerminalSession, TerminalSnapshot } from "@mains/contracts/terminal";
 import type { CreatePrPayload, CreatePrResult, PrAttachmentChunk } from "@mains/contracts/pr-attachments";
 import type { BrowserAnnotationTheme } from "../shared/browser-annotation";
@@ -330,6 +333,7 @@ const api = {
   // Non-developer Projects: organizational Collections for Work/Chat runs.
   atlas: {
     list: (options: AtlasListOptions) => ipcRenderer.invoke(CHANNELS.atlas.list, options),
+    library: (options: AtlasLibraryOptions) => ipcRenderer.invoke(CHANNELS.atlas.library, options),
     generated: (options: AtlasGeneratedOptions) => ipcRenderer.invoke(CHANNELS.atlas.generated, options),
     get: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.get, options),
     createPage: (input: AtlasCreatePage) => ipcRenderer.invoke(CHANNELS.atlas.createPage, input),
@@ -567,6 +571,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.workspace.create, payload),
     createFromSource: (payload: unknown) =>
       ipcRenderer.invoke(CHANNELS.workspace.createFromSource, payload),
+    cancelClone: (payload: CancelWorkspaceClonePayload): Promise<ServiceResponse<boolean>> =>
+      ipcRenderer.invoke(CHANNELS.workspace.cancelClone, payload),
     update: (id: string, payload: unknown) =>
       ipcRenderer.invoke(CHANNELS.workspace.update, id, payload),
     delete: (id: string, options?: { removeWorktree?: boolean }) =>
@@ -783,6 +789,8 @@ const api = {
     }) => ipcRenderer.invoke(CHANNELS.runs.continue, payload),
     steer: (payload: RunSteerPayload) => ipcRenderer.invoke(CHANNELS.runs.steer, payload),
     inputStatus: (payload: RunInputStatusPayload) => ipcRenderer.invoke(CHANNELS.runs.inputStatus, payload),
+    answerAsyncQuestions: (payload: AnswerAsyncQuestionsPayload): Promise<ServiceResponse<AnswerAsyncQuestionsResponse>> => ipcRenderer.invoke(CHANNELS.runs.answerAsyncQuestions, payload),
+    dismissAsyncQuestions: (payload: DismissAsyncQuestionsPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.dismissAsyncQuestions, payload),
     createRealtimeConversation: (payload: CreateRealtimeConversationPayload): Promise<ServiceResponse<CreateRealtimeConversationResponse>> => ipcRenderer.invoke(CHANNELS.runs.createRealtimeConversation, payload),
     startRealtime: (payload: RunRealtimeStartPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.startRealtime, payload),
     stopRealtime: (payload: RunRealtimeStopPayload): Promise<ServiceResponse<void>> => ipcRenderer.invoke(CHANNELS.runs.stopRealtime, payload),
@@ -1081,6 +1089,7 @@ const api = {
   },
   platform: {
     homedir: os.homedir(),
+    os: process.platform,
   },
   imageProxy: {
     sign: (absPath: string, maxSide?: LocalImagePreviewSize) => ipcRenderer.invoke(CHANNELS.imageProxy.sign, absPath, maxSide),
@@ -1142,6 +1151,8 @@ const api = {
       ipcRenderer.invoke(CHANNELS.app.setMenuBarIconVisible, visible),
     setThemeSource: (theme: "system" | "light" | "dark") =>
       ipcRenderer.invoke(CHANNELS.app.setThemeSource, theme),
+    setWindowAppearance: (appearance: WindowAppearance): Promise<ServiceResponse<null>> =>
+      ipcRenderer.invoke(CHANNELS.app.setWindowAppearance, appearance),
     setOnboardingWindow: (onboarding: boolean, contentReady = true): Promise<ServiceResponse<null>> =>
       ipcRenderer.invoke(CHANNELS.app.setOnboardingWindow, onboarding, contentReady),
     onFlushAndQuit: (callback: () => void) => {

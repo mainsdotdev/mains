@@ -22,6 +22,8 @@ import { DocumentRenderHost } from "./document-viewer/document-render-host";
 import { MarkdownDocument } from "./document-viewer/markdown-document";
 import { PdfDocument } from "./document-viewer/pdf-document";
 import { DocumentViewerToolbar } from "./document-viewer/document-viewer-toolbar";
+import { DocumentFallback } from "./document-viewer/document-fallback";
+import { documentPreviewLimit } from "@mains/contracts/output-files";
 
 export function DocumentViewerPanel({ reserveLayoutControls = false }: { reserveLayoutControls?: boolean }) {
   const { isOpen, currentDoc, close } = useDocumentViewer();
@@ -115,7 +117,11 @@ export function DocumentViewerPanel({ reserveLayoutControls = false }: { reserve
               bytes go to the shadow host. They never mix, so the branch lives here
               rather than inside the host. */}
           {currentDoc ? (
-            isTextDocType(currentDoc.docType) ? (
+            currentDoc.byteSize !== undefined && currentDoc.byteSize > documentPreviewLimit(currentDoc.docType) ? (
+              <div className="relative flex-1">
+                <DocumentFallback doc={currentDoc} message={`This document exceeds the ${documentPreviewLimit(currentDoc.docType) / (1024 * 1024)} MiB inline preview limit. Save a copy or open it in another app.`} />
+              </div>
+            ) : isTextDocType(currentDoc.docType) ? (
               <MarkdownDocument key={currentDoc.path} path={currentDoc.path} docType={currentDoc.docType} />
             ) : currentDoc.docType === "pdf" ? (
               <PdfDocument key={currentDoc.path} doc={currentDoc} zoom={zoom} />

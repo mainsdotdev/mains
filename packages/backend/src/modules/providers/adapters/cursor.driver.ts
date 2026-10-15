@@ -1,3 +1,4 @@
+import { providerProcessPath, providerLoginCommand } from "../providers.utils";
 // ─────────────────────────────────────────────────────────────
 // Cursor ProviderDriver
 //
@@ -19,7 +20,8 @@
 //   - cleanup ordering, cancelPendingRequests
 // ─────────────────────────────────────────────────────────────
 
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnProvider as spawn, killProviderProcess } from "./provider-process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -160,7 +162,6 @@ class CursorAcpServer {
     this.child = spawn(binaryPath, ["acp"], {
       env: spawnEnv,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
 
     if (!this.child.stdout || !this.child.stdin) {
@@ -286,14 +287,14 @@ class CursorAcpServer {
     try {
       child.stdin?.end();
       try {
-        child.kill("SIGTERM");
+        killProviderProcess(child, "SIGTERM");
       } catch {
         /* already exited */
       }
       await new Promise<void>((resolve) => {
         const killTimer = setTimeout(() => {
           try {
-            child.kill("SIGKILL");
+            killProviderProcess(child);
           } catch {
             /* already exited */
           }
@@ -305,7 +306,7 @@ class CursorAcpServer {
         });
       });
     } catch {
-      child.kill("SIGKILL");
+      killProviderProcess(child);
     }
   }
 
@@ -721,7 +722,9 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     const resolved = findCursorBinaryPath();
     if (resolved) return resolved;
     throw new Error(
-      "Cursor Agent CLI not found. Install it with: curl https://cursor.com/install -fsS | bash\n" +
+      (process.platform === "win32"
+        ? "Cursor Agent CLI not found. Install it from https://cursor.com/docs/cli/installation and restart Mains.\n"
+        : "Cursor Agent CLI not found. Install it with: curl https://cursor.com/install -fsS | bash\n") +
         "Or set config.binary to the full path of the `agent` executable.",
     );
   }
@@ -756,13 +759,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     const env: Record<string, string> = {};
     env.HOME = os.homedir();
 
-    const extraPaths = [
-      path.dirname(binaryPath),
-      path.join(os.homedir(), ".local", "bin"),
-      "/usr/local/bin",
-      "/opt/homebrew/bin",
-    ];
-    env.PATH = [...extraPaths, process.env.PATH || ""].join(":");
+    env.PATH = providerProcessPath(binaryPath);
 
     if (config.apiKey) {
       env.CURSOR_API_KEY = config.apiKey;
@@ -1895,13 +1892,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
     const env: Record<string, string | undefined> = {
       ...process.env,
       HOME: os.homedir(),
-      PATH: [
-        path.dirname(binaryPath),
-        path.join(os.homedir(), ".local", "bin"),
-        "/usr/local/bin",
-        "/opt/homebrew/bin",
-        process.env.PATH || "",
-      ].join(":"),
+      PATH: providerProcessPath(binaryPath),
     };
     if (config.apiKey) env.CURSOR_API_KEY = config.apiKey;
 
@@ -2474,6 +2465,9 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const info = parseCursorAbout(stdout, stderr);
         const cli = {
           version: info.version,
+          ...(process.platform === "win32"
+            ? { authLoginCommand: providerLoginCommand(findCursorBinary(), ["login"]) }
+            : {}),
           channel: readCursorCliChannel(),
           // Only flag genuinely-old CLIs (where `agent about` itself is
           // unsupported); recent CLIs run the parameterized picker without `lab`.
@@ -2504,13 +2498,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
       const env: Record<string, string | undefined> = {
         ...process.env,
         HOME: os.homedir(),
-        PATH: [
-          path.dirname(binaryPath),
-          path.join(os.homedir(), ".local", "bin"),
-          "/usr/local/bin",
-          "/opt/homebrew/bin",
-          process.env.PATH || "",
-        ].join(":"),
+        PATH: providerProcessPath(binaryPath),
       };
 
       return new Promise<CliUpdateResult>((resolve) => {
@@ -2561,13 +2549,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
             const env: Record<string, string | undefined> = {
               ...process.env,
               HOME: os.homedir(),
-              PATH: [
-                path.dirname(binaryPath),
-                path.join(os.homedir(), ".local", "bin"),
-                "/usr/local/bin",
-                "/opt/homebrew/bin",
-                process.env.PATH || "",
-              ].join(":"),
+              PATH: providerProcessPath(binaryPath),
             };
             if (config.apiKey) env.CURSOR_API_KEY = config.apiKey;
 
@@ -2648,13 +2630,7 @@ export function createCursorDriver(config: CursorAdapterConfig): ProviderDriver 
         const env: Record<string, string | undefined> = {
           ...process.env,
           HOME: os.homedir(),
-          PATH: [
-            path.dirname(binaryPath),
-            path.join(os.homedir(), ".local", "bin"),
-            "/usr/local/bin",
-            "/opt/homebrew/bin",
-            process.env.PATH || "",
-          ].join(":"),
+          PATH: providerProcessPath(binaryPath),
         };
         if (config.apiKey) env.CURSOR_API_KEY = config.apiKey;
 

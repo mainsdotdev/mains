@@ -10,6 +10,8 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
+  readFileSync,
+  truncateSync,
 } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -34,6 +36,7 @@ import type Database from "better-sqlite3";
 import type { RealtimeWorkHandlers, WorkRunRealtimeRequest } from "../../../shared/adapter.types";
 import type { RunRealtimeEvent, RunRealtimeUpdate } from "@mains/contracts/realtime";
 import { CHANNELS } from "@mains/contracts/channels";
+import { asyncQuestionMessageId } from "@mains/contracts/async-questions";
 import { registerEventSink } from "../../ipc-kit/event-bus";
 
 const flushBackground = () => new Promise((r) => setTimeout(r, 50));
@@ -117,6 +120,7 @@ vi.mock("../workspace", async () => {
 
 import { runsService } from "./runs.service";
 import { runsRepo } from "./runs.repo";
+import { insertRunInputArtifact } from "./run-input-artifact";
 import { managedRunDir, managedRunImageDir } from "./run-execution";
 import { runSessionRegistry } from "./run-session-registry";
 import { prepareRunAttachments } from "./run-attachment-storage";
@@ -2494,6 +2498,116 @@ describe("runsService", () => {
   // Run Artifact Operations
   // ─────────────────────────────────────────────────────────────
   describe("getArtifactsByRun", () => {
+    it("keeps a large deliverable available for saving while rejecting its inline preview", async () => {
+      const runId = "large-registered-document";
+      createRun(db, { id: runId, mode: "work", status: "running" });
+      const turn = createRunTurn(db, { runId });
+      const root = managedRunDir(runId, "work");
+      const copies = mkdtempSync(join(tmpdir(), "mains-document-copy-"));
+      mkdirSync(root, { recursive: true });
+      const target = join(root, "report.pptx");
+      writeFileSync(target, readFileSync(join(__dirname, "../../../test/fixtures/artifacts/report.pptx")));
+      truncateSync(target, 26 * 1024 * 1024);
+      try {
+        await runsService.registerDeliverable(runId, target);
+        await runsRepo.updateTurn(turn.id, { status: "completed" });
+        await runsRepo.updateRun(runId, { status: "succeeded" });
+        const [output] = await runsService.getOutputArtifacts(runId);
+        expect(output.metadata?.byteSize).toBe(26 * 1024 * 1024);
+        const { imageProxyService, serveLocalDocument } = await import("../imageProxy");
+        const response = await serveLocalDocument(new URL(imageProxyService.signLocalDocumentUrl(target)!));
+        expect(response.status).toBe(413);
+        const { fileExplorerService } = await import("../fileExplorer");
+        await fileExplorerService.saveFileAs(target, join(copies, "saved.pptx"));
+        expect(statSync(join(copies, "saved.pptx")).size).toBe(26 * 1024 * 1024);
+      } finally { rmSync(root, { recursive: true, force: true }); rmSync(copies, { recursive: true, force: true }); }
+    });
+    it.each(["pptx", "docx", "pdf", "md"])("registers %s deliverables through the provider tool and preserves them across history reads", async (ext) => {
+      const runId = `registered-${ext}`;
+      createRun(db, { id: runId, mode: "work", status: "running" });
+      const turn = createRunTurn(db, { runId, status: "active" });
+      const root = managedRunDir(runId, "work");
+      mkdirSync(join(root, "outputs"), { recursive: true });
+      const target = join(root, "outputs", `report.${ext}`);
+      writeFileSync(target, readFileSync(join(__dirname, "../../../test/fixtures/artifacts", `report.${ext}`)));
+      try {
+        const { dispatchMainsTool } = await import("../providers/adapters/mains-tools.registry");
+        const result = await dispatchMainsTool("RegisterDeliverable", { path: `outputs/report.${ext}` },
+          { runId, rootPath: root, workspaceId: null });
+        const registered = JSON.parse(result.content[0].text);
+        expect(await runsService.getOutputArtifacts(runId)).toEqual([]);
+        expect((await runsService.registerDeliverable(runId, target)).artifactId).toBe(registered.artifactId);
+        await runsRepo.updateTurn(turn.id, { status: "completed" });
+        await runsRepo.updateRun(runId, { status: "succeeded" });
+        const [output] = await runsService.getOutputArtifacts(runId);
+        expect(output).toMatchObject({ id: registered.artifactId, path: realpathSync(target),
+          metadata: { outputRole: "deliverable", outputTurn: `turn:${turn.id}` } });
+        for (const profile of [undefined, "mobile"] as const) {
+          const history = await runsService.getHistoryPage({ runId, profile });
+          expect(history.artifacts.filter((row) => row.metadata?.outputSelected).map((row) => row.id)).toEqual([output.id]);
+        }
+        expect((await runsService.getArtifactsByRun(runId, output.id)).map((row) => row.id)).toContain(output.id);
+        expect((await runsService.listRunOutputFiles(runId)).map((row) => row.absolutePath)).toEqual([output.path]);
+        expect((await atlasService.generated({ accountId: "default" })).items.some((row) => row.path === output.path)).toBe(true);
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+    it("rejects foreign, missing and symlinked registration paths and does not expose working files", async () => {
+      const runId = "registration-guards";
+      createRun(db, { id: runId, mode: "work", status: "running" });
+      const turn = createRunTurn(db, { runId });
+      const root = managedRunDir(runId, "work");
+      const outside = mkdtempSync(join(tmpdir(), "mains-foreign-output-"));
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(outside, "private.md"), "foreign");
+      writeFileSync(join(root, "draft.md"), "draft");
+      symlinkSync(join(outside, "private.md"), join(root, "link.md"));
+      try {
+        await expect(runsService.registerDeliverable(runId, join(outside, "private.md"))).rejects.toThrow("outside");
+        await expect(runsService.registerDeliverable(runId, "missing.md")).rejects.toThrow();
+        await expect(runsService.registerDeliverable(runId, "link.md")).rejects.toThrow("regular file");
+        await runsService.registerDeliverable(runId, "draft.md", "working");
+        await runsRepo.updateTurn(turn.id, { status: "completed" });
+        await runsRepo.updateRun(runId, { status: "succeeded" });
+        expect(await runsService.getOutputArtifacts(runId)).toEqual([]);
+        await expect(runsService.registerDeliverable(runId, "draft.md")).rejects.toThrow("active conversation");
+      } finally { rmSync(root, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }); }
+    });
+    it("returns native generated images without Markdown links across history and output reads", async () => {
+      const runId = "native-image-no-link";
+      const root = mkdtempSync(join(tmpdir(), "mains-native-image-"));
+      createWorkspace(db, { id: "native-image-workspace", rootPath: root });
+      createRun(db, { id: runId, providerId: "codex", workspaceId: "native-image-workspace", status: "succeeded" });
+      const turn = createRunTurn(db, { runId, status: "completed" });
+      const imageDir = managedRunImageDir(runId);
+      const imagePath = join(imageDir, "mosaic.png");
+      mkdirSync(imageDir, { recursive: true });
+      writeFileSync(imagePath, "generated image bytes");
+      createRunArtifact(db, { runId, kind: "user-prompt" as "report", content: "Create a mosaic",
+        metadata: JSON.stringify({ turnId: turn.id }) });
+      createRunArtifact(db, { runId, kind: "report", content: "Creating the mosaic",
+        metadata: JSON.stringify({ turnId: turn.id, messagePhase: "commentary" }) });
+      const image = createRunArtifact(db, { runId, kind: "image", path: imagePath,
+        metadata: JSON.stringify({ turnId: turn.id, source: "codex_image_generation", path: imagePath }) });
+      const final = createRunArtifact(db, { runId, kind: "report", content: "Created your ceramic mosaic mural in 16:9.",
+        metadata: JSON.stringify({ turnId: turn.id, messagePhase: "final_answer" }) });
+      try {
+        const [output] = await runsService.getOutputArtifacts(runId);
+        expect(output).toMatchObject({ id: image.id, kind: "image", path: realpathSync(imagePath),
+          metadata: { outputSelected: true, outputAnchor: { source: "artifact", id: final.id } } });
+        for (const profile of [undefined, "mobile"] as const) {
+          const history = await runsService.getHistoryPage({ runId, profile });
+          expect(history.artifacts.filter((row) => row.metadata?.outputSelected).map((row) => row.id)).toEqual([image.id]);
+        }
+        expect((await runsService.getArtifactsByRun(runId, image.id)).filter((row) => row.kind === "image")
+          .map((row) => row.id)).toEqual([image.id]);
+        expect((await runsService.listRunOutputFiles(runId)).map((row) => row.absolutePath)).toEqual([realpathSync(imagePath)]);
+        expect((await runsRepo.findArtifactById(image.id))?.metadata?.outputSelected).toBeUndefined();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+        rmSync(imageDir, { recursive: true, force: true });
+      }
+    });
+
     it("returns empty array when no artifacts", async () => {
       createRun(db, { id: "r1" });
 
@@ -3403,6 +3517,30 @@ describe("runsService", () => {
   // continueRun
   // ─────────────────────────────────────────────────────────────
   describe("steer input delivery", () => {
+    it("rejects a stale async answer when an ordinary input is accepted during native preflight", async () => {
+      createProvider(db, { id: "codex" });
+      createRun(db, { id: "question-race", providerId: "codex", accountId: "default", status: "running" });
+      const artifactId = await runsRepo.insertArtifact({ runId: "question-race", kind: "report", content: "Environment?",
+        metadata: { source: "codex_async_questions", questions: [{ title: "Environment?", options: null }] } });
+      const active = { runId: "question-race", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() };
+      runSessionRegistry.register(active.runId, active);
+      const steerRun = vi.fn();
+      vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
+      const provider = (await providersService.getById("codex"))!;
+      const reading = vi.spyOn(providersService, "getById").mockImplementationOnce(async () => {
+        await insertRunInputArtifact(active.runId, { type: "artifact", kind: "user-prompt", content: "A different task" });
+        return provider;
+      });
+      try {
+        await expect(runsService.steerRun({ runId: active.runId, accountId: "default",
+          clientUserMessageId: asyncQuestionMessageId(artifactId), message: "Staging",
+          asyncQuestionReply: { artifactId, answers: ["Staging"] } })).rejects.toThrow("newer message was sent");
+        expect(steerRun).not.toHaveBeenCalled();
+        expect((await runsRepo.findRunById(active.runId))?.status).toBe("running");
+        expect(runSessionRegistry.get(active.runId)).toBe(active);
+      } finally { reading.mockRestore(); runSessionRegistry.unregister(active.runId); }
+    });
+
     it.each(["codex", "claude_code"])("forwards %s active input without model or directory overrides", async (providerId) => {
       if (providerId === "codex") createProvider(db, { id: providerId });
       createRun(db, { id: "steer-run", providerId, accountId: "default", status: "running" });
@@ -3477,6 +3615,21 @@ describe("runsService", () => {
     function createContinuableRun(overrides: Parameters<typeof createRun>[1]) {
       return createRun(db, { status: "succeeded", ...overrides });
     }
+
+    it("rejects a stale async answer before changing an idle run or starting its provider", async () => {
+      createProvider(db, { id: "codex" });
+      createContinuableRun({ id: "old-question", providerId: "codex", accountId: "default" });
+      const artifactId = await runsRepo.insertArtifact({ runId: "old-question", kind: "report", content: "Environment?",
+        metadata: { source: "codex_async_questions", questions: [{ title: "Environment?", options: null }] } });
+      await insertRunInputArtifact("old-question", { type: "artifact", kind: "user-prompt", content: "New task" });
+      const adapter = setupContinueAdapter();
+      await expect(runsService.continueRun({ runId: "old-question", accountId: "default", message: "Staging",
+        clientUserMessageId: asyncQuestionMessageId(artifactId), asyncQuestionReply: { artifactId, answers: ["Staging"] } }))
+        .rejects.toThrow("newer message was sent");
+      expect(adapter.continueRun).not.toHaveBeenCalled();
+      expect((await runsRepo.findRunById("old-question"))?.status).toBe("succeeded");
+      expect(runSessionRegistry.get("old-question")).toBeUndefined();
+    });
 
     it("rejects concurrent continuation without failing the active run", async () => {
       createContinuableRun({ id: "live-run", accountId: "default", status: "running" });

@@ -27,7 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawnProvider as spawn } from "./provider-process";
 import type {
   AcquiredSession,
   AgentsConfig,

@@ -3,8 +3,9 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedFile, AtlasIdentity,
-  AtlasItem, AtlasListItem, AtlasListOptions, AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem,
+  AtlasItem, AtlasLibraryEntry, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions, AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem,
   AtlasUploadFile } from "@mains/contracts/atlas";
+import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
 import { collectionsService } from "../collections";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { atlasRepo, type AtlasRecord, type RevisionRecord } from "./atlas.repo";
@@ -90,7 +91,7 @@ async function runContext(runId: string, accountId: string) {
     roots: [...(root ? [root] : []), imageRoot, ...(codexImages ? [codexImages] : []),
       ...attachments.map((file) => path.dirname(file.path))] };
 }
-async function generatedForRun(runId: string, accountId: string): Promise<AtlasGeneratedFile[]> {
+async function generatedForRun(runId: string, accountId: string, hashImages = true): Promise<AtlasGeneratedFile[]> {
   const { run, runsService, roots, attachments } = await runContext(runId, accountId);
   const candidates = new Set<string>();
   for (const artifact of await runsService.getOutputArtifacts(runId)) {
@@ -107,7 +108,7 @@ async function generatedForRun(runId: string, accountId: string): Promise<AtlasG
       const { real, stats } = await inspectSource(file, roots);
       result.push({ sourceKey: sourceKey(runId, real), runId, runTitle: run.title ?? "Conversation",
         origin: uploads.has(file) ? "attachment" : "generated",
-        ...(type.kind === "image" ? { contentHash: uploads.get(file)?.contentHash ?? await imageContentHash(real, stats) } : {}),
+        ...(type.kind === "image" ? { contentHash: uploads.get(file)?.contentHash ?? (hashImages ? await imageContentHash(real, stats) : undefined) } : {}),
         collectionId: run.collectionId, ...type, path: real, fileName: path.basename(real),
         byteSize: stats.size, modifiedAt: stats.mtime.toISOString() });
     } catch { /* Missing/incomplete files and symlinks are excluded from the projection. */ }
@@ -139,13 +140,144 @@ function once(key: string, action: () => Promise<AtlasItem>) {
   return promise;
 }
 
+function savedEntry(item: AtlasListItem): AtlasLibraryEntry {
+  return { key: item.id, kind: item.kind, title: item.title, date: item.updatedAt,
+    collectionId: item.collectionId, path: item.path, contentHash: item.contentHash, saved: item };
+}
+
+function matchesLibrary(entry: AtlasLibraryEntry, options: AtlasLibraryOptions, query: string) {
+  return (!options.type || options.type === "all" || entry.kind === options.type)
+    && (!options.collectionId || entry.collectionId === options.collectionId)
+    && `${entry.title} ${entry.generated?.runTitle ?? ""}`.toLocaleLowerCase().includes(query);
+}
+
+async function* savedLibraryEntries(options: AtlasLibraryOptions, query: string) {
+  if (options.scope === "generated" || options.scope === "uploads") return;
+  for (let offset = 0; ; offset += ATLAS_LIBRARY_PAGE_SIZE) {
+    const items = atlasService.list({ accountId: options.accountId, offset, limit: ATLAS_LIBRARY_PAGE_SIZE,
+      kind: options.type === "all" ? undefined : options.type, collectionId: options.collectionId,
+      trashed: false, ...(options.scope === "favorites" ? { isFavorite: true } : {}) });
+    for (const item of items) {
+      const entry = savedEntry(item);
+      if (matchesLibrary(entry, options, query)) yield entry;
+    }
+    if (items.length < ATLAS_LIBRARY_PAGE_SIZE) return;
+  }
+}
+
+async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: string) {
+  if (options.type === "page" || options.scope === "saved" || options.scope === "favorites") return;
+  const preferredImages = options.scope === "all"
+    ? new Set(atlasRepo.imageIdentities(options.accountId, options.collectionId)
+      .filter((item) => item.title.toLocaleLowerCase().includes(query)).map((item) => item.contentHash).filter(Boolean))
+    : new Set<string>();
+  // Continue through older conversations only as the requested page needs
+  // them. An empty conversation or a filtered batch cannot hide later files.
+  const batchSize = 25;
+  for (let offset = 0; ; offset += batchSize) {
+    const runs = atlasRepo.generatedRuns(options.accountId, offset, batchSize, options.collectionId);
+    const files: AtlasGeneratedFile[] = [];
+    for (let index = 0; index < runs.length; index += 4) {
+      const batch = await Promise.all(runs.slice(index, index + 4)
+        .map((run) => generatedForRun(run.id, options.accountId, false)));
+      files.push(...batch.flat());
+    }
+    files.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt) || a.sourceKey.localeCompare(b.sourceKey));
+    for (const file of files) {
+      if (options.scope === "generated" && file.origin === "attachment") continue;
+      if (options.scope === "uploads" && file.origin !== "attachment") continue;
+      const entry: AtlasLibraryEntry = { key: file.sourceKey, kind: file.kind, title: file.fileName,
+        date: file.modifiedAt, collectionId: file.collectionId, path: file.path, generated: file };
+      if (!matchesLibrary(entry, options, query)) continue;
+      const saved = atlasRepo.bySource(options.accountId, file.sourceKey);
+      if (options.scope === "all" && saved && (saved.trashedAt || matchesLibrary(savedEntry(format(saved)), options, query))) continue;
+      if (file.kind === "image" && !file.contentHash) {
+        try { file.contentHash = await imageContentHash(file.path, await fs.stat(file.path)); }
+        catch { continue; }
+      }
+      if (file.kind === "image" && options.scope === "all" && file.contentHash && preferredImages.has(file.contentHash)) continue;
+      entry.contentHash = file.contentHash;
+      if (options.scope !== "all" && saved) entry.saved = format(saved);
+      yield entry;
+    }
+    if (runs.length < batchSize) return;
+  }
+}
+
+async function* libraryEntries(options: AtlasLibraryOptions, query: string) {
+  const saved = savedLibraryEntries(options, query);
+  const generated = generatedLibraryEntries(options, query);
+  let [left, right] = await Promise.all([saved.next(), generated.next()]);
+  const seenImages = new Set<string>();
+  while (!left.done || !right.done) {
+    const takeSaved = !left.done && (right.done || left.value.date >= right.value.date);
+    const entry = takeSaved ? left.value! : right.value!;
+    if (entry.kind !== "image" || !entry.contentHash || !seenImages.has(entry.contentHash)) {
+      if (entry.kind === "image" && entry.contentHash) seenImages.add(entry.contentHash);
+      yield entry;
+    }
+    if (takeSaved) left = await saved.next(); else right = await generated.next();
+  }
+}
+
 export const atlasService = {
   list(options: AtlasListOptions): AtlasListItem[] {
+    const accountId = required(options?.accountId, "Account");
+    if ((options.limit !== undefined && (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 1000))
+      || (options.offset !== undefined && (!Number.isSafeInteger(options.offset) || options.offset < 0))
+      || (options.ids !== undefined && (!Array.isArray(options.ids) || options.ids.length > 1000 || options.ids.some((id) => typeof id !== "string")))
+      || (options.kind !== undefined && !["page", "file", "image"].includes(options.kind))
+      || (options.trashed !== undefined && typeof options.trashed !== "boolean")
+      || (options.isFavorite !== undefined && typeof options.isFavorite !== "boolean")
+      || (options.collectionId !== undefined && typeof options.collectionId !== "string"))
+      throw new Error("Invalid Atlas pagination or filters");
+    if (options.ids?.length === 0) return [];
     const includePreview = options?.includePagePreview === true;
-    return atlasRepo.list(required(options?.accountId, "Account"), includePreview)
+    return atlasRepo.list({ ...options, accountId, includePagePreview: includePreview })
       .map(({ item, preview }) => ({ ...format(item),
         ...(item.kind === "image" && item.contentHash ? { contentHash: item.contentHash } : {}),
         ...(includePreview && item.kind === "page" ? { preview: preview ?? "" } : {}) }));
+  },
+  async library(input: AtlasLibraryOptions): Promise<AtlasLibraryPage> {
+    const accountId = required(input?.accountId, "Account");
+    const requestedPage = input.page ?? 1;
+    if (!Number.isSafeInteger(requestedPage) || requestedPage < 1 || requestedPage > 100000
+      || (input.type !== undefined && !["all", "page", "file", "image"].includes(input.type))
+      || (input.scope !== undefined && !["all", "saved", "favorites", "generated", "uploads"].includes(input.scope))
+      || (input.query !== undefined && (typeof input.query !== "string" || input.query.length > 4096)))
+      throw new Error("Invalid Atlas pagination");
+    if (input.collectionId) await collection(input.collectionId, accountId);
+    const options = { ...input, accountId, scope: input.scope ?? "all" };
+    const query = (input.query ?? "").toLocaleLowerCase().trim();
+    const start = (requestedPage - 1) * ATLAS_LIBRARY_PAGE_SIZE;
+    const end = start + ATLAS_LIBRARY_PAGE_SIZE;
+    let index = 0;
+    let items: AtlasLibraryEntry[] = [];
+    let lastPage: AtlasLibraryEntry[] = [];
+    let hasNext = false;
+    for await (const entry of libraryEntries(options, query)) {
+      if (index === end) { hasNext = true; break; }
+      if (index % ATLAS_LIBRARY_PAGE_SIZE === 0) lastPage = [];
+      lastPage.push(entry);
+      if (index >= start) items.push(entry);
+      index++;
+    }
+    const page = hasNext ? requestedPage : Math.max(1, Math.ceil(index / ATLAS_LIBRARY_PAGE_SIZE));
+    if (page < requestedPage) items = lastPage;
+    const previewImages: Record<string, string> = {};
+    if (input.includePagePreview === true) {
+      const ids = items.filter((entry) => entry.kind === "page").map((entry) => entry.key);
+      const previews = new Map(this.list({ accountId, ids, includePagePreview: true }).map((item) => [item.id, item]));
+      for (const entry of items) {
+        if (entry.kind !== "page" || !entry.saved) continue;
+        entry.saved = previews.get(entry.key) ?? entry.saved;
+        for (const match of (entry.saved.preview ?? "").matchAll(/atlas-file:\/\/([^\s)>]+)/g)) {
+          const image = atlasRepo.find(match[1], accountId);
+          if (image?.kind === "image" && image.storageKey) previewImages[match[0]] = storagePath(image.storageKey);
+        }
+      }
+    }
+    return { items, page, hasNext, previewImages };
   },
   async generated(options: AtlasGeneratedOptions) {
     const accountId = required(options?.accountId, "Account");

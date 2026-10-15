@@ -11,11 +11,14 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { InstalledApp } from "@/lib/redux/api/shellApi";
+
+const appQuery = vi.hoisted(() => ({ apps: [] as InstalledApp[] }));
 
 // The row only needs these two reads; neither is what the branch editor is
 // about, so they are stubbed rather than backed by a store.
 vi.mock("@/lib/redux/api", () => ({
-  useGetInstalledAppsQuery: () => ({ data: [], isLoading: false }),
+  useGetInstalledAppsQuery: () => ({ data: appQuery.apps, isLoading: false }),
 }));
 vi.mock("@/lib/redux/api/workspaceApi", () => ({
   useGetLatestWorkspaceDiffSummaryQuery: () => ({ data: undefined }),
@@ -40,6 +43,7 @@ class ResizeObserverStub {
 }
 
 beforeEach(() => {
+  appQuery.apps = [];
   frameCallbacks = [];
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     frameCallbacks.push(callback);
@@ -121,6 +125,25 @@ describe("WorkspaceItem branch rename", () => {
 });
 
 describe("WorkspaceItem project actions", () => {
+  it("shows Windows Open with apps and opens the selected app at the workspace path", async () => {
+    const rootPath = "C:\\Users\\Okan\\Desktop\\website";
+    appQuery.apps = [
+      { id: "explorer", name: "File Explorer", path: "C:\\Windows\\explorer.exe", bundleId: "", icon: null },
+      { id: "powershell", name: "PowerShell", path: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", bundleId: "", icon: null },
+    ];
+    const openInApp = vi.fn();
+    vi.stubGlobal("api", { shell: { openInApp } });
+    const user = userEvent.setup();
+    render(createElement(WorkspaceItem, { id: "ws-1", name: "website", rootPath }));
+
+    await user.click(screen.getByRole("button", { name: "Workspace options" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open with" }));
+    expect(screen.getByRole("menuitem", { name: "PowerShell" })).toBeTruthy();
+    await user.click(screen.getByRole("menuitem", { name: "File Explorer" }));
+    expect(openInApp).toHaveBeenCalledExactlyOnceWith("explorer", rootPath);
+    expect(screen.queryByRole("menu", { name: "Workspace actions" })).toBeNull();
+  });
+
   it("keeps the native browser behind the workspace menu and releases suppression after an action", async () => {
     const setSuppressed = vi.fn<(lease: string, suppressed: boolean) => void>();
     const setVisible = vi.fn();

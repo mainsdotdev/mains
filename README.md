@@ -36,7 +36,7 @@ Mains is a macOS app for working with AI agents — **Claude Code**, **OpenAI Co
 
 Download the latest DMG for Apple Silicon (`arm64`) or Intel (`x64`) from [Releases](https://github.com/mainsdotdev/mains/releases/latest) and move Mains to **Applications** — it updates itself from there.
 
-**Platform:** macOS only (Apple Silicon and Intel). The [standalone server](#standalone-server) also runs on Linux.
+**Platform:** macOS (Apple Silicon and Intel). Windows x64 beta preparation and its validation checklist are documented in [Windows beta notes](apps/desktop/docs/design/windows-x64-beta.md); a tested Windows release is pending. The [standalone server](#standalone-server) also runs on Linux.
 
 ### Agents
 

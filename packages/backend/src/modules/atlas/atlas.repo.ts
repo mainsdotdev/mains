@@ -1,5 +1,6 @@
-import { and, desc, eq, sql } from "drizzle-orm";
-import type { AtlasMetadataPatch } from "@mains/contracts/atlas";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import type { AtlasListOptions, AtlasMetadataPatch } from "@mains/contracts/atlas";
+import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
 import { getDb } from "../../db/client";
 import { atlasItems, atlasPageRevisions, atlasPageFileRefs, runs } from "../../db/schema";
 import { mergeMetadata, readMetadata } from "./atlas.metadata";
@@ -8,7 +9,8 @@ export type AtlasRecord = typeof atlasItems.$inferSelect;
 export type RevisionRecord = typeof atlasPageRevisions.$inferSelect;
 
 export const atlasRepo = {
-  list(accountId: string, includePagePreview = false) {
+  list({ accountId, includePagePreview = false, kind, ids, trashed, collectionId,
+    isFavorite, offset, limit }: AtlasListOptions) {
     // Read only a small excerpt, in the same query as the library. The indexed
     // item/version lookup excludes history and never loads full blocks JSON.
     const preview = includePagePreview
@@ -20,8 +22,24 @@ export const atlasRepo = {
       eq(atlasPageRevisions.version, atlasItems.version),
       eq(atlasItems.kind, "page"),
     ));
-    return query.where(eq(atlasItems.accountId, accountId))
-      .orderBy(desc(atlasItems.updatedAt)).all();
+    const conditions = [eq(atlasItems.accountId, accountId)];
+    if (kind) conditions.push(eq(atlasItems.kind, kind));
+    if (ids) conditions.push(inArray(atlasItems.id, ids));
+    if (trashed !== undefined) conditions.push(trashed ? isNotNull(atlasItems.trashedAt) : isNull(atlasItems.trashedAt));
+    if (collectionId) conditions.push(eq(atlasItems.collectionId, collectionId));
+    if (isFavorite !== undefined) conditions.push(eq(atlasItems.isFavorite, isFavorite));
+    query.where(and(...conditions)).orderBy(desc(atlasItems.updatedAt), desc(atlasItems.id));
+    if (offset !== undefined) query.offset(offset);
+    if (limit !== undefined || offset !== undefined) query.limit(limit ?? ATLAS_LIBRARY_PAGE_SIZE);
+    return query.all();
+  },
+  imageIdentities(accountId: string, collectionId?: string) {
+    const conditions = [eq(atlasItems.accountId, accountId), eq(atlasItems.kind, "image"), isNull(atlasItems.trashedAt)];
+    if (collectionId) conditions.push(eq(atlasItems.collectionId, collectionId));
+    // Image identity is small; do not load storage paths, Page previews or the
+    // rest of the account's inventory merely to prefer permanent copies.
+    return getDb().select({ title: atlasItems.title, contentHash: atlasItems.contentHash })
+      .from(atlasItems).where(and(...conditions)).all();
   },
   find(id: string, accountId: string) {
     return getDb().select().from(atlasItems)

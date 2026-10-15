@@ -2,6 +2,7 @@ import { ipcMain } from "../../ipc-kit/ipc-main";
 import { handle } from "../../ipc-kit/handle";
 import { workspaceService } from "./workspace.service";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { CancelWorkspaceClonePayload } from "@mains/contracts/workspace-intake";
 import type {
   CreateWorkspacePayload,
   DeleteWorkspaceOptions,
@@ -88,6 +89,11 @@ export function registerWorkspaceIpc(): void {
     handle((id: string, options?: DeleteWorkspaceOptions) =>
       workspaceService.delete(id, options),
     ),
+  );
+
+  ipcMain.handle(
+    CHANNELS.workspace.cancelClone,
+    handle((payload: CancelWorkspaceClonePayload) => workspaceService.cancelClone(payload)),
   );
 
   ipcMain.handle(
@@ -287,6 +293,7 @@ export function unregisterWorkspaceIpc(): void {
     CHANNELS.workspace.getByRootPath,
     CHANNELS.workspace.create,
     CHANNELS.workspace.createFromSource,
+    CHANNELS.workspace.cancelClone,
     CHANNELS.workspace.update,
     CHANNELS.workspace.delete,
     CHANNELS.workspace.archive,

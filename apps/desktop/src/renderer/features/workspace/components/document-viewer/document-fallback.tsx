@@ -7,7 +7,7 @@ import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 
 /** Shown when a document can't be rendered inline (notably best-effort PPTX).
  * Offers to open it with a native handler app (PowerPoint, Keynote, …). */
-export function DocumentFallback({ doc }: { doc: DocumentViewerDoc }) {
+export function DocumentFallback({ doc, message }: { doc: DocumentViewerDoc; message?: string }) {
   const [fetchApps, { data: handlerApps = [] }] = useLazyGetAppsForFileQuery();
 
   useEffect(() => {
@@ -24,7 +24,7 @@ export function DocumentFallback({ doc }: { doc: DocumentViewerDoc }) {
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center bg-primary dark:bg-primary-900">
       <Document className="size-10 text-primary-400" />
       <Text as="div" tone="muted">
-        Inline preview isn’t available for this {label}.
+        {message ?? `Inline preview isn’t available for this ${label}.`}
       </Text>
       <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
         {handlerApps.slice(0, 3).map((app) => (

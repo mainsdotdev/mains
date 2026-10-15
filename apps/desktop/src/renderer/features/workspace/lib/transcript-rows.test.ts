@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { groupEvents } from "./group-events";
+import { mergeRunEvents } from "./run-event-mappers";
 import {
   buildTurnRenderRows,
   matchModelChangesToPromptGroups,
   matchTurnsToGroups,
+  lastPromptSuggestionIndex,
 } from "./transcript-rows";
 import type { RunEvent } from "../types";
 import type { RunTurn } from "@/lib/redux/api";
@@ -63,6 +65,23 @@ function turn(turnIndex: number, model: string | null): RunTurn {
 }
 
 describe("buildTurnRenderRows — deliverable breakout", () => {
+  it("keeps async questions reachable in their original position after a confirmed final answer", () => {
+    const groups = groupEvents([
+      ev({ id: "u", metadata: { kind: "user-prompt" } }),
+      ev({ id: "progress", content: "Checking", metadata: { kind: "report" } }),
+      ev({ id: "final", content: "Done", metadata: { kind: "report", messagePhase: "final_answer" } }),
+      ev({ id: "question", content: "Continue?", metadata: { kind: "report", source: "codex_async_questions" } }),
+      ev({ id: "later", content: "More background work", metadata: { kind: "report" } }),
+    ]);
+    const rows = buildTurnRenderRows(groups);
+    expect(rows.find((row) => row.kind === "flat" && row.indices.includes(3))).toEqual({ kind: "flat", indices: [3] });
+    const collapsed = rows.flatMap((row) => row.kind === "accordion" ? row.previousSegments.flat() : []);
+    expect(collapsed).not.toContain(3);
+    const visible = rows.flatMap((row) => row.kind === "flat" ? row.indices : [...row.messageBreakoutIndices, ...row.lastSegment]);
+    expect(visible.indexOf(2)).toBeLessThan(visible.indexOf(3));
+    expect(visible.indexOf(3)).toBeLessThan(visible.indexOf(4));
+  });
+
   it("leaves compaction visible in chronological order between collapsed activity on both sides", () => {
     const groups = groupEvents([
       ev({ id: "u", metadata: { kind: "user-prompt" } }),
@@ -407,7 +426,145 @@ describe("final-answer transcript layout", () => {
   });
 });
 
+describe("follow-up transcript layout", () => {
+  const suggestion = (id = "suggestion") => ev({ id, content: "pdf olarak da hazırla", metadata: { kind: "prompt_suggestion" } });
+  const reply = (id = "final", messagePhase: string | null = "final_answer") => ev({ id, content: "CV is ready", metadata: { kind: "report", messagePhase: messagePhase ?? undefined } });
+  const prompt = (id = "prompt") => ev({ id, metadata: { kind: "user-prompt" } });
+  const tool = () => ev({ id: "tool", type: "tool_call", content: "Write: CV.md", metadata: { status: "done" } });
+
+  it.each(["document", "image", "visualization"])("keeps the suggestion outside the accordion when a %s follows the confirmed final answer", (kind) => {
+    const groups = groupEvents([prompt(), tool(), reply(),
+      ev({ id: "deliverable", metadata: { kind, path: "/tmp/CV.md", outputSelected: true } }), suggestion()]);
+    const row = buildTurnRenderRows(groups)[1];
+    const at = (id: string) => groups.findIndex((group) => group.events.some((event) => event.id === id));
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    expect(row.previousSegments.flat()).toEqual([at("tool")]);
+    expect(row.messageBreakoutIndices).toEqual([at("deliverable")]);
+    expect(row.lastSegment).toEqual([at("final")]);
+    expect(row.suggestionIndices).toEqual([at("suggestion")]);
+    expect(row.previousToolSummary).toBe("1 tool call");
+    expect(row.previousMessageCount).toBe(0);
+  });
+
+  it.each(["before", "after"])("places a follow-up after the reply when it arrives %s the reply", (position) => {
+    const events = [prompt(), tool(), ...(position === "before" ? [suggestion(), reply()] : [reply(), suggestion()])];
+    const groups = groupEvents(events);
+    const row = buildTurnRenderRows(groups)[1];
+    const at = (id: string) => groups.findIndex((group) => group.events.some((event) => event.id === id));
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    expect(row.previousSegments.flat()).toEqual([at("tool")]);
+    expect(row.lastSegment).toEqual([at("final")]);
+    expect(row.suggestionIndices).toEqual([at("suggestion")]);
+  });
+
+  it("keeps every suggestion once after a split final answer and late commentary", () => {
+    const groups = groupEvents([prompt(), reply("first"), suggestion("s1"), reply("second"),
+      suggestion("s2"), reply("late", "commentary")]);
+    const row = buildTurnRenderRows(groups)[1];
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    expect(row.previousSegments.flat()).toEqual([5]);
+    expect(row.lastSegment).toEqual([1, 3]);
+    expect(row.suggestionIndices).toEqual([2, 4]);
+    const indices = [...row.previousSegments.flat(), ...row.lastSegment, ...row.suggestionIndices!];
+    expect(indices.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("keeps a single historical reply flat with its suggestion afterward", () => {
+    const rows = buildTurnRenderRows(groupEvents([prompt(), suggestion(), reply("legacy", null)]));
+    expect(rows).toEqual([
+      { kind: "flat", indices: [0] },
+      { kind: "flat", indices: [2], suggestionIndices: [1] },
+    ]);
+  });
+
+  it("keeps each suggestion in its own turn before the next user prompt", () => {
+    const rows = buildTurnRenderRows(groupEvents([prompt("p1"), tool(), reply("r1"), suggestion("s1"),
+      prompt("p2"), reply("r2"), suggestion("s2")]));
+    expect(rows[1].suggestionIndices).toEqual([3]);
+    expect(rows[2]).toEqual({ kind: "flat", indices: [4] });
+    expect(rows[3]).toEqual({ kind: "flat", indices: [5], suggestionIndices: [6] });
+  });
+
+  it("keeps a suggestion available when final content arrives after it", () => {
+    const groups = groupEvents([prompt(), tool(), suggestion(), reply(),
+      ev({ id: "document", metadata: { kind: "document", path: "/tmp/CV.md" } })]);
+    expect(lastPromptSuggestionIndex(groups)).toBe(2);
+  });
+
+  it("hides the previous suggestion after a user sends another message", () => {
+    expect(lastPromptSuggestionIndex(groupEvents([prompt("p1"), reply("r1"), suggestion(), prompt("p2"), reply("r2")]))).toBe(-1);
+  });
+
+  it("uses the latest suggestion offered after the new user message", () => {
+    expect(lastPromptSuggestionIndex(groupEvents([prompt("p1"), reply("r1"), suggestion("s1"),
+      prompt("p2"), suggestion("s2"), reply("r2")]))).toBe(4);
+  });
+
+  it("does not invent a follow-up for an empty or suggestion-free transcript", () => {
+    expect(lastPromptSuggestionIndex([])).toBe(-1);
+    expect(lastPromptSuggestionIndex(groupEvents([prompt(), reply()]))).toBe(-1);
+  });
+
+  it("keeps the same layout when a final-answer phase and projected document arrive in a history refresh", () => {
+    const stored = (id: number, kind: string, content: string, metadata: Record<string, unknown> = {}) => ({
+      id, runId: "claude-run", kind, content, metadata: JSON.stringify(metadata), createdAt: new Date(10_000),
+    });
+    const artifacts = [stored(1, "user-prompt", "Review my CV"), stored(2, "report", "CV is ready", { providerMessageId: "reply" }),
+      stored(3, "prompt_suggestion", "pdf olarak da hazırla")];
+    const live = mergeRunEvents([], artifacts, []);
+    const complete = [artifacts[0], stored(2, "report", "CV is ready", { providerMessageId: "reply", messagePhase: "final_answer" }),
+      artifacts[2], stored(-12, "document", "", { outputSelected: true, path: "/tmp/CV.md", outputAnchor: { source: "artifact", id: 2 } })];
+    const refreshed = mergeRunEvents(live, complete, []);
+    const reopened = mergeRunEvents([], complete, []);
+    expect(refreshed.map((event) => event.metadata?.kind)).toEqual(["user-prompt", "report", "document", "prompt_suggestion"]);
+    const groups = groupEvents(refreshed);
+    expect(buildTurnRenderRows(groups)).toEqual([
+      { kind: "flat", indices: [0] },
+      { kind: "flat", indices: [2, 1], suggestionIndices: [3] },
+    ]);
+    expect(buildTurnRenderRows(groupEvents(reopened))).toEqual(buildTurnRenderRows(groups));
+  });
+
+  it("offsets suggestion indices after a compaction boundary", () => {
+    const groups = groupEvents([ev({ id: "compaction", type: "log", metadata: { source: "context_compaction", level: "info" } }),
+      prompt(), tool(), reply(), suggestion()]);
+    const rows = buildTurnRenderRows(groups);
+    const row = rows[2];
+    expect(row.kind).toBe("accordion");
+    if (row.kind !== "accordion") return;
+    expect(row.previousSegments).toEqual([[2]]);
+    expect(row.lastSegment).toEqual([3]);
+    expect(row.suggestionIndices).toEqual([4]);
+  });
+
+  it("keeps tool-only and suggestion-only transcripts reachable without an empty accordion", () => {
+    expect(buildTurnRenderRows(groupEvents([tool(), suggestion()]))).toEqual([
+      { kind: "flat", indices: [0], suggestionIndices: [1] },
+    ]);
+    expect(buildTurnRenderRows(groupEvents([suggestion()]))).toEqual([{ kind: "flat", indices: [0] }]);
+  });
+});
+
 describe("matchTurnsToGroups", () => {
+  it.each([true, false])("keeps the footer below the final answer and above its follow-up (backend turn: %s)", (withTurn) => {
+    const groups = groupEvents([
+      ev({ id: "prompt", timestamp: new Date(1000), metadata: { kind: "user-prompt" } }),
+      ev({ id: "tool", timestamp: new Date(2000), type: "tool_call", metadata: { status: "done" } }),
+      ev({ id: "final", timestamp: new Date(4000), content: "CV is ready", metadata: { kind: "report", messagePhase: "final_answer" } }),
+      ev({ id: "document", timestamp: new Date(4000), metadata: { kind: "document", path: "/tmp/CV.md", outputSelected: true } }),
+      ev({ id: "suggestion", timestamp: new Date(5000), content: "pdf olarak da hazırla", metadata: { kind: "prompt_suggestion" } }),
+    ]);
+    const final = groups.findIndex((group) => group.events.some((event) => event.id === "final"));
+    const turns = withTurn ? [{ ...turn(0, "claude"), elapsedMs: 4000, endedAt: 5 }] : [];
+    const sessions = matchTurnsToGroups(groups, turns, new Date(1000), true);
+    expect([...sessions.keys()]).toEqual([final]);
+    expect(sessions.get(final)?.responseContent).toContain("CV is ready");
+    expect(sessions.get(final)?.responseContent).not.toContain("pdf olarak da hazırla");
+  });
+
   it.each([true, false])("puts the footer after the visible final answer when a later image breaks out (backend turn: %s)", (withTurn) => {
     const groups = groupEvents([
       ev({ id: "prompt", timestamp: new Date(1000), metadata: { kind: "user-prompt" } }),

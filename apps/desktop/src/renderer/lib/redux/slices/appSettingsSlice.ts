@@ -31,6 +31,7 @@ export interface DocumentViewerDoc {
   path: string;
   fileName: string;
   docType: DocType;
+  byteSize?: number;
 }
 
 export type ThemePreference = "light" | "dark" | "system";

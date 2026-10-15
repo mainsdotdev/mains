@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyboardShortcutsProvider } from "@/providers/keyboard-shortcuts-provider";
 import { SpaceModePicker } from "./space-mode-picker";
 
+// The picker shows macOS shortcut labels (⌘1–3); other platforms show Ctrl.
+vi.mock("../../../../shared/runtime-platform", () => ({ getRuntimeOS: () => "darwin" }));
+
 beforeEach(() => {
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     queueMicrotask(() => callback(0));

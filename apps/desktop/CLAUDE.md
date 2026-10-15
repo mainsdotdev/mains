@@ -8,7 +8,7 @@ This file provides guidance to coding agents working with code in this repositor
 
 ```bash
 # Start development server
-npm start                   # electron-forge start (raises ulimit to 65536)
+npm start                   # portable Forge launcher (raises macOS ulimit to 65536)
 npm run serve               # start with MAINS_SERVE=1 (backend exposed over WebSocket)
 npm run serve:tailscale     # serve + MAINS_TAILSCALE_SERVE=1 (Tailscale HTTPS exposure)
 npm run build:web           # build the renderer as a standalone web client → dist-web/
@@ -59,7 +59,7 @@ Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the 
 
 ## Architecture Overview
 
-Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). CommonJS package with ESM Vite configs (`.mjs`). **macOS only** (Apple Silicon and Intel) — Windows and Linux are not supported.
+Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). CommonJS package with ESM Vite configs (`.mjs`). **macOS** (Apple Silicon and Intel), with a **Windows x64 beta target** verified by native Windows CI and installed-app smoke in Parallels; interactive beta acceptance remains pending. Lens, Dock icon customization and file-handler discovery remain macOS-only. Workspace Open With supports macOS apps and Windows File Explorer, PowerShell and detected editors. Windows 11 22H2+ translucent sidebars use native Acrylic with Window Controls Overlay. Windows uses PowerShell and manual installer upgrades; see `docs/design/windows-x64-beta.md` for build and acceptance checks. Linux desktop is not supported.
 
 ### Process Boundaries
 
@@ -236,7 +236,7 @@ Core tables:
 - `fake.driver.ts` — in-memory driver used by tests
 - `work-run-core.ts` — shared run loop / event plumbing used by every driver
 - `adapter.shared.ts` — common helpers used by every driver
-- `mains-mcp-server.ts`, `mains-tools.core.ts`, `mains-tools.schemas.ts`, `mains-tools.registry.ts` — in-process MCP server and the **mains tools** (`SaveReview`, `SaveFinding`, `SaveFindings`, `CheckPackage`). Handler logic lives once in core, the Zod schema once in schemas, assembly once in the registry with `providers` and `modes` allowlists (ordinary tools are developer-only; a separate voice scope exposes Codex coordination tools in all modes). Git is not among them: commits and PRs are the user's job through the git-actions panel, or the agent's through the shell. Never hand-write a tool definition inside a driver.
+- `mains-mcp-server.ts`, `mains-tools.core.ts`, `mains-tools.schemas.ts`, `mains-tools.registry.ts` — in-process MCP server and the **mains tools** (`RegisterDeliverable`, `SaveReview`, `SaveFinding`, `SaveFindings`, `CheckPackage`). Handler logic lives once in core, the Zod schema once in schemas, assembly once in the registry with `providers` and `modes` allowlists (review/package tools are developer-only; `RegisterDeliverable` is available in Code and Work; a separate voice scope exposes Codex coordination tools in all modes). Git is not among them: commits and PRs are the user's job through the git-actions panel, or the agent's through the shell. Never hand-write a tool definition inside a driver.
 - **Mode harness** (`src/shared/mode-harness.ts`) — per-mode prompt delta, tool policy, and per-provider config defaults/overrides, resolved once per run in `runs.service` (never inside a driver, never via the cached `AdapterConfig`). Drivers receive the resolved values on the per-run request (`extraInstructions`, `toolPolicy`, `configSnapshot`) and apply them natively: claude appends to the `claude_code` system-prompt preset + allow/disallow lists, copilot layers the session `systemMessage` + PreToolUse deny, codex sends `developerInstructions` + sandbox override (chat = `read-only`) + `personality` (work/chat = `friendly`) + `planMode`/`goalMode` pinned off (plan in work/chat, goal in chat — on create, resume, and fork), cursor prefixes the prompt + agent mode (chat = `ask`). Continue/fork re-derive the harness from the run row's `mode` snapshot.
 - Hook system for pre/post tool execution and subagent coordination; pre-approved tool list (Bash, Read, Glob, Grep, …) with interactive approval for others
 

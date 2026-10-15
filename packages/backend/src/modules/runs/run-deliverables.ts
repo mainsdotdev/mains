@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { OUTPUT_FILE_MAX_BYTES, OUTPUT_DOCUMENT_TYPES as DOCUMENT_TYPES, OUTPUT_IMAGE_EXTENSIONS as IMAGE_EXTENSIONS } from "@mains/contracts/output-files";
+import { outputReferences, resolveOutputFilePath as resolveReference } from "./run-output-references";
 import type { RunArtifactResponse } from "./runs.dto";
 import type { RunTurnResponse } from "@mains/contracts/runs";
 
@@ -13,12 +14,9 @@ interface History {
 interface Reply {
   key: string;
   messages: RunArtifactResponse[][];
+  candidates: RunArtifactResponse[];
 }
 const FILE_KINDS = new Set(["file", "document", "image"]);
-const DOCUMENT_TYPES: Record<string, string> = { md: "md", markdown: "md", txt: "txt", csv: "txt",
-  pdf: "pdf", docx: "docx", pptx: "pptx", xlsx: "xlsx" };
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "svg"]);
-const EXTENSIONS = "pptx|docx|xlsx|pdf|markdown|md|txt|csv|png|jpe?g|gif|webp|avif|svg";
 const parent = (metadata: Record<string, unknown> | null) => !metadata?.isFromSubagent && !metadata?.voice;
 const time = (value: Date | null) => value ? new Date(value).getTime() : 0;
 const chronological = (a: { id: number; createdAt: Date }, b: { id: number; createdAt: Date }) =>
@@ -50,12 +48,20 @@ export function deliverableReplies(history: History): Reply[] {
     return turn ? `turn:${turn.id}` : "legacy";
   };
   const groups = new Map<string, Map<string, RunArtifactResponse[]>>();
+  const candidates = new Map<string, RunArtifactResponse[]>();
   const group = (key: string) => {
     let result = groups.get(key);
     if (!result) { result = new Map(); groups.set(key, result); }
     return result;
   };
   for (const row of [...history.artifacts].sort(chronological)) {
+    if (FILE_KINDS.has(row.kind) && parent(row.metadata)) {
+      const key = keyFor(row);
+      const rows = candidates.get(key) ?? [];
+      rows.push(row);
+      candidates.set(key, rows);
+      if (row.metadata?.outputRole === "deliverable" || row.metadata?.source === "codex_image_generation") group(key);
+    }
     if (!isMessage(row)) continue;
     const messages = group(keyFor(row));
     const nativeId = row.metadata?.providerMessageId ?? row.metadata?.itemId ?? row.metadata?.streamId;
@@ -68,58 +74,8 @@ export function deliverableReplies(history: History): Reply[] {
   return [...groups].filter(([key]) => completed.has(key)).map(([key, group]) => {
     const messages = [...group.values()];
     const final = messages.filter((parts) => parts.some((row) => row.metadata?.messagePhase === "final_answer"));
-    return { key, messages: final.length ? final : messages.slice(-1) };
+    return { key, messages: final.length ? final : messages.slice(-1), candidates: candidates.get(key) ?? [] };
   });
-}
-function resolveReference(reference: string, root: string | null): string | null {
-  let value = reference.trim().replace(/^<|>$/g, "");
-  try { value = decodeURIComponent(value); } catch { /* Literal percent in a filename. */ }
-  if (/^[a-z][\w+.-]*:/i.test(value) && !value.startsWith("file:")) return null;
-  if (value.startsWith("file:")) {
-    try { const url = new URL(value); if (url.hostname && url.hostname !== "localhost") return null; value = url.pathname; }
-    catch { return null; }
-  }
-  value = value.replace(/(?:#L\d+(?:-\d+)?|:\d+(?::\d+)?)$/, "");
-  if (value.startsWith("~/")) value = path.join(os.homedir(), value.slice(2));
-  if (value.includes("\0") || value.length > 4096) return null;
-  return path.isAbsolute(value) ? path.resolve(value) : root ? path.resolve(root, value) : null;
-}
-function references(text: string, root: string | null): Set<string> {
-  const result = new Set<string>();
-  const add = (reference: string) => {
-    if (result.size >= 500 || reference.length > 4096) return;
-    const file = resolveReference(reference, root);
-    if (!file) return;
-    const extension = path.extname(file).slice(1).toLowerCase();
-    if (DOCUMENT_TYPES[extension] || IMAGE_EXTENSIONS.has(extension)) result.add(file);
-  };
-  // Markdown destinations and quoted paths preserve spaces; bare tokens cover
-  // plain file references in the reply. Remote URLs never become local paths.
-  for (const match of text.matchAll(/\]\(\s*(<[^>]+>|[^\n)]+)\)/g)) add(match[1].replace(/\s+["'][^"']*["']$/, ""));
-  for (const match of text.matchAll(/[`"']([^`"'\n]+)[`"']/g)) add(match[1]);
-  for (const match of text.matchAll(/^\s*\[[^\]]+\]:\s*(<[^>]+>|\S+)/gm)) add(match[1]);
-  const withoutUrls = text.replace(/(?:https?:\/\/|[a-z][\w+.-]*:\/\/)[^\s<>"'`]+/gi, "");
-  const extension = new RegExp(`\\.(?:${EXTENSIONS})(?:#L\\d+(?:-\\d+)?|:\\d+(?::\\d+)?)?$`, "i");
-  for (const match of withoutUrls.matchAll(/[^\s`"'<>()[\]{}=,;]+/g)) {
-    const token = match[0].replace(/[.,;!?]+$/, "");
-    if (token.length <= 4096 && extension.test(token)) add(token);
-  }
-  // A reply can consist of a path, including whitespace in its name.
-  if (!text.includes("\n") && new RegExp(`\\.(?:${EXTENSIONS})$`, "i").test(text.trim())) add(text);
-  return result;
-}
-function inlineImages(text: string, root: string | null) {
-  const result = new Set<string>();
-  for (const match of text.matchAll(/!\[[^\]]*\]\(\s*(<[^>]+>|[^\n)]+)\)/g)) {
-    const file = resolveReference(match[1].replace(/\s+["'][^"']*["']$/, ""), root); if (file) result.add(file);
-  }
-  const definitions = new Map<string, string>();
-  for (const match of text.matchAll(/^\s*\[([^\]]+)\]:\s*(<[^>]+>|\S+)/gm)) definitions.set(match[1].toLowerCase(), match[2]);
-  for (const match of text.matchAll(/!\[([^\]]*)\](?:\[([^\]]*)\])?/g)) {
-    const ref = definitions.get((match[2] || match[1]).toLowerCase());
-    const file = ref && resolveReference(ref, root); if (file) result.add(file);
-  }
-  return result;
 }
 function within(root: string, file: string) {
   const relative = path.relative(root, file);
@@ -127,7 +83,8 @@ function within(root: string, file: string) {
 }
 
 /** One read-only output projection for chat, Atlas and the session shelf.
- * Candidate artifacts and directory contents are not evidence of delivery.
+ * Explicit reply references take priority; native generation can deliver its
+ * own images when that reply names no files. Other candidates are not outputs.
  * Negative IDs identify derived rows; the persisted event ledger stays intact.
  */
 export async function projectRunDeliverables(input: History & {
@@ -136,7 +93,7 @@ export async function projectRunDeliverables(input: History & {
   const rootPaths = [...(input.root ? [input.root] : []), ...(input.extraRoots ?? [])];
   const roots = await Promise.all(rootPaths.map((root) => fs.realpath(root).catch(() => null)));
   const result = input.artifacts.filter((row) => !FILE_KINDS.has(row.kind));
-  const usedImageIds = new Set<number>();
+  const usedArtifactIds = new Set<number>();
   const inspected = new Map<string, Promise<{ real: string; size: number; modifiedAt: number } | null>>();
   const inspect = (file: string) => {
     let value = inspected.get(file);
@@ -144,7 +101,7 @@ export async function projectRunDeliverables(input: History & {
       value = (async () => {
         try {
           const stats = await fs.lstat(file);
-          if (!stats.isFile() || stats.isSymbolicLink() || stats.size > 100 * 1024 * 1024) return null;
+          if (!stats.isFile() || stats.isSymbolicLink() || stats.size > OUTPUT_FILE_MAX_BYTES) return null;
           const real = await fs.realpath(file);
           return roots.some((root) => root && within(root, real)) ? { real, size: stats.size, modifiedAt: stats.mtimeMs } : null;
         } catch { return null; }
@@ -153,23 +110,23 @@ export async function projectRunDeliverables(input: History & {
     }
     return value;
   };
-  const imageRows = new Map<string, RunArtifactResponse[]>();
-  const addImageRow = (file: string, row: RunArtifactResponse) => {
-    const rows = imageRows.get(file) ?? [];
+  const fileRows = new Map<string, RunArtifactResponse[]>();
+  const addFileRow = (file: string, row: RunArtifactResponse) => {
+    const rows = fileRows.get(file) ?? [];
     if (rows.at(-1)?.id !== row.id) rows.push(row);
-    imageRows.set(file, rows);
+    fileRows.set(file, rows);
   };
   for (const row of input.artifacts) {
-    if (row.kind !== "image") continue;
+    if (!FILE_KINDS.has(row.kind)) continue;
     const reference = row.path ?? row.metadata?.path;
     const resolved = typeof reference === "string" && resolveReference(reference, input.root);
     if (!resolved) continue;
-    addImageRow(resolved, row);
+    addFileRow(resolved, row);
     // Resolve aliases of the roots once; don't inspect earlier image files
     // merely to recover their persisted ID. Only delivered files are read.
     rootPaths.forEach((root, index) => {
       if (roots[index] && within(root, resolved))
-        addImageRow(path.resolve(roots[index]!, path.relative(root, resolved)), row);
+        addFileRow(path.resolve(roots[index]!, path.relative(root, resolved)), row);
     });
   }
   for (const reply of deliverableReplies(input)) {
@@ -179,15 +136,38 @@ export async function projectRunDeliverables(input: History & {
     const add = (file: string) => { if (paths.size < 500) paths.add(file); };
     for (const parts of reply.messages) {
       const text = parts.map((row) => row.content ?? "").join("\n");
-      references(text, input.root).forEach(add);
-      inlineImages(text, input.root).forEach((file) => embedded.add(file));
+      const references = outputReferences(text, input.root);
+      references.files.forEach(add);
+      references.embedded.forEach((file) => embedded.add(file));
     }
-    const anchor = messages.at(-1);
+    // Native image generation displays its result independently of Markdown.
+    // A final file reference instead selects the saved copy or composed document.
+    const declared = new Map<string, RunArtifactResponse>();
+    for (const row of reply.candidates) {
+      const reference = row.path ?? row.metadata?.path;
+      const resolved = typeof reference === "string" && resolveReference(reference, input.root);
+      if (resolved && (row.metadata?.outputRole || row.metadata?.source === "codex_image_generation")) declared.set(resolved, row);
+    }
+    const delivered = [...declared].filter(([, row]) => row.metadata?.outputRole === "deliverable" ||
+      (!row.metadata?.outputRole && row.metadata?.source === "codex_image_generation"));
+    if (paths.size === 0) delivered.forEach(([file]) => add(file));
+    const anchor = messages.at(-1) ?? delivered.at(-1)?.[1];
     if (!anchor) continue;
     const seen = new Set<string>();
     const realEmbedded = new Set((await Promise.all([...embedded].map(inspect))).flatMap((file) => file ? [file.real] : []));
     for (const file of paths) {
-      const inspectedFile = await inspect(file);
+      let inspectedFile = await inspect(file);
+      if (!inspectedFile) {
+        const matches = new Map<string, NonNullable<Awaited<ReturnType<typeof inspect>>>>();
+        for (const row of reply.candidates) {
+          const reference = row.path ?? row.metadata?.path;
+          const candidate = typeof reference === "string" && resolveReference(reference, input.root);
+          if (!candidate || path.basename(candidate) !== path.basename(file)) continue;
+          const checked = await inspect(candidate);
+          if (checked) matches.set(checked.real, checked);
+        }
+        if (matches.size === 1) inspectedFile = [...matches.values()][0];
+      }
       if (!inspectedFile || seen.has(inspectedFile.real)) continue;
       seen.add(inspectedFile.real);
       const real = inspectedFile.real;
@@ -195,17 +175,19 @@ export async function projectRunDeliverables(input: History & {
       const image = IMAGE_EXTENSIONS.has(extension);
       // Preserve existing image IDs so older paired clients can still request
       // their pixels. New files and repeated delivery in another turn derive IDs.
-      const existingImage = image ? [...(imageRows.get(real) ?? [])].reverse().find((row) => {
+      const existingFile = declared.get(real) ?? [...(fileRows.get(real) ?? [])].reverse().find((row) => {
         if (typeof row.metadata?.turnId === "number") return reply.key === `turn:${row.metadata.turnId}`;
         return time(row.createdAt) < time(anchor.createdAt) || (time(row.createdAt) === time(anchor.createdAt) &&
           row.id <= anchor.id);
-      }) : undefined;
-      const id = existingImage && !usedImageIds.has(existingImage.id) ? existingImage.id
+      });
+      const id = existingFile && existingFile.kind === (image ? "image" : "document") && !usedArtifactIds.has(existingFile.id) ? existingFile.id
         : -parseInt(createHash("sha256").update(JSON.stringify([input.runId, reply.key, real])).digest("hex").slice(0, 13), 16) - 1;
-      if (existingImage) usedImageIds.add(existingImage.id);
+      if (existingFile) usedArtifactIds.add(existingFile.id);
       result.push({ id, runId: input.runId, kind: image ? "image" : "document", path: real, content: "",
         blobData: null, entityId: null, contentHash: null,
-        createdAt: anchor.createdAt, metadata: { kind: image ? "image" : "document", outputSelected: true,
+        createdAt: anchor.createdAt, metadata: {
+          ...(existingFile?.metadata ?? {}),
+          kind: image ? "image" : "document", outputSelected: true,
           outputTurn: reply.key, outputAnchor: { source: "artifact", id: anchor.id }, path: real,
           fileName: path.basename(real), docType: DOCUMENT_TYPES[extension], byteSize: inspectedFile.size,
           modifiedAt: inspectedFile.modifiedAt, ...(image && realEmbedded.has(real) ? { inlineInReport: true } : {}) } });

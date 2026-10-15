@@ -70,7 +70,7 @@ async function repoTopLevel(rootPath: string): Promise<string> {
 }
 
 export interface WorktreeLocation {
-  /** The worktree's root — what every snapshot and tree diff path is relative to. */
+  /** Native canonical worktree root; snapshot and tree diff paths are relative to it. */
   topLevel: string;
   /** Where `rootPath` sits inside it: "" at the root, else "sub/dir/". */
   prefix: string;
@@ -81,7 +81,9 @@ export async function locateWorktree(rootPath: string): Promise<WorktreeLocation
   const [topLevel, prefix = ""] = (
     await openGit(rootPath).raw(["rev-parse", "--show-toplevel", "--show-prefix"])
   ).split("\n");
-  return { topLevel: topLevel.trim(), prefix: prefix.trim() };
+  // Git for Windows emits forward slashes and expands 8.3 directory aliases.
+  // Use the same native canonical spelling as filesystem-backed callers.
+  return { topLevel: await fs.promises.realpath(topLevel.trim()), prefix: prefix.trim() };
 }
 
 function splitNul(raw: string): string[] {

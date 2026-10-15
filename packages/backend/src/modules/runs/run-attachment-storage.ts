@@ -91,15 +91,21 @@ async function persistOne(runId: string, inputKey: string, ordinal: number, inpu
     }
     const byteSize = (await fs.stat(pending)).size;
     const contentHash = await fileHash(pending);
-    await fs.chmod(pending, 0o444);
-    const handle = await fs.open(pending, "r");
+    // Windows FlushFileBuffers requires write access. Flush before marking
+    // the original read-only, while the pending file is still writable.
+    const handle = await fs.open(pending, "r+");
     try { await handle.sync(); } finally { await handle.close(); }
+    await fs.chmod(pending, 0o444);
     await fs.rename(pending, target);
     // Verification precedes the reference: a crash can leave an orphan, never
     // a committed history reference pointing at a half-written original.
     if ((await fs.stat(target)).size !== byteSize || await fileHash(target) !== contentHash) throw new Error("Attachment could not be verified");
-    const directoryHandle = await fs.open(directory, "r");
-    try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+    // Windows cannot fsync directory handles. The file bytes above are still
+    // flushed and verified before retaining their database reference.
+    if (process.platform !== "win32") {
+      const directoryHandle = await fs.open(directory, "r");
+      try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+    }
     runsRepo.retainAttachment(runId, inputKey, ordinal, { id, name, type: input.type, mimeType: input.mimeType, storageKey: key, byteSize, contentHash });
     const row = runsRepo.findAttachment(runId, id);
     if (!row) throw new Error("Attachment could not be saved");

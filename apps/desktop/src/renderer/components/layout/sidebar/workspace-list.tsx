@@ -4,6 +4,8 @@ import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceListGrouping } from "@/lib/redux/slices/appSettingsSlice";
 import { DropdownMenu, DropdownMenuItem, SortableItem, SortableList, Text, toast, type SortableHandle } from "@/components/ui";
 import WorkspaceItem from "./workspace-item";
+import PendingWorkspaceItem from "./pending-workspace-item";
+import type { PendingWorkspaceClone } from "@/hooks/use-sidebar-actions";
 import type {
   Workspace as WorkspaceResponse,
   WorkspaceGitState,
@@ -52,6 +54,10 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 interface WorkspacesListProps {
   workspaces: WorkspaceResponse[];
+  pendingClones: PendingWorkspaceClone[];
+  onCancelClone: (id: string) => void;
+  onRetryClone: (id: string) => void;
+  onDismissClone: (id: string) => void;
   gitStateByWorkspaceId: ReadonlyMap<string, WorkspaceGitState>;
   isLoading: boolean;
   searchQuery: string;
@@ -61,6 +67,10 @@ interface WorkspacesListProps {
 
 export default function WorkspacesList({
   workspaces,
+  pendingClones,
+  onCancelClone,
+  onRetryClone,
+  onDismissClone,
   gitStateByWorkspaceId,
   isLoading,
   searchQuery,
@@ -111,8 +121,11 @@ export default function WorkspacesList({
   }, [projects]);
 
   const basePath = WORKSPACE_BASE_PATH;
+  const cloneSearch = searchQuery.toLowerCase().trim();
+  const visibleClones = pendingClones.filter((clone) => !cloneSearch ||
+    [clone.name, clone.url, clone.targetPath].some((value) => value.toLowerCase().includes(cloneSearch)));
 
-  if (isLoading) {
+  if (isLoading && visibleClones.length === 0) {
     return (
       <div className="flex items-center justify-center h-16">
         <Text size="xs">Loading...</Text>
@@ -120,7 +133,7 @@ export default function WorkspacesList({
     );
   }
 
-  if (workspaces.length === 0) {
+  if (workspaces.length === 0 && visibleClones.length === 0) {
     return (
       <div className="flex items-center justify-center h-16">
         <Text size="xs">No projects yet</Text>
@@ -438,6 +451,19 @@ export default function WorkspacesList({
           isExpanded ? "max-h-250 opacity-100" : "max-h-0 opacity-0"
         }`}
       >
+        {visibleClones.length > 0 && (
+          <div className="mb-1 flex flex-col gap-1">
+            {visibleClones.map((clone) => (
+              <PendingWorkspaceItem
+                key={clone.id}
+                clone={clone}
+                onCancel={() => onCancelClone(clone.id)}
+                onRetry={() => onRetryClone(clone.id)}
+                onDismiss={() => onDismissClone(clone.id)}
+              />
+            ))}
+          </div>
+        )}
         {grouping === "none" ? (
           renderSortableWorkspaces(unpinnedWorkspaces, "flex flex-col space-y-1")
         ) : (

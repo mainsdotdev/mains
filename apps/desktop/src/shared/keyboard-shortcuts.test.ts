@@ -6,6 +6,8 @@ import {
   normalizeKeyboardShortcut,
   parseKeyboardShortcutOverrides,
   resolveKeyboardShortcut,
+  matchesKeyboardShortcut,
+  isReservedKeyboardShortcut,
 } from "./keyboard-shortcuts";
 
 describe("keyboard shortcuts", () => {
@@ -30,7 +32,7 @@ describe("keyboard shortcuts", () => {
   });
 
   it("formats macOS keycaps", () => {
-    expect(formatKeyboardShortcut("Command+Option+BracketLeft")).toEqual([
+    expect(formatKeyboardShortcut("Command+Option+BracketLeft", "darwin")).toEqual([
       "⌘",
       "⌥",
       "[",
@@ -38,10 +40,10 @@ describe("keyboard shortcuts", () => {
   });
 
   it("falls back to defaults and preserves an explicit unassigned override", () => {
-    expect(resolveKeyboardShortcut("app.openSettings", {})).toBe(
+    expect(resolveKeyboardShortcut("app.openSettings", {}, "darwin")).toBe(
       "Command+Shift+S",
     );
-    expect(resolveKeyboardShortcut("app.closeSettings", {})).toBe(
+    expect(resolveKeyboardShortcut("app.closeSettings", {}, "darwin")).toBe(
       "Command+Shift+W",
     );
     expect(resolveKeyboardShortcut("app.openSettings", { "app.openSettings": null })).toBeNull();
@@ -60,7 +62,7 @@ describe("keyboard shortcuts", () => {
 
   it("allows editor and browser contexts to reuse a chord", () => {
     expect(
-      findKeyboardShortcutConflict("editor.addSelection", "Command+L", {}),
+      findKeyboardShortcutConflict("editor.addSelection", "Command+L", {}, "darwin"),
     ).toBeNull();
   });
 
@@ -70,7 +72,26 @@ describe("keyboard shortcuts", () => {
         "browser.print",
         "Command+Shift+P",
         {},
+        "darwin",
       )?.id,
     ).toBe("app.focusComposer");
+  });
+
+  it("uses Control and Alt defaults on Windows and keeps custom bindings intact", () => {
+    const binding = resolveKeyboardShortcut("app.toggleTerminal", {}, "win32");
+    expect(binding).toBe("Control+J");
+    expect(matchesKeyboardShortcut({ code: "KeyJ", ctrlKey: true }, binding)).toBe(true);
+    expect(matchesKeyboardShortcut({ code: "KeyJ", metaKey: true }, binding)).toBe(false);
+    expect(formatKeyboardShortcut(resolveKeyboardShortcut("app.commandMenu", {}, "win32"), "win32"))
+      .toEqual(["Ctrl", "Alt", "K"]);
+    expect(resolveKeyboardShortcut("app.toggleTerminal", { "app.toggleTerminal": "Control+Shift+J" }, "win32"))
+      .toBe("Control+Shift+J");
+  });
+
+  it("reserves Windows system chords and finds conflicts against Windows defaults", () => {
+    expect(isReservedKeyboardShortcut("Option+F4", "win32")).toBe(true);
+    expect(isReservedKeyboardShortcut("Control+C", "win32")).toBe(true);
+    expect(findKeyboardShortcutConflict("browser.print", "Control+J", {}, "win32")?.id)
+      .toBe("app.toggleTerminal");
   });
 });

@@ -5,6 +5,7 @@ import path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../ipc-kit";
 import { workspaceRepo } from "./workspace.repo";
+import { cloneWorkspaceRepository, cancelWorkspaceClone } from "./workspace-clone";
 import { projectsRepo } from "../projects/projects.repo";
 import { normalizeRemoteOrigin } from "../projects/projects.utils";
 import { gitService, type DiffSnapshot } from "../git";
@@ -203,9 +204,14 @@ export async function clearWorkspaceDiff(workspaceId: string): Promise<boolean> 
 // projects.service imports the workspace barrel.
 // ─────────────────────────────────────────────────────────────
 
-/** Last path segment, e.g. `/a/b/my-repo` → `my-repo`. */
+/** Keep POSIX filenames literal while recognizing drive and UNC paths. */
+function repoPathApi(p: string): typeof path.posix {
+  return path.win32.isAbsolute(p) && !p.startsWith("/") ? path.win32 : path.posix;
+}
+
+/** Last path segment, e.g. `/a/b/my-repo` or `C:\\a\\b\\my-repo` → `my-repo`. */
 function basename(p: string): string {
-  return p.split("/").pop() || "Untitled";
+  return repoPathApi(p).basename(p) || "Untitled";
 }
 
 /** Honor the global worktree preference (off unless the user turned it on). */
@@ -226,7 +232,7 @@ async function readOriginUrl(rootPath: string): Promise<string | null> {
 
 /** A project's worktree dir is the parent of its first worktree. */
 function deriveWorkspacesPath(worktreePath: string): string {
-  return worktreePath.substring(0, worktreePath.lastIndexOf("/"));
+  return repoPathApi(worktreePath).dirname(worktreePath);
 }
 
 /**
@@ -438,6 +444,7 @@ async function syncGitStateWatchers(
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
 export const workspaceService = {
+  cancelClone: cancelWorkspaceClone,
   // ─────────────────────────────────────────────────────────────
   // ── Workspace lifecycle ──
   // ─────────────────────────────────────────────────────────────
@@ -727,7 +734,7 @@ export const workspaceService = {
     // ── folder / clone: obtain a local repo path, then import it. ──
     const sourcePath =
       source.kind === "clone"
-        ? (await gitService.cloneRepo(source.url, source.targetPath))
+        ? (await cloneWorkspaceRepository(accountId, source))
             .clonedPath
         : source.path;
     // Seed name for a *new* project only. The workspace is named after the

@@ -51,6 +51,15 @@ function prompt(metadata: Record<string, unknown> = {}): EventGroup {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("Codex async questions", () => {
+  it("keeps async question input out of the transcript card", () => {
+    const group = groupEvents([mapArtifactToEvent({ id: 12, runId: "run", kind: "report", content: "Continue?",
+      metadata: { source: "codex_async_questions", questions: [{ title: "Continue?", options: ["Yes", "No"] }] } })])[0];
+    render(<InfoGroup runId="run" group={group} />);
+    expect(screen.getByRole("button", { name: /Question.*Continue/ })).toBeTruthy();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
   it("renders persisted structured questions through the question display", () => {
     const group = groupEvents([mapArtifactToEvent({
       id: 1, runId: "run", kind: "report",

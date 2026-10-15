@@ -81,6 +81,7 @@ vi.mock("@/features/workspace/hooks", () => ({
     conversationSettings: { model: "", config: {} }, conversationSettingsReady: true,
     setConversationSettings: vi.fn(), handleSettingsConfigChange: vi.fn(), ...page.state }),
   useToolApproval: () => ({ pendingApprovals: [], respond: vi.fn() }),
+  usePluginLogoMap: () => new Map(),
   useProviderAuthTerminal: () => ({ session: null }),
   PluginLogoProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
@@ -137,6 +138,7 @@ vi.mock("@/lib/redux/hooks", () => ({
   useAppSelector: (selector: (state: unknown) => unknown) =>
     selector({
       workspace: { selectedCollectionId: null },
+      backends: { activeBackendId: null },
       appSettings: { onboardingCompleted: true },
     }),
 }));
@@ -206,6 +208,25 @@ afterEach(() => {
 });
 
 describe("WorkspaceProviderPage while changing spaces", () => {
+  it("shows a compact completed-run question action above the composer and opens input only on request", () => {
+    const run = { id: "run-1", status: "succeeded", providerId: "codex", goal: "Question" };
+    page.state = { runs: [run], activeTab: run.id, activeRunId: run.id, activeRun: run, composerRun: run,
+      currentEvents: [{ id: "artifact-12", type: "artifact", content: "Which environment?", timestamp: new Date(),
+        metadata: { kind: "report", source: "codex_async_questions", questions: [{ title: "Which environment?", options: ["Staging", "Production"] }] } }],
+      currentTurns: [], currentWorkspace: null, openIssueTabs: [], openSignalTabs: [], openNoteTabs: [],
+      showEmptyState: false, isEmptyStatePending: false, showNewRunTab: false, showInput: true, goal: "", uploadedFiles: [] };
+    renderPage();
+    const pending = screen.getByRole("button", { name: "Answer pending questions" });
+    expect(screen.queryByRole("textbox", { name: "Custom answer" })).toBeNull();
+    expect(screen.getByTestId("events").compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pending.compareDocumentPosition(screen.getByTestId("pinned-input")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(pending);
+    const option = screen.getByRole("button", { name: "Staging" });
+    expect(screen.getByRole("textbox", { name: "Custom answer" })).toBeTruthy();
+    expect(screen.getByTestId("events").compareDocumentPosition(option) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(option.compareDocumentPosition(screen.getByTestId("pinned-input")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it.each([true, false])("consumes floating annotations in the parent only after an accepted send (%s)", async (accepted) => {
     annotationChat();
     const sent = annotation("sent");

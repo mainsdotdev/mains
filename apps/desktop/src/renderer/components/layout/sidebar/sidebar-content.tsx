@@ -2,6 +2,7 @@ import type { CSSProperties, MouseEvent } from "react";
 import WorkspacesList from "./workspace-list";
 import { SidebarChatList } from "./chat-list";
 import { useSidebarConfig } from "@/hooks/use-sidebar-config";
+import type { PendingWorkspaceClone } from "@/hooks/use-sidebar-actions";
 import type {
   Workspace as WorkspaceResponse,
   WorkspaceGitState,
@@ -11,6 +12,10 @@ const EMPTY_WORKSPACES: WorkspaceResponse[] = [];
 
 interface SidebarContentProps {
   workspaces: WorkspaceResponse[];
+  pendingClones: PendingWorkspaceClone[];
+  onCancelClone: (id: string) => void;
+  onRetryClone: (id: string) => void;
+  onDismissClone: (id: string) => void;
   gitStateByWorkspaceId: ReadonlyMap<string, WorkspaceGitState>;
   isLoadingWorkspaces: boolean;
   onDeleteWorkspace?: (workspaceId: string, e: MouseEvent) => void;
@@ -23,6 +28,10 @@ interface SidebarContentProps {
 
 export function SidebarContent({
   workspaces = EMPTY_WORKSPACES,
+  pendingClones,
+  onCancelClone,
+  onRetryClone,
+  onDismissClone,
   gitStateByWorkspaceId,
   isLoadingWorkspaces = false,
   onDeleteWorkspace,
@@ -50,6 +59,10 @@ export function SidebarContent({
         ) : (
           <WorkspacesList
             workspaces={workspaces}
+            pendingClones={pendingClones}
+            onCancelClone={onCancelClone}
+            onRetryClone={onRetryClone}
+            onDismissClone={onDismissClone}
             gitStateByWorkspaceId={gitStateByWorkspaceId}
             isLoading={isLoadingWorkspaces}
             searchQuery={searchQuery}

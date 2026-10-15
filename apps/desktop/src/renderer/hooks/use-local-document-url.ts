@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   getCachedSignedDocUrl,
   isPassThroughDocSrc,
   signLocalDocument,
+  localDocumentUrlRevision,
+  subscribeLocalDocumentUrls,
 } from "@/lib/local-document-url";
 
 /**
@@ -12,23 +14,25 @@ import {
  * path; subsequent renders hit the in-memory cache synchronously.
  */
 export function useLocalDocumentUrl(src: string | undefined | null): string | undefined {
+  const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
+  const key = JSON.stringify([revision, src]);
   const sync = src ? resolveSync(src) : undefined;
-  const [asyncEntry, setAsyncEntry] = useState<{ src: string; url: string } | null>(null);
+  const [asyncEntry, setAsyncEntry] = useState<{ key: string; url: string } | null>(null);
 
   useEffect(() => {
     if (!src || sync !== undefined) return;
     let cancelled = false;
     signLocalDocument(src).then((next) => {
       if (cancelled || !next) return;
-      setAsyncEntry({ src, url: next });
+      setAsyncEntry({ key, url: next });
     });
     return () => {
       cancelled = true;
     };
-  }, [src, sync]);
+  }, [src, key, sync]);
 
   if (sync !== undefined) return sync;
-  if (asyncEntry && asyncEntry.src === src) return asyncEntry.url;
+  if (asyncEntry && asyncEntry.key === key) return asyncEntry.url;
   return undefined;
 }
 

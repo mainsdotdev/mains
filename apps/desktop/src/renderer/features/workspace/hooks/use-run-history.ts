@@ -15,6 +15,8 @@ interface HistoryState {
   hasNewer: boolean;
   loading: boolean;
   error: string | null;
+  following: boolean;
+  historical: boolean;
   latestRevision: number;
 }
 
@@ -23,6 +25,8 @@ export interface TranscriptHistory {
   hasNewer: boolean;
   loading: boolean;
   error: string | null;
+  following: boolean;
+  /** An explicitly paged window that ends before the live conversation. */
   historical: boolean;
   latestRevision?: number;
   loadOlder(): Promise<void>;
@@ -53,6 +57,7 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
     const generation = revision.current;
     const version = versions.current.get(runId) ?? 0;
     if (direction === "latest") following.current.set(runId, true);
+    else if (direction === "older" || direction === "newer") following.current.set(runId, false);
     const isCurrent = () => generation === revision.current && version === (versions.current.get(runId) ?? 0);
     // Paging and refreshes share a queue. A late live refresh cannot overwrite
     // the older window the reader just requested.
@@ -61,9 +66,10 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
       if (!isCurrent()) return;
       const current = stateRef.current[runId];
       const initial: HistoryState = current ?? {
-        start: null, end: null, last: null, hasOlder: false, hasNewer: false, loading: false, error: null, latestRevision: 0,
+        start: null, end: null, last: null, hasOlder: false, hasNewer: false, loading: false, error: null,
+        following: true, historical: false, latestRevision: 0,
       };
-      update(runId, { ...initial, loading: true, error: null });
+      update(runId, { ...initial, following: following.current.get(runId) ?? initial.following, loading: true, error: null });
       const request: ReadRunHistoryPayload = { runId, direction: current?.start ? direction : "latest", deferToolOutput: true };
       if (direction === "older" && current?.start) request.cursor = current.start;
       if (direction === "newer" && current?.end) request.cursor = current.end;
@@ -101,6 +107,12 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
         stateRef.current = pruneRunMap(stateRef.current, allowed);
         update(runId, { start: page.start, end: page.end ?? pausedEnd ?? null, last: page.last,
           hasOlder: page.hasOlder, hasNewer: page.hasNewer, loading: false, error: null,
+          following: following.current.get(runId) ?? true,
+          // A reading pause freezes the query boundary without removing live
+          // rows. Only page navigation can move the display into older history.
+          historical: request.direction === "refresh"
+            ? stateRef.current[runId]?.historical ?? initial.historical
+            : request.direction !== "latest" && page.end != null,
           latestRevision: request.direction === "latest" ? ++latestSequence.current : initial.latestRevision });
       } catch (error) {
         if (!isCurrent()) return;
@@ -137,7 +149,8 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
   const history: TranscriptHistory = {
     hasOlder: current?.hasOlder ?? false,
     hasNewer: current?.hasNewer ?? false,
-    historical: current?.end != null,
+    following: current?.following ?? true,
+    historical: current?.historical ?? false,
     latestRevision: current?.latestRevision ?? 0,
     loading: current?.loading ?? false,
     error: current?.error ?? null,
@@ -149,12 +162,15 @@ export function useRunHistory(cache: ReturnType<typeof createRunCache>, activeRu
       if (activeRunId) following.current.set(activeRunId, value);
       if (!activeRunId) return;
       const state = stateRef.current[activeRunId];
-      if (value && state?.end && !state.hasNewer) {
-        update(activeRunId, { ...state, end: null });
-      } else if (!value && state?.last && !state.end) {
+      if (!state) return;
+      if (value && state.end && !state.hasNewer) {
+        update(activeRunId, { ...state, following: true, historical: false, end: null });
+      } else if (!value && state.last && !state.end) {
         // Freeze after the last known row, even within a second-grained
         // timestamp. Newly inserted ties stay outside this reading window.
-        update(activeRunId, { ...state, end: historyEndAfter(state.last) });
+        update(activeRunId, { ...state, following: false, end: historyEndAfter(state.last) });
+      } else if (state.following !== value) {
+        update(activeRunId, { ...state, following: value });
       }
     },
   };

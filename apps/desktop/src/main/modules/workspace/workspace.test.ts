@@ -2959,6 +2959,66 @@ describe("workspaceService — createFromSource (workspace intake)", () => {
     expect(projects[0].workspacesPath).toBeNull();
   });
 
+  it.each([
+    ["C:\\Users\\okanbalci\\Desktop\\og", "og"],
+    ["C:\\Users\\okanbalci\\Desktop\\Türkçe repo\\", "Türkçe repo"],
+    ["\\\\server\\team\\og\\", "og"],
+    ["/Users/okanbalci/Desktop/og/", "og"],
+    ["/Users/okanbalci/Desktop/og\\legacy", "og\\legacy"],
+  ])("names an imported project after its folder: %s", async (rootPath, name) => {
+    setWorktrees(false);
+    gitMock.importLocalRepoDirect.mockResolvedValue({
+      branchName: "master", sourcePath: rootPath, baseBranch: "master",
+      tracking: null, ahead: 0, behind: 0, originUrl: null,
+    });
+
+    const workspace = await workspaceService.createFromSource({
+      accountId: "default", source: { kind: "folder", path: rootPath },
+    });
+    const project = await projectsRepo.findById(workspace.projectId!);
+    expect(project?.name).toBe(name);
+    expect(workspace.name).toBe(name);
+    expect(project?.rootPath).toBe(rootPath);
+    expect(workspace.rootPath).toBe(rootPath);
+  });
+
+  it("names a Windows clone after the cloned folder", async () => {
+    setWorktrees(false);
+    const rootPath = "C:\\Users\\okanbalci\\Desktop\\og";
+    gitMock.cloneRepo.mockResolvedValue({
+      clonedPath: rootPath, defaultBranch: "main", originUrl: "https://github.com/team/og.git",
+    });
+    gitMock.importLocalRepoDirect.mockResolvedValue({
+      branchName: "main", sourcePath: rootPath, baseBranch: "main",
+      tracking: null, ahead: 0, behind: 0, originUrl: "https://github.com/team/og.git",
+    });
+    const workspace = await workspaceService.createFromSource({
+      accountId: "default",
+      source: { kind: "clone", url: "https://github.com/team/og.git", targetPath: "C:\\Users\\okanbalci\\Desktop" },
+    });
+    expect(workspace.name).toBe("og");
+    expect((await projectsRepo.findById(workspace.projectId!))?.name).toBe("og");
+  });
+
+  it("uses the Windows project name and worktree parent directory", async () => {
+    setWorktrees(true);
+    gitMock.getRemotes.mockResolvedValue([]);
+    gitMock.getDefaultBranch.mockResolvedValue("master");
+    gitMock.importLocalRepo.mockResolvedValue({
+      branchName: "feature/x", worktreePath: "C:\\Mains\\worktrees\\og\\apple",
+      worktreeName: "apple", baseBranch: "master", tracking: null,
+      ahead: 0, behind: 0, originUrl: null,
+    });
+    const workspace = await workspaceService.createFromSource({
+      accountId: "default", source: { kind: "folder", path: "C:\\Users\\okanbalci\\Desktop\\og" },
+    });
+    expect(gitMock.importLocalRepo).toHaveBeenCalledWith("C:\\Users\\okanbalci\\Desktop\\og", {
+      projectName: "og", baseBranch: "master",
+    });
+    expect(workspace.name).toBe("og");
+    expect((await projectsRepo.findById(workspace.projectId!))?.workspacesPath).toBe("C:\\Mains\\worktrees\\og");
+  });
+
   it("clone + direct: clones first, then imports the cloned path", async () => {
     setWorktrees(false);
     gitMock.cloneRepo.mockResolvedValue({

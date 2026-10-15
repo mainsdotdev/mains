@@ -13,9 +13,7 @@ export function createOnboardingStartupState(showSplash = false) {
       if (contentReady && !ready) return false;
       onboarding = next;
       if (ready) contentReady = true;
-      if (next || ready) {
-        closeSplashWindow();
-      } else if (showSplash && !splashRequested) {
+      if (!next && !ready && showSplash && !splashRequested) {
         splashRequested = true;
         createSplashWindow();
       }
@@ -23,6 +21,8 @@ export function createOnboardingStartupState(showSplash = false) {
     },
     finish() {
       contentReady = true;
+      // Mounted React content can precede ready-to-show or native bounds
+      // restoration. Keep the splash until the window's actual handoff.
       closeSplashWindow();
     },
   };

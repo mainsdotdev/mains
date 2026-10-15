@@ -11,6 +11,7 @@ export { MODE_IDS, providerModes } from "./modes";
 export type { ModeId } from "./modes";
 import type { ModeId } from "./modes";
 import type { ConversationSettings, ModelServiceTier } from "./run-settings";
+import type { AsyncQuestionReply } from "./async-questions";
 
 export function modeLabel(mode: ModeId): string {
   switch (mode) {
@@ -98,6 +99,7 @@ export interface RunSteerPayload {
   accountId: string;
   clientUserMessageId: string;
   message: string;
+  asyncQuestionReply?: AsyncQuestionReply;
   attachments?: Array<{ name: string; type: string; data?: string; sourcePath?: string; mimeType: string }>;
   additionalContext?: Array<{ kind: "file" | "diff" | "selection" | "note"; ref?: string; content?: string; metadata?: Record<string, unknown> }>;
   contextIssues?: Array<{ provider: string; number?: number | null; title: string; body?: string | null }>;

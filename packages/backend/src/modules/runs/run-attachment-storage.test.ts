@@ -117,6 +117,22 @@ describe("durable prompt attachments", () => {
     for (const name of await fs.readdir(root)) expect(await fs.readdir(path.join(root, name))).toEqual([]);
   });
 
+  it.each(["EPERM", "EIO"])("keeps %s file flush failures from committing an attachment reference", async (code) => {
+    const run = createRun(db);
+    const failure = Object.assign(new Error("Disk flush failed"), { code });
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).includes(".pending-")) vi.spyOn(handle, "sync").mockRejectedValue(failure);
+      return handle;
+    });
+
+    await expect(prepareRunAttachments(run.id, [upload()], "failed-flush")).rejects.toBe(failure);
+    expect(db.select().from(runAttachments).all()).toEqual([]);
+    const root = path.join(directory, "attachments");
+    for (const name of await fs.readdir(root)) expect(await fs.readdir(path.join(root, name))).toEqual([]);
+  });
+
   it("removes old orphans while preserving recent and referenced originals", async () => {
     const run = createRun(db);
     const [item] = (await prepareRunAttachments(run.id, [upload()]))!;

@@ -76,6 +76,8 @@ function confirmReplace(conflict: "exists" | "existsAndRunning"): boolean {
  * the app is quitting to relaunch from Applications, so stop booting.
  */
 export async function offerMoveToApplications(): Promise<boolean> {
+  // These Electron APIs only exist on macOS. Check before building the context.
+  if (process.platform !== "darwin" || !app.isPackaged) return false;
   const offer = shouldOfferMove({
     isPackaged: app.isPackaged,
     platform: process.platform,

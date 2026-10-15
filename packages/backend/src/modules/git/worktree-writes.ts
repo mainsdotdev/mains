@@ -126,7 +126,7 @@ function isInside(relative: string): boolean {
     relative !== "" &&
     relative !== ".." &&
     !relative.startsWith("../") &&
-    !path.isAbsolute(relative)
+    !path.posix.isAbsolute(relative)
   );
 }
 
@@ -138,14 +138,17 @@ export function toWorktreePath(
   location: WorktreeLocation,
   cwd: string,
   filePath: string,
+  nativePath = path,
 ): string | null {
-  const fromCwd = path.isAbsolute(filePath) ? path.relative(cwd, filePath) : filePath;
-  const joined = path.posix.normalize(location.prefix + fromCwd);
+  const fromCwd = nativePath.isAbsolute(filePath) ? nativePath.relative(cwd, filePath) : filePath;
+  if (nativePath.isAbsolute(fromCwd)) return null; // A different Windows drive.
+  const gitPath = (value: string) => value.split(nativePath.sep).join("/");
+  const joined = path.posix.normalize(location.prefix + gitPath(fromCwd));
   if (isInside(joined)) return joined;
   // An absolute path spelled the way git resolves the root (/private/tmp/…)
   // rather than the way the cwd was given (/tmp/…).
-  if (path.isAbsolute(filePath)) {
-    const fromRoot = path.relative(location.topLevel, filePath);
+  if (nativePath.isAbsolute(filePath)) {
+    const fromRoot = gitPath(nativePath.relative(location.topLevel, filePath));
     if (isInside(fromRoot)) return fromRoot;
   }
   return null;

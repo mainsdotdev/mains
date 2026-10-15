@@ -97,17 +97,21 @@ export default defineConfig(({ command }) => {
         '@anthropic-ai/claude-agent-sdk',
         '@anthropic-ai/claude-agent-sdk-darwin-arm64',
         '@anthropic-ai/claude-agent-sdk-darwin-x64',
+        '@anthropic-ai/claude-agent-sdk-win32-x64',
         '@github/copilot-sdk',
         '@github/copilot-sdk-darwin-arm64',
         '@github/copilot-sdk-darwin-x64',
+        '@github/copilot-sdk-win32-x64',
         '@github/copilot',
         '@github/copilot-darwin-arm64',
         '@github/copilot-darwin-x64',
+        '@github/copilot-win32-x64',
         // Content search's ripgrep: the package resolves its per-arch binary
         // package at runtime, so neither can be inlined into main.js.
         '@vscode/ripgrep',
         '@vscode/ripgrep-darwin-arm64',
         '@vscode/ripgrep-darwin-x64',
+        '@vscode/ripgrep-win32-x64',
         'vscode-jsonrpc',
         'zod',
         '@blocknote/server-util',
@@ -135,24 +139,27 @@ export default defineConfig(({ command }) => {
         ];
 
         // Scoped packages need their parent @scope directory created.
-        // Both darwin variants of each binary package (copilot, claude, ripgrep)
-        // are listed: npm only installs the host-arch one, and CI force-installs
-        // the cross-build target's variant.
+        // List the macOS variants and Windows x64 runtime packages. npm only
+        // installs the host variant; macOS CI also installs its cross-build target.
         // Whichever variants exist get copied; forge's packageAfterPrune hook
         // strips the non-target one from the final bundle.
         const scopedModulesToCopy = [
           '@anthropic-ai/claude-agent-sdk',
           '@anthropic-ai/claude-agent-sdk-darwin-arm64',
           '@anthropic-ai/claude-agent-sdk-darwin-x64',
+          '@anthropic-ai/claude-agent-sdk-win32-x64',
           '@github/copilot-sdk',
           '@github/copilot-sdk-darwin-arm64',
           '@github/copilot-sdk-darwin-x64',
+          '@github/copilot-sdk-win32-x64',
           '@github/copilot',
           '@github/copilot-darwin-arm64',
           '@github/copilot-darwin-x64',
+          '@github/copilot-win32-x64',
           '@vscode/ripgrep',
           '@vscode/ripgrep-darwin-arm64',
           '@vscode/ripgrep-darwin-x64',
+          '@vscode/ripgrep-win32-x64',
         ];
 
         for (const mod of modulesToCopy) {

@@ -221,6 +221,44 @@ describe("useWorkspaceRuns streaming transcript", () => {
     voice.state = { phase: "connected", runId: "run-a", connectionId: "connection", startedAt: 18_000 };
   }
 
+  it("keeps the live reply visible while tail following is paused and history refreshes", async () => {
+    streaming.events = [preview("Live reply")];
+    const view = await transcript([{ id: 1, kind: "user-prompt", content: "Question" }]);
+    const visibleIds = view.result.current.currentEvents.map((event) => event.id);
+    act(() => view.result.current.history.setFollowing(false));
+    expect(view.result.current.currentEvents.map((event) => event.id)).toEqual(visibleIds);
+    expect(view.result.current.history.historical).toBe(false);
+
+    streaming.events = [preview("Live reply continues")];
+    view.rerender();
+    await act(() => view.result.current.loadRunDetails(runA.id));
+    expect(mocks.getHistory.mock.calls.at(-1)?.[0]).toMatchObject({
+      direction: "refresh", end: { timestamp: 2, source: "artifact", id: 3 },
+    });
+    expect(view.result.current.currentEvents.map((event) => event.content)).toEqual(["Question", "Live reply continues"]);
+    expect(view.result.current.history.historical).toBe(false);
+    view.unmount();
+  });
+
+  it("hides live replies only after navigating to an older history window", async () => {
+    streaming.events = [preview("Live reply")];
+    const view = await transcript([{ id: 1, kind: "user-prompt", content: "Current question" }]);
+    mocks.getHistory.mockResolvedValueOnce({ success: true, data: {
+      artifacts: [{ id: 20, kind: "user-prompt", content: "Older question" }], toolCalls: [], turns: [],
+      start: { timestamp: 1, source: "artifact", id: 20 }, end: { timestamp: 2, source: "artifact", id: 21 },
+      last: { timestamp: 3, source: "artifact", id: 22 }, hasOlder: true, hasNewer: true,
+    } });
+    await act(() => view.result.current.history.loadOlder());
+    expect(view.result.current.history.historical).toBe(true);
+    expect(view.result.current.currentEvents.map((event) => event.content)).toEqual(["Older question"]);
+    streaming.events = [preview("Live reply continues")];
+    view.rerender();
+    expect(view.result.current.currentEvents.map((event) => event.content)).toEqual(["Older question"]);
+    await act(() => view.result.current.history.loadLatest());
+    expect(view.result.current.currentEvents.map((event) => event.content)).toEqual(["Current question", "Live reply continues"]);
+    view.unmount();
+  });
+
   it("replaces a live preview by message identity when the final text differs", async () => {
     streaming.events = [preview("partial answer")];
     const view = await transcript([{ id: 2, kind: "report", content: "Corrected final answer",

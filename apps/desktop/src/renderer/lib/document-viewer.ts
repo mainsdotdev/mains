@@ -30,10 +30,10 @@ const EXT_TO_DOC_TYPE: Record<string, DocType> = {
  * can't show it. Legacy binary formats (.doc/.xls/.ppt) return null — the
  * pure-JS renderers can't read them, so they fall through to "Open with…".
  */
-export function classifyDocType(fileNameOrPath: string): DocType | null {
+export function classifyDocType(fileNameOrPath: string, literalPath = false): DocType | null {
   if (!fileNameOrPath) return null;
   // Strip any query/hash suffix, then take the last extension.
-  const clean = fileNameOrPath.split(/[?#]/)[0];
+  const clean = literalPath ? fileNameOrPath : fileNameOrPath.split(/[?#]/)[0];
   const dot = clean.lastIndexOf(".");
   if (dot < 0) return null;
   const ext = clean.slice(dot).toLowerCase();

@@ -60,6 +60,31 @@ afterEach(async () => {
 });
 
 describe("Codex capabilities", () => {
+  it("discovers project plugins and isolates installed-plugin caches across workspaces", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-project-plugins-"));
+    tempDirs.push(dir);
+    const logPath = path.join(dir, "protocol.jsonl");
+    const server = await startServer(logPath, { MAINS_CODEX_FIXTURE_PROJECT_PLUGINS: "1" });
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server, getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.162.1", channel: null, outdated: false, compatibility: "supported" }),
+    });
+    const first = path.join(dir, "first");
+    const second = path.join(dir, "second");
+    const [a, b, aAgain] = await Promise.all([
+      capabilities.listInstalledPlugins(false, first),
+      capabilities.listInstalledPlugins(false, second),
+      capabilities.listInstalledPlugins(false, first),
+    ]);
+    expect(a.marketplaces[0]?.path).toBe(first);
+    expect(b.marketplaces[0]?.path).toBe(second);
+    expect(aAgain).toEqual(a);
+    await expect(capabilities.listInstalledPlugins()).resolves.toMatchObject({ marketplaces: [] });
+    expect(await capabilities.listInstalledPlugins(false, first)).toEqual(a);
+    const requests = readProtocolLog(logPath).filter((message) => message.method === "plugin/installed");
+    expect(requests.map((message) => message.params)).toEqual([{ cwds: [first] }, { cwds: [second] }, {}]);
+  });
+
   it("reads current app connection state after authorization completed outside app-server", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-plugin-external-auth-"));
     tempDirs.push(dir);
