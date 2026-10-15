@@ -79,9 +79,10 @@ export default function ProjectDetail({ id }: ProjectDetailProps) {
     return handleSave(value);
   }, [handleSave]);
 
-  // Auto-save when the icon or its tint changes (skip syncs from project
-  // load/switch via isDirty)
-  const iconKey = `${icon}|${iconColor}`;
+  // Only auto-save changes to the stored icon. A tint chosen before a registry
+  // icon is just a draft; saving it would refetch and reset the picker.
+  // Skip syncs from project load/switch via isDirty.
+  const iconKey = formatIcon(iconKindOf(icon), icon, iconColor);
   const prevIconRef = useRef(iconKey);
   useEffect(() => {
     if (prevIconRef.current === iconKey) return;

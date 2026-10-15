@@ -1,8 +1,8 @@
 /** Seed agent spaces shown in welcome + filtered onboarding provider steps */
 export const ONBOARDING_AGENT_SLUGS = [
   "claude",
-  "copilot",
   "codex",
+  "copilot",
   "cursor",
 ] as const;
 
