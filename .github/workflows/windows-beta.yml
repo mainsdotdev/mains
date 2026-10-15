@@ -1,16 +1,8 @@
 name: Windows x64 beta
+run-name: Windows x64 beta · ${{ github.ref_name }}
 
 on:
   workflow_dispatch:
-  push:
-    branches: [codex/windows-x64-beta, feat/windows]
-  pull_request:
-    branches: [dev, main, v0.18]
-    paths:
-      - 'apps/desktop/**'
-      - 'packages/backend/**'
-      - 'packages/contracts/**'
-      - '.github/workflows/windows-beta.yml'
 
 concurrency:
   group: windows-beta-${{ github.ref }}

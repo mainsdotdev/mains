@@ -1,4 +1,4 @@
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
+import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
 import type { ProviderConnectorsUpdatedEvent } from "@mains/contracts/provider-connectors";
@@ -333,6 +333,7 @@ const api = {
   // Non-developer Projects: organizational Collections for Work/Chat runs.
   atlas: {
     list: (options: AtlasListOptions) => ipcRenderer.invoke(CHANNELS.atlas.list, options),
+    library: (options: AtlasLibraryOptions) => ipcRenderer.invoke(CHANNELS.atlas.library, options),
     generated: (options: AtlasGeneratedOptions) => ipcRenderer.invoke(CHANNELS.atlas.generated, options),
     get: (options: AtlasIdentity) => ipcRenderer.invoke(CHANNELS.atlas.get, options),
     createPage: (input: AtlasCreatePage) => ipcRenderer.invoke(CHANNELS.atlas.createPage, input),

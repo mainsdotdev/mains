@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type {
-  AtlasGeneratedFile,
   AtlasItem,
-  AtlasListItem,
-  AtlasKind,
+  AtlasLibraryEntry as Entry,
 } from "@mains/contracts/atlas";
+import { ATLAS_LIBRARY_PAGE_SIZE } from "@mains/contracts/atlas";
 import { PageShell } from "@/components/layout/page-shell";
 import {
   Button,
@@ -40,9 +39,8 @@ import {
 import { Dna, Globe, Lightbulb, Rocket, Star } from "@/components/ui/icons/space";
 import { useLazyGetAppsForFileQuery, useListCollectionsQuery } from "@/lib/redux/api";
 import {
-  useAtlasGeneratedQuery,
+  useAtlasLibraryQuery,
   useCreateAtlasPageMutation,
-  useListAtlasQuery,
   useUpdateAtlasItemMutation,
 } from "@/lib/redux/api/atlasApi";
 import { useDocumentViewer } from "@/hooks/use-document-viewer";
@@ -71,17 +69,6 @@ import { AtlasPageCard } from "./atlas-page-card";
 import { AtlasImagePreview } from "./atlas-image-preview";
 import { useAtlasOwnerKey } from "../hooks/use-atlas-tabs";
 
-type Entry = {
-  key: string;
-  kind: AtlasKind;
-  title: string;
-  date: string;
-  collectionId: string | null;
-  path: string | null;
-  contentHash?: string;
-  saved?: AtlasListItem;
-  generated?: AtlasGeneratedFile;
-};
 const templateIcons = [
   { Icon: Document, color: "text-blue-600 dark:text-blue-400" },
   { Icon: Dna, color: "text-emerald-600 dark:text-emerald-400" },
@@ -165,26 +152,32 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const [params, setParams] = useSearchParams();
   const { type, scope, collectionId } = atlasView(params);
   const [searchValue, setSearchValue] = useAtlasSearch();
-  const [offset, setOffset] = useState(0);
-  const [older, setOlder] = useState<AtlasGeneratedFile[]>([]);
+  const rawPage = Number(params.get("page") ?? 1);
+  const page = Number.isSafeInteger(rawPage) && rawPage > 0 && rawPage <= 100000 ? rawPage : 1;
   const [preview, setPreview] = useState<Entry | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const previousPage = useRef(page);
   const grid = type === "image" || params.get("layout") === "grid";
-  const needGenerated =
-    type !== "page" && (scope === "all" || scope === "generated" || scope === "uploads");
-  const saved = useListAtlasQuery({
-    accountId,
+  const library = useAtlasLibraryQuery({
+    accountId, type, scope, page,
+    collectionId: collectionId || undefined,
+    query: params.get("q") || undefined,
     ...(grid && (type === "page" || type === "all") ? { includePagePreview: true } : {}),
   }, { pollingInterval: 15000 });
-  const previewImagePaths = useMemo(() => new Map(
-    (grid ? saved.data ?? [] : [])
-      .filter((item) => item.kind === "image" && item.path)
-      .map((item) => [`atlas-file://${item.id}`, item.path!]),
-  ), [grid, saved.data]);
-  const generated = useAtlasGeneratedQuery(
-    { accountId, offset, collectionId: collectionId || undefined },
-    { skip: !needGenerated, pollingInterval: 15000 },
-  );
+  const entries = library.currentData?.items ?? [];
+  const previewImagePaths = useMemo(() => new Map(Object.entries(library.currentData?.previewImages ?? {})), [library.currentData]);
+  useEffect(() => {
+    if (previousPage.current !== page) resultsRef.current?.scrollIntoView?.({ block: "start" });
+    previousPage.current = page;
+  }, [page]);
+  useEffect(() => {
+    if (!library.currentData || library.currentData.page === page) return;
+    const next = new URLSearchParams(params);
+    if (library.currentData.page > 1) next.set("page", String(library.currentData.page));
+    else next.delete("page");
+    setParams(next, { replace: true });
+  }, [library.currentData, page, params, setParams]);
   const { data: collections = [] } = useListCollectionsQuery({ accountId });
   const [createPage, creating] = useCreateAtlasPageMutation();
   const [update, updating] = useUpdateAtlasItemMutation();
@@ -202,91 +195,12 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const setFilter = (key: string, value: string) => {
     const next = new URLSearchParams(params);
     next.delete("focus");
-    if (value && !(["view", "type"].includes(key) && value === "all"))
+    if (key !== "page" && key !== "layout") next.delete("page");
+    if (value && !(key === "page" && value === "1") && !(["view", "type"].includes(key) && value === "all"))
       next.set(key, value);
     else next.delete(key);
     setParams(next);
   };
-  const entries = useMemo(() => {
-    const persistent = saved.data ?? [];
-    const bySource = new Map(
-      persistent
-        .filter((item) => item.sourceKey)
-        .map((item) => [item.sourceKey, item]),
-    );
-    const results: Entry[] = [];
-    if (scope !== "generated" && scope !== "uploads")
-      for (const item of persistent) {
-        if (
-          item.trashedAt ||
-          (scope === "favorites" && !item.isFavorite)
-        )
-          continue;
-        results.push({
-          key: item.id,
-          title: item.title,
-          kind: item.kind,
-          date: item.updatedAt,
-          collectionId: item.collectionId,
-          path: item.path,
-          contentHash: item.contentHash,
-          saved: item,
-        });
-      }
-    if (scope === "all" || scope === "generated" || scope === "uploads") {
-      const files = [
-        ...new Map(
-          [...older, ...(generated.currentData?.items ?? [])].map((item) => [
-            item.sourceKey,
-            item,
-          ]),
-        ).values(),
-      ].sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
-      for (const file of files) {
-        if (scope === "generated" && file.origin === "attachment") continue;
-        if (scope === "uploads" && file.origin !== "attachment") continue;
-        if (scope === "all" && bySource.has(file.sourceKey)) continue;
-        results.push({
-          key: file.sourceKey,
-          title: file.fileName,
-          kind: file.kind,
-          date: file.modifiedAt,
-          collectionId: file.collectionId,
-          path: file.path,
-          contentHash: file.contentHash,
-          generated: file,
-          saved:
-            scope !== "all" ? bySource.get(file.sourceKey) : undefined,
-        });
-      }
-    }
-    const seenImages = new Set<string>();
-    return results
-      .filter(
-        (entry) =>
-          (type === "all" || entry.kind === type) &&
-          (!collectionId || entry.collectionId === collectionId) &&
-          `${entry.title} ${entry.generated?.runTitle ?? ""}`
-            .toLocaleLowerCase()
-            .includes(searchValue.toLocaleLowerCase().trim()),
-      )
-      .filter((entry) => {
-        if (entry.kind !== "image" || !entry.contentHash) return true;
-        if (seenImages.has(entry.contentHash)) return false;
-        seenImages.add(entry.contentHash);
-        return true;
-      })
-      .sort((a, b) => b.date.localeCompare(a.date));
-  }, [
-    saved.data,
-    generated.currentData,
-    older,
-    scope,
-    type,
-    collectionId,
-    searchValue,
-  ]);
-
   const change = async (
     item: AtlasItem,
     fields: { trashed?: boolean; isFavorite?: boolean },
@@ -509,8 +423,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const title = type === "all" && project
     ? project.name
     : ATLAS_TYPES.find((item) => item.value === type)!.label;
-  const loading = saved.isLoading || (needGenerated && generated.isLoading);
-  const error = saved.error ?? (needGenerated ? generated.error : undefined);
+  const loading = library.isFetching && !library.currentData;
+  const error = library.error;
 
   return (
     <PageShell
@@ -662,10 +576,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               <DropdownMenuItem
                 onClick={() => {
                   close();
-                  setOlder([]);
-                  setOffset(0);
-                  void saved.refetch();
-                  if (needGenerated) void generated.refetch();
+                  void library.refetch();
                 }}
               >
                 <Refresh className="size-4" />
@@ -675,7 +586,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           )}
         </AtlasMenu>
       </div>
-      {type === "all" && scope === "all" && !searchValue && (
+      {type === "all" && scope === "all" && !searchValue && page === 1 && (
         <section className="mb-10" aria-label="Start a page">
           <Text size="sm" weight="medium" className="mb-4">
             Start a page
@@ -719,6 +630,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           </HorizontalFadeScroller>
         </section>
       )}
+      <div ref={resultsRef} className="scroll-mt-4" />
       {!!error && (
         <Text className="mb-4" role="alert">
           {atlasError(error)}
@@ -945,17 +857,25 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
           </tbody>
         </table>
       )}
-      {/* {needGenerated && generated.currentData?.nextOffset != null && (
-        <div className="mt-8 text-center">
-          <Button
-            variant="ghost"
-            disabled={generated.isFetching}
-            onClick={loadOlder}
-          >
-            Load older conversations
-          </Button>
-        </div>
-      )} */}
+      {!loading && library.currentData && (page > 1 || library.currentData.hasNext) && (
+        <nav aria-label="Atlas pagination" className="mt-4 px-2 flex items-center justify-between gap-4  dark:border-primary-900">
+          <Text size="s" tone="subtle" role="status" aria-live="polite">
+            {entries.length > 0 && `${(page - 1) * ATLAS_LIBRARY_PAGE_SIZE + 1}–${(page - 1) * ATLAS_LIBRARY_PAGE_SIZE + entries.length} · `}Page {page}
+          </Text>
+          <div className="flex items-center gap-2">
+            <Button variant="primary" disabled={page === 1 || library.isFetching} onClick={() => setFilter("page", String(page - 1))}>
+              Previous
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!library.currentData.hasNext || library.isFetching}
+              onClick={() => setFilter("page", String(page + 1))}
+            >
+              Next
+            </Button>
+          </div>
+        </nav>
+      )}
       {preview && (
         <AtlasImagePreview title={preview.title} path={preview.path} onClose={() => setPreview(null)} />
       )}

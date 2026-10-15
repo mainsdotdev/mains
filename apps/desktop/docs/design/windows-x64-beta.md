@@ -8,11 +8,36 @@ version `0.17.0`; branching does not bump the version or create a release tag.
 
 Build on a native Windows x64 runner (`windows-2022`, Node 24), with separate
 dependency installs in `packages/backend` and `apps/desktop`. The workflow
-`.github/workflows/windows-beta.yml` runs on this branch, relevant PRs, or manual
-dispatch. It uploads `Mains-<version>-win32-x64-Setup.exe`, the Squirrel `.nupkg`
+`.github/workflows/windows-beta.yml` runs only on manual dispatch; pushes and
+PR updates do not start it. In GitHub Actions, select **Windows x64 beta**, then
+**Run workflow** and the branch to build. It uploads
+`Mains-<version>-win32-x64-Setup.exe`, the Squirrel `.nupkg`
 and `RELEASES` as one artifact. It does not publish a GitHub release.
 If packaging succeeds but a later check fails, the artifact is named
 `Mains-windows-x64-diagnostic-<sha>`; the run stays failed.
+
+macOS test installers have their own manual workflow, **macOS build**
+(`.github/workflows/macos-build.yml`), with an `arm64` or `x64` choice. The two
+platform workflows are independent. The macOS job builds on a native runner
+for the selected architecture, uses the release's Apple signing/notarization
+secrets, and uploads a DMG and app ZIP as artifacts for 14 days. It runs
+lint/types, build asset checks and the packaged-app smoke test. A package that
+fails smoke is retained as a diagnostic artifact and the run stays failed.
+
+The workflow must first exist on the repository's default branch for GitHub to
+offer manual dispatch; then select the source branch in **Run workflow**.
+From GitHub CLI, for example:
+
+```bash
+gh workflow run windows-beta.yml --ref feat/windows
+gh workflow run macos-build.yml --ref feat/windows -f arch=arm64
+gh workflow run macos-build.yml --ref feat/windows -f arch=x64
+```
+
+Neither manual build publishes a release or updates the public update feed.
+Normal lint/type/test CI remains automatic. The separate `release.yml` flow
+still builds macOS and standalone server release assets when a `v*` tag is
+pushed.
 
 The Forge Windows maker uses Squirrel. The installer is unsigned for the beta;
 an Authenticode certificate and a validated update feed are later release work.

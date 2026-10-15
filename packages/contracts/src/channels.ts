@@ -113,6 +113,7 @@ export const CHANNELS = {
   },
   atlas: {
     list: "atlas:list",
+    library: "atlas:library",
     generated: "atlas:generated",
     get: "atlas:get",
     createPage: "atlas:createPage",

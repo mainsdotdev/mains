@@ -37,6 +37,14 @@ export interface AtlasItem {
 }
 export interface AtlasListOptions {
   accountId: string;
+  kind?: AtlasKind;
+  ids?: string[];
+  trashed?: boolean;
+  collectionId?: string;
+  isFavorite?: boolean;
+  /** Starts a bounded list; omitting limit with an offset uses 50 records. */
+  offset?: number;
+  limit?: number;
   /** Include a bounded Markdown excerpt of each Page's current revision. */
   includePagePreview?: boolean;
 }
@@ -70,6 +78,35 @@ export interface AtlasGeneratedOptions {
   limit?: number;
 }
 export interface AtlasGeneratedPage { items: AtlasGeneratedFile[]; nextOffset: number | null }
+export const ATLAS_LIBRARY_PAGE_SIZE = 50;
+export type AtlasLibraryScope = "all" | "generated" | "uploads" | "saved" | "favorites";
+export interface AtlasLibraryOptions {
+  accountId: string;
+  type?: "all" | AtlasKind;
+  scope?: AtlasLibraryScope;
+  collectionId?: string;
+  query?: string;
+  page?: number;
+  includePagePreview?: boolean;
+}
+export interface AtlasLibraryEntry {
+  key: string;
+  kind: AtlasKind;
+  title: string;
+  date: string;
+  collectionId: string | null;
+  path: string | null;
+  contentHash?: string;
+  saved?: AtlasListItem;
+  generated?: AtlasGeneratedFile;
+}
+export interface AtlasLibraryPage {
+  items: AtlasLibraryEntry[];
+  page: number;
+  hasNext: boolean;
+  /** Only permanent images referenced by the current page's bounded previews. */
+  previewImages: Record<string, string>;
+}
 export interface AtlasPageRevision {
   id: string;
   itemId: string;

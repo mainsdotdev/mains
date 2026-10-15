@@ -1,5 +1,5 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedPage, AtlasIdentity, AtlasItem, AtlasListItem, AtlasListOptions,
+import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedPage, AtlasIdentity, AtlasItem, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions,
   AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import { baseApi } from "./baseApi";
 import type { RootState } from "../index";
@@ -7,6 +7,11 @@ import { closeAtlasPageTab } from "../slices/atlasSlice";
 
 export const atlasApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    atlasLibrary: builder.query<AtlasLibraryPage, AtlasLibraryOptions>({
+      query: (options) => ({ handler: CHANNELS.atlas.library, args: [options] }),
+      providesTags: ["Atlas", "RunArtifacts", "RunOutputs", "Runs"],
+      keepUnusedDataFor: 30,
+    }),
     listAtlas: builder.query<AtlasListItem[], AtlasListOptions>({
       query: (options) => ({ handler: CHANNELS.atlas.list, args: [options] }),
       providesTags: ["Atlas"],
@@ -83,6 +88,6 @@ export const atlasApi = baseApi.injectEndpoints({
     }),
   }),
 });
-export const { useListAtlasQuery, useAtlasGeneratedQuery, useAtlasPageQuery, useCreateAtlasPageMutation,
+export const { useAtlasLibraryQuery, useListAtlasQuery, useAtlasGeneratedQuery, useAtlasPageQuery, useCreateAtlasPageMutation,
   useSaveAtlasPageMutation, useAtlasRevisionsQuery, useRestoreAtlasPageMutation, useSaveToAtlasMutation,
   useUploadAtlasFileMutation, useUpdateAtlasItemMutation, useRemoveAtlasItemMutation } = atlasApi;
