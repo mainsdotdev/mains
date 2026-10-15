@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { BridgeStatus, BridgeBackendInfo, BridgeRunState } from "@mains/contracts/bridge";
+import type { BridgeStatus, BridgeBackendInfo, BridgeRunState, BridgeQuota } from "@mains/contracts/bridge";
 import type { BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import type { SQLiteInstance } from "../../db/types";
 import { createBridgeEngine } from "./bridge.engine";
@@ -12,6 +12,7 @@ import { createBridgeBlobs } from "./bridge.blobs";
 import { createBridgeBlobRecords, type BridgeFileTable } from "./bridge.blob-records";
 
 export interface BridgeReplicatorOptions {
+  onApproval?: (request: import("@mains/contracts/bridge-auth").BridgeApprovalRequest) => void;
   sqlite: SQLiteInstance;
   backendId: string;
   config: BridgeDevConfig;
@@ -24,6 +25,7 @@ export interface BridgeReplicatorOptions {
   idleIntervalMs?: number;
   requestTimeoutMs?: number;
   dataDir?: string;
+  stageLocalBeforePull?: boolean;
 }
 const watcherLeaseMs = 90_000;
 
@@ -32,13 +34,20 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   const { sqlite, backendId, config } = options;
   if (config.backendId !== backendId) throw new Error("Bridge configuration belongs to another backend");
   const fingerprint = createHash("sha256").update(config.accountKey).digest("hex");
-  const binding = sqlite.prepare("SELECT account_fingerprint FROM bridge_config WHERE id=1").get() as { account_fingerprint: string | null } | undefined;
+  const binding = sqlite.prepare("SELECT account_fingerprint,enrollment_staging FROM bridge_config WHERE id=1").get() as { account_fingerprint: string | null; enrollment_staging: number } | undefined;
   if (binding?.account_fingerprint && binding.account_fingerprint !== fingerprint) throw new Error("This database is already bound to another Bridge account key");
 
-  let stopped = false, initialized = false, state: BridgeStatus["state"] = "connecting";
+  let stopped = false, paused = false, initialized = false, state: BridgeStatus["state"] = "connecting";
   let lastSyncedAt: string | null = null, error: string | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined, inFlight: Promise<void> | undefined;
   let requested = false, failures = 0, subscribed = "";
+  let quota: BridgeQuota | null = null;
+  async function refreshQuota() {
+    const token = options.token ? await options.token() : config.token;
+    const response = await fetch(new URL("/v1/quota", config.url.replace(/^ws/, "http")), { headers: { Authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Bridge quota request failed (${response.status})`);
+    quota = await response.json() as BridgeQuota;
+  }
   const watchers = new Map<string, { runId: string; expires: number }>();
   const runStates = new Map<string, BridgeRunState>();
   const online = new Map<string, boolean>();
@@ -58,6 +67,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     url: config.url, token: options.token ?? config.token, metadata: { label: config.label, platform: process.platform },
     requestTimeoutMs: options.requestTimeoutMs,
     onPresence: presence,
+    onApproval: options.onApproval,
     onChanged: () => { requested = true; schedule(0); },
     onStatusChange(next) {
       if (stopped) return;
@@ -69,7 +79,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   const blobs = options.dataDir ? createBridgeBlobs({ dataDir: options.dataDir, accountKey: config.accountKey, url: config.url, token: options.token ?? config.token }) : undefined;
   const files = blobs ? createBridgeBlobRecords({ sqlite, backendId, dataDir: options.dataDir!, blobs }) : undefined;
   const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(config.accountKey).recordKey,
-    codec: createBridgeSealingCodec(config.accountKey), transport, blobs: files, onApplied: options.onApplied });
+    codec: createBridgeSealingCodec(config.accountKey), transport, blobs: files, onApplied: options.onApplied, stageLocalBeforePull: options.stageLocalBeforePull || !!binding?.enrollment_staging });
   sqlite.prepare("UPDATE bridge_config SET account_fingerprint=? WHERE id=1").run(fingerprint);
 
   function watchedRuns(): string[] {
@@ -80,14 +90,14 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     return runs;
   }
   function schedule(delay: number) {
-    if (stopped || options.autoStart === false) return;
+    if (stopped || paused || options.autoStart === false) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => { timer = undefined; void syncNow().catch(() => {}); }, delay);
     timer.unref();
   }
   async function drain(stream: BridgeStream) {
     // Bound a busy publisher's work so account pulls and open transcripts keep progressing.
-    for (let batch = 0; batch < 10 && !stopped; batch++) if (await engine.push(stream, 100) < 100) break;
+    for (let batch = 0; batch < 10 && !stopped && !paused; batch++) if (await engine.push(stream, 100) < 100) break;
   }
   async function cycle() {
     requested = false;
@@ -99,22 +109,41 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         state = "syncing"; notify();
         await engine.bootstrap(); initialized = true;
       } else await engine.pull("account");
-      if (stopped) return;
-      await drain("account");
-      const accountPending = (sqlite.prepare(`SELECT count(*) AS n FROM bridge_outbox WHERE stream='account'`).get() as { n: number }).n;
-      // Run children may only be published after their account-stream roots/parents.
-      if (!accountPending) {
-        const outgoing = sqlite.prepare(`SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' ORDER BY stream`).all() as { stream: BridgeStream }[];
-        for (const row of outgoing) { if (stopped) return; await drain(row.stream); }
+      if (stopped || paused) return;
+      await refreshQuota();
+      while (!(sqlite.prepare("SELECT backfill_done FROM bridge_config WHERE id=1").get() as { backfill_done: number }).backfill_done) {
+        await engine.backfill(100); await new Promise<void>((resolve) => setImmediate(resolve));
+        if (stopped || paused) return;
+      }
+      let writeError: unknown;
+      try {
+        await drain("account");
+        const accountPending = (sqlite.prepare(`SELECT count(*) AS n FROM bridge_outbox WHERE stream='account'`).get() as { n: number }).n;
+        // Run children may only be published after their account-stream roots/parents.
+        if (!accountPending) {
+          const outgoing = sqlite.prepare(`SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' ORDER BY stream`).all() as { stream: BridgeStream }[];
+          for (const row of outgoing) { if (stopped || paused) return; await drain(row.stream); }
+        }
+      } catch (cause) {
+        if (!/quota|rate limit/i.test(String(cause))) throw cause;
+        writeError = cause;
+        const deletions = sqlite.prepare("SELECT DISTINCT stream FROM bridge_outbox WHERE op='delete' AND stream<>'account'").all() as { stream: BridgeStream }[];
+        for (const { stream } of deletions) {
+          if (stopped || paused) return;
+          // A new, never-published root can still be queued at the account quota.
+          await engine.push(stream, 100, true).catch(() => {});
+        }
       }
       for (const runId of watchedRuns()) {
-        if (stopped) return;
+        if (stopped || paused) return;
         await engine.pull(`run:${runId}`);
         runStates.set(runId, { runId, ready: true, error: null });
       }
+      if (writeError) throw writeError;
       state = "connected"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify();
     } catch (cause) {
       if (stopped) return;
+      if (/quota|rate limit/i.test(String(cause))) await refreshQuota().catch(() => {});
       failures++;
       error = cause instanceof Error ? cause.message : "Bridge replication failed";
       state = /connection|timed out/i.test(error) ? "offline" : "error";
@@ -135,12 +164,16 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   }
   function syncNow(): Promise<void> {
     if (stopped) return Promise.reject(new Error("Bridge replicator is stopped"));
+    if (paused) return Promise.reject(new Error("Bridge replication is paused"));
     if (inFlight) return inFlight;
     inFlight = cycle().finally(() => { inFlight = undefined; });
     return inFlight;
   }
   const api = {
     syncNow,
+    async pause() { paused = true; if (timer) clearTimeout(timer); timer = undefined; await inFlight?.catch(() => {}); },
+    resume() { if (stopped) return; paused = false; api.wake(); },
+    async preserveAccountFiles() { await files?.preserveAccountFiles(); },
     isCachedFile(realPath: string): Promise<boolean> { return blobs?.isCachedFile(realPath) ?? Promise.resolve(false); },
     captureOutput(file: string, roots: string[], mime: string | null) { return files?.captureOutput(file, roots, mime); },
     resolveFile(table: BridgeFileTable, id: string | number, column?: string, sourcePath?: string): Promise<string> {
@@ -171,7 +204,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       const owners = sqlite.prepare("SELECT DISTINCT owner_backend_id AS id FROM runs UNION SELECT DISTINCT owner_backend_id FROM workspaces").all() as { id: string }[];
       for (const { id } of owners) if (!backends.has(id)) backends.set(id, { backendId: id, label: `Device ${id.slice(0, 8)}`, platform: null, online: null, lastSeen: null });
       backends.set(backendId, { backendId, label: config.label, platform: process.platform, online: state === "connected", lastSeen: lastSyncedAt });
-      return { enabled: true, state, backendId, label: config.label, lastSyncedAt, error, pendingRecords: pending(), backends: [...backends.values()], runs: [...runStates.values()] };
+      return { enabled: true, state, backendId, label: config.label, lastSyncedAt, error, pendingRecords: pending(), backends: [...backends.values()], runs: [...runStates.values()], quota };
     },
     async stop() {
       stopped = true; if (timer) clearTimeout(timer); timer = undefined;

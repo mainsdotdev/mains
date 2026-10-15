@@ -9,6 +9,7 @@ import { createBridgeEngine, type BridgeEngineOptions } from "./bridge.engine";
 import { createBridgeTestHub, bridgeTestCodec, bridgeTestRecordKey, closeBridgeTestConnections, disposeBridgeTestHub } from "../../../test/bridge-hub";
 import type { BridgeTransport } from "./bridge.transport";
 import { registerEventSink } from "../../ipc-kit/event-bus";
+import { beginBridgeEnrollment, bindBridgeAccount, includeBridgeLocalHistory, removeBridgeReplicas, resetBridgeBackfill, setBridgeProjectScope } from "./bridge.product";
 
 const key = bridgeTestRecordKey;
 const cleanups: (() => void)[] = [];
@@ -48,8 +49,94 @@ async function pullAll(n: Node) {
   for (const r of rows(n, "runs")) await n.engine.pull(`run:${r.id}`);
 }
 async function settle(a: Node, b: Node) { await drain(a); await pullAll(b); await drain(b); await pullAll(a); await drain(a); await pullAll(b); }
+async function backfill(n: Node) {
+  for (let i = 0; i < 100; i++) if ((await n.engine.backfill(100)).done) return;
+  throw new Error("Backfill did not finish");
+}
 const bodyOf = (envelope: BridgeEnvelope) => bridgeTestCodec.open(envelope).body;
+function project(n: Node, id: string) {
+  n.sqlite.prepare("INSERT INTO projects(id,owner_backend_id,account_id,name,root_path) VALUES(?,?,'default',?,'/local')").run(id, n.id, id);
+  n.sqlite.prepare("INSERT INTO workspaces(id,owner_backend_id,account_id,project_id,name,root_path) VALUES(?,?,'default',?,?,'/local')").run(`${id}-workspace`, n.id, id, id);
+}
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { promise, resolve }; }
+
+describe("Bridge product retention and scope across independent databases", () => {
+  it("fences queued and future project writes, and publishes edits and deletes when enabled again", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    await settle(a, b);
+    project(a, "private"); run(a, "private-run", "private-workspace");
+    setBridgeProjectScope(a.sqlite, "A", "private", true);
+    a.sqlite.exec("UPDATE runs SET title='Private edit' WHERE id='private-run'; INSERT INTO run_artifacts(run_id,kind,content) VALUES('private-run','report','Private child')");
+    a.sqlite.exec("INSERT INTO run_attachments(id,name,type,mime_type,storage_key,byte_size,content_hash) VALUES('private-att','x.png','image','image/png','attachments/x',3,'hash'); INSERT INTO run_attachment_refs(run_id,attachment_id,input_key,ordinal) VALUES('private-run','private-att','input',0)");
+    await backfill(a);
+    expect(a.engine.pending()).toEqual([]); await settle(a, b);
+    expect(row(b, "projects", "private")).toBeUndefined(); expect(row(b, "runs", "private-run")).toBeUndefined();
+    setBridgeProjectScope(a.sqlite, "A", "private", false); await backfill(a);
+    await settle(a, b);
+    expect(row(b, "runs", "private-run")?.title).toBe("Private edit"); expect(rows(b, "run_artifacts")[0].content).toBe("Private child");
+    setBridgeProjectScope(a.sqlite, "A", "private", true);
+    a.sqlite.exec("DELETE FROM run_artifacts WHERE run_id='private-run'; DELETE FROM runs WHERE id='private-run'");
+    expect(a.engine.pending()).toEqual([]); await settle(a, b);
+    expect(row(b, "runs", "private-run")).toBeDefined();
+    setBridgeProjectScope(a.sqlite, "A", "private", false); await backfill(a);
+    await settle(a, b); expect(row(b, "runs", "private-run")).toBeUndefined();
+    expect(a.sqlite.pragma("foreign_key_check")).toEqual([]); expect(b.sqlite.pragma("foreign_key_check")).toEqual([]);
+  });
+  it("takes the history boundary at sign-in, keeps new rows public, and can add old history later", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    a.sqlite.exec("UPDATE bridge_config SET enabled=0,tracking_enabled=0 WHERE id=1");
+    run(a, "old"); item(a, "old-file");
+    beginBridgeEnrollment(a.sqlite, "A", false);
+    run(a, "created-during-approval"); item(a, "new-file");
+    const approvalClock = a.sqlite.prepare("SELECT physical_ms,counter FROM bridge_row_clock WHERE table_name='runs' AND pk='created-during-approval'").get();
+    bindBridgeAccount(a.sqlite, "fingerprint", "http://hub", "account"); a.sqlite.exec("UPDATE bridge_config SET enabled=1 WHERE id=1");
+    await backfill(a); await settle(a, b);
+    expect(a.sqlite.prepare("SELECT physical_ms,counter FROM bridge_row_clock WHERE table_name='runs' AND pk='created-during-approval'").get()).toEqual(approvalClock);
+    expect(row(b, "runs", "old")).toBeUndefined(); expect(row(b, "atlas_items", "old-file")).toBeUndefined();
+    expect(row(b, "runs", "created-during-approval")).toBeDefined(); expect(row(b, "atlas_items", "new-file")).toBeDefined();
+    includeBridgeLocalHistory(a.sqlite); await backfill(a); await settle(a, b);
+    expect(row(b, "runs", "old")).toBeDefined(); expect(row(b, "atlas_items", "old-file")).toBeDefined();
+  });
+  it("retains local data and dirty clocks through logout, without making an older offline edit win on re-entry", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    bindBridgeAccount(a.sqlite, "same", "http://hub", "account");
+    run(a, "own"); run(b, "foreign"); collection(a, "shared"); await settle(a, b);
+    await settle(a, b); removeBridgeReplicas(a.sqlite, "A");
+    expect(row(a, "runs", "own")).toBeDefined(); expect(row(a, "runs", "foreign")).toBeUndefined();
+    expect(a.sqlite.prepare("SELECT 1 FROM bridge_row_clock WHERE origin='B' AND table_name='runs'").get()).toBeUndefined();
+    a.sqlite.exec("UPDATE collections SET name='Older offline' WHERE id='shared'");
+    const captured = a.sqlite.prepare("SELECT physical_ms,counter FROM bridge_row_clock WHERE table_name='collections' AND pk='shared'").get();
+    await new Promise((resolve) => setTimeout(resolve, 3));
+    b.sqlite.exec("UPDATE collections SET name='Newer remote' WHERE id='shared'"); await drain(b);
+    expect(bindBridgeAccount(a.sqlite, "same", "http://hub", "account")).toBe(false);
+    a.sqlite.exec("UPDATE bridge_config SET enabled=1 WHERE id=1");
+    await backfill(a);
+    expect(a.sqlite.prepare("SELECT physical_ms,counter FROM bridge_row_clock WHERE table_name='collections' AND pk='shared'").get()).toEqual(captured);
+    await a.engine.bootstrap(); await settle(a, b);
+    expect(row(a, "collections", "shared")?.name).toBe("Newer remote"); expect(row(b, "collections", "shared")?.name).toBe("Newer remote");
+    expect(row(a, "runs", "foreign")).toBeDefined();
+  });
+  it("optional synced-object removal preserves unsent Pages, revisions and referenced files", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    item(a, "kept-file"); item(a, "removed-file");
+    a.sqlite.exec("INSERT INTO atlas_items(id,account_id,kind,title) VALUES('page','default','page','Page')"); await settle(a, b);
+    a.sqlite.exec(`INSERT INTO atlas_page_revisions(id,item_id,version,title,blocks_json,markdown,actor) VALUES('offline-revision','page',1,'Offline','[]','Unsent text','user');
+      INSERT INTO atlas_page_file_refs(revision_id,file_id) VALUES('offline-revision','kept-file'); UPDATE atlas_items SET current_revision_id='offline-revision' WHERE id='page'`);
+    removeBridgeReplicas(a.sqlite, "A", true);
+    expect(row(a, "atlas_items", "page")).toBeDefined(); expect(row(a, "atlas_items", "kept-file")).toBeDefined();
+    expect(row(a, "atlas_items", "removed-file")).toBeUndefined(); expect(row(a, "atlas_page_revisions", "offline-revision")?.markdown).toBe("Unsent text");
+    expect(a.sqlite.pragma("foreign_key_check")).toEqual([]);
+  });
+  it("publishes a logged-out delete after re-entry without reusing its identity", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    collection(a, "gone"); await settle(a, b); removeBridgeReplicas(a.sqlite, "A");
+    a.sqlite.exec("DELETE FROM collections WHERE id='gone'"); expect(a.engine.pending()).toEqual([]);
+    expect(() => collection(a, "gone")).toThrow(/cannot be reused/);
+    a.sqlite.exec("UPDATE bridge_config SET enabled=1 WHERE id=1"); resetBridgeBackfill(a.sqlite);
+    await backfill(a); await settle(a, b);
+    expect(row(b, "collections", "gone")).toBeUndefined();
+  });
+});
 
 // All integration scenarios below use separately migrated SQLite handles with FK checks ON.
 describe("Bridge transfer between independent SQLite databases", () => {

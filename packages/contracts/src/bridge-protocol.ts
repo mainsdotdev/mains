@@ -38,7 +38,7 @@ export interface BridgeLogRecord { seq: number; envelope: BridgeEnvelope }
 export type BridgePushResult =
   | { seq: number }
   | { deleted: BridgeEnvelope }
-  | { error: "notOwner" };
+  | { error: "notOwner" | "quotaExceeded" | "rateLimited" };
 export type BridgeClientMessage =
   | { type: "hello"; label: string; platform: string }
   | { type: "push"; stream: BridgeStream; records: BridgeEnvelope[] }
@@ -46,6 +46,7 @@ export type BridgeClientMessage =
   | { type: "subscribe"; streams: BridgeStream[] }
   | { type: "compact" };
 export type BridgeServerMessage =
+  | ({ type: "approval" } & import("./bridge-auth").BridgeApprovalRequest)
   | { type: "identified"; backendId: string }
   | { type: "ack"; stream: BridgeStream; results: BridgePushResult[] }
   | { type: "records"; stream: BridgeStream; records: BridgeLogRecord[]; next: number; hasMore: boolean }

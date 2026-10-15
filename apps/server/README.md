@@ -39,6 +39,17 @@ npm run auth -- revoke <device-id>
 link. Pass `--url https://your-browser-facing-origin` when the browser reaches
 the server through an address that is not recorded in server state.
 
+To sync this backend with another Mains backend, open Settings › Bridge in its
+browser UI or run `mains bridge login --hub https://your-bridge-hub` while the
+server stays running. Use `mains bridge status`, `mains bridge approve <id>
+--code <matching-code>`, `mains bridge recover` and `mains bridge logout` for
+headless management (`npm run bridge -- <action>` from a source checkout). Recovery secrets are read from stdin rather than command
+arguments. `mains bridge projects` lists project scope; `mains bridge local-only
+<project-id> --on|--off` changes it. `mains bridge sync-history` adds previously
+excluded history, and `mains bridge sync` retries queued changes. Status includes
+account storage usage and quota errors. Own data stays local on sign-out; unsent
+edits survive optional synced-object removal. See [Bridge setup and key ceremonies](../bridge/README.md#sign-in-and-key-management-b7).
+
 The server uses the existing Mains user-data directory by default, including
 the same `mains.db`, workspaces, collections, and run history as the installed
 desktop app. No import is required. Quit Mains Desktop before starting Mains

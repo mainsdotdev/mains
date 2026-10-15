@@ -44,6 +44,7 @@ const NotificationsSettings = lazy(
 const ProjectsSettings = lazy(() => import("./components/projects"));
 const ArchiveSettings = lazy(() => import("./components/archive"));
 const BackendsSettings = lazy(() => import("@/features/relay/components/backends"));
+const BridgeSettings = lazy(() => import("./components/bridge"));
 const DashboardPage = lazy(
   () => import("@/features/stats/components/dashboard-page"),
 );
@@ -69,6 +70,7 @@ export type SettingsRouteId =
   | "codex-plugins"
   | "cursor"
   | "backends"
+  | "bridge"
   | "archive"
   | "dashboard";
 
@@ -100,6 +102,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "lens", label: "Lens", icon: View, showInNav: capabilities.appshots, Component: LensSettings },
   { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard, showInNav: capabilities.windowChrome, Component: KeyboardShortcutsSettings },
   { id: "connections", label: "Connections", icon: Connect, showInNav: true, Component: ConnectionsSettings },
+  { id: "bridge", label: "Bridge", icon: Relay, showInNav: true, Component: BridgeSettings },
   // Hidden from the Settings nav — surfaced as the top-level Connect route instead.
   { id: "backends", label: "Mains Connect", icon: Relay, Component: BackendsSettings },
   { id: "dashboard", label: "Dashboard", icon: Chart, showInNav: true, Component: DashboardPage },

@@ -1,4 +1,5 @@
 import { fail, type ServiceResponse } from "@mains/contracts/service-response";
+import { CHANNELS } from "@mains/contracts/channels";
 import {
   decodeWireValue,
   decodeWsMessage,
@@ -73,6 +74,8 @@ export function serveConnection(
 // a retry usually arrives over a NEW socket (the old one is what dropped), and
 // it must find the attempt already running rather than start a second one.
 const inFlightCommands = new Map<string, Promise<ServiceResponse<unknown>>>();
+// Recovery material must never be persisted or replayed through command receipts.
+const secretResponses = new Set<string>([CHANNELS.bridge.takeRecoveryCode, CHANNELS.bridge.regenerateRecoveryCode]);
 
 async function routeMessage(
   conn: WsConnection,
@@ -120,7 +123,7 @@ async function routeMessage(
 
   const receipts = options.commandReceipts;
   const result =
-    conn.deviceId && commandId && receipts
+    conn.deviceId && commandId && receipts && !secretResponses.has(channel)
       ? await runCommand(conn.deviceId, commandId, channel, message.args, ctx, receipts)
       : await invokeHandler(channel, message.args, ctx);
   reply(result);

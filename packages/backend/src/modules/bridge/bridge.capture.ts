@@ -33,18 +33,46 @@ export function ownerSql(table: string, prefix: string): string {
   if (table === "review_findings") return `(SELECT coalesce(w.owner_backend_id,r.owner_backend_id) FROM reviews v LEFT JOIN workspaces w ON w.id=v.workspace_id LEFT JOIN runs r ON r.id=v.run_id WHERE v.id=${prefix}.review_id)`;
   return `(SELECT owner_backend_id FROM workspaces WHERE id=${prefix}.workspace_id)`;
 }
+/** Scope walks required parents, and selected target workspaces, without JS UDFs. */
+export function scopeSql(table: string, prefix: string, seen = new Set<string>()): string {
+  const pk = portablePkSql(table, prefix), def = definition(table);
+  const own = `NOT EXISTS(SELECT 1 FROM bridge_exclusions e WHERE e.table_name=${literal(table)} AND e.pk=${pk})`;
+  if (seen.has(table)) return own;
+  const next = new Set(seen).add(table), clauses = [own];
+  for (const [column, ref] of Object.entries(def.references)) {
+    if (ref.class !== "required" && !(column === "workspace_id" && ref.table === "workspaces")) continue;
+    const parent = `scope_${next.size}_${column}`;
+    clauses.push(`(${prefix}.${quote(column)} IS NULL OR EXISTS(SELECT 1 FROM ${quote(ref.table)} ${parent} WHERE ${parent}.id=${prefix}.${quote(column)} AND ${scopeSql(ref.table, parent, next)}))`);
+  }
+  if (table === "atlas_items") {
+    const file = `scope_file_${next.size}`;
+    clauses.push(`(${prefix}.kind<>'page' OR NOT EXISTS(SELECT 1 FROM atlas_page_file_refs f JOIN atlas_page_revisions v ON v.id=f.revision_id JOIN atlas_items ${file} ON ${file}.id=f.file_id WHERE v.item_id=${prefix}.id AND NOT (${scopeSql("atlas_items", file, next)})))`);
+  }
+  return clauses.join(" AND ");
+}
+export function projectIdSql(table: string, prefix: string): string {
+  const def = definition(table);
+  let direct = "NULL";
+  if (table === "projects") direct = `${prefix}.id`;
+  else if (table === "workspaces") direct = `${prefix}.project_id`;
+  else if (table === "review_findings") direct = `(SELECT w.project_id FROM reviews v JOIN workspaces w ON w.id=v.workspace_id WHERE v.id=${prefix}.review_id)`;
+  else if (def.references.workspace_id) direct = `(SELECT project_id FROM workspaces WHERE id=${prefix}.workspace_id)`;
+  else if (def.ownerRoot === "runs") direct = `(SELECT w.project_id FROM runs r JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=${runIdSql(table, prefix)})`;
+  return `coalesce(${direct},(SELECT project_id FROM bridge_row_clock WHERE table_name=${literal(table)} AND pk=${portablePkSql(table, prefix)} AND project_id IS NOT NULL LIMIT 1))`;
+}
 export function eligibleSql(table: string, prefix: string): string {
   const def = definition(table), pk = portablePkSql(table, prefix);
-  const runId = runIdSql(table, prefix);
   return [
-    "coalesce((SELECT enabled FROM bridge_config WHERE id=1),0)=1",
+    "coalesce((SELECT max(enabled,tracking_enabled) FROM bridge_config WHERE id=1),0)=1",
     "(SELECT applying FROM bridge_state WHERE id=1)=0",
     isAtlas(table) ? "(SELECT atlas_enabled FROM bridge_config WHERE id=1)=1" : "1",
     def.ownerRoot ? `${ownerSql(table, prefix)}=${backend}` : "1",
-    `NOT EXISTS(SELECT 1 FROM bridge_exclusions WHERE table_name=${literal(table)} AND pk=${pk})`,
-    def.ownerRoot === "runs" ? `NOT EXISTS(SELECT 1 FROM bridge_exclusions WHERE table_name='runs' AND pk=${runId})` : "1",
     `NOT EXISTS(SELECT 1 FROM bridge_tombstones WHERE table_name=${literal(table)} AND pk=${pk})`,
   ].join(" AND ");
+}
+function publishSql(table: string, prefix: string): string {
+  const run = definition(table).ownerRoot === "runs" && table !== "runs" ? ` AND EXISTS(SELECT 1 FROM runs scope_run WHERE scope_run.id=${runIdSql(table, prefix)} AND ${scopeSql("runs", "scope_run")})` : "";
+  return `(SELECT enabled FROM bridge_config WHERE id=1)=1 AND ${scopeSql(table, prefix)}${run}`;
 }
 export function captureSql(table: string, register: string, prefix: string, previous?: string): string {
   const def = definition(table), pk = portablePkSql(table, prefix), owner = ownerSql(table, prefix), runId = runIdSql(table, prefix);
@@ -58,13 +86,13 @@ export function captureSql(table: string, register: string, prefix: string, prev
     return [literal(col), `CASE WHEN typeof(${value})='text' THEN ${value} || '' ELSE ${value} END`];
   });
   return `${tickSql}
-    INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,refs_json,portable)
-      VALUES(${literal(table)},${pk},${literal(register)},${localClock},${localCounter},${backend},json_object(${values.join(",")}), '{}',0)
+    INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,refs_json,portable,dirty,project_id)
+      VALUES(${literal(table)},${pk},${literal(register)},${localClock},${localCounter},${backend},json_object(${values.join(",")}), '{}',0,1,${projectIdSql(table, prefix)})
       ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
-        origin=excluded.origin,values_json=excluded.values_json,refs_json='{}',blob_refs_json=${preserveFiles},portable=0;
+        origin=excluded.origin,values_json=excluded.values_json,refs_json='{}',blob_refs_json=${preserveFiles},portable=0,dirty=1,project_id=excluded.project_id;
     DELETE FROM bridge_pending_links WHERE table_name=${literal(table)} AND pk=${pk} AND register=${literal(register)};
     INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at)
-      VALUES(${literal(table)},${pk},${literal(register)},'upsert',${generation},${stream},${owner},${runId},${localClock})
+      SELECT ${literal(table)},${pk},${literal(register)},'upsert',${generation},${stream},${owner},${runId},${localClock} WHERE ${publishSql(table, prefix)}
       ON CONFLICT(table_name,pk,register) DO UPDATE SET op='upsert',generation=excluded.generation,stream=excluded.stream,owner=excluded.owner,run_id=excluded.run_id,changed_at=excluded.changed_at;`;
 }
 
@@ -75,11 +103,13 @@ export function installBridgeCapture(sqlite: SQLiteInstance): void {
     for (const [table, def] of syncedTables) {
       const pkNew = portablePkSql(table, "NEW"), pkOld = portablePkSql(table, "OLD");
       // Primary keys are immutable. Re-adding a permanently deleted identity is never allowed.
-      sqlite.exec(`CREATE TRIGGER IF NOT EXISTS ${quote(`bridge_${table}_identity`)} BEFORE UPDATE ON ${quote(table)}
-        WHEN (SELECT enabled FROM bridge_config WHERE id=1)=1 AND (SELECT applying FROM bridge_state WHERE id=1)=0 AND (${pkNew} IS NOT ${pkOld})
+      sqlite.exec(`DROP TRIGGER IF EXISTS ${quote(`bridge_${table}_identity`)};
+        DROP TRIGGER IF EXISTS ${quote(`bridge_${table}_fence`)};
+        CREATE TRIGGER ${quote(`bridge_${table}_identity`)} BEFORE UPDATE ON ${quote(table)}
+        WHEN (SELECT max(enabled,tracking_enabled) FROM bridge_config WHERE id=1)=1 AND (SELECT applying FROM bridge_state WHERE id=1)=0 AND (${pkNew} IS NOT ${pkOld})
         BEGIN SELECT RAISE(ABORT,'Bridge identities are immutable'); END;
-        CREATE TRIGGER IF NOT EXISTS ${quote(`bridge_${table}_fence`)} BEFORE INSERT ON ${quote(table)}
-        WHEN (SELECT enabled FROM bridge_config WHERE id=1)=1 AND EXISTS(SELECT 1 FROM bridge_tombstones WHERE table_name=${literal(table)} AND pk=${pkNew})
+        CREATE TRIGGER ${quote(`bridge_${table}_fence`)} BEFORE INSERT ON ${quote(table)}
+        WHEN (SELECT max(enabled,tracking_enabled) FROM bridge_config WHERE id=1)=1 AND EXISTS(SELECT 1 FROM bridge_tombstones WHERE table_name=${literal(table)} AND pk=${pkNew})
         BEGIN SELECT RAISE(ABORT,'A deleted Bridge identity cannot be reused'); END;`);
       for (const [register, columns] of Object.entries(def.registers)) {
         for (const event of ["INSERT", "UPDATE"]) {
@@ -97,13 +127,13 @@ export function installBridgeCapture(sqlite: SQLiteInstance): void {
         WHEN ${eligibleSql(table, "OLD")}
         BEGIN ${tickSql}
           DELETE FROM bridge_outbox WHERE table_name=${literal(table)} AND pk IN (${aliases});
-          INSERT INTO bridge_tombstones(table_name,pk) SELECT ${literal(table)},pk FROM (${aliases}) WHERE 1
+          INSERT INTO bridge_tombstones(table_name,pk,stream,owner,run_id,project_id) SELECT ${literal(table)},pk,${stream},${ownerSql(table, "OLD")},${runIdSql(table, "OLD")},${projectIdSql(table, "OLD")} FROM (${aliases}) WHERE 1
             ON CONFLICT(table_name,pk) DO NOTHING;
-          INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,portable)
-            SELECT ${literal(table)},pk,'__delete__',${localClock},${localCounter},${backend},'{}',0 FROM (${aliases}) WHERE 1
+          INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,portable,dirty,project_id)
+            SELECT ${literal(table)},pk,'__delete__',${localClock},${localCounter},${backend},'{}',0,1,${projectIdSql(table, "OLD")} FROM (${aliases}) WHERE 1
             ON CONFLICT(table_name,pk,register) DO NOTHING;
           INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at)
-            SELECT ${literal(table)},pk,'__delete__','delete',${generation},${stream},${ownerSql(table, "OLD")},${runIdSql(table, "OLD")},${localClock} FROM (${aliases}) WHERE 1
+            SELECT ${literal(table)},pk,'__delete__','delete',${generation},${stream},${ownerSql(table, "OLD")},${runIdSql(table, "OLD")},${localClock} FROM (${aliases}) WHERE ${publishSql(table, "OLD")}
             ON CONFLICT(table_name,pk,register) DO UPDATE SET op='delete',generation=excluded.generation,changed_at=excluded.changed_at;
         END;`);
     }
@@ -116,8 +146,9 @@ export function installBridgeCapture(sqlite: SQLiteInstance): void {
       END;`);
     // No permanently deleted fixed ids: the service archives seeds, SQL must also protect them.
     for (const [table, ids] of [["accounts", ["default"]], ["spaces", ["claude", "codex", "copilot", "cursor"].filter(isSeededSpaceId)]] as const) {
-      sqlite.exec(`CREATE TRIGGER IF NOT EXISTS ${quote(`bridge_${table}_fixed`)} BEFORE DELETE ON ${quote(table)}
-        WHEN (SELECT enabled FROM bridge_config WHERE id=1)=1 AND OLD.id IN (${ids.map(literal).join(",")})
+      sqlite.exec(`DROP TRIGGER IF EXISTS ${quote(`bridge_${table}_fixed`)};
+        CREATE TRIGGER ${quote(`bridge_${table}_fixed`)} BEFORE DELETE ON ${quote(table)}
+        WHEN (SELECT max(enabled,tracking_enabled) FROM bridge_config WHERE id=1)=1 AND OLD.id IN (${ids.map(literal).join(",")})
         BEGIN SELECT RAISE(ABORT,'Fixed Bridge identities must be archived'); END;`);
     }
   })();

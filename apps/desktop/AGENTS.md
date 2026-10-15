@@ -59,7 +59,8 @@ For a second development backend, set `MAINS_DEV_USER_DATA` to an absolute
 disposable directory before `npm start`. Unpackaged Electron then isolates both
 Chromium state and `mains.db` there, before acquiring its instance/database locks.
 Do not redirect HOME or use the installed app's profile for replica tests. Bridge
-starts only with an explicit `<userData>/bridge/dev.json` or `MAINS_BRIDGE_CONFIG`;
+starts after Bridge sign-in and key approval, or with an explicit
+`<userData>/bridge/dev.json` / `MAINS_BRIDGE_CONFIG`;
 see `../bridge/README.md` for the two-backend demo and acceptance commands.
 
 Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the `test*` scripts handle this automatically, but running `vitest` directly will fail if you skip that step (use `npm rebuild better-sqlite3` first). Desktop-adapter tests live next to the file under test; backend tests and shared fixtures/factories live in `../../packages/backend`.
@@ -339,7 +340,7 @@ Core tables:
 - **Layering**: `components/ui/` holds feature-agnostic primitives and may NOT import from `@/features/` (ESLint-enforced). `components/layout/` is the app shell — `main/`, `sidebar/`, `right-panel/`, `page-shell`, `resize-handle` — and composing features there is correct. Feature panels do not belong in `layout/`: the session panel (environment, sources, deliverables) and subagent panel live under `features/workspace/components/` and are rendered from `App.tsx`.
 - **Shared input UI**: `src/renderer/components/ui/input/` (`input-form`, `rich-input-form`, `permission-mode-dropdown`, `model-select-dropdown`, `fast-mode-button`, `goal-button`, `dictation-button`, `file-upload-dropdown`, `compact-composer-controls`, `send-button`)
 - **Routing**: HashRouter — page components in `src/renderer/routes/`
-- **Settings Routing**: `/settings?section={id}` — section ids live in `src/renderer/features/settings/settings-sections.tsx`: `general`, `appearance`, `git`, `connections`, `backends`, `dashboard`, `archive`, `claude`, `codex`, `codex-plugins`, `copilot`, `cursor`, `notifications`, `personalization`, `schedules`, `security`, `projects`
+- **Settings Routing**: `/settings?section={id}` — section ids live in `src/renderer/features/settings/settings-sections.tsx`: `general`, `appearance`, `git`, `connections`, `backends`, `bridge`, `dashboard`, `archive`, `claude`, `codex`, `codex-plugins`, `copilot`, `cursor`, `notifications`, `personalization`, `schedules`, `security`, `projects`
 - **Styling**: Tailwind CSS v4 (PostCSS-based)
 - **Colors come from theme tokens, never literals.** App themes (`src/renderer/lib/app-themes.ts`, Settings › Appearance, per provider) re-derive the tokens at runtime, so anything painted outside them ignores the theme:
   - Surfaces, borders, hovers, and text use the neutral scale `primary` / `primary-50` … `primary-950`; links, focus, and selection use `accent`, with `accent-foreground` for text on an accent fill; submit buttons use the fixed `action` color. No hex (`bg-[#…]`, inline `style` colors), no Tailwind palette classes (`blue-500`, `gray-*`), no `bg-white` / `text-white`.

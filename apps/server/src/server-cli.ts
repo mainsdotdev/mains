@@ -31,6 +31,7 @@ import {
 } from "./pairing-client";
 import { printPairingCode } from "./pairing-output";
 import { runServiceCommand } from "./service-manager";
+import { parseBridgeArguments, runBridgeCommand } from "./bridge-cli";
 
 function findResourcesPath(): string | null {
   const candidates = [
@@ -74,6 +75,7 @@ Usage: mains [serve] [options]
        mains pair [options]
        mains web [options]
        mains auth <list|revoke> [options]
+       mains bridge <login|logout|status|approve|reject|revoke|recover|recovery> [options]
        mains service <action> [options]
        npm run serve -- [options]  (development)
 
@@ -90,6 +92,15 @@ Usage: mains [serve] [options]
   --no-pairing                  Do not print a startup pairing QR
   --version                     Show the installed Mains version
   --help                        Show this help
+
+Bridge options (operate on the running backend; it keeps ownership of SQLite):
+  login --hub <url> [--label <name>] [--local-history]
+  status | logout [--remove-synced]
+  approve <backend-id> --code <matching-code> | reject <backend-id>
+  revoke <backend-id> | recover | recovery --replace
+  projects | local-only <project-id> --on|--off
+  sync-history | sync
+  --data-dir <path> --server-url <url> --token <owner-token>
 
 Pair options:
   --endpoint <url>              Reachable phone URL (repeatable; defaults to server state)
@@ -341,6 +352,12 @@ export async function runServerCli(argv = process.argv.slice(2)): Promise<void> 
   }
   if (command === "auth") {
     await runAuthCommand(commandArgs);
+    return;
+  }
+  if (command === "bridge") {
+    const options = parseBridgeArguments(commandArgs);
+    const { admin } = resolveAdminClient(parsePairCliOptions(options.adminArgs));
+    await runBridgeCommand(options, admin);
     return;
   }
   if (command === "service") {

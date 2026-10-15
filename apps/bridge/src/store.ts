@@ -16,10 +16,24 @@ export function createHubStore(storage: DurableObjectStorage) {
     CREATE TABLE IF NOT EXISTS row_owners(row_key TEXT PRIMARY KEY, owner TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS runs(run_id TEXT PRIMARY KEY, owner TEXT NOT NULL, root_key TEXT NOT NULL UNIQUE, tombstone TEXT);
     CREATE TABLE IF NOT EXISTS presence(backend_id TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS backend_metadata(backend_id TEXT PRIMARY KEY, label TEXT NOT NULL, platform TEXT NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS backend_metadata(backend_id TEXT PRIMARY KEY, label TEXT NOT NULL, platform TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS write_rate(backend_id TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);`);
   const first = <T>(query: string, ...args: (string | number | null)[]): T | undefined => sql.exec(query, ...args).toArray()[0] as T | undefined;
   const api = {
-    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[]) {
+    recordBytes(): number {
+      return first<{ n: number }>(`SELECT coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM latest
+        WHERE NOT EXISTS(SELECT 1 FROM deleted d WHERE d.row_key=json_extract(latest.envelope,'$.header.rowKey'))
+        AND stream NOT IN(SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL)),0)
+        +coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM deleted),0) n`)!.n;
+    },
+    takeWrite(backendId: string, limit: number): boolean {
+      const window = Math.floor(Date.now() / 60_000);
+      const rate = first<{ window: number; count: number }>("SELECT window,count FROM write_rate WHERE backend_id=?", backendId);
+      if (rate?.window === window && rate.count >= limit) return false;
+      sql.exec("INSERT INTO write_rate VALUES(?,?,1) ON CONFLICT(backend_id) DO UPDATE SET window=excluded.window,count=CASE WHEN write_rate.window=excluded.window THEN count+1 ELSE 1 END", backendId, window);
+      return true;
+    },
+    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number }) {
       return storage.transactionSync(() => {
         const changed: BridgeLogRecord[] = [];
         const results = envelopes.map((envelope): BridgePushResult => {
@@ -35,16 +49,21 @@ export function createHubStore(storage: DurableObjectStorage) {
             const run = first<{ owner: string; root_key: string }>("SELECT owner,root_key FROM runs WHERE run_id=?", h.runId);
             if (!h.owner || run && (run.owner !== backendId || run.root_key !== h.rowKey) ||
                 first("SELECT 1 FROM runs WHERE root_key=? AND run_id<>?", h.rowKey, h.runId)) return { error: "notOwner" };
-            sql.exec("INSERT OR IGNORE INTO runs(run_id,owner,root_key) VALUES(?,?,?)", h.runId, backendId, h.rowKey);
           }
-          if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
           const deleted = first<LogRow>("SELECT seq,envelope FROM deleted WHERE row_key=?", h.rowKey);
           if (deleted) return { deleted: JSON.parse(deleted.envelope) };
           const previous = h.op === "upsert" ? first<LogRow>("SELECT seq,envelope FROM latest WHERE stream=? AND register_key=?", stream, h.registerKey) : undefined;
           if (previous && order(envelope, JSON.parse(previous.envelope)) <= 0) return { seq: previous.seq };
+          const encoded = JSON.stringify(envelope);
+          if (h.op === "upsert" && budget) {
+            const delta = new TextEncoder().encode(encoded).length - (previous ? new TextEncoder().encode(previous.envelope).length : 0);
+            if (delta > 0 && api.recordBytes() + budget.blobBytes + delta > budget.limitBytes) return { error: "quotaExceeded" };
+            if (!api.takeWrite(backendId, budget.writesPerMinute)) return { error: "rateLimited" };
+          }
+          if (stream === "account" && h.runId) sql.exec("INSERT OR IGNORE INTO runs(run_id,owner,root_key) VALUES(?,?,?)", h.runId, backendId, h.rowKey);
+          if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
           sql.exec("INSERT INTO streams(stream,seq) VALUES(?,1) ON CONFLICT(stream) DO UPDATE SET seq=seq+1", stream);
           const seq = first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)!.seq;
-          const encoded = JSON.stringify(envelope);
           sql.exec("INSERT INTO log(stream,seq,row_key,register_key,op,envelope) VALUES(?,?,?,?,?,?)", stream, seq, h.rowKey, h.registerKey ?? null, h.op, encoded);
           if (h.op === "delete") {
             sql.exec("INSERT INTO deleted(row_key,stream,seq,envelope) VALUES(?,?,?,?)", h.rowKey, stream, seq, encoded);

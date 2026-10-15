@@ -30,6 +30,20 @@ function method<F extends AsyncFn>(channel: string): F {
 }
 
 export const appApi = {
+  bridge: {
+    signIn: method<typeof window.api.bridge.signIn>(CHANNELS.bridge.signIn),
+    signOut: method<typeof window.api.bridge.signOut>(CHANNELS.bridge.signOut),
+    setProjectLocalOnly: method<typeof window.api.bridge.setProjectLocalOnly>(CHANNELS.bridge.setProjectLocalOnly),
+    includeLocalHistory: method<typeof window.api.bridge.includeLocalHistory>(CHANNELS.bridge.includeLocalHistory),
+    refreshAuth: method<typeof window.api.bridge.refreshAuth>(CHANNELS.bridge.refreshAuth),
+    approveBackend: method<typeof window.api.bridge.approveBackend>(CHANNELS.bridge.approveBackend),
+    rejectBackend: method<typeof window.api.bridge.rejectBackend>(CHANNELS.bridge.rejectBackend),
+    requestApproval: method<typeof window.api.bridge.requestApproval>(CHANNELS.bridge.requestApproval),
+    revokeBackend: method<typeof window.api.bridge.revokeBackend>(CHANNELS.bridge.revokeBackend),
+    enterRecoveryCode: method<typeof window.api.bridge.enterRecoveryCode>(CHANNELS.bridge.enterRecoveryCode),
+    takeRecoveryCode: method<typeof window.api.bridge.takeRecoveryCode>(CHANNELS.bridge.takeRecoveryCode),
+    regenerateRecoveryCode: method<typeof window.api.bridge.regenerateRecoveryCode>(CHANNELS.bridge.regenerateRecoveryCode),
+  },
   account: {
     get: method<typeof window.api.account.get>(CHANNELS.account.get),
   },

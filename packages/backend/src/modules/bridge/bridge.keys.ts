@@ -4,6 +4,8 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import { fromBase64Url, toBase64Url, utf8 } from "./bridge.encoding";
+import type { BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
+export type { BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
 
 const salt = utf8("mains.bridge.v1");
 export function requireBridgeKey(key: Uint8Array): void {
@@ -16,7 +18,6 @@ export function deriveBridgeKeys(accountKey: Uint8Array) {
 }
 export function generateBridgeAccountKey(): Uint8Array { return randomBytes(32); }
 export function generateBridgeDeviceKeyPair() { return x25519.keygen(); }
-export interface BridgeSealedAccountKey { v: 1; ephemeralPublicKey: string; nonce: string; payload: string }
 function wrapMaterial(shared: Uint8Array, ephemeral: Uint8Array, recipient: Uint8Array) {
   const aad = utf8(JSON.stringify([1, "mains.bridge.v1/account-key", toBase64Url(ephemeral), toBase64Url(recipient)]));
   return { aad, key: hkdf(sha256, shared, concatBytes(ephemeral, recipient), utf8("mains.bridge.v1/device-wrap"), 32) };

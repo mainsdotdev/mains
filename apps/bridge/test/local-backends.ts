@@ -115,10 +115,10 @@ async function createHost(dir: string, label: string) {
 }
 
 /** Two actual composition roots, independent data dirs/identities, one temporary workerd hub. */
-export async function startLocalBackends() {
+export async function startLocalBackends(settings: { auth?: boolean } = {}) {
   await access(serverEntry).catch(() => { throw new Error("Build apps/server and apps/desktop's web renderer before running host acceptance tests"); });
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hosts-"));
-  const hub = await startLocalBridgeHub();
+  const hub = await startLocalBridgeHub(settings);
   const a = await createHost(join(dir, "A"), "Computer A"), b = await createHost(join(dir, "B"), "Computer B");
   const dispose = async () => {
     await Promise.allSettled([a.stop(), b.stop()]); await hub.dispose();
@@ -130,6 +130,7 @@ export async function startLocalBackends() {
     await a.start(); await b.start();
     const disabled = await a.client.call(CHANNELS.bridge.getStatus);
     if (disabled.enabled || disabled.state !== "disabled") throw new Error("Bridge must be disabled without explicit config");
+    if (settings.auth) return { dir, hub, a, b, dispose };
     await a.stop(); await b.stop();
     const accountId = randomUUID(), accountKey = randomBytes(32).toString("base64url");
     for (const host of [a, b]) {

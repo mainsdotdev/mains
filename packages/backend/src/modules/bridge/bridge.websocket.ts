@@ -5,6 +5,7 @@ import { BRIDGE_MAX_BATCH, BRIDGE_MAX_FRAME_BYTES, parseBridgeServerFrame, valid
 import type { BridgeTransport } from "./bridge.transport";
 
 export interface BridgeWebSocketOptions {
+  onApproval?: (request: import("@mains/contracts/bridge-auth").BridgeApprovalRequest) => void;
   url: string;
   token: string | (() => string | Promise<string>);
   requestTimeoutMs?: number;
@@ -37,7 +38,7 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
       if (Buffer.byteLength(text) > BRIDGE_MAX_FRAME_BYTES) throw new Error("oversized");
       value = parseBridgeServerFrame(text);
     } catch { socket?.terminate(); rejectAll(new Error("Invalid Bridge hub response")); return; }
-    if ("requestId" in value) {
+    if ("requestId" in value && !("type" in value)) {
       const entry = pending.get(value.requestId);
       if (!entry) return;
       pending.delete(value.requestId); clearTimeout(entry.timer);
@@ -47,6 +48,7 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
       try {
         if (value.type === "presence") options.onPresence?.(value);
         else if (value.type === "changed") options.onChanged?.(value.stream);
+        else if (value.type === "approval") options.onApproval?.(value);
       } catch (error) { console.error("Bridge transport listener failed", error); }
     }
   }

@@ -6,7 +6,7 @@ import { installBridgeCapture, portablePkSql } from "./bridge.capture";
 import { bridgePassThroughCodec, type BridgeCodec } from "./bridge.crypto";
 import { applyBridgeBatch, applyDeletedAck, type AppliedChange } from "./bridge.applier";
 import { definition, getClock, isAtlas, quote, syncedTables } from "./bridge.sql";
-import { captureExisting, inScope, prepareRecord, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
+import { captureExisting, outboxInScope, prepareRecord, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
 import type { BridgeTransport } from "./bridge.transport";
 import type { BridgeBlobRecords } from "./bridge.blob-records";
 import { recoverAtlasPage } from "./bridge.atlas";
@@ -23,6 +23,8 @@ export interface BridgeEngineOptions {
   recover?: (context: BridgeRecoveryContext) => void;
   onApplied?: (changes: AppliedChange[]) => void;
   blobs?: BridgeBlobRecords;
+  /** Enrollment stages existing UUID data before the first pull; untouched seeds still pull first. */
+  stageLocalBeforePull?: boolean;
 }
 const backfillTables = dependencyOrder();
 function dependencyOrder(): string[] {
@@ -50,8 +52,8 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     schemaVersion: options.schemaVersion ?? 2, atlasEnabled: options.experimentalAtlas ?? true,
     recover(context) { recoverAtlasPage(context); options.recover?.(context); }, filesEnabled: !!options.blobs };
   sqlite.transaction(() => {
-    sqlite.prepare(`INSERT INTO bridge_config(id,backend_id,enabled,atlas_enabled) VALUES(1,?,1,?)
-      ON CONFLICT(id) DO UPDATE SET enabled=1,atlas_enabled=excluded.atlas_enabled`).run(backendId, Number(store.atlasEnabled));
+    sqlite.prepare(`INSERT INTO bridge_config(id,backend_id,enabled,tracking_enabled,atlas_enabled) VALUES(1,?,1,1,?)
+      ON CONFLICT(id) DO UPDATE SET enabled=1,tracking_enabled=1,atlas_enabled=excluded.atlas_enabled`).run(backendId, Number(store.atlasEnabled));
     if (store.atlasEnabled && existing?.atlas_enabled === 0) sqlite.prepare("UPDATE bridge_config SET backfill_done=0,backfill_table=NULL,backfill_pk=NULL WHERE id=1").run();
     installBridgeCapture(sqlite);
   })();
@@ -99,6 +101,14 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
         if (visited >= limit) return { done: false, visited };
         sqlite.prepare("UPDATE bridge_config SET backfill_table=?,backfill_pk=NULL WHERE id=1").run(backfillTables[i + 1] ?? null);
       }
+      const deletes = sqlite.prepare(`SELECT t.table_name,t.pk,t.stream,t.owner,t.run_id,c.physical_ms FROM bridge_tombstones t JOIN bridge_row_clock c
+        ON c.table_name=t.table_name AND c.pk=t.pk AND c.register='__delete__' WHERE c.dirty=1 AND c.origin=?
+        AND NOT EXISTS(SELECT 1 FROM bridge_outbox o WHERE o.table_name=t.table_name AND o.pk=t.pk AND o.register='__delete__')`).all(backendId) as (OutboxEntry & { physical_ms: number })[];
+      for (const entry of deletes) if (outboxInScope(store, { ...entry, op: "delete" })) {
+        sqlite.exec("UPDATE bridge_clock SET generation=generation+1 WHERE id=1");
+        sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at)
+          VALUES(?,?,'__delete__','delete',(SELECT generation FROM bridge_clock WHERE id=1),?,?,?,?)`).run(entry.table_name, entry.pk, entry.stream, entry.owner, entry.run_id, entry.physical_ms);
+      }
       sqlite.prepare("UPDATE bridge_config SET backfill_done=1 WHERE id=1").run();
       return { done: true, visited };
     })();
@@ -117,18 +127,24 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       if (!page.hasMore) return count;
     }
   }
-  async function push(stream: BridgeStream, limit: number): Promise<number> {
+  async function push(stream: BridgeStream, limit: number, deletesOnly = false): Promise<number> {
     validateLimit(limit);
-    const outgoing = () => sqlite.prepare(`SELECT * FROM bridge_outbox WHERE stream=? AND (?=1 OR substr(table_name,1,6)<>'atlas_')
-      ORDER BY generation,table_name,pk,register LIMIT ?`).all(stream, Number(store.atlasEnabled), limit) as OutboxEntry[];
+    const outgoing = () => sqlite.prepare(`SELECT * FROM bridge_outbox WHERE stream=? AND (?=1 OR substr(table_name,1,6)<>'atlas_') AND (?=0 OR op='delete')
+      ORDER BY CASE WHEN op='delete' THEN 0 ELSE 1 END,generation,table_name,pk,register LIMIT ?`).all(stream, Number(store.atlasEnabled), Number(deletesOnly), limit) as OutboxEntry[];
+    let preparationError: unknown;
     // Disk/network work stays outside SQLite transactions. A changed generation
     // is left pending rather than receiving an older generation's manifest.
     if (options.blobs) for (const entry of outgoing()) {
-      if (!inScope(store, entry.table_name, entry.pk) || entry.run_id && !inScope(store, "runs", entry.run_id)) continue;
-      await options.blobs.prepare(store, entry);
-      if (entry.table_name === "run_attachment_refs" && entry.op === "upsert") {
-        const attachmentId = (JSON.parse(entry.pk) as string[])[1];
-        await options.blobs.prepare(store, { ...entry, table_name: "run_attachments", pk: attachmentId, register: "row" });
+      if (!outboxInScope(store, entry)) continue;
+      try {
+        await options.blobs.prepare(store, entry);
+        if (entry.table_name === "run_attachment_refs" && entry.op === "upsert") {
+          const attachmentId = (JSON.parse(entry.pk) as string[])[1];
+          await options.blobs.prepare(store, { ...entry, table_name: "run_attachments", pk: attachmentId, register: "row" });
+        }
+      } catch (cause) {
+        if (!/quota|rate limit/i.test(String(cause))) throw cause;
+        preparationError ??= cause;
       }
     }
     const { prepared, attachmentCount } = sqlite.transaction(() => {
@@ -137,7 +153,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
         if (options.blobs && !options.blobs.ready(store, entry)) return false;
         if (options.blobs && entry.table_name === "run_attachment_refs" && entry.op === "upsert" &&
             !options.blobs.ready(store, { ...entry, table_name: "run_attachments", pk: (JSON.parse(entry.pk) as string[])[1], register: "row" })) return false;
-        if (inScope(store, entry.table_name, entry.pk) && (!entry.run_id || inScope(store, "runs", entry.run_id))) return true;
+        if (outboxInScope(store, entry)) return true;
         sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
         return false;
       });
@@ -153,7 +169,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       }
       return { prepared: [...attachments.values(), ...entries.map((entry) => prepareRecord(store, entry))], attachmentCount: attachments.size };
     })();
-    if (!prepared.length) return 0;
+    if (!prepared.length) { if (preparationError) throw preparationError; return 0; }
     const results = await transport.push(stream, prepared.map((record) => record.envelope));
     if (results.length !== prepared.length) throw new Error("Bridge ACK count does not match the push");
     // A batch can accept new revisions whose encrypted Page identity is unknown
@@ -163,32 +179,51 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       const result = results[i];
       if ("deleted" in result) announce(applyDeletedAck(store, prepared[i], result.deleted));
     }
+    let rejection: string | undefined;
     for (let i = 0; i < results.length; i++) {
       const result = results[i], sent = prepared[i], entry = sent.entry;
       if ("deleted" in result) continue;
-      if ("error" in result) throw new Error("Bridge hub rejected a non-owner write");
+      if ("error" in result) {
+        rejection ??= result.error === "quotaExceeded" ? "Bridge storage quota exceeded; local changes remain queued" :
+          result.error === "rateLimited" ? "Bridge write rate limit reached; local changes remain queued" : "Bridge hub rejected a non-owner write";
+        continue;
+      }
       if (!Number.isSafeInteger(result.seq) || result.seq < 1) throw new Error("Invalid Bridge ACK sequence");
       if (i < attachmentCount) continue;
       sqlite.transaction(() => {
         const clock = getClock(sqlite, entry.table_name, entry.pk, entry.register);
         if (clock && clock.physical_ms === sent.clock.physical_ms && clock.counter === sent.clock.counter && clock.origin === sent.clock.origin)
-          sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?) WHERE table_name=? AND pk=? AND register=?").run(result.seq, entry.table_name, entry.pk, entry.register);
+          sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?),dirty=0 WHERE table_name=? AND pk=? AND register=?").run(result.seq, entry.table_name, entry.pk, entry.register);
         sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
       })();
       if (options.blobs) await options.blobs.acknowledged(sent.clock);
     }
+    if (rejection) throw new Error(rejection);
+    if (preparationError) throw preparationError;
     return prepared.length - attachmentCount;
   }
   return {
     /** Full account pull precedes first backfill, so untouched fixed-id seeds do not win by installation time. */
     bootstrap(pageSize = 100) {
       return serial(async () => {
+        if (options.stageLocalBeforePull) {
+          for (const table of backfillTables) {
+            const pkSql = portablePkSql(table, "r"); let after = "";
+            for (;;) {
+              const batch = sqlite.prepare(`SELECT ${pkSql} pk FROM ${quote(table)} r WHERE ${pkSql}>? ORDER BY ${pkSql} LIMIT 100`).all(after) as { pk: string }[];
+              sqlite.transaction(() => { for (const row of batch) if (table !== "accounts" && !(table === "spaces" && ["claude","codex","copilot","cursor"].includes(row.pk))) captureExisting(store, table, row.pk); })();
+              if (!batch.length) break;
+              after = batch.at(-1)!.pk; await new Promise<void>((resolve) => setImmediate(resolve));
+            }
+          }
+          sqlite.exec("UPDATE bridge_config SET enrollment_staging=0 WHERE id=1");
+        }
         await pull("account", true, pageSize);
         while (!backfill(100).done) await new Promise<void>((resolve) => setImmediate(resolve));
       });
     },
     backfill(limit = 100) { return serial(async () => backfill(limit)); },
-    push(stream: BridgeStream = "account", limit = 100) { return serial(() => push(stream, limit)); },
+    push(stream: BridgeStream = "account", limit = 100, deletesOnly = false) { return serial(() => push(stream, limit, deletesOnly)); },
     pull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, false, limit)); },
     /** The shared queue drains in-flight pushes before pulling; local SQL writers stay unblocked. */
     fullPull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, true, limit)); },

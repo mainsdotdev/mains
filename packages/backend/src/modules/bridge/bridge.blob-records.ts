@@ -51,6 +51,40 @@ export function createBridgeBlobRecords(options: { sqlite: SQLiteInstance; backe
     return entry.op === "upsert" && BRIDGE_TABLES[entry.table_name].blobColumns.some((column) => BRIDGE_TABLES[entry.table_name].registers[entry.register].includes(column));
   }
   return {
+    /** Turn downloaded shared files into ordinary local files before dropping the account key/cache. */
+    async preserveAccountFiles() {
+      for (const table of ["atlas_items", "collection_sources"] as const) {
+        const rows = sqlite.prepare(`SELECT * FROM ${table} WHERE storage_key IS NOT NULL`).all() as { id: string; collection_id?: string; storage_key: string; content_hash: string }[];
+        for (const row of rows) {
+          const clocks = aliasSet(sqlite, table, row.id).map((id) => getClock(sqlite, table, id, BRIDGE_TABLES[table].primaryRegister!)).filter((clock): clock is RowClock => !!clock)
+            .sort((a, b) => compareClock(clockOf(b), clockOf(a)));
+          const ref = (JSON.parse(clocks[0]?.blob_refs_json ?? "[]") as BridgeBlobRef[]).find((entry) => entry.column === "storage_key");
+          if (!ref) continue;
+          const file = await blobs.cached(ref); if (!file) continue;
+          const key = row.storage_key;
+          if (table === "atlas_items" ? !/^[\w-]+\/[^/\\]+$/.test(key) || [".", ".."].includes(path.basename(key)) :
+            !/^collections\/[\w-]+\/sources\/[\w-]+\/content(?:\.[a-z0-9]{1,16})?$/.test(key) || key.split("/")[1] !== row.collection_id) throw new Error("Unsafe shared file storage key");
+          const target = table === "atlas_items" ? path.join(dataDir, "atlas", "files", key) : path.join(dataDir, key);
+          // A pre-existing source file is never overwritten. Verify cached bytes again against domain metadata.
+          const bytes = await fs.readFile(file);
+          if (createHash("sha256").update(bytes).digest("hex") !== row.content_hash) throw new Error("Shared file integrity check failed");
+          let dir = dataDir;
+          for (const part of path.relative(dataDir, path.dirname(target)).split(path.sep)) {
+            dir = path.join(dir, part);
+            try { await fs.mkdir(dir, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+            const stat = await fs.lstat(dir);
+            if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe shared file storage directory");
+          }
+          try { await fs.writeFile(target, bytes, { flag: "wx", mode: 0o600 }); }
+          catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+            const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+            try { if (createHash("sha256").update(await handle.readFile()).digest("hex") !== row.content_hash) throw new Error("Existing local file has different content"); }
+            finally { await handle.close(); }
+          }
+        }
+      }
+    },
     async captureOutput(file: string, roots: string[], mime: string | null): Promise<BridgeBlobRef | undefined> {
       const bytes = await snapshotFile(file, roots);
       return bytes ? blobs.capture(bytes, { column: "metadata", sourcePath: file, name: path.basename(file), mime }) : undefined;

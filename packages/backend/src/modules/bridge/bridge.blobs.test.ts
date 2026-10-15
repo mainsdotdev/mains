@@ -149,6 +149,23 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     await b.engine.push("account"); await a.engine.pull("account");
     expect(await fs.readFile(await a.records.resolve("atlas_items", "atlas-image"))).toEqual(image);
     expect(a.sqlite.prepare("SELECT title FROM atlas_items WHERE id='atlas-image'").get()).toMatchObject({ title: "Renamed on B" });
+    b.sqlite.exec("UPDATE bridge_row_clock SET blob_refs_json=NULL WHERE table_name='atlas_items' AND pk='atlas-image'; UPDATE atlas_items SET title='Newer local metadata' WHERE id='atlas-image'");
+    const newerClock = b.sqlite.prepare("SELECT physical_ms,counter FROM bridge_row_clock WHERE table_name='atlas_items' AND pk='atlas-image' AND register='content'").get();
+    await b.engine.fullPull();
+    expect(b.sqlite.prepare("SELECT title FROM atlas_items WHERE id='atlas-image'").get()).toMatchObject({ title: "Newer local metadata" });
+    expect(b.sqlite.prepare("SELECT physical_ms,counter FROM bridge_row_clock WHERE table_name='atlas_items' AND pk='atlas-image' AND register='content'").get()).toEqual(newerClock);
+    expect(await fs.readFile(await b.records.resolve("atlas_items", "atlas-image"))).toEqual(image);
+    // Logout must preserve opened shared files as ordinary local files, including
+    // collection context, without traversing a substituted storage directory.
+    const diverted = join(b.dataDir, "diverted"); await fs.mkdir(diverted);
+    await fs.symlink(diverted, join(b.dataDir, "collections"));
+    await expect(b.records.preserveAccountFiles()).rejects.toThrow(/Unsafe shared file storage directory/);
+    expect(await fs.readdir(diverted)).toEqual([]);
+    await fs.unlink(join(b.dataDir, "collections"));
+    await b.records.preserveAccountFiles(); await b.blobs.stop();
+    await fs.rm(join(b.dataDir, "bridge", "blobs"), { recursive: true, force: true });
+    expect(await fs.readFile(join(b.dataDir, key))).toEqual(image);
+    expect(await fs.readFile(join(b.dataDir, "atlas/files/atlas-image/image.png"))).toEqual(image);
   });
 
   it("upgrades B4's acknowledged file rows with new clocks so existing replicas receive their manifests", async () => {

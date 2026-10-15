@@ -3,7 +3,7 @@ import { isSeededSpaceId } from "@mains/contracts/spaces";
 import { bridgeRecordKeys } from "./bridge.crypto";
 import { BRIDGE_TABLES } from "./bridge.records";
 import { aliasSet, canonicalPk, clockOf, compareClock, definition, deleted, getClock, headerClock, isAtlas, quote, rowWhere, syncedTables, type RowClock, type SqlRow } from "./bridge.sql";
-import { bestClock, captureExisting, normalizeCompositeIdentity, physicalPk, portableValues, readRow, type BridgeStore, type PreparedRecord } from "./bridge.store";
+import { bestClock, captureExisting, inScope, normalizeCompositeIdentity, physicalPk, portableValues, readRow, type BridgeStore, type PreparedRecord } from "./bridge.store";
 import { ownerSql } from "./bridge.capture";
 
 export interface AppliedChange { table: string; pk: string; runId?: string; op: "upsert" | "delete" }
@@ -47,7 +47,7 @@ function saveClock(store: BridgeStore, record: BridgeLogRecord, body: BridgeUpse
   const h = record.envelope.header;
   store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,blob_refs_json,portable)
     VALUES(?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
-    origin=excluded.origin,synced_seq=excluded.synced_seq,values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1`)
+    origin=excluded.origin,synced_seq=excluded.synced_seq,values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1,dirty=0`)
     .run(body.table, body.pk, body.register, h.hlc.physicalMs, h.hlc.counter, h.origin, record.seq, JSON.stringify(body.values), JSON.stringify(body.refs), JSON.stringify(body.blobRefs));
 }
 function resolveReferences(store: BridgeStore, table: string, pk: string, clock: RowClock, owner: string, saveLinks: boolean): Record<string, BridgeValue> | string {
@@ -111,17 +111,17 @@ function mergeIds(store: BridgeStore, table: string, ids: string[]) {
   for (const register of Object.keys(definition(table).registers)) {
     const pending = members.flatMap((id) => store.sqlite.prepare("SELECT * FROM bridge_outbox WHERE table_name=? AND pk=? AND register=?").all(table, id, register) as import("./bridge.store").OutboxEntry[]);
     const best = bestClock(store, table, canonical, register);
-    if (!best || !pending.length) continue;
+    if (!best || !pending.length && !best.dirty) continue;
     const winningPending = pending.find((entry) => entry.pk === best.pk);
     for (const id of members) store.sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=?").run(table, id, register);
-    if (winningPending) {
+    if (winningPending || best.dirty) {
       // Retarget the edit with its capture clock, never a new HLC.
       const image = portableValues(store, table, best);
       if ("id" in image.values) image.values.id = canonical;
-      store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,blob_refs_json,portable)
-        VALUES(?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,origin=excluded.origin,
-        values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1`).run(table, canonical, register, best.physical_ms, best.counter, best.origin, best.synced_seq, JSON.stringify(image.values), JSON.stringify(image.refs), best.blob_refs_json);
-      store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,'upsert',?,?,?,?,?)`)
+      store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,blob_refs_json,portable,dirty,project_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,origin=excluded.origin,
+        values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1,dirty=excluded.dirty,project_id=excluded.project_id`).run(table, canonical, register, best.physical_ms, best.counter, best.origin, best.synced_seq, JSON.stringify(image.values), JSON.stringify(image.refs), best.blob_refs_json, best.dirty ?? 0, best.project_id ?? null);
+      if (winningPending) store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,'upsert',?,?,?,?,?)`)
         .run(table, canonical, register, winningPending.generation, winningPending.stream, winningPending.owner, winningPending.run_id, winningPending.changed_at);
     }
   }
@@ -136,7 +136,7 @@ function naturalProjection(store: BridgeStore, table: string, pk: string, body: 
   // Register images retain original natural keys even when a changed output is projected without one.
   const candidates = (store.sqlite.prepare("SELECT * FROM bridge_row_clock WHERE table_name=? AND register=?").all(table, register) as RowClock[])
     .map((clock) => ({ id: clock.pk, v: portableValues(store, table, clock).values }))
-    .filter((entry) => !deleted(store.sqlite, table, entry.id) && (table === "collection_sources" ? entry.v.collection_id === v.collection_id && entry.v.content_hash === v.content_hash : entry.v.account_id === v.account_id && entry.v.source_key === v.source_key));
+    .filter((entry) => inScope(store, table, entry.id) && !deleted(store.sqlite, table, entry.id) && (table === "collection_sources" ? entry.v.collection_id === v.collection_id && entry.v.content_hash === v.content_hash : entry.v.account_id === v.account_id && entry.v.source_key === v.source_key));
   const same = candidates.filter((entry) => table === "collection_sources" || !!v.content_hash && entry.v.content_hash === v.content_hash).map((entry) => entry.id);
   const canonical = same.length > 1 ? mergeIds(store, table, same) : canonicalPk(store.sqlite, table, pk);
   if (table === "atlas_items") {
@@ -232,11 +232,24 @@ function applyUpsert(store: BridgeStore, record: BridgeLogRecord, body: BridgeUp
     }
   }
   if (existing && compareClock(headerClock(header), clockOf(existing)) <= 0) {
-    if (compareClock(headerClock(header), clockOf(existing)) === 0) store.sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?) WHERE table_name=? AND pk=? AND register=?").run(record.seq, body.table, body.pk, body.register);
+    let restoredManifest = false;
+    if ((body.table === "atlas_items" || body.table === "collection_sources") && existing.blob_refs_json === null && body.blobRefs.length) {
+      // A retained file can outlive an account binding without ever having been
+      // downloaded here. Recover this account's authenticated manifest without
+      // moving the newer local metadata clock or reading the old source path.
+      const local = portableValues(store, body.table, existing).values;
+      if (typeof local.content_hash === "string" && local.content_hash === body.values.content_hash &&
+          local.byte_size === body.values.byte_size && local.storage_key === body.values.storage_key) {
+        store.sqlite.prepare("UPDATE bridge_row_clock SET blob_refs_json=? WHERE table_name=? AND pk=? AND register=?")
+          .run(JSON.stringify(body.blobRefs), body.table, body.pk, body.register);
+        restoredManifest = true;
+      }
+    }
+    if (compareClock(headerClock(header), clockOf(existing)) === 0) store.sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?),dirty=0 WHERE table_name=? AND pk=? AND register=?").run(record.seq, body.table, body.pk, body.register);
     // A full pull can repair a missing physical projection without overwriting a newer clock.
     if (!readRow(store, body.table, body.pk, header.owner ?? header.origin))
       return materialize(store, body.table, canonicalPk(store.sqlite, body.table, body.pk), header.owner ?? header.origin);
-    return "ignored";
+    return restoredManifest ? "applied" : "ignored";
   }
   const candidate: RowClock = { table_name: body.table, pk: body.pk, register: body.register, physical_ms: header.hlc.physicalMs, counter: header.hlc.counter, origin: header.origin, synced_seq: record.seq, values_json: JSON.stringify(body.values), refs_json: JSON.stringify(body.refs), blob_refs_json: JSON.stringify(body.blobRefs), portable: 1 };
   const refs = resolveReferences(store, body.table, body.pk, candidate, header.owner ?? header.origin, false);
@@ -416,5 +429,17 @@ export function applyDeletedAck(store: BridgeStore, sent: PreparedRecord, tombst
   const { header, body } = verifyEnvelope(store, tombstone), expected = sent.envelope.header;
   if (header.op !== "delete" || header.rowKey !== expected.rowKey && !(expected.runId && body.table === "runs" && body.pk === expected.runId && header.runId === expected.runId && header.owner === expected.owner))
     throw new Error("Bridge deleted ACK does not identify the sent row or its run");
-  return applyBridgeBatch(store, header.stream, [{ seq: 0, envelope: tombstone }]);
+  const changes = applyBridgeBatch(store, header.stream, [{ seq: 0, envelope: tombstone }]);
+  if (body.table === "runs" && header.runId === body.pk) {
+    store.sqlite.transaction(() => {
+      // The source may already have cascaded the SQL root while it was Local only.
+      // A closed run acknowledges all its queued descendants, even without a row to visit.
+      store.sqlite.prepare(`UPDATE bridge_row_clock SET dirty=0 WHERE EXISTS(SELECT 1 FROM bridge_outbox o
+        WHERE o.run_id=? AND o.table_name=bridge_row_clock.table_name AND o.pk=bridge_row_clock.pk)` ).run(body.pk);
+      store.sqlite.prepare(`UPDATE bridge_row_clock SET dirty=0 WHERE EXISTS(SELECT 1 FROM bridge_tombstones t
+        WHERE t.run_id=? AND t.table_name=bridge_row_clock.table_name AND t.pk=bridge_row_clock.pk)`).run(body.pk);
+      store.sqlite.prepare("DELETE FROM bridge_outbox WHERE run_id=?").run(body.pk);
+    })();
+  }
+  return changes;
 }

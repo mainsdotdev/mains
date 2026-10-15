@@ -1,11 +1,10 @@
-# Bridge local hub
+# Bridge hub
 
-B3–B5's Cloudflare Worker, account-scoped SQLite Durable Object and private R2 bucket. Desktop and
+B3–B8's Cloudflare Worker, account-scoped SQLite Durable Object, D1 identity store and private R2 bucket. Desktop and
 standalone backends seal records before sending them over WebSocket. The hub
 stores routing headers and ciphertext; it never receives an account key or a
 plaintext record body. Desktop and standalone startup activate background sync
-only when an explicit development configuration exists. Without it, today's
-local execution and iPad remote control continue unchanged.
+after account sign-in and backend approval, or with explicit development configuration. Without either, local execution and iPad remote control continue unchanged.
 
 ## Try the existing UI quickly
 
@@ -77,8 +76,151 @@ npm run dev:token -- --account demo --backend B
 Clients send the token in `Authorization: Bearer <token>` during the WebSocket
 handshake. These development JWTs bind `accountId` and backend id, expire after
 24 hours, and are accepted only with `BRIDGE_DEV_AUTH=true` and a configured
-signing secret. App sign-in, registration, device approval, key persistence and
-recovery are B7. The dev token and the E2EE account key are separate credentials.
+signing secret. These are development credentials only; normal sign-in and approval are described below. The dev token and the E2EE account key are separate credentials.
+
+## Sign-in and key management (B7)
+
+Settings › **Bridge** (`/settings?section=bridge`) signs the selected backend into
+an account. Desktop opens the system browser and receives a one-use, 60-second
+authorization code on an ephemeral loopback listener, bound with state and PKCE
+S256. A Node backend uses Better Auth’s device authorization flow: the browser
+shows the account login, then explicitly authorizes the displayed sign-in code.
+GitHub and verified email magic links use the same Better Auth account. Signing
+in does not grant an existing account’s decryption key.
+
+The first backend creates the random 256-bit account key. It uploads an X25519
+wrap for its own public key plus an Argon2id recovery wrap. The recovery code
+has 160 random bits, is shown once, and is never sent to the hub. Save it before
+closing Mains; if the setup code was not saved, an approved backend can generate
+a replacement in Settings. Replacing it invalidates the previous recovery code.
+The fixed recovery KDF uses 64 MiB, three iterations and one lane.
+
+A later backend remains **pending** with no log or R2 access until either:
+
+- An approved backend compares the six-character public-key code on both screens
+  and approves that exact request and public key. Desktop also posts an OS
+  notification when a request arrives.
+- The new backend decrypts the recovery wrap locally and proves possession of
+  the recovered key using a fresh, signed challenge. The proof binds the account,
+  backend, public key and exact device wrap; it cannot be replayed or transferred
+  to another recipient. Other backends can be offline.
+
+The hub stores verified-account metadata, hashed 90-day backend credentials,
+public keys, encrypted key wraps and expiring approval requests. Backends renew
+credentials before expiry. Private device keys, account keys and backend tokens
+live only in an encrypted `bridge/identity.json` (mode 0600). Electron uses
+`safeStorage`; standalone uses its protected `server-secret.key` storage adapter.
+The host adapters’ formats are intentionally incompatible and fail closed; use
+separate profiles for simultaneous Desktop/Server backends. Public status and
+notifications contain no credentials. Recovery values bypass Redux and durable
+command receipts.
+
+Revocation closes open Bridge sockets and blocks later frames and existing blob
+URLs. It cannot remove plaintext already downloaded by the revoked backend.
+Account-key rotation is a later feature. Sign-out revokes this backend before
+removing its keys and replicas; it therefore needs the hub reachable (an already
+revoked credential can be cleared offline). Own chats and account objects stay
+local by default. The Settings confirmation can also remove synced account
+objects. Existing paired-phone remote control and backend switching keep their
+current permissions; paired phones cannot manage account keys.
+
+With a server already running, use its owner connection instead of opening a
+second SQLite owner:
+
+```sh
+mains bridge login --hub https://bridge.example.com --data-dir /path/to/profile
+mains bridge status --data-dir /path/to/profile
+mains bridge approve <backend-id> --code <matching-six-character-code>
+mains bridge recover
+mains bridge revoke <backend-id>
+mains bridge recovery --replace
+mains bridge logout
+```
+
+`recover` reads the secret from stdin with terminal echo suppressed; do not pass
+it as an argument. All commands accept `--data-dir`, `--server-url`, and `--token`
+like the existing server admin commands. `login` prints the verification URL and
+sign-in code, then the public-key comparison code if approval is still required.
+Settings in a browser manages the backend that browser is connected to; Safari
+never receives a private account key or stores an independent SQLite database.
+
+### Configure an authentication hub
+
+The development demo remains available without an identity service. For normal
+sign-in, create a Cloudflare D1 database and private R2 bucket, put the returned
+D1 id into `wrangler.jsonc`, then apply both migrations:
+
+```sh
+npx wrangler d1 create mains-bridge-auth
+npx wrangler d1 migrations apply AUTH_DB --local
+# Use --remote for the deployed D1 database.
+npx wrangler secret put BETTER_AUTH_SECRET
+npx wrangler secret put GITHUB_CLIENT_SECRET
+npx wrangler secret put RESEND_API_KEY
+```
+
+Set `BRIDGE_AUTH_URL` to the HTTPS hub origin and `GITHUB_CLIENT_ID` in Worker
+vars (or use `.dev.vars` locally). Configure the GitHub OAuth callback as
+`<BRIDGE_AUTH_URL>/api/auth/callback/github`. Set `MAIL_FROM` to a verified sending
+address for email links. `BETTER_AUTH_SECRET` must be at least 32 random
+characters. The mail implementation uses Resend, or an `AUTH_MAILER` service
+binding; local tests replace only delivery and consume real Better Auth links.
+Choose the OAuth and mail methods you configure; unavailable buttons are hidden.
+Disable `BRIDGE_DEV_AUTH` on a normal hub. No production deployment or provider
+credentials are required for the automated tests.
+
+`npm test` includes approval/recovery isolation, challenge replay and tampering,
+bootstrap races, revoked initializer re-enrollment, PKCE/state/redirect checks,
+callback cancellation, credential renewal and immediate socket/R2 revocation.
+`npm run test:hosts` also signs two real backend processes into Better Auth,
+checks pending isolation, approves B on A, restarts B with its saved encrypted
+identity, revokes B, and joins B by recovery with A offline. These fixtures use
+real Worker/D1/DO/R2 runtimes and disposable profiles. No external email is sent.
+
+## Retention, project scope and quotas (B8)
+
+The first-sign-in checkbox takes its history boundary when sign-in starts.
+Leaving it unchecked keeps existing chats and Atlas items local; items created
+while approval is pending can sync after approval. **Sync existing history**
+adds the excluded history later. Manual project exclusions remain in force.
+
+Settings › Bridge lists this backend’s projects. **Local only** stops future
+uploads for that project’s workspaces, chats and children, including already
+queued changes. Existing copies on other backends remain there. Turning it off
+queues private edits and deletions with their original clocks. Scope choices
+persist through restarts and account re-entry.
+
+Sign-out preserves own chats and shared account objects by default. Already
+opened Atlas/Collection files become ordinary local files before the download
+cache and keys are removed. Files never downloaded still require signing back
+in. The optional synced-object cleanup keeps unsent edits, Page revisions and
+their file dependencies. A durable logout journal finishes interrupted cleanup
+after restart; a failed revocation pauses sync until sign-out is retried. Edits
+made while signed out are tracked locally and queued on same-account re-entry.
+Native sign-in/sign-out also disables automatic activation of old development
+configuration, so a stale dev file cannot reconnect after logout.
+
+The default operator policy is **1 GiB per account**, **50 MiB per file** and
+**600 writes per backend per minute**. Set `BRIDGE_STORAGE_LIMIT_BYTES` and
+`BRIDGE_WRITES_PER_MINUTE` to change defaults. D1 migration `0003_bridge_quotas`
+adds optional `bridge_account_quotas` overrides (`account_id`, `plan`,
+`storage_limit_bytes`, `writes_per_minute`). These are operator-managed limits;
+there is no billing integration. Public `/v1/quota`, Settings and CLI status
+report usage without exposing keys or content.
+
+Storage counts current encrypted registers, permanent tombstones, stored R2
+chunks and unexpired upload reservations. Retried/duplicate chunks count once.
+Expired reservations reconcile R2 before releasing space, including a crash
+between a PUT and its receipt. Stored chunks remain charged until a later blob
+retention/garbage-collection feature; deleting a file’s metadata does not yet
+reclaim those bytes. Record replacements and deletes reclaim their superseded
+logical register bytes. Reads and tombstones remain available at quota/rate
+limits. Failed writes stay in the local outbox and retry after capacity returns.
+
+For headless management, use `mains bridge projects`,
+`mains bridge local-only <project-id> --on|--off`,
+`mains bridge sync-history`, and `mains bridge sync`. `mains bridge status`
+includes sync health, queued changes and account usage.
 
 ## Test two independent backends
 
@@ -93,7 +235,7 @@ npm run lint
 npm run build
 ```
 
-`test:replication` runs all 53 core integration scenarios against the actual Worker
+`test:replication` runs all 58 core integration scenarios against the actual Worker
 on a real HTTP/WebSocket listener, with the sealing codec and independently
 migrated SQLite databases. Seven additional network tests check actual Durable
 Object SQL for ciphertext, persistence across restart, permanent tombstones,
@@ -200,15 +342,14 @@ It authenticates the backend and issues ten-minute, account/object/chunk/op
 capabilities. These are Worker-signed URLs streaming the private `BLOBS` R2
 binding, rather than S3 SigV4 URLs. Local development needs no S3 credentials
 or deployed bucket. Chunks are immutable; filenames, MIME and plaintext hashes
-never reach the hub. Production identity/key ceremonies remain B7.
+never reach the hub. Production identity is checked again when each capability is used, so revoking a backend invalidates previously issued URLs too.
 
 Attachment membership is checked before resolving bytes. Inline artifact blobs
 are externalized, and explicit file artifacts and selected turn outputs use the
 same transport. Turn-end output snapshots stay in `bridge/uploads` until ACK;
 the selected-output manifest lives on its existing reply anchor. Replica views
 rebuild that projection and open cached images/documents without touching A's
-paths. Collection source files also resolve lazily. Atlas's file adapter is
-tested behind the existing gate; normal Atlas replication remains disabled.
+paths. Collection source files also resolve lazily. B6 enables Atlas files, Pages and revision graphs for signed-in backends and explicit development configurations.
 Migration 0033 upgrades already acknowledged B4 file records with new clocks.
 
 `npm run test:replication` covers real workerd/R2 plus independent SQLite stores,

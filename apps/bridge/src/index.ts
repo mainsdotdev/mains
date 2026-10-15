@@ -1,17 +1,37 @@
 import { DurableObject } from "cloudflare:workers";
 import type { BridgeRpcRequest, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES, parseBridgeRpcRequest } from "@mains/contracts/bridge-wire";
-import { authenticate, type BridgeIdentity, type DevAuthEnv } from "./auth";
+import { authenticate, identityIsActive, type BridgeIdentity, type DevAuthEnv } from "./auth";
+import { handleSignIn } from "./sign-in";
+import { handleDevices } from "./devices";
+import type { BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import { createHubStore } from "./store";
 import { handleBlobs, type BlobEnv } from "./blobs";
+import { createBlobQuota, BridgeQuotaError, type BlobReservation, type QuotaEnv } from "./quota";
 
-interface Env extends DevAuthEnv, BlobEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
+interface Env extends DevAuthEnv, BlobEnv, QuotaEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") return Response.json({ ok: true, protocol: 1 });
-    if (url.pathname.startsWith("/v1/blobs/")) return handleBlobs(request, env);
+    if (env.AUTH_DB && (url.pathname.startsWith("/api/auth/") || ["/sign-in", "/device", "/authorize"].includes(url.pathname) || url.pathname.startsWith("/v1/auth/"))) {
+      const response = await handleSignIn(request, env); if (response) return response;
+    }
+    if (url.pathname.startsWith("/v1/backends") || url.pathname.startsWith("/v1/keys/") || url.pathname.startsWith("/v1/approvals"))
+      return handleDevices(request, env, {
+        async approval(account, entry) { await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).notifyApproval(entry); },
+        async revoked(account, backend) { await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).revoke(backend); },
+      });
+    if (url.pathname.startsWith("/v1/blobs/")) return handleBlobs(request, env, {
+      reserve: (identity, entries, expires) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).reserveBlobs(identity, entries, expires),
+      put: (identity, key, expires, bytes) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).putBlob(identity, key, expires, bytes),
+    });
+    if (url.pathname === "/v1/quota" && request.method === "GET") {
+      const identity = await authenticate(request, env);
+      if (!identity) return new Response("Unauthorized", { status: 401 });
+      return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).getQuota(identity), { headers: { "Cache-Control": "no-store" } });
+    }
     if (url.pathname !== "/v1/log") return new Response("Not found", { status: 404 });
     // This development auth is deliberately unavailable without explicit local configuration.
     const identity = await authenticate(request, env);
@@ -26,7 +46,27 @@ export default {
 /** Cloudflare requires a class at this runtime boundary; storage/domain helpers remain functions. */
 export class AccountHub extends DurableObject<Env> {
   private store: ReturnType<typeof createHubStore>;
-  constructor(ctx: DurableObjectState, env: Env) { super(ctx, env); this.store = createHubStore(ctx.storage); }
+  private quota: ReturnType<typeof createBlobQuota>;
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env); this.store = createHubStore(ctx.storage); this.quota = createBlobQuota(ctx.storage, env, () => this.store.recordBytes());
+  }
+  async getQuota(identity: BridgeIdentity) { return this.ctx.blockConcurrencyWhile(() => this.quota.status(identity.accountId)); }
+  async reserveBlobs(identity: BridgeIdentity, entries: BlobReservation[], expires: number) {
+    return this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        const limit = (await this.quota.status(identity.accountId)).writesPerMinute;
+        if (!this.store.takeWrite(identity.backendId, limit)) return { status: 429, error: "Bridge write rate limit reached" };
+        await this.quota.reserve(identity, entries, expires);
+        return { status: 200, error: null };
+      } catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
+    });
+  }
+  async putBlob(identity: BridgeIdentity, key: string, expires: number, bytes: Uint8Array) {
+    return this.ctx.blockConcurrencyWhile(async () => {
+      try { await this.quota.put(identity, key, expires, bytes); return { status: 204, error: null }; }
+      catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
+    });
+  }
   async fetch(request: Request): Promise<Response> {
     const identity = JSON.parse(request.headers.get("X-Bridge-Identity")!) as BridgeIdentity;
     const pair = new WebSocketPair();
@@ -42,7 +82,7 @@ export class AccountHub extends DurableObject<Env> {
   }
   async webSocketMessage(socket: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const session = this.session(socket);
-    if (session.expiresAt <= Date.now()) { socket.close(1008, "Token expired"); return; }
+    if (!await identityIsActive(session, this.env)) { socket.close(1008, "Backend access expired or was revoked"); return; }
     if (typeof data !== "string" || data.length > BRIDGE_MAX_FRAME_BYTES) { socket.close(1009, "Invalid message size"); return; }
     let request: BridgeRpcRequest;
     try { request = parseBridgeRpcRequest(data); }
@@ -57,7 +97,10 @@ export class AccountHub extends DurableObject<Env> {
           this.broadcast({ type: "presence", backendId: session.backendId, online: true, lastSeen: new Date().toISOString(), label: message.label.trim(), platform: message.platform });
           response = { type: "identified", backendId: session.backendId }; break;
         case "push": {
-          const { results, changed } = this.store.push(session.backendId, message.stream, message.records);
+          const { results, changed } = await this.ctx.blockConcurrencyWhile(async () => {
+            const quota = await this.quota.status(session.accountId);
+            return this.store.push(session.backendId, message.stream, message.records, { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes });
+          });
           response = { type: "ack", stream: message.stream, results };
           if (changed.length) {
             this.broadcast({ type: "changed", stream: message.stream }, message.stream);
@@ -85,6 +128,10 @@ export class AccountHub extends DurableObject<Env> {
   }
   webSocketError(socket: WebSocket): void { this.webSocketClose(socket, 1011, "Connection error"); }
   alarm(): void { this.store.compact(); }
+  async notifyApproval(request: BridgeApprovalRequest): Promise<void> { this.broadcast({ type: "approval", ...request }); }
+  async revoke(backendId: string): Promise<void> {
+    for (const socket of this.sockets()) if (this.session(socket).backendId === backendId) socket.close(1008, "Backend access revoked");
+  }
   private session(socket: WebSocket): Session { return socket.deserializeAttachment() as Session; }
   private sockets() { return this.ctx.getWebSockets().filter((socket) => socket.readyState === WebSocket.OPEN); }
   private broadcast(message: BridgeServerMessage, stream?: BridgeStream) {

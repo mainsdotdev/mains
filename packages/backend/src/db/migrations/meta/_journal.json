@@ -253,6 +253,13 @@
       "when": 1792085422297,
       "tag": "0035_atlas_recovery_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1792090251073,
+      "tag": "0036_bridge_product_state",
+      "breakpoints": true
     }
   ]
 }

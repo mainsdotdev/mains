@@ -182,6 +182,7 @@ import {
 } from "./modules/remoteBackends";
 import { registerBackendIpc, unregisterBackendIpc } from "@mains/backend/modules/backend";
 import { bridgeService, registerBridgeIpc, unregisterBridgeIpc } from "@mains/backend/modules/bridge";
+import { startBridgeNotifications } from "./modules/bridge/bridge-notifications";
 import { registerSearchIpc, unregisterSearchIpc } from "@mains/backend/modules/search";
 import { CHANNELS } from "@mains/contracts/channels";
 import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime";
@@ -210,6 +211,7 @@ function finishPackageSmoke(error?: unknown): void {
 configureBackendRuntime(createElectronBackendRuntime());
 configureIpcMainAdapter(ipcMain);
 configureRunNotificationSink(createElectronRunNotificationSink());
+let stopBridgeNotifications: (() => void) | undefined;
 
 // ─────────────────────────────────────────────────────────────
 // Installed workspace app detection (macOS and Windows)
@@ -905,6 +907,7 @@ async function initializeApp() {
     registerRemoteBackendsIpc();
     registerBackendIpc();
     registerBridgeIpc();
+    stopBridgeNotifications = startBridgeNotifications();
     registerLocalBackendIpc();
     registerSearchIpc();
     await bridgeService.start();
@@ -1226,6 +1229,7 @@ async function cleanupApp() {
     sshService.closeAllTunnels();
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
+    stopBridgeNotifications?.();
     await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)

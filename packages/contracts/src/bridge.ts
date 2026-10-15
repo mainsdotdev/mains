@@ -23,4 +23,12 @@ export interface BridgeStatus {
   pendingRecords: number;
   backends: BridgeBackendInfo[];
   runs: BridgeRunState[];
+  quota?: BridgeQuota | null;
+}
+export interface BridgeQuota {
+  plan: string; limitBytes: number; usedBytes: number; recordBytes: number; blobBytes: number; reservedBytes: number;
+  fileLimitBytes: number; writesPerMinute: number;
+}
+export interface BridgeProjectScope {
+  id: string; name: string; localOnly: boolean; workspaces: number; runs: number;
 }

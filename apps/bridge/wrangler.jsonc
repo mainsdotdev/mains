@@ -3,6 +3,8 @@
   "name": "mains-bridge-local",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [{ "binding": "AUTH_DB", "database_name": "mains-bridge-auth", "database_id": "replace-with-d1-database-id", "migrations_dir": "migrations" }],
   "workers_dev": false,
   "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "mains-bridge-blobs" }],
   "durable_objects": {

@@ -63,7 +63,7 @@ export function parseBridgeServerFrame(text: string): BridgeRpcResponse | Bridge
   if (new TextEncoder().encode(text).length > BRIDGE_MAX_FRAME_BYTES) throw new Error("Bridge message is too large");
   const frame: unknown = JSON.parse(text);
   if (!object(frame)) throw new Error("Invalid Bridge response");
-  if ("requestId" in frame) {
+  if ("requestId" in frame && frame.type !== "approval") {
     if (!identifier(frame.requestId)) throw new Error("Invalid Bridge response id");
     if ("error" in frame) {
       if (!object(frame.error) || typeof frame.error.code !== "string" || !frame.error.code || frame.error.code.length > 128 ||
@@ -73,7 +73,7 @@ export function parseBridgeServerFrame(text: string): BridgeRpcResponse | Bridge
     validateServerMessage(frame.message);
   } else {
     validateServerMessage(frame);
-    if (frame.type !== "presence" && frame.type !== "changed") throw new Error("Uncorrelated Bridge response");
+    if (frame.type !== "presence" && frame.type !== "changed" && frame.type !== "approval") throw new Error("Uncorrelated Bridge response");
   }
   return frame as unknown as BridgeRpcResponse | BridgeServerMessage;
 }
@@ -90,7 +90,7 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
         else if ("deleted" in result) {
           validateEncryptedBridgeEnvelope(result.deleted);
           if (result.deleted.header.op !== "delete") throw new Error("Invalid Bridge deleted ACK");
-        } else if (result.error !== "notOwner") throw new Error("Invalid Bridge ACK error");
+        } else if (!["notOwner", "quotaExceeded", "rateLimited"].includes(result.error)) throw new Error("Invalid Bridge ACK error");
       }
       break;
     case "records":
@@ -106,6 +106,12 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
       break;
     case "compacted": break;
     case "changed": if (!isBridgeStream(message.stream)) throw new Error("Invalid Bridge change hint"); break;
+    case "approval":
+      if (!identifier(message.requestId) || !identifier(message.backendId) || typeof message.publicKey !== "string" ||
+        !/^[A-Za-z0-9_-]{43}$/.test(message.publicKey) || typeof message.label !== "string" || !message.label || message.label.length > 128 ||
+        typeof message.platform !== "string" || !message.platform || message.platform.length > 32 || typeof message.code !== "string" || !/^[A-HJ-NP-Z2-9]{6}$/.test(message.code) ||
+        typeof message.expiresAt !== "string" || !Number.isFinite(Date.parse(message.expiresAt))) throw new Error("Invalid Bridge approval");
+      break;
     case "presence":
       if (!identifier(message.backendId) || typeof message.online !== "boolean" || typeof message.lastSeen !== "string" ||
           !Number.isFinite(Date.parse(message.lastSeen)) || message.label !== undefined && (typeof message.label !== "string" || !message.label.trim() || message.label.length > 128) ||

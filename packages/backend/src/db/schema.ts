@@ -1623,6 +1623,13 @@ export const bridgeConfig = sqliteTable("bridge_config", {
   backfillPk: text("backfill_pk"),
   backfillDone: integer("backfill_done", { mode: "boolean" }).notNull().default(false),
   accountFingerprint: text("account_fingerprint"),
+  trackingEnabled: integer("tracking_enabled", { mode: "boolean" }).notNull().default(false),
+  bridgeAccountId: text("account_id"), hubOrigin: text("hub_origin"),
+  enrollmentStaging: integer("enrollment_staging", { mode: "boolean" }).notNull().default(false),
+  devDisabled: integer("dev_disabled", { mode: "boolean" }).notNull().default(false),
+  logoutPending: integer("logout_pending", { mode: "boolean" }).notNull().default(false),
+  logoutRevoked: integer("logout_revoked", { mode: "boolean" }).notNull().default(false),
+  logoutRemoveSynced: integer("logout_remove_synced", { mode: "boolean" }).notNull().default(false),
 }, (t) => [check("check_bridge_config_singleton", sql`${t.id} = 1`)]);
 
 /** Last observed device labels/presence survive restarts; online is never persisted. */
@@ -1652,6 +1659,7 @@ export const bridgeRowClock = sqliteTable("bridge_row_clock", {
   tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(),
   physicalMs: integer("physical_ms").notNull(), counter: integer("counter").notNull(), origin: text("origin").notNull(),
   syncedSeq: integer("synced_seq"),
+  dirty: integer("dirty", { mode: "boolean" }).notNull().default(false), projectId: text("project_id"),
   // Latest register image also retains losing aliases' values for deterministic projection.
   valuesJson: text("values_json").notNull(), refsJson: text("refs_json").notNull().default("{}"),
   // NULL means this local generation has not prepared its file manifest yet.
@@ -1685,8 +1693,10 @@ export const bridgeTombstones = sqliteTable("bridge_tombstones", {
   tableName: text("table_name").notNull(), pk: text("pk").notNull(),
   // Locally captured tombstones are sealed when the outbox is read; remote ones stay whole.
   envelope: text("envelope"),
+  stream: text("stream").notNull().default("account"), owner: text("owner"), runId: text("run_id"), projectId: text("project_id"),
 }, (t) => [primaryKey({ columns: [t.tableName, t.pk] })]);
 
 export const bridgeExclusions = sqliteTable("bridge_exclusions", {
   tableName: text("table_name").notNull(), pk: text("pk").notNull(),
+  reason: text("reason").notNull().default("manual"),
 }, (t) => [primaryKey({ columns: [t.tableName, t.pk] })]);

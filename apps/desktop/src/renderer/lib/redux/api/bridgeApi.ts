@@ -1,10 +1,23 @@
-import type { BridgeStatus } from "@mains/contracts/bridge";
+import type { BridgeStatus, BridgeProjectScope } from "@mains/contracts/bridge";
+import type { BridgeAuthStatus } from "@mains/contracts/bridge-auth";
 import { CHANNELS } from "@mains/contracts/channels";
 import { subscribeEvent } from "@/lib/transport";
 import { baseApi } from "./baseApi";
 
 export const bridgeApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    getBridgeProjectScopes: builder.query<BridgeProjectScope[], void>({
+      query: () => ({ handler: CHANNELS.bridge.getProjectScopes }), providesTags: ["Bridge", "Projects"],
+    }),
+    getBridgeAuthStatus: builder.query<BridgeAuthStatus, void>({
+      query: () => ({ handler: CHANNELS.bridge.getAuthStatus }),
+      providesTags: ["Bridge"],
+      async onCacheEntryAdded(_arg, { dispatch, cacheEntryRemoved }) {
+        const status = subscribeEvent(CHANNELS.bridge.statusChanged, () => { dispatch(baseApi.util.invalidateTags(["Bridge"])); });
+        const approval = subscribeEvent(CHANNELS.bridge.deviceApprovalRequested, () => { dispatch(baseApi.util.invalidateTags(["Bridge"])); });
+        try { await cacheEntryRemoved; } finally { status(); approval(); }
+      },
+    }),
     getBridgeStatus: builder.query<BridgeStatus, void>({
       query: () => ({ handler: CHANNELS.bridge.getStatus }),
       providesTags: ["Bridge"],
@@ -29,4 +42,4 @@ export const bridgeApi = baseApi.injectEndpoints({
     }),
   }),
 });
-export const { useGetBridgeStatusQuery, useSyncBridgeNowMutation } = bridgeApi;
+export const { useGetBridgeAuthStatusQuery, useGetBridgeStatusQuery, useGetBridgeProjectScopesQuery, useSyncBridgeNowMutation } = bridgeApi;

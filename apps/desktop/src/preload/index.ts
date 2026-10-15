@@ -1,3 +1,4 @@
+import type { BridgeSignInInput, BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
 import type { GoalMutationOrigin, GoalSetParams } from "@mains/contracts/provider-goals";
@@ -246,8 +247,22 @@ const api = {
   },
   // Encrypted at-rest storage for direct-mode backend owner tokens (local-only)
   bridge: {
+    getAuthStatus: () => ipcRenderer.invoke(CHANNELS.bridge.getAuthStatus),
+    signIn: (input: BridgeSignInInput) => ipcRenderer.invoke(CHANNELS.bridge.signIn, input),
+    signOut: (removeAccountObjects = false) => ipcRenderer.invoke(CHANNELS.bridge.signOut, removeAccountObjects),
+    refreshAuth: () => ipcRenderer.invoke(CHANNELS.bridge.refreshAuth),
+    approveBackend: (input: Pick<BridgeApprovalRequest, "requestId" | "backendId" | "publicKey" | "code">) => ipcRenderer.invoke(CHANNELS.bridge.approveBackend, input),
+    rejectBackend: (requestId: string) => ipcRenderer.invoke(CHANNELS.bridge.rejectBackend, requestId),
+    requestApproval: () => ipcRenderer.invoke(CHANNELS.bridge.requestApproval),
+    revokeBackend: (backendId: string) => ipcRenderer.invoke(CHANNELS.bridge.revokeBackend, backendId),
+    enterRecoveryCode: (code: string) => ipcRenderer.invoke(CHANNELS.bridge.enterRecoveryCode, code),
+    takeRecoveryCode: () => ipcRenderer.invoke(CHANNELS.bridge.takeRecoveryCode),
+    regenerateRecoveryCode: () => ipcRenderer.invoke(CHANNELS.bridge.regenerateRecoveryCode),
     getStatus: () => ipcRenderer.invoke(CHANNELS.bridge.getStatus),
     syncNow: () => ipcRenderer.invoke(CHANNELS.bridge.syncNow),
+    getProjectScopes: () => ipcRenderer.invoke(CHANNELS.bridge.getProjectScopes),
+    setProjectLocalOnly: (projectId: string, localOnly: boolean) => ipcRenderer.invoke(CHANNELS.bridge.setProjectLocalOnly, projectId, localOnly),
+    includeLocalHistory: () => ipcRenderer.invoke(CHANNELS.bridge.includeLocalHistory),
     watchRun: (runId: string, watcherId: string) => ipcRenderer.invoke(CHANNELS.bridge.watchRun, runId, watcherId),
     unwatchRun: (watcherId: string) => ipcRenderer.invoke(CHANNELS.bridge.unwatchRun, watcherId),
   },

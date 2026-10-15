@@ -104,7 +104,8 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     const token = typeof options.token === "function" ? await options.token() : options.token;
     const response = await request(new URL("/v1/blobs/presign", origin).toString(), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ op, blobs: [{ blobId: ref.blobId, size: ref.size }] }) });
-    if (!response.ok) throw new Error(`Bridge blob authorization failed (${response.status})`);
+    if (!response.ok) throw new Error(response.status === 413 ? "Bridge storage quota exceeded; local files remain queued" :
+      response.status === 429 ? "Bridge write rate limit reached; local files remain queued" : `Bridge blob authorization failed (${response.status})`);
     const body = await response.json() as BridgeBlobPresignResult;
     const blob = body.blobs?.[0];
     if (body.blobs?.length !== 1 || blob?.blobId !== ref.blobId || blob.size !== ref.size || !Array.isArray(blob.chunks) || blob.chunks.length !== bridgeBlobChunkCount(ref.size))
@@ -150,6 +151,7 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     return path;
   }
   const api = {
+    cached(ref: BridgeBlobRef): Promise<string | undefined> { validateBridgeBlobIdentity(ref); return cached(ref); },
     async isCachedFile(realPath: string): Promise<boolean> {
       const ref = opened.get(realPath); if (!ref) return false;
       try { await directory(); const file = await cached(ref); return !!file && await fs.realpath(file) === realPath; }

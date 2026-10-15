@@ -2,7 +2,7 @@ import type { BridgeEnvelope, BridgeHeader, BridgeStream, BridgeUpsertBody, Brid
 import type { SQLiteInstance } from "../../db/types";
 import { bridgeRecordKeys, type BridgeCodec } from "./bridge.crypto";
 import { BRIDGE_TABLES } from "./bridge.records";
-import { ownerSql, runIdSql, tickSql } from "./bridge.capture";
+import { ownerSql, projectIdSql, runIdSql, tickSql } from "./bridge.capture";
 import { aliasSet, canonicalPk, clockOf, compareClock, definition, getClock, isAtlas, quote, rowWhere, type RowClock, type SqlRow } from "./bridge.sql";
 
 export interface BridgeRecoveryContext {
@@ -56,9 +56,21 @@ export function inScope(store: BridgeStore, table: string, pk: string, seen = ne
   const def = definition(table);
   const row = readRow(store, table, pk);
   if (!row) return true; // Deleted rows still need to publish their tombstone.
+  if (table === "atlas_items" && row.kind === "page") {
+    const files = store.sqlite.prepare("SELECT f.file_id FROM atlas_page_file_refs f JOIN atlas_page_revisions v ON v.id=f.revision_id WHERE v.item_id=?").all(pk) as { file_id: string }[];
+    if (files.some((file) => !inScope(store, "atlas_items", file.file_id, seen))) return false;
+  }
   for (const [column, reference] of Object.entries(def.references)) {
-    if (reference.class !== "required" || row[column] == null || BRIDGE_TABLES[reference.table].idKind === "run-integer") continue;
+    if ((reference.class !== "required" && !(column === "workspace_id" && reference.table === "workspaces")) || row[column] == null || BRIDGE_TABLES[reference.table].idKind === "run-integer") continue;
     if (!inScope(store, reference.table, String(row[column]), seen)) return false;
+  }
+  return true;
+}
+export function outboxInScope(store: BridgeStore, entry: Pick<OutboxEntry, "table_name" | "pk" | "run_id" | "op">): boolean {
+  if (!inScope(store, entry.table_name, entry.pk) || entry.run_id && !inScope(store, "runs", entry.run_id)) return false;
+  if (entry.op === "delete") {
+    const route = store.sqlite.prepare("SELECT project_id FROM bridge_tombstones WHERE table_name=? AND pk=?").get(entry.table_name, entry.pk) as { project_id: string | null } | undefined;
+    if (route?.project_id && store.sqlite.prepare("SELECT 1 FROM bridge_exclusions WHERE table_name='projects' AND pk=?").get(route.project_id)) return false;
   }
   return true;
 }
@@ -117,10 +129,10 @@ export function normalizeCompositeIdentity(store: BridgeStore, table: string, ol
     const winner = bestClock(store, table, pk, register);
     if (!winner) continue;
     const image = portableValues(store, table, winner);
-    store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,blob_refs_json,portable)
-      VALUES(?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
-      origin=excluded.origin,values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1`)
-      .run(table, pk, register, winner.physical_ms, winner.counter, winner.origin, winner.pk === pk ? winner.synced_seq : null, JSON.stringify(image.values), JSON.stringify(image.refs), winner.blob_refs_json);
+    store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,blob_refs_json,portable,dirty,project_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
+      origin=excluded.origin,values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1,dirty=excluded.dirty,project_id=excluded.project_id`)
+      .run(table, pk, register, winner.physical_ms, winner.counter, winner.origin, winner.pk === pk ? winner.synced_seq : null, JSON.stringify(image.values), JSON.stringify(image.refs), winner.blob_refs_json, winner.dirty ?? 0, winner.project_id ?? null);
     const pending = store.sqlite.prepare("SELECT * FROM bridge_outbox WHERE table_name=? AND pk=? AND register=?").get(table, winner.pk, register) as OutboxEntry | undefined;
     for (const member of new Set([...members, pk])) store.sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=?").run(table, member, register);
     if (pending) store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,?,?,?,?,?,?)
@@ -162,30 +174,40 @@ export function captureExisting(store: BridgeStore, table: string, pk: string): 
   if (isAtlas(table) && !store.atlasEnabled) return;
   const def = definition(table), row = readRow(store, table, pk);
   if (!row) return;
-  let owner: string | null = null, runId: string | null = null;
+  let owner: string | null = null, runId: string | null = null, projectId: string | null = null;
   if (def.ownerRoot) {
     // Use the same SQL ownership traversal as the triggers, including routed attachments.
     const where = rowWhere(def, String(physicalPk(store, table, pk, store.backendId)));
-    const route = store.sqlite.prepare(`SELECT ${ownerSql(table, "r")} AS owner, ${runIdSql(table, "r")} AS run_id FROM ${quote(table)} r WHERE ${where.sql}`).get(...where.args) as { owner: string | null; run_id: string | null };
-    owner = route.owner; runId = route.run_id;
+    const route = store.sqlite.prepare(`SELECT ${ownerSql(table, "r")} AS owner, ${runIdSql(table, "r")} AS run_id,${projectIdSql(table, "r")} project_id FROM ${quote(table)} r WHERE ${where.sql}`).get(...where.args) as { owner: string | null; run_id: string | null; project_id: string | null };
+    owner = route.owner; runId = route.run_id; projectId = route.project_id;
     if (owner !== store.backendId) return;
   }
-  if (!inScope(store, table, pk)) return;
+  const publish = !!store.sqlite.prepare("SELECT 1 FROM bridge_config WHERE id=1 AND enabled=1").get() &&
+    inScope(store, table, pk) && (!runId || inScope(store, "runs", runId));
   if (store.sqlite.prepare("SELECT 1 FROM bridge_tombstones WHERE table_name=? AND pk=?").get(table, pk)) return;
   for (const [register, columns] of Object.entries(def.registers)) {
     const existing = getClock(store.sqlite, table, pk, register);
     // Upgrade B4's already acknowledged file metadata with a fresh capture HLC.
     // Receivers must see a new generation, rather than ignore a same-clock manifest.
-    const upgrade = store.filesEnabled && existing && existing.origin === store.backendId && existing.synced_seq !== null && existing.blob_refs_json === null &&
+    const upgrade = store.filesEnabled && existing && !existing.dirty && existing.origin === store.backendId && existing.synced_seq !== null && existing.blob_refs_json === null &&
       def.blobColumns.some((column) => columns.includes(column));
-    if (existing && !upgrade) continue;
+    if (existing && !upgrade) {
+      if (publish && existing.dirty && existing.origin === store.backendId) {
+        store.sqlite.exec("UPDATE bridge_clock SET generation=generation+1 WHERE id=1");
+        store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at)
+          VALUES(?,?,?,'upsert',(SELECT generation FROM bridge_clock WHERE id=1),?,?,?,?)
+          ON CONFLICT(table_name,pk,register) DO NOTHING`).run(table, pk, register, def.stream === "account" ? "account" : `run:${runId}`, owner, runId, existing.physical_ms);
+      }
+      continue;
+    }
     store.sqlite.exec(tickSql);
     const clock = store.sqlite.prepare("SELECT * FROM bridge_clock WHERE id=1").get() as { physical_ms: number; counter: number; generation: number };
     const values = Object.fromEntries(columns.map((col) => [col, col === "blob_data" ? null : row[col]]));
     store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,synced_seq) VALUES(?,?,?,?,?,?,?,?)
       ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,origin=excluded.origin,
         values_json=excluded.values_json,refs_json='{}',blob_refs_json=NULL,portable=0`).run(table, pk, register, clock.physical_ms, clock.counter, store.backendId, JSON.stringify(values), existing?.synced_seq ?? null);
-    store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,'upsert',?,?,?,?,?)
+    store.sqlite.prepare("UPDATE bridge_row_clock SET dirty=1,project_id=? WHERE table_name=? AND pk=? AND register=?").run(projectId, table, pk, register);
+    if (publish) store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,'upsert',?,?,?,?,?)
       ON CONFLICT(table_name,pk,register) DO UPDATE SET op='upsert',generation=excluded.generation,changed_at=excluded.changed_at`)
       .run(table, pk, register, clock.generation, def.stream === "account" ? "account" : `run:${runId}`, owner, runId, clock.physical_ms);
   }

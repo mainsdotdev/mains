@@ -13,12 +13,13 @@
     "dev:demo": "tsx scripts/dev-demo.ts",
     "test": "vitest run",
     "test:replication": "node scripts/test-replication.mjs",
-    "test:hosts": "MAINS_BRIDGE_HOST_TESTS=1 vitest run test/hosts.test.ts",
+    "test:hosts": "MAINS_BRIDGE_HOST_TESTS=1 vitest run test/hosts.test.ts test/auth-hosts.test.ts test/product-hosts.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tools.json",
     "lint": "eslint src/ test/ scripts/"
   },
   "dependencies": {
     "@mains/contracts": "file:../../packages/contracts",
+    "better-auth": "1.7.10",
     "jose": "6.2.12"
   },
   "devDependencies": {
