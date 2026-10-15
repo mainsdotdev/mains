@@ -1,5 +1,6 @@
 import type { BridgeEnvelope, BridgeLogRecord, BridgePushResult, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { compareClock, headerClock } from "./bridge.clock";
+import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
 
 export interface BridgePullPage { records: BridgeLogRecord[]; next: number; hasMore: boolean }
 /** B3's network adapter implements this same seam; no SQLite or codec on the hub. */
@@ -17,6 +18,7 @@ export function createMemoryBridgeHub() {
   const tombstones = new Map<string, BridgeLogRecord>();
   const latest = new Map<string, BridgeLogRecord>();
   const closedRuns = new Map<string, BridgeEnvelope>();
+  const activity = new Map<BridgeStream, number>();
   function state(stream: BridgeStream) {
     let value = streams.get(stream);
     if (!value) { value = { seq: 0, log: [] }; streams.set(stream, value); }
@@ -50,6 +52,7 @@ export function createMemoryBridgeHub() {
             const target = state(stream);
             const record = { seq: ++target.seq, envelope };
             target.log.push(record); latest.set(key, record);
+            if (h.runId) activity.set(`run:${h.runId}`, Date.now());
             if (h.op === "delete") {
               tombstones.set(h.rowKey, record);
               if (h.runId && runRoots.get(h.runId) === h.rowKey) closedRuns.set(h.runId, envelope);
@@ -67,6 +70,7 @@ export function createMemoryBridgeHub() {
       };
     },
     compact() {
+      for (const [key, record] of latest) if (record.envelope.header.retention && (activity.get(record.envelope.header.stream) ?? 0) <= Date.now() - BRIDGE_IDLE_RETENTION_MS) latest.delete(key);
       for (const [stream, target] of streams) {
         target.log = stream !== "account" && closedRuns.has(stream.slice(4)) ? [] : target.log.filter((record) => {
           const h = record.envelope.header;

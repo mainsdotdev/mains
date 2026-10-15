@@ -1,15 +1,17 @@
-import type { BridgeStream } from "@mains/contracts/bridge-protocol";
+import type { BridgeLogRecord, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { SQLiteInstance } from "../../db/types";
 import { emit } from "../../ipc-kit/event-bus";
 import { installBridgeCapture, portablePkSql } from "./bridge.capture";
 import { bridgePassThroughCodec, type BridgeCodec } from "./bridge.crypto";
-import { applyBridgeBatch, applyDeletedAck, type AppliedChange } from "./bridge.applier";
+import { applyBridgeBatch, applyDeletedAck, verifyEnvelope, type AppliedChange } from "./bridge.applier";
 import { definition, getClock, isAtlas, quote, syncedTables } from "./bridge.sql";
 import { captureExisting, outboxInScope, prepareRecord, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
 import type { BridgeTransport } from "./bridge.transport";
 import type { BridgeBlobRecords } from "./bridge.blob-records";
 import { recoverAtlasPage } from "./bridge.atlas";
+import { valueBlobBytes } from "./bridge.value-blobs";
+import { BRIDGE_TABLES } from "./bridge.records";
 
 export interface BridgeEngineOptions {
   sqlite: SQLiteInstance;
@@ -49,7 +51,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   const existing = sqlite.prepare("SELECT backend_id,atlas_enabled FROM bridge_config WHERE id=1").get() as { backend_id: string; atlas_enabled: number } | undefined;
   if (existing && existing.backend_id !== backendId) throw new Error("Bridge database belongs to another backend");
   const store: BridgeStore = { sqlite, backendId, recordKey: Uint8Array.from(options.recordKey), codec: options.codec ?? bridgePassThroughCodec,
-    schemaVersion: options.schemaVersion ?? 2, atlasEnabled: options.experimentalAtlas ?? true,
+    schemaVersion: options.schemaVersion ?? 4, wireSchemaVersion: options.schemaVersion ?? 3, atlasEnabled: options.experimentalAtlas ?? true,
     recover(context) { recoverAtlasPage(context); options.recover?.(context); }, filesEnabled: !!options.blobs };
   sqlite.transaction(() => {
     sqlite.prepare(`INSERT INTO bridge_config(id,backend_id,enabled,tracking_enabled,atlas_enabled) VALUES(1,?,1,1,?)
@@ -113,18 +115,54 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       return { done: true, visited };
     })();
   }
+  async function applyRecords(stream: BridgeStream, records: BridgeLogRecord[], cursor?: number) {
+    const values = new Map<string, string>();
+    for (const record of records) {
+      const { body, header } = verifyEnvelope(store, record.envelope);
+      if (header.stream !== stream) throw new Error("Bridge pull contains a different stream");
+      if (options.blobs && "schemaVersion" in body && body.schemaVersion <= store.schemaVersion && BRIDGE_TABLES[body.table] && BRIDGE_TABLES[body.table].class !== "local") {
+        for (const [key, value] of await options.blobs.values.restore(body, values)) values.set(key, value);
+      }
+    }
+    store.materializedValues = values;
+    try { announce(applyBridgeBatch(store, stream, records, cursor)); }
+    finally { store.materializedValues = undefined; }
+  }
+  async function retryParked() {
+    announce(applyBridgeBatch(store, "account", []));
+    if (!options.blobs) return;
+    let previous = -1;
+    for (;;) {
+      const pending = sqlite.prepare("SELECT stream,seq,envelope FROM bridge_parked ORDER BY seq").all() as { stream: BridgeStream; seq: number; envelope: string }[];
+      if (!pending.length || pending.length === previous) return;
+      previous = pending.length;
+      for (const entry of pending) {
+        const record = { seq: entry.seq, envelope: JSON.parse(entry.envelope) }, { body } = verifyEnvelope(store, record.envelope);
+        if ("schemaVersion" in body && body.schemaVersion <= store.schemaVersion && valueBlobBytes(body)) await applyRecords(entry.stream, [record]);
+      }
+    }
+  }
   async function pull(stream: BridgeStream, full: boolean, limit: number): Promise<number> {
     validateLimit(limit);
     let after = full ? 0 : (sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream=?").get(stream) as { seq: number } | undefined)?.seq ?? 0;
-    let count = 0;
+    let count = 0, requestLimit = limit;
     for (;;) {
-      const page = await transport.pull(stream, after, limit);
-      if (!Number.isSafeInteger(page.next) || page.next < after || page.records.some((record, index) =>
+      const page = await transport.pull(stream, after, requestLimit);
+      if (!Number.isSafeInteger(page.next) || page.next < after || page.records.length > requestLimit || page.records.some((record, index) =>
           !Number.isSafeInteger(record.seq) || record.seq <= (index ? page.records[index - 1].seq : after) || record.seq > page.next) || page.hasMore && page.next === after)
         throw new Error("Invalid Bridge pull page");
-      announce(applyBridgeBatch(store, stream, page.records, page.next));
+      // Authenticate the entire page before downloading bytes or mutating SQL.
+      let restoredBytes = 0;
+      for (const record of page.records) {
+        const { body, header } = verifyEnvelope(store, record.envelope);
+        if (header.stream !== stream) throw new Error("Bridge pull contains a different stream");
+        if ("schemaVersion" in body && body.schemaVersion <= store.schemaVersion) restoredBytes += valueBlobBytes(body);
+      }
+      // A register is bounded to 50 MiB; avoid multiplying that by a large page.
+      if (options.blobs && restoredBytes > 16 * 1024 * 1024 && page.records.length > 1) { requestLimit = 1; continue; }
+      await applyRecords(stream, page.records, page.next);
       count += page.records.length; after = page.next;
-      if (!page.hasMore) return count;
+      if (!page.hasMore) { await retryParked(); return count; }
     }
   }
   async function push(stream: BridgeStream, limit: number, deletesOnly = false): Promise<number> {
@@ -134,13 +172,18 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     let preparationError: unknown;
     // Disk/network work stays outside SQLite transactions. A changed generation
     // is left pending rather than receiving an older generation's manifest.
+    const prepareFiles = async (entry: OutboxEntry) => {
+      await options.blobs!.prepare(store, entry);
+      if (options.blobs!.ready(store, entry)) await options.blobs!.values.prepare(store, entry);
+    };
+    const ready = (entry: OutboxEntry) => !options.blobs || options.blobs.ready(store, entry) && options.blobs.values.ready(store, entry);
     if (options.blobs) for (const entry of outgoing()) {
       if (!outboxInScope(store, entry)) continue;
       try {
-        await options.blobs.prepare(store, entry);
+        await prepareFiles(entry);
         if (entry.table_name === "run_attachment_refs" && entry.op === "upsert") {
           const attachmentId = (JSON.parse(entry.pk) as string[])[1];
-          await options.blobs.prepare(store, { ...entry, table_name: "run_attachments", pk: attachmentId, register: "row" });
+          await prepareFiles({ ...entry, table_name: "run_attachments", pk: attachmentId, register: "row" });
         }
       } catch (cause) {
         if (!/quota|rate limit/i.test(String(cause))) throw cause;
@@ -150,9 +193,9 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     const { prepared, attachmentCount } = sqlite.transaction(() => {
       const candidates = outgoing();
       const entries = candidates.filter((entry) => {
-        if (options.blobs && !options.blobs.ready(store, entry)) return false;
+        if (!ready(entry)) return false;
         if (options.blobs && entry.table_name === "run_attachment_refs" && entry.op === "upsert" &&
-            !options.blobs.ready(store, { ...entry, table_name: "run_attachments", pk: (JSON.parse(entry.pk) as string[])[1], register: "row" })) return false;
+            !ready({ ...entry, table_name: "run_attachments", pk: (JSON.parse(entry.pk) as string[])[1], register: "row" })) return false;
         if (outboxInScope(store, entry)) return true;
         sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
         return false;
@@ -193,7 +236,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       sqlite.transaction(() => {
         const clock = getClock(sqlite, entry.table_name, entry.pk, entry.register);
         if (clock && clock.physical_ms === sent.clock.physical_ms && clock.counter === sent.clock.counter && clock.origin === sent.clock.origin)
-          sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?),dirty=0 WHERE table_name=? AND pk=? AND register=?").run(result.seq, entry.table_name, entry.pk, entry.register);
+          sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?),dirty=0,last_ack_ms=? WHERE table_name=? AND pk=? AND register=?").run(result.seq, Date.now(), entry.table_name, entry.pk, entry.register);
         sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
       })();
       if (options.blobs) await options.blobs.acknowledged(sent.clock);
@@ -227,7 +270,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     pull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, false, limit)); },
     /** The shared queue drains in-flight pushes before pulling; local SQL writers stay unblocked. */
     fullPull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, true, limit)); },
-    retryParked() { return serial(async () => { announce(applyBridgeBatch(store, "account", [])); }); },
+    retryParked() { return serial(retryParked); },
     pending() { return sqlite.prepare("SELECT * FROM bridge_outbox ORDER BY generation").all() as OutboxEntry[]; },
     async stop() { await queue; stopped = true; },
   };

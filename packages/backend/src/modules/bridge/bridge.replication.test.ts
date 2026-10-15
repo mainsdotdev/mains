@@ -371,10 +371,10 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
   });
 
   it("retains records from a newer schema until the receiving backend upgrades", async () => {
-    const hub = await createBridgeTestHub(), a = await node(hub, "A", { schemaVersion: 3 }), b = await node(hub, "B");
+    const hub = await createBridgeTestHub(), a = await node(hub, "A", { schemaVersion: 5 }), b = await node(hub, "B");
     space(a, "new-schema"); await drain(a); await b.engine.pull();
     expect(row(b, "spaces", "new-schema")).toBeUndefined(); expect(b.sqlite.prepare("SELECT reason FROM bridge_parked WHERE reason='schema'").get()).toBeTruthy();
-    await b.engine.stop(); b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("B"), schemaVersion: 3, experimentalAtlas: true });
+    await b.engine.stop(); b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("B"), schemaVersion: 5, experimentalAtlas: true });
     await b.engine.retryParked(); expect(row(b, "spaces", "new-schema")).toBeTruthy(); expect(b.sqlite.prepare("SELECT * FROM bridge_parked").all()).toEqual([]);
   });
 

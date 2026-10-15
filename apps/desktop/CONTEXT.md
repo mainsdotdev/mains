@@ -199,6 +199,36 @@ and per-backend write limits preserve reads/deletes and keep refused writes in
 the local outbox. Settings and owner CLI expose scope, retry and public usage.
 Billing and reclamation of stored unreferenced blob chunks remain later work.
 
+B9 adds a dormant Claude session mirror. After a turn, the Claude driver closes
+the query and imports native main/subagent JSONL and metadata through the SDK's
+`importSessionToStore`. Once Bridge tracking is enabled, exact opaque entries
+live in the run-owned `provider_session_entries` table; UUIDs and content/occurrence
+identities make full re-imports idempotent. Replicas receive entries through lazy
+run streams, with entries above 256 KiB using encrypted blobs. Local only and
+logout follow the run's existing scope/ownership rules. An authenticated opaque
+retention header lets the hub expire mirrors after 30 days without run activity,
+preserving visible history and permanent deletes. Active owners can republish
+expired mirrors with their original clocks. `query()` still uses native local
+storage; cross-device continuation remains a later phase.
+
+The disposable Bridge demo's `--lan` mode exposes only B to the private network
+and mints browser links for B's advertised origin; A and the hub remain local.
+Browser bootstrap supplies a cryptographic `randomUUID` fallback for LAN HTTP,
+before app/editor modules load, using `getRandomValues` and preserving native
+implementations when available.
+
+Large database strings use generic value blobs regardless of a table's file
+columns. The exact captured register image supplies JSON-encoded strings above
+128 KiB, plus additional fields needed to keep inline values below 256 KiB.
+Schema-4 encrypted records carry `kind: "value"` manifests and null wire values;
+ordinary records remain schema 3. Older backends park the new form. Receivers
+verify and restore full strings before applying SQLite transactions, so ordinary
+queries, offline use, rebuilds and cache eviction retain complete tool outputs.
+Value transfers share R2 encryption, immutable chunks and quota enforcement;
+failed uploads preserve the outbox and failed downloads preserve the cursor.
+The receiver bounds restored values to 50 MiB per record and reduces large pull
+pages to one record before downloading. File manifests still resolve lazily.
+
 _Avoid_: calling Bridge “Cloud”; copying SQLite files to sync them; operating on a replica's filesystem paths; using a Space slug as identity; enabling transfer before ownership and replication tests pass.
 
 ### backend

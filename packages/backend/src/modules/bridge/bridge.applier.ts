@@ -5,6 +5,7 @@ import { BRIDGE_TABLES } from "./bridge.records";
 import { aliasSet, canonicalPk, clockOf, compareClock, definition, deleted, getClock, headerClock, isAtlas, quote, rowWhere, syncedTables, type RowClock, type SqlRow } from "./bridge.sql";
 import { bestClock, captureExisting, inScope, normalizeCompositeIdentity, physicalPk, portableValues, readRow, type BridgeStore, type PreparedRecord } from "./bridge.store";
 import { ownerSql } from "./bridge.capture";
+import { valueBlobKey } from "./bridge.value-blobs";
 
 export interface AppliedChange { table: string; pk: string; runId?: string; op: "upsert" | "delete" }
 type Outcome = "applied" | "ignored" | string;
@@ -25,15 +26,23 @@ export function verifyEnvelope(store: BridgeStore, envelope: BridgeEnvelope) {
     throw new Error("Unexpected Bridge ownership routing");
   if (def && (def.stream === "account" ? header.stream !== "account" : !header.runId || header.stream !== `run:${header.runId}`)) throw new Error("Invalid Bridge stream");
   if (header.op === "upsert" && "values" in body && def && body.schemaVersion <= store.schemaVersion) {
+    if (header.retention !== def.retention) throw new Error("Invalid Bridge retention policy");
     const columns = def.registers[body.register];
     if (!columns || Object.keys(body.values).length !== columns.length || columns.some((column) => !(column in body.values))) throw new Error("Invalid Bridge register columns");
-    if (body.blobRefs.some((ref) => !def.blobColumns.includes(ref.column) || !columns.includes(ref.column))) throw new Error("Invalid Bridge blob column");
+    if (body.blobRefs.some((ref) => !columns.includes(ref.column) || (ref.kind === "value"
+      ? body.schemaVersion < 4 || body.values[ref.column] !== null || def.primaryKey.includes(ref.column) || !!def.references[ref.column] || ref.column === "owner_backend_id" || ref.sourcePath !== undefined
+      : !def.blobColumns.includes(ref.column)))) throw new Error("Invalid Bridge blob column");
     if (def.idKind === "text" && def.primaryKey[0] in body.values && body.values[def.primaryKey[0]] !== body.pk ||
         def.idKind === "run-integer" && (body.values.id !== body.pk || body.pk !== `${body.values.run_id}:${body.pk.slice(body.pk.lastIndexOf(":") + 1)}`) ||
         def.idKind === "composite" && JSON.stringify(def.primaryKey.map((column) => body.values[column])) !== body.pk)
       throw new Error("Bridge body primary key does not match its identity");
     if (def.ownerRoot === body.table && body.values.owner_backend_id !== header.owner) throw new Error("Bridge owner does not match the root");
     if (body.table === "runs" && header.runId !== body.pk || def.stream === "run" && header.runId !== body.values.run_id) throw new Error("Bridge run binding does not match the row");
+    if (body.blobRefs.some((ref) => ref.kind === "value")) {
+      opened.body = { ...body, values: { ...body.values } };
+      for (const ref of body.blobRefs) if (ref.kind === "value" && store.materializedValues?.has(valueBlobKey(ref)))
+        opened.body.values[ref.column] = store.materializedValues.get(valueBlobKey(ref))!;
+    }
   }
   return opened;
 }
@@ -217,6 +226,7 @@ function applyUpsert(store: BridgeStore, record: BridgeLogRecord, body: BridgeUp
   if (!def || body.schemaVersion > store.schemaVersion) return "schema";
   if (isAtlas(body.table) && !store.atlasEnabled) return "disabled";
   if (deleted(store.sqlite, body.table, body.pk)) return "ignored";
+  if (body.blobRefs.some((ref) => ref.kind === "value" && typeof body.values[ref.column] !== "string")) return "value-blobs";
   if (def.stream !== "account") {
     if (deleted(store.sqlite, "runs", header.runId!)) return "ignored";
     const run = readRow(store, "runs", header.runId!);
@@ -245,7 +255,7 @@ function applyUpsert(store: BridgeStore, record: BridgeLogRecord, body: BridgeUp
         restoredManifest = true;
       }
     }
-    if (compareClock(headerClock(header), clockOf(existing)) === 0) store.sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?),dirty=0 WHERE table_name=? AND pk=? AND register=?").run(record.seq, body.table, body.pk, body.register);
+    if (compareClock(headerClock(header), clockOf(existing)) === 0) store.sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?),dirty=0,last_ack_ms=? WHERE table_name=? AND pk=? AND register=?").run(record.seq, Date.now(), body.table, body.pk, body.register);
     // A full pull can repair a missing physical projection without overwriting a newer clock.
     if (!readRow(store, body.table, body.pk, header.owner ?? header.origin))
       return materialize(store, body.table, canonicalPk(store.sqlite, body.table, body.pk), header.owner ?? header.origin);

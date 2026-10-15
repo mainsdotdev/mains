@@ -5,6 +5,8 @@ export const BRIDGE_BLOB_CIPHER_OVERHEAD = 24 + 16;
 export interface BridgeBlobIdentity { blobId: string; size: number }
 /** This manifest only travels inside an authenticated, encrypted record body. */
 export interface BridgeBlobRef extends BridgeBlobIdentity {
+  /** Schema 4: a JSON-encoded database string, restored before applying its row. */
+  kind?: "value";
   column: string;
   name: string;
   mime: string | null;

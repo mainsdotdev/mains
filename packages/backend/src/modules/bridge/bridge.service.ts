@@ -16,6 +16,7 @@ import { createBridgeIdentity, type BridgeIdentityClient } from "./bridge.identi
 import type { BridgeDevConfig } from "./bridge.config";
 import { beginBridgeEnrollment, bindBridgeAccount, bridgeProjectScopes, includeBridgeLocalHistory, removeBridgeReplicas, setBridgeProjectScope } from "./bridge.product";
 import { installBridgeCapture } from "./bridge.capture";
+import { importClaudeSessionMirror } from "./bridge.session-mirror";
 
 let replicator: BridgeReplicator | null = null;
 let startupError: string | null = null;
@@ -183,10 +184,20 @@ export const bridgeService = {
     return replicator.resolveFile(table, id, column, sourcePath);
   },
   captureOutput(file: string, roots: string[], mime: string | null) { return replicator?.captureOutput(file, roots, mime); },
+  async mirrorClaudeSession(input: { runId: string; sessionId: string; dir: string }): Promise<void> {
+    if (!identity && !replicator) return;
+    await exclusive(async () => {
+      if (!identity && !replicator) return;
+      const sqlite = getSqlite();
+      if (!sqlite.prepare("SELECT 1 FROM bridge_config WHERE id=1 AND (enabled=1 OR tracking_enabled=1)").get()) return;
+      await importClaudeSessionMirror({ ...input, sqlite, backendId: getLocalBackendId() });
+      replicator?.wake();
+    });
+  },
   watchRun(runId: string, watcherId: string): void { replicator?.watchRun(runId, watcherId); },
   unwatchRun(watcherId: string): void { replicator?.unwatchRun(watcherId); },
   async stop(): Promise<void> {
-    await starting; const currentIdentity = identity; identity = null; await currentIdentity?.stop();
+    await starting; await mutation; const currentIdentity = identity; identity = null; await currentIdentity?.stop();
     await stopReplication(); startupError = null;
   },
 };

@@ -6,7 +6,10 @@ import { CHANNELS } from "@mains/contracts/channels";
 import { startLocalBackends } from "../test/local-backends";
 
 // A disposable local demo: real hosts and Worker, no user database or provider execution.
-const demo = await startLocalBackends();
+const args = process.argv.slice(2);
+if (args.length > 1 || args.length === 1 && args[0] !== "--lan") throw new Error("Usage: npm run dev:demo -- [--lan]");
+const lan = args.includes("--lan");
+const demo = await startLocalBackends({ lan });
 let stopping = false, sourceStopped = false;
 const input = createInterface({ input: process.stdin, output: process.stdout });
 async function stop() {
@@ -37,15 +40,26 @@ try {
   await b.client.call(CHANNELS.bridge.syncNow);
   for (const host of [a, b]) await host.client.call(CHANNELS.appSettings.update, { activeSpaceId: space.id });
   console.log(`Temporary profiles: ${demo.dir}`);
-  console.log(`A (control): ${await a.webLogin()}`);
-  console.log(`B (view replica): ${await b.webLogin()}`);
+  const links = async () => {
+    console.log(`A (open on this Mac): ${await a.webLogin()}`);
+    const endpoints = lan ? await b.endpoints() : [b.url];
+    if (!endpoints.length) throw new Error("No private LAN address found. Connect this Mac and the iPad to the same network, then restart the demo.");
+    for (const endpoint of endpoints) console.log(`B (${lan ? "open on iPad / another computer" : "view replica"}): ${await b.webLogin(endpoint)}`);
+    console.log("Browser links are single-use and expire after 5 minutes. Type 'links' for fresh links.");
+  };
+  await links();
   console.log(`Run: ${runId}`);
-  console.log("Type a message to persist it on A; B's open transcript updates. 'offline' stops A; 'online' restarts it; 'quit' cleans up.");
+  console.log("Type a message to persist it on A; B's open transcript updates. 'offline' stops A; 'online' restarts it; 'links' refreshes browser links; 'quit' cleans up.");
   console.log("For an Electron source: type 'desktop', then start apps/desktop with the printed isolated-profile command.");
   for await (const line of input) {
     const value = line.trim();
     if (stopping || value === "quit") break;
-    if (value === "offline" || value === "desktop") {
+    if (value === "links") {
+      if (sourceStopped) {
+        const endpoints = lan ? await b.endpoints() : [b.url];
+        for (const endpoint of endpoints) console.log(`B (view replica): ${await b.webLogin(endpoint)}`);
+      } else await links();
+    } else if (value === "offline" || value === "desktop") {
       await a.stop(); sourceStopped = true;
       if (value === "desktop") {
         const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;

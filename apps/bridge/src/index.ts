@@ -104,7 +104,8 @@ export class AccountHub extends DurableObject<Env> {
           response = { type: "ack", stream: message.stream, results };
           if (changed.length) {
             this.broadcast({ type: "changed", stream: message.stream }, message.stream);
-            if (await this.ctx.storage.getAlarm() === null) await this.ctx.storage.setAlarm(Date.now() + 60_000);
+            const alarm = await this.ctx.storage.getAlarm(), compactAt = Date.now() + 60_000;
+            if (alarm === null || alarm > compactAt) await this.ctx.storage.setAlarm(compactAt);
           }
           break;
         }
@@ -127,7 +128,11 @@ export class AccountHub extends DurableObject<Env> {
       online: this.sockets().some((other) => other !== socket && this.session(other).backendId === session.backendId), lastSeen: new Date().toISOString() });
   }
   webSocketError(socket: WebSocket): void { this.webSocketClose(socket, 1011, "Connection error"); }
-  alarm(): void { this.store.compact(); }
+  async alarm(): Promise<void> {
+    this.store.compact();
+    const next = this.store.nextExpiry();
+    if (next !== null) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, next));
+  }
   async notifyApproval(request: BridgeApprovalRequest): Promise<void> { this.broadcast({ type: "approval", ...request }); }
   async revoke(backendId: string): Promise<void> {
     for (const socket of this.sockets()) if (this.session(socket).backendId === backendId) socket.close(1008, "Backend access revoked");

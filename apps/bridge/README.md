@@ -1,10 +1,70 @@
 # Bridge hub
 
-B3–B8's Cloudflare Worker, account-scoped SQLite Durable Object, D1 identity store and private R2 bucket. Desktop and
+B3–B9's Cloudflare Worker, account-scoped SQLite Durable Object, D1 identity store and private R2 bucket. Desktop and
 standalone backends seal records before sending them over WebSocket. The hub
 stores routing headers and ciphertext; it never receives an account key or a
 plaintext record body. Desktop and standalone startup activate background sync
 after account sign-in and backend approval, or with explicit development configuration. Without either, local execution and iPad remote control continue unchanged.
+
+## Claude session mirror (B9)
+
+Once Bridge tracking has been enabled, Claude turn cleanup imports the native
+SDK session into `provider_session_entries`: exact main/subagent entries and
+agent metadata, including signed thinking and tool results. Re-imports deduplicate
+UUIDs and preserve repeated UUID-less lines without growing on each turn. The
+live query keeps using the native Claude session files; this does not yet enable
+continuing a run on another backend.
+
+Entries travel in the owner's lazy run stream under E2EE and the same project
+Local only rules. Entries above 256 KiB use the existing encrypted R2 blob/cache
+path; the 50 MiB per-entry blob limit applies. Failed import leaves the Claude
+turn's outcome unchanged and is retried after the next turn. Refused uploads stay
+queued locally.
+
+The hub sees an authenticated `30d-idle` storage policy, never a table name or
+session content. Any accepted run activity refreshes retention; compaction and
+scheduled alarms expire idle mirror records after 30 days. Visible chat records,
+writer bindings and permanent tombstones survive. Locally active owners whose
+old mirror may have expired requeue original clocks before backfill. Expired
+record ciphertext stops counting toward record quota; stored R2 chunks still
+require the later blob GC feature.
+
+Upgrade the hub and backends together for B9's new authenticated retention
+header. Clients that understand the header but use an older record schema park
+schema-3 entries until their record support is upgraded.
+
+`test:replication` includes real SDK import fixtures and a large opaque entry
+through workerd/R2 between independent SQLite databases. `test:hosts` includes
+two actual server processes: import A's temporary native session, sync to B,
+remove the source, then verify exact main/subagent entries across B's restart.
+These tests invoke no model and never read the user's Claude profile.
+
+## Large database values
+
+Every synced register now supports automatic encrypted value blobs, independently
+of its table's file columns. JSON-encoded strings above 128 KiB, and additional
+strings needed to keep the remaining register values below 256 KiB, are published
+through the existing immutable R2 chunk/quota pipeline. Captured clock images
+supply the bytes, so a local edit during upload cannot acquire an older manifest.
+
+The encrypted record replaces those fields with null and carries `kind: "value"`
+manifests using record schema 4. Ordinary records retain schema 3 compatibility;
+older backends durably park schema-4 records until upgraded. The hub wire and
+storage format stay unchanged, and no plaintext field names or values reach R2.
+
+Receivers authenticate manifests and download/verify/decode their JSON strings
+before entering the SQLite apply transaction. Full field values are persisted in
+SQLite and capture clocks, surviving cache eviction, restart and the source going
+offline. A failed download leaves the page/cursor unapplied. Restored values are
+capped at 50 MiB per record; pull pages exceeding a 16 MiB restoration budget are
+retried one record at a time. Existing file manifests remain lazy.
+
+`test/value-hosts.test.ts` exercises Read/Read/Grep records through two actual
+backend processes, with A offline during B's download and B restarted without
+its cache. The regular fixtures are synthetic. For a private acceptance run,
+set `MAINS_BRIDGE_REAL_TOOL_RECORDS` to an external, owner-readable JSON array of
+the three captured tool rows. Private payloads stay outside the repository and
+assertions compare field equality without printing document contents.
 
 ## Try the existing UI quickly
 
@@ -27,6 +87,22 @@ Type a line in the demo terminal: it is persisted on A and appears in B's open
 transcript. `offline` stops A; B retains downloaded history and shows its last
 seen time. `online` restarts A. `quit` closes the processes and removes their
 temporary profiles. No agent/provider request is executed by the demo.
+
+For an iPad or another computer on the same trusted Wi-Fi/LAN, start with
+`npm run dev:demo -- --lan`. Only B listens on the LAN; A and the hub stay on
+loopback. Open the printed **A** link on this Mac and the **B** LAN link on the
+iPad. Browser links are single-use and expire after five minutes; type `links`
+in the demo terminal to mint fresh ones (including while A is offline).
+The Mac must remain awake and B must stay running for the iPad to use it.
+If macOS asks, allow Node's incoming local-network connections. No cloud
+deployment or provider account is needed for this initial test. `quit` removes
+both temporary profiles.
+
+Try writing in the demo terminal, opening the synced image, creating/editing an
+Atlas Page from either browser, then `offline` and `online`. On B, open the
+conversation before stopping A to download its lazy history; open the image
+after stopping A to verify the blob comes from the hub. Atlas is editable on B;
+A's run replicas are read-only.
 
 To use Electron as A, type `desktop`. This stops the Node source first and
 prints a command to run from `apps/desktop` with `MAINS_DEV_USER_DATA` and
@@ -148,7 +224,7 @@ never receives a private account key or stores an independent SQLite database.
 
 The development demo remains available without an identity service. For normal
 sign-in, create a Cloudflare D1 database and private R2 bucket, put the returned
-D1 id into `wrangler.jsonc`, then apply both migrations:
+D1 id into `wrangler.jsonc`, then apply all three migrations:
 
 ```sh
 npx wrangler d1 create mains-bridge-auth
@@ -176,6 +252,90 @@ callback cancellation, credential renewal and immediate socket/R2 revocation.
 checks pending isolation, approves B on A, restarts B with its saved encrypted
 identity, revokes B, and joins B by recovery with A offline. These fixtures use
 real Worker/D1/DO/R2 runtimes and disposable profiles. No external email is sent.
+
+## Cloudflare staging
+
+`wrangler.staging.jsonc` targets the Mains Cloudflare account and separate
+`mains-bridge-staging` resources. It enables the Worker URL and disables preview
+URLs and development-token authentication. The local Wrangler config stays
+separate. The D1 id/account id in this config are resource identifiers, not keys.
+
+- Worker: `mains-bridge-staging`
+- D1 (`AUTH_DB`): `mains-bridge-staging-auth`
+- Private R2 (`BLOBS`): `mains-bridge-staging-blobs`
+- SQLite Durable Object binding: `ACCOUNT_HUB` / `AccountHub`
+
+For a new Cloudflare account, open **Workers & Pages** in the Dashboard once to
+initialize its `workers.dev` subdomain. The deployed address is
+`https://mains-bridge-staging.team-68e.workers.dev`, also configured as
+`BRIDGE_AUTH_URL`.
+
+Run these commands from `apps/bridge`:
+
+```sh
+npm run staging:build       # Local compile/dry run; creates no remote resources
+npm run staging:migrate     # Apply pending migrations to staging D1
+npm run staging:deploy      # Publish this checkout to the staging Worker
+```
+
+R2 must first be enabled for the account in **Storage & databases → R2 →
+Overview**. Its activation/checkout is completed by the account owner. Then
+create the private bucket once:
+
+```sh
+npx wrangler r2 bucket create mains-bridge-staging-blobs --location weur --update-config=false --config wrangler.staging.jsonc
+```
+
+`BETTER_AUTH_SECRET` is provisioned in the staging Worker's secrets. Subsequent
+deployments preserve it; it is not kept in the repository. Create a staging
+GitHub OAuth App with homepage
+`https://mains-bridge-staging.team-68e.workers.dev/sign-in`, or reuse an existing
+Mains OAuth App. Add callback
+`https://mains-bridge-staging.team-68e.workers.dev/api/auth/callback/github`;
+when reusing an app, keep its existing callbacks and add this as another entry.
+GitHub.com supports multiple callback URLs for OAuth Apps. Set its public
+`GITHUB_CLIENT_ID` in the staging config, then enter its secret interactively:
+
+```sh
+npx wrangler secret put GITHUB_CLIENT_SECRET --config wrangler.staging.jsonc
+npm run staging:deploy
+```
+
+Check `/health` and `/sign-in` at the resulting Worker URL. Anonymous calls to
+`/v1/log`, `/v1/quota` and `/v1/blobs/presign` must return 401. A usable sign-in
+requires a configured provider; the staging infrastructure alone does not
+authorize a backend.
+
+Use persistent isolated A/B profiles without a development config. Sign in from
+Settings → Bridge with the staging HTTPS origin. A creates the account key and
+recovery code; B signs in to the same account and waits for A's approval or
+recovery. Test run history, Atlas and files, A offline, revocation and recovery.
+An iPad browser still connects to B's running backend, which connects to this
+hub. It does not store the account key or an independent SQLite database.
+
+### Lost all account keys
+
+GitHub sign-in cannot recover an account encryption key. Signing out removes
+this backend's protected identity; save the recovery code before signing out of
+the last approved backend. If every key is lost, preserve local data and obtain
+explicit consent before resetting the inaccessible cloud copy.
+
+`src/staging-reset-worker.ts` is an operator-only, temporary staging entry point;
+the normal `src/index.ts` does not expose its maintenance route. It requires the
+exact staging origin, a single `BRIDGE_RESET_ACCOUNT` and a random secret
+`BRIDGE_RESET_TOKEN` of at least 43 characters. An authorized POST to
+`/__maintenance/bridge-reset` with `{ accountId, confirm: false }` inspects counts;
+`confirm: true` resets only that account and refuses while an approved backend
+still exists. It revokes credentials first, deletes the account's R2 prefix,
+clears its Durable Object, and removes its Bridge key state last so failures can
+be retried. Better Auth users, provider logins, sessions, quota plans and other
+accounts remain intact. It never accesses a backend's local database.
+
+Before using this overlay, take and verify a SQLite backup. Deploy it only with
+an explicit temporary config, then immediately redeploy `wrangler.staging.jsonc`,
+delete the temporary secret and confirm the maintenance route returns 404.
+Sign the preserved backend in normally with existing history included; its new
+account key causes a fresh backfill. Save the newly generated recovery code.
 
 ## Retention, project scope and quotas (B8)
 
@@ -216,6 +376,18 @@ retention/garbage-collection feature; deleting a file’s metadata does not yet
 reclaim those bytes. Record replacements and deletes reclaim their superseded
 logical register bytes. Reads and tombstones remain available at quota/rate
 limits. Failed writes stay in the local outbox and retry after capacity returns.
+
+Record, stored-chunk and reserved-byte totals are persistent SQLite counters,
+updated by triggers in the same transaction as their source rows. Existing
+Durable Objects initialize these totals and indexes once; hibernation/restart
+and quota checks do not rescan the ciphertext or chunk inventory. Row/run
+deletes remove their superseded current registers immediately while preserving
+the permanent tombstones and log/cursor rules. Reservation expiry uses an index.
+
+Backends sample usage after changes at most once per minute and reuse the cached
+sample while idle. Entering/recovering from a quota refusal refreshes the sample;
+repeated refusals and failed samples remain throttled. A failed usage request
+does not interrupt replication. The hub still enforces every upload/write.
 
 For headless management, use `mains bridge projects`,
 `mains bridge local-only <project-id> --on|--off`,

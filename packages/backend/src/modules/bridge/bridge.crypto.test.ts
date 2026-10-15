@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BridgeHeader, BridgeUpsertBody } from "@mains/contracts/bridge-protocol";
-import { bridgePassThroughCodec as codec, bridgeRecordKeys } from "./bridge.crypto";
+import { bridgePassThroughCodec as codec, bridgeRecordKeys, createBridgeSealingCodec } from "./bridge.crypto";
+import { deriveBridgeKeys } from "./bridge.keys";
 
 const key = new Uint8Array(32).fill(7);
 const body: BridgeUpsertBody = { table: "atlas_items", pk: "page", register: "metadata", schemaVersion: 1,
@@ -9,6 +10,17 @@ const header: BridgeHeader = { v: 1, stream: "account", ...bridgeRecordKeys(key,
   registerKey: bridgeRecordKeys(key, body.table, body.pk, body.register).registerKey!, hlc: { physicalMs: 1, counter: 0 }, origin: "backend-a", op: "upsert" };
 
 describe("Bridge portable envelope", () => {
+  it("authenticates optional mirror retention without changing existing records' AAD", () => {
+    const sealing = createBridgeSealingCodec(key);
+    const keys = bridgeRecordKeys(deriveBridgeKeys(key).recordKey, body.table, body.pk, body.register);
+    const mirrorHeader: BridgeHeader = { ...header, ...keys, registerKey: keys.registerKey!, stream: "run:r", owner: header.origin, runId: "r", retention: "30d-idle" };
+    const envelope = sealing.seal(mirrorHeader, body);
+    expect(sealing.open(envelope).header.retention).toBe("30d-idle");
+    delete envelope.header.retention; expect(() => sealing.open(envelope)).toThrow();
+    const ordinary = sealing.seal({ ...mirrorHeader, retention: undefined }, body);
+    ordinary.header.retention = "30d-idle"; expect(() => sealing.open(ordinary)).toThrow();
+  });
+
   it("round-trips an isolated register through the development codec", () => {
     expect(codec.open(codec.seal(header, body))).toEqual({ header, body });
   });

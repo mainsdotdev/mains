@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import WebSocket from "ws";
 import type { BridgeClientMessage, BridgeEnvelope, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
 import { startLocalBridgeHub } from "./local-hub.mjs";
 
 let hub: Awaited<ReturnType<typeof startLocalBridgeHub>>;
@@ -42,6 +43,31 @@ async function log(client: Awaited<ReturnType<typeof connect>>, stream: BridgeSt
 }
 
 describe("Cloudflare SQLite Bridge hub", () => {
+  it("expires idle ciphertext mirrors without losing history, tombstones or monotonic cursors", async () => {
+    const account = randomUUID(), client = await connect(account), stream = "run:mirror" as const;
+    const root = record("mirror-root", 1, "upsert", "row", "account", "A", "mirror");
+    await client.rpc({ type: "push", stream: "account", records: [root] });
+    const mirror = record("mirror-entry", 2, "upsert", "row", stream, "A", "mirror"); mirror.header.retention = "30d-idle";
+    const history = record("history", 3, "upsert", "row", stream, "A", "mirror");
+    const tombstone = record("deleted-entry", 4, "delete", "row", stream, "A", "mirror");
+    await client.rpc({ type: "push", stream, records: [mirror, history, tombstone] });
+    const sizeBefore = await hub.quotaSql(account, "SELECT length(envelope) n FROM latest"); expect(sizeBefore.length).toBe(3);
+    await hub.quotaSql(account, `UPDATE stream_activity SET last_activity=${Date.now() - BRIDGE_IDLE_RETENTION_MS - 1000}`);
+    const activeRoot = structuredClone(root); activeRoot.header.hlc.physicalMs = 5;
+    await client.rpc({ type: "push", stream: "account", records: [activeRoot] }); await client.rpc({ type: "compact" });
+    expect((await log(client, stream)).records).toHaveLength(3);
+    await hub.quotaSql(account, `UPDATE stream_activity SET last_activity=${Date.now() - BRIDGE_IDLE_RETENTION_MS - 1000}`);
+    await client.rpc({ type: "compact" });
+    expect((await log(client, stream)).records.map((row) => row.envelope)).toEqual([history, tombstone]);
+    expect((await log(client, stream, 3)).next).toBe(3);
+    expect(await hub.quotaSql(account, "SELECT count(*) n FROM latest")).toMatchObject([{ n: 2 }]);
+    // Expiry is not a permanent delete: the same owner can publish the same HLC.
+    expect(await client.rpc({ type: "push", stream, records: [mirror] })).toMatchObject({ results: [{ seq: 4 }] });
+    expect((await log(client, stream, 3)).records).toEqual([{ seq: 4, envelope: mirror }]);
+    const invalid = structuredClone(root); invalid.header.retention = "30d-idle";
+    await expect(client.rpc({ type: "push", stream: "account", records: [invalid] })).rejects.toThrow("closed");
+  });
+
   it("requires configured signed dev authentication before selecting an account", async () => {
     expect((await fetch(new URL("/health", hub.url))).status).toBe(200);
     expect((await fetch(new URL("/v1/log", hub.url))).status).toBe(401);

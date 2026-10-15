@@ -1,5 +1,6 @@
 import type { BridgeEnvelope, BridgeLogRecord, BridgePushResult, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES } from "@mains/contracts/bridge-wire";
+import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
 
 type LogRow = { seq: number; envelope: string };
 const order = (a: BridgeEnvelope, b: BridgeEnvelope) => a.header.hlc.physicalMs - b.header.hlc.physicalMs || a.header.hlc.counter - b.header.hlc.counter ||
@@ -17,14 +18,36 @@ export function createHubStore(storage: DurableObjectStorage) {
     CREATE TABLE IF NOT EXISTS runs(run_id TEXT PRIMARY KEY, owner TEXT NOT NULL, root_key TEXT NOT NULL UNIQUE, tombstone TEXT);
     CREATE TABLE IF NOT EXISTS presence(backend_id TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS backend_metadata(backend_id TEXT PRIMARY KEY, label TEXT NOT NULL, platform TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS write_rate(backend_id TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS write_rate(backend_id TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS stream_activity(stream TEXT PRIMARY KEY,last_activity INTEGER NOT NULL);`);
   const first = <T>(query: string, ...args: (string | number | null)[]): T | undefined => sql.exec(query, ...args).toArray()[0] as T | undefined;
+  storage.transactionSync(() => {
+    sql.exec(`CREATE INDEX IF NOT EXISTS latest_row_key ON latest(json_extract(envelope,'$.header.rowKey'));
+      CREATE TABLE IF NOT EXISTS record_usage(id INTEGER PRIMARY KEY CHECK(id=1),bytes INTEGER NOT NULL CHECK(bytes>=0));`);
+    if (!first("SELECT 1 FROM record_usage WHERE id=1")) {
+      // Upgrade existing stores once. Old versions retained these superseded
+      // ciphertexts until compaction, but already excluded them from quota.
+      sql.exec(`DELETE FROM latest WHERE json_extract(envelope,'$.header.rowKey') IN (SELECT row_key FROM deleted)
+        OR stream IN (SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL);
+        INSERT INTO record_usage SELECT 1,
+          coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM latest),0)
+          +coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM deleted),0);`);
+    }
+    for (const table of ["latest", "deleted"]) sql.exec(`
+      CREATE TRIGGER IF NOT EXISTS ${table}_usage_insert AFTER INSERT ON ${table} BEGIN
+        UPDATE record_usage SET bytes=bytes+length(CAST(NEW.envelope AS BLOB)) WHERE id=1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS ${table}_usage_delete AFTER DELETE ON ${table} BEGIN
+        UPDATE record_usage SET bytes=bytes-length(CAST(OLD.envelope AS BLOB)) WHERE id=1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS ${table}_usage_update AFTER UPDATE OF envelope ON ${table}
+      WHEN length(CAST(NEW.envelope AS BLOB))<>length(CAST(OLD.envelope AS BLOB)) BEGIN
+        UPDATE record_usage SET bytes=bytes+length(CAST(NEW.envelope AS BLOB))-length(CAST(OLD.envelope AS BLOB)) WHERE id=1;
+      END;`);
+  });
   const api = {
     recordBytes(): number {
-      return first<{ n: number }>(`SELECT coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM latest
-        WHERE NOT EXISTS(SELECT 1 FROM deleted d WHERE d.row_key=json_extract(latest.envelope,'$.header.rowKey'))
-        AND stream NOT IN(SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL)),0)
-        +coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM deleted),0) n`)!.n;
+      return first<{ bytes: number }>("SELECT bytes FROM record_usage WHERE id=1")!.bytes;
     },
     takeWrite(backendId: string, limit: number): boolean {
       const window = Math.floor(Date.now() / 60_000);
@@ -64,10 +87,15 @@ export function createHubStore(storage: DurableObjectStorage) {
           if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
           sql.exec("INSERT INTO streams(stream,seq) VALUES(?,1) ON CONFLICT(stream) DO UPDATE SET seq=seq+1", stream);
           const seq = first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)!.seq;
+          if (h.runId) sql.exec("INSERT INTO stream_activity VALUES(?,?) ON CONFLICT(stream) DO UPDATE SET last_activity=excluded.last_activity", `run:${h.runId}`, Date.now());
           sql.exec("INSERT INTO log(stream,seq,row_key,register_key,op,envelope) VALUES(?,?,?,?,?,?)", stream, seq, h.rowKey, h.registerKey ?? null, h.op, encoded);
           if (h.op === "delete") {
             sql.exec("INSERT INTO deleted(row_key,stream,seq,envelope) VALUES(?,?,?,?)", h.rowKey, stream, seq, encoded);
             sql.exec("UPDATE runs SET tombstone=? WHERE root_key=?", encoded, h.rowKey);
+            // Reclaim logical register bytes in the same transaction, across
+            // registers/reused attachments and all children of a deleted run.
+            sql.exec("DELETE FROM latest WHERE json_extract(envelope,'$.header.rowKey')=?", h.rowKey);
+            sql.exec("DELETE FROM latest WHERE stream IN(SELECT 'run:'||run_id FROM runs WHERE root_key=?)", h.rowKey);
           } else sql.exec("INSERT INTO latest(stream,register_key,seq,envelope) VALUES(?,?,?,?) ON CONFLICT(stream,register_key) DO UPDATE SET seq=excluded.seq,envelope=excluded.envelope", stream, h.registerKey, seq, encoded);
           changed.push({ seq, envelope });
           return { seq };
@@ -90,10 +118,16 @@ export function createHubStore(storage: DurableObjectStorage) {
     },
     compact() {
       storage.transactionSync(() => {
+        sql.exec(`DELETE FROM latest WHERE json_extract(envelope,'$.header.retention')='30d-idle'
+          AND stream IN(SELECT stream FROM stream_activity WHERE last_activity<=?)`, Date.now() - BRIDGE_IDLE_RETENTION_MS);
         sql.exec(`DELETE FROM log WHERE op='upsert' AND (EXISTS(SELECT 1 FROM deleted d WHERE d.row_key=log.row_key) OR NOT EXISTS(SELECT 1 FROM latest l WHERE l.stream=log.stream AND l.register_key=log.register_key AND l.seq=log.seq));
           DELETE FROM log WHERE stream IN (SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL);
           DELETE FROM latest WHERE json_extract(envelope,'$.header.rowKey') IN (SELECT row_key FROM deleted) OR stream IN (SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL);`);
       });
+    },
+    nextExpiry(): number | null {
+      return first<{ expires: number | null }>(`SELECT min(a.last_activity)+? expires FROM stream_activity a
+        WHERE EXISTS(SELECT 1 FROM latest l WHERE l.stream=a.stream AND json_extract(l.envelope,'$.header.retention')='30d-idle')`, BRIDGE_IDLE_RETENTION_MS)!.expires;
     },
     seen(backendId: string) { sql.exec("INSERT INTO presence(backend_id,last_seen) VALUES(?,?) ON CONFLICT(backend_id) DO UPDATE SET last_seen=excluded.last_seen", backendId, Date.now()); },
     identify(backendId: string, label: string, platform: string) {

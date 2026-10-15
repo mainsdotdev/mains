@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { createTestDb } from "../../../test/setup-db";
 import { disposeBridgeTestHub, getLocalBridgeTestWorker, networkMode } from "../../../test/bridge-hub";
@@ -9,7 +9,7 @@ import { toBase64Url } from "./bridge.encoding";
 const key = new Uint8Array(32).fill(51);
 const config = { version: 1, backendId: "A", url: "ws://127.0.0.1:8790/v1/log", token: "test-token", accountKey: toBase64Url(key), label: "MacBook" };
 const cleanups: (() => void | Promise<void>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.restoreAllMocks(); });
 afterAll(disposeBridgeTestHub);
 async function node(account: string, backendId: string, extra: Partial<BridgeReplicatorOptions> = {}) {
   const hub = await getLocalBridgeTestWorker(), fixture = createTestDb(); cleanups.push(fixture.cleanup);
@@ -42,6 +42,37 @@ describe("Bridge development configuration", () => {
 });
 
 describe.skipIf(!networkMode)("Bridge background replication for desktop/server viewers", () => {
+  it("samples quota after writes, skips idle polling and coalesces live updates to one request per minute", async () => {
+    const fetches = vi.spyOn(globalThis, "fetch"), now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const quotaRequests = () => fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1/quota").length;
+    const a = await node(randomUUID(), "A");
+    await a.replicator.syncNow(); await a.replicator.syncNow();
+    expect(quotaRequests()).toBe(1);
+    expect(a.replicator.getStatus().quota!.recordBytes).toBeGreaterThan(0);
+    for (let i = 1; i <= 10; i++) { clock.mockReturnValue(now + i * 60_000); await a.replicator.syncNow(); }
+    expect(quotaRequests()).toBe(1);
+    run(a); await a.replicator.syncNow();
+    expect(quotaRequests()).toBe(2);
+    const sampled = a.replicator.getStatus().quota!.usedBytes;
+    for (let i = 0; i < 5; i++) {
+      a.sqlite.prepare("UPDATE runs SET title=? WHERE id='r'").run(`Change ${i} ${"x".repeat(200)}`);
+      await a.replicator.syncNow();
+    }
+    expect(quotaRequests()).toBe(2);
+    clock.mockReturnValue(now + 11 * 60_000); await a.replicator.syncNow();
+    expect(quotaRequests()).toBe(3);
+    expect(a.replicator.getStatus().quota!.usedBytes).toBeGreaterThan(sampled);
+  });
+  it("keeps replication working and backs off optional quota sampling when that endpoint fails", async () => {
+    const original = globalThis.fetch;
+    const fetches = vi.spyOn(globalThis, "fetch").mockImplementation((url, options) =>
+      new URL(String(url)).pathname === "/v1/quota" ? Promise.resolve(new Response("Unavailable", { status: 503 })) : original(url, options));
+    const a = await node(randomUUID(), "A");
+    run(a); await a.replicator.syncNow();
+    for (let i = 0; i < 5; i++) await a.replicator.syncNow();
+    expect(a.replicator.getStatus()).toMatchObject({ state: "connected", pendingRecords: 0, quota: null });
+    expect(fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1/quota")).toHaveLength(1);
+  });
   it("replicates account roots first, lazily loads a watched conversation, and retains its offline copy", async () => {
     const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
     await a.replicator.syncNow(); await b.replicator.syncNow(); run(a);

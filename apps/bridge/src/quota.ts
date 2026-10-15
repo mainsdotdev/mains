@@ -33,6 +33,25 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
   const sql = storage.sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS quota_chunks(key TEXT PRIMARY KEY,bytes INTEGER NOT NULL,stored INTEGER NOT NULL,expires_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS quota_state(id INTEGER PRIMARY KEY,initialized INTEGER NOT NULL);`);
+  storage.transactionSync(() => {
+    sql.exec(`CREATE INDEX IF NOT EXISTS quota_chunks_expiry ON quota_chunks(expires_at) WHERE stored=0;
+      CREATE TABLE IF NOT EXISTS quota_usage(id INTEGER PRIMARY KEY CHECK(id=1),blob_bytes INTEGER NOT NULL CHECK(blob_bytes>=0),reserved_bytes INTEGER NOT NULL CHECK(reserved_bytes>=0));`);
+    if (!sql.exec("SELECT 1 FROM quota_usage WHERE id=1").toArray().length) sql.exec(`INSERT INTO quota_usage SELECT 1,
+      coalesce(sum(CASE WHEN stored=1 THEN bytes ELSE 0 END),0),coalesce(sum(CASE WHEN stored=0 THEN bytes ELSE 0 END),0) FROM quota_chunks`);
+    sql.exec(`CREATE TRIGGER IF NOT EXISTS quota_usage_insert AFTER INSERT ON quota_chunks BEGIN
+        UPDATE quota_usage SET blob_bytes=blob_bytes+CASE WHEN NEW.stored=1 THEN NEW.bytes ELSE 0 END,
+          reserved_bytes=reserved_bytes+CASE WHEN NEW.stored=0 THEN NEW.bytes ELSE 0 END WHERE id=1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS quota_usage_delete AFTER DELETE ON quota_chunks BEGIN
+        UPDATE quota_usage SET blob_bytes=blob_bytes-CASE WHEN OLD.stored=1 THEN OLD.bytes ELSE 0 END,
+          reserved_bytes=reserved_bytes-CASE WHEN OLD.stored=0 THEN OLD.bytes ELSE 0 END WHERE id=1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS quota_usage_update AFTER UPDATE OF bytes,stored ON quota_chunks
+      WHEN NEW.bytes<>OLD.bytes OR NEW.stored<>OLD.stored BEGIN
+        UPDATE quota_usage SET blob_bytes=blob_bytes+(CASE WHEN NEW.stored=1 THEN NEW.bytes ELSE 0 END)-(CASE WHEN OLD.stored=1 THEN OLD.bytes ELSE 0 END),
+          reserved_bytes=reserved_bytes+(CASE WHEN NEW.stored=0 THEN NEW.bytes ELSE 0 END)-(CASE WHEN OLD.stored=0 THEN OLD.bytes ELSE 0 END) WHERE id=1;
+      END;`);
+  });
   let initialized = false;
   async function reconcile(accountId: string) {
     if (!initialized) {
@@ -56,7 +75,7 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
     }
   }
   function usage() {
-    const row = sql.exec<{ blobBytes: number; reservedBytes: number }>("SELECT coalesce(sum(CASE WHEN stored=1 THEN bytes ELSE 0 END),0) blobBytes,coalesce(sum(CASE WHEN stored=0 THEN bytes ELSE 0 END),0) reservedBytes FROM quota_chunks").toArray()[0];
+    const row = sql.exec<{ blobBytes: number; reservedBytes: number }>("SELECT blob_bytes AS blobBytes,reserved_bytes AS reservedBytes FROM quota_usage WHERE id=1").toArray()[0];
     return row;
   }
   const api = {

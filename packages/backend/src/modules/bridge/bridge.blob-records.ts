@@ -9,9 +9,10 @@ import { BRIDGE_TABLES } from "./bridge.records";
 import { aliasSet, clockOf, compareClock, deleted, getClock, quote, rowWhere, type RowClock } from "./bridge.sql";
 import { readRow, type BridgeStore, type OutboxEntry } from "./bridge.store";
 import type { BridgeBlobs } from "./bridge.blobs";
+import { createBridgeValueBlobs } from "./bridge.value-blobs";
 
-export type BridgeFileTable = "run_attachments" | "run_artifacts" | "collection_sources" | "atlas_items";
-const fileTables: readonly string[] = ["run_attachments", "run_artifacts", "collection_sources", "atlas_items"];
+export type BridgeFileTable = "run_attachments" | "run_artifacts" | "collection_sources" | "atlas_items" | "provider_session_entries";
+const fileTables: readonly string[] = ["run_attachments", "run_artifacts", "collection_sources", "atlas_items", "provider_session_entries"];
 const sameClock = (a: RowClock, b: RowClock | undefined) => !!b && compareClock(clockOf(a), clockOf(b)) === 0;
 const within = (root: string, file: string) => { const relative = path.relative(root, file); return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative); };
 
@@ -51,6 +52,7 @@ export function createBridgeBlobRecords(options: { sqlite: SQLiteInstance; backe
     return entry.op === "upsert" && BRIDGE_TABLES[entry.table_name].blobColumns.some((column) => BRIDGE_TABLES[entry.table_name].registers[entry.register].includes(column));
   }
   return {
+    values: createBridgeValueBlobs(blobs),
     /** Turn downloaded shared files into ordinary local files before dropping the account key/cache. */
     async preserveAccountFiles() {
       for (const table of ["atlas_items", "collection_sources"] as const) {
@@ -58,7 +60,7 @@ export function createBridgeBlobRecords(options: { sqlite: SQLiteInstance; backe
         for (const row of rows) {
           const clocks = aliasSet(sqlite, table, row.id).map((id) => getClock(sqlite, table, id, BRIDGE_TABLES[table].primaryRegister!)).filter((clock): clock is RowClock => !!clock)
             .sort((a, b) => compareClock(clockOf(b), clockOf(a)));
-          const ref = (JSON.parse(clocks[0]?.blob_refs_json ?? "[]") as BridgeBlobRef[]).find((entry) => entry.column === "storage_key");
+          const ref = (JSON.parse(clocks[0]?.blob_refs_json ?? "[]") as BridgeBlobRef[]).find((entry) => entry.kind !== "value" && entry.column === "storage_key");
           if (!ref) continue;
           const file = await blobs.cached(ref); if (!file) continue;
           const key = row.storage_key;
@@ -109,7 +111,12 @@ export function createBridgeBlobRecords(options: { sqlite: SQLiteInstance; backe
         refs.push(await blobs.publish(bytes, { column, name: typeof file === "string" ? path.basename(file) : name, mime,
           ...(typeof file === "string" ? { sourcePath: file } : {}) }));
       };
-      if (entry.table_name === "run_attachments") {
+      if (entry.table_name === "provider_session_entries") {
+        if (typeof row.entry !== "string") throw new Error("Source Claude session entry is missing");
+        const bytes = Buffer.from(row.entry);
+        if (bytes.length > BRIDGE_BLOB_MAX_BYTES) throw new Error("Claude session entry exceeds the 50 MiB Bridge blob limit; local entry remains queued");
+        if (bytes.length > 256 * 1024) refs.push(await blobs.publish(bytes, { column: "entry", name: "session-entry.json", mime: "application/json" }));
+      } else if (entry.table_name === "run_attachments") {
         const expected = `attachments/${row.id}/${row.name}`;
         if (/^[a-f0-9]{64}$/.test(String(row.id)) && path.basename(String(row.name)) === row.name && row.storage_key === expected)
           await publish("storage_key", path.join(dataDir, expected), [path.join(dataDir, "attachments")], String(row.content_hash));
@@ -165,7 +172,7 @@ export function createBridgeBlobRecords(options: { sqlite: SQLiteInstance; backe
       const clocks = aliasSet(sqlite, table, pk).map((id) => getClock(sqlite, table, id, def.primaryRegister!)).filter((clock): clock is RowClock => !!clock)
         .sort((a, b) => compareClock(clockOf(b), clockOf(a)));
       const refs: BridgeBlobRef[] = JSON.parse(clocks[0]?.blob_refs_json ?? "[]");
-      const ref = refs.find((candidate) => (!column || candidate.column === column) && (!sourcePath || candidate.sourcePath === sourcePath));
+      const ref = refs.find((candidate) => candidate.kind !== "value" && (!column || candidate.column === column) && (!sourcePath || candidate.sourcePath === sourcePath));
       if (!ref) throw new Error("File is available only on its source device (missing or above 50 MiB)");
       return blobs.resolve(ref);
     },

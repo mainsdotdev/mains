@@ -20,18 +20,26 @@ export async function bridgeHttp<T>(hub: string, route: string, token?: string, 
 export async function startBridgeLoopback(hub: string, received: (token: string) => Promise<void>, failed: (error: unknown) => void) {
   const state = randomBytes(32).toString("base64url"), verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
-  let redirect = "", consumed = false;
+  let redirect = "", acceptedCode: string | undefined;
+  let completion: Promise<{ status: number; message: string }> | undefined;
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const code = url.searchParams.get("code");
     const supplied = Buffer.from(url.searchParams.get("state") ?? ""), expected = Buffer.from(state);
-    if (request.method !== "GET" || url.pathname !== "/callback" || supplied.length !== expected.length || !timingSafeEqual(supplied, expected) || consumed || !url.searchParams.get("code")) {
+    if (request.method !== "GET" || url.pathname !== "/callback" || supplied.length !== expected.length || !timingSafeEqual(supplied, expected) || !code || completion && code !== acceptedCode) {
       response.writeHead(400, { "Content-Type": "text/plain" }); response.end("Invalid sign-in callback"); return;
     }
-    consumed = true;
-    void bridgeHttp<{ token: string }>(hub, "/v1/auth/exchange", undefined, { code: url.searchParams.get("code"), verifier, redirectUri: redirect })
-      .then(async ({ token }) => { await received(token); response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" }); response.end("Signed in. Return to Mains to finish key approval."); })
-      .catch((error: unknown) => { failed(error); response.writeHead(400, { "Content-Type": "text/plain" }); response.end("Sign-in failed. Return to Mains and try again."); })
-      .finally(() => { clearTimeout(timer); server.close(); });
+    if (!completion) {
+      acceptedCode = code;
+      // Repeated browser redirects share the result, never the code exchange.
+      completion = bridgeHttp<{ token: string }>(hub, "/v1/auth/exchange", undefined, { code, verifier, redirectUri: redirect })
+        .then(async ({ token }) => { await received(token); return { status: 200, message: "Signed in. Return to Mains to finish key approval." }; })
+        .catch((error: unknown) => { failed(error); return { status: 400, message: "Sign-in failed. Return to Mains and try again." }; })
+        .finally(() => { clearTimeout(timer); server.close(); });
+    }
+    void completion.then(({ status, message }) => {
+      response.writeHead(status, { "Content-Type": "text/plain", "Cache-Control": "no-store" }); response.end(message);
+    });
   });
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   const port = (server.address() as { port: number }).port;

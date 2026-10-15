@@ -4,6 +4,8 @@ import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { BRIDGE_BLOB_CHUNK_BYTES, BRIDGE_BLOB_MAX_BYTES } from "@mains/contracts/bridge-blobs";
+import { BRIDGE_MAX_RECORD_BYTES } from "@mains/contracts/bridge-wire";
+import type { BridgeEnvelope } from "@mains/contracts/bridge-protocol";
 import { createTestDb } from "../../../test/setup-db";
 import { getLocalBridgeTestWorker, disposeBridgeTestHub, networkMode } from "../../../test/bridge-hub";
 import { createBridgeBlobs } from "./bridge.blobs";
@@ -12,6 +14,8 @@ import { createBridgeEngine } from "./bridge.engine";
 import { createBridgeWebSocketTransport } from "./bridge.websocket";
 import { createBridgeSealingCodec } from "./bridge.crypto";
 import { deriveBridgeKeys } from "./bridge.keys";
+import { createClaudeSessionMirror } from "./bridge.session-mirror";
+import { largeToolFixture, seedLargeTools } from "../../../test/large-tool-fixture";
 
 const key = new Uint8Array(32).fill(23);
 const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64");
@@ -24,21 +28,172 @@ async function files(account: string, backend: string, extra: { cacheLimitBytes?
   const blobs = createBridgeBlobs({ accountKey: key, dataDir, url: hub.wsUrl, token: () => hub.token(account, backend), ...extra });
   cleanup.push(() => blobs.stop()); return { blobs, dataDir, hub };
 }
-async function node(account: string, backendId: string) {
+async function node(account: string, backendId: string, options: { schemaVersion?: number; cacheLimitBytes?: number } = {}) {
   const fixture = createTestDb(); cleanup.push(fixture.cleanup);
   const { sqlite } = fixture;
   sqlite.prepare("INSERT INTO accounts(id) VALUES('default')").run();
   sqlite.prepare("INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default',?)").run(backendId);
   sqlite.prepare("INSERT INTO providers(id,kind,display_name) VALUES('codex','agent_runtime','Codex')").run();
-  const { blobs, dataDir, hub } = await files(account, backendId);
+  const { blobs, dataDir, hub } = await files(account, backendId, { cacheLimitBytes: options.cacheLimitBytes });
   const records = createBridgeBlobRecords({ sqlite, backendId, dataDir, blobs });
   const transport = createBridgeWebSocketTransport({ url: hub.wsUrl, token: () => hub.token(account, backendId) }); cleanup.push(() => transport.close());
-  const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(key).recordKey, codec: createBridgeSealingCodec(key), transport, blobs: records, experimentalAtlas: true });
+  const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(key).recordKey, codec: createBridgeSealingCodec(key), transport, blobs: records, experimentalAtlas: true, schemaVersion: options.schemaVersion });
   cleanup.push(() => engine.stop()); await engine.bootstrap();
   return { sqlite, blobs, dataDir, records, engine, transport };
 }
 
 describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQLite backends", () => {
+  it("restores the complete Read, Read and Grep records byte for byte on B with A offline", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
+    const records = await largeToolFixture();
+    expect(records.map((record) => record.tool_name)).toEqual(["Read", "Read", "Grep"]);
+    const expected = seedLargeTools(a.sqlite, "A", records);
+    for (const record of expected) b.sqlite.prepare("INSERT OR IGNORE INTO providers(id,kind,display_name) VALUES(?,'agent_runtime','Test provider')").run(record.provider_id);
+    await a.engine.push("account"); await b.engine.pull("account");
+    for (const record of expected) await a.engine.push(`run:${record.run_id}`);
+    expect(a.engine.pending()).toEqual([]);
+    a.transport.close(); await a.blobs.stop(); await fs.rm(a.dataDir, { recursive: true, force: true });
+    for (const record of expected) {
+      await b.engine.pull(`run:${record.run_id}`);
+      const actual = b.sqlite.prepare("SELECT * FROM tool_calls WHERE run_id=? AND tool_name=?").get(record.run_id, record.tool_name) as Record<string, unknown>;
+      expect(!!actual).toBe(true);
+      for (const [column, value] of Object.entries(record)) if (column !== "id") {
+        // Boolean equality keeps private document bytes out of assertion reports.
+        expect(actual[column] === value, `exact tool field: ${column}`).toBe(true);
+      }
+    }
+    const hub = await getLocalBridgeTestWorker(), wire = await hub.inspect(account) as { envelope: string }[];
+    const envelopes = wire.map((record) => JSON.parse(record.envelope) as BridgeEnvelope);
+    expect(envelopes.every((envelope) => Buffer.byteLength(JSON.stringify(envelope)) <= BRIDGE_MAX_RECORD_BYTES)).toBe(true);
+    const tools = envelopes.map((envelope) => createBridgeSealingCodec(key).open(envelope).body).filter((body) => body.table === "tool_calls");
+    expect(tools).toHaveLength(3);
+    for (const body of tools) {
+      expect("schemaVersion" in body && body.schemaVersion).toBe(4);
+      expect("values" in body && body.values.output === null).toBe(true);
+    }
+  });
+
+  it("automatically restores a large ordinary database field on B with A offline", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
+    const bio = "Large private field — Türkçe 🙂\n".repeat(60_000);
+    a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run(bio);
+    await a.engine.push("account");
+    a.transport.close(); await a.blobs.stop();
+    await fs.rm(a.dataDir, { recursive: true, force: true });
+    await b.engine.pull("account");
+    const actual = b.sqlite.prepare("SELECT bio FROM accounts WHERE id='default'").get() as { bio: string };
+    expect(Buffer.from(actual.bio).equals(Buffer.from(bio))).toBe(true);
+    const hub = await getLocalBridgeTestWorker(), wire = JSON.stringify(await hub.inspect(account));
+    expect(wire).not.toContain("Large private field");
+    expect(wire.length).toBeLessThan(20_000);
+    expect(a.engine.pending()).toEqual([]);
+  });
+
+  it("leaves a newer field edit queued when it changes during upload, then sends the exact newer image", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
+    const newer = "new captured value".repeat(100_000);
+    a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run("previous captured value".repeat(100_000));
+    const real = globalThis.fetch; let changed = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const response = await real(url, init);
+      if (!changed && init?.method === "PUT") { changed = true; a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run(newer); }
+      return response;
+    });
+    await a.engine.push("account");
+    expect(a.engine.pending().some((entry) => entry.table_name === "accounts")).toBe(true);
+    expect((await b.transport.pull("account", 0, 100)).records).toEqual([]);
+    vi.restoreAllMocks();
+    await a.engine.push("account"); await b.engine.pull();
+    expect((b.sqlite.prepare("SELECT bio FROM accounts WHERE id='default'").get() as { bio: string }).bio === newer).toBe(true);
+    expect(a.engine.pending()).toEqual([]);
+  });
+
+  it("keeps the row and cursor unchanged on corrupt value bytes, then retries successfully", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
+    const bio = `${randomUUID()} private field`.repeat(30_000);
+    a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run(bio); await a.engine.push();
+    const page = await a.transport.pull("account", 0, 100), body = createBridgeSealingCodec(key).open(page.records[0].envelope).body;
+    if (!("blobRefs" in body)) throw new Error("Expected value manifest");
+    const ref = body.blobRefs.find((entry) => entry.kind === "value")!;
+    const hub = await getLocalBridgeTestWorker(), bucket = await hub.bucket();
+    const object = (await bucket.list()).objects.find((entry) => entry.key.includes(ref.blobId))!;
+    const original = Buffer.from(await (await bucket.get(object.key))!.arrayBuffer()), damaged = Buffer.from(original); damaged[damaged.length - 1] ^= 1;
+    const before = b.sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream='account'").get();
+    await bucket.put(object.key, damaged);
+    await expect(b.engine.pull()).rejects.toThrow();
+    expect(b.sqlite.prepare("SELECT bio FROM accounts WHERE id='default'").get()).toMatchObject({ bio: null });
+    expect(b.sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream='account'").get()).toEqual(before);
+    await bucket.put(object.key, original); await b.engine.pull();
+    expect((b.sqlite.prepare("SELECT bio FROM accounts WHERE id='default'").get() as { bio: string }).bio === bio).toBe(true);
+  });
+
+  it("parks schema 4 values on an older backend and restores them after upgrading", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B", { schemaVersion: 3 });
+    const bio = "waiting for an upgraded backend".repeat(50_000);
+    a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run(bio); await a.engine.push();
+    await b.engine.pull();
+    expect(b.sqlite.prepare("SELECT bio FROM accounts WHERE id='default'").get()).toMatchObject({ bio: null });
+    expect(b.sqlite.prepare("SELECT reason FROM bridge_parked").get()).toMatchObject({ reason: "schema" });
+    await b.engine.stop();
+    const upgraded = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: deriveBridgeKeys(key).recordKey, codec: createBridgeSealingCodec(key), transport: b.transport, blobs: b.records });
+    cleanup.push(() => upgraded.stop()); await upgraded.retryParked();
+    expect((b.sqlite.prepare("SELECT bio FROM accounts WHERE id='default'").get() as { bio: string }).bio === bio).toBe(true);
+    expect(b.sqlite.prepare("SELECT count(*) n FROM bridge_parked").get()).toMatchObject({ n: 0 });
+  });
+
+  it("packs medium records within the frame limit and drains every queued row", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
+    a.sqlite.exec("INSERT INTO runs(id,owner_backend_id,account_id,provider_id) VALUES('medium','A','default','codex')");
+    const input = JSON.stringify("i".repeat(100_000)), output = JSON.stringify("o".repeat(100_000));
+    const insert = a.sqlite.prepare("INSERT INTO tool_calls(account_id,run_id,tool_name,input,output) VALUES('default','medium','Search',?,?)");
+    a.sqlite.transaction(() => { for (let i = 0; i < 70; i++) insert.run(input, output); })();
+    await a.engine.push(); await b.engine.pull();
+    for (let i = 0; i < 5 && a.engine.pending().length; i++) await a.engine.push("run:medium");
+    expect(a.engine.pending()).toEqual([]);
+    await b.engine.pull("run:medium");
+    expect(b.sqlite.prepare("SELECT count(*) n FROM tool_calls WHERE run_id='medium'").get()).toMatchObject({ n: 70 });
+  }, 30_000);
+
+  it("spills accumulated small fields and returns to inline values when they shrink", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
+    const value = "x".repeat(100_000);
+    a.sqlite.prepare("UPDATE accounts SET bio=?,company=?,website=? WHERE id='default'").run(value, value, value);
+    await a.engine.push(); await b.engine.pull();
+    const actual = b.sqlite.prepare("SELECT bio,company,website FROM accounts WHERE id='default'").get() as Record<string, string>;
+    expect(Object.values(actual).every((field) => field === value)).toBe(true);
+    const clock = a.sqlite.prepare("SELECT blob_refs_json FROM bridge_row_clock WHERE table_name='accounts'").get() as { blob_refs_json: string };
+    expect(JSON.parse(clock.blob_refs_json).some((ref: { kind?: string }) => ref.kind === "value")).toBe(true);
+    a.sqlite.exec("UPDATE accounts SET bio='small',company='small',website='small' WHERE id='default'");
+    await a.engine.push(); await b.engine.pull();
+    expect(b.sqlite.prepare("SELECT bio,company,website FROM accounts WHERE id='default'").get()).toEqual({ bio: "small", company: "small", website: "small" });
+    expect(b.sqlite.prepare("SELECT blob_refs_json FROM bridge_row_clock WHERE table_name='accounts'").get()).toMatchObject({ blob_refs_json: "[]" });
+  });
+
+  it("restores a large opaque Claude session entry from R2 on B after A's profile disappears", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B"), sessionId = randomUUID();
+    for (const n of [a, b]) n.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
+    a.sqlite.prepare("INSERT INTO runs(id,owner_backend_id,account_id,provider_id,session_id) VALUES('r','A','default','claude_code',?)").run(sessionId);
+    const entry = { type: "assistant", uuid: randomUUID(), message: { role: "assistant", content: [
+      { type: "thinking", thinking: "Private signed thinking", signature: "opaque-signature" },
+      { type: "tool_result", content: "private-tool-output-".repeat(100_000) },
+    ] } };
+    const key = { projectKey: "source-directory", sessionId };
+    await createClaudeSessionMirror({ sqlite: a.sqlite, backendId: "A", runId: "r", sessionId }).append(key, [entry]);
+    await a.engine.push("account"); await b.engine.pull(); await a.engine.push("run:r"); await b.engine.pull("run:r");
+    const row = b.sqlite.prepare("SELECT id,entry FROM provider_session_entries").get() as { id: string; entry: null };
+    expect(row.entry).toBeNull();
+    const hub = await getLocalBridgeTestWorker(), wire = JSON.stringify(await hub.inspect(account));
+    expect(wire).not.toContain("Private signed thinking"); expect(wire.length).toBeLessThan(20_000);
+    const payloads = await (await hub.bucket()).list();
+    const object = await (await hub.bucket()).get(payloads.objects[0].key);
+    expect(Buffer.from(await object!.arrayBuffer()).includes(Buffer.from("private-tool-output"))).toBe(false);
+    a.transport.close(); await a.blobs.stop(); await fs.rm(a.dataDir, { recursive: true, force: true });
+    const replica = createClaudeSessionMirror({ sqlite: b.sqlite, backendId: "B", runId: "r", sessionId,
+      resolveEntry: (id) => b.records.resolve("provider_session_entries", id, "entry") });
+    expect(await replica.load({ ...key, projectKey: "different-device" })).toEqual([entry]);
+    expect(await replica.load(key)).toEqual([entry]);
+  });
+
   it("lazily opens A's attached image on B, with A disconnected, without reading A's path", async () => {
     const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
     a.sqlite.exec("INSERT INTO runs(id,owner_backend_id,account_id,provider_id,title) VALUES('r','A','default','codex','Image attachment');");

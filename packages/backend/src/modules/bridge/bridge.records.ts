@@ -16,6 +16,7 @@ export interface BridgeTableDefinition {
   references: Readonly<Record<string, { table: string; class: BridgeReferenceClass }>>;
   uniqueIndexes: Readonly<Record<string, BridgeNaturalKeyRule>>;
   blobColumns: readonly string[];
+  retention?: "30d-idle";
 }
 
 /** Explicit column lists make schema changes fail the audit until classified.
@@ -24,6 +25,13 @@ export interface BridgeTableDefinition {
  * attachments and tool_calls with no run are not eligible for transfer.
  */
 export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
+  provider_session_entries: {
+    class: "append-only", primaryKey: ["id"], idKind: "text", stream: "run",
+    ownerRoot: "runs", primaryRegister: "row",
+    registers: { row: ["id", "run_id", "session_id", "subpath", "seq", "uuid", "entry", "byte_size", "content_hash"] },
+    localColumns: [], references: { run_id: { table: "runs", class: "required" } },
+    uniqueIndexes: {}, blobColumns: ["entry"], retention: "30d-idle",
+  },
   ...Object.fromEntries(Object.entries({
     bridge_atlas_recoveries: ["revision_id"], bridge_config: ["id"], bridge_peers: ["backend_id"], bridge_clock: ["id"], bridge_outbox: ["table_name", "pk", "register"],
     bridge_row_clock: ["table_name", "pk", "register"], bridge_cursors: ["stream"],

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,7 +62,7 @@ async function availablePort() {
   return port;
 }
 
-async function createHost(dir: string, label: string) {
+async function createHost(dir: string, label: string, lan = false) {
   await mkdir(dir, { recursive: true });
   const port = await availablePort(), token = randomBytes(32).toString("base64url");
   const configFile = join(dir, "bridge", "dev.json");
@@ -76,7 +76,7 @@ async function createHost(dir: string, label: string) {
     async start() {
       if (child) throw new Error(`${label} is already running`);
       const env = { ...process.env, MAINS_SERVE_TOKEN: token, MAINS_BRIDGE_CONFIG: configFile };
-      child = spawn(process.execPath, [serverEntry, "serve", "--data-dir", dir, "--port", String(port), "--no-pairing"], { cwd: serverRoot, env, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(process.execPath, [serverEntry, "serve", "--data-dir", dir, "--port", String(port), "--no-pairing", ...(lan ? ["--lan"] : [])], { cwd: serverRoot, env, stdio: ["ignore", "pipe", "pipe"] });
       const append = (data: Buffer) => { logs = (logs + data.toString()).slice(-8000); };
       child.stdout?.on("data", append); child.stderr?.on("data", append);
       let spawnError: Error | undefined;
@@ -98,8 +98,12 @@ async function createHost(dir: string, label: string) {
         processToStop.kill("SIGTERM");
       });
     },
-    async webLogin() {
-      const response = await fetch(`${url}/__mains/admin/web-login`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ baseUrl: url }) });
+    async endpoints(): Promise<string[]> {
+      const state = JSON.parse(await readFile(join(dir, "server-state.json"), "utf8")) as { endpoints: string[] };
+      return state.endpoints;
+    },
+    async webLogin(baseUrl = url) {
+      const response = await fetch(`${url}/__mains/admin/web-login`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ baseUrl }) });
       if (!response.ok) throw new Error(`Browser login failed: ${response.status}`);
       return (await response.json() as { link: string }).link;
     },
@@ -115,11 +119,11 @@ async function createHost(dir: string, label: string) {
 }
 
 /** Two actual composition roots, independent data dirs/identities, one temporary workerd hub. */
-export async function startLocalBackends(settings: { auth?: boolean } = {}) {
+export async function startLocalBackends(settings: { auth?: boolean; lan?: boolean } = {}) {
   await access(serverEntry).catch(() => { throw new Error("Build apps/server and apps/desktop's web renderer before running host acceptance tests"); });
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hosts-"));
   const hub = await startLocalBridgeHub(settings);
-  const a = await createHost(join(dir, "A"), "Computer A"), b = await createHost(join(dir, "B"), "Computer B");
+  const a = await createHost(join(dir, "A"), "Computer A"), b = await createHost(join(dir, "B"), "Computer B", settings.lan);
   const dispose = async () => {
     await Promise.allSettled([a.stop(), b.stop()]); await hub.dispose();
     const locks = await Promise.all([a, b].map((host) => access(join(host.dir, "mains.db.backend.lock")).then(() => true, () => false)));

@@ -26,7 +26,8 @@ export function bridgeRecordKeys(key: Uint8Array, table: string, pk: string, reg
 export function bridgeHeaderAad(header: BridgeHeader): Uint8Array {
   validateBridgeHeader(header);
   return utf8(JSON.stringify([header.v, header.stream, header.rowKey, header.registerKey ?? null,
-    header.hlc.physicalMs, header.hlc.counter, header.origin, header.op, header.owner ?? null, header.runId ?? null]));
+    header.hlc.physicalMs, header.hlc.counter, header.origin, header.op, header.owner ?? null, header.runId ?? null,
+    ...(header.retention === undefined ? [] : [header.retention])]));
 }
 
 export function createBridgeSealingCodec(accountKey: Uint8Array): BridgeCodec {
@@ -77,6 +78,7 @@ function validateRecord(header: BridgeHeader, value: unknown): asserts value is 
       typeof header.rowKey !== "string" || !header.rowKey ||
       (header.owner !== undefined && (typeof header.owner !== "string" || !header.owner)) ||
       (header.runId !== undefined && (typeof header.runId !== "string" || !header.runId)) ||
+      (header.retention !== undefined && (header.retention !== "30d-idle" || header.op !== "upsert" || header.stream === "account" || !header.owner || header.stream !== `run:${header.runId}`)) ||
       (header.stream !== "account" && !/^run:.+/.test(header.stream)) ||
       !Number.isSafeInteger(header.hlc.physicalMs) || header.hlc.physicalMs < 0 ||
       !Number.isSafeInteger(header.hlc.counter) || header.hlc.counter < 0)
@@ -102,6 +104,7 @@ function validateRecord(header: BridgeHeader, value: unknown): asserts value is 
       validateBridgeBlobIdentity(ref);
       const slot = JSON.stringify([ref.column, ref.sourcePath ?? null]);
       if (typeof ref.column !== "string" || !ref.column || typeof ref.name !== "string" || !ref.name || ref.name.length > 255 ||
+          ref.kind !== undefined && ref.kind !== "value" || ref.kind === "value" && (body.schemaVersion as number) < 4 ||
           /[\\/]/.test(ref.name) || [...ref.name].some((char) => char.charCodeAt(0) < 32) || ref.mime !== null && (typeof ref.mime !== "string" || ref.mime.length > 200) ||
           ref.sourcePath !== undefined && (typeof ref.sourcePath !== "string" || ref.sourcePath.length > 8192) || slots.has(slot)) throw new Error("Invalid Bridge file manifest");
       slots.add(slot);

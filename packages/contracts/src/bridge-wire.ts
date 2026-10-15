@@ -13,11 +13,12 @@ const opaqueKey = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_
 
 /** Header-only validation. The hub never imports record schemas or opens bodies. */
 export function validateBridgeHeader(value: unknown): asserts value is BridgeHeader {
-  if (!object(value) || Object.keys(value).some((key) => !["v", "stream", "rowKey", "registerKey", "hlc", "origin", "op", "owner", "runId"].includes(key)) ||
+  if (!object(value) || Object.keys(value).some((key) => !["v", "stream", "rowKey", "registerKey", "hlc", "origin", "op", "owner", "runId", "retention"].includes(key)) ||
       value.v !== BRIDGE_PROTOCOL_VERSION || !isBridgeStream(value.stream) || !identifier(value.origin) ||
       !opaqueKey(value.rowKey) || !object(value.hlc) || Object.keys(value.hlc).length !== 2 ||
       !safeClock(value.hlc.physicalMs) || !safeClock(value.hlc.counter) ||
       value.owner !== undefined && !identifier(value.owner) || value.runId !== undefined && !identifier(value.runId) ||
+      value.retention !== undefined && (value.retention !== "30d-idle" || value.op !== "upsert" || value.stream === "account" || !value.owner || value.stream !== `run:${value.runId}`) ||
       value.op !== "upsert" && value.op !== "delete" ||
       value.op === "upsert" && !opaqueKey(value.registerKey) || value.op === "delete" && value.registerKey !== undefined)
     throw new Error("Invalid Bridge header");

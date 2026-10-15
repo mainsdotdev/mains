@@ -10,6 +10,7 @@ import type { AppliedChange } from "./bridge.applier";
 import type { BridgeDevConfig } from "./bridge.config";
 import { createBridgeBlobs } from "./bridge.blobs";
 import { createBridgeBlobRecords, type BridgeFileTable } from "./bridge.blob-records";
+import { refreshClaudeSessionMirrors } from "./bridge.session-mirror";
 
 export interface BridgeReplicatorOptions {
   onApproval?: (request: import("@mains/contracts/bridge-auth").BridgeApprovalRequest) => void;
@@ -28,6 +29,7 @@ export interface BridgeReplicatorOptions {
   stageLocalBeforePull?: boolean;
 }
 const watcherLeaseMs = 90_000;
+const quotaRefreshIntervalMs = 60_000;
 
 /** One serialized background loop per database; a hub outage never blocks local execution. */
 export function createBridgeReplicator(options: BridgeReplicatorOptions) {
@@ -42,11 +44,21 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   let timer: ReturnType<typeof setTimeout> | undefined, inFlight: Promise<void> | undefined;
   let requested = false, failures = 0, subscribed = "";
   let quota: BridgeQuota | null = null;
-  async function refreshQuota() {
-    const token = options.token ? await options.token() : config.token;
-    const response = await fetch(new URL("/v1/quota", config.url.replace(/^ws/, "http")), { headers: { Authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) throw new Error(`Bridge quota request failed (${response.status})`);
-    quota = await response.json() as BridgeQuota;
+  let quotaDirty = true, nextQuotaRefreshAt = 0;
+  async function refreshQuota(force = false) {
+    if (!force && (!quotaDirty || Date.now() < nextQuotaRefreshAt)) return;
+    nextQuotaRefreshAt = Date.now() + quotaRefreshIntervalMs;
+    quotaDirty = false;
+    try {
+      const token = options.token ? await options.token() : config.token;
+      const response = await fetch(new URL("/v1/quota", config.url.replace(/^ws/, "http")), { headers: { Authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) throw new Error(`Bridge quota request failed (${response.status})`);
+      quota = await response.json() as BridgeQuota;
+    } catch {
+      // Usage is a cached UI sample. The hub enforces limits on every write;
+      // a failed sample must neither block replication nor hammer the endpoint.
+      quotaDirty = true;
+    }
   }
   const watchers = new Map<string, { runId: string; expires: number }>();
   const runStates = new Map<string, BridgeRunState>();
@@ -68,18 +80,21 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     requestTimeoutMs: options.requestTimeoutMs,
     onPresence: presence,
     onApproval: options.onApproval,
-    onChanged: () => { requested = true; schedule(0); },
+    onChanged: () => { quotaDirty = true; requested = true; schedule(0); },
     onStatusChange(next) {
       if (stopped) return;
       if (next === "offline") { online.clear(); subscribed = ""; state = "offline"; }
       else if (next === "connecting") state = "connecting";
+      else if (next === "connected") quotaDirty = true;
       notify();
     },
   });
   const blobs = options.dataDir ? createBridgeBlobs({ dataDir: options.dataDir, accountKey: config.accountKey, url: config.url, token: options.token ?? config.token }) : undefined;
   const files = blobs ? createBridgeBlobRecords({ sqlite, backendId, dataDir: options.dataDir!, blobs }) : undefined;
   const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(config.accountKey).recordKey,
-    codec: createBridgeSealingCodec(config.accountKey), transport, blobs: files, onApplied: options.onApplied, stageLocalBeforePull: options.stageLocalBeforePull || !!binding?.enrollment_staging });
+    codec: createBridgeSealingCodec(config.accountKey), transport, blobs: files,
+    onApplied: (changes) => { quotaDirty = true; options.onApplied?.(changes); },
+    stageLocalBeforePull: options.stageLocalBeforePull || !!binding?.enrollment_staging });
   sqlite.prepare("UPDATE bridge_config SET account_fingerprint=? WHERE id=1").run(fingerprint);
 
   function watchedRuns(): string[] {
@@ -97,7 +112,11 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   }
   async function drain(stream: BridgeStream) {
     // Bound a busy publisher's work so account pulls and open transcripts keep progressing.
-    for (let batch = 0; batch < 10 && !stopped && !paused; batch++) if (await engine.push(stream, 100) < 100) break;
+    for (let batch = 0; batch < 10 && !stopped && !paused; batch++) {
+      const pushed = await engine.push(stream, 100);
+      if (pushed) quotaDirty = true;
+      if (pushed < 100) break;
+    }
   }
   async function cycle() {
     requested = false;
@@ -110,7 +129,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         await engine.bootstrap(); initialized = true;
       } else await engine.pull("account");
       if (stopped || paused) return;
-      await refreshQuota();
+      refreshClaudeSessionMirrors(sqlite, backendId);
       while (!(sqlite.prepare("SELECT backfill_done FROM bridge_config WHERE id=1").get() as { backfill_done: number }).backfill_done) {
         await engine.backfill(100); await new Promise<void>((resolve) => setImmediate(resolve));
         if (stopped || paused) return;
@@ -140,10 +159,13 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         runStates.set(runId, { runId, ready: true, error: null });
       }
       if (writeError) throw writeError;
+      // Entering/leaving a quota refusal needs a fresh plan/usage sample. The
+      // ordinary live-update path and repeated refusals remain rate limited.
+      await refreshQuota(!!error && /quota|rate limit/i.test(error));
       state = "connected"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify();
     } catch (cause) {
       if (stopped) return;
-      if (/quota|rate limit/i.test(String(cause))) await refreshQuota().catch(() => {});
+      if (/quota|rate limit/i.test(String(cause))) { quotaDirty = true; await refreshQuota(!error || !/quota|rate limit/i.test(error)); }
       failures++;
       error = cause instanceof Error ? cause.message : "Bridge replication failed";
       state = /connection|timed out/i.test(error) ? "offline" : "error";

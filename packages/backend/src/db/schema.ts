@@ -747,6 +747,20 @@ export const runContext = sqliteTable(
    RUN ARTIFACTS (patches, logs, files, reports)
 ------------------------------ */
 
+/** Exact SDK session entries. Large received entries are resolved from their
+ * encrypted blob manifest instead of being duplicated in the row. */
+export const providerSessionEntries = sqliteTable("provider_session_entries", {
+  id: text("id").primaryKey().notNull(),
+  runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  sessionId: text("session_id").notNull(), subpath: text("subpath").notNull().default(""),
+  seq: integer("seq").notNull(), uuid: text("uuid"), entry: text("entry"),
+  byteSize: integer("byte_size").notNull(), contentHash: text("content_hash").notNull(),
+}, (t) => [
+  index("idx_provider_session_entries_order").on(t.runId, t.sessionId, t.subpath, t.seq, t.id),
+  check("check_provider_session_entry_json", sql`${t.entry} IS NULL OR json_valid(${t.entry})`),
+  check("check_provider_session_entry_size", sql`${t.byteSize} >= 0 AND ${t.seq} >= 0`),
+]);
+
 export const runArtifacts = sqliteTable(
   "run_artifacts",
   {
@@ -1659,6 +1673,7 @@ export const bridgeRowClock = sqliteTable("bridge_row_clock", {
   tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(),
   physicalMs: integer("physical_ms").notNull(), counter: integer("counter").notNull(), origin: text("origin").notNull(),
   syncedSeq: integer("synced_seq"),
+  lastAckMs: integer("last_ack_ms"),
   dirty: integer("dirty", { mode: "boolean" }).notNull().default(false), projectId: text("project_id"),
   // Latest register image also retains losing aliases' values for deterministic projection.
   valuesJson: text("values_json").notNull(), refsJson: text("refs_json").notNull().default("{}"),

@@ -59,7 +59,7 @@ export async function handleSignIn(request: Request, env: AuthEnv): Promise<Resp
       if (!/^[A-Za-z0-9_-]{32,128}$/.test(state)) throw new HttpError(400, "Invalid sign-in state");
       const args = JSON.stringify({ redirectUri: url.searchParams.get("redirect_uri"), challenge: url.searchParams.get("code_challenge"), state }).replace(/</g, "\\u003c");
       return page("Sign in to Mains", "<p>Continue to the Mains app on this computer. Key approval is a separate step.</p><button id=\"continue\">Continue to Mains</button>",
-        `${client}document.querySelector('#continue').onclick=()=>post('/v1/auth/authorize',${args}).then(d=>location.assign(d.redirect)).catch(fail);`);
+        `${client}const button=document.querySelector('#continue');button.onclick=async()=>{button.disabled=true;try{const d=await post('/v1/auth/authorize',${args});location.assign(d.redirect);}catch(error){button.disabled=false;fail(error);}};`);
     }
     if (path === "/v1/auth/authorize" && request.method === "POST") {
       if (request.headers.get("Origin") !== url.origin) throw new HttpError(403, "Sign-in origin does not match");

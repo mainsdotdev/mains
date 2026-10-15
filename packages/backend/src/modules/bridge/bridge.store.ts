@@ -13,7 +13,10 @@ export interface BridgeRecoveryContext {
 export interface BridgeStore {
   sqlite: SQLiteInstance; backendId: string; recordKey: Uint8Array; codec: BridgeCodec;
   schemaVersion: number; atlasEnabled: boolean;
+  wireSchemaVersion?: number;
   filesEnabled?: boolean;
+  /** Verified value blobs for the current apply transaction; never fetched inside SQL. */
+  materializedValues?: ReadonlyMap<string, string>;
   recover?: (context: BridgeRecoveryContext) => void;
 }
 export interface OutboxEntry {
@@ -107,6 +110,7 @@ export function portableValues(store: BridgeStore, table: string, clock: RowCloc
     }
   }
   // Paths describe the source filesystem. Replicas open authenticated blob manifests.
+  if (table === "provider_session_entries" && (JSON.parse(clock.blob_refs_json ?? "[]") as { column: string }[]).some((ref) => ref.column === "entry")) values.entry = null;
   if (table === "run_artifacts") {
     if (values.path) refs.path = { path: values.path };
     values.path = null; values.blob_data = null;
@@ -147,9 +151,10 @@ export function prepareRecord(store: BridgeStore, entry: OutboxEntry): PreparedR
   const base = { v: 1 as const, stream: entry.stream, rowKey: keys.rowKey,
     hlc: { physicalMs: clock.physical_ms, counter: clock.counter }, origin: clock.origin,
     ...(entry.owner ? { owner: entry.owner } : {}), ...(entry.run_id ? { runId: entry.run_id } : {}) };
-  const header: BridgeHeader = entry.op === "delete" ? { ...base, op: "delete" } : { ...base, op: "upsert", registerKey: keys.registerKey! };
+  const retention = definition(entry.table_name).retention;
+  const header: BridgeHeader = entry.op === "delete" ? { ...base, op: "delete" } : { ...base, op: "upsert", registerKey: keys.registerKey!, ...(retention ? { retention } : {}) };
   const body = entry.op === "delete" ? { table: entry.table_name, pk: entry.pk } : {
-    table: entry.table_name, pk: entry.pk, register: entry.register, schemaVersion: store.schemaVersion,
+    table: entry.table_name, pk: entry.pk, register: entry.register, schemaVersion: store.wireSchemaVersion ?? store.schemaVersion,
     ...portableValues(store, entry.table_name, clock), blobRefs: JSON.parse(clock.blob_refs_json ?? "[]"),
   };
   if (entry.op === "upsert" && !clock.portable && "values" in body) {
@@ -157,6 +162,9 @@ export function prepareRecord(store: BridgeStore, entry: OutboxEntry): PreparedR
     // remap integers again even when the former physical parent no longer exists.
     store.sqlite.prepare("UPDATE bridge_row_clock SET values_json=?,refs_json=?,portable=1 WHERE table_name=? AND pk=? AND register=?")
       .run(JSON.stringify(body.values), JSON.stringify(body.refs), entry.table_name, entry.pk, entry.register);
+  }
+  if ("values" in body) for (const ref of body.blobRefs) if (ref.kind === "value") {
+    body.schemaVersion = Math.max(body.schemaVersion, 4); body.values[ref.column] = null;
   }
   // The exact sealed delete survives retries and compaction, including its nonce and tag.
   let envelope: BridgeEnvelope;

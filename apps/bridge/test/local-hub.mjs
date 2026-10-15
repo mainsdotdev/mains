@@ -8,12 +8,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
- * @param {{ auth?: boolean, storageLimitBytes?: number, writesPerMinute?: number }} [settings] */
+ * @param {{ auth?: boolean, storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
 export async function startLocalBridgeHub(settings = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hub-"));
   const bundle = join(dir, "hub.mjs");
   const secret = randomBytes(32).toString("hex");
-  await build({ entryPoints: [fileURLToPath(new URL("../src/index.ts", import.meta.url))], bundle: true, format: "esm", platform: "browser", target: "es2022", outfile: bundle, external: ["cloudflare:workers", "node:*"] });
+  await build({ entryPoints: [fileURLToPath(new URL(settings.maintenance ? "../src/staging-reset-worker.ts" : "../src/index.ts", import.meta.url))], bundle: true, format: "esm", platform: "browser", target: "es2022", outfile: bundle, external: ["cloudflare:workers", "node:*"] });
   /** @type {Array<{to: string, url: string}>} */
   const mail = [];
   let loginCount = 0;
@@ -25,6 +25,7 @@ export async function startLocalBridgeHub(settings = {}) {
       mail.push(/** @type {{to: string, url: string}} */ (await request.json())); return Response.json({ ok: true });
     } } } : {}),
     resourcePersistencePath: join(dir, "storage"), bindings: { BRIDGE_DEV_AUTH: settings.auth ? "false" : "true", BRIDGE_DEV_SECRET: secret,
+      ...(settings.maintenance ? { BRIDGE_RESET_ACCOUNT: settings.maintenance.accountId, BRIDGE_RESET_TOKEN: settings.maintenance.token, BRIDGE_AUTH_URL: "https://mains-bridge-staging.team-68e.workers.dev" } : {}),
       ...(settings.storageLimitBytes !== undefined ? { BRIDGE_STORAGE_LIMIT_BYTES: String(settings.storageLimitBytes) } : {}),
       ...(settings.writesPerMinute !== undefined ? { BRIDGE_WRITES_PER_MINUTE: String(settings.writesPerMinute) } : {}),
       ...(settings.auth ? { BETTER_AUTH_SECRET: randomBytes(32).toString("hex") } : {}) } };

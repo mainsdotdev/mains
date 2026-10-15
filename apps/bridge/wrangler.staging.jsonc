@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mains-bridge-staging",
+  "account_id": "68e5ea9f7e1e6a56120e6c366eda1a59",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    "BRIDGE_DEV_AUTH": "false",
+    "BRIDGE_AUTH_URL": "https://mains-bridge-staging.team-68e.workers.dev",
+    "GITHUB_CLIENT_ID": "Ov23livSdwQ720Sax55l"
+  },
+  "d1_databases": [{
+    "binding": "AUTH_DB",
+    "database_name": "mains-bridge-staging-auth",
+    "database_id": "c2c1b89b-566e-49da-8aab-0a0bda098a81",
+    "migrations_dir": "migrations"
+  }],
+  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "mains-bridge-staging-blobs" }],
+  "durable_objects": {
+    "bindings": [{ "name": "ACCOUNT_HUB", "class_name": "AccountHub" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountHub"] }]
+}

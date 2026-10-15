@@ -151,6 +151,9 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     return path;
   }
   const api = {
+    matches(ref: BridgeBlobRef, bytes: Uint8Array): boolean {
+      validateBridgeBlobIdentity(ref); return bytes.length === ref.size && crypto.id(bytes) === ref.blobId;
+    },
     cached(ref: BridgeBlobRef): Promise<string | undefined> { validateBridgeBlobIdentity(ref); return cached(ref); },
     async isCachedFile(realPath: string): Promise<boolean> {
       const ref = opened.get(realPath); if (!ref) return false;

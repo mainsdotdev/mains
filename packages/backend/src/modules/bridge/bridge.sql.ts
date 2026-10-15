@@ -6,11 +6,12 @@ export const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
 export const literal = (value: string) => `'${value.replace(/'/g, "''")}'`;
 export const syncedTables = Object.entries(BRIDGE_TABLES).filter(([, def]) => def.class !== "local");
 export const isAtlas = (table: string) => table.startsWith("atlas_");
-export const clockColumns = "table_name, pk, register, physical_ms, counter, origin, synced_seq, values_json, refs_json, blob_refs_json, portable, dirty, project_id";
+export const clockColumns = "table_name, pk, register, physical_ms, counter, origin, synced_seq, values_json, refs_json, blob_refs_json, portable, dirty, project_id, last_ack_ms";
 export interface RowClock {
   table_name: string; pk: string; register: string; physical_ms: number; counter: number;
   origin: string; synced_seq: number | null; values_json: string; refs_json: string; portable: number;
   blob_refs_json: string | null; dirty?: number; project_id?: string | null;
+  last_ack_ms?: number | null;
 }
 export { compareClock, headerClock } from "./bridge.clock";
 export const clockOf = (clock: RowClock) => ({ physicalMs: clock.physical_ms, counter: clock.counter, origin: clock.origin });

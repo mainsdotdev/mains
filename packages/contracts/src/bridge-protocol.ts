@@ -12,7 +12,10 @@ interface BridgeHeaderBase {
   owner?: string;
   /** Authenticated binding between a run's opaque root key and its public stream. */
   runId?: string;
+  /** Opaque storage policy; no application table or entry contents reach the hub. */
+  retention?: "30d-idle";
 }
+export const BRIDGE_IDLE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export type BridgeHeader = BridgeHeaderBase & (
   | { op: "upsert"; registerKey: string }
   | { op: "delete"; registerKey?: never }
