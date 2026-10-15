@@ -120,7 +120,8 @@ describe("createWorkAdapter", () => {
     } as ProviderDriver;
     createCodexDriver.mockReturnValue(driver);
 
-    const skills = await listSkillsForProvider(codexProvider({}));
+    const skills = await listSkillsForProvider(codexProvider({}), "C:\\Repo");
+    expect(driver.listInstalledPlugins).toHaveBeenCalledWith("C:\\Repo");
 
     expect(skills).toEqual([
       expect.objectContaining({

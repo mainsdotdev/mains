@@ -128,7 +128,7 @@ export function EditorContent({ className = "" }: EditorContentProps) {
 
   if (selectedFile.extension === "diff") {
     return (
-      <div className={`flex flex-col h-full noscrollbar ${className}`}>
+      <div className={`relative flex flex-col h-full noscrollbar ${className}`}>
         <div className="flex shrink-0 items-center justify-end px-3 pt-1">
           <DiffLayoutToggle diffStyle={diffStyle} onStyleChange={setDiffStyle} />
         </div>
@@ -143,13 +143,14 @@ export function EditorContent({ className = "" }: EditorContentProps) {
             />
           </Suspense>
         </div>
+        <div aria-hidden="true" className="absolute bottom-0 left-0 right-0 h-6 bg-linear-to-t from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none" />
       </div>
     );
   }
 
   // Render code viewer
   return (
-    <div className={`flex flex-col h-full ${className}`}>
+    <div className={`relative flex flex-col h-full ${className}`}>
       <div className="flex-1 min-h-0 py-2 overflow-hidden noscrollbar">
         <Suspense fallback={null}>
           <CodeViewer
@@ -163,6 +164,7 @@ export function EditorContent({ className = "" }: EditorContentProps) {
           />
         </Suspense>
       </div>
+      <div aria-hidden="true" className="absolute bottom-0 left-0 right-0 h-6 bg-linear-to-t from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none" />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { attachCrashRecovery } from "./crash-recovery";
 import { getAppIconPath, getSavedDockIcon } from "./dock-icon";
 import { createOnboardingWindowState } from "./onboarding-window";
 import { createOnboardingStartupState } from "./onboarding-startup";
+import { attachWindowAppearance, windowsWindowAppearanceOptions } from "./window-appearance";
 
 let mainWindow: BrowserWindow | null = null;
 let onboardingWindow: ReturnType<typeof createOnboardingWindowState> | null = null;
@@ -101,6 +102,7 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
     minHeight: 600,
     icon: iconPath,
     show: false, // Always create hidden, control visibility via ready-to-show
+    ...windowsWindowAppearanceOptions(),
     webPreferences: {
       preload: path.join(__dirname, "index.js"),
       contextIsolation: true,
@@ -122,6 +124,7 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
   });
 
   const window = mainWindow;
+  attachWindowAppearance(window);
   const presentation = createOnboardingWindowState(window, Boolean(useSaved && saved.isMaximized));
   onboardingWindow = presentation;
   const startup = createOnboardingStartupState(showStartupSplash);
@@ -154,11 +157,16 @@ export function createMainWindow(options: MainWindowOptions = {}): BrowserWindow
     await presentationReady;
     clearTimeout(fallback);
     if (window.isDestroyed()) return;
-    startup.finish();
-    if (onReadyToShow) {
-      onReadyToShow(window);
-    } else if (show) {
-      window.show();
+    try {
+      if (onReadyToShow) {
+        onReadyToShow(window);
+      } else if (show) {
+        window.show();
+      }
+    } finally {
+      // Show the prepared main window before removing the splash; otherwise
+      // the desktop is exposed between the two native windows.
+      startup.finish();
     }
   });
 

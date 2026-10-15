@@ -3,12 +3,14 @@
 //
 // Pure (React-free) layout logic for the run transcript, extracted from
 // workspace-events.tsx so it is testable through its interface rather than
-// only by rendering. Two public functions:
+// only by rendering. Public layout functions:
 //
 //   • buildTurnRenderRows(groups) → flat voice conversation/tools and regular
 //     text accordions (plan/media stay directly reachable).
 //   • matchTurnsToGroups(groups, turns, …) → which group index each session
 //     time bar attaches to.
+//   • lastPromptSuggestionIndex(groups) → the latest follow-up that no user
+//     message has consumed.
 //
 // Everything else here is an internal seam (used by the module + its tests).
 // ─────────────────────────────────────────────────────────────
@@ -178,7 +180,7 @@ function sessionBarsInRenderOrder(
     let lastRank = -1;
     for (let index = start; index <= end; index++) {
       const order = rank.get(index);
-      if (order !== undefined && order > lastRank && !isUserPromptGroup(groups[index])) {
+      if (order !== undefined && order > lastRank && !isUserPromptGroup(groups[index]) && groups[index].type !== "prompt_suggestion") {
         anchor = index;
         lastRank = order;
       }
@@ -264,6 +266,15 @@ export function isUserPromptGroup(g: EventGroup): boolean {
   return g.type === "info" && g.events[0]?.metadata?.kind === "user-prompt";
 }
 
+/** Later assistant content does not consume an offered follow-up; a user message does. */
+export function lastPromptSuggestionIndex(groups: EventGroup[]): number {
+  for (let index = groups.length - 1; index >= 0; index--) {
+    if (isUserPromptGroup(groups[index])) return -1;
+    if (groups[index].type === "prompt_suggestion") return index;
+  }
+  return -1;
+}
+
 export interface ModelChangeMarker {
   fromModel: string;
   toModel: string;
@@ -302,12 +313,6 @@ export function matchModelChangesToPromptGroups(
   return result;
 }
 
-function expandIndexRange(r: { start: number; end: number }): number[] {
-  const out: number[] = [];
-  for (let i = r.start; i <= r.end; i++) out.push(i);
-  return out;
-}
-
 /** Total tool_call events in grouped UI ranges (collapsed accordion preview). */
 function countToolCallsInRanges(groups: EventGroup[], ranges: number[][]): number {
   let n = 0;
@@ -330,37 +335,33 @@ function formatAccordionToolSummary(total: number): string {
 
 /**
  * Within one agent turn (content after a user message until the next user message),
- * split into: optional non-response prefix chunks, then segments each starting with a response
- * artifact and running until the next response (tools, status, suggestions, etc. stay attached).
+ * split into a non-response prefix and response segments. Follow-ups belong
+ * after the visible answer, independent of which response segment arrived last.
  */
 function partitionAgentTurn(
   groups: EventGroup[],
   turnStart: number,
   turnEnd: number,
-): { prefix: Array<{ start: number; end: number }>; segments: Array<{ start: number; end: number }> } {
-  const prefix: Array<{ start: number; end: number }> = [];
-  const segments: Array<{ start: number; end: number }> = [];
-  let i = turnStart;
-  while (i <= turnEnd) {
-    if (groups[i].type !== "response") {
-      const pStart = i;
-      while (i <= turnEnd && groups[i].type !== "response") i++;
-      prefix.push({ start: pStart, end: i - 1 });
+): { prefix: number[]; segments: number[][]; suggestions: number[] } {
+  const prefix: number[] = [];
+  const segments: number[][] = [];
+  const suggestions: number[] = [];
+  let segment = prefix;
+  for (let index = turnStart; index <= turnEnd; index++) {
+    if (groups[index].type === "prompt_suggestion") {
+      suggestions.push(index);
       continue;
     }
-    const segStart = i;
-    let segEnd = i;
-    i++;
-    while (i <= turnEnd && groups[i].type !== "response") {
-      segEnd = i;
-      i++;
+    if (groups[index].type === "response") {
+      segment = [];
+      segments.push(segment);
     }
-    segments.push({ start: segStart, end: segEnd });
+    segment.push(index);
   }
-  return { prefix, segments };
+  return { prefix, segments, suggestions };
 }
 
-export type TurnRenderRow =
+export type TurnRenderRow = (
   | { kind: "flat"; indices: number[] }
   | {
       kind: "accordion";
@@ -376,7 +377,11 @@ export type TurnRenderRow =
       lastSegment: number[];
       previousMessageCount: number;
       previousToolSummary: string;
-    };
+    }
+) & {
+  /** Follow-up chips rendered after the row's answer, outside its accordion. */
+  suggestionIndices?: number[];
+};
 
 /**
  * Material the turn worked *with* rather than produced, tagged at the source
@@ -444,7 +449,7 @@ function groupHasMediaArtifact(
   });
 }
 
-/** Linear plan: every group index appears exactly once, in order. */
+/** Every group index appears once; final answers and follow-ups use presentation order. */
 function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
   const rows: TurnRenderRow[] = [];
   let idx = 0;
@@ -459,30 +464,29 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
     const turnEnd = idx - 1;
     if (turnStart > turnEnd) continue;
 
-    const { prefix, segments } = partitionAgentTurn(groups, turnStart, turnEnd);
+    const { prefix, segments, suggestions } = partitionAgentTurn(groups, turnStart, turnEnd);
+    const appendRow = (row: TurnRenderRow) => rows.push(suggestions.length > 0
+      ? { ...row, suggestionIndices: suggestions } : row);
     const latestDocumentGroup = latestDocumentGroups(
       groups,
       turnStart,
       turnEnd,
     );
-    const prefixIndices = prefix.flatMap(expandIndexRange);
-
     if (segments.length === 0) {
-      for (const p of prefix) {
-        rows.push({ kind: "flat", indices: expandIndexRange(p) });
-      }
+      if (prefix.length > 0) appendRow({ kind: "flat", indices: prefix });
+      else rows.push({ kind: "flat", indices: suggestions });
       continue;
     }
 
     // Native final-answer evidence takes precedence over transport order. A
     // final reply can span multiple text blocks, followed by later commentary.
-    const finalSegments = segments.filter((segment) => groups[segment.start].events.some((event) =>
+    const finalSegments = segments.filter((segment) => groups[segment[0]].events.some((event) =>
       event.type === "artifact" && event.metadata?.kind === "report" && event.metadata?.messagePhase === "final_answer",
     ));
     if (segments.length === 1 && finalSegments.length === 0) {
-      rows.push({
+      appendRow({
         kind: "flat",
-        indices: [...prefixIndices, ...expandIndexRange(segments[0]!)],
+        indices: [...prefix, ...segments[0]!],
       });
       continue;
     }
@@ -491,11 +495,11 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
     // reply were emitted as separate "prefix" rows. Fold them into the first collapsed chunk.
     const visibleSegments = finalSegments.length > 0 ? finalSegments : [segments[segments.length - 1]!];
     const visibleSet = new Set(visibleSegments);
-    const lastSegment = visibleSegments.flatMap(expandIndexRange);
-    const prevRanges = segments.filter((segment) => !visibleSet.has(segment)).map(expandIndexRange);
-    if (prefixIndices.length > 0) {
-      if (prevRanges.length > 0) prevRanges[0] = [...prefixIndices, ...prevRanges[0]!];
-      else prevRanges.push(prefixIndices);
+    const lastSegment = visibleSegments.flat();
+    const prevRanges = segments.filter((segment) => !visibleSet.has(segment));
+    if (prefix.length > 0) {
+      if (prevRanges.length > 0) prevRanges[0] = [...prefix, ...prevRanges[0]!];
+      else prevRanges.push(prefix);
     }
 
     // Plans and MCP Apps must stay out of the collapsed region so their
@@ -524,7 +528,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
       .filter((range) => range.length > 0);
 
     if (filteredPrevRanges.length === 0) {
-      rows.push({
+      appendRow({
         kind: "flat",
         indices: [
           ...messageBreakout,
@@ -542,7 +546,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
         if (groups[gIdx]?.type === "response") visibleMessageCount++;
       }
     }
-    rows.push({
+    appendRow({
       kind: "accordion",
       previousSegments: filteredPrevRanges,
       planBreakoutIndices: planBreakout,
@@ -555,7 +559,7 @@ function buildRegularTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
   return rows;
 }
 
-/** Compaction boundaries, speech and native voice tools stay in chronological chat flow. Typed turns
+/** Async questions, compaction boundaries, speech and native voice tools stay in chronological chat flow. Typed turns
  * keep the existing layout; voice work never adds a separate work disclosure. */
 export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
   const rows: TurnRenderRow[] = [];
@@ -563,8 +567,10 @@ export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
     if (from >= to) return;
     for (const row of buildRegularTurnRenderRows(groups.slice(from, to))) {
       const offset = (indices: number[]) => indices.map((index) => index + from);
-      rows.push(row.kind === "flat" ? { ...row, indices: offset(row.indices) } : {
+      const suggestionTail = row.suggestionIndices ? { suggestionIndices: offset(row.suggestionIndices) } : {};
+      rows.push(row.kind === "flat" ? { ...row, ...suggestionTail, indices: offset(row.indices) } : {
         ...row,
+        ...suggestionTail,
         previousSegments: row.previousSegments.map(offset),
         lastSegment: offset(row.lastSegment),
         planBreakoutIndices: offset(row.planBreakoutIndices),
@@ -578,7 +584,8 @@ export function buildTurnRenderRows(groups: EventGroup[]): TurnRenderRow[] {
     const metadata = group.events[0]?.metadata;
     const workId = typeof metadata?.voiceWorkId === "string" ? metadata.voiceWorkId : null;
     const speech = group.events.some((event) => event.metadata?.voice === true || event.metadata?.kind === "voice-task");
-    if (group.type !== "context_compaction" && !workId && !speech) continue;
+    const asyncQuestions = group.events.some((event) => event.metadata?.source === "codex_async_questions");
+    if (group.type !== "context_compaction" && !workId && !speech && !asyncQuestions) continue;
     flushRegular(regularStart, index);
     regularStart = index + 1;
     rows.push({ kind: "flat", indices: [index] });

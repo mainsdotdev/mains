@@ -296,6 +296,10 @@ function publishLock(lockPath: string, record: OwnershipRecord): boolean {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EEXIST" || code === "ENOTEMPTY") return false;
+      // Windows reports EPERM when a directory rename collides with the
+      // existing lock. Let the owner checks/recovery below handle it; an
+      // EPERM without a destination still indicates a real permission error.
+      if (code === "EPERM" && fs.existsSync(lockPath)) return false;
       throw error;
     }
   } finally {

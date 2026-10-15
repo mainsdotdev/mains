@@ -125,10 +125,10 @@ describe("mains tool registry — mode dimension", () => {
   });
 
   it("work exposes Atlas Page tools to Work-capable providers", () => {
-    expect(toClaudeTools(CTX, "work").map((tool) => tool.name)).toEqual(["AtlasReadPage", "AtlasCreatePage", "AtlasUpdatePage"]);
+    expect(toClaudeTools(CTX, "work").map((tool) => tool.name)).toEqual(["RegisterDeliverable", "AtlasReadPage", "AtlasCreatePage", "AtlasUpdatePage"]);
     expect(toCopilotTools(CTX, "work")).toHaveLength(0);
     expect(toMcpToolDefs("work")).toHaveLength(0);
-    expect(toCodexDynamicTools("work").map((tool) => tool.name)).toEqual(["AtlasReadPage", "AtlasCreatePage", "AtlasUpdatePage"]);
+    expect(toCodexDynamicTools("work").map((tool) => tool.name)).toEqual(["RegisterDeliverable", "AtlasReadPage", "AtlasCreatePage", "AtlasUpdatePage"]);
   });
 
   it("chat exposes only read-only Atlas access", () => {

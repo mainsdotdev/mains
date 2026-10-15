@@ -32,7 +32,7 @@ import {
 import { getTransport } from "@/lib/transport";
 import { WorkspaceInput } from "@/features/workspace/components/workspace-input";
 import { WorkspaceEvents } from "@/features/workspace/components/workspace-events";
-import { ToolApprovalDialog } from "@/features/workspace/components/tools/tool-approval-dialog";
+import { AsyncQuestionDialogProvider, RunInputDialog } from "@/features/workspace/components/tools/async-question-dialog";
 import { PluginLogoProvider } from "@/features/workspace/hooks/use-plugin-logos";
 import { useConversationSettings } from "@/features/workspace/hooks/use-conversation-settings";
 import { useWorkspaceRuns } from "@/features/workspace/hooks/use-workspace-runs";
@@ -474,6 +474,9 @@ function ImageComposer({
   );
   return (
     <PluginLogoProvider providerId="codex">
+    <AsyncQuestionDialogProvider ownerKey={runOwnerKey(backendId, ws.activeRunId ?? runId ?? "new")}
+      runId={ws.activeRunId} runStatus={ws.activeRun?.status} turns={ws.currentTurns}
+      events={ws.currentEvents} historical={ws.history?.historical}>
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-3 px-5 py-3">
           {runId && (
@@ -503,9 +506,9 @@ function ImageComposer({
                 variant="codex"
               />
             </div>
-            {approval && (
+            {ws.activeRunId && (
               <div className="mx-auto w-full max-w-210 px-4 pb-3">
-                <ToolApprovalDialog
+                <RunInputDialog
                   request={approval}
                   onRespond={respond}
                   variant="codex"
@@ -567,6 +570,7 @@ function ImageComposer({
           </div>
         )}
       </div>
+    </AsyncQuestionDialogProvider>
     </PluginLogoProvider>
   );
 }

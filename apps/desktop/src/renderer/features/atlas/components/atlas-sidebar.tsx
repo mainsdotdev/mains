@@ -45,7 +45,7 @@ export function AtlasSidebar() {
   const { data: account } = useGetAccountQuery();
   const ownerKey = useAtlasOwnerKey(account?.id ?? "");
   const items = useListAtlasQuery(
-    { accountId: account?.id ?? "" },
+    { accountId: account?.id ?? "", kind: "page", trashed: false, limit: 30 },
     { skip: !account },
   );
   const { data: collections = [] } = useListCollectionsQuery(

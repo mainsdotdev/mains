@@ -13,6 +13,7 @@ import {
 } from "./settings-layout";
 import { useAutoUpdate } from "@/hooks/use-auto-update";
 import { useCapabilities } from "@/lib/platform";
+import { getRuntimeOS } from "../../../../shared/runtime-platform";
 import { Refresh } from "@/components/ui/icons";
 import {
   AgentCard,
@@ -228,10 +229,10 @@ export default function GeneralSettings() {
       </SettingsSection>
 
       {caps.windowChrome && (
-        <SettingsSection title="Menu Bar">
+        <SettingsSection title={getRuntimeOS() === "darwin" ? "Menu Bar" : "System Tray"}>
           <SettingsRow
-            title="Menu Bar Icon"
-            description="Show the Mains icon in the system menu bar"
+            title={getRuntimeOS() === "darwin" ? "Menu Bar Icon" : "Tray Icon"}
+            description="Show the Mains icon in the system status area"
           >
             <MenuBarIconToggle />
           </SettingsRow>
@@ -249,6 +250,15 @@ export default function GeneralSettings() {
               onCheck={checkUpdate}
               onInstall={installUpdate}
             />
+          </SettingsRow>
+        </SettingsSection>
+      )}
+      {caps.windowChrome && !caps.autoUpdate && (
+        <SettingsSection title="Software Updates">
+          <SettingsRow title="Version" description={`Current version: v${__APP_VERSION__}. Windows beta upgrades use the installer.`}>
+            <Button variant="ghost" onClick={() => void window.api.shell.openExternal("https://github.com/mainsdotdev/mains/releases")}>
+              Download latest release
+            </Button>
           </SettingsRow>
         </SettingsSection>
       )}

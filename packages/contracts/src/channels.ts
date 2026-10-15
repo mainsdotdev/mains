@@ -19,6 +19,7 @@ export const CHANNELS = {
     setMenuBarIconVisible: "app:setMenuBarIconVisible",
     setOnboardingWindow: "app:setOnboardingWindow",
     setThemeSource: "app:setThemeSource",
+    setWindowAppearance: "app:setWindowAppearance",
     setUnsavedChanges: "app:setUnsavedChanges",
     windowRequest: "app:windowRequest",
   },
@@ -112,6 +113,7 @@ export const CHANNELS = {
   },
   atlas: {
     list: "atlas:list",
+    library: "atlas:library",
     generated: "atlas:generated",
     get: "atlas:get",
     createPage: "atlas:createPage",
@@ -378,6 +380,8 @@ export const CHANNELS = {
     continue: "runs:continue",
     steer: "runs:steer",
     inputStatus: "runs:inputStatus",
+    answerAsyncQuestions: "runs:answerAsyncQuestions",
+    dismissAsyncQuestions: "runs:dismissAsyncQuestions",
     createRealtimeConversation: "runs:createRealtimeConversation",
     startRealtime: "runs:startRealtime",
     stopRealtime: "runs:stopRealtime",
@@ -491,6 +495,7 @@ export const CHANNELS = {
   workspace: {
     // ── lifecycle ──
     archive: "workspace:archive",
+    cancelClone: "workspace:cancelClone",
     create: "workspace:create",
     createFromSource: "workspace:createFromSource",
     delete: "workspace:delete",

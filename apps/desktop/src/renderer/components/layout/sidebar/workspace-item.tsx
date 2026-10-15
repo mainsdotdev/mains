@@ -100,7 +100,7 @@ export default function WorkspaceItem({
   const { data: latestDiff } = useGetLatestWorkspaceDiffSummaryQuery(id);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   useSuppressBrowserView(isDropdownOpen);
-  // Detecting installed apps sweeps every `.app` bundle in the main process, so
+  // Detecting installed apps checks native installations in the main process, so
   // it isn't something to do for a menu that may never open. Start on hover
   // instead of on click — the options button only appears on hover anyway, so
   // the request is already in flight by the time the menu opens. RTKQ dedupes

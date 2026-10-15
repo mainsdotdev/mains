@@ -16,7 +16,8 @@ export function useAtlasTabs(accountId: string, activeId?: string) {
   const ownerKey = useAtlasOwnerKey(accountId);
   const dispatch = useAppDispatch();
   const stored = useAppSelector((state) => state.atlas.byOwner[ownerKey]?.tabs ?? EMPTY_TABS);
-  const { currentData, isFetching, isError } = useListAtlasQuery({ accountId });
+  const ids = useMemo(() => [...new Set([...stored.map((tab) => tab.id), ...(activeId ? [activeId] : [])])].sort(), [stored, activeId]);
+  const { currentData, isFetching, isError } = useListAtlasQuery({ accountId, ids }, { skip: !ids.length });
   const items = currentData ?? EMPTY_ITEMS;
   const itemsById = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const complete = currentData !== undefined && !isFetching && !isError;

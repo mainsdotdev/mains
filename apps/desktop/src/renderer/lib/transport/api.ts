@@ -53,6 +53,8 @@ export const appApi = {
     continue: method<typeof window.api.runs.continue>(CHANNELS.runs.continue),
     steer: method<typeof window.api.runs.steer>(CHANNELS.runs.steer),
     inputStatus: method<typeof window.api.runs.inputStatus>(CHANNELS.runs.inputStatus),
+    answerAsyncQuestions: method<typeof window.api.runs.answerAsyncQuestions>(CHANNELS.runs.answerAsyncQuestions),
+    dismissAsyncQuestions: method<typeof window.api.runs.dismissAsyncQuestions>(CHANNELS.runs.dismissAsyncQuestions),
     createRealtimeConversation: method<typeof window.api.runs.createRealtimeConversation>(CHANNELS.runs.createRealtimeConversation),
     startRealtime: method<typeof window.api.runs.startRealtime>(CHANNELS.runs.startRealtime),
     stopRealtime: method<typeof window.api.runs.stopRealtime>(CHANNELS.runs.stopRealtime),

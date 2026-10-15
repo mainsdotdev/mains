@@ -20,14 +20,19 @@ beforeEach(() => {
 
 afterEach(() => {
   delete (window as any).mainTransport;
+  delete (window as any).api;
   vi.resetModules();
 });
 
 describe("Settings sections", () => {
-  it("gives Lens its own desktop Settings page", async () => {
+  it("gives Lens its own macOS desktop Settings page", async () => {
     Object.defineProperty(window, "mainTransport", {
       configurable: true,
       value: {},
+    });
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { platform: { os: "darwin" } },
     });
     vi.resetModules();
 

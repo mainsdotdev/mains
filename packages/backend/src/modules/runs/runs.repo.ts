@@ -4,6 +4,7 @@ import { getDb } from "../../db/client";
 import { safeJsonParse } from "../../db/utils";
 import type { ReadRunHistoryContentPayload, ReadRunHistoryPayload, RunHistoryContentPage, RunHistoryCursor } from "@mains/contracts/runs";
 import { historyEndAfter } from "@mains/contracts/run-history";
+import { readAsyncQuestions, type AsyncQuestionAnswer } from "@mains/contracts/async-questions";
 import { historyWindow, compareHistoryCursors as compareCursor } from "./run-history";
 import type { SQLWrapper, SQL } from "drizzle-orm";
 import {
@@ -492,12 +493,74 @@ export const runsRepo = {
     return rows[0] ? mapArtifactRowToResponse(rows[0]) : null;
   },
 
+  async findInputArtifact(runId: string, clientUserMessageId: string): Promise<RunArtifactResponse | null> {
+    const rows = await getDb().select().from(runArtifacts).where(and(
+      eq(runArtifacts.runId, runId),
+      sql`${runArtifacts.kind} = 'user-prompt'`,
+      sql`json_extract(${runArtifacts.metadata}, '$.clientUserMessageId') = ${clientUserMessageId}`,
+    )).limit(1);
+    return rows[0] ? mapArtifactRowToResponse(rows[0]) : null;
+  },
+
+  /** Also covers older questions that predate persisted lifecycle metadata. */
+  async findAsyncQuestionSupersedingInput(runId: string, artifactId: number): Promise<number | null> {
+    const rows = await getDb().select({ id: runArtifacts.id }).from(runArtifacts).where(and(
+      eq(runArtifacts.runId, runId), gt(runArtifacts.id, artifactId),
+      sql`${runArtifacts.kind} = 'user-prompt'`,
+      sql`COALESCE(json_extract(${runArtifacts.metadata}, '$.isFromSubagent'), 0) != 1`,
+      sql`COALESCE(json_extract(${runArtifacts.metadata}, '$.clientUserMessageId') =
+        'codex-async-answer-' || json_extract(${runArtifacts.metadata}, '$.asyncQuestionReply.artifactId'), 0) = 0`,
+    )).orderBy(asc(runArtifacts.id)).limit(1);
+    return rows[0]?.id ?? null;
+  },
+
+  async dismissAsyncQuestions(runId: string, artifactId: number): Promise<boolean> {
+    const rows = await getDb().update(runArtifacts).set({
+      metadata: sql`json_patch(COALESCE(${runArtifacts.metadata}, '{}'), ${JSON.stringify({ asyncQuestionState: { dismissed: true } })})`,
+    }).where(and(
+      eq(runArtifacts.runId, runId), eq(runArtifacts.id, artifactId),
+      sql`json_extract(${runArtifacts.metadata}, '$.source') = 'codex_async_questions'`,
+      sql`COALESCE(json_extract(${runArtifacts.metadata}, '$.isFromSubagent'), 0) != 1`,
+      sql`COALESCE(json_extract(${runArtifacts.metadata}, '$.asyncQuestionState.dismissed'), 0) != 1`,
+    )).returning({ id: runArtifacts.id });
+    return rows.length > 0;
+  },
+
+  /** An accepted ordinary user input retires every older unanswered question. */
+  async supersedeAsyncQuestions(runId: string, inputArtifactId: number): Promise<void> {
+    await getDb().update(runArtifacts).set({
+      metadata: sql`json_patch(COALESCE(${runArtifacts.metadata}, '{}'), ${JSON.stringify({ asyncQuestionState: { supersededBy: inputArtifactId } })})`,
+    }).where(and(
+      eq(runArtifacts.runId, runId), sql`${runArtifacts.id} < ${inputArtifactId}`,
+      sql`json_extract(${runArtifacts.metadata}, '$.source') = 'codex_async_questions'`,
+      sql`COALESCE(json_extract(${runArtifacts.metadata}, '$.isFromSubagent'), 0) != 1`,
+      sql`json_extract(${runArtifacts.metadata}, '$.asyncQuestionAnswer') IS NULL`,
+      sql`json_extract(${runArtifacts.metadata}, '$.asyncQuestionState.supersededBy') IS NULL`,
+    ));
+  },
+
+  /** Only accepted input may settle a question; drafts never enter the DB. */
+  async recordAsyncQuestionAnswer(runId: string, answer: AsyncQuestionAnswer): Promise<boolean> {
+    const artifact = await this.findArtifactById(answer.artifactId);
+    if (!artifact || artifact.runId !== runId || artifact.metadata?.source !== "codex_async_questions" ||
+        artifact.metadata.isFromSubagent === true ||
+        readAsyncQuestions(artifact.metadata.questions).length !== answer.answers.length) return false;
+    const rows = await getDb().update(runArtifacts).set({
+      metadata: sql`json_patch(COALESCE(${runArtifacts.metadata}, '{}'), ${JSON.stringify({ asyncQuestionAnswer: answer })})`,
+    }).where(and(
+      eq(runArtifacts.id, answer.artifactId),
+      eq(runArtifacts.runId, runId),
+      sql`json_extract(${runArtifacts.metadata}, '$.asyncQuestionAnswer') IS NULL`,
+    )).returning({ id: runArtifacts.id });
+    return rows.length > 0;
+  },
+
   findOutputArtifactKeys(runId: string): RunArtifactResponse[] {
     return getDb().select({ ...getTableColumns(runArtifacts), blobData: sql<null>`NULL`,
       content: sql<string | null>`CASE WHEN ${runArtifacts.kind} = 'user-prompt' THEN ${runArtifacts.content}
         WHEN ${runArtifacts.kind} = 'report' AND length(trim(${runArtifacts.content})) > 0 THEN '[message]' ELSE NULL END` })
       .from(runArtifacts).where(and(eq(runArtifacts.runId, runId),
-        sql`${runArtifacts.kind} IN ('report', 'user-prompt', 'image')`))
+        sql`${runArtifacts.kind} IN ('report', 'user-prompt', 'image', 'document', 'file')`))
       .orderBy(asc(runArtifacts.id)).all().map(mapArtifactRowToResponse);
   },
 

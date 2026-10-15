@@ -3,7 +3,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { createServer } from "node:http";
+import { WORKSPACE_CLONE_CANCELED } from "@mains/contracts/workspace-intake";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
+import { augmentPathForPackagedApp } from "../providers/providers.utils";
 
 // ─────────────────────────────────────────────────────────────
 // git module tests — real temporary repos, no simple-git mock.
@@ -65,7 +69,7 @@ function write(repo: string, file: string, content: string): void {
  * recorded; returns the files recorded since. Closed when the test ends.
  */
 function watchWorktree(repo: string): () => Set<string> {
-  const topLevel = fs.realpathSync(repo);
+  const topLevel = fs.realpathSync.native(repo);
   const runId = `watcher-${++repoCounter}`;
   const since = Date.now();
   worktreeWrites.open(topLevel, runId, since);
@@ -403,7 +407,63 @@ describe("initRepo", () => {
   });
 });
 
-describe("cloneRepo — URL hardening", () => {
+describe("cloneRepo", () => {
+  it("stops a real in-flight Git request and removes its partial checkout", async () => {
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    const server = createServer(() => requestStarted());
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing test server port");
+    const controller = new AbortController();
+    const pending = gitService.cloneRepo(`http://127.0.0.1:${address.port}/slow.git`, sandbox, controller.signal);
+    onTestFinished(async () => {
+      controller.abort();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await pending.catch(() => {});
+    });
+    const rejected = expect(pending).rejects.toThrow(WORKSPACE_CLONE_CANCELED);
+    await started;
+    expect(fs.existsSync(path.join(sandbox, "slow"))).toBe(true);
+    controller.abort();
+    await rejected;
+    expect(fs.existsSync(path.join(sandbox, "slow"))).toBe(false);
+  });
+
+  it("preserves an existing destination on failure and does no work when already canceled", async () => {
+    const destination = path.join(sandbox, "owned");
+    fs.mkdirSync(destination);
+    fs.writeFileSync(path.join(destination, "keep.txt"), "existing files");
+    const controller = new AbortController();
+    await expect(gitService.cloneRepo("https://mains-test.invalid/owned.git", sandbox, controller.signal)).rejects.toMatchObject({ code: "EEXIST" });
+    controller.abort();
+    await expect(gitService.cloneRepo("https://mains-test.invalid/owned.git", sandbox, controller.signal)).rejects.toThrow(WORKSPACE_CLONE_CANCELED);
+    expect(fs.readFileSync(path.join(destination, "keep.txt"), "utf8")).toBe("existing files");
+  });
+
+  it.runIf(process.platform === "win32")("clones with the stale PATH inherited from Windows Explorer", async () => {
+    const source = makeRepo();
+    const url = "https://mains-test.invalid/fixture.git";
+    const config = path.join(sandbox, "clone-config");
+    // Redirect this fixture URL locally so the regression needs no network or auth.
+    git(sandbox, "config", "--file", config, `url.${pathToFileURL(source).href}.insteadOf`, url);
+    git(sandbox, "config", "--file", config, "core.autocrlf", "false");
+    const parent = path.join(sandbox, "Türkçe clone parent");
+    fs.mkdirSync(parent);
+    vi.stubEnv("GIT_CONFIG_GLOBAL", config);
+    vi.stubEnv("PATH", path.join(process.env.SystemRoot ?? "C:\\Windows", "System32"));
+    try {
+      augmentPathForPackagedApp(true);
+      const result = await gitService.cloneRepo(url, parent);
+      expect(result).toEqual({ clonedPath: path.join(parent, "fixture"), defaultBranch: "main", originUrl: url });
+      expect(fs.readFileSync(path.join(result.clonedPath, "README.md"), "utf8")).toBe("# test\n");
+      expect(await gitService.getCurrentBranch(result.clonedPath)).toBe("main");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects option-injection and non-transport URLs", async () => {
     await expect(
       gitService.cloneRepo("-oProxyCommand=evil", sandbox),
@@ -1090,21 +1150,23 @@ describe("diffTrees", () => {
     const repo = makeTurnRepo();
     const before = await gitService.snapshotWorkingTree(repo);
     makeTurnEdits(repo);
-    write(repo, "*.ts", "not a glob\n");
+    write(repo, "a[1].ts", "not a glob\n");
+    write(repo, "a1.ts", "not the literal filename\n");
     const after = await gitService.snapshotWorkingTree(repo);
 
     const diff = await gitService.diffTrees(repo, before, after, [
       "keep.ts",
       "moved.ts",
       "move-me.ts",
-      "*.ts",
+      "a[1].ts",
     ]);
-    expect(diff.files.map((f) => f.path).sort()).toEqual(["*.ts", "keep.ts", "moved.ts"]);
+    expect(diff.files.map((f) => f.path).sort()).toEqual(["a[1].ts", "keep.ts", "moved.ts"]);
     expect(diff.files.find((f) => f.path === "moved.ts")).toMatchObject({
       status: "renamed",
       oldPath: "move-me.ts",
     });
     expect(diff.diffText).not.toContain("new.ts");
+    expect(diff.diffText).not.toContain("a1.ts");
     expect(diff.additions).toBe(2);
     expect(diff.deletions).toBe(1);
 
@@ -1132,10 +1194,10 @@ describe("locateWorktree", () => {
     fs.mkdirSync(path.join(repo, "apps", "desktop"), { recursive: true });
 
     const atRoot = await gitService.locateWorktree(repo);
-    expect(atRoot).toEqual({ topLevel: fs.realpathSync(repo), prefix: "" });
+    expect(atRoot).toEqual({ topLevel: fs.realpathSync.native(repo), prefix: "" });
 
     const inSubdir = await gitService.locateWorktree(path.join(repo, "apps", "desktop"));
-    expect(inSubdir).toEqual({ topLevel: fs.realpathSync(repo), prefix: "apps/desktop/" });
+    expect(inSubdir).toEqual({ topLevel: fs.realpathSync.native(repo), prefix: "apps/desktop/" });
   });
 });
 

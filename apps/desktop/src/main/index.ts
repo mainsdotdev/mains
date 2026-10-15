@@ -4,6 +4,8 @@ if (process.platform === "win32") {
 
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 
+if (process.platform === "win32") app.setAppUserModelId("com.squirrel.Mains.Mains");
+
 // Disable background Chromium features we never use. `CalculateNativeWinOcclusion`
 // in particular can cause steady CPU churn on Windows when the window is hidden.
 app.commandLine.appendSwitch(
@@ -29,6 +31,7 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
+import { getWindowsWorkspaceApps, openWindowsWorkspaceInApp } from "./modules/shell/windows-open-with";
 import { initializeDatabase, closeDatabase } from "@mains/backend/db/client";
 import { DatabaseOwnershipError } from "@mains/backend/db/database-ownership";
 import { registerBrowserWindowSink } from "./ipc-kit/browser-window-sink";
@@ -97,6 +100,8 @@ import {
   applySavedThemeSource,
   registerThemeSourceIpc,
   unregisterThemeSourceIpc,
+  registerWindowAppearanceIpc,
+  unregisterWindowAppearanceIpc,
   registerOnboardingWindowIpc,
   unregisterOnboardingWindowIpc,
   applySavedDockIcon,
@@ -181,13 +186,25 @@ import { CHANNELS } from "@mains/contracts/channels";
 import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime";
 import { createElectronBackendRuntime } from "./runtime/electron-backend-runtime";
 import { configureIpcMainAdapter } from "@mains/backend/ipc-kit/ipc-main";
+import { runPackageSmoke } from "./package-smoke";
+
+const SMOKE_TEST = process.argv.includes("--smoke-test");
+function finishPackageSmoke(error?: unknown): void {
+  if (!process.env.MAINS_SMOKE_RESULT) throw new Error("Package smoke requires a result file");
+  fs.writeFileSync(process.env.MAINS_SMOKE_RESULT, JSON.stringify({
+    success: !error, platform: process.platform, arch: process.arch,
+    ...(error ? { error: error instanceof Error ? error.stack ?? error.message : String(error) } : {}),
+  }));
+  if (error) app.exit(1);
+  else app.quit();
+}
 
 configureBackendRuntime(createElectronBackendRuntime());
 configureIpcMainAdapter(ipcMain);
 configureRunNotificationSink(createElectronRunNotificationSink());
 
 // ─────────────────────────────────────────────────────────────
-// Installed app detection (macOS)
+// Installed workspace app detection (macOS and Windows)
 // ─────────────────────────────────────────────────────────────
 const execFileAsync = promisify(execFile);
 
@@ -271,7 +288,7 @@ let persistedAppsLoaded = false;
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const MAX_MENTIONABLE_APP_MATCHES = 40;
 /** Bump when `DetectedApp` or `KNOWN_APPS` changes shape — invalidates the disk cache. */
-const INSTALLED_APPS_CACHE_VERSION = 1;
+const INSTALLED_APPS_CACHE_VERSION = 2;
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["https:", "http:", "mailto:"]);
 
 function appIconsDir(): string {
@@ -285,11 +302,11 @@ function appIconsDir(): string {
 }
 
 /**
- * Extract the `.icns` for `appPath` and persist a 64×64 PNG to
+ * Extract the native icon for `appPath` and persist a PNG to
  * `userData/app-icons/<id>.png`. Returns a `mains-appicon://icon/<id>.png` URL
  * the renderer can drop into `<img src>` without any base64 buffering.
  *
- * If the PNG already exists and is non-empty we skip the `sips` call —
+ * If the PNG already exists and is non-empty we skip native icon extraction —
  * `detectInstalledApps` runs on a 1h cache but the disk copy survives
  * restarts, so this is nearly free on subsequent launches.
  */
@@ -300,6 +317,13 @@ async function getAppIcon(
   try {
     const outPath = path.join(appIconsDir(), `${id}.png`);
     if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
+      return `mains-appicon://icon/${id}.png`;
+    }
+
+    if (process.platform === "win32") {
+      const icon = await app.getFileIcon(appPath, { size: "normal" });
+      if (icon.isEmpty()) return null;
+      await fsp.writeFile(outPath, icon.toPNG());
       return `mains-appicon://icon/${id}.png`;
     }
 
@@ -618,9 +642,10 @@ function loadPersistedInstalledApps(): void {
   try {
     const parsed = JSON.parse(
       fs.readFileSync(installedAppsCachePath(), "utf8"),
-    ) as { version?: number; detectedAt?: number; apps?: DetectedApp[] };
+    ) as { version?: number; platform?: string; detectedAt?: number; apps?: DetectedApp[] };
     if (
       parsed?.version !== INSTALLED_APPS_CACHE_VERSION ||
+      parsed.platform !== process.platform ||
       !Array.isArray(parsed.apps)
     ) {
       return;
@@ -648,6 +673,7 @@ function persistInstalledApps(apps: DetectedApp[]): void {
       installedAppsCachePath(),
       JSON.stringify({
         version: INSTALLED_APPS_CACHE_VERSION,
+        platform: process.platform,
         detectedAt: Date.now(),
         apps,
       }),
@@ -663,19 +689,21 @@ function refreshInstalledApps(): Promise<DetectedApp[]> {
 
   detectInFlight = (async () => {
     try {
-      const byBundleId = await scanBundleIdMap();
-
-      const detected: DetectedApp[] = [];
-      for (const knownApp of KNOWN_APPS) {
-        const appPath = byBundleId.get(knownApp.bundleId);
-        if (!appPath) continue;
-        detected.push({
-          id: knownApp.id,
-          name: knownApp.name,
-          bundleId: knownApp.bundleId,
-          path: appPath,
-          icon: null,
-        });
+      const detected: DetectedApp[] = process.platform === "win32"
+        ? getWindowsWorkspaceApps() : [];
+      if (process.platform === "darwin") {
+        const byBundleId = await scanBundleIdMap();
+        for (const knownApp of KNOWN_APPS) {
+          const appPath = byBundleId.get(knownApp.bundleId);
+          if (!appPath) continue;
+          detected.push({
+            id: knownApp.id,
+            name: knownApp.name,
+            bundleId: knownApp.bundleId,
+            path: appPath,
+            icon: null,
+          });
+        }
       }
 
       // Icons are a no-op once the PNG is on disk (see getAppIcon).
@@ -908,6 +936,10 @@ async function initializeApp() {
     ipcMain.handle(
       CHANNELS.shell.openInApp,
       async (_, appId: string, filePath: string) => {
+        if (process.platform === "win32") {
+          await openWindowsWorkspaceInApp(appId, filePath);
+          return;
+        }
         if (process.platform !== "darwin") return;
         const known = KNOWN_APPS.find((a) => a.id === appId);
         if (!known) return;
@@ -922,7 +954,7 @@ async function initializeApp() {
       },
     );
     ipcMain.handle(CHANNELS.shell.getInstalledApps, async () => {
-      if (process.platform !== "darwin") {
+      if (process.platform !== "darwin" && process.platform !== "win32") {
         return { success: true, data: [] };
       }
       try {
@@ -1029,6 +1061,7 @@ async function initializeApp() {
     }));
     registerWindowRequestIpc();
     registerThemeSourceIpc();
+    registerWindowAppearanceIpc();
     registerOnboardingWindowIpc();
     registerDockIconIpc();
 
@@ -1123,15 +1156,17 @@ async function initializeApp() {
     createMainWindow({
       show: false,
       // The renderer's early storage read permits this only for completed users.
-      showStartupSplash: true,
+      showStartupSplash: !SMOKE_TEST,
       onReadyToShow: (window) => {
-        // Close splash and show main window
-        closeSplashWindow();
+        if (SMOKE_TEST) {
+          void runPackageSmoke(window).then(() => finishPackageSmoke(), finishPackageSmoke);
+          return;
+        }
         window.show();
 
         // Warm the installed-app cache off the critical path so the workspace
         // "Open with" submenu is already populated the first time it opens.
-        if (process.platform === "darwin") {
+        if (process.platform === "darwin" || process.platform === "win32") {
           setTimeout(() => {
             void detectInstalledApps().catch((err) =>
               console.warn("Installed-apps warmup failed:", err),
@@ -1152,6 +1187,10 @@ async function initializeApp() {
   } catch (error) {
     console.error("Failed to initialize application:", error);
     closeSplashWindow();
+    if (SMOKE_TEST) {
+      finishPackageSmoke(error);
+      return;
+    }
     if (error instanceof DatabaseOwnershipError) {
       dialog.showErrorBox("Mains data is already in use", error.message);
     }
@@ -1245,6 +1284,7 @@ async function cleanupApp() {
     ipcMain.removeHandler(CHANNELS.app.getFullscreen);
     unregisterWindowRequestIpc();
     unregisterThemeSourceIpc();
+    unregisterWindowAppearanceIpc();
     unregisterOnboardingWindowIpc();
     unregisterDockIconIpc();
 
@@ -1260,7 +1300,7 @@ async function cleanupApp() {
 // Single instance lock — prevent multiple app instances
 // Skip the single-instance lock in headless --serve mode so a backend can run
 // alongside a local GUI instance (e.g. for testing).
-if (!SERVE.serve) {
+if (!SERVE.serve && !SMOKE_TEST) {
   const gotTheLock = app.requestSingleInstanceLock();
 
   if (!gotTheLock) {
@@ -1286,7 +1326,10 @@ if (!app.isPackaged) {
 // The display name is "Mains", but userData has always lived under the
 // lowercase dir — pin it so existing installs keep their data even on
 // case-sensitive filesystems.
-app.setPath("userData", path.join(app.getPath("appData"), "mains"));
+if (SMOKE_TEST && (!process.env.MAINS_SMOKE_USER_DATA || !path.isAbsolute(process.env.MAINS_SMOKE_USER_DATA))) {
+  throw new Error("Package smoke requires an isolated absolute userData directory");
+}
+app.setPath("userData", SMOKE_TEST ? process.env.MAINS_SMOKE_USER_DATA! : path.join(app.getPath("appData"), "mains"));
 
 // Custom About panel
 app.setAboutPanelOptions({

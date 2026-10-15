@@ -908,6 +908,20 @@ input.on("line", (line) => {
       break;
 
     case "plugin/installed":
+      if (process.env.MAINS_CODEX_FIXTURE_PROJECT_PLUGINS === "1") {
+        const cwd = params.cwds?.[0];
+        respond(id, {
+          ...fixturePluginCatalog(),
+          marketplaces: cwd ? [{
+            name: "workspace-local", path: cwd,
+            plugins: [fixturePluginSummary({
+              id: "workspace-plugin@workspace-local", name: "workspace-plugin",
+              installed: true, enabled: true, source: { type: "local", path: cwd },
+            })],
+          }] : [],
+        });
+        break;
+      }
       // Real Codex answers this from a registry snapshotted at process start,
       // so a plugin installed mid-session stays missing until a restart. Set
       // the flag to reproduce that blind spot.

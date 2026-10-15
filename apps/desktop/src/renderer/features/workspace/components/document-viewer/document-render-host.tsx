@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Text } from "@/components/ui";
-import { useLocalDocumentUrl } from "@/hooks/use-local-document-url";
+import { fetchLocalDocument, localDocumentUrlRevision, subscribeLocalDocumentUrls } from "@/lib/local-document-url";
 import { pickRenderer, type OfficeDocType } from "@/lib/document-viewer";
 import type { DocumentViewerDoc } from "@/lib/redux/slices/appSettingsSlice";
 import { DocumentFallback } from "./document-fallback";
@@ -185,7 +185,7 @@ export function DocumentRenderHost({
   doc: DocumentViewerDoc & { docType: OfficeDocType };
   zoom: number;
 }) {
-  const url = useLocalDocumentUrl(doc.path);
+  const revision = useSyncExternalStore(subscribeLocalDocumentUrls, localDocumentUrlRevision);
   const hostRef = useRef<HTMLDivElement>(null);
   const shadowRootRef = useRef<ShadowRoot | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -193,6 +193,7 @@ export function DocumentRenderHost({
   const pptxCtlRef = useRef<PptxRenderController | null>(null);
 
   const [status, setStatus] = useState<Status>("loading");
+  const [failure, setFailure] = useState<string | undefined>();
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
   const sheetCtlRef = useRef<{ showSheet: (name: string) => void } | null>(
@@ -210,7 +211,7 @@ export function DocumentRenderHost({
   // Render whenever the signed URL or target document changes.
   useEffect(() => {
     const root = shadowRootRef.current;
-    if (!url || !root) {
+    if (!root) {
       setStatus("loading");
       return;
     }
@@ -218,6 +219,7 @@ export function DocumentRenderHost({
     let cancelled = false;
     const controller = new AbortController();
     setStatus("loading");
+    setFailure(undefined);
     setSheetNames([]);
     setActiveSheet(null);
     sheetCtlRef.current = null;
@@ -243,13 +245,14 @@ export function DocumentRenderHost({
 
       let buf: ArrayBuffer;
       try {
-        const res = await fetch(url, { signal: controller.signal });
+        const res = await fetchLocalDocument(doc.path, { signal: controller.signal });
         if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
         buf = await res.arrayBuffer();
       } catch (err) {
         if (controller.signal.aborted) return;
         if (!cancelled) {
           console.error(`[document-viewer] failed to fetch ${doc.path}`, err);
+          setFailure(err instanceof Error ? err.message : undefined);
           setStatus("error");
         }
         return;
@@ -303,7 +306,7 @@ export function DocumentRenderHost({
       pptxCtlRef.current?.destroy();
       pptxCtlRef.current = null;
     };
-  }, [url, doc.path, doc.docType]);
+  }, [revision, doc.path, doc.docType]);
 
   // Apply zoom imperatively so changing it doesn't re-render the document.
   useEffect(() => {
@@ -345,7 +348,7 @@ export function DocumentRenderHost({
         )}
         {status === "error" && (
           <div className="absolute inset-0">
-            <DocumentFallback doc={doc} />
+            <DocumentFallback doc={doc} message={failure} />
           </div>
         )}
       </div>

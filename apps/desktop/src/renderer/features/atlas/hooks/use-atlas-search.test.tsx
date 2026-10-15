@@ -27,7 +27,7 @@ afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("Atlas search navigation", () => {
   it.each(["saved", "uploads"])("keeps fast typing intact and preserves the %s filter in the search URL", async (scope) => {
-    const input = setup([`/atlas?type=file&view=${scope}&project=mains&focus=search`]);
+    const input = setup([`/atlas?type=file&view=${scope}&project=mains&focus=search&page=3`]);
     let value = "";
     for (const character of "missing-result") {
       value += character;

@@ -1,6 +1,7 @@
 import { SimpleGit, StatusResult, LogResult, RemoteWithRefs } from "simple-git";
 import path from "path";
 import fs from "fs";
+import { cloneRepositoryName, WORKSPACE_CLONE_CANCELED } from "@mains/contracts/workspace-intake";
 import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { captureDiffSnapshot, openGit, type DiffSnapshot } from "./git-snapshot";
 import {
@@ -561,24 +562,26 @@ export const gitService = {
   async cloneRepo(
     url: string,
     targetPath: string,
+    signal?: AbortSignal,
   ): Promise<{ clonedPath: string; defaultBranch: string; originUrl: string }> {
     assertCloneUrl(url);
-
-    // Extract repo name from URL for the folder name.
-    const repoName = url
-      .replace(/\.git$/, "")
-      .split("/")
-      .pop() || "repo";
-    const clonePath = path.join(targetPath, repoName);
-
-    // Clone using simple-git (not bound to any repo yet).
-    await openGit().clone(url, clonePath);
-
-    const defaultBranch = (
-      await getGit(clonePath).revparse(["--abbrev-ref", "HEAD"])
-    ).trim();
-
-    return { clonedPath: clonePath, defaultBranch, originUrl: url };
+    if (signal?.aborted) throw new Error(WORKSPACE_CLONE_CANCELED);
+    const clonePath = path.join(targetPath, cloneRepositoryName(url));
+    // Reserve a fresh directory atomically. Failure/cancellation may remove
+    // only this attempt's output, never an existing checkout or folder.
+    await fs.promises.mkdir(clonePath);
+    try {
+      await openGit(undefined, signal).clone(url, clonePath);
+      const defaultBranch = (
+        await openGit(clonePath, signal).revparse(["--abbrev-ref", "HEAD"])
+      ).trim();
+      if (signal?.aborted) throw new Error(WORKSPACE_CLONE_CANCELED);
+      return { clonedPath: clonePath, defaultBranch, originUrl: url };
+    } catch (error) {
+      await fs.promises.rm(clonePath, { recursive: true, force: true });
+      if (signal?.aborted) throw new Error(WORKSPACE_CLONE_CANCELED);
+      throw error;
+    }
   },
 
   /** Stage files for commit (all when unspecified). */

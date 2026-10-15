@@ -41,6 +41,9 @@ function hasManagedShells(): boolean {
 }
 
 function scheduleServerCheck(): void {
+  // The Windows beta retains PowerShell tabs until explicitly stopped. POSIX
+  // process/listener probes and zsh prompt-based idle cleanup do not apply.
+  if (process.platform === "win32") return;
   if (!serversChanged || serverTimer || !hasManagedShells()) return;
   serverTimer = setTimeout(() => {
     serverTimer = null;
@@ -175,6 +178,7 @@ export const terminalService = {
   },
 
   refreshServers(): Promise<void> {
+    if (process.platform === "win32") return Promise.resolve();
     if (serverCheck) return serverCheck;
     const targets = [...instances.values()].filter((entry) => entry.session.workspaceId !== null &&
       entry.session.status === "running" && Number.isSafeInteger(entry.process.pid) && entry.process.pid > 0);

@@ -18,7 +18,6 @@ interface AddProjectModalProps {
   activeTab: ProjectTab;
   onTabChange: (tab: ProjectTab) => void;
   isAddingLocal: boolean;
-  isCloning: boolean;
   isCreating: boolean;
   addLocalShortcut?: string;
   onAddLocal: () => void;
@@ -38,7 +37,6 @@ export default function AddProjectModal({
   activeTab,
   onTabChange,
   isAddingLocal,
-  isCloning,
   isCreating,
   addLocalShortcut,
   onAddLocal,
@@ -60,7 +58,7 @@ export default function AddProjectModal({
   const [parentPath, setParentPath] = useState("");
 
   const isClone = activeTab === "clone";
-  const isBusy = isAddingLocal || isCloning || isCreating;
+  const isBusy = isAddingLocal || isCreating;
   const trimmedName = name.trim();
   const invalidName = !trimmedName || INVALID_NAME.test(trimmedName);
   const createLocation = parentPath.trim()
@@ -181,7 +179,7 @@ export default function AddProjectModal({
               title={isClone ? undefined : `Will be created at ${createLocation} on the main branch.`}
             >
               {isClone
-                ? "The repository will be cloned to this location."
+                ? "The repository will be cloned here in the background."
                 : `Will be created at ${createLocation} on the main branch.`}
             </Caption>
           </div>
@@ -192,7 +190,7 @@ export default function AddProjectModal({
             Cancel
           </Button>
           <Button
-            isLoading={isCloning}
+            isLoading={isCreating}
             type="submit"
             variant="submit"
             disabled={
@@ -201,7 +199,7 @@ export default function AddProjectModal({
             }
           >
             {isClone
-              ? isCloning ? "Cloning..." : "Clone"
+              ? "Clone"
               : isCreating ? "Creating..." : "Create"}
           </Button>
         </div>

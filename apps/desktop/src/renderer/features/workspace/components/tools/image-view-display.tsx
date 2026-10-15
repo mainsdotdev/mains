@@ -21,7 +21,7 @@ export function ImageViewDisplay({
   const imagePath = params.path ?? "";
   const fileName = imagePath.split("/").pop() || "image";
   const url = useLocalImageUrl(imagePath);
-  const [isExpanded, setIsExpanded] = useToolExpansion(true);
+  const [isExpanded, setIsExpanded] = useToolExpansion();
   const [previewOpen, setPreviewOpen] = useState(false);
   const [thumbFailed, setThumbFailed] = useState(false);
 

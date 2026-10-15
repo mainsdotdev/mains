@@ -25,6 +25,23 @@ function show(content: string, { path = "/skills/apple-design/SKILL.md", docType
 }
 
 describe("Markdown document metadata display", () => {
+  it("resolves UNC document images through the signed path after the load action", async () => {
+    show("# Shared report\n\n![Chart](../images/chart.png)", { path: "\\\\server\\share\\docs\\report.md" });
+    const load = await screen.findByRole("button", { name: /remote image from server/ });
+    expect(mocks.signImage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("img", { name: "Chart" })).toBeNull();
+    fireEvent.click(load);
+    await waitFor(() => expect(mocks.signImage).toHaveBeenCalledWith("\\\\server\\share\\images\\chart.png"));
+    expect(screen.queryByRole("button", { name: /remote image from/ })).toBeNull();
+  });
+  it("preserves literal percent escapes in relative Windows image filenames", async () => {
+    show("# Percent report\n\n![Chart](./images/chart%2520.png)", { path: "C:\\Test%20 User\\report.md" });
+    await waitFor(() => expect(mocks.signImage).toHaveBeenCalledWith("C:/Test%20 User/images/chart%20.png"));
+  });
+  it("resolves relative images from a Windows document path", async () => {
+    show("# Windows report\n\n![Chart](./images/chart.png)", { path: "C:\\Test User\\report.md" });
+    await waitFor(() => expect(mocks.signImage).toHaveBeenCalledWith("C:/Test User/images/chart.png"));
+  });
   it("shows metadata in a definition list, followed by the document's own heading", async () => {
     show("---\nname: apple-design\ndescription: Apple's approach to fluid interfaces.\n---\n\n# Apple Design\n\nThe core idea.\n\n---\n\nMore content.");
     const metadata = await screen.findByRole("region", { name: "Metadata" });

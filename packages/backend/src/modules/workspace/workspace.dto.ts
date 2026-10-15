@@ -76,16 +76,7 @@ export interface UpdateWorkspacePayload {
 // See CONTEXT.md "Workspace intake".
 // ─────────────────────────────────────────────────────────────
 
-export type WorkspaceIntakeSource =
-  | { kind: "folder"; path: string }
-  | { kind: "clone"; url: string; targetPath: string }
-  | { kind: "init"; name: string; parentPath?: string }
-  | { kind: "worktree"; projectId: string };
-
-export interface WorkspaceIntakePayload {
-  accountId: string;
-  source: WorkspaceIntakeSource;
-}
+export type { WorkspaceIntakeSource, WorkspaceIntakePayload } from "@mains/contracts/workspace-intake";
 
 export interface WorkspaceResponse {
   id: string;

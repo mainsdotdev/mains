@@ -335,7 +335,7 @@ export async function listSkillsForProvider(
   }
 
   const plugins = adapter.listInstalledPlugins
-    ? await adapter.listInstalledPlugins()
+    ? await adapter.listInstalledPlugins(workspacePath)
     : await adapter.listPlugins();
   return mergeSkillsWithInstalledPlugins(skills, plugins);
 }

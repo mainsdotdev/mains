@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UnifiedContextDropdown } from "./unified-context-dropdown";
+import type { SkillInfo } from "@/lib/redux/api/providersApi";
 
 const getMentionableApps = vi.hoisted(() => vi.fn());
 
@@ -24,7 +25,7 @@ const directory = {
   hasChildren: true,
 };
 
-function renderDropdown(overrides: { filterText?: string; providerId?: string } = {}) {
+function renderDropdown(overrides: { filterText?: string; providerId?: string; workspacePath?: string; skills?: SkillInfo[]; isLoadingSkills?: boolean } = {}) {
   const onSelectFile = vi.fn();
   const onSelectSkill = vi.fn();
   const onNavigateFile = vi.fn();
@@ -36,9 +37,10 @@ function renderDropdown(overrides: { filterText?: string; providerId?: string } 
       trigger: "@",
       providerId: overrides.providerId,
       filterText: overrides.filterText ?? "",
-      workspacePath: "/repo",
+      workspacePath: overrides.workspacePath ?? "/repo",
       commands: [],
-      skills: [],
+      skills: overrides.skills ?? [],
+      isLoadingSkills: overrides.isLoadingSkills,
       onSelectCommand: vi.fn(),
       onSelectSkill,
       onSelectFile,
@@ -109,6 +111,48 @@ afterEach(() => {
 });
 
 describe("UnifiedContextDropdown folders", () => {
+  it("browses a Windows search result using a relative path and matches drive casing", async () => {
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { fileExplorer: { searchFiles: vi.fn().mockResolvedValue({ success: true, data: [{ ...directory, fullPath: "c:\\Repo\\src\\components" }] }) } },
+    });
+    const { onNavigateFile } = renderDropdown({ filterText: "components", workspacePath: "C:\\Repo" });
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Browse components folder" }));
+    expect(onNavigateFile).toHaveBeenCalledWith("src/components/");
+    expect(screen.getByText("src")).toBeTruthy();
+  });
+
+  it("accepts Windows separators when entering a folder filter", async () => {
+    const listDir = vi.fn().mockResolvedValue({ success: true, data: [] });
+    const searchFiles = vi.fn().mockResolvedValue({ success: true, data: [] });
+    Object.defineProperty(window, "api", { configurable: true, value: { fileExplorer: { listDir, searchFiles } } });
+    renderDropdown({ filterText: "src\\components\\", workspacePath: "C:\\Repo" });
+    await waitFor(() => expect(listDir).toHaveBeenCalledWith({ dirPath: "C:\\Repo\\src\\components" }));
+    expect(searchFiles).not.toHaveBeenCalled();
+  });
+
+  it("does not mistake another repository with the same prefix for a workspace child", async () => {
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { fileExplorer: { listDir: vi.fn().mockResolvedValue({ success: true, data: [{ name: "notes.md", fullPath: "/repo-other/src/notes.md", type: "file" }] }) } },
+    });
+    renderDropdown();
+    expect(await screen.findByText("/repo-other/src")).toBeTruthy();
+  });
+
+  it("keeps the combined menu loading while skills are still being discovered", async () => {
+    const searchFiles = vi.fn().mockResolvedValue({ success: true, data: [] });
+    Object.defineProperty(window, "api", {
+      configurable: true,
+      value: { fileExplorer: { searchFiles } },
+    });
+    renderDropdown({ providerId: "codex", filterText: "presentations", isLoadingSkills: true });
+    await waitFor(() => expect(searchFiles).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByText("Loading files…")).toBeNull());
+    expect(screen.queryByText("No matches")).toBeNull();
+    expect(screen.getByText("Loading...")).toBeTruthy();
+  });
+
   it("mentions a folder from the row and keeps browsing as a separate action", async () => {
     const listDir = vi.fn().mockResolvedValue({
       success: true,

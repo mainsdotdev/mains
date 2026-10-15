@@ -10,6 +10,11 @@ import {
 } from "./document-viewer";
 
 describe("classifyDocType", () => {
+  it("preserves reserved characters in actual filesystem names", () => {
+    expect(classifyDocType("/tmp/draft#v1.docx", true)).toBe("docx");
+    expect(classifyDocType("/tmp/report?draft.pptx", true)).toBe("pptx");
+    expect(classifyDocType("/tmp/report%20.pdf", true)).toBe("pdf");
+  });
   it("classifies supported OOXML extensions", () => {
     expect(classifyDocType("report.docx")).toBe("docx");
     expect(classifyDocType("budget.xlsx")).toBe("xlsx");

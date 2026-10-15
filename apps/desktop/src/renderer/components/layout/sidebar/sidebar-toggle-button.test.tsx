@@ -7,9 +7,10 @@ import { MainContent } from "../main/main-content";
 
 const native = vi.hoisted(() => ({
   fullscreen: false,
+  macWindowChrome: true,
   listeners: new Set<(fullscreen: boolean) => void>(),
 }));
-vi.mock("@/lib/platform", () => ({ useCapabilities: () => ({ windowChrome: true }) }));
+vi.mock("@/lib/platform", () => ({ useCapabilities: () => ({ windowChrome: true, macWindowChrome: native.macWindowChrome }) }));
 vi.mock("@/providers/keyboard-shortcuts-provider", () => ({ useKeyboardShortcutBinding: () => null }));
 vi.mock("@/components/ui", () => ({ Button: ({ children, onClick, "aria-label": label }: {
   children: ReactNode; onClick: () => void; "aria-label": string;
@@ -18,6 +19,7 @@ vi.mock("@/components/ui", () => ({ Button: ({ children, onClick, "aria-label": 
 beforeEach(() => {
   native.listeners.clear();
   native.fullscreen = false;
+  native.macWindowChrome = true;
   // The preload subscription delivers a snapshot followed by native changes.
   vi.stubGlobal("api", { app: { onFullscreenChange: (callback: (fullscreen: boolean) => void) => {
     native.listeners.add(callback);
@@ -42,6 +44,12 @@ function changeFullscreen(value: boolean) {
 }
 
 describe("native fullscreen titlebar placement", () => {
+  it("leaves no traffic-light gap under Windows native chrome", async () => {
+    native.macWindowChrome = false;
+    render(<Shell />);
+    await act(async () => {});
+    expectPosition(true);
+  });
   it("clears the traffic-light gap when mounting inside an already fullscreen window", async () => {
     native.fullscreen = true;
     render(<Shell />);

@@ -49,8 +49,11 @@ import { setThemeSource } from "./theme-source";
 
 let userData: string;
 const resourcesDescriptor = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+// Dock icons are macOS-only; elsewhere getAppIconPath returns the plain icon.png.
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 
 beforeEach(() => {
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
   vi.resetAllMocks();
   userData = fs.mkdtempSync(path.join(os.tmpdir(), "mains-dock-icon-"));
   mocks.app.isPackaged = true;
@@ -74,6 +77,7 @@ afterEach(() => {
   fs.rmSync(userData, { recursive: true, force: true });
   if (resourcesDescriptor) Object.defineProperty(process, "resourcesPath", resourcesDescriptor);
   else Reflect.deleteProperty(process, "resourcesPath");
+  Object.defineProperty(process, "platform", platformDescriptor);
 });
 
 function saveIcon(icon: string) {

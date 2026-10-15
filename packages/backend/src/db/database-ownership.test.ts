@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireDatabaseOwnership,
   DatabaseOwnershipError,
@@ -33,12 +33,54 @@ function writeRecord(
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
+function emulateWindowsDirectoryCollision(): void {
+  const rename = fs.renameSync;
+  vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+    if (String(source).includes(".backend.lock.candidate-") && fs.existsSync(destination)) {
+      throw Object.assign(new Error("Destination directory already exists"), { code: "EPERM" });
+    }
+    rename(source, destination);
+  });
+}
+
 describe("database ownership", () => {
+  it("reports the live owner when Windows returns EPERM for a directory collision", () => {
+    const databasePath = temporaryDatabasePath();
+    const desktop = acquireDatabaseOwnership(databasePath, "Mains Desktop");
+    emulateWindowsDirectoryCollision();
+    expect(() => acquireDatabaseOwnership(databasePath, "Mains CLI"))
+      .toThrow(/already in use by Mains Desktop/u);
+    desktop.release();
+  });
+
+  it("recovers a dead owner when Windows returns EPERM for a directory collision", () => {
+    const databasePath = temporaryDatabasePath();
+    const lockPath = databaseOwnershipPath(databasePath);
+    fs.mkdirSync(lockPath);
+    writeRecord(path.join(lockPath, "owner.json"), {
+      version: 1, token: "stale-owner", pid: 2_147_483_647,
+      owner: "Mains Desktop", acquiredAt: "2026-01-01T00:00:00.000Z",
+    });
+    emulateWindowsDirectoryCollision();
+    const desktop = acquireDatabaseOwnership(databasePath, "Mains Desktop");
+    expect(JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf8")).pid).toBe(process.pid);
+    desktop.release();
+  });
+
+  it("keeps genuine EPERM errors when the destination lock does not exist", () => {
+    const databasePath = temporaryDatabasePath();
+    const error = Object.assign(new Error("Permission denied"), { code: "EPERM" });
+    vi.spyOn(fs, "renameSync").mockImplementation(() => { throw error; });
+    expect(() => acquireDatabaseOwnership(databasePath, "Mains Desktop")).toThrow(error);
+    expect(fs.readdirSync(path.dirname(databasePath))).toEqual([]);
+  });
+
   it("allows only one backend owner and releases cleanly", () => {
     const databasePath = temporaryDatabasePath();
     const desktop = acquireDatabaseOwnership(databasePath, "Mains Desktop");
@@ -111,7 +153,8 @@ describe("database ownership", () => {
     server.release();
   });
 
-  it("recovers when a live PID belongs to a different process instance", () => {
+  // Process-instance identity is currently available on macOS and Linux only.
+  it.runIf(process.platform !== "win32")("recovers when a live PID belongs to a different process instance", () => {
     const databasePath = temporaryDatabasePath();
     const lockPath = databaseOwnershipPath(databasePath);
     fs.mkdirSync(lockPath);

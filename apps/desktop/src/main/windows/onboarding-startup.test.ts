@@ -24,15 +24,19 @@ describe("onboarding startup presentation", () => {
     expect(mocks.createSplashWindow).toHaveBeenCalledOnce();
     expect(startup.needsOnboarding()).toBe(false);
     startup.update(false, true);
+    expect(mocks.closeSplashWindow).not.toHaveBeenCalled();
+    startup.finish();
     expect(mocks.closeSplashWindow).toHaveBeenCalledOnce();
   });
 
-  it("closes a splash if rehydration decides onboarding must run", () => {
+  it("keeps the splash until the compact onboarding window is presented if rehydration changes the decision", () => {
     const startup = createOnboardingStartupState(true);
     startup.update(false, false);
     startup.update(true, true);
-    expect(mocks.closeSplashWindow).toHaveBeenCalledOnce();
+    expect(mocks.closeSplashWindow).not.toHaveBeenCalled();
     expect(startup.needsOnboarding()).toBe(true);
+    startup.finish();
+    expect(mocks.closeSplashWindow).toHaveBeenCalledOnce();
   });
 
   it("ignores late boot announcements after content has become ready", () => {

@@ -37,6 +37,7 @@ import {
   matchTurnsToGroups,
   matchModelChangesToPromptGroups,
   isUserPromptGroup,
+  lastPromptSuggestionIndex,
   type SessionInfo,
 } from "../lib/transcript-rows";
 
@@ -62,7 +63,7 @@ import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
 import { formatAbsoluteDate } from "@/lib/format-date";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
 import { TurnChangesCard } from "./turn-changes-card";
-import { TranscriptWindow, type TranscriptWindowRow } from "./transcript-window";
+import { TranscriptList, type TranscriptListRow } from "./transcript-list";
 import { createTranscriptViewCache, TranscriptItemScope, TranscriptViewProvider, useTranscriptValue } from "../lib/transcript-view-state";
 
 function formatNumber(n: number): string {
@@ -585,22 +586,7 @@ export function WorkspaceEvents({
     return last;
   }, [sessionTimes]);
 
-  // Last prompt_suggestion group index — only show if nothing comes after it
-  // (i.e. no user-prompt or other content after the suggestion)
-  const lastSuggestionIndex = useMemo(() => {
-    let last = -1;
-    for (let i = 0; i < eventGroups.length; i++) {
-      if (eventGroups[i].type === "prompt_suggestion") last = i;
-    }
-    // If there's any non-suggestion group after the last suggestion,
-    // it means the user already acted — hide the suggestion
-    if (last !== -1) {
-      for (let i = last + 1; i < eventGroups.length; i++) {
-        if (eventGroups[i].type !== "prompt_suggestion") return -1;
-      }
-    }
-    return last;
-  }, [eventGroups]);
+  const lastSuggestionIndex = useMemo(() => lastPromptSuggestionIndex(eventGroups), [eventGroups]);
 
   const handleFork = useCallback(
     (_responseContent: string) => {
@@ -783,19 +769,22 @@ export function WorkspaceEvents({
     ],
   );
 
-  const windowRows = useMemo<TranscriptWindowRow[]>(() => turnRenderRows.map((row, rowIndex) => {
+  const transcriptRows = useMemo<TranscriptListRow[]>(() => turnRenderRows.map((row, rowIndex) => {
     const first = row.kind === "flat" ? row.indices[0] : row.previousSegments[0]?.[0] ?? row.lastSegment[0];
     const id = `row-${row.kind === "flat" ? "flat" : "acc"}-${eventGroups[first]?.id}`;
-    const indices = row.kind === "flat" ? row.indices : row.lastSegment;
-    const estimate = Math.min(1400, 64 + indices.reduce((total, index) => total + eventGroups[index].events.reduce((sum, event) => sum + Math.min(1000, 32 + Math.ceil(event.content.length / 90) * 20), 0), 0));
-    return { id, groupIndex: row.kind === "flat" ? first : undefined, estimate,
+    return { id, groupIndex: row.kind === "flat" ? first : undefined,
       render: () => <TranscriptItemScope id={id}><div className="group/agent-turn space-y-4">{row.kind === "flat"
         ? row.indices.map(renderGroupAt)
         : <AgentTurnMessagesAccordion {...row} renderGroup={renderGroupAt}
-          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}</div></TranscriptItemScope> };
+          isRunInProgress={isRunning && !history?.historical && !suppressLiveAccordionForStaleEvents && rowIndex === turnRenderRows.length - 1} />}{row.suggestionIndices?.map(renderGroupAt)}</div></TranscriptItemScope> };
   }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
 
   const activeTool = useMemo(() => selectActiveTool(currentEvents), [currentEvents]);
+  const hasStreamingResponse = useMemo(() => displayEvents.some((event) =>
+    event.type === "artifact" && event.metadata?.kind === "report" &&
+    event.metadata.streaming === true && event.metadata.isFromSubagent !== true &&
+    event.content.trim().length > 0,
+  ), [displayEvents]);
 
   // Latest thinking: ephemeral Cursor stream (cursor-think-*) or legacy persisted [thinking] logs
   const latestThinking = useMemo(() => {
@@ -820,9 +809,7 @@ export function WorkspaceEvents({
     [currentEvents],
   );
 
-  // Run content stays mounted whenever there are events for the active run,
-  // just hidden when a non-run tab is active. Preserves accordion open state,
-  // scroll position, and other local UI state across tab switches.
+  // The view cache restores scroll position and accordion state across tabs.
 
   return (
     <TranscriptViewProvider view={transcriptView}><Text as="div" size="sm" tone="inherit" className="group/voice-chat relative h-full flex flex-col">
@@ -854,8 +841,7 @@ export function WorkspaceEvents({
                   {history.loading ? "Loading earlier messages…" : history.error ? "Retry loading messages" : "Load earlier messages"}
                 </button>
               )}
-              <TranscriptWindow key={activeTab} rows={windowRows} scrollRef={transcriptRef}
-                view={transcriptView} onResize={onTranscriptResize} />
+              <TranscriptList key={activeTab} rows={transcriptRows} onResize={onTranscriptResize} />
               {activeRunFailedOnAuth && !providerSignedOut && (
                 <ProviderAuthNotice
                   variant={variant}
@@ -863,7 +849,8 @@ export function WorkspaceEvents({
                   message={activeRun?.lastError}
                 />
               )}
-              {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction && (
+              {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction &&
+                (activeTool || !hasStreamingResponse) && (
                 <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />
               )}
               <div ref={eventsEndRef} />
@@ -878,7 +865,7 @@ export function WorkspaceEvents({
             transcriptRef={transcriptRef}
           />
         )}
-        {hasRunContent && history?.historical && (
+        {hasRunContent && history && (history.historical || !history.following) && (
           <div className="pointer-events-none absolute inset-x-0 bottom-4 z-(--z-base) flex justify-center group-has-data-voice-orb-overlay/voice-chat:bottom-52 sm:group-has-data-voice-orb-overlay/voice-chat:bottom-68">
             <Button
               aria-label="Jump to latest"

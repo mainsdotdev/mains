@@ -11,6 +11,7 @@ import { classifyDocType } from "@/lib/document-viewer";
 import { selectSessionRunId } from "@/features/workspace/components/session-panel/select-session-run";
 import { appApi } from "@/lib/transport";
 import { toast } from "@/components/ui";
+import { fileBasename, fileHrefPath, isAbsoluteFilePath } from "@/lib/file-path";
 import type {
   DirEntry,
   FileNode,
@@ -44,7 +45,8 @@ export function useOpenFileInEditor() {
 
   return useCallback(
     async (filePath: string) => {
-      const trimmed = filePath?.trim();
+      const reference = filePath?.trim() ?? "";
+      const trimmed = /^file:/i.test(reference) ? fileHrefPath(reference) : reference;
       if (!trimmed) return;
 
       // Workspace-less runs (work, chat) still have a directory their files
@@ -61,14 +63,14 @@ export function useOpenFileInEditor() {
       }
 
       const open = (absolutePath: string) => {
-        const name = absolutePath.split("/").pop() || absolutePath;
+        const name = fileBasename(absolutePath);
         const dotIdx = name.lastIndexOf(".");
         const extension = dotIdx > 0 ? name.slice(dotIdx + 1) : undefined;
         // No tabs, no editor to open into. The viewer panel takes what it can
         // render — markdown and Office documents — and everything else goes to
         // the OS rather than into a surface this mode never renders.
         if (!showTabs) {
-          const docType = classifyDocType(absolutePath);
+          const docType = classifyDocType(absolutePath, true);
           if (docType) {
             openDocument({ path: absolutePath, fileName: name, docType });
           } else {
@@ -97,10 +99,10 @@ export function useOpenFileInEditor() {
 
       // 1. Direct resolution — absolute as-is, relative against the root.
       const cleaned = trimmed.replace(/^\.\//, "");
-      const direct = trimmed.startsWith("/")
+      const direct = isAbsoluteFilePath(trimmed)
         ? trimmed
         : rootPath
-          ? `${rootPath.replace(/\/$/, "")}/${cleaned}`
+          ? `${rootPath.replace(/[\\/]$/, "")}/${cleaned}`
           : null;
       if (direct && (await fileExists(direct))) {
         open(direct);
@@ -109,7 +111,7 @@ export function useOpenFileInEditor() {
 
       // 2. Locate by basename anywhere in the workspace. Workspace-less runs
       // (work, chat) have no tree to search, so they end at the toast below.
-      const basename = cleaned.split("/").pop() ?? cleaned;
+      const basename = fileBasename(cleaned);
       if (rootPath) {
         try {
           const result: ServiceResponse<DirEntry[]> =
@@ -121,7 +123,7 @@ export function useOpenFileInEditor() {
           if (result.success) {
             const candidates = result.data.filter((e) => e.name === basename);
             const best =
-              candidates.find((e) => e.fullPath.endsWith(`/${cleaned}`)) ??
+              candidates.find((e) => e.fullPath.replace(/\\/g, "/").endsWith(`/${cleaned.replace(/\\/g, "/")}`)) ??
               candidates[0];
             if (best) {
               open(best.fullPath);

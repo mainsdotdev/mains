@@ -15,6 +15,7 @@ import {
   type ThemeChoiceChange,
 } from "@/lib/app-themes";
 import { useActiveSpace } from "./use-active-space";
+import { syncWindowAppearance } from "@/lib/window-appearance";
 
 /**
  * Mirrors the app theme in force — the settings resolved for the active
@@ -45,21 +46,20 @@ function resolveFor(
 if (typeof window !== "undefined") {
   // Pre-paint seed. Whatever redux rehydrates a tick later agrees with this in
   // every case except a corrupt blob, where the hook below corrects it.
-  applyAppTheme(
-    document,
-    resolveFor(
-      // Raw, then parsed: the blob may predate the redux-persist migration
-      // that rehydration will run.
-      parseAppThemeSettings(
-        readPersistedAppSetting("appTheme", isAnything, undefined),
-      ),
-      readPersistedWorkspaceSetting<string | null>(
-        "selectedProviderId",
-        isString,
-        null,
-      ),
+  const bootTheme = resolveFor(
+    // Raw, then parsed: the blob may predate the redux-persist migration
+    // that rehydration will run.
+    parseAppThemeSettings(
+      readPersistedAppSetting("appTheme", isAnything, undefined),
+    ),
+    readPersistedWorkspaceSetting<string | null>(
+      "selectedProviderId",
+      isString,
+      null,
     ),
   );
+  applyAppTheme(document, bootTheme);
+  syncWindowAppearance(bootTheme);
 }
 
 /** The provider whose theme is in force. */
@@ -85,6 +85,7 @@ export function useAppTheme() {
 
   useLayoutEffect(() => {
     applyAppTheme(document, theme);
+    syncWindowAppearance(theme);
   }, [theme]);
 }
 

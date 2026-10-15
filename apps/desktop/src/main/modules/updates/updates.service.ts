@@ -3,6 +3,10 @@ import { updateElectronApp, UpdateSourceType } from "update-electron-app";
 import { emit } from "@mains/backend/ipc-kit";
 import type { UpdateState } from "./updates.dto";
 
+function supportsAutomaticUpdates(): boolean {
+  return app.isPackaged && process.platform === "darwin" && !app.getVersion().includes("-");
+}
+
 // ─────────────────────────────────────────────────────────────
 // Service - Auto-update business logic using update-electron-app
 // ─────────────────────────────────────────────────────────────
@@ -20,8 +24,8 @@ export const updatesService = {
     if (this._initialized) return;
     this._initialized = true;
 
-    if (!app.isPackaged) {
-      console.log("Updates: skipping auto-updater in development mode");
+    if (!supportsAutomaticUpdates()) {
+      console.log("Updates: this build uses manual installer upgrades");
       return;
     }
 
@@ -70,7 +74,7 @@ export const updatesService = {
   },
 
   async checkForUpdates(): Promise<UpdateState> {
-    if (!app.isPackaged) {
+    if (!supportsAutomaticUpdates()) {
       this._state = { status: "not-available", info: null, progress: null, error: null };
       return this._state;
     }
@@ -96,8 +100,9 @@ export const updatesService = {
   },
 
   quitAndInstall(): null {
-    if (!app.isPackaged) {
-      throw new Error("Cannot install updates in development mode");
+    if (!app.isPackaged) throw new Error("Cannot install updates in development mode");
+    if (!supportsAutomaticUpdates()) {
+      throw new Error("Install the latest release to upgrade this build");
     }
 
     autoUpdater.quitAndInstall();

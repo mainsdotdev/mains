@@ -1,5 +1,5 @@
 import { CHANNELS } from "@mains/contracts/channels";
-import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasListOptions, AtlasSaveFile,
+import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasIdentity, AtlasLibraryOptions, AtlasListOptions, AtlasSaveFile,
   AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
 import { handle } from "../../ipc-kit/handle";
 import { ipcMain } from "../../ipc-kit/ipc-main";
@@ -7,6 +7,7 @@ import { atlasService } from "./atlas.service";
 
 export function registerAtlasIpc() {
   ipcMain.handle(CHANNELS.atlas.list, handle((options: AtlasListOptions) => atlasService.list(options)));
+  ipcMain.handle(CHANNELS.atlas.library, handle((options: AtlasLibraryOptions) => atlasService.library(options)));
   ipcMain.handle(CHANNELS.atlas.generated, handle((options: AtlasGeneratedOptions) => atlasService.generated(options)));
   ipcMain.handle(CHANNELS.atlas.get, handle((options: AtlasIdentity) => {
     const item = atlasService.get(options);

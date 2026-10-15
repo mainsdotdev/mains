@@ -19,6 +19,7 @@ export function useAtlasSearch() {
     const timer = setTimeout(() => {
       const next = new URLSearchParams(params);
       next.delete("focus");
+      next.delete("page");
       if (value) next.set("q", value); else next.delete("q");
       searchNavigation.current = next.size ? `?${next}` : "";
       setParams(next, { replace: true });

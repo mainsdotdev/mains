@@ -613,12 +613,12 @@ export function createCodexCapabilities(
     value: PluginListResponse;
     fetchedAt: number;
   } | null = null;
-  let installedPluginsCache: {
+  const installedPluginsCache = new Map<string, {
     value: PluginListResponse;
     fetchedAt: number;
-  } | null = null;
+  }>();
   let pluginCatalogInFlight: Promise<PluginListResponse> | null = null;
-  let installedPluginsInFlight: Promise<PluginListResponse> | null = null;
+  const installedPluginsInFlight = new Map<string, Promise<PluginListResponse>>();
   let pluginCapabilityPromise: Promise<void> | null = null;
   let pluginCacheGeneration = 0;
   const mcpAppPluginSources = new Map<string, Promise<Pick<McpAppPluginSource, "connectorIds" | "mcpServers">>>();
@@ -803,12 +803,13 @@ export function createCodexCapabilities(
 
   async function fetchPluginList(
     method: "plugin/list" | "plugin/installed",
+    workspacePath?: string,
   ): Promise<PluginListResponse> {
-    const server = await options.ensureServer();
+    const server = await options.ensureServer(workspacePath);
     await assertPluginCapability(server);
     const result = (await server.sendRequest(
       method,
-      {},
+      workspacePath ? { cwds: [workspacePath] } : {},
       30000,
     )) as unknown as Record<string, unknown>;
     indexPluginReferences(result);
@@ -840,9 +841,9 @@ export function createCodexCapabilities(
   function invalidatePluginCaches(): void {
     pluginCacheGeneration += 1;
     pluginCatalogCache = null;
-    installedPluginsCache = null;
+    installedPluginsCache.clear();
     pluginCatalogInFlight = null;
-    installedPluginsInFlight = null;
+    installedPluginsInFlight.clear();
     mcpAppPluginSources.clear();
     mcpInventoryInFlight = null;
   }
@@ -1125,26 +1126,29 @@ export function createCodexCapabilities(
     return request;
   }
 
-  async function listInstalledPlugins(forceRefresh = false): Promise<PluginListResponse> {
+  async function listInstalledPlugins(forceRefresh = false, workspacePath?: string): Promise<PluginListResponse> {
+    const key = workspacePath ?? "";
+    const cached = installedPluginsCache.get(key);
     if (
       !forceRefresh &&
-      installedPluginsCache &&
-      Date.now() - installedPluginsCache.fetchedAt <
+      cached &&
+      Date.now() - cached.fetchedAt <
         INSTALLED_PLUGINS_TTL_MS
     ) {
-      return applySessionOverlay(installedPluginsCache.value);
+      return applySessionOverlay(cached.value);
     }
-    if (installedPluginsInFlight) return installedPluginsInFlight;
+    const inFlight = installedPluginsInFlight.get(key);
+    if (inFlight) return inFlight;
 
-    const staleValue = installedPluginsCache?.value;
+    const staleValue = cached?.value;
     const generation = pluginCacheGeneration;
-    const request = fetchPluginList("plugin/installed")
+    const request = fetchPluginList("plugin/installed", workspacePath)
       .then((value) => {
         if (generation === pluginCacheGeneration) {
-          installedPluginsCache = {
+          installedPluginsCache.set(key, {
             value,
             fetchedAt: Date.now(),
-          };
+          });
         }
         return value;
       })
@@ -1153,11 +1157,11 @@ export function createCodexCapabilities(
       )
       .then(applySessionOverlay)
       .finally(() => {
-        if (installedPluginsInFlight === request) {
-          installedPluginsInFlight = null;
+        if (installedPluginsInFlight.get(key) === request) {
+          installedPluginsInFlight.delete(key);
         }
       });
-    installedPluginsInFlight = request;
+    installedPluginsInFlight.set(key, request);
     return request;
   }
 

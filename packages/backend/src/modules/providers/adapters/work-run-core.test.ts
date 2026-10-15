@@ -432,9 +432,10 @@ describe("createWorkRunAdapter", () => {
         return execute(...args);
       };
       const adapter = createWorkRunAdapter(fake.driver);
-      await adapter.continueRun!(makeContinueReq({ clientUserMessageId: "queued-input", onInputAccepted: accepted }), (event) => { events.push(event); });
+      const asyncQuestionReply = { artifactId: 12, answers: ["Staging"] };
+      await adapter.continueRun!(makeContinueReq({ clientUserMessageId: "queued-input", onInputAccepted: accepted, asyncQuestionReply }), (event) => { events.push(event); });
       expect(events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toEqual([
-        expect.objectContaining({ content: "follow-up", metadata: expect.objectContaining({ model: "canonical-model", clientUserMessageId: "queued-input", providerTurnId: "native-turn" }) }),
+        expect.objectContaining({ content: "follow-up", metadata: expect.objectContaining({ model: "canonical-model", clientUserMessageId: "queued-input", providerTurnId: "native-turn", asyncQuestionReply }) }),
       ]);
     });
 

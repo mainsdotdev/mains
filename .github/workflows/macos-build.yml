@@ -1,0 +1,97 @@
+name: macOS build
+run-name: macOS ${{ inputs.arch }} · ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Mac architecture
+        type: choice
+        required: true
+        default: arm64
+        options:
+          - arm64
+          - x64
+
+concurrency:
+  group: macos-build-${{ github.ref }}-${{ inputs.arch }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/desktop
+
+jobs:
+  macos:
+    name: Test, package and smoke macOS ${{ inputs.arch }}
+    # Match Node and optional native agent packages to the target architecture.
+    runs-on: ${{ inputs.arch == 'x64' && 'macos-26-intel' || 'macos-26' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            apps/desktop/package-lock.json
+            packages/backend/package-lock.json
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - name: Check backend types and lint
+        working-directory: packages/backend
+        run: |
+          npm run lint
+          npm run typecheck
+      - run: npm run test:build
+      - name: Regenerate notices for the macOS dependency tree
+        run: npm run licenses:generate
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+      - name: Make the signed macOS installer
+        id: make
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          MAINS_GITHUB_CLIENT_ID: ${{ secrets.MAINS_GITHUB_CLIENT_ID }}
+          BUILD_ARCH: ${{ inputs.arch }}
+        run: npm run make -- --platform darwin --arch "$BUILD_ARCH"
+      - name: Smoke the packaged app with isolated user data
+        run: npm run smoke:package
+      - name: Upload installer and app archive
+        if: always() && steps.make.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mains-macos-${{ inputs.arch }}-${{ job.status == 'success' && 'build' || 'diagnostic' }}-${{ github.sha }}
+          path: |
+            apps/desktop/out/make/**/*.dmg
+            apps/desktop/out/make/**/*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          if [ -f "$RUNNER_TEMP/build.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/build.keychain"
+          fi

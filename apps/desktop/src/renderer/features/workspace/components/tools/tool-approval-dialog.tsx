@@ -27,6 +27,16 @@ interface ToolApprovalDialogProps {
   variant?: "copilot" | "claude" | "codex" | "cursor";
   /** Forms keep their actions visible within this height while fields scroll. */
   maxHeight?: string;
+  /** Controlled question input for callers that deliver answers themselves. */
+  questionControls?: {
+    value: string;
+    onChange: (value: string) => void;
+    submitLabel?: string;
+    busy?: boolean;
+    readOnly?: boolean;
+    error?: string;
+    onPrevious?: () => void;
+  };
 }
 
 // Fields that are either rendered elsewhere (title, browser-open URL) or are
@@ -242,6 +252,7 @@ function ToolApprovalDialogContents({
   onRespond,
   variant,
   maxHeight = "55dvh",
+  questionControls,
 }: ToolApprovalDialogProps) {
   const isCursor = variant === "cursor";
   const isCodex = variant === "codex";
@@ -302,6 +313,12 @@ function ToolApprovalDialogContents({
   }, [request.requestId, onRespond]);
 
   const handleSubmitAnswer = useCallback(() => {
+    if (questionControls) {
+      if (!questionControls.busy && questionControls.value.trim()) {
+        onRespond(request.requestId, true, questionControls.value.trim());
+      }
+      return;
+    }
     let answer: string;
     if (selectedOptions.length > 0) {
       answer = selectedOptions.join(", ");
@@ -311,10 +328,14 @@ function ToolApprovalDialogContents({
       return;
     }
     onRespond(request.requestId, true, answer);
-  }, [request.requestId, selectedOptions, freeText, isCursor, onRespond]);
+  }, [request.requestId, selectedOptions, freeText, isCursor, onRespond, questionControls]);
 
   const toggleOption = useCallback(
     (label: string) => {
+      if (questionControls) {
+        questionControls.onChange(questionControls.value === label ? "" : label);
+        return;
+      }
       if (request.multiSelect) {
         setSelectedOptions((prev) =>
           prev.includes(label)
@@ -325,11 +346,12 @@ function ToolApprovalDialogContents({
         setSelectedOptions((prev) => (prev.includes(label) ? [] : [label]));
       }
     },
-    [request.multiSelect],
+    [request.multiSelect, questionControls],
   );
 
   const canSubmit =
-    selectedOptions.length > 0 || (!isCursor && freeText.trim().length > 0);
+    questionControls ? questionControls.value.trim().length > 0
+      : selectedOptions.length > 0 || (!isCursor && freeText.trim().length > 0);
 
   if (request.kind === "elicitation") {
     const isUrlMode = request.elicitationMode === "url" && !!request.url;
@@ -406,9 +428,8 @@ function ToolApprovalDialogContents({
 
   if (request.kind === "ask_user") {
     return (
-      <div className="mx-auto mb-1 max-w-210 overflow-y-auto noscrollbar" style={{ maxHeight }}>
-        <div className="overflow-hidden rounded-3xl  glass-surface">
-          <div className="flex gap-3 px-3.5 pb-2 pt-3.5 sm:px-4 sm:pt-4">
+      <div className="mx-auto mb-1 flex max-w-210 flex-col overflow-hidden rounded-3xl glass-surface" style={{ maxHeight }}>
+          <div className="flex shrink-0 gap-3 px-3.5 pb-2 pt-3.5 sm:px-4 sm:pt-4">
             <Question className="mt-0.5 size-4 shrink-0 text-primary-600 dark:text-primary-400" />
             <div className="min-w-0 flex-1 space-y-2">
               {request.header && (
@@ -436,14 +457,16 @@ function ToolApprovalDialogContents({
           </div>
 
           {request.options && request.options.length > 0 && (
-            <div className="space-y-2 px-3.5 pb-3 sm:px-4">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain noscrollbar px-3.5 pb-3 sm:px-4">
               {request.options.map((opt) => {
-                const isSelected = selectedOptions.includes(opt.label);
+                const isSelected = questionControls ? questionControls.value === opt.label : selectedOptions.includes(opt.label);
                 return (
                   <Button
                     key={opt.label}
                     type="button"
                     onClick={() => toggleOption(opt.label)}
+                    aria-pressed={isSelected}
+                    disabled={questionControls?.busy || questionControls?.readOnly}
                     className={`flex w-full gap-2.5 rounded-xl  px-2.5 py-2.5 text-left text-xs transition-colors ${
                       isSelected
                         ? " dark:bg-success/5 bg-success/10"
@@ -485,7 +508,7 @@ function ToolApprovalDialogContents({
             </div>
           )}
 
-          <div className=" px-3.5 py-3  sm:px-4">
+          <div className="shrink-0 px-3.5 py-3 sm:px-4">
             <div
               className={`flex flex-col gap-3 sm:flex-row sm:items-end ${isCursor ? "sm:justify-end" : ""}`}
             >
@@ -496,8 +519,11 @@ function ToolApprovalDialogContents({
                     variant="bare"
                     type={request.isSecret ? "password" : "text"}
                     autoComplete={request.isSecret ? "new-password" : undefined}
-                    value={freeText}
-                    onChange={(e) => setFreeText(e.target.value)}
+                    value={questionControls
+                      ? request.options?.some((option) => option.label === questionControls.value) ? "" : questionControls.value
+                      : freeText}
+                    disabled={questionControls?.busy || questionControls?.readOnly}
+                    onChange={(e) => questionControls ? questionControls.onChange(e.target.value) : setFreeText(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter") return;
                       e.preventDefault();
@@ -510,11 +536,15 @@ function ToolApprovalDialogContents({
                 </label>
               )}
               <div className="flex shrink-0 items-center justify-end gap-2 sm:pb-px">
+                {questionControls?.onPrevious && (
+                  <Button variant="ghost" disabled={questionControls.busy || questionControls.readOnly} onClick={questionControls.onPrevious}>Back</Button>
+                )}
                 <Button
                   variant="primary"
                   className="min-w-18  text-primary-700 hover:bg-primary-200/40  dark:text-primary-300 dark:hover:bg-primary-800/50"
                   onClick={handleDeny}
                   autoFocus={request.defaultToNo}
+                  disabled={questionControls?.busy}
                 >
                   Dismiss
                 </Button>
@@ -522,14 +552,15 @@ function ToolApprovalDialogContents({
                   variant="submit"
                   className="min-w-18 font-semibold shadow-sm disabled:opacity-45"
                   onClick={handleSubmitAnswer}
-                  disabled={!canSubmit}
+                  disabled={!canSubmit || questionControls?.busy}
+                  isLoading={questionControls?.busy}
                 >
-                  Submit
+                  {questionControls?.submitLabel ?? "Submit"}
                 </Button>
               </div>
             </div>
+            {questionControls?.error && <Caption role="alert" tone="danger" className="mt-2 block">{questionControls.error}</Caption>}
           </div>
-        </div>
       </div>
     );
   }

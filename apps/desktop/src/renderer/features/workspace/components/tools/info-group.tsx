@@ -20,7 +20,13 @@ import {
 } from "@/components/ui/icons";
 import { ProviderIcon } from "../provider-icon";
 import { ImagePreviewModal } from "../image-preview-modal";
-import { Button, DropdownMenu, DropdownMenuItem, Text, toast } from "@/components/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuItem,
+  Text,
+  toast,
+} from "@/components/ui";
 import { appApi } from "@/lib/transport";
 import { useAttachmentImage } from "../../lib/attachment-image";
 import { AttachmentImagePreview } from "../attachment-image-preview";
@@ -46,6 +52,13 @@ import { PromptBrowserAnnotations } from "./prompt-browser-annotations";
 import { VoiceTaskCard } from "../voice-task-card";
 import type { VoiceTaskLink } from "@mains/contracts/realtime";
 import { AskUserQuestionDisplay } from "./ask-user-question-display";
+import { CodexAsyncQuestionCard } from "./codex-async-question-card";
+import {
+  readAsyncQuestionAnswer,
+  readAsyncQuestionReply,
+  readAsyncQuestions,
+  readAsyncQuestionState,
+} from "@mains/contracts/async-questions";
 
 interface PromptAttachment {
   attachmentId?: string;
@@ -59,37 +72,99 @@ interface PromptAttachment {
   path?: string;
 }
 
-type PromptPreview = { name: string; dataUrl: string; attachmentId?: string; runId?: string };
+type PromptPreview = {
+  name: string;
+  dataUrl: string;
+  attachmentId?: string;
+  runId?: string;
+};
 
-function PromptPreviewModal({ preview, onClose }: { preview: PromptPreview; onClose: () => void }) {
-  return preview.attachmentId && preview.runId
-    ? <AttachmentImagePreview runId={preview.runId} attachmentId={preview.attachmentId} name={preview.name} fallbackSrc={preview.dataUrl} onClose={onClose} />
-    : <ImagePreviewModal name={preview.name} src={preview.dataUrl} onClose={onClose} />;
+function PromptPreviewModal({
+  preview,
+  onClose,
+}: {
+  preview: PromptPreview;
+  onClose: () => void;
+}) {
+  return preview.attachmentId && preview.runId ? (
+    <AttachmentImagePreview
+      runId={preview.runId}
+      attachmentId={preview.attachmentId}
+      name={preview.name}
+      fallbackSrc={preview.dataUrl}
+      onClose={onClose}
+    />
+  ) : (
+    <ImagePreviewModal
+      name={preview.name}
+      src={preview.dataUrl}
+      onClose={onClose}
+    />
+  );
 }
 
-function PromptImageAttachment({ attachment, runId, onPreview }: {
+function PromptImageAttachment({
+  attachment,
+  runId,
+  onPreview,
+}: {
   attachment: PromptAttachment;
   runId?: string;
   onPreview: (image: PromptPreview) => void;
 }) {
-  const { observe, src: storedSrc, error: storedError } = useAttachmentImage(runId, attachment.attachmentId);
-  const legacy = useLocalImageUrl(attachment.attachmentId ? undefined : (attachment.dataUrl || attachment.path ||
-    (attachment.captureName ? `mains-capture://cap/${encodeURIComponent(attachment.captureName)}` : attachment.sourcePath)));
+  const {
+    observe,
+    src: storedSrc,
+    error: storedError,
+  } = useAttachmentImage(runId, attachment.attachmentId);
+  const legacy = useLocalImageUrl(
+    attachment.attachmentId
+      ? undefined
+      : attachment.dataUrl ||
+          attachment.path ||
+          (attachment.captureName
+            ? `mains-capture://cap/${encodeURIComponent(attachment.captureName)}`
+            : attachment.sourcePath),
+  );
   const src = attachment.attachmentId ? storedSrc : legacy;
   return src || (attachment.attachmentId && runId) ? (
     <Button
       ref={observe}
       type="button"
-      onClick={() => onPreview({ name: attachment.name, dataUrl: src ?? "", attachmentId: attachment.attachmentId, runId })}
+      onClick={() =>
+        onPreview({
+          name: attachment.name,
+          dataUrl: src ?? "",
+          attachmentId: attachment.attachmentId,
+          runId,
+        })
+      }
       className="size-20 shrink-0 overflow-hidden rounded-2xl border border-primary-200 dark:border-primary-800 cursor-pointer outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent"
       title={`Click to preview · ${attachment.name}`}
       aria-label={`Preview ${attachment.name}`}
     >
-      {src ? <img src={src} alt={attachment.name} draggable={false} className="size-full object-cover" />
-        : <span className="flex size-full items-center justify-center bg-primary-50 dark:bg-primary-900" title={storedError}><Picture className="size-5 text-primary-500" /></span>}
+      {src ? (
+        <img
+          src={src}
+          alt={attachment.name}
+          draggable={false}
+          className="size-full object-cover"
+        />
+      ) : (
+        <span
+          className="flex size-full items-center justify-center bg-primary-50 dark:bg-primary-900"
+          title={storedError}
+        >
+          <Picture className="size-5 text-primary-500" />
+        </span>
+      )}
     </Button>
   ) : (
-    <div ref={observe} className="flex size-20 shrink-0 items-center justify-center rounded-2xl border border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900" title={storedError ?? attachment.name}>
+    <div
+      ref={observe}
+      className="flex size-20 shrink-0 items-center justify-center rounded-2xl border border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900"
+      title={storedError ?? attachment.name}
+    >
       <Picture className="size-5 text-primary-500" />
     </div>
   );
@@ -102,17 +177,26 @@ interface InfoGroupProps {
   floatingChat?: boolean;
 }
 
-function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoGroupProps) {
+function InfoGroupImpl({
+  group,
+  runId,
+  providerId,
+  floatingChat = false,
+}: InfoGroupProps) {
   const event = group.events[0];
   const [previewAtt, setPreviewAtt] = useState<PromptPreview | null>(null);
   if (!event) return null;
   if (event.type === "artifact" && event.metadata?.kind === "voice-task") {
     const task = event.metadata.voiceTask as VoiceTaskLink | undefined;
-    return task && typeof task.id === "string" ? <VoiceTaskCard task={task} /> : null;
+    return task && typeof task.id === "string" ? (
+      <VoiceTaskCard task={task} />
+    ) : null;
   }
 
   if (event.type === "artifact" && event.metadata?.kind === "user-prompt") {
     const message = (event.content ?? "").trim();
+    const isAsyncQuestionReply =
+      readAsyncQuestionReply(event.metadata.asyncQuestionReply) !== null;
     const isReview = event.metadata?.isReview === true;
     const issues = (event.metadata?.issues ?? []) as Array<{
       provider: string;
@@ -142,9 +226,14 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
         displayName: parent ? `${parent}/${fileName}` : fileName,
       };
     });
-    const attachments = (event.metadata?.attachments ?? []) as PromptAttachment[];
-    const annotations = ((event.metadata?.browserAnnotations ?? []) as BrowserAnnotation[])
-      .filter((annotation) => Array.isArray(annotation.elements) && annotation.elements.length > 0);
+    const attachments = (event.metadata?.attachments ??
+      []) as PromptAttachment[];
+    const annotations = (
+      (event.metadata?.browserAnnotations ?? []) as BrowserAnnotation[]
+    ).filter(
+      (annotation) =>
+        Array.isArray(annotation.elements) && annotation.elements.length > 0,
+    );
     const reviewComments = readReviewComments(event.metadata?.reviewComments);
     const skills = (event.metadata?.skills ?? []) as PromptMarkdownSkill[];
 
@@ -198,14 +287,24 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
         <div className="w-full py-2 flex justify-end">
           <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-2">
             {!!event.metadata?.voiceDelegation && (
-              <Text as="span" size="xs" tone="muted" className="flex items-center gap-1.5">
+              <Text
+                as="span"
+                size="xs"
+                tone="muted"
+                className="flex items-center gap-1.5"
+              >
                 <Codex className="size-3" /> Sent from voice conversation
               </Text>
             )}
             {imageAttachments.length > 0 && (
               <div className="flex flex-wrap justify-end gap-2">
                 {imageAttachments.map((attachment, index) => (
-                  <PromptImageAttachment key={`${attachment.name}-${index}`} attachment={attachment} runId={runId} onPreview={setPreviewAtt} />
+                  <PromptImageAttachment
+                    key={`${attachment.name}-${index}`}
+                    attachment={attachment}
+                    runId={runId}
+                    onPreview={setPreviewAtt}
+                  />
                 ))}
               </div>
             )}
@@ -218,22 +317,43 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
                 attachmentId={att.attachmentId}
               />
             ))}
-            {annotations.length > 0 && <PromptBrowserAnnotations annotations={annotations} />}
-            {reviewComments.length > 0 && <ReviewCommentsAttachment comments={reviewComments} />}
+            {annotations.length > 0 && (
+              <PromptBrowserAnnotations annotations={annotations} />
+            )}
+            {reviewComments.length > 0 && (
+              <ReviewCommentsAttachment comments={reviewComments} />
+            )}
             {message && (
-              <div className={`min-w-0 max-w-full px-3.5 py-2 rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}>
-                <div className="prose prose-sm dark:prose-invert max-w-none text-left">
-                  <PromptMarkdown skills={skills} files={files} providerId={providerId}>
+              <div
+                className={`min-w-0 max-w-full ${isAsyncQuestionReply ? "px-3 py-1.5" : "px-3.5 py-2"} rounded-2xl ${floatingChat ? "bg-primary-200/70" : "bg-primary-50"} dark:bg-primary/5`}
+              >
+                <div
+                  className={`prose prose-sm dark:prose-invert max-w-none text-left ${
+                    isAsyncQuestionReply
+                      ? "[&_.document-paragraph]:text-sm [&_.document-paragraph]:leading-5 [&_.document-paragraph]:my-0.5 [&_.document-divider]:my-2 [&>p:is(:first-child,hr+p)]:text-s [&>p:is(:first-child,hr+p)]:text-primary-400 dark:[&>p:is(:first-child,hr+p)]:text-primary-600"
+                      : ""
+                  }`}
+                >
+                  <PromptMarkdown
+                    skills={skills}
+                    files={files}
+                    providerId={providerId}
+                  >
                     {message}
                   </PromptMarkdown>
                 </div>
               </div>
             )}
             {typeof event.metadata?.sendError === "string" && (
-              <Text size="xs" tone="secondary">{event.metadata.sendError}</Text>
+              <Text size="xs" tone="secondary">
+                {event.metadata.sendError}
+              </Text>
             )}
             {previewAtt && (
-              <PromptPreviewModal preview={previewAtt} onClose={() => setPreviewAtt(null)} />
+              <PromptPreviewModal
+                preview={previewAtt}
+                onClose={() => setPreviewAtt(null)}
+              />
             )}
             {(externalFiles.length > 0 ||
               issues.length > 0 ||
@@ -321,10 +441,17 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
             onPreview={setPreviewAtt}
           />
         ) : (
-          <ImageArtifactGallery runId={runId} images={images} onPreview={setPreviewAtt} />
+          <ImageArtifactGallery
+            runId={runId}
+            images={images}
+            onPreview={setPreviewAtt}
+          />
         )}
         {previewAtt && (
-          <PromptPreviewModal preview={previewAtt} onClose={() => setPreviewAtt(null)} />
+          <PromptPreviewModal
+            preview={previewAtt}
+            onClose={() => setPreviewAtt(null)}
+          />
         )}
       </div>
     );
@@ -346,7 +473,7 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
       "document";
     const docType =
       (event.metadata?.docType as DocType | undefined) ??
-      classifyDocType(fileName);
+      classifyDocType(fileName, true);
     if (!docType) return null;
     return (
       <div className="overflow-hidden">
@@ -355,6 +482,11 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
           absPath={absPath}
           fileName={fileName}
           docType={docType}
+          byteSize={
+            typeof event.metadata?.byteSize === "number"
+              ? event.metadata.byteSize
+              : undefined
+          }
         />
       </div>
     );
@@ -366,29 +498,40 @@ function InfoGroupImpl({ group, runId, providerId, floatingChat = false }: InfoG
     const title = event.metadata?.title as string | undefined;
     const mode = event.metadata?.mode === "wide" ? "wide" : undefined;
     return (
-      <VisualizationArtifact
-        absPath={absPath}
-        title={title}
-        mode={mode}
-      />
+      <VisualizationArtifact absPath={absPath} title={title} mode={mode} />
     );
   }
 
   // Codex delivers async questions on agentMessage items. Their report
   // artifacts retain the structured fields, including in saved conversations.
-  if (event.type === "artifact" && event.metadata?.source === "codex_async_questions") {
-    const rawQuestions = event.metadata.questions;
-    const questions = Array.isArray(rawQuestions) ? rawQuestions.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") return [];
-      const { title, options } = entry as Record<string, unknown>;
-      if (typeof title !== "string" || !title.trim()) return [];
-      return [{
-        question: title.trim(),
-        options: Array.isArray(options) ? options.flatMap((option) =>
-          typeof option === "string" && option.trim() ? [{ label: option.trim() }] : []) : undefined,
-      }];
-    }) : [];
-    if (questions.length > 0) return <AskUserQuestionDisplay params={{ questions }} />;
+  if (
+    event.type === "artifact" &&
+    event.metadata?.source === "codex_async_questions"
+  ) {
+    const questions = readAsyncQuestions(event.metadata.questions);
+    const artifactId = /^artifact-(\d+)$/.exec(event.id)?.[1];
+    if (questions.length > 0) {
+      if (runId && artifactId)
+        return (
+          <CodexAsyncQuestionCard
+            runId={runId}
+            artifactId={Number(artifactId)}
+            questions={questions}
+            answer={readAsyncQuestionAnswer(event.metadata.asyncQuestionAnswer)}
+            state={readAsyncQuestionState(event.metadata.asyncQuestionState)}
+          />
+        );
+      return (
+        <AskUserQuestionDisplay
+          params={{
+            questions: questions.map(({ title, options }) => ({
+              question: title,
+              options: options?.map((label) => ({ label })),
+            })),
+          }}
+        />
+      );
+    }
   }
 
   if (event.type === "artifact") {
@@ -444,7 +587,8 @@ function AttachmentDocumentCard({
   const { open } = useDocumentViewer();
   const dot = name.lastIndexOf(".");
   const extension = dot > 0 ? name.slice(dot + 1) : undefined;
-  const docType = filePath || (runId && attachmentId) ? classifyDocType(name) : null;
+  const docType =
+    filePath || (runId && attachmentId) ? classifyDocType(name) : null;
   const className =
     "flex w-60 max-w-full glass-card items-center gap-3 rounded-2xl  p-1.5 pr-3  ";
   const content = (
@@ -481,12 +625,21 @@ function AttachmentDocumentCard({
         try {
           let resolved = filePath;
           if (!resolved && runId && attachmentId) {
-            const result = await appApi.runArtifacts.resolveAttachmentPath({ runId, attachmentId });
+            const result = await appApi.runArtifacts.resolveAttachmentPath({
+              runId,
+              attachmentId,
+            });
             if (!result.success) throw new Error(result.error);
             resolved = result.data;
           }
           if (resolved) open({ path: resolved, fileName: name, docType });
-        } catch (error) { toast.error(error instanceof Error ? error.message : "Could not open attachment"); }
+        } catch (error) {
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : "Could not open attachment",
+          );
+        }
       }}
       className={`${className} cursor-pointer outline-none transition-colors hover:bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent dark:hover:bg-primary-800/60`}
       title={`Open ${name}`}
@@ -507,7 +660,8 @@ function ImageArtifactGallery({
   onPreview: (att: { name: string; dataUrl: string }) => void;
 }) {
   const [selectedPath, setSelectedPath] = useState(images[0].absPath);
-  const selected = images.find((image) => image.absPath === selectedPath) ?? images[0];
+  const selected =
+    images.find((image) => image.absPath === selectedPath) ?? images[0];
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [fade, setFade] = useState({ top: false, bottom: false });
@@ -597,9 +751,7 @@ function ImageGalleryThumbnail({
       aria-pressed={selected}
       title={image.fileName}
       className={`flex aspect-square w-full shrink-0 items-center justify-center overflow-hidden rounded-2xl  transition-colors focus-visible:ring-2 focus-visible:ring-accent/20 ${
-        selected
-          ? "border border-accent/40 outline-none"
-          : "glass-outline"
+        selected ? "border border-accent/40 outline-none" : "glass-outline"
       }  `}
     >
       {url && !thumbFailed ? (
@@ -637,7 +789,11 @@ function ImageArtifact({
   const { revealInFolder } = useCapabilities();
   const [thumbFailed, setThumbFailed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [menuPos, setMenuPos] = useState<{ x: number; y: number; anchorTop?: number }>({ x: 0, y: 0 });
+  const [menuPos, setMenuPos] = useState<{
+    x: number;
+    y: number;
+    anchorTop?: number;
+  }>({ x: 0, y: 0 });
   const openBtnRef = useRef<HTMLButtonElement>(null);
   const [fetchApps, { data: handlerApps = [], isFetching }] =
     useLazyGetAppsForFileQuery();
@@ -693,9 +849,18 @@ function ImageArtifact({
         <Mains className="size-4 shrink-0" />
         Show Image
       </DropdownMenuItem>
-      {runId && <DropdownMenuItem disabled={atlas.saving} onClick={() => { setMenuOpen(false); void atlas.save(runId, absPath); }}>
-        <Globe className="size-4 shrink-0" />Save to Atlas
-      </DropdownMenuItem>}
+      {runId && (
+        <DropdownMenuItem
+          disabled={atlas.saving}
+          onClick={() => {
+            setMenuOpen(false);
+            void atlas.save(runId, absPath);
+          }}
+        >
+          <Globe className="size-4 shrink-0" />
+          Save to Atlas
+        </DropdownMenuItem>
+      )}
       {revealInFolder && (
         <DropdownMenuItem onClick={showInFinder}>
           <Finder className="size-4 shrink-0" />
@@ -722,7 +887,12 @@ function ImageArtifact({
             ) : (
               <External className="size-4 shrink-0 opacity-70" />
             )}
-            <span className="min-w-0 flex-1 truncate text-left" title={app.name}>{app.name}</span>
+            <span
+              className="min-w-0 flex-1 truncate text-left"
+              title={app.name}
+            >
+              {app.name}
+            </span>
           </DropdownMenuItem>
         ))
       )}
@@ -740,18 +910,26 @@ function ImageArtifact({
         className={`block max-w-full overflow-hidden rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-accent ${variant === "gallery" ? "w-full bg-primary-50 dark:bg-primary-900/85" : ""}`}
         aria-label={`Preview ${fileName} in Mains`}
       >
-        <div className={`flex items-center justify-center overflow-hidden ${variant === "gallery" ? "aspect-square w-full max-h-144" : "max-h-144 max-w-[24rem]"}`}>
+        <div
+          className={`flex items-center justify-center overflow-hidden ${variant === "gallery" ? "aspect-square w-full max-h-144" : "max-h-144 max-w-[24rem]"}`}
+        >
           {url && !thumbFailed ? (
             <img
               src={url}
               alt={fileName}
-              className={variant === "gallery" ? "block size-full object-contain" : "block h-auto max-h-144 w-auto max-w-full object-contain"}
+              className={
+                variant === "gallery"
+                  ? "block size-full object-contain"
+                  : "block h-auto max-h-144 w-auto max-w-full object-contain"
+              }
               loading="lazy"
               draggable={false}
               onError={() => setThumbFailed(true)}
             />
           ) : (
-            <div className={`flex items-center justify-center rounded-2xl bg-primary-100/70 dark:bg-primary-900/70 ${variant === "gallery" ? "size-full" : "h-44 w-72"}`}>
+            <div
+              className={`flex items-center justify-center rounded-2xl bg-primary-100/70 dark:bg-primary-900/70 ${variant === "gallery" ? "size-full" : "h-44 w-72"}`}
+            >
               <Picture className="size-7 text-primary-500" />
             </div>
           )}

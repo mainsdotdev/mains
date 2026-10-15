@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { APP_WRITER, toWorktreePath, worktreeWrites } from "./worktree-writes";
+import path from "node:path";
 
 // The ledger is module state; every test takes a worktree of its own.
 let worktreeCounter = 0;
@@ -117,5 +118,15 @@ describe("toWorktreePath", () => {
   it("drops paths outside the worktree", () => {
     expect(toWorktreePath(atRoot, "/tmp/repo", "/etc/hosts")).toBeNull();
     expect(toWorktreePath(atRoot, "/tmp/repo", "../elsewhere.ts")).toBeNull();
+  });
+
+  it("keeps Windows disk paths out of Git's relative path identity", () => {
+    const location = { topLevel: "C:\\Test User\\repo", prefix: "apps/desktop/" };
+    const cwd = "C:\\Test User\\repo\\apps\\desktop";
+    expect(toWorktreePath(location, cwd, "src\\a.ts", path.win32)).toBe("apps/desktop/src/a.ts");
+    expect(toWorktreePath(location, cwd, `${cwd}\\src\\a.ts`, path.win32)).toBe("apps/desktop/src/a.ts");
+    expect(toWorktreePath(location, cwd, "..\\..\\packages\\türkçe.ts", path.win32)).toBe("packages/türkçe.ts");
+    expect(toWorktreePath(location, cwd, "..\\..\\..\\outside.ts", path.win32)).toBeNull();
+    expect(toWorktreePath(location, cwd, "D:\\outside.ts", path.win32)).toBeNull();
   });
 });

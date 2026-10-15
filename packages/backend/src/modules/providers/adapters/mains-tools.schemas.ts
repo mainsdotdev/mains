@@ -11,6 +11,11 @@
 
 import { z } from "zod";
 
+export const RegisterDeliverableSchema = z.object({
+  path: z.string().trim().min(1).max(4096).describe("Existing file path, absolute or relative to this conversation's working directory"),
+  role: z.enum(["deliverable", "working", "preview"]).optional().describe("Defaults to deliverable. Working material and render previews are excluded from final outputs."),
+});
+
 const atlasContentFields = {
   blocksJson: z.string().max(2 * 1024 * 1024).optional().describe("Lossless BlockNote block array encoded as JSON; preserve unchanged IDs, properties and atlas-file:// references from AtlasReadPage"),
   markdown: z.string().max(2 * 1024 * 1024).optional().describe("Alternative Markdown input. Lossy for advanced formatting; prefer blocksJson when updating rich content. Supply exactly one content field."),

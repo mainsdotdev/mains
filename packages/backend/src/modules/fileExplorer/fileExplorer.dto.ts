@@ -95,7 +95,7 @@ export interface WriteFileTextResponse {
 }
 
 // Max file size constant (2MB)
-export const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024;
+export { TEXT_PREVIEW_MAX_BYTES as MAX_FILE_SIZE_BYTES } from "@mains/contracts/output-files";
 
 // Max total nodes (files + directories) emitted by a recursive readDirectory
 // call. Protects RAM on gigantic trees — callers that need more should fall

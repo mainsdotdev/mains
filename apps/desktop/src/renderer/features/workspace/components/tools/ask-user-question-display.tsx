@@ -122,7 +122,8 @@ export function AskUserQuestionDisplay({
                       })}
                     </div>
                   )}
-                  {(!q.options || q.options.length === 0) &&
+                  {!q.options?.some((option) => selectedAnswer === option.label ||
+                    Array.isArray(selectedAnswer) && selectedAnswer.includes(option.label)) &&
                     selectedAnswer != null &&
                     String(selectedAnswer).trim() !== "" && (
                     <div className="flex items-start gap-2 rounded px-2 py-1.5 bg-primary/80 dark:bg-success/10">
