@@ -24,7 +24,7 @@ function viewport(ids: string[]) {
   mount(ids);
   return { element, mount };
 }
-const controls = (): TranscriptHistory => ({ hasOlder: true, hasNewer: false, historical: false, latestRevision: 1,
+const controls = (): TranscriptHistory => ({ hasOlder: true, hasNewer: false, following: true, historical: false, latestRevision: 1,
   loading: false, error: null, loadOlder: vi.fn(async () => {}), loadNewer: vi.fn(async () => {}),
   loadLatest: vi.fn(async () => {}), retry: vi.fn(async () => {}), setFollowing: vi.fn(),
 });

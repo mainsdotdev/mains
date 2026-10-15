@@ -48,12 +48,44 @@ describe("bounded transcript cache", () => {
     const view = renderHook(() => useRunHistory(cache, "r"));
     await act(() => view.result.current.load("r"));
     act(() => view.result.current.history.setFollowing(false));
+    expect(view.result.current.history.following).toBe(false);
     await act(() => view.result.current.load("r"));
     expect(getHistory.mock.calls[1][0]).toMatchObject({ direction: "refresh", cursor: cursor(90), end: { timestamp: 99000, source: "artifact", id: 100 } });
     act(() => view.result.current.history.setFollowing(true));
     await act(() => view.result.current.history.loadLatest());
     expect(getHistory.mock.calls.at(-1)?.[0]).toEqual({ runId: "r", direction: "latest", deferToolOutput: true });
     expect(view.result.current.history.historical).toBe(false);
+    expect(view.result.current.history.following).toBe(true);
+  });
+
+  it("keeps a paused latest window live when a frozen refresh reports newer rows", async () => {
+    getHistory.mockResolvedValueOnce(page(90)).mockResolvedValueOnce(page(90, 10, 100));
+    const cache = createRunCache();
+    const view = renderHook(() => useRunHistory(cache, "r"));
+    await act(() => view.result.current.load("r"));
+    act(() => view.result.current.history.setFollowing(false));
+    expect(view.result.current.history.historical).toBe(false);
+    await act(() => view.result.current.load("r"));
+    expect(view.result.current.history.hasNewer).toBe(true);
+    expect(view.result.current.history.historical).toBe(false);
+    expect(view.result.current.history.following).toBe(false);
+    view.unmount();
+  });
+
+  it("preserves a reading pause made during an in-flight refresh", async () => {
+    getHistory.mockResolvedValueOnce(page(90));
+    const cache = createRunCache();
+    const view = renderHook(() => useRunHistory(cache, "r"));
+    await act(() => view.result.current.load("r"));
+    const latestRevision = view.result.current.history.latestRevision;
+    let finish!: (value: ReturnType<typeof page>) => void;
+    getHistory.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    let refreshing!: Promise<void>;
+    await act(async () => { refreshing = view.result.current.load("r"); await Promise.resolve(); });
+    act(() => view.result.current.history.setFollowing(false));
+    await act(async () => { finish(page(90)); await refreshing; });
+    expect(view.result.current.history).toMatchObject({ following: false, historical: false, latestRevision });
+    view.unmount();
   });
 
   it("serializes paging behind an in-flight refresh", async () => {

@@ -5,33 +5,25 @@ export interface TranscriptViewState {
   scrollOffset: number | null;
   followTail: boolean;
   latestRevision: number;
-  heights: Map<string, number>;
   values: Map<string, unknown>;
   listeners: Set<() => void>;
 }
 
 const VIEW_LIMIT = 4;
 const VALUE_LIMIT = 512;
-const HEIGHT_LIMIT = 128;
 
 export function createTranscriptViewCache() {
   const views = new Map<string, TranscriptViewState>();
   return {
     get(runId: string): TranscriptViewState {
       const view = views.get(runId) ?? { scrollOffset: null, followTail: true, latestRevision: 0,
-        heights: new Map(), values: new Map(), listeners: new Set() };
+        values: new Map(), listeners: new Set() };
       views.delete(runId);
       views.set(runId, view);
       while (views.size > VIEW_LIMIT) views.delete(views.keys().next().value!);
       return view;
     },
   };
-}
-
-export function rememberRowHeight(view: TranscriptViewState, id: string, height: number) {
-  view.heights.delete(id);
-  view.heights.set(id, height);
-  while (view.heights.size > HEIGHT_LIMIT) view.heights.delete(view.heights.keys().next().value!);
 }
 
 export function rememberTranscriptPosition(view: TranscriptViewState, update: Partial<Pick<TranscriptViewState, "scrollOffset" | "followTail" | "latestRevision">>) {
@@ -48,7 +40,7 @@ export function TranscriptItemScope({ id, children }: { id: string; children: Re
   return <Context.Provider value={parent ? { view: parent.view, scope: id } : null}>{children}</Context.Provider>;
 }
 
-/** Persist small interaction values across virtual row unmounts. */
+/** Retain small interaction values across transcript tab switches. */
 export function useTranscriptValue<T>(key: string, initial: T): [T, Dispatch<SetStateAction<T>>] {
   const context = useContext(Context);
   const view = context?.view;

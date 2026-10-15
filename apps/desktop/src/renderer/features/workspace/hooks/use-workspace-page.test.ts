@@ -395,7 +395,7 @@ describe("submitted prompt feedback", () => {
     expect(page.result.current.currentEvents[0].id).not.toMatch(/^pending-prompt:/);
   });
 
-  it("shows a continuation before the API resolves without matching an older identical prompt", async () => {
+  it.each([false, true])("shows a continuation before the API resolves without matching an older identical prompt (paused=%s)", async (paused) => {
     mocks.getById.mockResolvedValue({ success: true, data: run });
     mocks.checkCanResume.mockResolvedValue(true);
     let finish!: (success: boolean) => void;
@@ -404,11 +404,13 @@ describe("submitted prompt feedback", () => {
     act(() => page.store.dispatch(setActiveTab(run.id)));
     await waitFor(() => expect(page.result.current.canResume).toBe(true));
     await waitFor(() => expect(page.result.current.currentEvents).toHaveLength(1));
+    if (paused) act(() => page.result.current.history.setFollowing(false));
     act(() => page.result.current.setGoal(run.goal));
     let sending!: Promise<string | null>;
     act(() => { sending = page.result.current.handleExecute(); });
     expect(page.result.current.currentEvents.filter((event) => event.content === run.goal)).toHaveLength(2);
     await waitFor(() => expect(mocks.continueRun).toHaveBeenCalled());
+    if (paused) expect(mocks.getHistory.mock.calls.at(-1)?.[0].direction).toBe("latest");
     await act(async () => { finish(true); await sending; });
     expect(page.result.current.currentEvents.filter((event) => event.content === run.goal)).toHaveLength(2);
   });

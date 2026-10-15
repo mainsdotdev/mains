@@ -63,7 +63,7 @@ import { formatCostFromMicros, formatDurationMs } from "@/lib/format";
 import { formatAbsoluteDate } from "@/lib/format-date";
 import { PromptSuggestionChips } from "./prompt-suggestion-chips";
 import { TurnChangesCard } from "./turn-changes-card";
-import { TranscriptWindow, type TranscriptWindowRow } from "./transcript-window";
+import { TranscriptList, type TranscriptListRow } from "./transcript-list";
 import { createTranscriptViewCache, TranscriptItemScope, TranscriptViewProvider, useTranscriptValue } from "../lib/transcript-view-state";
 
 function formatNumber(n: number): string {
@@ -769,12 +769,10 @@ export function WorkspaceEvents({
     ],
   );
 
-  const windowRows = useMemo<TranscriptWindowRow[]>(() => turnRenderRows.map((row, rowIndex) => {
+  const transcriptRows = useMemo<TranscriptListRow[]>(() => turnRenderRows.map((row, rowIndex) => {
     const first = row.kind === "flat" ? row.indices[0] : row.previousSegments[0]?.[0] ?? row.lastSegment[0];
     const id = `row-${row.kind === "flat" ? "flat" : "acc"}-${eventGroups[first]?.id}`;
-    const indices = [...(row.kind === "flat" ? row.indices : row.lastSegment), ...(row.suggestionIndices ?? [])];
-    const estimate = Math.min(1400, 64 + indices.reduce((total, index) => total + eventGroups[index].events.reduce((sum, event) => sum + Math.min(1000, 32 + Math.ceil(event.content.length / 90) * 20), 0), 0));
-    return { id, groupIndex: row.kind === "flat" ? first : undefined, estimate,
+    return { id, groupIndex: row.kind === "flat" ? first : undefined,
       render: () => <TranscriptItemScope id={id}><div className="group/agent-turn space-y-4">{row.kind === "flat"
         ? row.indices.map(renderGroupAt)
         : <AgentTurnMessagesAccordion {...row} renderGroup={renderGroupAt}
@@ -811,9 +809,7 @@ export function WorkspaceEvents({
     [currentEvents],
   );
 
-  // Run content stays mounted whenever there are events for the active run,
-  // just hidden when a non-run tab is active. Preserves accordion open state,
-  // scroll position, and other local UI state across tab switches.
+  // The view cache restores scroll position and accordion state across tabs.
 
   return (
     <TranscriptViewProvider view={transcriptView}><Text as="div" size="sm" tone="inherit" className="group/voice-chat relative h-full flex flex-col">
@@ -845,8 +841,7 @@ export function WorkspaceEvents({
                   {history.loading ? "Loading earlier messages…" : history.error ? "Retry loading messages" : "Load earlier messages"}
                 </button>
               )}
-              <TranscriptWindow key={activeTab} rows={windowRows} scrollRef={transcriptRef}
-                view={transcriptView} onResize={onTranscriptResize} />
+              <TranscriptList key={activeTab} rows={transcriptRows} onResize={onTranscriptResize} />
               {activeRunFailedOnAuth && !providerSignedOut && (
                 <ProviderAuthNotice
                   variant={variant}
@@ -870,7 +865,7 @@ export function WorkspaceEvents({
             transcriptRef={transcriptRef}
           />
         )}
-        {hasRunContent && history?.historical && (
+        {hasRunContent && history && (history.historical || !history.following) && (
           <div className="pointer-events-none absolute inset-x-0 bottom-4 z-(--z-base) flex justify-center group-has-data-voice-orb-overlay/voice-chat:bottom-52 sm:group-has-data-voice-orb-overlay/voice-chat:bottom-68">
             <Button
               aria-label="Jump to latest"

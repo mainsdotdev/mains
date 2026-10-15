@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { createRef, type RefObject } from "react";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { RunTurn } from "@/lib/redux/api";
 import type { Run, RunEvent } from "../types";
 import type { EventGroup } from "../lib/group-events";
+import type { TranscriptHistory } from "../hooks/use-run-history";
 import { WorkspaceEvents } from "./workspace-events";
 
 vi.mock("./tools/tool-call-group", async () => {
@@ -54,6 +55,20 @@ const run: Run = { id: "run", workspaceId: "ws", status: "running", providerId: 
 function event(id: string, time: number, metadata: Record<string, unknown> = {}): RunEvent {
   return { id, content: id, type: "artifact", timestamp: new Date(time), metadata: { kind: "report", ...metadata } };
 }
+
+it("offers Jump to latest while a live transcript is paused without hiding the reply", () => {
+  const history: TranscriptHistory = {
+    following: false, historical: false, hasOlder: false, hasNewer: false, loading: false, error: null,
+    latestRevision: 1, loadOlder: vi.fn(async () => {}), loadNewer: vi.fn(async () => {}),
+    loadLatest: vi.fn(async () => {}), retry: vi.fn(async () => {}), setFollowing: vi.fn(),
+  };
+  const view = render(<WorkspaceEvents runs={[run]} activeTab={run.id} history={history}
+    currentEvents={[event("Live reply", 43_000, { streaming: true })]} currentWorkspace={null}
+    eventsEndRef={createRef<HTMLDivElement>() as RefObject<HTMLDivElement>} issueTabs={[]} variant="codex" />);
+  expect(view.getByText("Live reply")).toBeTruthy();
+  fireEvent.click(view.getByRole("button", { name: "Jump to latest" }));
+  expect(history.loadLatest).toHaveBeenCalledOnce();
+});
 
 it("hides thinking during a visible assistant stream while retaining waiting and tool activity", () => {
   const waiting = [event("Old reply", 1_000), event("New request", 40_000, { kind: "user-prompt" }),

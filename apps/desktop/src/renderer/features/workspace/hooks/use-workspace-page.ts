@@ -513,7 +513,7 @@ export function useWorkspacePage(providerId: string, mirrorOnly = false) {
       const runContext = [...submitted, ...(appContext?.(ownerKey) ?? [])];
       const continuing = !!targetRunId && canResume && !!targetRun;
       clientPromptId = beginPrompt(text, runContext, files, continuing ? targetRunId : null);
-      if (continuing && history.historical) void history.loadLatest();
+      if (continuing && (history.historical || !history.following)) void history.loadLatest();
       const attachments = files.length > 0 ? await serializeAttachments(files) : undefined;
       let nextRunId: string | null;
       if (continuing) {
