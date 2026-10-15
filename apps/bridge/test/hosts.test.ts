@@ -3,10 +3,99 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CHANNELS } from "@mains/contracts/channels";
+import type { AtlasPage, AtlasItem } from "@mains/contracts/atlas";
 import type { BridgeStatus } from "@mains/contracts/bridge";
 import { startLocalBackends, waitFor } from "./local-backends";
 
 describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge through two real Mains server processes", () => {
+  it.each(["current", "other"] as const)("synchronizes Atlas branches and resolves %s across real backends", async (choice) => {
+    const fixture = await startLocalBackends(); const { a, b } = fixture;
+    try {
+      const base = await a.client.call<AtlasPage>(CHANNELS.atlas.createPage, { accountId: "default", title: "Shared Atlas", markdown: "Base" });
+      const identity = { accountId: "default", id: base.item.id };
+      const before = await waitFor(() => b.client.call<AtlasPage | null>(CHANNELS.atlas.get, identity), (value) => value?.revision.id === base.revision.id, "Atlas Page on B");
+      // Keep B's actual backend and editor API running pointed at an unavailable
+      // network endpoint. Persisted SQL capture continues while its hub is unavailable.
+      await b.stop();
+      const onlineConfig = await readFile(b.configFile, "utf8");
+      await writeFile(b.configFile, JSON.stringify({ ...JSON.parse(onlineConfig), url: "ws://127.0.0.1:1/v1/log" }));
+      await b.start();
+      await a.client.call(CHANNELS.atlas.savePage, { ...identity, expectedVersion: base.item.version, title: "Branch A", markdown: "A content" });
+      await b.client.call(CHANNELS.atlas.update, { ...identity, isFavorite: true });
+      await b.client.call(CHANNELS.atlas.savePage, { ...identity, expectedVersion: before!.item.version, title: "Branch B", markdown: "B content" });
+      await b.stop(); await writeFile(b.configFile, onlineConfig); await b.start();
+      const branched = await waitFor(() => a.client.call<AtlasPage>(CHANNELS.atlas.get, identity), (value) => value.conflicts?.length === 1 && value.item.isFavorite, "Atlas conflict and stale favourite");
+      await waitFor(() => b.client.call<AtlasPage>(CHANNELS.atlas.get, identity), (value) => value.conflicts?.[0]?.id === branched.conflicts![0].id, "same conflict on B");
+      const merged = await a.client.call<AtlasPage>(CHANNELS.atlas.resolveConflict, { ...identity, expectedVersion: branched.item.version, revisionId: branched.conflicts![0].id, choice });
+      expect(merged.item.title).toBe(choice === "current" ? branched.item.title : branched.conflicts![0].title);
+      expect(merged.revision.parentRevisionId).toBe(branched.revision.id);
+      expect(merged.revision.mergedRevisionId).toBe(branched.conflicts![0].id);
+      const result = await waitFor(() => b.client.call<AtlasPage>(CHANNELS.atlas.get, identity), (value) => value.revision.id === merged.revision.id && value.conflicts?.length === 0, "resolved graph on B");
+      expect(result.item.isFavorite).toBe(true);
+      expect(await b.client.call<unknown[]>(CHANNELS.atlas.revisions, identity)).toHaveLength(4);
+      expect(await b.client.invoke(CHANNELS.atlas.savePage, { ...identity, expectedVersion: before!.item.version, title: "Stale", markdown: "Do not overwrite" })).toMatchObject({ success: false });
+    } finally { await fixture.dispose(); }
+  }, 60_000);
+
+  it("recovers an offline Atlas Page and its embedded image before a remote delete cascades", async () => {
+    const fixture = await startLocalBackends(); const { a, b } = fixture;
+    try {
+      const base = await a.client.call<AtlasPage>(CHANNELS.atlas.createPage, { accountId: "default", title: "Recover me", markdown: "Base" });
+      const identity = { accountId: "default", id: base.item.id };
+      const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64");
+      const file = await a.client.call<AtlasItem>(CHANNELS.atlas.uploadFile, { accountId: "default", pageId: base.item.id, fileName: "atlas.png", data: image.toString("base64") });
+      await a.client.call(CHANNELS.bridge.syncNow);
+      await waitFor(() => b.client.call<AtlasItem[]>(CHANNELS.atlas.list, { accountId: "default" }), (rows) => rows.some((row) => row.id === file.id), "image metadata on B");
+      await waitFor(() => b.client.call<AtlasPage | null>(CHANNELS.atlas.get, identity), (value) => value?.revision.id === base.revision.id, "base on B");
+      await b.stop();
+      const onlineConfig = await readFile(b.configFile, "utf8");
+      await writeFile(b.configFile, JSON.stringify({ ...JSON.parse(onlineConfig), url: "ws://127.0.0.1:1/v1/log" }));
+      await b.start();
+      await b.client.call(CHANNELS.atlas.savePage, { ...identity, expectedVersion: 1, title: "Offline notes", markdown: `Written offline\n\n![Image](atlas-file://${file.id})` });
+      await a.client.call(CHANNELS.atlas.update, { ...identity, trashed: true }); await a.client.call(CHANNELS.atlas.remove, identity);
+      await a.client.call(CHANNELS.atlas.update, { accountId: "default", id: file.id, trashed: true });
+      await a.client.call(CHANNELS.atlas.remove, { accountId: "default", id: file.id });
+      await a.client.call(CHANNELS.bridge.syncNow);
+      await b.stop(); await writeFile(b.configFile, onlineConfig); await b.start();
+      const recovered = await waitFor(() => b.client.call<AtlasItem[]>(CHANNELS.atlas.list, { accountId: "default", kind: "page" }), (rows) => rows.some((row) => row.title === "Offline notes (recovered)"), "recovered Page");
+      const copy = recovered.find((row) => row.title === "Offline notes (recovered)")!;
+      expect(copy.id).not.toBe(base.item.id);
+      const page = await b.client.call<AtlasPage>(CHANNELS.atlas.get, { accountId: "default", id: copy.id });
+      const copiedFileId = page.revision.markdown.match(/atlas-file:\/\/([\w-]+)/)![1];
+      expect(copiedFileId).not.toBe(file.id);
+      const path = await b.client.call<string>(CHANNELS.atlas.resolveFile, { accountId: "default", id: copiedFileId });
+      expect(path.startsWith(join(b.dir, "bridge", "blobs"))).toBe(true);
+      expect(await readFile(path)).toEqual(image);
+      await b.client.call(CHANNELS.bridge.syncNow);
+      await waitFor(() => a.client.call<AtlasPage | null>(CHANNELS.atlas.get, { accountId: "default", id: copy.id }), (value) => value?.revision.id === page.revision.id, "recovered copy on A");
+      expect(await b.client.call(CHANNELS.atlas.get, identity)).toBeNull();
+      expect(await b.client.call(CHANNELS.atlas.get, { accountId: "default", id: file.id })).toBeNull();
+      expect(await a.client.call(CHANNELS.atlas.get, identity)).toBeNull();
+    } finally { await fixture.dispose(); }
+  }, 60_000);
+
+  it("restores a historical Atlas revision and opens its image on B while A is offline", async () => {
+    const fixture = await startLocalBackends(); const { a, b } = fixture;
+    try {
+      const base = await a.client.call<AtlasPage>(CHANNELS.atlas.createPage, { accountId: "default", title: "History", markdown: "Before image" });
+      const identity = { accountId: "default", id: base.item.id };
+      const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64");
+      const file = await a.client.call<AtlasItem>(CHANNELS.atlas.uploadFile, { accountId: "default", pageId: base.item.id, fileName: "historical.png", data: image.toString("base64") });
+      const embedded = await a.client.call<AtlasPage>(CHANNELS.atlas.savePage, { ...identity, expectedVersion: base.item.version, title: "With image", markdown: `![Historical](atlas-file://${file.id})` });
+      const latest = await a.client.call<AtlasPage>(CHANNELS.atlas.savePage, { ...identity, expectedVersion: embedded.item.version, title: "Image removed", markdown: "Text only now" });
+      const received = await waitFor(() => b.client.call<AtlasPage | null>(CHANNELS.atlas.get, identity), (value) => value?.revision.id === latest.revision.id, "current Page on B");
+      await a.stop(); await unlink(file.path!);
+      const restored = await b.client.call<AtlasPage>(CHANNELS.atlas.restore, { ...identity, revisionId: embedded.revision.id, expectedVersion: received!.item.version });
+      expect(restored.revision.blocks).toEqual(embedded.revision.blocks);
+      expect(restored.revision.parentRevisionId).toBe(latest.revision.id);
+      expect(restored.conflicts).toEqual([]);
+      const path = await b.client.call<string>(CHANNELS.atlas.resolveFile, { accountId: "default", id: file.id });
+      expect(path.startsWith(join(b.dir, "bridge", "blobs"))).toBe(true); expect(await readFile(path)).toEqual(image);
+      await b.client.call(CHANNELS.atlas.update, { accountId: "default", id: file.id, trashed: true });
+      expect(await b.client.invoke(CHANNELS.atlas.remove, { accountId: "default", id: file.id })).toMatchObject({ success: false });
+    } finally { await fixture.dispose(); }
+  }, 60_000);
+
   it("opens A's image and document on B after the source is stopped, then reopens from cache offline", async () => {
     const fixture = await startLocalBackends(); const { a, b } = fixture;
     try {

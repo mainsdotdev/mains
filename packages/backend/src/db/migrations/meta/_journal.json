@@ -239,6 +239,20 @@
       "when": 1792083091013,
       "tag": "0033_bridge_blobs",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1792085108967,
+      "tag": "0034_atlas_revision_graph",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1792085422297,
+      "tag": "0035_atlas_recovery_receipts",
+      "breakpoints": true
     }
   ]
 }

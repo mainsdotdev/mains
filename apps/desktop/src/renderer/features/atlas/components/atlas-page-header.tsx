@@ -15,6 +15,7 @@ import {
   type IconPickerMode,
 } from "@/components/layout/sidebar/icon-picker-panel";
 import { useClickOutside } from "@/hooks/use-click-outside";
+import { useAtlasFilePath } from "../hooks/use-atlas-file-path";
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { cn } from "@/lib/cn";
 import {
@@ -43,7 +44,8 @@ function CoverChoice({
   disabled: boolean;
   onSelect: () => void;
 }) {
-  const url = useLocalImageUrl(item.path, 768);
+  const path = useAtlasFilePath(item.accountId, item.id, item.path);
+  const url = useLocalImageUrl(path, 768);
   return (
     <Button
       disabled={disabled}
@@ -93,7 +95,8 @@ export function AtlasPageHeader({
     uploading.isLoading;
   const coverId = metadata?.coverFileId;
   const cover = images.data?.find((image) => image.id === coverId);
-  const coverUrl = useLocalImageUrl(cover?.path, 2048);
+  const coverPath = useAtlasFilePath(cover?.accountId, cover?.id, cover?.path);
+  const coverUrl = useLocalImageUrl(coverPath, 2048);
   const position =
     coverId && storedPosition?.coverFileId === coverId
       ? storedPosition.coverPositionY

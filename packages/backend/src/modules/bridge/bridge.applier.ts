@@ -183,10 +183,18 @@ function materialize(store: BridgeStore, table: string, pk: string, owner: strin
     }
   }
   if (table === "atlas_page_revisions" && !existing) {
+    for (const column of ["parent_revision_id", "merged_revision_id"]) if (values[column]) {
+      const parent = store.sqlite.prepare("SELECT item_id FROM atlas_page_revisions WHERE id=?").get(values[column]) as { item_id: string } | undefined;
+      if (parent?.item_id !== values.item_id) throw new Error("Atlas revision parent belongs to a different Page");
+    }
     values.version = (store.sqlite.prepare("SELECT coalesce(max(version),0)+1 AS version FROM atlas_page_revisions WHERE item_id=?").get(values.item_id) as { version: number }).version;
   }
   if (table === "atlas_items") {
-    values.version = Number(existing?.version ?? -1) + 1;
+    const current = values.current_revision_id
+      ? store.sqlite.prepare("SELECT version,item_id FROM atlas_page_revisions WHERE id=?").get(values.current_revision_id) as { version: number; item_id: string } | undefined
+      : undefined;
+    if (current && current.item_id !== pk) throw new Error("Atlas revision belongs to a different Page");
+    values.version = current?.version ?? 0;
     values.updated_at = Math.floor(Date.now() / 1000);
   }
   if (def.idKind === "run-integer") delete values.id;
@@ -216,6 +224,13 @@ function applyUpsert(store: BridgeStore, record: BridgeLogRecord, body: BridgeUp
     if (run.owner_backend_id !== header.owner) throw new Error("Bridge stream owner does not match its run");
   }
   const existing = getClock(store.sqlite, body.table, body.pk, body.register);
+  if (body.table === "atlas_page_revisions" && existing) {
+    const previous = portableValues(store, body.table, existing).values;
+    for (const column of definition(body.table).registers.row) {
+      if (column !== "source_run_id" && previous[column] !== body.values[column])
+        throw new Error("Atlas revision identity is immutable");
+    }
+  }
   if (existing && compareClock(headerClock(header), clockOf(existing)) <= 0) {
     if (compareClock(headerClock(header), clockOf(existing)) === 0) store.sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?) WHERE table_name=? AND pk=? AND register=?").run(record.seq, body.table, body.pk, body.register);
     // A full pull can repair a missing physical projection without overwriting a newer clock.
@@ -252,13 +267,26 @@ function attemptUpsert(store: BridgeStore, record: BridgeLogRecord, body: Bridge
 }
 
 /** Recovery and cascade share the transaction for pull, replay and verified deleted ACKs. */
-function applyDelete(store: BridgeStore, envelope: BridgeEnvelope, recovered: { table: string; pk: string }[], changes: AppliedChange[]): void {
+type RecoveredRow = { table: string; pk: string; blobRefsJson?: string };
+function applyDelete(store: BridgeStore, envelope: BridgeEnvelope, recovered: RecoveredRow[], changes: AppliedChange[]): Outcome {
   const { header, body } = verifyEnvelope(store, envelope), { table, pk } = body;
   const def = BRIDGE_TABLES[table];
   if (!def) throw new Error("Cannot apply a deletion from an unknown schema");
   if (def.idKind === "composite") normalizeCompositeIdentity(store, table, pk);
   const canonical = canonicalPk(store.sqlite, table, pk), members = aliasSet(store.sqlite, table, canonical);
   const row = readRow(store, table, canonical, header.owner ?? header.origin);
+  // Another backend may have deleted a file before learning of an offline
+  // embed. Retain its immutable bytes until the restorable references disappear.
+  if (table === "atlas_items" && row?.kind !== "page" && store.sqlite.prepare("SELECT 1 FROM atlas_page_file_refs WHERE file_id=? LIMIT 1").get(canonical)) {
+    // Finality is immediate even while the physical row is retained for Page
+    // recovery. Neither a delayed upsert nor a local file edit can republish it.
+    for (const id of members) {
+      store.sqlite.prepare("INSERT OR IGNORE INTO bridge_tombstones(table_name,pk) VALUES(?,?)").run(table, id);
+      store.sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=?").run(table, id);
+    }
+    store.sqlite.prepare("UPDATE bridge_tombstones SET envelope=coalesce(envelope,?) WHERE table_name=? AND pk=?").run(JSON.stringify(envelope), table, pk);
+    return "parent";
+  }
   const wasDeleted = deleted(store.sqlite, table, pk);
   if (row && def.ownerRoot === table && row.owner_backend_id !== header.owner) throw new Error("Bridge delete owner collision");
   if (row && def.ownerRoot && def.ownerRoot !== table) {
@@ -267,7 +295,7 @@ function applyDelete(store: BridgeStore, envelope: BridgeEnvelope, recovered: { 
     if (actual.owner !== header.owner) throw new Error("Bridge delete owner collision");
   }
   if (row && !wasDeleted) store.recover?.({ sqlite: store.sqlite, table, pk: canonical, row,
-    captureAfterDelete(recoveredTable, recoveredPk) { definition(recoveredTable); recovered.push({ table: recoveredTable, pk: recoveredPk }); },
+    captureAfterDelete(recoveredTable, recoveredPk, blobRefsJson) { definition(recoveredTable); recovered.push({ table: recoveredTable, pk: recoveredPk, blobRefsJson }); },
   });
   // Record descendants before CASCADE, so pending local inserts cannot later resurrect them.
   const visit = (childTable: string, childPk: string, childRow: SqlRow) => {
@@ -298,6 +326,7 @@ function applyDelete(store: BridgeStore, envelope: BridgeEnvelope, recovered: { 
     store.sqlite.prepare(`DELETE FROM ${quote(table)} WHERE ${where.sql}`).run(...where.args);
     changes.push({ table, pk: canonical, op: "delete", ...(header.runId ? { runId: header.runId } : {}) });
   }
+  return "applied";
 }
 
 function portableRowPk(table: string, row: SqlRow, store: BridgeStore, owner: string): string {
@@ -316,15 +345,21 @@ function fillLinks(store: BridgeStore) {
     const stale = !current || compareClock(clockOf(current), { physicalMs: link.physical_ms, counter: link.counter, origin: link.origin }) !== 0;
     const parent = readRow(store, link.parent_table, link.parent_pk, link.owner);
     if (!stale && parent && !deleted(store.sqlite, link.parent_table, link.parent_pk)) {
+      if (link.table_name === "atlas_items" && link.column_name === "current_revision_id" && parent.item_id !== link.pk)
+        throw new Error("Atlas revision belongs to a different Page");
       const where = rowWhere(definition(link.table_name), String(physicalPk(store, link.table_name, link.pk, link.owner)));
       store.sqlite.prepare(`UPDATE ${quote(link.table_name)} SET ${quote(link.column_name)}=? WHERE ${where.sql}`).run(physicalPk(store, link.parent_table, link.parent_pk, link.owner), ...where.args);
     }
     if (stale || parent || deleted(store.sqlite, link.parent_table, link.parent_pk)) store.sqlite.prepare("DELETE FROM bridge_pending_links WHERE table_name=? AND pk=? AND register=? AND column_name=?").run(link.table_name, link.pk, link.register, link.column_name);
   }
+  // The pointer may have arrived before its immutable revision. Ordinals are
+  // projections of that pointer, never of metadata writes or arrival order.
+  store.sqlite.exec(`UPDATE atlas_items SET version=coalesce((SELECT version FROM atlas_page_revisions
+    WHERE id=atlas_items.current_revision_id AND item_id=atlas_items.id),0) WHERE kind='page'`);
 }
 
 export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, records: BridgeLogRecord[], cursor?: number): AppliedChange[] {
-  const changes: AppliedChange[] = [], recovered: { table: string; pk: string }[] = [];
+  const changes: AppliedChange[] = [], recovered: RecoveredRow[] = [];
   store.sqlite.transaction(() => {
     store.sqlite.pragma("defer_foreign_keys = ON");
     store.sqlite.prepare("UPDATE bridge_state SET applying=1 WHERE id=1").run();
@@ -335,7 +370,10 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
       if (opened.header.op === "delete") {
         const reason = !BRIDGE_TABLES[opened.body.table] ? "schema" : isAtlas(opened.body.table) && !store.atlasEnabled ? "disabled" : undefined;
         if (reason) store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)").run(stream, record.seq, JSON.stringify(record.envelope), reason);
-        else applyDelete(store, record.envelope, recovered, changes);
+        else {
+          const outcome = applyDelete(store, record.envelope, recovered, changes);
+          if (outcome !== "applied") store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)").run(stream, record.seq, JSON.stringify(record.envelope), outcome);
+        }
       }
       else {
         const outcome = attemptUpsert(store, record, opened.body as BridgeUpsertBody);
@@ -353,7 +391,7 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
         let outcome: Outcome;
         if (header.op === "delete") {
           if (!BRIDGE_TABLES[body.table] || isAtlas(body.table) && !store.atlasEnabled) continue;
-          applyDelete(store, envelope, recovered, changes); outcome = "ignored";
+          outcome = applyDelete(store, envelope, recovered, changes);
         } else outcome = attemptUpsert(store, { seq: entry.seq, envelope }, body as BridgeUpsertBody);
         if (outcome === "applied" || outcome === "ignored") {
           store.sqlite.prepare("DELETE FROM bridge_parked WHERE stream=? AND seq=?").run(entry.stream, entry.seq);
@@ -365,7 +403,11 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
     fillLinks(store);
     if (cursor !== undefined) store.sqlite.prepare("INSERT INTO bridge_cursors(stream,seq) VALUES(?,?) ON CONFLICT(stream) DO UPDATE SET seq=max(seq,excluded.seq)").run(stream, cursor);
     store.sqlite.prepare("UPDATE bridge_state SET applying=0 WHERE id=1").run();
-    for (const row of recovered) captureExisting(store, row.table, row.pk);
+    for (const row of recovered) {
+      captureExisting(store, row.table, row.pk);
+      if (row.blobRefsJson !== undefined) store.sqlite.prepare("UPDATE bridge_row_clock SET blob_refs_json=? WHERE table_name=? AND pk=? AND register='content'")
+        .run(row.blobRefsJson, row.table, row.pk);
+    }
   })();
   return changes;
 }

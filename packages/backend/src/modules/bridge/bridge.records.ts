@@ -25,7 +25,7 @@ export interface BridgeTableDefinition {
  */
 export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
   ...Object.fromEntries(Object.entries({
-    bridge_config: ["id"], bridge_peers: ["backend_id"], bridge_clock: ["id"], bridge_outbox: ["table_name", "pk", "register"],
+    bridge_atlas_recoveries: ["revision_id"], bridge_config: ["id"], bridge_peers: ["backend_id"], bridge_clock: ["id"], bridge_outbox: ["table_name", "pk", "register"],
     bridge_row_clock: ["table_name", "pk", "register"], bridge_cursors: ["stream"],
     bridge_parked: ["stream", "seq"], bridge_pending_links: ["table_name", "pk", "register", "column_name"],
     bridge_id_map: ["owner_backend_id", "table_name", "remote_id"], bridge_aliases: ["table_name", "alias_pk"],
@@ -51,8 +51,8 @@ export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
   "atlas_items": {
     class: "account", primaryKey: ["id"], idKind: "text", stream: "account",
     ownerRoot: null, primaryRegister: "content",
-    registers: {"content": ["id", "account_id", "kind", "title", "source_run_id", "source_key", "storage_key", "file_name", "mime_type", "byte_size", "content_hash", "created_at"], "metadata": ["metadata", "is_favorite", "collection_id", "trashed_at"]},
-    localColumns: ["version", "updated_at"], references: {"account_id": {"table": "accounts", "class": "required"}, "collection_id": {"table": "collections", "class": "required"}, "source_run_id": {"table": "runs", "class": "optional"}},
+    registers: {"content": ["id", "account_id", "kind", "title", "current_revision_id", "source_run_id", "source_key", "storage_key", "file_name", "mime_type", "byte_size", "content_hash", "created_at"], "metadata": ["metadata", "is_favorite", "collection_id", "trashed_at"]},
+    localColumns: ["version", "updated_at"], references: {"current_revision_id": {"table": "atlas_page_revisions", "class": "optional"}, "account_id": {"table": "accounts", "class": "required"}, "collection_id": {"table": "collections", "class": "required"}, "source_run_id": {"table": "runs", "class": "optional"}},
     uniqueIndexes: {"uniq_atlas_items_source": "atlas-source"}, blobColumns: ["storage_key"],
   },
   "atlas_page_file_refs": {
@@ -65,8 +65,8 @@ export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
   "atlas_page_revisions": {
     class: "append-only", primaryKey: ["id"], idKind: "text", stream: "account",
     ownerRoot: null, primaryRegister: "row",
-    registers: {"row": ["id", "item_id", "schema_version", "title", "blocks_json", "markdown", "actor", "source_run_id", "created_at"]},
-    localColumns: ["version"], references: {"item_id": {"table": "atlas_items", "class": "required"}, "source_run_id": {"table": "runs", "class": "optional"}},
+    registers: {"row": ["id", "item_id", "parent_revision_id", "merged_revision_id", "schema_version", "title", "blocks_json", "markdown", "actor", "source_run_id", "created_at"]},
+    localColumns: ["version"], references: {"parent_revision_id": {"table": "atlas_page_revisions", "class": "required"}, "merged_revision_id": {"table": "atlas_page_revisions", "class": "required"}, "item_id": {"table": "atlas_items", "class": "required"}, "source_run_id": {"table": "runs", "class": "optional"}},
     uniqueIndexes: {"uniq_atlas_page_revisions_version": "local-ordinal"}, blobColumns: [],
   },
   "automation_runs": {

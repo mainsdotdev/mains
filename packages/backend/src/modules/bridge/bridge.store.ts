@@ -8,7 +8,7 @@ import { aliasSet, canonicalPk, clockOf, compareClock, definition, getClock, isA
 export interface BridgeRecoveryContext {
   sqlite: SQLiteInstance; table: string; pk: string; row: SqlRow;
   /** Rows must be created synchronously in this transaction. Capture them after the delete. */
-  captureAfterDelete(table: string, pk: string): void;
+  captureAfterDelete(table: string, pk: string, blobRefsJson?: string): void;
 }
 export interface BridgeStore {
   sqlite: SQLiteInstance; backendId: string; recordKey: Uint8Array; codec: BridgeCodec;

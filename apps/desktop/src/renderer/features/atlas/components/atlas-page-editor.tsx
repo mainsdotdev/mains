@@ -42,6 +42,7 @@ import type {
 import { AtlasPageChat } from "./atlas-page-chat";
 import { AtlasPageHeader } from "./atlas-page-header";
 import { AtlasPageToolbar } from "./atlas-page-toolbar";
+import { AtlasPageConflicts } from "./atlas-page-conflicts";
 
 export interface AtlasPageEditorHandle {
   flush: () => Promise<boolean>;
@@ -55,6 +56,7 @@ interface AtlasPageEditorProps {
   onTitleChange: (title: string) => void;
   requestedAction?: AtlasPendingPageAction;
   onActionHandled?: (token: string) => void;
+  draftScope?: string;
 }
 
 function readDraft(key: string): { version: number; draft: PageDraft } | null {
@@ -78,6 +80,7 @@ export default function AtlasPageEditor({
   onTitleChange,
   requestedAction,
   onActionHandled,
+  draftScope,
 }: AtlasPageEditorProps) {
   const query = useAtlasPageQuery({ accountId, id }, { pollingInterval: 5000 });
   if (query.isLoading)
@@ -103,6 +106,7 @@ export default function AtlasPageEditor({
       handleRef={handleRef}
       onTitleChange={onTitleChange}
       requestedAction={requestedAction}
+      draftScope={draftScope}
       onActionHandled={onActionHandled}
     />
   );
@@ -115,6 +119,7 @@ function PageEditor({
   onTitleChange,
   requestedAction,
   onActionHandled,
+  draftScope,
 }: {
   page: AtlasPage;
   reload: () => Promise<AtlasPage | null | undefined>;
@@ -122,12 +127,14 @@ function PageEditor({
   onTitleChange: (title: string) => void;
   requestedAction?: AtlasPendingPageAction;
   onActionHandled?: (token: string) => void;
+  draftScope?: string;
 }) {
   const { accountId, id } = page.item;
   const navigate = useNavigate();
   const [mountedTransport] = useState(getTransport);
-  // Page IDs are unique per backend. Keep an interrupted draft through reloads.
-  const draftKey = `mains:atlas:draft:${accountId}:${id}`;
+  // Synced Page IDs are shared. A web client switching backends must keep
+  // each backend's optimistic ordinal and interrupted draft separate.
+  const draftKey = `mains:atlas:draft:${draftScope ?? accountId}:${id}`;
   const [recovered] = useState(() => readDraft(draftKey));
   const [name, setName] = useState(recovered?.draft.title ?? page.item.title);
   const [saveState, setSaveState] = useState<{
@@ -448,10 +455,12 @@ function PageEditor({
             ? "Saving…"
             : saveState.dirty
               ? "Unsaved changes"
-              : `Saved · v${queue.version}`}
+              : "Saved"}
       </Text>
       <div className="min-h-0 flex-1 overflow-y-auto noscrollbar pb-44">
         <AtlasPageHeader item={page.item}>
+          {!!page.conflicts?.length && !page.item.trashedAt && <AtlasPageConflicts page={page}
+            beforeResolve={async () => (await queue.flush()) ? queue.version : null} onResolved={reloadLatest} />}
           {page.item.trashedAt && (
             <div className="mb-6 flex items-center gap-3">
               <Muted>This page is in Trash.</Muted>
@@ -587,11 +596,12 @@ function PageEditor({
             >
               <div>
                 <Text size="sm">
-                  v{row.version} · {row.title}
+                  {row.title}
                 </Text>
                 <Muted className="mt-1 text-xs">
                   {row.actor === "agent" ? "Agent" : "You"} ·{" "}
                   {new Date(row.createdAt).toLocaleString()}
+                  {" · "}{row.backendLabel ?? row.backendId ?? "This device"}
                 </Muted>
               </div>
               <Button
@@ -599,7 +609,7 @@ function PageEditor({
                 className="inline-flex"
                 leftIcon={<Undo className="size-4" />}
                 disabled={
-                  row.version === queue.version ||
+                  row.id === page.revision.id ||
                   !!page.item.trashedAt ||
                   restoring.isLoading
                 }
@@ -609,7 +619,7 @@ function PageEditor({
                     await restore({
                       accountId,
                       id,
-                      version: row.version,
+                      revisionId: row.id,
                       expectedVersion: queue.version,
                     }).unwrap();
                     await reloadLatest();

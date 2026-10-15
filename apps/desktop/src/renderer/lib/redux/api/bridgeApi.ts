@@ -13,6 +13,7 @@ export const bridgeApi = baseApi.injectEndpoints({
         const records = subscribeEvent(CHANNELS.bridge.recordsApplied, (value) => {
           const tables = (value as { tables?: unknown })?.tables;
           if (!Array.isArray(tables)) return;
+          if (tables.some((table) => typeof table === "string" && table.startsWith("atlas_"))) dispatch(baseApi.util.invalidateTags(["Atlas", "AtlasPage"]));
           if (tables.includes("workspaces")) dispatch(baseApi.util.invalidateTags(["Workspaces"]));
           if (tables.includes("projects")) dispatch(baseApi.util.invalidateTags(["Projects"]));
           if (tables.includes("spaces")) dispatch(baseApi.util.invalidateTags(["Spaces"]));

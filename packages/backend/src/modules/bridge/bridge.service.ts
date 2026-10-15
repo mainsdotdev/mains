@@ -15,7 +15,7 @@ let startupError: string | null = null;
 let removeSink: (() => void) | null = null;
 let starting: Promise<void> | null = null;
 const changed = () => emit(CHANNELS.bridge.statusChanged, {});
-const localWrites: ReadonlySet<string> = new Set([CHANNELS.runs.updated, CHANNELS.runs.eventPersisted, CHANNELS.space.changed]);
+const localWrites: ReadonlySet<string> = new Set([CHANNELS.runs.updated, CHANNELS.runs.eventPersisted, CHANNELS.space.changed, CHANNELS.atlas.changed]);
 
 export const bridgeService = {
   isRunning(): boolean { return replicator !== null; },

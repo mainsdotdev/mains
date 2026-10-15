@@ -35,6 +35,9 @@ export const appApi = {
   },
   atlas: {
     get: method<typeof window.api.atlas.get>(CHANNELS.atlas.get),
+    getRevision: method<typeof window.api.atlas.getRevision>(CHANNELS.atlas.getRevision),
+    resolveConflict: method<typeof window.api.atlas.resolveConflict>(CHANNELS.atlas.resolveConflict),
+    resolveFile: method<typeof window.api.atlas.resolveFile>(CHANNELS.atlas.resolveFile),
   },
   runs: {
     getHistory: method<typeof window.api.runs.getHistory>(CHANNELS.runs.getHistory),

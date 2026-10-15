@@ -1,12 +1,17 @@
 import { useLocalImageUrl } from "@/hooks/use-local-image-url";
 import { ImagePreviewModal } from "@/features/workspace/components/image-preview-modal";
 
-export function AtlasImagePreview({ title, path, onClose }: {
+import { useAtlasFilePath } from "../hooks/use-atlas-file-path";
+
+export function AtlasImagePreview({ title, path, accountId, id, onClose }: {
   title: string;
+  accountId?: string;
+  id?: string;
   path: string | null;
   onClose: () => void;
 }) {
-  const src = useLocalImageUrl(path ?? "");
+  const resolved = useAtlasFilePath(accountId, id, path);
+  const src = useLocalImageUrl(resolved ?? "");
   return (
     <ImagePreviewModal
       name={title}

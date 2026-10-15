@@ -66,6 +66,7 @@ import { AtlasMenu } from "./atlas-menu";
 import { AtlasFileIcon } from "./atlas-file-icon";
 import { AtlasPageIcon } from "./atlas-page-icon";
 import { AtlasPageCard } from "./atlas-page-card";
+import { useAtlasFilePath } from "../hooks/use-atlas-file-path";
 import { AtlasImagePreview } from "./atlas-image-preview";
 import { useAtlasOwnerKey } from "../hooks/use-atlas-tabs";
 
@@ -89,7 +90,8 @@ function activity(date: string) {
 }
 
 function ImageTile({ entry, onOpen, fill = false }: { entry: Entry; onOpen: () => void; fill?: boolean }) {
-  const src = useLocalImageUrl(entry.path ?? "", 768, entry.date);
+  const path = useAtlasFilePath(entry.saved?.accountId, entry.saved?.id, entry.path);
+  const src = useLocalImageUrl(path ?? "", 768, entry.date);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return (
     <Button
@@ -115,8 +117,9 @@ function ImageTile({ entry, onOpen, fill = false }: { entry: Entry; onOpen: () =
   );
 }
 
-function ImageThumbnail({ path, version }: { path: string | null; version: string }) {
-  const src = useLocalImageUrl(path, 256, version);
+function ImageThumbnail({ entry }: { entry: Entry }) {
+  const path = useAtlasFilePath(entry.saved?.accountId, entry.saved?.id, entry.path);
+  const src = useLocalImageUrl(path, 256, entry.date);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return src && src !== failedSrc ? (
     <img
@@ -241,6 +244,12 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       creatingPage.current = false;
     }
   };
+  const resolvePath = async (entry: Entry) => {
+    if (!entry.saved) return entry.path;
+    const response = await appApi.atlas.resolveFile({ accountId: entry.saved.accountId, id: entry.saved.id });
+    if (!response.success) throw new Error(response.error ?? "File unavailable");
+    return response.data as string;
+  };
   const show = (entry: Entry) => {
     if (entry.kind === "page") {
       navigate(`/atlas/${entry.key}`);
@@ -250,13 +259,12 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
       setPreview(entry);
       return;
     }
-    if (entry.path)
-      open({
-        path: entry.path,
-        fileName: entry.saved?.fileName ?? entry.title,
-        docType: classifyDocType(entry.path, true) ?? "md",
-        byteSize: entry.generated?.byteSize ?? entry.saved?.byteSize ?? undefined,
-      });
+    void (async () => {
+      const path = await resolvePath(entry);
+      if (path) open({ path, fileName: entry.saved?.fileName ?? entry.title,
+        docType: classifyDocType(path, true) ?? "md",
+        byteSize: entry.generated?.byteSize ?? entry.saved?.byteSize ?? undefined });
+    })().catch((error: unknown) => toast.error(atlasError(error)));
   };
   const source = async (entry: Entry) => {
     const runId = entry.generated?.runId ?? entry.saved?.sourceRunId;
@@ -273,7 +281,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
     if (!entry.path) return;
     try {
       const response = await appApi.fileExplorer.saveFileAs(
-        entry.path,
+        (await resolvePath(entry))!,
         entry.saved?.fileName ?? entry.title,
       );
       if (!response.success)
@@ -811,7 +819,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                         {entry.kind === "page" ? (
                           <AtlasPageIcon icon={entry.saved?.metadata?.icon} />
                         ) : entry.kind === "image" ? (
-                          <ImageThumbnail path={entry.path} version={entry.date} />
+                          <ImageThumbnail entry={entry} />
                         ) : (
                           <AtlasFileIcon
                             kind={entry.kind}
@@ -877,7 +885,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
         </nav>
       )}
       {preview && (
-        <AtlasImagePreview title={preview.title} path={preview.path} onClose={() => setPreview(null)} />
+        <AtlasImagePreview accountId={preview.saved?.accountId} id={preview.saved?.id} title={preview.title} path={preview.path} onClose={() => setPreview(null)} />
       )}
     </PageShell>
   );

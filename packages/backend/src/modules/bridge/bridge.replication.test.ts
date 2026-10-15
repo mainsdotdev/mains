@@ -284,10 +284,10 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
   });
 
   it("retains records from a newer schema until the receiving backend upgrades", async () => {
-    const hub = await createBridgeTestHub(), a = await node(hub, "A", { schemaVersion: 2 }), b = await node(hub, "B");
+    const hub = await createBridgeTestHub(), a = await node(hub, "A", { schemaVersion: 3 }), b = await node(hub, "B");
     space(a, "new-schema"); await drain(a); await b.engine.pull();
     expect(row(b, "spaces", "new-schema")).toBeUndefined(); expect(b.sqlite.prepare("SELECT reason FROM bridge_parked WHERE reason='schema'").get()).toBeTruthy();
-    await b.engine.stop(); b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("B"), schemaVersion: 2, experimentalAtlas: true });
+    await b.engine.stop(); b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("B"), schemaVersion: 3, experimentalAtlas: true });
     await b.engine.retryParked(); expect(row(b, "spaces", "new-schema")).toBeTruthy(); expect(b.sqlite.prepare("SELECT * FROM bridge_parked").all()).toEqual([]);
   });
 
@@ -368,7 +368,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     const c = await node(hub, "C"); expect(row(c, "runs", "r")).toBeUndefined();
   });
 
-  it("protects fixed identities and leaves Atlas capture disabled for normal activation", async () => {
+  it("protects fixed identities and supports explicitly disabling Atlas capture", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A", { experimentalAtlas: false }); space(a, "claude");
     expect(() => a.sqlite.exec("DELETE FROM spaces WHERE id='claude'")).toThrow(/archived/);
     expect(() => a.sqlite.exec("DELETE FROM accounts WHERE id='default'")).toThrow(/archived/);
@@ -376,7 +376,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     await drain(a); await a.engine.stop();
     a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("A"), experimentalAtlas: true });
     item(a, "pending-atlas"); await a.engine.stop();
-    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("A") });
+    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("A"), experimentalAtlas: false });
     expect(await a.engine.push()).toBe(0);
     expect(a.engine.pending().filter((entry) => entry.pk === "pending-atlas")).toHaveLength(2);
     expect((await hub.inspect("account")).some((record) => bodyOf(record.envelope).table === "atlas_items")).toBe(false);

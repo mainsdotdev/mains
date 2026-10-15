@@ -1,6 +1,6 @@
 import { CHANNELS } from "@mains/contracts/channels";
 import type { AtlasCreatePage, AtlasGeneratedOptions, AtlasGeneratedPage, AtlasIdentity, AtlasItem, AtlasLibraryOptions, AtlasLibraryPage, AtlasListItem, AtlasListOptions,
-  AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile } from "@mains/contracts/atlas";
+  AtlasPage, AtlasPageRevision, AtlasSaveFile, AtlasSavePage, AtlasUpdateItem, AtlasUploadFile, AtlasRestorePage, AtlasResolveConflict } from "@mains/contracts/atlas";
 import { baseApi } from "./baseApi";
 import type { RootState } from "../index";
 import { closeAtlasPageTab } from "../slices/atlasSlice";
@@ -51,7 +51,15 @@ export const atlasApi = baseApi.injectEndpoints({
       query: (input) => ({ handler: CHANNELS.atlas.revisions, args: [input] }),
       providesTags: (_r, _e, { id }) => [{ type: "AtlasPage", id }],
     }),
-    restoreAtlasPage: builder.mutation<AtlasPage, AtlasIdentity & { version: number; expectedVersion: number }>({
+    atlasRevision: builder.query<AtlasPageRevision, AtlasIdentity & { revisionId: string }>({
+      query: (input) => ({ handler: CHANNELS.atlas.getRevision, args: [input] }),
+      providesTags: (_r, _e, { id }) => [{ type: "AtlasPage", id }],
+    }),
+    resolveAtlasConflict: builder.mutation<AtlasPage, AtlasResolveConflict>({
+      query: (input) => ({ handler: CHANNELS.atlas.resolveConflict, args: [input] }),
+      invalidatesTags: (_r, e, { id }) => e ? [] : ["Atlas", { type: "AtlasPage", id }],
+    }),
+    restoreAtlasPage: builder.mutation<AtlasPage, AtlasRestorePage>({
       query: (input) => ({ handler: CHANNELS.atlas.restore, args: [input] }),
       invalidatesTags: (_r, e, { id }) => e ? [] : ["Atlas", { type: "AtlasPage", id }],
     }),
@@ -89,5 +97,5 @@ export const atlasApi = baseApi.injectEndpoints({
   }),
 });
 export const { useAtlasLibraryQuery, useListAtlasQuery, useAtlasGeneratedQuery, useAtlasPageQuery, useCreateAtlasPageMutation,
-  useSaveAtlasPageMutation, useAtlasRevisionsQuery, useRestoreAtlasPageMutation, useSaveToAtlasMutation,
+  useSaveAtlasPageMutation, useAtlasRevisionsQuery, useAtlasRevisionQuery, useResolveAtlasConflictMutation, useRestoreAtlasPageMutation, useSaveToAtlasMutation,
   useUploadAtlasFileMutation, useUpdateAtlasItemMutation, useRemoveAtlasItemMutation } = atlasApi;

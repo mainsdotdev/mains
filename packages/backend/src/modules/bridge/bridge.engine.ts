@@ -9,6 +9,7 @@ import { definition, getClock, isAtlas, quote, syncedTables } from "./bridge.sql
 import { captureExisting, inScope, prepareRecord, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
 import type { BridgeTransport } from "./bridge.transport";
 import type { BridgeBlobRecords } from "./bridge.blob-records";
+import { recoverAtlasPage } from "./bridge.atlas";
 
 export interface BridgeEngineOptions {
   sqlite: SQLiteInstance;
@@ -16,7 +17,7 @@ export interface BridgeEngineOptions {
   recordKey: Uint8Array;
   transport: BridgeTransport;
   codec?: BridgeCodec;
-  /** Only for core register tests until the Atlas graph migration in B6. */
+  /** Atlas is enabled by default. Tests can explicitly disable its stream. */
   experimentalAtlas?: boolean;
   schemaVersion?: number;
   recover?: (context: BridgeRecoveryContext) => void;
@@ -43,13 +44,15 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   if (sqlite.inTransaction) throw new Error("Start Bridge outside a database transaction");
   const identity = sqlite.prepare("SELECT backend_id FROM app_settings WHERE id='default'").get() as { backend_id: string | null } | undefined;
   if (!identity?.backend_id || identity.backend_id !== backendId) throw new Error("Bridge backend identity must match persisted app_settings");
-  const existing = sqlite.prepare("SELECT backend_id FROM bridge_config WHERE id=1").get() as { backend_id: string } | undefined;
+  const existing = sqlite.prepare("SELECT backend_id,atlas_enabled FROM bridge_config WHERE id=1").get() as { backend_id: string; atlas_enabled: number } | undefined;
   if (existing && existing.backend_id !== backendId) throw new Error("Bridge database belongs to another backend");
   const store: BridgeStore = { sqlite, backendId, recordKey: Uint8Array.from(options.recordKey), codec: options.codec ?? bridgePassThroughCodec,
-    schemaVersion: options.schemaVersion ?? 1, atlasEnabled: options.experimentalAtlas ?? false, recover: options.recover, filesEnabled: !!options.blobs };
+    schemaVersion: options.schemaVersion ?? 2, atlasEnabled: options.experimentalAtlas ?? true,
+    recover(context) { recoverAtlasPage(context); options.recover?.(context); }, filesEnabled: !!options.blobs };
   sqlite.transaction(() => {
     sqlite.prepare(`INSERT INTO bridge_config(id,backend_id,enabled,atlas_enabled) VALUES(1,?,1,?)
       ON CONFLICT(id) DO UPDATE SET enabled=1,atlas_enabled=excluded.atlas_enabled`).run(backendId, Number(store.atlasEnabled));
+    if (store.atlasEnabled && existing?.atlas_enabled === 0) sqlite.prepare("UPDATE bridge_config SET backfill_done=0,backfill_table=NULL,backfill_pk=NULL WHERE id=1").run();
     installBridgeCapture(sqlite);
   })();
   let stopped = false;
@@ -65,7 +68,8 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     try { options.onApplied?.(changes); } catch (error) { console.error("Bridge change listener failed", error); }
     for (const change of changes) {
       try {
-        if (change.table === "spaces") emit(CHANNELS.space.changed, {});
+        if (change.table.startsWith("atlas_")) emit(CHANNELS.atlas.changed, {});
+        else if (change.table === "spaces") emit(CHANNELS.space.changed, {});
         else if (change.table === "runs") {
           emit(CHANNELS.runs.updated, { runId: change.pk, ts: Date.now() });
           const run = sqlite.prepare("SELECT status FROM runs WHERE id=?").get(change.pk) as { status: string } | undefined;
@@ -152,9 +156,16 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     if (!prepared.length) return 0;
     const results = await transport.push(stream, prepared.map((record) => record.envelope));
     if (results.length !== prepared.length) throw new Error("Bridge ACK count does not match the push");
+    // A batch can accept new revisions whose encrypted Page identity is unknown
+    // to the hub, then reject their Page pointer as deleted. Recover before any
+    // accepted child is marked synced; otherwise its offline content disappears.
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if ("deleted" in result) announce(applyDeletedAck(store, prepared[i], result.deleted));
+    }
     for (let i = 0; i < results.length; i++) {
       const result = results[i], sent = prepared[i], entry = sent.entry;
-      if ("deleted" in result) { announce(applyDeletedAck(store, sent, result.deleted)); continue; }
+      if ("deleted" in result) continue;
       if ("error" in result) throw new Error("Bridge hub rejected a non-owner write");
       if (!Number.isSafeInteger(result.seq) || result.seq < 1) throw new Error("Invalid Bridge ACK sequence");
       if (i < attachmentCount) continue;

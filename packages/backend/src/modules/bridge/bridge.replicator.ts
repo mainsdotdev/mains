@@ -45,8 +45,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   const notify = () => {
     if (!stopped) { try { options.onStatus?.(); } catch { /* UI listeners cannot interrupt durable replication. */ } }
   };
-  const eligible = "substr(table_name,1,6)<>'atlas_'";
-  const pending = () => (sqlite.prepare(`SELECT count(*) AS n FROM bridge_outbox WHERE ${eligible}`).get() as { n: number }).n;
+  const pending = () => (sqlite.prepare("SELECT count(*) AS n FROM bridge_outbox").get() as { n: number }).n;
 
   function presence(value: Extract<BridgeServerMessage, { type: "presence" }>) {
     const previous = sqlite.prepare("SELECT label,platform FROM bridge_peers WHERE backend_id=?").get(value.backendId) as { label: string; platform: string | null } | undefined;
@@ -102,10 +101,10 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       } else await engine.pull("account");
       if (stopped) return;
       await drain("account");
-      const accountPending = (sqlite.prepare(`SELECT count(*) AS n FROM bridge_outbox WHERE stream='account' AND ${eligible}`).get() as { n: number }).n;
+      const accountPending = (sqlite.prepare(`SELECT count(*) AS n FROM bridge_outbox WHERE stream='account'`).get() as { n: number }).n;
       // Run children may only be published after their account-stream roots/parents.
       if (!accountPending) {
-        const outgoing = sqlite.prepare(`SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' AND ${eligible} ORDER BY stream`).all() as { stream: BridgeStream }[];
+        const outgoing = sqlite.prepare(`SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' ORDER BY stream`).all() as { stream: BridgeStream }[];
         for (const row of outgoing) { if (stopped) return; await drain(row.stream); }
       }
       for (const runId of watchedRuns()) {

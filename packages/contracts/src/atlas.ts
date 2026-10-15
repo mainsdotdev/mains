@@ -32,6 +32,7 @@ export interface AtlasItem {
   isFavorite: boolean;
   trashedAt: string | null;
   version: number;
+  currentRevisionId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -110,6 +111,11 @@ export interface AtlasLibraryPage {
 export interface AtlasPageRevision {
   id: string;
   itemId: string;
+  parentRevisionId?: string | null;
+  mergedRevisionId?: string | null;
+  /** Backend identity is stable; label is a cached, display-only device name. */
+  backendId?: string | null;
+  backendLabel?: string | null;
   version: number;
   schemaVersion: number;
   title: string;
@@ -119,7 +125,13 @@ export interface AtlasPageRevision {
   sourceRunId: string | null;
   createdAt: string;
 }
-export interface AtlasPage { item: AtlasItem; revision: AtlasPageRevision }
+export type AtlasRevisionSummary = Omit<AtlasPageRevision, "blocks" | "markdown">;
+export interface AtlasPage { item: AtlasItem; revision: AtlasPageRevision; conflicts?: AtlasRevisionSummary[] }
+export interface AtlasRestorePage extends AtlasIdentity {
+  revisionId: string;
+  expectedVersion: number;
+}
+export interface AtlasResolveConflict extends AtlasRestorePage { choice: "current" | "other" }
 export interface AtlasCreatePage {
   accountId: string;
   title: string;

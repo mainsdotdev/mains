@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   check,
   primaryKey,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import { PROVIDER_IDS, SUPPORTED_PROVIDER_IDS } from "@mains/contracts/provider-ids";
 import { DEFAULT_MODE_ID, MODE_IDS } from "@mains/contracts/modes";
@@ -60,6 +61,7 @@ export const atlasItems = sqliteTable("atlas_items", {
   contentHash: text("content_hash"),
   isFavorite: integer("is_favorite", { mode: "boolean" }).notNull().default(false),
   trashedAt: integer("trashed_at", { mode: "timestamp" }),
+  currentRevisionId: text("current_revision_id").references((): AnySQLiteColumn => atlasPageRevisions.id, { onDelete: "set null" }),
   version: integer("version").notNull().default(0),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
@@ -74,6 +76,8 @@ export const atlasItems = sqliteTable("atlas_items", {
 export const atlasPageRevisions = sqliteTable("atlas_page_revisions", {
   id: text("id").primaryKey().notNull(),
   itemId: text("item_id").notNull().references(() => atlasItems.id, { onDelete: "cascade" }),
+  parentRevisionId: text("parent_revision_id").references((): AnySQLiteColumn => atlasPageRevisions.id, { onDelete: "set null" }),
+  mergedRevisionId: text("merged_revision_id").references((): AnySQLiteColumn => atlasPageRevisions.id, { onDelete: "set null" }),
   version: integer("version").notNull(),
   schemaVersion: integer("schema_version").notNull().default(1),
   title: text("title").notNull(),
@@ -84,6 +88,8 @@ export const atlasPageRevisions = sqliteTable("atlas_page_revisions", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 }, (t) => [
   uniqueIndex("uniq_atlas_page_revisions_version").on(t.itemId, t.version),
+  index("idx_atlas_page_revisions_parent").on(t.parentRevisionId),
+  index("idx_atlas_page_revisions_merged").on(t.mergedRevisionId),
   check("check_atlas_page_revisions_blocks_json", sql`json_valid(${t.blocksJson})`),
 ]);
 
@@ -95,6 +101,12 @@ export const atlasPageFileRefs = sqliteTable("atlas_page_file_refs", {
   primaryKey({ columns: [t.revisionId, t.fileId] }),
   index("idx_atlas_page_file_refs_file").on(t.fileId),
 ]);
+
+/** Local receipts join revision deleted ACKs to the later Page tombstone. */
+export const bridgeAtlasRecoveries = sqliteTable("bridge_atlas_recoveries", {
+  revisionId: text("revision_id").primaryKey().notNull(),
+  recoveredItemId: text("recovered_item_id").notNull(),
+});
 
 export const appSettings = sqliteTable("app_settings", {
   id: text("id").primaryKey().notNull().default("default"),
