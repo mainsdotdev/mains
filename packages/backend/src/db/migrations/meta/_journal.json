@@ -211,6 +211,27 @@
       "when": 1791308692124,
       "tag": "0029_atlas_item_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1792072726592,
+      "tag": "0030_bridge_ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1792074695106,
+      "tag": "0031_bridge_replication",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1792079748374,
+      "tag": "0032_bridge_runtime",
+      "breakpoints": true
     }
   ]
 }

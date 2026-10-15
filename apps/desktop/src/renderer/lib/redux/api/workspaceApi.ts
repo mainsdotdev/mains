@@ -32,7 +32,7 @@ export type WorkspaceStatus =
   | "canceled"
   | "duplicate";
 
-export interface Workspace {
+export interface Workspace extends Partial<import("@mains/contracts/bridge").BackendOwnership> {
   id: string;
   accountId: string;
   projectId: string | null;

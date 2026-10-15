@@ -1,3 +1,4 @@
+import { assertOwnedRecord } from "../bridge";
 import { randomUUID } from "crypto";
 import { execFile } from "child_process";
 import { existsSync, watch, type FSWatcher } from "fs";
@@ -124,7 +125,7 @@ function emitScriptComplete(event: ScriptCompleteEvent): void {
  * run-session, guards, mains-tools). Never blocks or throws.
  */
 export function logWorkspaceActivity(payload: CreateActivityPayload): void {
-  workspaceRepo.insertActivity(payload).catch((err) => {
+  workspaceService.createActivity(payload).catch((err) => {
     console.error("[WorkspaceService] logWorkspaceActivity failed:", err);
   });
 }
@@ -152,6 +153,7 @@ export async function recordWorkspaceDiff(
   runId: string | null,
   snapshot: DiffSnapshot,
 ): Promise<void> {
+  assertOwnedRecord("workspaces", workspaceId);
   const filesJson = JSON.stringify(snapshot.files);
   const statsJson = JSON.stringify({
     shortstat: snapshot.shortstat,
@@ -189,6 +191,7 @@ export async function recordWorkspaceDiff(
 
 /** Drop the workspace's latest diff row. Returns true when a row existed. */
 export async function clearWorkspaceDiff(workspaceId: string): Promise<boolean> {
+  assertOwnedRecord("workspaces", workspaceId);
   const latest = await workspaceRepo.findLatestDiffByWorkspace(workspaceId);
   if (!latest) return false;
   await workspaceRepo.deleteLatestDiffByWorkspace(workspaceId);
@@ -444,6 +447,10 @@ async function syncGitStateWatchers(
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
 export const workspaceService = {
+  async listOwned(includeArchived = false) {
+    return workspaceRepo.findAllOwned(includeArchived);
+  },
+
   cancelClone: cancelWorkspaceClone,
   // ─────────────────────────────────────────────────────────────
   // ── Workspace lifecycle ──
@@ -473,7 +480,7 @@ export const workspaceService = {
       return {
         ...workspace,
         projectName: nameByProject.get(workspace.projectId) ?? null,
-        pathExists: workspacePathExists(workspace.rootPath),
+        pathExists: !workspace.isReplica && workspacePathExists(workspace.rootPath),
         worktree: worktree?.enabled ? worktree : null,
       };
     });
@@ -494,7 +501,7 @@ export const workspaceService = {
         new Set(payload.orderedIds).size !== payload.orderedIds.length) {
       throw new Error("Invalid workspace order");
     }
-    const active = await workspaceRepo.findByAccountId(payload.accountId);
+    const active = (await workspaceRepo.findAllOwned()).filter((row) => row.accountId === payload.accountId);
     const activeIds = new Set(active.map((workspace) => workspace.id));
     if (payload.orderedIds.length !== activeIds.size ||
         payload.orderedIds.some((id) => !activeIds.has(id))) {
@@ -508,6 +515,7 @@ export const workspaceService = {
         typeof payload.accountId !== "string" || typeof payload.pinned !== "boolean") {
       throw new Error("Invalid workspace pin request");
     }
+    assertOwnedRecord("workspaces", payload.id);
     const workspace = await workspaceRepo.findById(payload.id);
     if (!workspace) throw new Error("Workspace not found");
     if (workspace.accountId !== payload.accountId) {
@@ -533,7 +541,7 @@ export const workspaceService = {
   },
 
   async listGitStates(): Promise<WorkspaceGitState[]> {
-    const workspaces = await workspaceRepo.findAll();
+    const workspaces = await workspaceRepo.findAllOwned();
     const states = await Promise.all(
       workspaces.map(async (workspace) => {
         // `branch: null` alone can't distinguish "not a git repo" from "the
@@ -561,12 +569,14 @@ export const workspaceService = {
   },
 
   async deleteByProject(projectId: string): Promise<void> {
+    assertOwnedRecord("projects", projectId);
     const workspaces = await workspaceRepo.findByProjectId(projectId);
     for (const workspace of workspaces) removeGitStateWatcher(workspace.id);
     await workspaceRepo.deleteByProjectId(projectId);
   },
 
   async deleteReviewsByWorkspace(workspaceId: string): Promise<void> {
+    assertOwnedRecord("workspaces", workspaceId);
     await workspaceRepo.deleteReviewsByWorkspace(workspaceId);
   },
 
@@ -576,6 +586,7 @@ export const workspaceService = {
     if (!payload.projectId) {
       throw new Error("Workspace requires a Developer Project");
     }
+    assertOwnedRecord("projects", payload.projectId);
     const project = await projectsRepo.findById(payload.projectId);
     if (!project) throw new Error("Project not found");
     if (project.accountId !== payload.accountId) {
@@ -689,6 +700,7 @@ export const workspaceService = {
     // ── worktree: an additional worktree workspace for an existing project.
     // The project already exists, so find-or-create is a lookup. ──
     if (source.kind === "worktree") {
+      assertOwnedRecord("projects", source.projectId);
       const project = await projectsRepo.findById(source.projectId);
       if (!project) throw new Error("Project not found");
       const baseBranch =
@@ -835,7 +847,9 @@ export const workspaceService = {
     id: string,
     payload: UpdateWorkspacePayload,
   ): Promise<WorkspaceResponse> {
+    assertOwnedRecord("workspaces", id);
     if (payload.projectId !== undefined) {
+      assertOwnedRecord("projects", payload.projectId);
       const [workspace, project] = await Promise.all([
         workspaceRepo.findById(id),
         projectsRepo.findById(payload.projectId),
@@ -865,6 +879,7 @@ export const workspaceService = {
    * leave the user with an entry they cannot get rid of by any route.
    */
   async delete(id: string, options?: DeleteWorkspaceOptions): Promise<void> {
+    assertOwnedRecord("workspaces", id);
     if (options?.removeWorktree) {
       const workspace = await workspaceRepo.findById(id);
       const worktree = workspace?.metadata?.worktree;
@@ -892,6 +907,7 @@ export const workspaceService = {
   },
 
   async archive(id: string): Promise<WorkspaceResponse> {
+    assertOwnedRecord("workspaces", id);
     const workspace = await workspaceRepo.findById(id);
     if (!workspace) throw new Error("Workspace not found");
 
@@ -951,6 +967,7 @@ export const workspaceService = {
    * re-established by the next `listGitStates` sync.
    */
   async unarchive(id: string): Promise<WorkspaceResponse> {
+    assertOwnedRecord("workspaces", id);
     const workspace = await workspaceRepo.findById(id);
     if (!workspace) throw new Error("Workspace not found");
     if (!(await projectsRepo.findById(workspace.projectId))) {
@@ -981,6 +998,7 @@ export const workspaceService = {
    * the new one.
    */
   async switchBranch(workspaceId: string, branch: string): Promise<void> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceRepo.findById(workspaceId);
     if (!workspace) throw new Error("Workspace not found");
     if (!workspace.rootPath) throw new Error("Workspace has no root path");
@@ -1014,6 +1032,7 @@ export const workspaceService = {
    * created.
    */
   async createBranch(workspaceId: string, branch: string): Promise<void> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceRepo.findById(workspaceId);
     if (!workspace) throw new Error("Workspace not found");
     if (!workspace.rootPath) throw new Error("Workspace has no root path");
@@ -1042,6 +1061,7 @@ export const workspaceService = {
     workspaceId: string,
     newBranchName: string,
   ): Promise<WorkspaceResponse> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceRepo.findById(workspaceId);
     if (!workspace) throw new Error("Workspace not found");
     if (!workspace.rootPath) {
@@ -1085,6 +1105,7 @@ export const workspaceService = {
    * the diff summary bar, its only caller.)
    */
   async discardPaths(workspaceId: string, paths: string[]): Promise<void> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceRepo.findById(workspaceId);
     if (!workspace) throw new Error("Workspace not found");
     if (!workspace.rootPath) throw new Error("Workspace has no root path");
@@ -1159,16 +1180,19 @@ export const workspaceService = {
   },
 
   async createActivity(payload: CreateActivityPayload): Promise<string> {
+    assertOwnedRecord("workspaces", payload.workspaceId);
     return workspaceRepo.insertActivity(payload);
   },
 
   async createManyActivity(
     payloads: CreateActivityPayload[],
   ): Promise<string[]> {
+    for (const payload of payloads) assertOwnedRecord("workspaces", payload.workspaceId);
     return workspaceRepo.insertManyActivity(payloads);
   },
 
   async deleteActivity(id: string): Promise<void> {
+    assertOwnedRecord("workspace_activity", id);
     await workspaceRepo.deleteActivity(id);
   },
 
@@ -1200,15 +1224,18 @@ export const workspaceService = {
   },
 
   async deleteLatestDiff(workspaceId: string): Promise<void> {
+    assertOwnedRecord("workspaces", workspaceId);
     await workspaceRepo.deleteLatestDiffByWorkspace(workspaceId);
   },
 
   /** Wipe every diff row of a workspace (post-commit history reset). */
   async deleteDiffs(workspaceId: string): Promise<void> {
+    assertOwnedRecord("workspaces", workspaceId);
     await workspaceRepo.deleteDiffsByWorkspace(workspaceId);
   },
 
   async createDiff(payload: CreateDiffPayload): Promise<string> {
+    assertOwnedRecord("workspaces", payload.workspaceId);
     return workspaceRepo.insertDiff(payload);
   },
 
@@ -1227,6 +1254,7 @@ export const workspaceService = {
   async resyncDiff(
     workspaceId: string,
   ): Promise<WorkspaceDiffSummaryResponse | null> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceRepo.findById(workspaceId);
     if (!workspace) throw new Error("Workspace not found");
 
@@ -1282,6 +1310,8 @@ export const workspaceService = {
   },
 
   async createReview(payload: CreateReviewPayload): Promise<string> {
+    if (payload.workspaceId) assertOwnedRecord("workspaces", payload.workspaceId);
+    if (payload.runId) assertOwnedRecord("runs", payload.runId);
     return workspaceRepo.insertReview(payload);
   },
 
@@ -1289,12 +1319,14 @@ export const workspaceService = {
     id: string,
     payload: UpdateReviewPayload,
   ): Promise<ReviewResponse> {
+    assertOwnedRecord("reviews", id);
     const updated = await workspaceRepo.updateReview(id, payload);
     if (!updated) throw new Error("Review not found");
     return updated;
   },
 
   async deleteReview(id: string): Promise<void> {
+    assertOwnedRecord("reviews", id);
     await workspaceRepo.deleteReview(id);
   },
 
@@ -1345,12 +1377,14 @@ export const workspaceService = {
   },
 
   async createFinding(payload: CreateReviewFindingPayload): Promise<string> {
+    assertOwnedRecord("reviews", payload.reviewId);
     return workspaceRepo.insertFinding(payload);
   },
 
   async createManyFindings(
     payloads: CreateReviewFindingPayload[],
   ): Promise<string[]> {
+    for (const payload of payloads) assertOwnedRecord("reviews", payload.reviewId);
     return workspaceRepo.insertManyFindings(payloads);
   },
 
@@ -1358,17 +1392,20 @@ export const workspaceService = {
     id: string,
     payload: UpdateReviewFindingPayload,
   ): Promise<ReviewFindingResponse> {
+    assertOwnedRecord("review_findings", id);
     const updated = await workspaceRepo.updateFinding(id, payload);
     if (!updated) throw new Error("Review finding not found");
     return updated;
   },
 
   async deleteFinding(id: string): Promise<void> {
+    assertOwnedRecord("review_findings", id);
     await workspaceRepo.deleteFinding(id);
   },
 
   /** Drop every finding of a workspace (committed code is accepted). */
   async deleteFindingsByWorkspace(workspaceId: string): Promise<void> {
+    assertOwnedRecord("workspaces", workspaceId);
     await workspaceRepo.deleteFindingsByWorkspace(workspaceId);
   },
 };

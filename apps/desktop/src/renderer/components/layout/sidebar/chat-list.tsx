@@ -15,7 +15,10 @@ import {
   Text,
   toast,
 } from "@/components/ui";
-import { Option, Plus, Settings, Trash } from "@/components/ui/icons";
+import { Option, Plus, Settings, Trash, Relay } from "@/components/ui/icons";
+import type { BridgeBackendInfo } from "@mains/contracts/bridge";
+import { useBridgeStatus } from "@/features/bridge/hooks/use-bridge";
+import { groupReplicaItems, bridgePresence } from "@/features/bridge/lib/backends";
 import {
   useGetAccountQuery,
   useListCollectionsQuery,
@@ -92,6 +95,7 @@ export function SidebarChatList({
   const activeTab = useAppSelector((state) => state.workspace.activeTab);
   const backendId = useAppSelector((state) => state.backends.activeBackendId);
   const { data: recentRuns, isLoading } = useRecentChats();
+  const { data: bridgeStatus } = useBridgeStatus();
   const { data: collections } = useListCollectionsQuery(
     { accountId: account?.id ?? "" },
     { skip: !account },
@@ -99,10 +103,11 @@ export function SidebarChatList({
 
   const query = searchQuery.trim().toLowerCase();
   const runs = useMemo(() => {
-    const all = recentRuns ?? [];
+    const all = (recentRuns ?? []).filter((run) => !run.isReplica);
     if (!query) return all;
     return all.filter((run) => chatLabel(run).toLowerCase().includes(query));
   }, [recentRuns, query]);
+  const replicaGroups = groupReplicaItems((recentRuns ?? []).filter((run) => !query || chatLabel(run).toLowerCase().includes(query)), bridgeStatus);
 
   // A pinned chat is lifted out of wherever it would otherwise sit — Recents or
   // its project — and rendered once, at the top. Same rule as below: a run
@@ -279,14 +284,15 @@ export function SidebarChatList({
     }
   };
 
-  const renderChat = (run: RecentRun, isRecent = false) => {
+  const renderChat = (run: RecentRun, isRecent = false, device?: BridgeBackendInfo) => {
     const provider = getProviderVariantById(run.providerId);
     const linkedPageId = run.configSnapshot?.atlasPageId;
     const pageId = typeof linkedPageId === "string" ? linkedPageId.trim() : "";
-    const canOpenPage = provider?.supportsAtlas && run.mode === "work" && !!run.spaceId && !!pageId;
+    const canOpenPage = !run.isReplica && provider?.supportsAtlas && run.mode === "work" && !!run.spaceId && !!pageId;
     return <ChatItem
       key={run.id}
       run={run}
+      device={device}
       variant={provider?.variant ?? "null"}
       isActive={activeTab === run.id}
       isRecent={isRecent}
@@ -432,7 +438,12 @@ export function SidebarChatList({
           )}
         </SidebarGroupSection>
       )}
-      {hasNoMatches && <EmptyListNote>No matching chats</EmptyListNote>}
+      {replicaGroups.map(({ backend, rows }) => <SidebarGroupSection key={backend.backendId} groupKey={`bridge-chats-${backend.backendId}`}
+        label={backend.label} icon={<Relay className="size-3.5" />} count={Math.min(rows.length, RECENTS_LIMIT)}>
+        <div className="px-2.5 pb-1"><Text size="xxs" tone="muted">{bridgePresence(backend)}</Text></div>
+        <div className="flex flex-col space-y-0.5">{rows.slice(0, RECENTS_LIMIT).map((run) => renderChat(run, true, backend))}</div>
+      </SidebarGroupSection>)}
+      {hasNoMatches && replicaGroups.length === 0 && <EmptyListNote>No matching chats</EmptyListNote>}
 
       <DropdownMenu
         isOpen={!!menuCollection}

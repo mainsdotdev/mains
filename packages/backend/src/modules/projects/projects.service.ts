@@ -1,3 +1,4 @@
+import { assertOwnedRecord } from "../bridge";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import { projectsRepo } from "./projects.repo";
@@ -23,6 +24,10 @@ import type {
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
 export const projectsService = {
+  async listOwned(includeArchived = false) {
+    return projectsRepo.findAllOwned(includeArchived);
+  },
+
   // ─────────────────────────────────────────────────────────────
   // Project lifecycle
   // ─────────────────────────────────────────────────────────────
@@ -45,7 +50,7 @@ export const projectsService = {
         new Set(payload.orderedIds).size !== payload.orderedIds.length) {
       throw new Error("Invalid project order");
     }
-    const active = await projectsRepo.findByAccountId(payload.accountId);
+    const active = (await projectsRepo.findAllOwned()).filter((row) => row.accountId === payload.accountId);
     const activeIds = new Set(active.map((project) => project.id));
     if (payload.orderedIds.length !== activeIds.size ||
         payload.orderedIds.some((id) => !activeIds.has(id))) {
@@ -128,6 +133,7 @@ export const projectsService = {
     id: string,
     payload: UpdateProjectPayload,
   ): Promise<ProjectResponse> {
+    assertOwnedRecord("projects", id);
     const updated = await projectsRepo.update(id, payload);
     if (!updated) {
       throw new Error("Project not found");
@@ -136,6 +142,7 @@ export const projectsService = {
   },
 
   async remove(id: string): Promise<void> {
+    assertOwnedRecord("projects", id);
     const project = await projectsRepo.findById(id);
     if (!project) {
       throw new Error("Project not found");
@@ -190,6 +197,7 @@ export const projectsService = {
    * `remotes/…` prefixes stripped).
    */
   async listBranchNames(id: string): Promise<string[]> {
+    assertOwnedRecord("projects", id);
     const project = await projectsRepo.findById(id);
     if (!project) throw new Error("Project not found");
     const { all } = await gitService.getBranches(project.rootPath);
@@ -206,6 +214,7 @@ export const projectsService = {
   },
 
   async archive(id: string): Promise<ProjectResponse> {
+    assertOwnedRecord("projects", id);
     const archived = await projectsRepo.archive(id);
     if (!archived) {
       throw new Error("Project not found");
@@ -243,6 +252,7 @@ export const projectsService = {
     projectId: string,
     resourceId: string,
   ): Promise<{ resource: ProjectResource }> {
+    assertOwnedRecord("projects", projectId);
     if (!projectId || !resourceId) {
       throw new Error("projectId and resourceId are required");
     }
@@ -258,6 +268,7 @@ export const projectsService = {
   },
 
   async removeResource(projectId: string, resourceId: string): Promise<void> {
+    assertOwnedRecord("projects", projectId);
     if (!projectId || !resourceId) {
       throw new Error("projectId and resourceId are required");
     }

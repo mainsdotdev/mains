@@ -245,6 +245,12 @@ const api = {
       ipcRenderer.invoke(CHANNELS.ssh.closeTunnel, id),
   },
   // Encrypted at-rest storage for direct-mode backend owner tokens (local-only)
+  bridge: {
+    getStatus: () => ipcRenderer.invoke(CHANNELS.bridge.getStatus),
+    syncNow: () => ipcRenderer.invoke(CHANNELS.bridge.syncNow),
+    watchRun: (runId: string, watcherId: string) => ipcRenderer.invoke(CHANNELS.bridge.watchRun, runId, watcherId),
+    unwatchRun: (watcherId: string) => ipcRenderer.invoke(CHANNELS.bridge.unwatchRun, watcherId),
+  },
   remoteBackends: {
     setToken: (id: string, token: string) =>
       ipcRenderer.invoke(CHANNELS.remoteBackends.setToken, id, token),

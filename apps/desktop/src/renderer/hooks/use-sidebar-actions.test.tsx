@@ -20,6 +20,8 @@ import AddProjectModal from "@/components/layout/sidebar/add-project-modal";
 import WorkspacesList from "@/components/layout/sidebar/workspace-list";
 import { useSidebarActions } from "./use-sidebar-actions";
 
+vi.mock("@/features/bridge/hooks/use-bridge", () => ({ useBridgeStatus: () => ({ data: undefined }) }));
+
 vi.mock("@/hooks/use-active-space", () => ({
   useActiveSpace: () => ({ spaces: [], activeSpace: { id: "space", providerId: "codex", mode: "developer" } }),
 }));

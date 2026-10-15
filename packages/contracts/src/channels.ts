@@ -214,6 +214,14 @@ export const CHANNELS = {
     openTunnel: "ssh:openTunnel",
     closeTunnel: "ssh:closeTunnel",
   },
+  bridge: {
+    getStatus: "bridge:getStatus",
+    syncNow: "bridge:syncNow",
+    watchRun: "bridge:watchRun",
+    unwatchRun: "bridge:unwatchRun",
+    statusChanged: "bridge:statusChanged",
+    recordsApplied: "bridge:recordsApplied",
+  },
   backend: {
     describe: "backend:describe",
   },

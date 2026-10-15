@@ -2,7 +2,7 @@ import { useState, useMemo, type MouseEvent, type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceListGrouping } from "@/lib/redux/slices/appSettingsSlice";
-import { DropdownMenu, DropdownMenuItem, SortableItem, SortableList, Text, toast, type SortableHandle } from "@/components/ui";
+import { Button, DropdownMenu, DropdownMenuItem, SortableItem, SortableList, Text, toast, type SortableHandle } from "@/components/ui";
 import WorkspaceItem from "./workspace-item";
 import PendingWorkspaceItem from "./pending-workspace-item";
 import type { PendingWorkspaceClone } from "@/hooks/use-sidebar-actions";
@@ -12,7 +12,9 @@ import type {
 } from "@/lib/redux/api/workspaceApi";
 import { LinkResourcesModal } from "@/features/workspace/components/link-resources-modal";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
-import { Option, Plus, Settings } from "@/components/ui/icons";
+import { Option, Plus, Settings, Lock, Relay } from "@/components/ui/icons";
+import { useBridgeStatus } from "@/features/bridge/hooks/use-bridge";
+import { bridgePresence, groupReplicaItems } from "@/features/bridge/lib/backends";
 import {
   useListProjectsQuery,
   useCreateWorkspaceFromSourceMutation,
@@ -121,6 +123,7 @@ export default function WorkspacesList({
   }, [projects]);
 
   const basePath = WORKSPACE_BASE_PATH;
+  const { data: bridgeStatus } = useBridgeStatus();
   const cloneSearch = searchQuery.toLowerCase().trim();
   const visibleClones = pendingClones.filter((clone) => !cloneSearch ||
     [clone.name, clone.url, clone.targetPath].some((value) => value.toLowerCase().includes(cloneSearch)));
@@ -190,14 +193,15 @@ export default function WorkspacesList({
     }
   };
 
-  const sortedWorkspaces = [...workspaces].sort((a, b) =>
+  const replicaGroups = groupReplicaItems(workspaces, bridgeStatus);
+  const sortedWorkspaces = workspaces.filter((workspace) => !workspace.isReplica).sort((a, b) =>
     a.sortOrder - b.sortOrder || a.id.localeCompare(b.id),
   );
   const pinnedWorkspaces = sortedWorkspaces.filter((workspace) => workspace.pinnedAt !== null);
   const unpinnedWorkspaces = sortedWorkspaces.filter((workspace) => workspace.pinnedAt === null);
   const allWorkspaceIds = sortedWorkspaces.map((workspace) => workspace.id);
   const allProjectIds = [...projects]
-    .filter((project) => project.accountId === account?.id && !project.isArchived)
+    .filter((project) => !project.isReplica && project.accountId === account?.id && !project.isArchived)
     .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
     .map((project) => project.id);
   const canReorderWorkspaces = !searchQuery.trim() && !!account &&
@@ -486,6 +490,15 @@ export default function WorkspacesList({
           </div>
         )}
       </div>
+
+      {replicaGroups.map(({ backend, rows }) => <SidebarGroupSection key={backend.backendId} groupKey={`bridge-workspaces-${backend.backendId}`}
+        label={backend.label} icon={<Relay className="size-3.5" />} count={rows.length}>
+        <div className="px-2.5 pb-1"><Text size="xxs" tone="muted">{bridgePresence(backend)}</Text></div>
+        {rows.map((workspace) => <Button key={workspace.id} onClick={() => handleWorkspaceClick(workspace)}
+          className="flex w-full min-w-0 items-center gap-1.5 rounded-[10px] px-2.5 py-1 text-left hover:bg-primary/50 dark:hover:bg-primary/5">
+          <Lock aria-hidden="true" className="size-3 shrink-0 text-primary-500" /><Text size="s" className="truncate">{workspace.name}</Text>
+        </Button>)}
+      </SidebarGroupSection>)}
 
       <DropdownMenu
         isOpen={!!menuProject}

@@ -1,3 +1,4 @@
+import { assertOwnedRecord } from "@mains/backend/modules/bridge";
 import { runsService } from "@mains/backend/modules/runs";
 import {
   providersService,
@@ -136,6 +137,7 @@ function normalizeResourceMeta(value: unknown): McpAppResourceMeta {
 }
 
 async function adapterForRun(runId: string) {
+  assertOwnedRecord("runs", runId);
   const run = await runsService.getRunById(runId);
   if (!run) throw new Error("Run not found");
   const provider = await providersService.getById(run.providerId);

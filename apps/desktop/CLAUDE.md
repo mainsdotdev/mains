@@ -55,6 +55,13 @@ npm run licenses:generate  # Regenerate THIRD-PARTY-NOTICES.txt
 The standalone Node application, CLI, packaging, and server release checks live
 in `../server`. Keep server-only composition code out of this Electron app.
 
+For a second development backend, set `MAINS_DEV_USER_DATA` to an absolute
+disposable directory before `npm start`. Unpackaged Electron then isolates both
+Chromium state and `mains.db` there, before acquiring its instance/database locks.
+Do not redirect HOME or use the installed app's profile for replica tests. Bridge
+starts only with an explicit `<userData>/bridge/dev.json` or `MAINS_BRIDGE_CONFIG`;
+see `../bridge/README.md` for the two-backend demo and acceptance commands.
+
 Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the `test*` scripts handle this automatically, but running `vitest` directly will fail if you skip that step (use `npm rebuild better-sqlite3` first). Desktop-adapter tests live next to the file under test; backend tests and shared fixtures/factories live in `../../packages/backend`.
 
 ## Architecture Overview
@@ -72,7 +79,7 @@ Mains is an Electron 41 desktop app (React 19 renderer, SQLite + Drizzle ORM). C
 
 **Preload** (`src/preload/index.ts`)
 - Exposes `window.api` object with typed IPC methods
-- Namespaced by domain: `api.account`, `api.app`, `api.appSettings`, `api.automations`, `api.browser`, `api.connections`, `api.documents`, `api.entities`, `api.fileExplorer`, `api.gitFlow`, `api.guards`, `api.imageProxy`, `api.issues`, `api.localBackend`, `api.platform`, `api.projects`, `api.providers`, `api.pullRequests`, `api.pulse`, `api.remoteBackends`, `api.runs`, `api.runArtifacts`, `api.runContext`, `api.runTurns`, `api.shell`, `api.signals`, `api.space`, `api.ssh`, `api.stats`, `api.sync`, `api.tasks`, `api.terminal`, `api.toolCalls`, `api.updates`, `api.workspace`
+- Namespaced by domain: `api.account`, `api.app`, `api.appSettings`, `api.automations`, `api.bridge`, `api.browser`, `api.connections`, `api.documents`, `api.entities`, `api.fileExplorer`, `api.gitFlow`, `api.guards`, `api.imageProxy`, `api.issues`, `api.localBackend`, `api.platform`, `api.projects`, `api.providers`, `api.pullRequests`, `api.pulse`, `api.remoteBackends`, `api.runs`, `api.runArtifacts`, `api.runContext`, `api.runTurns`, `api.shell`, `api.signals`, `api.space`, `api.ssh`, `api.stats`, `api.sync`, `api.tasks`, `api.terminal`, `api.toolCalls`, `api.updates`, `api.workspace`
 - The `workspace` namespace is an aggregate — it covers workspace lifecycle plus reviews, review findings, diffs, and activity. Connection credentials/states are folded into `api.connections`; project resources and linked issues into `api.projects`.
 - **There is no `api.git`.** The `git` module is main-process-internal (see **Git Module**); renderer git effects go through `api.workspace.*`, `api.gitFlow.*`, and `projects:listBranches`.
 - After modifying preload, restart dev server to pick up changes
@@ -119,7 +126,7 @@ Each domain module follows a layered pattern (see `../../packages/backend/src/mo
 
 **Cross-module access** goes through service methods or named barrel functions (`logWorkspaceActivity`, `recordWorkspaceDiff`, `getConnectionWithSecrets`, `getIssuesByResourceIds`) — never another module's repo.
 
-Shared backend domains: `account`, `appSettings`, `automations`, `backend`, `collections`, `connections`, `entities`, `fileExplorer`, `git`, `gitFlow`, `guards`, `imageProxy`, `projects`, `providers`, `pullRequests`, `pulse`, `runs`, `search`, `space`, `stats`, `sync`, `tailscale`, `terminal`, `tools`, `workspace`. Desktop-only adapters and integrations remain under `src/main/modules/`: `appshots`, `browser`, `keyboardShortcuts`, `localBackend`, `mcpApps`, `remoteBackends`, `ssh`, and `updates`, plus the native halves of split domains.
+Shared backend domains: `account`, `appSettings`, `automations`, `backend`, `bridge`, `collections`, `connections`, `entities`, `fileExplorer`, `git`, `gitFlow`, `guards`, `imageProxy`, `projects`, `providers`, `pullRequests`, `pulse`, `runs`, `search`, `space`, `stats`, `sync`, `tailscale`, `terminal`, `tools`, `workspace`. Desktop-only adapters and integrations remain under `src/main/modules/`: `appshots`, `browser`, `keyboardShortcuts`, `localBackend`, `mcpApps`, `remoteBackends`, `ssh`, and `updates`, plus the native halves of split domains.
 
 Not every domain has all six files. Domains that own no tables skip `repo`/`dto`, and `git` / `tailscale` have no `ipc.ts` at all. When adding a domain, match a sibling with similar responsibilities rather than blindly copying `account/`; keep native host adapters out of the backend package.
 
@@ -138,7 +145,7 @@ Sites that reference the registry:
 2. `../../packages/backend/src/modules/{name}/{name}.ipc.ts` — `ipcMain.handle(CHANNELS.entities.getAll, ...)`
 3. `src/renderer/lib/redux/api/{name}Api.ts` — `{ handler: CHANNELS.entities.getAll }`
 
-Channel namespaces: `account`, `app`, `appSettings`, `automations`, `backend`, `browser`, `connections`, `documents`, `entities`, `fileExplorer`, `gitFlow`, `guards`, `imageProxy`, `issues`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `remoteBackends`, `runArtifacts`, `runContext`, `runToolCalls`, `runTurns`, `runs`, `search`, `shell`, `signals`, `space`, `ssh`, `stats`, `sync`, `tasks`, `terminal`, `toolCalls`, `updates`, `workspace`.
+Channel namespaces: `account`, `app`, `appSettings`, `automations`, `backend`, `bridge`, `browser`, `connections`, `documents`, `entities`, `fileExplorer`, `gitFlow`, `guards`, `imageProxy`, `issues`, `localBackend`, `projects`, `providers`, `pullRequests`, `pulse`, `remoteBackends`, `runArtifacts`, `runContext`, `runToolCalls`, `runTurns`, `runs`, `search`, `shell`, `signals`, `space`, `ssh`, `stats`, `sync`, `tasks`, `terminal`, `toolCalls`, `updates`, `workspace`.
 
 All IPC responses use the `ServiceResponse<T>` envelope: `{ success: true, data }` or `{ success: false, error }`, built by `ok()` / `fail()` from `@mains/contracts/service-response`. The renderer unwraps it exactly once, in `ipcBaseQuery` — never in `transformResponse`.
 

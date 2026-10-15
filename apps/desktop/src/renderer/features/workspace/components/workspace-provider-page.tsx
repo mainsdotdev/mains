@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "@/components/ui";
 import { Document, Picture } from "@/components/ui/icons";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getProviderVariant } from "@/lib/provider-variants";
 import type { ProviderVariant } from "@/lib/provider-variants";
 import type { RefObject } from "react";
@@ -32,6 +32,8 @@ import {
   useGetAccountQuery,
   useGetCollectionQuery,
   useGetProviderByIdQuery,
+  useGetRunByIdQuery,
+  useGetWorkspaceQuery,
 } from "@/lib/redux/api";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setContextItemsForKey } from "@/lib/redux/slices/workspaceSlice";
@@ -71,6 +73,9 @@ import { runOwnerKey } from "../../../../shared/ui-state-keys";
 import type { ConversationQueue } from "@/lib/redux/slices/runQueueSlice";
 import { queueForBrowserChat } from "../lib/run-queue-preview";
 import type { RunSettingConfig, SettingsChangeSource } from "@mains/contracts/run-settings";
+import { useWorkspaceData } from "../hooks/use-workspace-data";
+import { isRunTab } from "../lib/repo-utils";
+const ReplicaWorkspaceView = lazy(() => import("@/features/bridge/components/replica-workspace-view").then((module) => ({ default: module.ReplicaWorkspaceView })));
 
 interface WorkspaceProviderPageProps {
   providerId: string;
@@ -79,7 +84,26 @@ interface WorkspaceProviderPageProps {
   browserChatOnly?: boolean;
 }
 
-export function WorkspaceProviderPage({
+export function WorkspaceProviderPage(props: WorkspaceProviderPageProps) {
+  const { runId } = useParams<{ runId?: string }>();
+  const { mode, showTabs } = useModeConfig();
+  const activeTab = useAppSelector((state) => state.workspace.activeTab);
+  const selectedBackend = useAppSelector((state) => state.backends.activeBackendId ?? "local");
+  const { currentWorkspace, loading: workspaceLoading } = useWorkspaceData(props.providerId, mode);
+  const requested = runId ?? (!showTabs && typeof activeTab === "string" && isRunTab(activeTab) ? activeTab : undefined);
+  const { currentData: run, error } = useGetRunByIdQuery(requested ?? "", { skip: !requested });
+  const { currentData: ownerWorkspace } = useGetWorkspaceQuery(run?.workspaceId ?? "", { skip: !run?.isReplica || !run.workspaceId });
+  if (run?.isReplica || (!requested && currentWorkspace?.isReplica)) {
+    const workspace = run?.workspaceId ? ownerWorkspace ?? (currentWorkspace?.id === run.workspaceId ? currentWorkspace : null) : currentWorkspace?.isReplica ? currentWorkspace : null;
+    return <Suspense fallback={<div className="p-6 text-xs text-primary-500">Loading synced conversation…</div>}><ReplicaWorkspaceView key={`${selectedBackend}/${workspace?.id ?? run?.id}`} initialRun={run} workspace={workspace}
+      providerId={props.providerId} variant={props.variant} /></Suspense>;
+  }
+  // Ownership must resolve before mounting any composer/provider controller.
+  if ((requested && run === undefined && !error) || (!requested && mode === "developer" && workspaceLoading)) return <div className="flex h-full items-center justify-center"><span className="text-xs text-primary-500">Loading conversation…</span></div>;
+  return <InteractiveWorkspaceProviderPage {...props} />;
+}
+
+function InteractiveWorkspaceProviderPage({
   providerId,
   variant,
   browserChatOnly = false,

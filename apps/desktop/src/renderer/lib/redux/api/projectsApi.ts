@@ -5,7 +5,7 @@ import { reconcilePersistedUiState } from "../ui-state-reconciliation";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { IssueWithEntity } from "./entitiesApi";
 
-export interface Project {
+export interface Project extends Partial<import("@mains/contracts/bridge").BackendOwnership> {
   id: string;
   accountId: string;
   name: string;

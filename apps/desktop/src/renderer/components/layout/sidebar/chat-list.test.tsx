@@ -41,6 +41,7 @@ vi.mock("@/features/workspace/hooks/use-chat-actions", () => ({
   }),
 }));
 vi.mock("./collection-settings-modal", () => ({ CollectionSettingsModal: () => null }));
+vi.mock("@/features/bridge/hooks/use-bridge", () => ({ useBridgeStatus: () => ({ data: undefined }) }));
 
 const run: RecentRun = {
   id: "page-chat", title: "Tokyo Running Guide", goal: "Create a guide",

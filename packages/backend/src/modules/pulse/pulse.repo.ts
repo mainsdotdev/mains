@@ -1,3 +1,5 @@
+import { getLocalBackendId } from "../../db/backend-identity";
+import { ownedHere } from "../bridge";
 import { eq, sql, and, lte, asc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { getDb } from "../../db/client";
@@ -12,7 +14,7 @@ export const pulseRepo = {
 
   findActive(): Pulse[] {
     const db = getDb();
-    return db.select().from(pulses).where(eq(pulses.isActive, true)).all();
+    return db.select().from(pulses).where(and(ownedHere(pulses.ownerBackendId), eq(pulses.isActive, true))).all();
   },
 
   findById(id: string): Pulse | undefined {
@@ -25,7 +27,7 @@ export const pulseRepo = {
     return db
       .select()
       .from(pulses)
-      .where(and(eq(pulses.isActive, true), lte(pulses.nextRunAt, now)))
+      .where(and(ownedHere(pulses.ownerBackendId), eq(pulses.isActive, true), lte(pulses.nextRunAt, now)))
       .all();
   },
 
@@ -34,7 +36,7 @@ export const pulseRepo = {
     return db
       .select()
       .from(pulses)
-      .where(eq(pulses.isActive, true))
+      .where(and(ownedHere(pulses.ownerBackendId), eq(pulses.isActive, true)))
       .orderBy(asc(pulses.nextRunAt))
       .limit(1)
       .get();
@@ -45,6 +47,7 @@ export const pulseRepo = {
     const id = nanoid();
     db.insert(pulses)
       .values({
+      ownerBackendId: getLocalBackendId(db),
         id,
         accountId,
         workspaceId: input.workspaceId ?? null,

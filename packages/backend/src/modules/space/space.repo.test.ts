@@ -54,21 +54,6 @@ describe("spaceRepo", () => {
     });
   });
 
-  describe("findBySlug", () => {
-    it("returns undefined when not found", async () => {
-      const result = await spaceRepo.findBySlug("nonexistent");
-      expect(result).toBeUndefined();
-    });
-
-    it("returns space by slug", async () => {
-      createSpace(db, { accountId: "default", name: "Coding", slug: "coding" });
-
-      const result = await spaceRepo.findBySlug("coding");
-      expect(result).toBeDefined();
-      expect(result!.name).toBe("Coding");
-    });
-  });
-
   describe("getMaxSortOrder", () => {
     it("returns 0 when no spaces exist", async () => {
       const result = await spaceRepo.getMaxSortOrder();

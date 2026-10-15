@@ -1,3 +1,4 @@
+import { assertOwnedRecord } from "../bridge";
 // ─────────────────────────────────────────────────────────────
 // Git Flow Service
 //
@@ -190,6 +191,7 @@ export const gitFlowService = {
   async resolveRoot(
     workspaceId: string,
   ): Promise<{ rootPath: string; projectId: string | null }> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceService.get(workspaceId);
     if (!workspace) throw new Error("Workspace not found");
     if (!workspace.rootPath) throw new Error("Workspace has no root path");
@@ -201,6 +203,7 @@ export const gitFlowService = {
 
   /** Commit instructions, project-level first then app-level. */
   async getCommitInstructions(workspaceId: string): Promise<string | null> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceService.get(workspaceId);
     if (workspace?.projectId) {
       const project = await projectsService.get(workspace.projectId);
@@ -212,6 +215,7 @@ export const gitFlowService = {
 
   /** PR instructions, project-level first then app-level. */
   async getPrInstructions(workspaceId: string): Promise<string | null> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceService.get(workspaceId);
     if (workspace?.projectId) {
       const project = await projectsService.get(workspace.projectId);
@@ -242,6 +246,7 @@ export const gitFlowService = {
     rootPath: string,
   ): Promise<void> {
     if (!workspaceId) return;
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceService.get(workspaceId);
     if (!workspace?.projectId) return;
     const project = await projectsService.get(workspace.projectId);
@@ -266,6 +271,7 @@ export const gitFlowService = {
    */
   async resolveBaseBranch(workspaceId: string | null): Promise<string | null> {
     if (!workspaceId) return null;
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceService.get(workspaceId);
     if (!workspace) return null;
     if (workspace.baseBranch) return workspace.baseBranch;
@@ -614,6 +620,7 @@ export const gitFlowService = {
 
   /** Live status for the commit panel header + button enablement. */
   async getStatus(workspaceId: string): Promise<GitFlowStatus> {
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceService.get(workspaceId);
     if (!workspace) throw new Error("Workspace not found");
     if (!workspace.rootPath) throw new Error("Workspace has no root path");
@@ -818,6 +825,7 @@ export const gitFlowService = {
 
     // Default repo name from the project, then the workspace, then the folder.
     let name = "";
+    assertOwnedRecord("workspaces", workspaceId);
     const workspace = await workspaceService.get(workspaceId);
     if (projectId) {
       const project = await projectsService.get(projectId);

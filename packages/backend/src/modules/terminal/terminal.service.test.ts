@@ -1,3 +1,4 @@
+vi.mock("../bridge", () => ({ assertOwnedRecord: vi.fn() }));
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { mockPty } = vi.hoisted(() => {

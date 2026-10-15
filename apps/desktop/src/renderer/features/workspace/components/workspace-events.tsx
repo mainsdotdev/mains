@@ -65,6 +65,7 @@ import { PromptSuggestionChips } from "./prompt-suggestion-chips";
 import { TurnChangesCard } from "./turn-changes-card";
 import { TranscriptList, type TranscriptListRow } from "./transcript-list";
 import { createTranscriptViewCache, TranscriptItemScope, TranscriptViewProvider, useTranscriptValue } from "../lib/transcript-view-state";
+import { useReplicaView } from "@/hooks/use-replica-view";
 
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
@@ -460,6 +461,7 @@ export function WorkspaceEvents({
   floatingChat = false,
   history,
 }: WorkspaceEventsProps) {
+  const replica = useReplicaView();
   const isEditorActive = activeTab === "editor" && !isSubmitting;
   const isIssueActive = isIssueTab(activeTab);
   const isSignalActive = isSignalTab(activeTab);
@@ -481,7 +483,7 @@ export function WorkspaceEvents({
   const transcriptView = useMemo(() => isRunTabActive ? viewCache.get(activeTab) : null, [isRunTabActive, activeTab, viewCache]);
   const { data: providerModels = [] } = useGetProviderModelsQuery(
     activeRun?.providerId ?? "",
-    { skip: !activeRun?.providerId },
+    { skip: !!replica || !activeRun?.providerId },
   );
 
   // Being signed out entirely is already reported above the composer, with a
@@ -491,7 +493,7 @@ export function WorkspaceEvents({
   // Query serves it from cache rather than probing twice.
   const { data: providerAccountInfo } = useGetProviderAccountInfoQuery(
     getProviderVariant(variant).providerId,
-    { refetchOnFocus: false },
+    { refetchOnFocus: false, skip: !!replica },
   );
   const providerSignedOut =
     !!providerAccountInfo && providerAccountInfo.account === null;
@@ -499,7 +501,7 @@ export function WorkspaceEvents({
     activeRun?.status === "failed" &&
     classifyRunErrorKind(activeRun.lastError) === "auth";
   const isRunning =
-    isSubmitting || activeRun?.status === "running" || activeRun?.status === "queued";
+    (isSubmitting || activeRun?.status === "running" || activeRun?.status === "queued") && (!replica || replica.online === true);
   const isRunCompleted =
     activeRun?.status === "succeeded" ||
     activeRun?.status === "failed" ||
@@ -842,7 +844,7 @@ export function WorkspaceEvents({
                 </button>
               )}
               <TranscriptList key={activeTab} rows={transcriptRows} onResize={onTranscriptResize} />
-              {activeRunFailedOnAuth && !providerSignedOut && (
+              {!replica && activeRunFailedOnAuth && !providerSignedOut && (
                 <ProviderAuthNotice
                   variant={variant}
                   title="Authentication expired"
@@ -886,7 +888,7 @@ export function WorkspaceEvents({
           <div className="absolute bottom-0 left-0 right-0 h-6 bg-linear-to-t from-primary to-transparent dark:from-primary-950 dark:to-transparent pointer-events-none" />
         </>
       )}
-      {!floatingChat && <RealtimeVoiceBar runId={activeRun?.id} />}
+      {!floatingChat && !replica && <RealtimeVoiceBar runId={activeRun?.id} />}
     </Text></TranscriptViewProvider>
   );
 }

@@ -38,8 +38,8 @@ function isWithin(parent: string, child: string): boolean {
 
 async function listContentRoots(): Promise<string[]> {
   const [workspaces, projects] = await Promise.all([
-    workspaceService.list(true),
-    projectsService.list(true),
+    workspaceService.listOwned(true),
+    projectsService.listOwned(true),
   ]);
 
   const roots = new Set<string>(managedExecutionRoots());

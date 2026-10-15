@@ -14,7 +14,7 @@ import {
   getProviderVariant,
   type ProviderVariant,
 } from "@/lib/provider-variants";
-import { ONBOARDING_AGENT_SLUGS } from "../onboarding-agents";
+import { ONBOARDING_AGENT_IDS } from "../onboarding-agents";
 
 export interface OnboardingProvider {
   variant: ProviderVariant;
@@ -36,7 +36,7 @@ export function onboardingProviders(
     claude: detected?.claudeSource,
     copilot: detected?.copilotSource,
   };
-  return ONBOARDING_AGENT_SLUGS.map((variant) => {
+  return ONBOARDING_AGENT_IDS.map((variant) => {
     const { providerId } = getProviderVariant(variant);
     const candidates = spaces
       .filter((space) => !space.isArchived && space.providerId === providerId)

@@ -23,7 +23,7 @@ type ProviderData = ReturnType<typeof useGetProviderByIdQuery>["data"];
 
 export function useProviderSettings<TConfig extends object = Record<string, unknown>>(
   providerId: string,
-  spaceSlug: string,
+  seededSpaceId: string,
 ) {
   const navigate = useNavigate();
   const {
@@ -37,9 +37,9 @@ export function useProviderSettings<TConfig extends object = Record<string, unkn
   const [unarchiveSpace] = useUnarchiveSpaceMutation();
   const [setActiveSpace] = useSetActiveSpaceMutation();
 
-  const space = spaces.find((s) => s.slug === spaceSlug);
+  const space = spaces.find((s) => s.id === seededSpaceId);
   const otherVisibleSpaces = spaces.filter(
-    (s) => s.slug !== spaceSlug && !s.isArchived,
+    (s) => s.id !== seededSpaceId && !s.isArchived,
   );
   const canHide = otherVisibleSpaces.length > 0;
   const config = (provider?.config ?? {}) as TConfig;

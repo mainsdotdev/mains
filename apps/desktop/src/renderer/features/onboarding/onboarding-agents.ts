@@ -1,18 +1,6 @@
-/** Seed agent spaces shown in welcome + filtered onboarding provider steps */
-export const ONBOARDING_AGENT_SLUGS = [
-  "claude",
-  "codex",
-  "copilot",
-  "cursor",
-] as const;
+import { SEEDED_SPACE_IDS, isSeededSpaceId, type SeededSpaceId } from "@mains/contracts/spaces";
 
-export type OnboardingAgentSlug = (typeof ONBOARDING_AGENT_SLUGS)[number];
-
-export function isOnboardingAgentSlug(
-  slug: string | null | undefined,
-): slug is OnboardingAgentSlug {
-  return (
-    slug != null &&
-    (ONBOARDING_AGENT_SLUGS as readonly string[]).includes(slug)
-  );
-}
+/** Seed agent identities; editable names and slugs never select a Space. */
+export const ONBOARDING_AGENT_IDS = SEEDED_SPACE_IDS;
+export type OnboardingAgentId = SeededSpaceId;
+export const isOnboardingAgentId = isSeededSpaceId;

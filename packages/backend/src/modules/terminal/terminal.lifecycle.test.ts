@@ -1,3 +1,4 @@
+vi.mock("../bridge", () => ({ assertOwnedRecord: vi.fn() }));
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { get } from "node:http";

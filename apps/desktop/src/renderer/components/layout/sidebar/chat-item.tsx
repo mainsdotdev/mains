@@ -24,6 +24,8 @@ import type { Collection, RecentRun } from "@/lib/redux/api";
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
 import { ProjectIcon } from "./project-icon";
 import { SidebarItemHoverCard } from "./sidebar-item-hover-card";
+import type { BridgeBackendInfo } from "@mains/contracts/bridge";
+import { DeviceBadge } from "@/features/bridge/components/device-badge";
 
 /** What the row prints — title, else the goal's first line. */
 export function chatLabel(run: Pick<RecentRun, "title" | "goal">): string {
@@ -38,6 +40,7 @@ export function chatLabel(run: Pick<RecentRun, "title" | "goal">): string {
 }
 
 interface ChatItemProps {
+  device?: BridgeBackendInfo;
   run: RecentRun;
   variant: AsciiSpinnerVariant;
   isActive: boolean;
@@ -59,6 +62,7 @@ interface ChatItemProps {
 
 export function ChatItem({
   run,
+  device,
   variant,
   isActive,
   isRecent = false,
@@ -72,7 +76,7 @@ export function ChatItem({
   isPinned,
   onTogglePin,
 }: ChatItemProps) {
-  const isLive = run.status === "running" || run.status === "queued";
+  const isLive = (run.status === "running" || run.status === "queued") && (!run.isReplica || device?.online === true);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [menuPosition, setMenuPosition] = useState({
     x: 0,
@@ -90,6 +94,7 @@ export function ChatItem({
   const isEditing = draft !== null;
 
   const startRename = () => {
+    if (run.isReplica) return;
     setIsMenuOpen(false);
     abandoned.current = false;
     setDraft(label);
@@ -104,6 +109,7 @@ export function ChatItem({
 
   const openMenu = (event: MouseEvent) => {
     event.stopPropagation();
+    if (run.isReplica) return;
     const rect = triggerRef.current?.getBoundingClientRect();
     if (rect) {
       setMenuPosition({
@@ -129,7 +135,7 @@ export function ChatItem({
           ?.name ?? "Chat"
       }
       disabled={isEditing || isMenuOpen}
-      actions={[
+      actions={run.isReplica ? [] : [
         {
           label: isPinned ? "Unpin chat" : "Pin chat",
           icon: isPinned ? (
@@ -255,7 +261,8 @@ export function ChatItem({
             </Text>
           )}
         </span>
-        <div
+        {run.isReplica && device && <DeviceBadge backend={device} compact />}
+        {!run.isReplica && <div
           className={`ml-auto flex items-center gap-1 shrink-0 ${
             isEditing ? "hidden" : ""
           }`}
@@ -291,10 +298,10 @@ export function ChatItem({
           >
             <Option className="w-3.5 h-3.5" />
           </Button>
-        </div>
+        </div>}
       </div>
       <DropdownMenu
-        isOpen={isMenuOpen}
+        isOpen={isMenuOpen && !run.isReplica}
         aria-label="Chat actions"
         position={menuPosition}
         onClose={() => setIsMenuOpen(false)}

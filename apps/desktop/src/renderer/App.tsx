@@ -59,6 +59,8 @@ import { RealtimeVoiceDock } from "./features/workspace/components/realtime-voic
 import { useWindowRequests } from "./hooks/use-window-requests";
 import { useAppSettingsEvents } from "./hooks/use-app-settings-events";
 import { useOnboardingWindow } from "./features/onboarding/hooks/use-onboarding-window";
+import { useBridgeStatus } from "./features/bridge/hooks/use-bridge";
+import { useGetRunByIdQuery, useGetWorkspaceQuery, useListWorkspacesQuery } from "./lib/redux/api";
 import {
   KeyboardShortcutsProvider,
   useKeyboardShortcut,
@@ -109,6 +111,7 @@ function useDropdownAnimationPrewarm() {
 }
 
 function AppContent() {
+  useBridgeStatus();
   useDropdownAnimationPrewarm();
   useLayoutWidthVars();
   useAppearanceFonts();
@@ -134,7 +137,6 @@ function AppContent() {
   const appExpanded = !!mcpAppPanel?.isExpanded;
   const docViewer = useDocumentViewer();
   const modeConfig = useModeConfig();
-  const showTerminalToggle = !hideWorkspacePanels && variant !== "default" && modeConfig.showTerminal;
   const showBrowserToggle = atlasRoute || variant !== "default";
   const dispatch = useAppDispatch();
   const sidebarCollapsed = useAppSelector(
@@ -151,6 +153,13 @@ function AppContent() {
   const sessionRunId = useAppSelector((state) =>
     selectSessionRunId(state.workspace),
   );
+  const { data: knownWorkspaces = [] } = useListWorkspacesQuery();
+  const { currentData: selectedWorkspace } = useGetWorkspaceQuery(activeWorkspaceId ?? "", { skip: !activeWorkspaceId });
+  const { currentData: selectedRun } = useGetRunByIdQuery(sessionRunId ?? "", { skip: !sessionRunId });
+  const workspaceAccess = selectedWorkspace ?? knownWorkspaces.find((workspace) => workspace.id === activeWorkspaceId);
+  const replicaView = workspaceAccess?.isReplica === true || selectedRun?.isReplica === true;
+  const operationalAccess = !replicaView && (!activeWorkspaceId || !!workspaceAccess) && (!sessionRunId || !!selectedRun);
+  const showTerminalToggle = operationalAccess && !hideWorkspacePanels && variant !== "default" && modeConfig.showTerminal;
   const onboardingCompleted = useAppSelector(
     (state) => state.appSettings.onboardingCompleted,
   );
@@ -166,7 +175,7 @@ function AppContent() {
   // Atlas and Chat/Work hide workspace tools without changing the persisted
   // developer preference. Document and browser previews own a separate lane.
   const rightPanelVisible =
-    rightPaneReady && !hideWorkspacePanels && modeConfig.showRightPanel && isRightPanelOpen;
+    operationalAccess && rightPaneReady && !hideWorkspacePanels && modeConfig.showRightPanel && isRightPanelOpen;
   // Whatever currently owns the right edge — the content stops there, and the
   // session box aligns to the same edge just inside it.
   const rightLaneWidth = mcpAppPanel?.isOpen
@@ -183,8 +192,8 @@ function AppContent() {
   // behind the workspace half so its status query never touches managed run
   // directories.
   const hasSessionPanelTarget =
-    (modeConfig.showGitActions && !!activeWorkspaceId) ||
-    (modeConfig.showSources && !!sessionRunId);
+    operationalAccess && ((modeConfig.showGitActions && !!activeWorkspaceId) ||
+    (modeConfig.showSources && !!sessionRunId));
   const sessionPanelShown =
     isSessionPanelOpen &&
     !hideWorkspacePanels &&
@@ -309,9 +318,9 @@ function AppContent() {
   const showLayoutControls = !hideRightPanel && !(isMobile && !sidebarCollapsed);
   const layoutControls = showLayoutControls ? (
     <ToggleButton
-      showChatActions={isMobile && !atlasRoute}
+      showChatActions={operationalAccess && isMobile && !atlasRoute}
       hideTerminalControls={appExpanded || hideWorkspacePanels || (browserPanel.isOpen && browserPanel.isExpanded)}
-      showRightPanelToggle={!hideWorkspacePanels}
+      showRightPanelToggle={operationalAccess && !hideWorkspacePanels && modeConfig.showRightPanel}
       isOpen={rightPanelVisible}
       onClick={() => {
         const open = !isRightPanelOpen;
@@ -382,7 +391,7 @@ function AppContent() {
           marginRight={contentRight}
           transparentSurface={workspaceRoute}
           contentInsetRight={contentInsetRight}
-          headerActions={!isMobile && !hideWorkspacePanels && !appExpanded && !browserPanel.isExpanded && (
+          headerActions={operationalAccess && !isMobile && !hideWorkspacePanels && !appExpanded && !browserPanel.isExpanded && (
             <SessionPanelTrigger showGitActions={modeConfig.showGitActions} showSources={modeConfig.showSources} />
           )}
           reserveWindowControls={showLayoutControls && rightLaneWidth === EDGE_GUTTER}
@@ -394,10 +403,10 @@ function AppContent() {
             <MainRoutes />
           </ErrorBoundary>
         </MainContent>
-        {!hideWorkspacePanels && modeConfig.showRightPanel && (
+        {operationalAccess && !hideWorkspacePanels && modeConfig.showRightPanel && (
           <RightPanel isOpen={rightPanelVisible} width={RIGHT_PANEL_WIDTH} />
         )}
-        {!hideWorkspacePanels && (
+        {operationalAccess && !hideWorkspacePanels && (
           <SessionPanel
             providerId={activeProviderId}
             runId={sessionRunId}
@@ -405,7 +414,7 @@ function AppContent() {
             floating={sessionPanelFloating}
           />
         )}
-        {!hideWorkspacePanels && (
+        {operationalAccess && !hideWorkspacePanels && (
           <SubagentPanel shown={subagentPanelShown} laneOffset={rightLaneWidth} />
         )}
         <BrowserPanel

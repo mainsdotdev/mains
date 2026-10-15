@@ -4,6 +4,7 @@ import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { ModeId } from "../../../../shared/modes";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { BackendOwnership } from "@mains/contracts/bridge";
 import type { RunExperienceOptions, RunOutputFile } from "@mains/contracts/runs";
 import type { AppDispatch, RootState } from "../index";
 import { forgetDeletedUiContext } from "../ui-state-cleanup";
@@ -37,7 +38,7 @@ export type RunArtifactKind =
   | "document"
   | "visualization";
 
-export interface Run {
+export interface Run extends Partial<BackendOwnership> {
   id: string;
   accountId: string;
   workspaceId: string | null;

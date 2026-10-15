@@ -124,6 +124,8 @@ export interface RunSteerResponse {
 export type ToolCallStatus = "queued" | "running" | "done" | "error" | "canceled";
 
 export interface RunResponse {
+  ownerBackendId?: string;
+  isReplica?: boolean;
   id: string;
   accountId: string;
   workspaceId: string | null;
@@ -426,6 +428,8 @@ export interface StartRunResponse {
 }
 
 export interface WorkspaceResponse {
+  ownerBackendId?: string;
+  isReplica?: boolean;
   id: string;
   projectId: string;
   name: string;

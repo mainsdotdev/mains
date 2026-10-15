@@ -9,8 +9,8 @@ import {
 } from "@/lib/redux/api";
 import { getSpaceDefaultRoute } from "@/lib/route-utils";
 import {
-  type OnboardingAgentSlug,
-  isOnboardingAgentSlug,
+  type OnboardingAgentId,
+  isOnboardingAgentId,
 } from "../onboarding-agents";
 
 export function useAgentSpaces(options: { navigateOnSwitch?: boolean } = {}) {
@@ -23,7 +23,7 @@ export function useAgentSpaces(options: { navigateOnSwitch?: boolean } = {}) {
   const [setActiveSpace] = useSetActiveSpaceMutation();
 
   const agentSpaces = useMemo(
-    () => spaces.filter((s) => s.slug && isOnboardingAgentSlug(s.slug)),
+    () => spaces.filter((s) => isOnboardingAgentId(s.id)),
     [spaces],
   );
 
@@ -32,17 +32,17 @@ export function useAgentSpaces(options: { navigateOnSwitch?: boolean } = {}) {
     [agentSpaces],
   );
 
-  const spacesBySlug = useMemo(() => {
-    const map = new Map<OnboardingAgentSlug, { id: string; isArchived: boolean }>();
+  const spacesById = useMemo(() => {
+    const map = new Map<OnboardingAgentId, { id: string; isArchived: boolean }>();
     for (const space of agentSpaces) {
-      if (!isOnboardingAgentSlug(space.slug)) continue;
-      map.set(space.slug, { id: space.id, isArchived: space.isArchived });
+      if (!isOnboardingAgentId(space.id)) continue;
+      map.set(space.id, { id: space.id, isArchived: space.isArchived });
     }
     return map;
   }, [agentSpaces]);
 
-  const toggleAgent = async (slug: OnboardingAgentSlug) => {
-    const space = agentSpaces.find((s) => s.slug === slug);
+  const toggleAgent = async (id: OnboardingAgentId) => {
+    const space = agentSpaces.find((s) => s.id === id);
     if (!space) return;
 
     if (space.isArchived) {
@@ -75,5 +75,5 @@ export function useAgentSpaces(options: { navigateOnSwitch?: boolean } = {}) {
     }
   };
 
-  return { agentSpaces, visibleAgentCount, spacesBySlug, toggleAgent };
+  return { agentSpaces, visibleAgentCount, spacesById, toggleAgent };
 }

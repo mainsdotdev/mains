@@ -1,3 +1,4 @@
+import { getLocalBackendId } from "./backend-identity";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -105,6 +106,7 @@ class DatabaseClient {
 
       // Seed initial data
       await this.seedInitialData();
+      getLocalBackendId(this.db);
 
       this.isInitialized = true;
 
@@ -451,6 +453,7 @@ class DatabaseClient {
   private getDefaultDatabasePath(): string {
     const runtime = getBackendRuntime();
     if (runtime.kind === "electron" && !runtime.isPackaged()) {
+      if (process.env.MAINS_DEV_USER_DATA) return path.join(runtime.getPath("userData"), "mains.db");
       return path.join(process.cwd(), ".data", "mains.db");
     }
     const userDataPath = runtime.getPath("userData");

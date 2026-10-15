@@ -1,3 +1,4 @@
+import { assertOwnedRecord } from "../../modules/bridge";
 // ─────────────────────────────────────────────────────────────
 // Run Dispatcher - Orchestrates adapter execution with DB persistence
 // ─────────────────────────────────────────────────────────────
@@ -68,6 +69,7 @@ export async function dispatchRun(request: DispatchRunRequest): Promise<Dispatch
   }
 
   // 2. Load workspace
+  assertOwnedRecord("workspaces", request.workspaceId);
   const workspace = await workspaceService.get(request.workspaceId);
   if (!workspace) {
     throw new Error(`Workspace "${request.workspaceId}" not found`);
@@ -219,6 +221,7 @@ async function dispatchRunInternal(
   }
 
   // 2. Load workspace
+  assertOwnedRecord("workspaces", request.workspaceId);
   const workspace = await workspaceService.get(request.workspaceId);
   if (!workspace) {
     throw new Error(`Workspace "${request.workspaceId}" not found`);

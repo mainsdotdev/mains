@@ -1,3 +1,4 @@
+vi.mock("../bridge", () => ({ assertOwnedRecord: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { prAttachmentStorage } from "./pr-attachment-storage";
@@ -89,6 +90,8 @@ describe("gitFlowService — live branch invariants", () => {
     vi.clearAllMocks();
     workspaceMock.get.mockResolvedValue({
       id: "ws-1",
+      ownerBackendId: "local-backend",
+      isReplica: false,
       accountId: "default",
       projectId: "project-1",
       name: "repo",

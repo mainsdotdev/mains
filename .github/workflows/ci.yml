@@ -56,6 +56,36 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  bridge:
+    name: Bridge hub and encrypted replication
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/bridge
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            apps/bridge/package-lock.json
+            packages/backend/package-lock.json
+      - name: Install shared backend dependencies
+        working-directory: packages/backend
+        run: npm ci
+      - name: Build SQLite for the test runtime
+        working-directory: packages/backend
+        run: npm rebuild better-sqlite3
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:replication
+      - run: npm run build
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -126,6 +156,7 @@ jobs:
           cache-dependency-path: |
             apps/desktop/package-lock.json
             apps/server/package-lock.json
+            apps/bridge/package-lock.json
             packages/backend/package-lock.json
       - name: Install desktop web dependencies
         working-directory: apps/desktop
@@ -139,6 +170,14 @@ jobs:
       - run: npm run lint
       - run: npm run package
       - run: npm run smoke:package
+      - name: Install Bridge acceptance dependencies
+        working-directory: apps/bridge
+        run: npm ci
+      - name: Exercise two real backends with encrypted sync and paired-device control
+        working-directory: apps/bridge
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: npm run test:hosts
 
   codex-app-server:
     name: Codex app-server (${{ matrix.codex-version }})

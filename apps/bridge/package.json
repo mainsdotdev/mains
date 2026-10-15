@@ -1,0 +1,40 @@
+{
+  "name": "@mains/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Ciphertext-only Bridge hub for local Cloudflare Workers development",
+  "scripts": {
+    "dev": "wrangler dev --ip 127.0.0.1 --port 8790",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "dev:setup": "tsx scripts/dev-setup.ts",
+    "dev:token": "tsx scripts/dev-token.ts",
+    "dev:client": "tsx scripts/dev-client.ts",
+    "dev:demo": "tsx scripts/dev-demo.ts",
+    "test": "vitest run",
+    "test:replication": "node scripts/test-replication.mjs",
+    "test:hosts": "MAINS_BRIDGE_HOST_TESTS=1 vitest run test/hosts.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tools.json",
+    "lint": "eslint src/ test/ scripts/"
+  },
+  "dependencies": {
+    "@mains/contracts": "file:../../packages/contracts",
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261015.1",
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "0.28.2",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0",
+    "miniflare": "5.20261012.0-beta",
+    "tsx": "^4.23.13",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^4.1.11",
+    "wrangler": "4.151.0",
+    "ws": "8.21.3"
+  }
+}

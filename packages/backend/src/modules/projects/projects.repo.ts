@@ -1,3 +1,5 @@
+import { getLocalBackendId } from "../../db/backend-identity";
+import { ownedHere, ownershipOf } from "../bridge";
 import { eq, desc, and, inArray, max } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 import { getDb } from "../../db/client";
@@ -16,6 +18,18 @@ import type {
 // Projects Repository
 // ─────────────────────────────────────────────────────────────
 export const projectsRepo = {
+  async findAllOwned(includeArchived = false): Promise<ProjectResponse[]> {
+    const rows = await getDb()
+      .select()
+      .from(projects)
+      .where(and(
+        ownedHere(projects.ownerBackendId),
+        includeArchived ? undefined : eq(projects.isArchived, false),
+      ))
+      .orderBy(desc(projects.updatedAt));
+    return rows.map(mapRowToResponse);
+  },
+
   async findAll(includeArchived = false): Promise<ProjectResponse[]> {
     const db = getDb();
     const query = db.select().from(projects);
@@ -59,6 +73,7 @@ export const projectsRepo = {
       .where(
         and(
           eq(projects.accountId, accountId),
+          ownedHere(projects.ownerBackendId),
           eq(projects.remoteOrigin, normalizedOrigin),
         ),
       )
@@ -77,6 +92,7 @@ export const projectsRepo = {
       .where(
         and(
           eq(projects.accountId, accountId),
+          ownedHere(projects.ownerBackendId),
           eq(projects.rootPath, rootPath),
         ),
       )
@@ -89,8 +105,9 @@ export const projectsRepo = {
     const [last] = await db
       .select({ value: max(projects.sortOrder) })
       .from(projects)
-      .where(eq(projects.accountId, payload.accountId));
+      .where(and(ownedHere(projects.ownerBackendId), eq(projects.accountId, payload.accountId)));
     await db.insert(projects).values({
+      ownerBackendId: getLocalBackendId(db),
       id: payload.id,
       accountId: payload.accountId,
       name: payload.name,
@@ -116,7 +133,7 @@ export const projectsRepo = {
       orderedIds.forEach((id, sortOrder) => {
         db.update(projects)
           .set({ sortOrder })
-          .where(and(eq(projects.id, id), eq(projects.accountId, accountId)))
+          .where(and(ownedHere(projects.ownerBackendId), eq(projects.id, id), eq(projects.accountId, accountId)))
           .run();
       });
     });
@@ -265,6 +282,7 @@ export const projectsRepo = {
 // ─────────────────────────────────────────────────────────────
 function mapRowToResponse(row: typeof projects.$inferSelect): ProjectResponse {
   return {
+    ...ownershipOf(row.ownerBackendId),
     id: row.id,
     accountId: row.accountId,
     name: row.name,

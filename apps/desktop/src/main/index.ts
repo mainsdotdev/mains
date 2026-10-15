@@ -181,6 +181,7 @@ import {
   unregisterRemoteBackendsIpc,
 } from "./modules/remoteBackends";
 import { registerBackendIpc, unregisterBackendIpc } from "@mains/backend/modules/backend";
+import { bridgeService, registerBridgeIpc, unregisterBridgeIpc } from "@mains/backend/modules/bridge";
 import { registerSearchIpc, unregisterSearchIpc } from "@mains/backend/modules/search";
 import { CHANNELS } from "@mains/contracts/channels";
 import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime";
@@ -189,6 +190,13 @@ import { configureIpcMainAdapter } from "@mains/backend/ipc-kit/ipc-main";
 import { runPackageSmoke } from "./package-smoke";
 
 const SMOKE_TEST = process.argv.includes("--smoke-test");
+// A development replica demo must never share the user's normal profile or database.
+const DEV_USER_DATA = !app.isPackaged ? process.env.MAINS_DEV_USER_DATA : undefined;
+if (DEV_USER_DATA) {
+  if (!path.isAbsolute(DEV_USER_DATA)) throw new Error("MAINS_DEV_USER_DATA must be an absolute directory");
+  fs.mkdirSync(DEV_USER_DATA, { recursive: true });
+  app.setPath("userData", DEV_USER_DATA);
+}
 function finishPackageSmoke(error?: unknown): void {
   if (!process.env.MAINS_SMOKE_RESULT) throw new Error("Package smoke requires a result file");
   fs.writeFileSync(process.env.MAINS_SMOKE_RESULT, JSON.stringify({
@@ -896,8 +904,10 @@ async function initializeApp() {
     registerSshIpc();
     registerRemoteBackendsIpc();
     registerBackendIpc();
+    registerBridgeIpc();
     registerLocalBackendIpc();
     registerSearchIpc();
+    await bridgeService.start();
     // Re-apply any persisted "This machine" exposure (survives app restarts).
     void localBackendService.restore();
     automationsService.start();
@@ -1216,6 +1226,7 @@ async function cleanupApp() {
     sshService.closeAllTunnels();
 
     // Tear down the in-app exposure (WS host + tailscale serve), if any
+    await bridgeService.stop();
     await localBackendService.shutdown();
     // Stop `tailscale serve` if this process started it (no-op otherwise)
     await tailscaleService.stopServeIfActive();
@@ -1268,6 +1279,7 @@ async function cleanupApp() {
     unregisterSshIpc();
     unregisterRemoteBackendsIpc();
     unregisterBackendIpc();
+    unregisterBridgeIpc();
     unregisterLocalBackendIpc();
     unregisterSearchIpc();
     ipcMain.removeHandler(CHANNELS.shell.openExternal);
@@ -1329,7 +1341,7 @@ if (!app.isPackaged) {
 if (SMOKE_TEST && (!process.env.MAINS_SMOKE_USER_DATA || !path.isAbsolute(process.env.MAINS_SMOKE_USER_DATA))) {
   throw new Error("Package smoke requires an isolated absolute userData directory");
 }
-app.setPath("userData", SMOKE_TEST ? process.env.MAINS_SMOKE_USER_DATA! : path.join(app.getPath("appData"), "mains"));
+app.setPath("userData", SMOKE_TEST ? process.env.MAINS_SMOKE_USER_DATA! : DEV_USER_DATA ?? path.join(app.getPath("appData"), "mains"));
 
 // Custom About panel
 app.setAboutPanelOptions({

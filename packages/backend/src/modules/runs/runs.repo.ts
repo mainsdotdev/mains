@@ -1,3 +1,5 @@
+import { getLocalBackendId } from "../../db/backend-identity";
+import { ownedHere, ownershipOf } from "../bridge";
 import { randomUUID } from "crypto";
 import { eq, desc, and, sql, asc, gt, gte, inArray, getTableColumns } from "drizzle-orm";
 import { getDb } from "../../db/client";
@@ -231,6 +233,7 @@ export const runsRepo = {
       .from(runs)
       .where(
         and(
+          ownedHere(runs.ownerBackendId),
           inArray(runs.status, ["queued", "running"]),
           eq(runs.isArchived, false),
         ),
@@ -285,7 +288,7 @@ export const runsRepo = {
     const rows = await getDb()
       .select({ id: runs.id })
       .from(runs)
-      .where(eq(runs.workspaceId, workspaceId));
+      .where(and(ownedHere(runs.ownerBackendId), eq(runs.workspaceId, workspaceId)));
     return rows.map((row) => row.id);
   },
 
@@ -302,9 +305,23 @@ export const runsRepo = {
     return rows.map(mapRunRowToResponse);
   },
 
+  async findOwnedRunsByStatus(
+    accountId: string,
+    status: "queued" | "running" | "succeeded" | "failed" | "canceled"
+  ): Promise<RunResponse[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(runs)
+      .where(and(ownedHere(runs.ownerBackendId), eq(runs.accountId, accountId), eq(runs.status, status)))
+      .orderBy(desc(runs.createdAt));
+    return rows.map(mapRunRowToResponse);
+  },
+
   async insertRun(payload: CreateRunPayload): Promise<string> {
     const db = getDb();
     await db.insert(runs).values({
+      ownerBackendId: getLocalBackendId(db),
       id: payload.id,
       accountId: payload.accountId,
       workspaceId: payload.workspaceId,
@@ -369,7 +386,7 @@ export const runsRepo = {
 
   async deleteRunsByWorkspaceId(workspaceId: string): Promise<void> {
     const db = getDb();
-    await db.delete(runs).where(eq(runs.workspaceId, workspaceId));
+    await db.delete(runs).where(and(ownedHere(runs.ownerBackendId), eq(runs.workspaceId, workspaceId)));
   },
 
   /**
@@ -976,6 +993,7 @@ function selectRunTurns(runId: string, start?: RunHistoryCursor, end?: RunHistor
 
 function mapRunRowToResponse(row: typeof runs.$inferSelect): RunResponse {
   return {
+    ...ownershipOf(row.ownerBackendId),
     id: row.id,
     accountId: row.accountId,
     workspaceId: row.workspaceId,

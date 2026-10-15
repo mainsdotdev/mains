@@ -12,10 +12,10 @@ const { rows } = vi.hoisted(() => ({
 }));
 
 vi.mock("../workspace", () => ({
-  workspaceService: { list: async () => rows.workspaces },
+  workspaceService: { listOwned: async () => rows.workspaces },
 }));
 vi.mock("../projects", () => ({
-  projectsService: { list: async () => rows.projects },
+  projectsService: { listOwned: async () => rows.projects },
 }));
 vi.mock("../runs", () => ({
   managedExecutionRoots: () => rows.managedRoots,

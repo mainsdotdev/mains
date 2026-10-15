@@ -17,6 +17,7 @@ import type { DatabaseInstance } from "../types";
 
 import * as v1 from "./v1";
 import * as v2 from "./v2";
+import * as v3 from "./v3";
 
 type SeedVersion = {
   version: number;
@@ -26,6 +27,7 @@ type SeedVersion = {
 const SEEDS: SeedVersion[] = [
   { version: 1, run: v1.run },
   { version: 2, run: v2.run },
+  { version: 3, run: v3.run },
 ];
 
 export const CURRENT_SEED_VERSION = SEEDS.length;

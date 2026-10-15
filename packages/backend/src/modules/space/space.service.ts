@@ -1,3 +1,4 @@
+import { isSeededSpaceId } from "@mains/contracts/spaces";
 import { nanoid } from "nanoid";
 import { spaceRepo } from "./space.repo";
 import { ACCOUNT_ID } from "./space.constants";
@@ -59,12 +60,6 @@ export const spaceService = {
     // Generate slug if not provided
     const slug = data.slug || generateSlug(data.name);
 
-    // Check if slug already exists
-    const existing = await spaceRepo.findBySlug(slug);
-    if (existing) {
-      throw new Error("slug: A space with this slug already exists");
-    }
-
     // Get next sort order
     const nextOrder = await spaceRepo.getMaxSortOrder();
 
@@ -122,14 +117,6 @@ export const spaceService = {
       );
     }
 
-    // If slug is being changed, check if new slug already exists
-    if (data.slug && data.slug !== existing.slug) {
-      const slugExists = await spaceRepo.findBySlug(data.slug);
-      if (slugExists) {
-        throw new Error("slug: A space with this slug already exists");
-      }
-    }
-
     // Update space (only set slug when provided or implied by a new name)
     const updatePayload: typeof data = { ...data };
     if (data.slug) {
@@ -148,7 +135,8 @@ export const spaceService = {
     const existing = await spaceRepo.findById(spaceId);
     if (!existing) throw new Error("Space not found");
 
-    await spaceRepo.delete(spaceId);
+    if (isSeededSpaceId(spaceId)) await spaceRepo.archive(spaceId);
+    else await spaceRepo.delete(spaceId);
   },
 
   async archive(spaceId: string): Promise<void> {

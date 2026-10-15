@@ -290,6 +290,7 @@ export const projects = sqliteTable(
   "projects",
   {
     id: text("id").primaryKey(),
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -318,10 +319,10 @@ export const projects = sqliteTable(
   },
   (t) => [
     uniqueIndex("uniq_projects_account_origin")
-      .on(t.accountId, t.remoteOrigin)
+      .on(t.accountId, t.ownerBackendId, t.remoteOrigin)
       .where(sql`${t.remoteOrigin} IS NOT NULL`),
     uniqueIndex("uniq_projects_account_root")
-      .on(t.accountId, t.rootPath)
+      .on(t.accountId, t.ownerBackendId, t.rootPath)
       .where(sql`${t.remoteOrigin} IS NULL`),
     index("idx_projects_account").on(t.accountId),
     index("idx_projects_remote_origin").on(t.remoteOrigin),
@@ -342,6 +343,7 @@ export const workspaces = sqliteTable(
   "workspaces",
   {
     id: text("id").primaryKey(), // uuid
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -376,7 +378,7 @@ export const workspaces = sqliteTable(
   (t) => [
     index("idx_workspaces_account").on(t.accountId),
     index("idx_workspaces_project").on(t.projectId),
-    uniqueIndex("uniq_workspaces_account_root").on(t.accountId, t.rootPath),
+    uniqueIndex("uniq_workspaces_account_root").on(t.accountId, t.ownerBackendId, t.rootPath),
     index("idx_workspaces_status").on(t.status),
     index("idx_workspaces_updated").on(t.updatedAt),
     index("idx_workspaces_account_sort").on(t.accountId, t.sortOrder),
@@ -488,6 +490,7 @@ export const runs = sqliteTable(
   "runs",
   {
     id: text("id").primaryKey(), // uuid
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -1217,8 +1220,8 @@ export const spaces = sqliteTable(
       .default(sql`(unixepoch())`),
   },
   (t) => [
-    uniqueIndex("uniq_spaces_account_slug").on(t.accountId, t.slug),
-    uniqueIndex("uniq_spaces_account_name").on(t.accountId, t.name),
+    index("idx_spaces_account_slug").on(t.accountId, t.slug),
+    index("idx_spaces_account_name").on(t.accountId, t.name),
     index("idx_spaces_account").on(t.accountId),
     index("idx_spaces_sort").on(t.sortOrder),
     index("idx_spaces_updated").on(t.updatedAt),
@@ -1428,6 +1431,7 @@ export const automations = sqliteTable(
   "automations",
   {
     id: text("id").primaryKey(),
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -1519,6 +1523,7 @@ export const pulses = sqliteTable(
   "pulses",
   {
     id: text("id").primaryKey(),
+    ownerBackendId: text("owner_backend_id").notNull().default(""),
     accountId: text("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
@@ -1589,3 +1594,85 @@ export const pulses = sqliteTable(
     check("check_pulses_minute", sql`${t.minute} BETWEEN 0 AND 59`),
   ],
 );
+
+/** Shared transaction flag; B2's applier and capture triggers use this singleton. */
+export const bridgeState = sqliteTable("bridge_state", {
+  id: integer("id").primaryKey(),
+  applying: integer("applying", { mode: "boolean" }).notNull().default(false),
+}, (t) => [check("check_bridge_state_singleton", sql`${t.id} = 1`)]);
+
+// Bridge's durable bookkeeping is local to each backend, never replicated.
+export const bridgeConfig = sqliteTable("bridge_config", {
+  id: integer("id").primaryKey(),
+  backendId: text("backend_id").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+  atlasEnabled: integer("atlas_enabled", { mode: "boolean" }).notNull().default(false),
+  backfillTable: text("backfill_table"),
+  backfillPk: text("backfill_pk"),
+  backfillDone: integer("backfill_done", { mode: "boolean" }).notNull().default(false),
+  accountFingerprint: text("account_fingerprint"),
+}, (t) => [check("check_bridge_config_singleton", sql`${t.id} = 1`)]);
+
+/** Last observed device labels/presence survive restarts; online is never persisted. */
+export const bridgePeers = sqliteTable("bridge_peers", {
+  backendId: text("backend_id").primaryKey().notNull(),
+  label: text("label").notNull(),
+  platform: text("platform"),
+  lastSeenMs: integer("last_seen_ms"),
+});
+
+export const bridgeClock = sqliteTable("bridge_clock", {
+  id: integer("id").primaryKey(),
+  physicalMs: integer("physical_ms").notNull().default(0),
+  counter: integer("counter").notNull().default(0),
+  generation: integer("generation").notNull().default(0),
+}, (t) => [check("check_bridge_clock_singleton", sql`${t.id} = 1`)]);
+
+export const bridgeOutbox = sqliteTable("bridge_outbox", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(),
+  op: text("op", { enum: ["upsert", "delete"] }).notNull(),
+  generation: integer("generation").notNull(),
+  stream: text("stream").notNull(), owner: text("owner"), runId: text("run_id"),
+  changedAt: integer("changed_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register] }), index("idx_bridge_outbox_stream").on(t.stream, t.generation)]);
+
+export const bridgeRowClock = sqliteTable("bridge_row_clock", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(),
+  physicalMs: integer("physical_ms").notNull(), counter: integer("counter").notNull(), origin: text("origin").notNull(),
+  syncedSeq: integer("synced_seq"),
+  // Latest register image also retains losing aliases' values for deterministic projection.
+  valuesJson: text("values_json").notNull(), refsJson: text("refs_json").notNull().default("{}"),
+  portable: integer("portable", { mode: "boolean" }).notNull().default(false),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register] })]);
+
+export const bridgeCursors = sqliteTable("bridge_cursors", {
+  stream: text("stream").primaryKey().notNull(), seq: integer("seq").notNull().default(0),
+});
+
+export const bridgeParked = sqliteTable("bridge_parked", {
+  stream: text("stream").notNull(), seq: integer("seq").notNull(), envelope: text("envelope").notNull(), reason: text("reason").notNull(),
+}, (t) => [primaryKey({ columns: [t.stream, t.seq] })]);
+
+export const bridgePendingLinks = sqliteTable("bridge_pending_links", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(), column: text("column_name").notNull(),
+  parentTable: text("parent_table").notNull(), parentPk: text("parent_pk").notNull(), owner: text("owner").notNull(),
+  physicalMs: integer("physical_ms").notNull(), counter: integer("counter").notNull(), origin: text("origin").notNull(),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register, t.column] })]);
+
+export const bridgeIdMap = sqliteTable("bridge_id_map", {
+  ownerBackendId: text("owner_backend_id").notNull(), tableName: text("table_name").notNull(), remoteId: text("remote_id").notNull(), localId: integer("local_id").notNull(),
+}, (t) => [primaryKey({ columns: [t.ownerBackendId, t.tableName, t.remoteId] })]);
+
+export const bridgeAliases = sqliteTable("bridge_aliases", {
+  tableName: text("table_name").notNull(), aliasPk: text("alias_pk").notNull(), canonicalPk: text("canonical_pk").notNull(),
+}, (t) => [primaryKey({ columns: [t.tableName, t.aliasPk] }), index("idx_bridge_aliases_canonical").on(t.tableName, t.canonicalPk)]);
+
+export const bridgeTombstones = sqliteTable("bridge_tombstones", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(),
+  // Locally captured tombstones are sealed when the outbox is read; remote ones stay whole.
+  envelope: text("envelope"),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk] })]);
+
+export const bridgeExclusions = sqliteTable("bridge_exclusions", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk] })]);

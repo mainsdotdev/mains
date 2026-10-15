@@ -1,3 +1,4 @@
+import type { BackendOwnership } from "../bridge";
 // ─────────────────────────────────────────────────────────────
 // Workspace aggregate DTOs
 //
@@ -78,7 +79,7 @@ export interface UpdateWorkspacePayload {
 
 export type { WorkspaceIntakeSource, WorkspaceIntakePayload } from "@mains/contracts/workspace-intake";
 
-export interface WorkspaceResponse {
+export interface WorkspaceResponse extends BackendOwnership {
   id: string;
   accountId: string;
   projectId: string;

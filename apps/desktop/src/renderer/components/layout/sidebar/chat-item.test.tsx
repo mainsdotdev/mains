@@ -58,7 +58,7 @@ function flushFrames() {
     pending.forEach((callback) => callback(0));
   });
 }
-function setup() {
+function setup(overrides: Partial<RecentRun> = {}) {
   const callbacks = {
     onSelect: vi.fn(),
     onArchive: vi.fn(),
@@ -69,7 +69,8 @@ function setup() {
   };
   render(
     <ChatItem
-      run={run}
+      run={{ ...run, ...overrides }}
+      device={overrides.isReplica ? { backendId: "source", label: "Source Mac", online: false, lastSeen: null, platform: "darwin" } : undefined}
       variant="codex"
       isActive={false}
       isRecent
@@ -89,6 +90,21 @@ function openCard(row: HTMLElement) {
 }
 
 describe("ChatItem quick actions", () => {
+  it("opens a replica without offering rename, pin, move, archive or delete", async () => {
+    const { row, user, onSelect, onRename, onTogglePin, onArchive, onDelete } = setup({ isReplica: true, ownerBackendId: "source" });
+    expect(screen.queryByRole("button", { name: "Chat options" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pin chat" })).toBeNull();
+    fireEvent.contextMenu(row);
+    fireEvent.keyDown(row, { key: "ArrowRight" });
+    flushFrames();
+    expect(screen.queryByRole("button", { name: "Rename chat" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Archive chat" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete chat" })).toBeNull();
+    await user.click(row);
+    expect(onSelect).toHaveBeenCalledOnce();
+    for (const mutation of [onRename, onTogglePin, onArchive, onDelete]) expect(mutation).not.toHaveBeenCalled();
+  });
+
   it("keeps the native browser behind the actions menu and its Move submenu until dismissal", async () => {
     const setSuppressed = vi.fn<(lease: string, suppressed: boolean) => void>();
     const setVisible = vi.fn();
