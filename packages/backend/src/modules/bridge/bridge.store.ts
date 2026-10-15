@@ -13,6 +13,7 @@ export interface BridgeRecoveryContext {
 export interface BridgeStore {
   sqlite: SQLiteInstance; backendId: string; recordKey: Uint8Array; codec: BridgeCodec;
   schemaVersion: number; atlasEnabled: boolean;
+  filesEnabled?: boolean;
   recover?: (context: BridgeRecoveryContext) => void;
 }
 export interface OutboxEntry {
@@ -93,7 +94,7 @@ export function portableValues(store: BridgeStore, table: string, clock: RowCloc
       values[column] = canonicalPk(store.sqlite, reference.table, String(value));
     }
   }
-  // File transport is B5. Inline text and file metadata travel now; bytes never do.
+  // Paths describe the source filesystem. Replicas open authenticated blob manifests.
   if (table === "run_artifacts") {
     if (values.path) refs.path = { path: values.path };
     values.path = null; values.blob_data = null;
@@ -116,10 +117,10 @@ export function normalizeCompositeIdentity(store: BridgeStore, table: string, ol
     const winner = bestClock(store, table, pk, register);
     if (!winner) continue;
     const image = portableValues(store, table, winner);
-    store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,portable)
-      VALUES(?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
-      origin=excluded.origin,values_json=excluded.values_json,refs_json=excluded.refs_json,portable=1`)
-      .run(table, pk, register, winner.physical_ms, winner.counter, winner.origin, winner.pk === pk ? winner.synced_seq : null, JSON.stringify(image.values), JSON.stringify(image.refs));
+    store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,blob_refs_json,portable)
+      VALUES(?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
+      origin=excluded.origin,values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1`)
+      .run(table, pk, register, winner.physical_ms, winner.counter, winner.origin, winner.pk === pk ? winner.synced_seq : null, JSON.stringify(image.values), JSON.stringify(image.refs), winner.blob_refs_json);
     const pending = store.sqlite.prepare("SELECT * FROM bridge_outbox WHERE table_name=? AND pk=? AND register=?").get(table, winner.pk, register) as OutboxEntry | undefined;
     for (const member of new Set([...members, pk])) store.sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=?").run(table, member, register);
     if (pending) store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,?,?,?,?,?,?)
@@ -137,7 +138,7 @@ export function prepareRecord(store: BridgeStore, entry: OutboxEntry): PreparedR
   const header: BridgeHeader = entry.op === "delete" ? { ...base, op: "delete" } : { ...base, op: "upsert", registerKey: keys.registerKey! };
   const body = entry.op === "delete" ? { table: entry.table_name, pk: entry.pk } : {
     table: entry.table_name, pk: entry.pk, register: entry.register, schemaVersion: store.schemaVersion,
-    ...portableValues(store, entry.table_name, clock), blobRefs: [],
+    ...portableValues(store, entry.table_name, clock), blobRefs: JSON.parse(clock.blob_refs_json ?? "[]"),
   };
   if (entry.op === "upsert" && !clock.portable && "values" in body) {
     // Keep the original wire references after ACK as well, so a projection repair can
@@ -172,11 +173,20 @@ export function captureExisting(store: BridgeStore, table: string, pk: string): 
   if (!inScope(store, table, pk)) return;
   if (store.sqlite.prepare("SELECT 1 FROM bridge_tombstones WHERE table_name=? AND pk=?").get(table, pk)) return;
   for (const [register, columns] of Object.entries(def.registers)) {
-    if (getClock(store.sqlite, table, pk, register)) continue;
+    const existing = getClock(store.sqlite, table, pk, register);
+    // Upgrade B4's already acknowledged file metadata with a fresh capture HLC.
+    // Receivers must see a new generation, rather than ignore a same-clock manifest.
+    const upgrade = store.filesEnabled && existing && existing.origin === store.backendId && existing.synced_seq !== null && existing.blob_refs_json === null &&
+      def.blobColumns.some((column) => columns.includes(column));
+    if (existing && !upgrade) continue;
     store.sqlite.exec(tickSql);
     const clock = store.sqlite.prepare("SELECT * FROM bridge_clock WHERE id=1").get() as { physical_ms: number; counter: number; generation: number };
     const values = Object.fromEntries(columns.map((col) => [col, col === "blob_data" ? null : row[col]]));
-    store.sqlite.prepare("INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json) VALUES(?,?,?,?,?,?,?)").run(table, pk, register, clock.physical_ms, clock.counter, store.backendId, JSON.stringify(values));
-    store.sqlite.prepare("INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,'upsert',?,?,?,?,?)").run(table, pk, register, clock.generation, def.stream === "account" ? "account" : `run:${runId}`, owner, runId, clock.physical_ms);
+    store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,synced_seq) VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,origin=excluded.origin,
+        values_json=excluded.values_json,refs_json='{}',blob_refs_json=NULL,portable=0`).run(table, pk, register, clock.physical_ms, clock.counter, store.backendId, JSON.stringify(values), existing?.synced_seq ?? null);
+    store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,'upsert',?,?,?,?,?)
+      ON CONFLICT(table_name,pk,register) DO UPDATE SET op='upsert',generation=excluded.generation,changed_at=excluded.changed_at`)
+      .run(table, pk, register, clock.generation, def.stream === "account" ? "account" : `run:${runId}`, owner, runId, clock.physical_ms);
   }
 }

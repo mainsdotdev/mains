@@ -4,6 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-30",
   "workers_dev": false,
+  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "mains-bridge-blobs" }],
   "durable_objects": {
     "bindings": [{ "name": "ACCOUNT_HUB", "class_name": "AccountHub" }]
   },

@@ -200,7 +200,7 @@ export const BRIDGE_TABLES: Readonly<Record<string, BridgeTableDefinition>> = {
     ownerRoot: "runs", primaryRegister: "row",
     registers: {"row": ["id", "run_id", "kind", "path", "content", "blob_data", "entity_id", "content_hash", "metadata", "created_at"]},
     localColumns: [], references: {"run_id": {"table": "runs", "class": "required"}, "entity_id": {"table": "entities", "class": "local"}},
-    uniqueIndexes: {}, blobColumns: ["blob_data", "path"],
+    uniqueIndexes: {}, blobColumns: ["blob_data", "path", "metadata"],
   },
   "run_attachment_refs": {
     class: "backend-owned", primaryKey: ["run_id", "attachment_id"], idKind: "composite", stream: "run",

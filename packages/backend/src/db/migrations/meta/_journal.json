@@ -232,6 +232,13 @@
       "when": 1792079748374,
       "tag": "0032_bridge_runtime",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1792083091013,
+      "tag": "0033_bridge_blobs",
+      "breakpoints": true
     }
   ]
 }

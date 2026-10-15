@@ -16,6 +16,7 @@ export async function startLocalBridgeHub() {
   /** @type {import('miniflare').V4MiniflareOptions} */
   const options = { name: "bridge-test", modules: true, script: await readFile(bundle, "utf8"), compatibilityDate: "2026-07-30", host: "127.0.0.1", port: 0, unsafeInspectDurableObjects: true,
     durableObjects: { ACCOUNT_HUB: { className: "AccountHub", useSQLite: true } },
+    r2Buckets: { BLOBS: "bridge-test-blobs" },
     resourcePersistencePath: join(dir, "storage"), bindings: { BRIDGE_DEV_AUTH: "true", BRIDGE_DEV_SECRET: secret } };
   let mf = new Miniflare(convertV4MiniflareOptions(options));
   /** @type {URL} */
@@ -42,6 +43,7 @@ export async function startLocalBridgeHub() {
       const namespace = await mf.getDurableObjectNamespace("ACCOUNT_HUB");
       await mf.unsafeEvictDurableObject("bridge-test", "AccountHub", { id: namespace.idFromName(accountId).toString() });
     },
+    async bucket() { return mf.getR2Bucket("BLOBS"); },
     async dispose() { await mf.dispose(); await rm(dir, { recursive: true, force: true }); },
   };
 }

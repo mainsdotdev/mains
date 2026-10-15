@@ -15,6 +15,8 @@ profile to Electron with `MAINS_DEV_USER_DATA`. Never bypass ownership locks.
 - Production code imports `@mains/contracts`, never `@mains/backend` or Electron.
 - The hub reads routing headers only. Account keys, decrypted rows, table names
   and application primary keys belong on backends, outside this app.
+- R2 contains immutable ciphertext chunks only. Blob capabilities bind account,
+  object, chunk, operation, length and expiry; keep filenames/MIME inside E2EE.
 - Preserve whole permanent tombstones, register compaction, stream cursors and
   authenticated writer ownership. Validate a complete frame before mutating SQL.
 - Use plain function/object helpers. Cloudflare's required Durable Object class

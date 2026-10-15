@@ -1,3 +1,4 @@
+import type { BridgeBlobRef } from "./bridge-blobs";
 /** Bridge v1 wire contract. No Electron, database, or crypto implementation here. */
 export const BRIDGE_PROTOCOL_VERSION = 1 as const;
 export type BridgeStream = "account" | `run:${string}`;
@@ -24,7 +25,7 @@ export interface BridgeUpsertBody {
   schemaVersion: number;
   values: Record<string, BridgeValue>;
   refs: Record<string, unknown>;
-  blobRefs: Array<{ blobId: string; size: number; mime: string | null }>;
+  blobRefs: BridgeBlobRef[];
 }
 export interface BridgeDeleteBody { table: string; pk: string }
 export type BridgeBody = BridgeUpsertBody | BridgeDeleteBody;

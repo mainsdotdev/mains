@@ -46,8 +46,10 @@ export function eligibleSql(table: string, prefix: string): string {
     `NOT EXISTS(SELECT 1 FROM bridge_tombstones WHERE table_name=${literal(table)} AND pk=${pk})`,
   ].join(" AND ");
 }
-export function captureSql(table: string, register: string, prefix: string): string {
+export function captureSql(table: string, register: string, prefix: string, previous?: string): string {
   const def = definition(table), pk = portablePkSql(table, prefix), owner = ownerSql(table, prefix), runId = runIdSql(table, prefix);
+  const fileColumns = [...def.blobColumns, "content_hash"].filter((column) => def.registers[register].includes(column));
+  const preserveFiles = previous && fileColumns.length ? `CASE WHEN ${fileColumns.map((column) => `${previous}.${quote(column)} IS ${prefix}.${quote(column)}`).join(" AND ")} THEN blob_refs_json ELSE NULL END` : "NULL";
   const stream = def.stream === "account" ? "'account'" : `'run:' || ${runId}`;
   const values = def.registers[register].flatMap((col) => {
     const value = col === "owner_backend_id" ? owner : col === "blob_data" ? "NULL" : `${prefix}.${quote(col)}`;
@@ -59,7 +61,7 @@ export function captureSql(table: string, register: string, prefix: string): str
     INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,values_json,refs_json,portable)
       VALUES(${literal(table)},${pk},${literal(register)},${localClock},${localCounter},${backend},json_object(${values.join(",")}), '{}',0)
       ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
-        origin=excluded.origin,values_json=excluded.values_json,refs_json='{}',portable=0;
+        origin=excluded.origin,values_json=excluded.values_json,refs_json='{}',blob_refs_json=${preserveFiles},portable=0;
     DELETE FROM bridge_pending_links WHERE table_name=${literal(table)} AND pk=${pk} AND register=${literal(register)};
     INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at)
       VALUES(${literal(table)},${pk},${literal(register)},'upsert',${generation},${stream},${owner},${runId},${localClock})
@@ -85,7 +87,7 @@ export function installBridgeCapture(sqlite: SQLiteInstance): void {
           sqlite.exec(`DROP TRIGGER IF EXISTS ${quote(`bridge_${table}_${register}_${event.toLowerCase()}`)};
             CREATE TRIGGER ${quote(`bridge_${table}_${register}_${event.toLowerCase()}`)} AFTER ${event} ON ${quote(table)}
             WHEN ${eligibleSql(table, "NEW")}${changed}
-            BEGIN ${captureSql(table, register, "NEW")} END;`);
+            BEGIN ${captureSql(table, register, "NEW", event === "UPDATE" ? "OLD" : undefined)} END;`);
         }
       }
       const aliases = `SELECT ${pkOld} AS pk UNION SELECT alias_pk FROM bridge_aliases WHERE table_name=${literal(table)} AND canonical_pk=${pkOld}`;

@@ -8,6 +8,7 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { emit, registerEventSink } from "../../ipc-kit/event-bus";
 import { bridgeDevConfigPath, readBridgeDevConfig } from "./bridge.config";
 import { createBridgeReplicator, type BridgeReplicator } from "./bridge.replicator";
+import type { BridgeFileTable } from "./bridge.blob-records";
 
 let replicator: BridgeReplicator | null = null;
 let startupError: string | null = null;
@@ -17,6 +18,8 @@ const changed = () => emit(CHANNELS.bridge.statusChanged, {});
 const localWrites: ReadonlySet<string> = new Set([CHANNELS.runs.updated, CHANNELS.runs.eventPersisted, CHANNELS.space.changed]);
 
 export const bridgeService = {
+  isRunning(): boolean { return replicator !== null; },
+  isCachedFile(realPath: string): Promise<boolean> { return replicator?.isCachedFile(realPath) ?? Promise.resolve(false); },
   /** Missing/disabled config preserves today's local backend and remote-control behavior. */
   async start(): Promise<void> {
     if (replicator) return;
@@ -30,7 +33,7 @@ export const bridgeService = {
         const fingerprint = createHash("sha256").update(config.accountKey).digest("hex");
         const backendId = getLocalBackendId();
         try {
-          replicator = createBridgeReplicator({ sqlite: getSqlite(), backendId, config,
+          replicator = createBridgeReplicator({ sqlite: getSqlite(), backendId, config, dataDir: getBackendRuntime().getPath("userData"),
             async token() {
               const next = await readBridgeDevConfig(file);
               if (!next) throw new Error("Bridge configuration was disabled; restart this backend");
@@ -62,6 +65,11 @@ export const bridgeService = {
       backends: peers.map((peer) => ({ backendId: peer.backend_id, label: peer.label, platform: peer.platform, online: null, lastSeen: peer.last_seen_ms === null ? null : new Date(peer.last_seen_ms).toISOString() })) };
   },
   async syncNow(): Promise<void> { if (!replicator) throw new Error(startupError ?? "Bridge is not configured"); await replicator.syncNow(); },
+  resolveFile(table: BridgeFileTable, id: string | number, column?: string, sourcePath?: string): Promise<string> {
+    if (!replicator) throw new Error(startupError ?? "Bridge is not configured");
+    return replicator.resolveFile(table, id, column, sourcePath);
+  },
+  captureOutput(file: string, roots: string[], mime: string | null) { return replicator?.captureOutput(file, roots, mime); },
   watchRun(runId: string, watcherId: string): void { replicator?.watchRun(runId, watcherId); },
   unwatchRun(watcherId: string): void { replicator?.unwatchRun(watcherId); },
   async stop(): Promise<void> {

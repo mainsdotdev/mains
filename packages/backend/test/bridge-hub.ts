@@ -18,6 +18,7 @@ export interface LocalBridgeTestWorker {
   readonly url: string; readonly wsUrl: string;
   token(accountId: string, backendId: string, expiresIn?: string | number): Promise<string>;
   restart(): Promise<void>; dispose(): Promise<void>; inspect(accountId: string): Promise<unknown>; evict(accountId: string): Promise<void>;
+  bucket(): Promise<{ list(): Promise<{ objects: { key: string }[] }>; get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>; put(key: string, value: Uint8Array): Promise<unknown> }>;
 }
 let worker: Promise<LocalBridgeTestWorker> | undefined;
 const clients = new Set<ReturnType<typeof createBridgeWebSocketTransport>>();

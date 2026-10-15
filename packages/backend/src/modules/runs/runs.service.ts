@@ -1,4 +1,5 @@
-import { assertOwnedRecord } from "../bridge";
+import { assertOwnedRecord, bridgeService } from "../bridge";
+import type { ResolveArtifactPathPayload } from "@mains/contracts/runs";
 import { CHANNELS } from "@mains/contracts/channels";
 import { conversationSettingsFrom, type ConversationSettings } from "@mains/contracts/run-settings";
 import type {
@@ -262,7 +263,7 @@ async function selectedArtifacts(
 ) {
   // Replica paths name the source filesystem. Its stored transcript is readable
   // without discovering deliverables or hashing files on the viewing backend.
-  if (run.isReplica) return artifacts;
+  if (run.isReplica) return replicaArtifacts(run.id, artifacts);
   let outputs = await selectedOutputArtifacts(run);
   if (outputWindow) {
     const artifactIds = new Set(outputWindow.artifacts.map((row) => row.id));
@@ -280,6 +281,24 @@ async function selectedArtifacts(
     ),
     ...outputs,
   ]);
+}
+
+/** Reconstitute the existing selected-output projection from authenticated manifests,
+ * without walking the source filesystem or creating another artifact ledger. */
+function replicaArtifacts(runId: string, artifacts: RunArtifactResponse[]): RunArtifactResponse[] {
+  const outputs: RunArtifactResponse[] = [];
+  for (const artifact of artifacts) {
+    const snapshots = artifact.metadata?.bridgeOutputs;
+    if (!Array.isArray(snapshots)) continue;
+    for (const output of snapshots) {
+      if (!output || typeof output.path !== "string" || !["image", "document"].includes(output.kind)) continue;
+      const id = -parseInt(createHash("sha256").update(JSON.stringify([runId, output.metadata?.outputTurn, output.path])).digest("hex").slice(0, 13), 16) - 1;
+      outputs.push({ ...artifact, id, kind: output.kind, path: null, content: "", blobData: null,
+        metadata: { ...output.metadata, path: output.path, bridgeSourceArtifactId: artifact.id, bridgeSourcePath: output.path } });
+    }
+  }
+  return [...artifacts.filter((row) => !["image", "file", "document"].includes(row.kind) || !outputs.some((output) =>
+    output.metadata?.bridgeSourceArtifactId === row.id || output.metadata?.path === (row.path ?? row.metadata?.path))), ...outputs];
 }
 
 /** Last model that actually handled a turn, falling back to the run's initial snapshot. */
@@ -1159,6 +1178,7 @@ export const runsService = {
                 status: "in_progress",
               });
             session = createRunSession({
+              onTurnClosed: runsService.snapshotBridgeOutputs,
               runId: run.id,
               accountId: run.accountId,
               providerId: run.providerId,
@@ -1680,7 +1700,51 @@ export const runsService = {
   // ─── Run Artifact Operations ───
   async getOutputArtifacts(runId: string): Promise<RunArtifactResponse[]> {
     const run = await runsRepo.findRunById(runId);
-    return run ? selectedOutputArtifacts(run) : [];
+    if (!run) return [];
+    return run.isReplica ? replicaArtifacts(runId, await runsRepo.findArtifactsByRun(runId)).filter((row) => row.metadata?.outputSelected) : selectedOutputArtifacts(run);
+  },
+  async snapshotBridgeOutputs(runId: string): Promise<void> {
+    if (!bridgeService.isRunning()) return;
+    const run = await runsRepo.findRunById(runId);
+    if (!run || run.isReplica) return;
+    const roots = [await runsService.getRunExecutionRoot(runId), path.join(getBackendRuntime().getPath("userData"), "generated-images", runId)].filter((root): root is string => !!root);
+    if (run.providerId === "codex" && run.sessionId && /^[\w-]+$/.test(run.sessionId)) roots.push(path.join(os.homedir(), ".codex", "generated_images", run.sessionId));
+    const grouped = new Map<number, unknown[]>();
+    for (const output of (await selectedOutputArtifacts(run)).slice(0, 48)) {
+      const anchor = output.metadata?.outputAnchor as { id?: number } | undefined;
+      if (typeof anchor?.id !== "number" || !output.path) continue;
+      const source = await runsRepo.findArtifactById(anchor.id);
+      if (!source || source.runId !== runId || source.metadata?.bridgeOutputs) continue;
+      const blobRef = await bridgeService.captureOutput(output.path, roots, null);
+      const snapshots = grouped.get(anchor.id) ?? [];
+      snapshots.push({ path: output.path, kind: output.kind, metadata: output.metadata, ...(blobRef ? { blobRef } : {}) });
+      grouped.set(anchor.id, snapshots);
+    }
+    for (const [anchorId, outputs] of grouped) await runsRepo.recordBridgeOutputs(runId, anchorId, outputs);
+  },
+  async resolveReplicaFile(payload: ResolveArtifactPathPayload): Promise<string> {
+    if (!payload || typeof payload.runId !== "string" || !payload.runId ||
+        (payload.artifactId === undefined) === (payload.sourcePath === undefined) ||
+        payload.artifactId !== undefined && !Number.isSafeInteger(payload.artifactId) ||
+        payload.sourcePath !== undefined && (typeof payload.sourcePath !== "string" || payload.sourcePath.length > 8192)) throw new Error("Invalid replica file reference");
+    const run = await runsRepo.findRunById(payload.runId);
+    if (!run?.isReplica) throw new Error("This file is not a replica");
+    const artifacts = replicaArtifacts(run.id, await runsRepo.findArtifactsByRun(run.id));
+    const normalize = (value: string) => path.posix.normalize(stripTextFileLocator(decodeFileReference(value)).replace(/\\/g, "/"));
+    const reference = payload.sourcePath === undefined ? undefined : normalize(payload.sourcePath);
+    const matches = artifacts.filter((row) => {
+      if (payload.artifactId !== undefined) return row.id === payload.artifactId;
+      const file = row.metadata?.bridgeSourcePath ?? row.path ?? row.metadata?.path;
+      if (typeof file !== "string" || !reference) return false;
+      const source = normalize(file);
+      return source === reference || !/^(?:\/|[A-Za-z]:\/|\.\.\/)/.test(reference) && source.endsWith(`/${reference}`);
+    });
+    const artifact = matches.length === 1 ? matches[0] : undefined;
+    if (!artifact) throw new Error("File not found in this conversation's selected outputs");
+    const sourceId = artifact.metadata?.bridgeSourceArtifactId;
+    return typeof sourceId === "number"
+      ? bridgeService.resolveFile("run_artifacts", sourceId, "metadata", String(artifact.metadata?.bridgeSourcePath))
+      : bridgeService.resolveFile("run_artifacts", artifact.id);
   },
   async registerDeliverable(runId: string, reference: string, role: OutputRole = "deliverable") {
     assertOwnedRecord("runs", runId);
@@ -1790,13 +1854,16 @@ export const runsService = {
           )
         : await runsRepo.findArtifactById(payload.artifactId);
     if (!artifact) throw new Error("Artifact not found");
+    if (payload.runId && artifact.runId !== payload.runId) throw new Error("Artifact not found in this conversation");
     if (artifact.kind !== "image") throw new Error("Not an image artifact");
     // The adapters record where the file is in the metadata, not the column.
-    const filePath =
+    let filePath =
       artifact.path ??
       (typeof artifact.metadata?.path === "string"
         ? artifact.metadata.path
         : null);
+    const run = await runsRepo.findRunById(artifact.runId);
+    if (run?.isReplica) filePath = await runsService.resolveReplicaFile({ runId: run.id, artifactId: artifact.id });
     const bytes =
       artifact.blobData ??
       (filePath && fs.existsSync(filePath) ? fs.readFileSync(filePath) : null);
@@ -2073,6 +2140,7 @@ export const runsService = {
       }
 
       const session = createRunSession({
+        onTurnClosed: runsService.snapshotBridgeOutputs,
         runId,
         accountId: payload.accountId,
         providerId: payload.providerId,
@@ -2221,6 +2289,7 @@ export const runsService = {
       await runsRepo.updateRun(runId, { startedAt: new Date() });
 
       const session = createRunSession({
+        onTurnClosed: runsService.snapshotBridgeOutputs,
         runId,
         accountId: payload.accountId,
         providerId: payload.providerId,
@@ -2446,6 +2515,7 @@ export const runsService = {
         }
 
         const session = createRunSession({
+          onTurnClosed: runsService.snapshotBridgeOutputs,
           runId,
           accountId,
           providerId: run.providerId,
@@ -2794,6 +2864,7 @@ export const runsService = {
       }
 
       const session = createRunSession({
+        onTurnClosed: runsService.snapshotBridgeOutputs,
         runId: newRunId,
         accountId,
         providerId: sourceRun.providerId,

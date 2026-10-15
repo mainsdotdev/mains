@@ -27,6 +27,7 @@ export function verifyEnvelope(store: BridgeStore, envelope: BridgeEnvelope) {
   if (header.op === "upsert" && "values" in body && def && body.schemaVersion <= store.schemaVersion) {
     const columns = def.registers[body.register];
     if (!columns || Object.keys(body.values).length !== columns.length || columns.some((column) => !(column in body.values))) throw new Error("Invalid Bridge register columns");
+    if (body.blobRefs.some((ref) => !def.blobColumns.includes(ref.column) || !columns.includes(ref.column))) throw new Error("Invalid Bridge blob column");
     if (def.idKind === "text" && def.primaryKey[0] in body.values && body.values[def.primaryKey[0]] !== body.pk ||
         def.idKind === "run-integer" && (body.values.id !== body.pk || body.pk !== `${body.values.run_id}:${body.pk.slice(body.pk.lastIndexOf(":") + 1)}`) ||
         def.idKind === "composite" && JSON.stringify(def.primaryKey.map((column) => body.values[column])) !== body.pk)
@@ -44,10 +45,10 @@ function advanceClock(store: BridgeStore, envelope: BridgeEnvelope) {
 }
 function saveClock(store: BridgeStore, record: BridgeLogRecord, body: BridgeUpsertBody) {
   const h = record.envelope.header;
-  store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,portable)
-    VALUES(?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
-    origin=excluded.origin,synced_seq=excluded.synced_seq,values_json=excluded.values_json,refs_json=excluded.refs_json,portable=1`)
-    .run(body.table, body.pk, body.register, h.hlc.physicalMs, h.hlc.counter, h.origin, record.seq, JSON.stringify(body.values), JSON.stringify(body.refs));
+  store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,blob_refs_json,portable)
+    VALUES(?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,
+    origin=excluded.origin,synced_seq=excluded.synced_seq,values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1`)
+    .run(body.table, body.pk, body.register, h.hlc.physicalMs, h.hlc.counter, h.origin, record.seq, JSON.stringify(body.values), JSON.stringify(body.refs), JSON.stringify(body.blobRefs));
 }
 function resolveReferences(store: BridgeStore, table: string, pk: string, clock: RowClock, owner: string, saveLinks: boolean): Record<string, BridgeValue> | string {
   const def = definition(table), { values } = portableValues(store, table, clock);
@@ -117,9 +118,9 @@ function mergeIds(store: BridgeStore, table: string, ids: string[]) {
       // Retarget the edit with its capture clock, never a new HLC.
       const image = portableValues(store, table, best);
       if ("id" in image.values) image.values.id = canonical;
-      store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,portable)
-        VALUES(?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,origin=excluded.origin,
-        values_json=excluded.values_json,refs_json=excluded.refs_json,portable=1`).run(table, canonical, register, best.physical_ms, best.counter, best.origin, best.synced_seq, JSON.stringify(image.values), JSON.stringify(image.refs));
+      store.sqlite.prepare(`INSERT INTO bridge_row_clock(table_name,pk,register,physical_ms,counter,origin,synced_seq,values_json,refs_json,blob_refs_json,portable)
+        VALUES(?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(table_name,pk,register) DO UPDATE SET physical_ms=excluded.physical_ms,counter=excluded.counter,origin=excluded.origin,
+        values_json=excluded.values_json,refs_json=excluded.refs_json,blob_refs_json=excluded.blob_refs_json,portable=1`).run(table, canonical, register, best.physical_ms, best.counter, best.origin, best.synced_seq, JSON.stringify(image.values), JSON.stringify(image.refs), best.blob_refs_json);
       store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at) VALUES(?,?,?,'upsert',?,?,?,?,?)`)
         .run(table, canonical, register, winningPending.generation, winningPending.stream, winningPending.owner, winningPending.run_id, winningPending.changed_at);
     }
@@ -222,7 +223,7 @@ function applyUpsert(store: BridgeStore, record: BridgeLogRecord, body: BridgeUp
       return materialize(store, body.table, canonicalPk(store.sqlite, body.table, body.pk), header.owner ?? header.origin);
     return "ignored";
   }
-  const candidate: RowClock = { table_name: body.table, pk: body.pk, register: body.register, physical_ms: header.hlc.physicalMs, counter: header.hlc.counter, origin: header.origin, synced_seq: record.seq, values_json: JSON.stringify(body.values), refs_json: JSON.stringify(body.refs), portable: 1 };
+  const candidate: RowClock = { table_name: body.table, pk: body.pk, register: body.register, physical_ms: header.hlc.physicalMs, counter: header.hlc.counter, origin: header.origin, synced_seq: record.seq, values_json: JSON.stringify(body.values), refs_json: JSON.stringify(body.refs), blob_refs_json: JSON.stringify(body.blobRefs), portable: 1 };
   const refs = resolveReferences(store, body.table, body.pk, candidate, header.owner ?? header.origin, false);
   if (typeof refs === "string") return refs === "deleted-parent" ? "ignored" : refs;
   if (body.register !== def.primaryRegister && !readRow(store, body.table, body.pk, header.owner ?? header.origin)) return "primary";

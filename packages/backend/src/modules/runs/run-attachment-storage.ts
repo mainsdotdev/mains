@@ -10,6 +10,7 @@ import { getBackendRuntime } from "../../runtime/backend-runtime";
 import { removeImagePreviews } from "../imageProxy";
 import { attachmentFileName } from "./run-attachments";
 import { runsRepo } from "./runs.repo";
+import { bridgeService } from "../bridge";
 
 type AttachmentRow = typeof runAttachments.$inferSelect;
 const activeWrites = new Set<string>();
@@ -140,6 +141,8 @@ export async function resolveRunAttachment(runId: string, attachmentId: string):
   if (typeof runId !== "string" || typeof attachmentId !== "string") throw new Error("Invalid attachment reference");
   const attachment = runsRepo.findAttachment(runId, attachmentId);
   if (!attachment) throw new Error("Attachment not found in this conversation");
+  const run = await runsRepo.findRunById(runId);
+  if (run?.isReplica) return { attachment, path: await bridgeService.resolveFile("run_attachments", attachmentId, "storage_key") };
   return { attachment, path: await originalPath(attachment) };
 }
 

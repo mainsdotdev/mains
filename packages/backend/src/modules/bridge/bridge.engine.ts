@@ -8,6 +8,7 @@ import { applyBridgeBatch, applyDeletedAck, type AppliedChange } from "./bridge.
 import { definition, getClock, isAtlas, quote, syncedTables } from "./bridge.sql";
 import { captureExisting, inScope, prepareRecord, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
 import type { BridgeTransport } from "./bridge.transport";
+import type { BridgeBlobRecords } from "./bridge.blob-records";
 
 export interface BridgeEngineOptions {
   sqlite: SQLiteInstance;
@@ -20,6 +21,7 @@ export interface BridgeEngineOptions {
   schemaVersion?: number;
   recover?: (context: BridgeRecoveryContext) => void;
   onApplied?: (changes: AppliedChange[]) => void;
+  blobs?: BridgeBlobRecords;
 }
 const backfillTables = dependencyOrder();
 function dependencyOrder(): string[] {
@@ -44,7 +46,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   const existing = sqlite.prepare("SELECT backend_id FROM bridge_config WHERE id=1").get() as { backend_id: string } | undefined;
   if (existing && existing.backend_id !== backendId) throw new Error("Bridge database belongs to another backend");
   const store: BridgeStore = { sqlite, backendId, recordKey: Uint8Array.from(options.recordKey), codec: options.codec ?? bridgePassThroughCodec,
-    schemaVersion: options.schemaVersion ?? 1, atlasEnabled: options.experimentalAtlas ?? false, recover: options.recover };
+    schemaVersion: options.schemaVersion ?? 1, atlasEnabled: options.experimentalAtlas ?? false, recover: options.recover, filesEnabled: !!options.blobs };
   sqlite.transaction(() => {
     sqlite.prepare(`INSERT INTO bridge_config(id,backend_id,enabled,atlas_enabled) VALUES(1,?,1,?)
       ON CONFLICT(id) DO UPDATE SET enabled=1,atlas_enabled=excluded.atlas_enabled`).run(backendId, Number(store.atlasEnabled));
@@ -113,10 +115,24 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   }
   async function push(stream: BridgeStream, limit: number): Promise<number> {
     validateLimit(limit);
+    const outgoing = () => sqlite.prepare(`SELECT * FROM bridge_outbox WHERE stream=? AND (?=1 OR substr(table_name,1,6)<>'atlas_')
+      ORDER BY generation,table_name,pk,register LIMIT ?`).all(stream, Number(store.atlasEnabled), limit) as OutboxEntry[];
+    // Disk/network work stays outside SQLite transactions. A changed generation
+    // is left pending rather than receiving an older generation's manifest.
+    if (options.blobs) for (const entry of outgoing()) {
+      if (!inScope(store, entry.table_name, entry.pk) || entry.run_id && !inScope(store, "runs", entry.run_id)) continue;
+      await options.blobs.prepare(store, entry);
+      if (entry.table_name === "run_attachment_refs" && entry.op === "upsert") {
+        const attachmentId = (JSON.parse(entry.pk) as string[])[1];
+        await options.blobs.prepare(store, { ...entry, table_name: "run_attachments", pk: attachmentId, register: "row" });
+      }
+    }
     const { prepared, attachmentCount } = sqlite.transaction(() => {
-      const candidates = sqlite.prepare(`SELECT * FROM bridge_outbox WHERE stream=? AND (?=1 OR substr(table_name,1,6)<>'atlas_')
-        ORDER BY generation,table_name,pk,register LIMIT ?`).all(stream, Number(store.atlasEnabled), limit) as OutboxEntry[];
+      const candidates = outgoing();
       const entries = candidates.filter((entry) => {
+        if (options.blobs && !options.blobs.ready(store, entry)) return false;
+        if (options.blobs && entry.table_name === "run_attachment_refs" && entry.op === "upsert" &&
+            !options.blobs.ready(store, { ...entry, table_name: "run_attachments", pk: (JSON.parse(entry.pk) as string[])[1], register: "row" })) return false;
         if (inScope(store, entry.table_name, entry.pk) && (!entry.run_id || inScope(store, "runs", entry.run_id))) return true;
         sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
         return false;
@@ -148,6 +164,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
           sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?) WHERE table_name=? AND pk=? AND register=?").run(result.seq, entry.table_name, entry.pk, entry.register);
         sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
       })();
+      if (options.blobs) await options.blobs.acknowledged(sent.clock);
     }
     return prepared.length - attachmentCount;
   }

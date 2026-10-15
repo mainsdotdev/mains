@@ -931,6 +931,8 @@ const api = {
   },
   // Run artifacts operations
   runArtifacts: {
+    resolveFilePath: (payload: import("@mains/contracts/runs").ResolveArtifactPathPayload) =>
+      ipcRenderer.invoke(CHANNELS.runArtifacts.resolveFilePath, payload),
     getByRun: (runId: string, sinceId?: number) =>
       ipcRenderer.invoke(CHANNELS.runArtifacts.getByRun, runId, sinceId),
     readAttachmentImage: (payload: import("@mains/contracts/runs").ReadAttachmentImagePayload) =>

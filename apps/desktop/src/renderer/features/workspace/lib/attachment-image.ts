@@ -48,16 +48,24 @@ function subscribe(listener: () => void): () => void {
 
 /** Only thumbnails are retained. Expanded previews belong to their open modal. */
 export async function loadAttachmentImage(runId: string, attachmentId: string, maxSide = 256): Promise<AttachmentImageLease> {
+  return loadStoredImage(runId, attachmentId, maxSide, false);
+}
+export async function loadArtifactImage(runId: string, artifactId: number, maxSide = 256): Promise<AttachmentImageLease> {
+  return loadStoredImage(runId, String(artifactId), maxSide, true);
+}
+async function loadStoredImage(runId: string, attachmentId: string, maxSide: number, artifact: boolean): Promise<AttachmentImageLease> {
   const revision = backendRevision;
   const transport = getTransport();
   const cacheable = maxSide === 256;
-  const key = JSON.stringify([revision, runId, attachmentId, maxSide]);
+  const key = JSON.stringify([revision, runId, attachmentId, maxSide, artifact]);
   let entry = cacheable ? cached.get(key) : undefined;
   if (!entry) {
     let task = cacheable ? pending.get(key) : undefined;
     if (!task) {
       task = (async () => {
-        const response = await transport.invoke(CHANNELS.runArtifacts.readAttachmentImage, [{ runId, attachmentId, maxSide }]);
+        const response = artifact
+          ? await transport.invoke(CHANNELS.runArtifacts.readImage, [{ runId, artifactId: Number(attachmentId), maxSide }])
+          : await transport.invoke(CHANNELS.runArtifacts.readAttachmentImage, [{ runId, attachmentId, maxSide }]);
         if (!response.success) throw new Error(response.error);
         if (revision !== backendRevision) throw new Error("Backend changed while loading the image");
         const image = response.data as ArtifactImage;
@@ -93,12 +101,18 @@ export async function loadAttachmentImage(runId: string, attachmentId: string, m
 
 /** A placeholder keeps layout stable while offscreen thumbnails hold no pixels. */
 export function useAttachmentImage(runId?: string, attachmentId?: string, maxSide = 256, eager = false) {
+  return useStoredImage(runId, attachmentId, maxSide, eager, false);
+}
+export function useArtifactImage(runId?: string, artifactId?: number, maxSide = 256, eager = false) {
+  return useStoredImage(runId, artifactId === undefined ? undefined : String(artifactId), maxSide, eager, true);
+}
+function useStoredImage(runId: string | undefined, attachmentId: string | undefined, maxSide: number, eager: boolean, artifact: boolean) {
   const revision = useSyncExternalStore(subscribe, () => backendRevision);
   const [element, setElement] = useState<Element | null>(null);
   const [intersecting, setIntersecting] = useState(false);
   const visible = eager || typeof IntersectionObserver === "undefined" || intersecting;
   const [image, setImage] = useState<{ lease?: AttachmentImageLease; error?: string; key: string }>({ key: "" });
-  const key = JSON.stringify([revision, runId, attachmentId, maxSide]);
+  const key = JSON.stringify([revision, runId, attachmentId, maxSide, artifact]);
 
   useEffect(() => {
     if (eager || typeof IntersectionObserver === "undefined" || !element) return;
@@ -111,7 +125,7 @@ export function useAttachmentImage(runId?: string, attachmentId?: string, maxSid
     if (!visible || !runId || !attachmentId) return;
     let canceled = false;
     let lease: AttachmentImageLease | undefined;
-    loadAttachmentImage(runId, attachmentId, maxSide).then((result) => {
+    loadStoredImage(runId, attachmentId, maxSide, artifact).then((result) => {
       if (canceled) { result.release(); return; }
       lease = result;
       setImage({ key, lease: result });
@@ -119,7 +133,7 @@ export function useAttachmentImage(runId?: string, attachmentId?: string, maxSid
       if (!canceled) setImage({ key, error: error instanceof Error ? error.message : "Could not load image" });
     });
     return () => { canceled = true; lease?.release(); };
-  }, [runId, attachmentId, maxSide, visible, key]);
+  }, [runId, attachmentId, maxSide, visible, key, artifact]);
 
   return { observe: setElement, src: visible && image.key === key && image.lease?.isActive() ? image.lease.src : undefined, error: image.key === key ? image.error : undefined };
 }

@@ -47,10 +47,19 @@ export function useOpenFileInEditor() {
 
   return useCallback(
     async (filePath: string) => {
-      if (replica) { toast.error(`This file is available on ${replica.label}`); return; }
       const reference = filePath?.trim() ?? "";
       const trimmed = /^file:/i.test(reference) ? fileHrefPath(reference) : reference;
       if (!trimmed) return;
+      if (replica) {
+        const docType = classifyDocType(trimmed, true);
+        if (!replica.runId || !docType) { toast.error(`This file is available on ${replica.label}`); return; }
+        try {
+          const result = await appApi.runArtifacts.resolveFilePath({ runId: replica.runId, sourcePath: trimmed });
+          if (!result.success) throw new Error(result.error);
+          openDocument({ path: result.data, fileName: fileBasename(trimmed), docType });
+        } catch (error) { toast.error(error instanceof Error ? error.message : `File available on ${replica.label}`); }
+        return;
+      }
 
       // Workspace-less runs (work, chat) still have a directory their files
       // live in — agents write bare filenames into their answers, and without

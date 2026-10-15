@@ -4,6 +4,7 @@ import * as path from "path";
 import { atlasService } from "../atlas";
 import { projectsService } from "../projects";
 import { collectionsService } from "../collections";
+import { bridgeService } from "../bridge";
 import { managedExecutionRoots } from "../runs";
 import { workspaceService } from "../workspace";
 import { isDiscoveredSkillDocument } from "../providers/skill-document-paths";
@@ -97,5 +98,6 @@ export async function assertWithinReadableContentRoots(realPath: string): Promis
   }
   if (await collectionsService.isStoredSourceFile(realPath)) return;
   if (await atlasService.isStoredFile(realPath)) return;
+  if (await bridgeService.isCachedFile(realPath)) return;
   throw new Error("Path is outside your workspaces");
 }

@@ -1642,6 +1642,8 @@ export const bridgeRowClock = sqliteTable("bridge_row_clock", {
   syncedSeq: integer("synced_seq"),
   // Latest register image also retains losing aliases' values for deterministic projection.
   valuesJson: text("values_json").notNull(), refsJson: text("refs_json").notNull().default("{}"),
+  // NULL means this local generation has not prepared its file manifest yet.
+  blobRefsJson: text("blob_refs_json"),
   portable: integer("portable", { mode: "boolean" }).notNull().default(false),
 }, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register] })]);
 

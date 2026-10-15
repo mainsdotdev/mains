@@ -8,6 +8,8 @@ import { deriveBridgeKeys } from "./bridge.keys";
 import { createBridgeWebSocketTransport } from "./bridge.websocket";
 import type { AppliedChange } from "./bridge.applier";
 import type { BridgeDevConfig } from "./bridge.config";
+import { createBridgeBlobs } from "./bridge.blobs";
+import { createBridgeBlobRecords, type BridgeFileTable } from "./bridge.blob-records";
 
 export interface BridgeReplicatorOptions {
   sqlite: SQLiteInstance;
@@ -21,6 +23,7 @@ export interface BridgeReplicatorOptions {
   activeIntervalMs?: number;
   idleIntervalMs?: number;
   requestTimeoutMs?: number;
+  dataDir?: string;
 }
 const watcherLeaseMs = 90_000;
 
@@ -64,8 +67,10 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       notify();
     },
   });
+  const blobs = options.dataDir ? createBridgeBlobs({ dataDir: options.dataDir, accountKey: config.accountKey, url: config.url, token: options.token ?? config.token }) : undefined;
+  const files = blobs ? createBridgeBlobRecords({ sqlite, backendId, dataDir: options.dataDir!, blobs }) : undefined;
   const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(config.accountKey).recordKey,
-    codec: createBridgeSealingCodec(config.accountKey), transport, onApplied: options.onApplied });
+    codec: createBridgeSealingCodec(config.accountKey), transport, blobs: files, onApplied: options.onApplied });
   sqlite.prepare("UPDATE bridge_config SET account_fingerprint=? WHERE id=1").run(fingerprint);
 
   function watchedRuns(): string[] {
@@ -137,6 +142,12 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   }
   const api = {
     syncNow,
+    isCachedFile(realPath: string): Promise<boolean> { return blobs?.isCachedFile(realPath) ?? Promise.resolve(false); },
+    captureOutput(file: string, roots: string[], mime: string | null) { return files?.captureOutput(file, roots, mime); },
+    resolveFile(table: BridgeFileTable, id: string | number, column?: string, sourcePath?: string): Promise<string> {
+      if (!files) throw new Error("Bridge file transfer is not configured");
+      return files.resolve(table, id, column, sourcePath);
+    },
     wake() { requested = true; schedule(0); },
     watchRun(runId: string, watcherId: string) {
       if (stopped) throw new Error("Bridge replicator is stopped");
@@ -165,7 +176,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     },
     async stop() {
       stopped = true; if (timer) clearTimeout(timer); timer = undefined;
-      transport.close(); await inFlight?.catch(() => {}); await engine.stop();
+      transport.close(); await blobs?.stop(); await inFlight?.catch(() => {}); await engine.stop();
       watchers.clear(); online.clear();
     },
   };

@@ -151,6 +151,16 @@ describe("RunSession", () => {
   // ─────────────────────────────────────────────────────────────
   // Construction
   // ─────────────────────────────────────────────────────────────
+  it("snapshots selected outputs once after the turn is committed, before finalization returns", async () => {
+    const onTurnClosed = vi.fn(async (id: string) => {
+      expect(id).toBe("r1");
+      const turns = await runsRepo.findTurnsByRun(id);
+      expect(turns[0].status).toBe("completed"); expect(turns[0].endedAt).toBeTruthy();
+    });
+    const session = makeSession({ onTurnClosed }); await flushBackground();
+    await session.finalize({ status: "succeeded" }); await session.finalize({ status: "succeeded" });
+    expect(onTurnClosed).toHaveBeenCalledTimes(1);
+  });
   it("keeps a late tool completion in the turn where the call started", async () => {
     const session = makeSession();
     await session.project({

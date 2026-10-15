@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { CHANNELS } from "@mains/contracts/channels";
@@ -29,6 +29,11 @@ try {
     await a.client.call(CHANNELS.bridge.syncNow);
   };
   await reply("This conversation lives on Computer A. Computer B keeps its own encrypted-sync replica.");
+  const imageDirectory = join(a.dir, "generated-images", runId); await mkdir(imageDirectory, { recursive: true });
+  const image = join(imageDirectory, "bridge-demo.svg");
+  await writeFile(image, '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"><rect width="800" height="400" rx="28" fill="#eeebfa"/><text x="60" y="140" font-family="sans-serif" font-size="60" fill="#30264e">A → B</text><text x="60" y="220" font-family="sans-serif" font-size="28" fill="#514164">This image travelled through encrypted Bridge blobs.</text><text x="60" y="275" font-family="sans-serif" font-size="24" fill="#514164">Stop A, then open the image on B.</text></svg>');
+  await a.client.call(CHANNELS.runArtifacts.add, { runId, kind: "image", path: image, metadata: { path: image, fileName: "bridge-demo.svg", turnIndex: 0 } });
+  await a.client.call(CHANNELS.bridge.syncNow);
   await b.client.call(CHANNELS.bridge.syncNow);
   for (const host of [a, b]) await host.client.call(CHANNELS.appSettings.update, { activeSpaceId: space.id });
   console.log(`Temporary profiles: ${demo.dir}`);
@@ -46,7 +51,7 @@ try {
         const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
         console.log(`From apps/desktop: MAINS_DEV_USER_DATA=${quote(a.dir)} MAINS_BRIDGE_CONFIG=${quote(a.configFile)} npm start`);
         console.log("Stop Electron before typing 'online' or 'quit'. Only one process may own A's database.");
-      } else console.log("A is offline. B can still read the downloaded transcript.");
+      } else console.log("A is offline. B can read the transcript and open the synced image.");
     } else if (value === "online") {
       if (sourceStopped) { await a.start(); sourceStopped = false; }
       console.log("A is online.");

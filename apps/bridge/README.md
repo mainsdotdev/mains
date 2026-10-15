@@ -1,6 +1,6 @@
 # Bridge local hub
 
-B3/B4's Cloudflare Worker and account-scoped SQLite Durable Object. Desktop and
+B3–B5's Cloudflare Worker, account-scoped SQLite Durable Object and private R2 bucket. Desktop and
 standalone backends seal records before sending them over WebSocket. The hub
 stores routing headers and ciphertext; it never receives an account key or a
 plaintext record body. Desktop and standalone startup activate background sync
@@ -177,11 +177,49 @@ encoding of the complete routing header is AEAD associated data; the receiver
 also verifies the opaque HMAC record identity against the decrypted body.
 Independent PyNaCl/libsodium known answers live under
 `packages/backend/test/fixtures/bridge`. Only routing metadata (stream, clocks,
-opaque ids, origin/owner and sizes) is visible to the hub. File bytes are B5;
-the Atlas revision graph is B6.
+opaque ids, origin/owner and sizes) is visible to the hub. File bytes use the
+encrypted B5 blob transport; the Atlas revision graph remains B6.
+
+## File transfer (B5)
+
+The demo seeds an image on A. Open B's replica, type `offline` in the demo
+terminal, then open the image on B. The source backend need not stay online
+once its encrypted upload completed. The browser still uses B's backend and
+SQLite; verified original files are cached on B, not in browser SQLite.
+
+Files have account-private HMAC identities and use 4 MiB XChaCha20-Poly1305
+chunks with fresh nonces, a separate HKDF key per blob, and authenticated
+identity/position/size. Each download verifies all chunks and the complete
+file identity before exposing an atomic, read-only original. Interrupted
+transfers resume per chunk. The default local LRU is 256 MiB, including partial
+downloads; active transfers are pinned and downloads have two slots. Files
+above 50 MiB stay source-only.
+
+`POST /v1/blobs/presign` accepts `{blobs:[{blobId,size}],op:"put"|"get"}`.
+It authenticates the backend and issues ten-minute, account/object/chunk/op
+capabilities. These are Worker-signed URLs streaming the private `BLOBS` R2
+binding, rather than S3 SigV4 URLs. Local development needs no S3 credentials
+or deployed bucket. Chunks are immutable; filenames, MIME and plaintext hashes
+never reach the hub. Production identity/key ceremonies remain B7.
+
+Attachment membership is checked before resolving bytes. Inline artifact blobs
+are externalized, and explicit file artifacts and selected turn outputs use the
+same transport. Turn-end output snapshots stay in `bridge/uploads` until ACK;
+the selected-output manifest lives on its existing reply anchor. Replica views
+rebuild that projection and open cached images/documents without touching A's
+paths. Collection source files also resolve lazily. Atlas's file adapter is
+tested behind the existing gate; normal Atlas replication remains disabled.
+Migration 0033 upgrades already acknowledged B4 file records with new clocks.
+
+`npm run test:replication` covers real workerd/R2 plus independent SQLite stores,
+including interrupted uploads/downloads, corruption, accounts, snapshot races,
+old-record upgrades and cached reopening. `npm run test:hosts` opens A's image
+on B with A stopped, through the real authenticated application protocol, and
+checks the existing paired-device remote control path too.
 
 Implementation references: [Durable Object SQLite](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/),
 [storage limits](https://developers.cloudflare.com/durable-objects/platform/limits/),
 [WebSocket hibernation](https://developers.cloudflare.com/durable-objects/best-practices/websockets/),
+[R2 Workers API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/),
 [noble ciphers](https://github.com/paulmillr/noble-ciphers) and
 [noble curves](https://github.com/paulmillr/noble-curves).

@@ -73,7 +73,7 @@ export function ReplicaWorkspaceView({ initialRun, workspace, providerId, varian
   useSetMainHeader(header, true, loadingList);
   const visibleRun = run ? { ...run, goal: run.goal ?? "", title: run.title ?? undefined, lastError: run.lastError ?? undefined,
     startedAt: run.startedAt == null ? undefined : new Date(run.startedAt), endedAt: run.endedAt == null ? undefined : new Date(run.endedAt), createdAt: new Date(run.createdAt) } : null;
-  const context = useMemo(() => ({ label: owner.label, online: owner.online }), [owner.label, owner.online]);
+  const context = useMemo(() => ({ label: owner.label, online: owner.online, runId: activeRunId }), [owner.label, owner.online, activeRunId]);
   return <ReplicaViewContext.Provider value={context}>
     <div className="flex h-full min-h-0 flex-col" data-testid="replica-run-view">
       <div className={`flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-primary-200/60 py-3 dark:border-primary-800/60 ${CONTENT_COLUMN_GUTTER}`}>

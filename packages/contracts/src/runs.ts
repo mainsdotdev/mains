@@ -233,6 +233,8 @@ export interface ArtifactImage {
   width: number | null;
   height: number | null;
 }
+/** Resolve a selected replica file into this backend's verified, read-only cache. */
+export interface ResolveArtifactPathPayload { runId: string; artifactId?: number; sourcePath?: string }
 
 /** Compact, durable prompt attachment. Bytes and host paths never live in history. */
 export interface StoredAttachment {

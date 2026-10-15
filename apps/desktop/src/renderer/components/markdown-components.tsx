@@ -14,6 +14,7 @@ import { useBrowserPanel } from "@/hooks/use-browser-panel";
 import { atlasPageIdFromHref } from "@/features/atlas/lib/page-link";
 import { localFileReference } from "@mains/contracts/local-file-reference";
 import { useReplicaView } from "@/hooks/use-replica-view";
+import { useReplicaFilePath } from "@/hooks/use-replica-file-path";
 import { fileBasename, fileHrefPath, isAbsoluteFilePath, isWindowsAbsolutePath } from "@/lib/file-path";
 
 function decodeFileHrefPath(filePath: string): string {
@@ -206,8 +207,9 @@ function MarkdownImage({ src, alt, width, height, title }: {
   const localPath = src && isAbsoluteFilePath(fileHrefPath(src)) && !src.startsWith("/__")
     ? decodeFileHrefPath(src)
     : undefined;
-  const localUrl = useLocalImageUrl(!replica && (!remote || loadApproved) ? localPath : undefined);
-  if (replica && localPath) return <Text size="xs" tone="muted">Image available on {replica.label}</Text>;
+  const replicaFile = useReplicaFilePath(replica?.runId, localPath);
+  const localUrl = useLocalImageUrl(replica ? replicaFile?.path : (!remote || loadApproved) ? localPath : undefined);
+  if (replica && localPath && !localUrl) return <Text size="xs" tone="muted">{replicaFile?.error ? `Image available on ${replica.label}` : "Loading image…"}</Text>;
 
   if (remote && !loadApproved) {
     let host = src;

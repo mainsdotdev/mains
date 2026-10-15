@@ -6,6 +6,7 @@ import { BRIDGE_PROTOCOL_VERSION, type BridgeBody, type BridgeEnvelope, type Bri
 import { validateBridgeHeader, validateEncryptedBridgeEnvelope } from "@mains/contracts/bridge-wire";
 import { fromBase64Url, toBase64Url, utf8 } from "./bridge.encoding";
 import { deriveBridgeKeys } from "./bridge.keys";
+import { validateBridgeBlobIdentity, type BridgeBlobRef } from "@mains/contracts/bridge-blobs";
 
 export interface BridgeCodec {
   seal(header: BridgeHeader, body: BridgeBody): BridgeEnvelope;
@@ -94,6 +95,17 @@ function validateRecord(header: BridgeHeader, value: unknown): asserts value is 
     throw new Error("Invalid Bridge upsert");
   }
   if (header.op === "upsert") {
+    const blobs = body.blobRefs as BridgeBlobRef[];
+    if (blobs.length > 64) throw new Error("Too many Bridge file references");
+    const slots = new Set<string>();
+    for (const ref of blobs) {
+      validateBridgeBlobIdentity(ref);
+      const slot = JSON.stringify([ref.column, ref.sourcePath ?? null]);
+      if (typeof ref.column !== "string" || !ref.column || typeof ref.name !== "string" || !ref.name || ref.name.length > 255 ||
+          /[\\/]/.test(ref.name) || [...ref.name].some((char) => char.charCodeAt(0) < 32) || ref.mime !== null && (typeof ref.mime !== "string" || ref.mime.length > 200) ||
+          ref.sourcePath !== undefined && (typeof ref.sourcePath !== "string" || ref.sourcePath.length > 8192) || slots.has(slot)) throw new Error("Invalid Bridge file manifest");
+      slots.add(slot);
+    }
     const values = (value as BridgeBody & { values: Record<string, unknown> }).values;
     if (Object.values(values).some((entry) => entry !== null &&
         !["string", "number", "boolean"].includes(typeof entry) || typeof entry === "number" && !Number.isFinite(entry)))

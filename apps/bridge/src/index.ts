@@ -3,13 +3,15 @@ import type { BridgeRpcRequest, BridgeRpcResponse, BridgeServerMessage, BridgeSt
 import { BRIDGE_MAX_FRAME_BYTES, parseBridgeRpcRequest } from "@mains/contracts/bridge-wire";
 import { authenticate, type BridgeIdentity, type DevAuthEnv } from "./auth";
 import { createHubStore } from "./store";
+import { handleBlobs, type BlobEnv } from "./blobs";
 
-interface Env extends DevAuthEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
+interface Env extends DevAuthEnv, BlobEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") return Response.json({ ok: true, protocol: 1 });
+    if (url.pathname.startsWith("/v1/blobs/")) return handleBlobs(request, env);
     if (url.pathname !== "/v1/log") return new Response("Not found", { status: 404 });
     // This development auth is deliberately unavailable without explicit local configuration.
     const identity = await authenticate(request, env);

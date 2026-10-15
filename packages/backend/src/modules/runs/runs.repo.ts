@@ -598,6 +598,12 @@ export const runsRepo = {
       .returning({ id: runArtifacts.id });
     return result[0]?.id ?? 0;
   },
+  async recordBridgeOutputs(runId: string, artifactId: number, outputs: unknown[]): Promise<void> {
+    await getDb().update(runArtifacts).set({
+      metadata: sql`json_set(coalesce(${runArtifacts.metadata}, '{}'), '$.bridgeOutputs', json(${JSON.stringify(outputs)}))`,
+    }).where(and(eq(runArtifacts.runId, runId), eq(runArtifacts.id, artifactId),
+      sql`json_type(${runArtifacts.metadata}, '$.bridgeOutputs') IS NULL`));
+  },
 
   async deleteArtifact(id: number): Promise<void> {
     const db = getDb();
