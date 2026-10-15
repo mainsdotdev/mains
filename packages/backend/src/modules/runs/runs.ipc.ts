@@ -26,6 +26,7 @@ import {
 } from "./user-input-broker";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { ConversationSettings } from "@mains/contracts/run-settings";
+import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import type { CreateRealtimeConversationPayload, RunRealtimeStartPayload, RunRealtimeStopPayload } from "@mains/contracts/realtime";
 import type {
   ReadArtifactImagePayload,
@@ -204,6 +205,8 @@ export function registerRunsIpc(): void {
 
   ipcMain.handle(CHANNELS.runs.steer, handle((payload: RunSteerPayload) => runsService.steerRun(payload)));
   ipcMain.handle(CHANNELS.runs.inputStatus, handle((payload: RunInputStatusPayload) => runsService.getInputStatus(payload)));
+  ipcMain.handle(CHANNELS.runs.answerAsyncQuestions, handle((payload: AnswerAsyncQuestionsPayload) => runsService.answerAsyncQuestions(payload)));
+  ipcMain.handle(CHANNELS.runs.dismissAsyncQuestions, handle((payload: DismissAsyncQuestionsPayload) => runsService.dismissAsyncQuestions(payload)));
 
   ipcMain.handle(
     CHANNELS.runs.executeReview,
@@ -310,6 +313,8 @@ export function registerRunsIpc(): void {
 export function unregisterRunsIpc(): void {
   ipcMain.removeHandler(CHANNELS.runs.steer);
   ipcMain.removeHandler(CHANNELS.runs.inputStatus);
+  ipcMain.removeHandler(CHANNELS.runs.answerAsyncQuestions);
+  ipcMain.removeHandler(CHANNELS.runs.dismissAsyncQuestions);
   [
     CHANNELS.runs.getAll,
     CHANNELS.runs.listArchived,

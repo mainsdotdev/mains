@@ -782,6 +782,11 @@ export function WorkspaceEvents({
   }), [turnRenderRows, eventGroups, renderGroupAt, isRunning, history?.historical, suppressLiveAccordionForStaleEvents]);
 
   const activeTool = useMemo(() => selectActiveTool(currentEvents), [currentEvents]);
+  const hasStreamingResponse = useMemo(() => displayEvents.some((event) =>
+    event.type === "artifact" && event.metadata?.kind === "report" &&
+    event.metadata.streaming === true && event.metadata.isFromSubagent !== true &&
+    event.content.trim().length > 0,
+  ), [displayEvents]);
 
   // Latest thinking: ephemeral Cursor stream (cursor-think-*) or legacy persisted [thinking] logs
   const latestThinking = useMemo(() => {
@@ -849,7 +854,8 @@ export function WorkspaceEvents({
                   message={activeRun?.lastError}
                 />
               )}
-              {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction && (
+              {isRunning && !history?.historical && !hasActiveImageGeneration && !activeCompaction &&
+                (activeTool || !hasStreamingResponse) && (
                 <AsciiLoader activeTool={activeTool} thinkingText={latestThinking} />
               )}
               <div ref={eventsEndRef} />

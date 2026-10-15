@@ -21,8 +21,8 @@ import simpleGit, { type SimpleGit } from "simple-git";
  * that arrived from the renderer then silently miss: `discardPaths` read such a
  * file as "not in HEAD" and deleted it instead of restoring it.
  */
-export function openGit(rootPath?: string): SimpleGit {
-  return simpleGit(rootPath, { config: ["core.quotePath=false"] });
+export function openGit(rootPath?: string, signal?: AbortSignal): SimpleGit {
+  return simpleGit(rootPath, { config: ["core.quotePath=false"], abort: signal });
 }
 
 const MAX_UNTRACKED_INLINE_BYTES = 256 * 1024;

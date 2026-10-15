@@ -36,7 +36,7 @@ import { FloatingChatOverlay } from "@/features/workspace/components/floating-ch
 import { ComposerSendTargetSelect } from "@/features/workspace/components/composer-send-target-select";
 import { WorkspaceInput } from "@/features/workspace/components/workspace-input";
 import { WorkspaceEvents } from "@/features/workspace/components/workspace-events";
-import { ToolApprovalDialog } from "@/features/workspace/components/tools/tool-approval-dialog";
+import { AsyncQuestionDialogProvider, RunInputDialog } from "@/features/workspace/components/tools/async-question-dialog";
 import { PluginLogoProvider } from "@/features/workspace/hooks/use-plugin-logos";
 import { useConversationSettings } from "@/features/workspace/hooks/use-conversation-settings";
 import {
@@ -374,6 +374,9 @@ function AtlasWorkingChat({
 
   return (
     <PluginLogoProvider providerId={space.providerId}>
+    <AsyncQuestionDialogProvider ownerKey={runOwnerKey(backendId, runId ?? "new")}
+      runId={runId} runStatus={ws.activeRun?.status} turns={ws.currentTurns}
+      events={ws.currentEvents} historical={ws.history?.historical}>
       <AtlasChatPanel
         title={page.title}
         titleControl={
@@ -452,9 +455,9 @@ function AtlasWorkingChat({
             />
           </div>
         )}
-        {approval && (
+        {runId && (
           <div className="shrink-0 px-3 pb-2">
-            <ToolApprovalDialog
+            <RunInputDialog
               request={approval}
               onRespond={respond}
               variant={variant}
@@ -463,6 +466,7 @@ function AtlasWorkingChat({
           </div>
         )}
       </AtlasChatPanel>
+    </AsyncQuestionDialogProvider>
     </PluginLogoProvider>
   );
 }

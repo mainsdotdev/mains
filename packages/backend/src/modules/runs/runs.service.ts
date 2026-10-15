@@ -9,6 +9,8 @@ import type {
   VoiceTaskLink,
 } from "@mains/contracts/realtime";
 import { insertRunInputArtifact } from "./run-input-artifact";
+import { answerAsyncQuestions, assertAsyncQuestionCanReply, dismissAsyncQuestions } from "./run-async-questions";
+import type { AnswerAsyncQuestionsPayload, DismissAsyncQuestionsPayload } from "@mains/contracts/async-questions";
 import { providerTurnLineageMetadata } from "../../../shared/provider-turn-lineage";
 import {
   createVoiceTaskCoordinator,
@@ -2279,6 +2281,7 @@ export const runsService = {
       ) {
         throw new Error("This conversation already has an active response.");
       }
+      if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(runId, payload.asyncQuestionReply);
       const uploads = sanitizeRunAttachments(
         payload.attachments,
         await browserCaptureDir(),
@@ -2446,6 +2449,7 @@ export const runsService = {
             message,
             providerTurnLineage: payload.providerTurnLineage,
             clientPromptId: payload.clientPromptId,
+            asyncQuestionReply: payload.asyncQuestionReply,
             ...(waitForInput
               ? {
                   clientUserMessageId: payload.clientUserMessageId,
@@ -2543,10 +2547,12 @@ export const runsService = {
     if (runSessionRegistry.get(run.id) !== activeSession) {
       throw new Error("The active turn changed before sending. The message stays queued.");
     }
+    if (payload.asyncQuestionReply) await assertAsyncQuestionCanReply(run.id, payload.asyncQuestionReply);
     const { turnId } = await adapter.steerRun({
       runId: run.id,
       message: payload.message,
       clientUserMessageId: payload.clientUserMessageId,
+      asyncQuestionReply: payload.asyncQuestionReply,
       attachments,
       context: payload.additionalContext,
       contextIssues: payload.contextIssues,
@@ -2555,6 +2561,14 @@ export const runsService = {
       skills: payload.contextSkills,
     });
     return { runId: run.id, turnId };
+  },
+
+  answerAsyncQuestions(payload: AnswerAsyncQuestionsPayload) {
+    return answerAsyncQuestions(payload, this);
+  },
+
+  dismissAsyncQuestions(payload: DismissAsyncQuestionsPayload) {
+    return dismissAsyncQuestions(payload);
   },
 
   async getInputStatus(
@@ -2607,6 +2621,7 @@ export const runsService = {
           runId: run.id,
           clientUserMessageId: payload.clientUserMessageId,
           providerTurnId: result.turnId,
+          asyncQuestionReply: input.asyncQuestionReply,
           ...(delivery ? { delivery } : {}),
           attachments,
           context: input.additionalContext,

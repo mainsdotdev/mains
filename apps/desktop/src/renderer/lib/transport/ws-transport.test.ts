@@ -118,6 +118,30 @@ describe("WsTransport", () => {
     transport.dispose();
   });
 
+  it("waits for a long repository clone instead of reporting a timeout", async () => {
+    vi.useFakeTimers();
+    const { transport, sockets } = harness({ invokeTimeoutMs: 30_000 });
+    transport.connect(); sockets[0].open();
+    const pending = transport.invoke(CHANNELS.workspace.createFromSource, [{
+      accountId: "account", source: { kind: "clone", url: "https://github.com/org/repo.git", targetPath: "/tmp" },
+    }]);
+    const settled = vi.fn(); void pending.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(settled).not.toHaveBeenCalled();
+    sockets[0].emit(responseFrame(1, { id: "workspace" }));
+    await expect(pending).resolves.toEqual({ success: true, data: { id: "workspace" } });
+    transport.dispose();
+  });
+
+  it("still rejects a pending clone when the connection closes", async () => {
+    const { transport, sockets } = harness({ invokeTimeoutMs: 30_000 });
+    transport.connect(); sockets[0].open();
+    const pending = transport.invoke(CHANNELS.workspace.createFromSource, [{ source: { kind: "clone" } }]);
+    sockets[0].serverClose();
+    await expect(pending).rejects.toThrow(/closed/);
+    transport.dispose();
+  });
+
   it("queues invokes sent before the socket opens, then flushes", () => {
     const { transport, sockets } = harness();
     transport.connect();

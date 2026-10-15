@@ -5,6 +5,7 @@ import path from "path";
 import { CHANNELS } from "@mains/contracts/channels";
 import { emit } from "../../ipc-kit";
 import { workspaceRepo } from "./workspace.repo";
+import { cloneWorkspaceRepository, cancelWorkspaceClone } from "./workspace-clone";
 import { projectsRepo } from "../projects/projects.repo";
 import { normalizeRemoteOrigin } from "../projects/projects.utils";
 import { gitService, type DiffSnapshot } from "../git";
@@ -443,6 +444,7 @@ async function syncGitStateWatchers(
 // target throw (see CONTEXT.md "absence rule").
 // ─────────────────────────────────────────────────────────────
 export const workspaceService = {
+  cancelClone: cancelWorkspaceClone,
   // ─────────────────────────────────────────────────────────────
   // ── Workspace lifecycle ──
   // ─────────────────────────────────────────────────────────────
@@ -732,7 +734,7 @@ export const workspaceService = {
     // ── folder / clone: obtain a local repo path, then import it. ──
     const sourcePath =
       source.kind === "clone"
-        ? (await gitService.cloneRepo(source.url, source.targetPath))
+        ? (await cloneWorkspaceRepository(accountId, source))
             .clonedPath
         : source.path;
     // Seed name for a *new* project only. The workspace is named after the

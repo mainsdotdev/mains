@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createServer } from "node:http";
+import { WORKSPACE_CLONE_CANCELED } from "@mains/contracts/workspace-intake";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import { augmentPathForPackagedApp } from "../providers/providers.utils";
 
@@ -406,6 +408,40 @@ describe("initRepo", () => {
 });
 
 describe("cloneRepo", () => {
+  it("stops a real in-flight Git request and removes its partial checkout", async () => {
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    const server = createServer(() => requestStarted());
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing test server port");
+    const controller = new AbortController();
+    const pending = gitService.cloneRepo(`http://127.0.0.1:${address.port}/slow.git`, sandbox, controller.signal);
+    onTestFinished(async () => {
+      controller.abort();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await pending.catch(() => {});
+    });
+    const rejected = expect(pending).rejects.toThrow(WORKSPACE_CLONE_CANCELED);
+    await started;
+    expect(fs.existsSync(path.join(sandbox, "slow"))).toBe(true);
+    controller.abort();
+    await rejected;
+    expect(fs.existsSync(path.join(sandbox, "slow"))).toBe(false);
+  });
+
+  it("preserves an existing destination on failure and does no work when already canceled", async () => {
+    const destination = path.join(sandbox, "owned");
+    fs.mkdirSync(destination);
+    fs.writeFileSync(path.join(destination, "keep.txt"), "existing files");
+    const controller = new AbortController();
+    await expect(gitService.cloneRepo("https://mains-test.invalid/owned.git", sandbox, controller.signal)).rejects.toMatchObject({ code: "EEXIST" });
+    controller.abort();
+    await expect(gitService.cloneRepo("https://mains-test.invalid/owned.git", sandbox, controller.signal)).rejects.toThrow(WORKSPACE_CLONE_CANCELED);
+    expect(fs.readFileSync(path.join(destination, "keep.txt"), "utf8")).toBe("existing files");
+  });
+
   it.runIf(process.platform === "win32")("clones with the stale PATH inherited from Windows Explorer", async () => {
     const source = makeRepo();
     const url = "https://mains-test.invalid/fixture.git";

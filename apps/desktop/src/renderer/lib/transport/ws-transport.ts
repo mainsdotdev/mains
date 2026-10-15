@@ -180,7 +180,11 @@ export class WsTransport implements Transport {
     const hasPrMedia = channel === CHANNELS.gitFlow.createPr &&
       Array.isArray((args[0] as { attachmentIds?: unknown } | undefined)?.attachmentIds) &&
       ((args[0] as { attachmentIds: unknown[] }).attachmentIds.length > 0);
-    const timeoutMs = hasPrMedia && this.invokeTimeoutMs > 0
+    const isClone = channel === CHANNELS.workspace.createFromSource &&
+      (args[0] as { source?: { kind?: unknown } } | undefined)?.source?.kind === "clone";
+    // Repository sizes vary without a useful upper bound. A socket close or
+    // disposal still rejects the request; the ordinary 30s timer must not.
+    const timeoutMs = isClone ? 0 : hasPrMedia && this.invokeTimeoutMs > 0
       ? Math.max(this.invokeTimeoutMs, PR_MEDIA_CREATE_TIMEOUT_MS) : this.invokeTimeoutMs;
     return new Promise<ServiceResponse<unknown>>((resolve, reject) => {
       const timer =

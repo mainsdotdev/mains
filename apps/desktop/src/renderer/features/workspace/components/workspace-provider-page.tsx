@@ -16,7 +16,7 @@ import {
   GoalSummaryBar,
   TodoSummaryBar,
 } from "@/features/workspace/components";
-import { ToolApprovalDialog } from "@/features/workspace/components/tools/tool-approval-dialog";
+import { AsyncQuestionDialogProvider, RunInputDialog } from "@/features/workspace/components/tools/async-question-dialog";
 import { parseStructuralPlanSnapshot } from "@/features/workspace/components/todo-summary-bar";
 import {
   useWorkspacePage,
@@ -87,6 +87,7 @@ export function WorkspaceProviderPage({
   const location = useLocation();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
+  const backendId = useAppSelector((state) => state.backends.activeBackendId);
   // Per-variant page behavior comes straight from the descriptor table —
   // no props to forget or default divergently. Per-mode shape comes from its
   // sibling table the same way.
@@ -768,9 +769,9 @@ export function WorkspaceProviderPage({
                   floatingChat
                 />
               </div>
-              {currentApproval && !currentPlanApproval && (
+              {!currentPlanApproval && (
                 <div className="shrink-0 px-3">
-                  <ToolApprovalDialog
+                  <RunInputDialog
                     request={currentApproval}
                     onRespond={respondToolApproval}
                     variant={variant}
@@ -797,11 +798,20 @@ export function WorkspaceProviderPage({
     : null;
 
   if (browserChatOnly) {
-    return <PluginLogoProvider providerId={providerId}>{browserChat}</PluginLogoProvider>;
+    return <PluginLogoProvider providerId={providerId}>
+      <AsyncQuestionDialogProvider ownerKey={runOwnerKey(backendId, ws.activeRunId ?? "new")}
+        runId={ws.activeRunId} runStatus={browserSelectedRun?.status} turns={ws.currentTurns}
+        events={ws.currentEvents ?? []} historical={ws.history?.historical}>
+        {browserChat}
+      </AsyncQuestionDialogProvider>
+    </PluginLogoProvider>;
   }
 
   return (
     <PluginLogoProvider providerId={providerId}>
+    <AsyncQuestionDialogProvider ownerKey={runOwnerKey(backendId, ws.activeRunId ?? "new")}
+      runId={ws.activeRunId} runStatus={ws.activeRun?.status} turns={ws.currentTurns}
+      events={ws.currentEvents ?? []} historical={ws.history?.historical}>
     {browserChat}
     {/* `relative` anchors the absolutely-positioned TodoSummaryBar toast so it
         centers over this content column (not the whole window — the embedded
@@ -939,12 +949,12 @@ export function WorkspaceProviderPage({
           then hangs off the right edge while the left keeps its padding. */}
       <div className="content-inset">
       <div className={CONTENT_COLUMN_GUTTER}>
-      {!floatingPanel.isExpanded && currentApproval &&
+      {!floatingPanel.isExpanded && ws.activeRunId &&
         !currentPlanApproval &&
         !ws.showEmptyState &&
         !ws.showNewRunTab && (
         <div className="w-full max-w-210 mx-auto">
-          <ToolApprovalDialog
+          <RunInputDialog
             request={currentApproval}
             onRespond={respondToolApproval}
             variant={variant}
@@ -1020,6 +1030,7 @@ export function WorkspaceProviderPage({
         workspaceName={ws.currentWorkspace!.name} rootPath={ws.currentWorkspace!.rootPath}
         isOpen={bottomTerminal.isOpen} onHide={bottomTerminal.close} />}
     </div>
+    </AsyncQuestionDialogProvider>
     </PluginLogoProvider>
   );
 }

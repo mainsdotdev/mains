@@ -23,7 +23,7 @@ vi.mock("./signal-tab-content", () => ({ SignalTabContent: () => null }));
 vi.mock("./note-tab-content", () => ({ NoteTabContent: () => null }));
 vi.mock("./turn-rail", () => ({ TurnRail: () => null }));
 vi.mock("./realtime-voice-bar", () => ({ RealtimeVoiceBar: () => null }));
-vi.mock("./ascii-loader", () => ({ AsciiLoader: () => <p>Working…</p> }));
+vi.mock("./ascii-loader", () => ({ AsciiLoader: ({ activeTool }: { activeTool?: RunEvent }) => <p>{activeTool ? "Tool activity" : "Working…"}</p> }));
 vi.mock("./provider-auth-notice", () => ({ ProviderAuthNotice: () => null }));
 vi.mock("./turn-changes-card", () => ({ TurnChangesCard: () => null }));
 vi.mock("@/hooks/use-mode-config", () => ({ useModeConfig: () => ({ showTurnChanges: false }) }));
@@ -54,6 +54,27 @@ const run: Run = { id: "run", workspaceId: "ws", status: "running", providerId: 
 function event(id: string, time: number, metadata: Record<string, unknown> = {}): RunEvent {
   return { id, content: id, type: "artifact", timestamp: new Date(time), metadata: { kind: "report", ...metadata } };
 }
+
+it("hides thinking during a visible assistant stream while retaining waiting and tool activity", () => {
+  const waiting = [event("Old reply", 1_000), event("New request", 40_000, { kind: "user-prompt" }),
+    event("Reasoning", 41_000, { kind: "thinking", streaming: true }),
+    event("Child reply", 42_000, { isFromSubagent: true, streaming: true })];
+  const props = { runs: [run], activeTab: run.id, currentEvents: waiting, currentWorkspace: null,
+    eventsEndRef: createRef<HTMLDivElement>() as RefObject<HTMLDivElement>, issueTabs: [], variant: "codex" as const };
+  const view = render(<WorkspaceEvents {...props} />);
+  expect(view.getByText("Working…")).toBeTruthy();
+  const stream = event("The answer is arriving", 43_000, { streaming: true });
+  view.rerender(<WorkspaceEvents {...props} currentEvents={[...waiting, stream]} />);
+  expect(view.getByText("The answer is arriving")).toBeTruthy();
+  expect(view.queryByText("Working…")).toBeNull();
+  const tool: RunEvent = { ...event("Read: package.json", 44_000, { status: "running", toolName: "Read" }), type: "tool_call" };
+  view.rerender(<WorkspaceEvents {...props} currentEvents={[...waiting, stream, tool]} />);
+  expect(view.getByText("Tool activity")).toBeTruthy();
+  view.rerender(<WorkspaceEvents {...props} runs={[{ ...run, status: "succeeded" }]}
+    currentEvents={[...waiting, { ...stream, metadata: { ...stream.metadata, streaming: false } }]} />);
+  expect(view.queryByText("Working…")).toBeNull();
+  expect(view.queryByText("Tool activity")).toBeNull();
+});
 
 it("renders the voice conversation and tools without a work block, then shows the next typed answer", () => {
   const events = [event("Spoken request", 9_000, { voice: true, kind: "user-prompt" }),

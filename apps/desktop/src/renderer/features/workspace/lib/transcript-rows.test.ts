@@ -65,6 +65,23 @@ function turn(turnIndex: number, model: string | null): RunTurn {
 }
 
 describe("buildTurnRenderRows — deliverable breakout", () => {
+  it("keeps async questions reachable in their original position after a confirmed final answer", () => {
+    const groups = groupEvents([
+      ev({ id: "u", metadata: { kind: "user-prompt" } }),
+      ev({ id: "progress", content: "Checking", metadata: { kind: "report" } }),
+      ev({ id: "final", content: "Done", metadata: { kind: "report", messagePhase: "final_answer" } }),
+      ev({ id: "question", content: "Continue?", metadata: { kind: "report", source: "codex_async_questions" } }),
+      ev({ id: "later", content: "More background work", metadata: { kind: "report" } }),
+    ]);
+    const rows = buildTurnRenderRows(groups);
+    expect(rows.find((row) => row.kind === "flat" && row.indices.includes(3))).toEqual({ kind: "flat", indices: [3] });
+    const collapsed = rows.flatMap((row) => row.kind === "accordion" ? row.previousSegments.flat() : []);
+    expect(collapsed).not.toContain(3);
+    const visible = rows.flatMap((row) => row.kind === "flat" ? row.indices : [...row.messageBreakoutIndices, ...row.lastSegment]);
+    expect(visible.indexOf(2)).toBeLessThan(visible.indexOf(3));
+    expect(visible.indexOf(3)).toBeLessThan(visible.indexOf(4));
+  });
+
   it("leaves compaction visible in chronological order between collapsed activity on both sides", () => {
     const groups = groupEvents([
       ev({ id: "u", metadata: { kind: "user-prompt" } }),

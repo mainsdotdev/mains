@@ -36,6 +36,7 @@ import type Database from "better-sqlite3";
 import type { RealtimeWorkHandlers, WorkRunRealtimeRequest } from "../../../shared/adapter.types";
 import type { RunRealtimeEvent, RunRealtimeUpdate } from "@mains/contracts/realtime";
 import { CHANNELS } from "@mains/contracts/channels";
+import { asyncQuestionMessageId } from "@mains/contracts/async-questions";
 import { registerEventSink } from "../../ipc-kit/event-bus";
 
 const flushBackground = () => new Promise((r) => setTimeout(r, 50));
@@ -119,6 +120,7 @@ vi.mock("../workspace", async () => {
 
 import { runsService } from "./runs.service";
 import { runsRepo } from "./runs.repo";
+import { insertRunInputArtifact } from "./run-input-artifact";
 import { managedRunDir, managedRunImageDir } from "./run-execution";
 import { runSessionRegistry } from "./run-session-registry";
 import { prepareRunAttachments } from "./run-attachment-storage";
@@ -3515,6 +3517,30 @@ describe("runsService", () => {
   // continueRun
   // ─────────────────────────────────────────────────────────────
   describe("steer input delivery", () => {
+    it("rejects a stale async answer when an ordinary input is accepted during native preflight", async () => {
+      createProvider(db, { id: "codex" });
+      createRun(db, { id: "question-race", providerId: "codex", accountId: "default", status: "running" });
+      const artifactId = await runsRepo.insertArtifact({ runId: "question-race", kind: "report", content: "Environment?",
+        metadata: { source: "codex_async_questions", questions: [{ title: "Environment?", options: null }] } });
+      const active = { runId: "question-race", project: vi.fn(), abort: vi.fn(), finalize: vi.fn(), updateBaseRef: vi.fn() };
+      runSessionRegistry.register(active.runId, active);
+      const steerRun = vi.fn();
+      vi.mocked(createWorkAdapter).mockReturnValue({ steerRun } as any);
+      const provider = (await providersService.getById("codex"))!;
+      const reading = vi.spyOn(providersService, "getById").mockImplementationOnce(async () => {
+        await insertRunInputArtifact(active.runId, { type: "artifact", kind: "user-prompt", content: "A different task" });
+        return provider;
+      });
+      try {
+        await expect(runsService.steerRun({ runId: active.runId, accountId: "default",
+          clientUserMessageId: asyncQuestionMessageId(artifactId), message: "Staging",
+          asyncQuestionReply: { artifactId, answers: ["Staging"] } })).rejects.toThrow("newer message was sent");
+        expect(steerRun).not.toHaveBeenCalled();
+        expect((await runsRepo.findRunById(active.runId))?.status).toBe("running");
+        expect(runSessionRegistry.get(active.runId)).toBe(active);
+      } finally { reading.mockRestore(); runSessionRegistry.unregister(active.runId); }
+    });
+
     it.each(["codex", "claude_code"])("forwards %s active input without model or directory overrides", async (providerId) => {
       if (providerId === "codex") createProvider(db, { id: providerId });
       createRun(db, { id: "steer-run", providerId, accountId: "default", status: "running" });
@@ -3589,6 +3615,21 @@ describe("runsService", () => {
     function createContinuableRun(overrides: Parameters<typeof createRun>[1]) {
       return createRun(db, { status: "succeeded", ...overrides });
     }
+
+    it("rejects a stale async answer before changing an idle run or starting its provider", async () => {
+      createProvider(db, { id: "codex" });
+      createContinuableRun({ id: "old-question", providerId: "codex", accountId: "default" });
+      const artifactId = await runsRepo.insertArtifact({ runId: "old-question", kind: "report", content: "Environment?",
+        metadata: { source: "codex_async_questions", questions: [{ title: "Environment?", options: null }] } });
+      await insertRunInputArtifact("old-question", { type: "artifact", kind: "user-prompt", content: "New task" });
+      const adapter = setupContinueAdapter();
+      await expect(runsService.continueRun({ runId: "old-question", accountId: "default", message: "Staging",
+        clientUserMessageId: asyncQuestionMessageId(artifactId), asyncQuestionReply: { artifactId, answers: ["Staging"] } }))
+        .rejects.toThrow("newer message was sent");
+      expect(adapter.continueRun).not.toHaveBeenCalled();
+      expect((await runsRepo.findRunById("old-question"))?.status).toBe("succeeded");
+      expect(runSessionRegistry.get("old-question")).toBeUndefined();
+    });
 
     it("rejects concurrent continuation without failing the active run", async () => {
       createContinuableRun({ id: "live-run", accountId: "default", status: "running" });

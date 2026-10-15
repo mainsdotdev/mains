@@ -341,7 +341,9 @@ describe("codex.driver / app-server protocol", () => {
     const events: Array<Record<string, unknown>> = [];
     const execution = driver.executePrompt(acquired.session, acquired.prompt, async (event) => { events.push(event as unknown as Record<string, unknown>); }, new AbortController().signal);
     await waitForDriverEvent(events, (event) => event.type === "context_usage", "live parent turn");
-    const result = await driver.steerRun!({ runId: "steer-run", clientUserMessageId: "input-1", message: "change direction", skills: [{ name: "skill", path: "/tmp/skill/SKILL.md" }] });
+    const asyncQuestionReply = { artifactId: 12, answers: ["Staging"] };
+    const result = await driver.steerRun!({ runId: "steer-run", clientUserMessageId: "input-1", message: "change direction",
+      asyncQuestionReply, skills: [{ name: "skill", path: "/tmp/skill/SKILL.md" }] });
     expect(await execution).toMatchObject({ status: "succeeded" });
     const requests = readProtocolLog(logPath);
     const steer = requests.find((message) => message.method === "turn/steer");
@@ -350,6 +352,8 @@ describe("codex.driver / app-server protocol", () => {
     expect(result.turnId).toBe(`turn-${acquired.sessionId}`);
     expect(requests.filter((message) => message.method === "turn/start")).toHaveLength(1);
     expect(events.filter((event) => event.type === "artifact" && event.kind === "user-prompt")).toHaveLength(1);
+    expect(events.find((event) => event.type === "artifact" && event.kind === "user-prompt")?.metadata)
+      .toMatchObject({ asyncQuestionReply });
   });
 
   // First test in the file pays the cold start (fixture process spawn + first

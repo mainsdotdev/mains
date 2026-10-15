@@ -379,6 +379,8 @@ export const CHANNELS = {
     continue: "runs:continue",
     steer: "runs:steer",
     inputStatus: "runs:inputStatus",
+    answerAsyncQuestions: "runs:answerAsyncQuestions",
+    dismissAsyncQuestions: "runs:dismissAsyncQuestions",
     createRealtimeConversation: "runs:createRealtimeConversation",
     startRealtime: "runs:startRealtime",
     stopRealtime: "runs:stopRealtime",
@@ -492,6 +494,7 @@ export const CHANNELS = {
   workspace: {
     // ── lifecycle ──
     archive: "workspace:archive",
+    cancelClone: "workspace:cancelClone",
     create: "workspace:create",
     createFromSource: "workspace:createFromSource",
     delete: "workspace:delete",

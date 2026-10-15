@@ -349,6 +349,23 @@ describe("RunSession", () => {
     await session.finalize({ status: "succeeded" });
   });
 
+  it("stamps async questions with their originating turn and retires them on accepted ordinary input", async () => {
+    const session = makeSession();
+    await session.project({ type: "artifact", kind: "report", content: "Environment?",
+      metadata: { source: "codex_async_questions", questions: [{ title: "Environment?", options: null }] } });
+    const [question] = await runsRepo.findArtifactsByRun("r1");
+    const turn = await runsRepo.findActiveTurnByRun("r1");
+    expect(question.metadata?.turnId).toBe(turn!.id);
+    await session.project({ type: "artifact", kind: "user-prompt", content: "Another task",
+      metadata: { delivery: "steer", clientUserMessageId: "normal-input" } });
+    const input = await runsRepo.findInputArtifact("r1", "normal-input");
+    expect((await runsRepo.findArtifactById(question.id))?.metadata).toMatchObject({
+      turnId: turn!.id, asyncQuestionState: { supersededBy: input!.id },
+    });
+    await session.finalize({ status: "succeeded" });
+    expect((await runsRepo.findTurnsByRun("r1"))[0].status).toBe("completed");
+  });
+
   describe("construction", () => {
     it("registers itself in the registry", () => {
       const session = makeSession();

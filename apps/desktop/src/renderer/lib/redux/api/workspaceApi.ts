@@ -5,11 +5,12 @@
 // Tag types stay split (Workspaces, WorkspaceActivity, WorkspaceDiffs,
 // Reviews, ReviewFindings) so UI sections refresh independently.
 
-import { appApi } from "@/lib/transport";
+import { appApi, getTransport } from "@/lib/transport";
 import { baseApi } from "./baseApi";
 import { CHANNELS } from "../../../../shared/ipc-kit/channels";
 import type { AppDispatch, RootState } from "../index";
 import { forgetDeletedUiContext } from "../ui-state-cleanup";
+import type { WorkspaceIntakePayload, CancelWorkspaceClonePayload } from "@mains/contracts/workspace-intake";
 
 // ─────────────────────────────────────────────────────────────
 // ── Workspace ──
@@ -97,16 +98,7 @@ export interface WorkspaceGitState {
 // Workspace intake — one operation creates a project + workspace from a repo.
 // The worktree-vs-direct branching and project find-or-create live in the
 // main process (workspaceService.createFromSource). See CONTEXT.md.
-export type WorkspaceIntakeSource =
-  | { kind: "folder"; path: string }
-  | { kind: "clone"; url: string; targetPath: string }
-  | { kind: "init"; name: string; parentPath?: string }
-  | { kind: "worktree"; projectId: string };
-
-export interface WorkspaceIntakePayload {
-  accountId: string;
-  source: WorkspaceIntakeSource;
-}
+export type { WorkspaceIntakeSource, WorkspaceIntakePayload } from "@mains/contracts/workspace-intake";
 
 // ─────────────────────────────────────────────────────────────
 // ── Activity ──
@@ -348,11 +340,25 @@ export const workspaceApi = baseApi.injectEndpoints({
     // Create a project + workspace from a repo (picked folder / clone / init).
     // Returns the created workspace so callers can navigate to it.
     createWorkspaceFromSource: builder.mutation<Workspace, WorkspaceIntakePayload>({
-      query: (payload) => ({
-        handler: CHANNELS.workspace.createFromSource,
-        args: [payload],
-      }),
+      async queryFn(payload, { dispatch }, _extra, baseQuery) {
+        const transport = getTransport();
+        const result = await baseQuery({ handler: CHANNELS.workspace.createFromSource, args: [payload] });
+        if (result.error) return { error: result.error };
+        const workspace = result.data as Workspace;
+        // Replace a clone's pending row without waiting for the list refetch.
+        // A late intake response must never enter another backend's cache.
+        if (getTransport() === transport) {
+          dispatch(workspaceApi.util.updateQueryData("listWorkspaces", undefined, (workspaces) => {
+            if (!workspaces.some((row) => row.id === workspace.id)) workspaces.push(workspace);
+          }));
+        }
+        return { data: workspace };
+      },
       invalidatesTags: ["Workspaces", "WorkspaceGitStates", "Projects"],
+    }),
+
+    cancelWorkspaceClone: builder.mutation<boolean, CancelWorkspaceClonePayload>({
+      query: (payload) => ({ handler: CHANNELS.workspace.cancelClone, args: [payload] }),
     }),
 
     updateWorkspace: builder.mutation<
@@ -723,6 +729,7 @@ export const {
   useLazyGetWorkspaceByRootPathQuery,
   useCreateWorkspaceMutation,
   useCreateWorkspaceFromSourceMutation,
+  useCancelWorkspaceCloneMutation,
   useUpdateWorkspaceMutation,
   useDeleteWorkspaceMutation,
   useArchiveWorkspaceMutation,

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { readAsyncQuestions as normalizeAsyncQuestions, type AsyncQuestion } from "@mains/contracts/async-questions";
 import type {
   WorkRunEvent,
   WorkRunPlanStep,
@@ -107,29 +108,7 @@ export type CodexThreadItemPhase = "start" | "update" | "complete";
 type ThreadItem = CodexThreadItem;
 type ThreadItemPhase = CodexThreadItemPhase;
 
-interface CodexAsyncQuestion {
-  title: string;
-  options: string[] | null;
-}
-
-function normalizeAsyncQuestions(value: unknown): CodexAsyncQuestion[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") return [];
-    const question = entry as Record<string, unknown>;
-    const title = typeof question.title === "string"
-      ? question.title.trim()
-      : "";
-    if (!title) return [];
-    const options = Array.isArray(question.options)
-      ? question.options.flatMap((option) =>
-          typeof option === "string" && option.trim() ? [option.trim()] : [])
-      : null;
-    return [{ title, options }];
-  });
-}
-
-function formatAsyncQuestions(questions: CodexAsyncQuestion[]): string {
+function formatAsyncQuestions(questions: AsyncQuestion[]): string {
   return questions.map((question) => {
     const title = `**${question.title}**`;
     if (!question.options?.length) return title;

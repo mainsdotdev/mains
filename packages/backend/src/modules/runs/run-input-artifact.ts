@@ -2,6 +2,7 @@ import type { WorkRunEvent } from "../../../shared/adapter.types";
 import { runsRepo } from "./runs.repo";
 import type { RunArtifactKind } from "./runs.dto";
 import { createHash } from "node:crypto";
+import { asyncQuestionMessageId, readAsyncQuestionReply } from "@mains/contracts/async-questions";
 
 const pendingInputs = new Map<string, Promise<boolean>>();
 
@@ -25,7 +26,7 @@ export async function insertRunInputArtifact(
       return false;
     }
     if (prepare) event = await prepare();
-    await runsRepo.insertArtifact({
+    const artifactId = await runsRepo.insertArtifact({
       runId,
       kind: event.kind as RunArtifactKind,
       path: event.path,
@@ -33,6 +34,14 @@ export async function insertRunInputArtifact(
       metadata: event.metadata,
       contentHash: event.content ? createHash("sha256").update(event.content).digest("hex") : undefined,
     });
+    if (event.kind === "user-prompt" && event.metadata?.isFromSubagent !== true) {
+      const reply = readAsyncQuestionReply(event.metadata?.asyncQuestionReply);
+      if (reply && id === asyncQuestionMessageId(reply.artifactId)) {
+        await runsRepo.recordAsyncQuestionAnswer(runId, { ...reply, clientUserMessageId: id });
+      } else {
+        await runsRepo.supersedeAsyncQuestions(runId, artifactId);
+      }
+    }
     return true;
   })();
   if (key) pendingInputs.set(key, insert);

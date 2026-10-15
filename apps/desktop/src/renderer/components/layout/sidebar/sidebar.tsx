@@ -155,7 +155,10 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     isAddingLocal,
     handleCloneRepo,
     handleOpenCloneModal,
-    isCloning,
+    pendingClones,
+    handleCancelClone,
+    handleRetryClone,
+    handleDismissClone,
     handleCreateProject,
     handleOpenCreateProjectModal,
     isCreatingProject,
@@ -517,6 +520,10 @@ export default function Sidebar({ collapsed }: SidebarProps) {
             )}
             <SidebarContent
               workspaces={workspaces}
+              pendingClones={pendingClones}
+              onCancelClone={handleCancelClone}
+              onRetryClone={handleRetryClone}
+              onDismissClone={handleDismissClone}
               gitStateByWorkspaceId={gitStateByWorkspaceId}
               isLoadingWorkspaces={isLoadingWorkspaces}
               onDeleteWorkspace={deleteWorkspace.handleDeleteClick}
@@ -577,7 +584,6 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           activeTab={addProjectTab}
           onTabChange={handleAddProjectTabChange}
           isAddingLocal={isAddingLocal}
-          isCloning={isCloning}
           isCreating={isCreatingProject}
           addLocalShortcut={addLocalShortcut}
           onAddLocal={() => void handleAddProject()}
