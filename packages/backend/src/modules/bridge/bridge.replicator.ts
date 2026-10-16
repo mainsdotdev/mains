@@ -45,6 +45,10 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   let requested = false, failures = 0, subscribed = "";
   let quota: BridgeQuota | null = null;
   let quotaDirty = true, nextQuotaRefreshAt = 0;
+  function readOnly() {
+    const current = quota?.subscription;
+    return !!current && (!current.canUpload || !!current.expiresAt && Date.parse(current.expiresAt) <= Date.now());
+  }
   async function refreshQuota(force = false) {
     if (!force && (!quotaDirty || Date.now() < nextQuotaRefreshAt)) return;
     nextQuotaRefreshAt = Date.now() + quotaRefreshIntervalMs;
@@ -110,15 +114,15 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     timer = setTimeout(() => { timer = undefined; void syncNow().catch(() => {}); }, delay);
     timer.unref();
   }
-  async function drain(stream: BridgeStream) {
+  async function drain(stream: BridgeStream, deletesOnly = false) {
     // Bound a busy publisher's work so account pulls and open transcripts keep progressing.
     for (let batch = 0; batch < 10 && !stopped && !paused; batch++) {
-      const pushed = await engine.push(stream, 100);
+      const pushed = await engine.push(stream, 100, deletesOnly);
       if (pushed) quotaDirty = true;
       if (pushed < 100) break;
     }
   }
-  async function cycle() {
+  async function cycle(refreshUsage = false) {
     requested = false;
     try {
       const streams: BridgeStream[] = ["account", ...watchedRuns().map((id): BridgeStream => `run:${id}`)];
@@ -129,6 +133,11 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         await engine.bootstrap(); initialized = true;
       } else await engine.pull("account");
       if (stopped || paused) return;
+      const wasReadOnly = readOnly();
+      // An inactive publisher checks for renewal once a minute, without retrying
+      // its whole outbox. Explicit UI sync may refresh the cached usage sooner.
+      if (wasReadOnly) { if (pending() || refreshUsage) quotaDirty = true; await refreshQuota(refreshUsage); }
+      const deletesOnly = readOnly();
       refreshClaudeSessionMirrors(sqlite, backendId);
       while (!(sqlite.prepare("SELECT backfill_done FROM bridge_config WHERE id=1").get() as { backfill_done: number }).backfill_done) {
         await engine.backfill(100); await new Promise<void>((resolve) => setImmediate(resolve));
@@ -136,15 +145,19 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       }
       let writeError: unknown;
       try {
-        await drain("account");
+        await drain("account", deletesOnly);
         const accountPending = (sqlite.prepare(`SELECT count(*) AS n FROM bridge_outbox WHERE stream='account'`).get() as { n: number }).n;
         // Run children may only be published after their account-stream roots/parents.
-        if (!accountPending) {
-          const outgoing = sqlite.prepare(`SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' ORDER BY stream`).all() as { stream: BridgeStream }[];
-          for (const row of outgoing) { if (stopped || paused) return; await drain(row.stream); }
+        if (!accountPending || deletesOnly) {
+          const outgoing = sqlite.prepare(`SELECT DISTINCT stream FROM bridge_outbox WHERE stream<>'account' AND (?=0 OR op='delete') ORDER BY stream`).all(Number(deletesOnly)) as { stream: BridgeStream }[];
+          for (const row of outgoing) {
+            if (stopped || paused) return;
+            if (deletesOnly) await drain(row.stream, true).catch(() => {}); // A never-published parent may still be queued.
+            else await drain(row.stream);
+          }
         }
       } catch (cause) {
-        if (!/quota|rate limit/i.test(String(cause))) throw cause;
+        if (!/quota|rate limit|subscription required/i.test(String(cause))) throw cause;
         writeError = cause;
         const deletions = sqlite.prepare("SELECT DISTINCT stream FROM bridge_outbox WHERE op='delete' AND stream<>'account'").all() as { stream: BridgeStream }[];
         for (const { stream } of deletions) {
@@ -161,11 +174,14 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       if (writeError) throw writeError;
       // Entering/leaving a quota refusal needs a fresh plan/usage sample. The
       // ordinary live-update path and repeated refusals remain rate limited.
-      await refreshQuota(!!error && /quota|rate limit/i.test(error));
-      state = "connected"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify();
+      await refreshQuota(refreshUsage && !wasReadOnly || !!error && /quota|rate limit/i.test(error));
+      state = readOnly() ? "read-only" : "connected"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify();
     } catch (cause) {
       if (stopped) return;
-      if (/quota|rate limit/i.test(String(cause))) { quotaDirty = true; await refreshQuota(!error || !/quota|rate limit/i.test(error)); }
+      if (/quota|rate limit|subscription required/i.test(String(cause))) { quotaDirty = true; await refreshQuota(!error || !/quota|rate limit|subscription required/i.test(error)); }
+      if (/subscription required/i.test(String(cause)) && readOnly()) {
+        state = "read-only"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify(); return;
+      }
       failures++;
       error = cause instanceof Error ? cause.message : "Bridge replication failed";
       state = /connection|timed out/i.test(error) ? "offline" : "error";
@@ -177,18 +193,18 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       notify(); throw cause;
     } finally {
       if (!stopped) {
-        const active = watchedRuns().length > 0 || pending() > 0;
-        const interval = active ? options.activeIntervalMs ?? 1000 : options.idleIntervalMs ?? 10_000;
+        const active = watchedRuns().length > 0 || pending() > 0 && !readOnly();
+        const interval = active ? options.activeIntervalMs ?? 1000 : readOnly() ? Math.max(quotaRefreshIntervalMs, options.idleIntervalMs ?? 10_000) : options.idleIntervalMs ?? 10_000;
         const delay = failures ? Math.min(30_000, 1000 * 2 ** Math.min(failures - 1, 5)) : requested ? 0 : interval;
         schedule(delay);
       }
     }
   }
-  function syncNow(): Promise<void> {
+  function syncNow(refreshUsage = false): Promise<void> {
     if (stopped) return Promise.reject(new Error("Bridge replicator is stopped"));
     if (paused) return Promise.reject(new Error("Bridge replication is paused"));
-    if (inFlight) return inFlight;
-    inFlight = cycle().finally(() => { inFlight = undefined; });
+    if (inFlight) return refreshUsage ? inFlight.catch(() => {}).then(() => syncNow(true)) : inFlight;
+    inFlight = cycle(refreshUsage).finally(() => { inFlight = undefined; });
     return inFlight;
   }
   const api = {
@@ -225,8 +241,11 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         online: online.get(peer.backend_id) ?? null, lastSeen: peer.last_seen_ms === null ? null : new Date(peer.last_seen_ms).toISOString() }]));
       const owners = sqlite.prepare("SELECT DISTINCT owner_backend_id AS id FROM runs UNION SELECT DISTINCT owner_backend_id FROM workspaces").all() as { id: string }[];
       for (const { id } of owners) if (!backends.has(id)) backends.set(id, { backendId: id, label: `Device ${id.slice(0, 8)}`, platform: null, online: null, lastSeen: null });
-      backends.set(backendId, { backendId, label: config.label, platform: process.platform, online: state === "connected", lastSeen: lastSyncedAt });
-      return { enabled: true, state, backendId, label: config.label, lastSyncedAt, error, pendingRecords: pending(), backends: [...backends.values()], runs: [...runStates.values()], quota };
+      backends.set(backendId, { backendId, label: config.label, platform: process.platform, online: state === "connected" || state === "read-only", lastSeen: lastSyncedAt });
+      const current = quota?.subscription;
+      const displayQuota = current?.canUpload && current.expiresAt && Date.parse(current.expiresAt) <= Date.now()
+        ? { ...quota!, subscription: { ...current, status: "expired" as const, canUpload: false } } : quota;
+      return { enabled: true, state: state === "connected" && readOnly() ? "read-only" : state, backendId, label: config.label, lastSyncedAt, error, pendingRecords: pending(), backends: [...backends.values()], runs: [...runStates.values()], quota: displayQuota };
     },
     async stop() {
       stopped = true; if (timer) clearTimeout(timer); timer = undefined;

@@ -267,6 +267,13 @@
       "when": 1792092950509,
       "tag": "0037_provider_session_mirror",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1792115211400,
+      "tag": "0038_bridge_blob_roots",
+      "breakpoints": true
     }
   ]
 }

@@ -4,10 +4,11 @@ import { backendIdentity, backendStillApproved } from "./devices";
 
 export interface BridgeIdentity { accountId: string; backendId: string; expiresAt: number; credentialHash?: string }
 export interface DevAuthEnv extends AuthEnv { BRIDGE_DEV_AUTH?: string; BRIDGE_DEV_SECRET?: string }
+export const bridgeDevelopmentEnabled = (env: DevAuthEnv) => env.BRIDGE_DEV_AUTH === "true" && (!env.BRIDGE_ENV || env.BRIDGE_ENV === "local");
 export async function authenticate(request: Request, env: DevAuthEnv): Promise<BridgeIdentity | null> {
   const backend = await backendIdentity(request, env);
   if (backend) return { accountId: backend.account_id, backendId: backend.backend_id, expiresAt: backend.token_expires_at, credentialHash: backend.token_hash };
-  if (env.BRIDGE_DEV_AUTH !== "true" || !env.BRIDGE_DEV_SECRET || env.BRIDGE_DEV_SECRET.length < 32) return null;
+  if (!bridgeDevelopmentEnabled(env) || !env.BRIDGE_DEV_SECRET || env.BRIDGE_DEV_SECRET.length < 32) return null;
   const authorization = request.headers.get("Authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
   try {
@@ -22,5 +23,5 @@ export async function authenticate(request: Request, env: DevAuthEnv): Promise<B
 }
 export async function identityIsActive(identity: BridgeIdentity, env: DevAuthEnv): Promise<boolean> {
   if (identity.expiresAt <= Date.now()) return false;
-  return identity.credentialHash ? backendStillApproved(env, identity.accountId, identity.backendId, identity.credentialHash) : env.BRIDGE_DEV_AUTH === "true";
+  return identity.credentialHash ? backendStillApproved(env, identity.accountId, identity.backendId, identity.credentialHash) : bridgeDevelopmentEnabled(env);
 }

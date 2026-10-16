@@ -8,6 +8,7 @@
   "workers_dev": true,
   "preview_urls": false,
   "vars": {
+    "BRIDGE_ENV": "staging",
     "BRIDGE_DEV_AUTH": "false",
     "BRIDGE_AUTH_URL": "https://mains-bridge-staging.team-68e.workers.dev",
     "GITHUB_CLIENT_ID": "Ov23livSdwQ720Sax55l"

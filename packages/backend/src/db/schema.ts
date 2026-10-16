@@ -1636,6 +1636,7 @@ export const bridgeConfig = sqliteTable("bridge_config", {
   backfillTable: text("backfill_table"),
   backfillPk: text("backfill_pk"),
   backfillDone: integer("backfill_done", { mode: "boolean" }).notNull().default(false),
+  blobRootsVersion: integer("blob_roots_version").notNull().default(0),
   accountFingerprint: text("account_fingerprint"),
   trackingEnabled: integer("tracking_enabled", { mode: "boolean" }).notNull().default(false),
   bridgeAccountId: text("account_id"), hubOrigin: text("hub_origin"),

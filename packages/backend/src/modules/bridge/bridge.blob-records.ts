@@ -93,6 +93,38 @@ export function createBridgeBlobRecords(options: { sqlite: SQLiteInstance; backe
     },
     ready(store: BridgeStore, entry: OutboxEntry) { return !needsFiles(entry) || getClock(store.sqlite, entry.table_name, entry.pk, entry.register)?.blob_refs_json != null; },
     async acknowledged(clock: RowClock) { await blobs.releaseCaptured(JSON.parse(clock.blob_refs_json ?? "[]")); },
+    /** An orphan may have expired while this backend was offline before ACK.
+     * Republish the exact captured identity, never substitute newer file bytes. */
+    async republish(store: BridgeStore, clock: RowClock) {
+      const values = JSON.parse(clock.values_json) as Record<string, unknown>;
+      for (const ref of JSON.parse(clock.blob_refs_json ?? "[]") as BridgeBlobRef[]) {
+        if (ref.kind === "value") {
+          if (typeof values[ref.column] !== "string") throw new Error("Bridge value snapshot is missing");
+          const bytes = Buffer.from(JSON.stringify(values[ref.column]));
+          if (!blobs.matches(ref, bytes)) throw new Error("Bridge value snapshot has changed");
+          await blobs.publish(bytes, ref);
+        } else await blobs.publishCaptured(ref, async () => {
+          const row = readRow(store, clock.table_name, clock.pk);
+          // Native entry wire images replace entry with null; its immutable
+          // source row retains the exact bytes and the blob HMAC verifies them.
+          if (clock.table_name === "provider_session_entries" && ref.column === "entry" && typeof row?.entry === "string")
+            return Buffer.from(row.entry);
+          const roots = [path.join(dataDir, "attachments"), path.join(dataDir, "collections"), path.join(dataDir, "atlas", "files")];
+          const runId = typeof values.run_id === "string" ? values.run_id : undefined;
+          if (runId && /^[\w-]+$/.test(runId)) {
+            const run = sqlite.prepare("SELECT r.mode,r.provider_id,r.session_id,w.root_path FROM runs r LEFT JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=? AND r.owner_backend_id=?").get(runId, backendId) as { mode: string; provider_id: string; session_id: string | null; root_path: string | null } | undefined;
+            if (run) {
+              roots.push(path.join(dataDir, "generated-images", runId));
+              if (run.root_path) roots.push(run.root_path);
+              else if (["work", "chat"].includes(run.mode)) roots.push(path.join(dataDir, "runs", runId, run.mode));
+              if (run.provider_id === "codex" && run.session_id && /^[\w-]+$/.test(run.session_id)) roots.push(path.join(homedir(), ".codex", "generated_images", run.session_id));
+            }
+          }
+          if (ref.sourcePath) return snapshotFile(ref.sourcePath, roots);
+          return clock.table_name === "run_artifacts" && ref.column === "blob_data" && Buffer.isBuffer(row?.blob_data) ? row.blob_data : undefined;
+        });
+      }
+    },
     async prepare(store: BridgeStore, entry: OutboxEntry) {
       if (!needsFiles(entry)) return;
       const clock = getClock(sqlite, entry.table_name, entry.pk, entry.register);

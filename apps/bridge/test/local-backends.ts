@@ -119,10 +119,11 @@ async function createHost(dir: string, label: string, lan = false) {
 }
 
 /** Two actual composition roots, independent data dirs/identities, one temporary workerd hub. */
-export async function startLocalBackends(settings: { auth?: boolean; lan?: boolean } = {}) {
+export async function startLocalBackends(settings: { auth?: boolean; lan?: boolean; subscriptionInterval?: "monthly" | "yearly" | null } = {}) {
   await access(serverEntry).catch(() => { throw new Error("Build apps/server and apps/desktop's web renderer before running host acceptance tests"); });
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hosts-"));
-  const hub = await startLocalBridgeHub(settings);
+  const { subscriptionInterval, ...hubSettings } = settings;
+  const hub = await startLocalBridgeHub({ ...hubSettings, ...(settings.auth && subscriptionInterval !== null ? { subscriptionInterval: subscriptionInterval ?? "monthly" } : {}) });
   const a = await createHost(join(dir, "A"), "Computer A"), b = await createHost(join(dir, "B"), "Computer B", settings.lan);
   const dispose = async () => {
     await Promise.allSettled([a.stop(), b.stop()]); await hub.dispose();

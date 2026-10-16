@@ -85,7 +85,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   function backfill(limit: number): { done: boolean; visited: number } {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid Bridge backfill limit");
     return sqlite.transaction(() => {
-      const progress = sqlite.prepare("SELECT backfill_table,backfill_pk,backfill_done FROM bridge_config WHERE id=1").get() as { backfill_table: string | null; backfill_pk: string | null; backfill_done: number };
+      const progress = sqlite.prepare("SELECT backfill_table,backfill_pk,backfill_done,blob_roots_version FROM bridge_config WHERE id=1").get() as { backfill_table: string | null; backfill_pk: string | null; backfill_done: number; blob_roots_version: number };
       if (progress.backfill_done) return { done: true, visited: 0 };
       let visited = 0;
       const start = progress.backfill_table ? backfillTables.indexOf(progress.backfill_table) : 0;
@@ -96,7 +96,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
         const after = table === progress.backfill_table ? progress.backfill_pk ?? "" : "";
         const rows = sqlite.prepare(`SELECT ${pkSql} AS pk FROM ${quote(table)} r WHERE ${pkSql}>? ORDER BY ${pkSql} LIMIT ?`).all(after, limit - visited) as { pk: string }[];
         for (const row of rows) {
-          if (row.pk) captureExisting(store, table, row.pk);
+          if (row.pk) captureExisting(store, table, row.pk, progress.blob_roots_version < 1);
           visited++;
           sqlite.prepare("UPDATE bridge_config SET backfill_table=?,backfill_pk=? WHERE id=1").run(table, row.pk);
         }
@@ -111,7 +111,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
         sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at)
           VALUES(?,?,'__delete__','delete',(SELECT generation FROM bridge_clock WHERE id=1),?,?,?,?)`).run(entry.table_name, entry.pk, entry.stream, entry.owner, entry.run_id, entry.physical_ms);
       }
-      sqlite.prepare("UPDATE bridge_config SET backfill_done=1 WHERE id=1").run();
+      sqlite.prepare("UPDATE bridge_config SET backfill_done=1,blob_roots_version=1 WHERE id=1").run();
       return { done: true, visited };
     })();
   }
@@ -186,7 +186,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
           await prepareFiles({ ...entry, table_name: "run_attachments", pk: attachmentId, register: "row" });
         }
       } catch (cause) {
-        if (!/quota|rate limit/i.test(String(cause))) throw cause;
+        if (!/quota|rate limit|subscription required/i.test(String(cause))) throw cause;
         preparationError ??= cause;
       }
     }
@@ -227,8 +227,11 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       const result = results[i], sent = prepared[i], entry = sent.entry;
       if ("deleted" in result) continue;
       if ("error" in result) {
+        if (result.error === "blobMissing" && options.blobs) await options.blobs.republish(store, sent.clock);
         rejection ??= result.error === "quotaExceeded" ? "Bridge storage quota exceeded; local changes remain queued" :
-          result.error === "rateLimited" ? "Bridge write rate limit reached; local changes remain queued" : "Bridge hub rejected a non-owner write";
+          result.error === "rateLimited" ? "Bridge write rate limit reached; local changes remain queued" :
+          result.error === "subscriptionRequired" ? "Bridge subscription required; local changes remain queued" :
+          result.error === "blobMissing" ? "Bridge files need republishing; local changes remain queued" : "Bridge hub rejected a non-owner write";
         continue;
       }
       if (!Number.isSafeInteger(result.seq) || result.seq < 1) throw new Error("Invalid Bridge ACK sequence");

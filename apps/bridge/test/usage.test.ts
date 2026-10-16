@@ -4,6 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import type { BridgeEnvelope } from "@mains/contracts/bridge-protocol";
 import type { BridgeQuota } from "@mains/contracts/bridge";
 import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
+import { createHash } from "node:crypto";
 
 // Count workerd's real SQLite cursor metrics at the quota/push seam. No remote
 // resources, wall-clock timings, SQL mocks or production instrumentation.
@@ -37,6 +38,7 @@ export class UsageProbe extends DurableObject {
         if (input.op === "push") value = push();
         else { try { this.ctx.storage.transactionSync(() => { push(); throw new Error("rollback"); }); } catch { value = "rolled back"; } }
       } else if (input.op === "compact") this.store.compact();
+      else if (input.op === "gc") { await this.quota.collect(); value = this.quota.nextExpiry(); }
       else value = await this.quota.status("test");
     }
     return Response.json({ value, rowsRead: this.cursors.reduce((n, cursor) => n + cursor.rowsRead, 0),
@@ -75,7 +77,7 @@ function record(id: string, clock = 1, size = 64) {
     body: { nonce: "opaque", payload: "x".repeat(size) } };
 }
 const deleted = (row: BridgeEnvelope): BridgeEnvelope => {
-  const { registerKey: _register, ...header } = row.header; void _register;
+  const { registerKey: _register, blobs: _blobs, retention: _retention, ...header } = row.header; void [_register, _blobs, _retention];
   return { header: { ...header, op: "delete", hlc: { physicalMs: 0, counter: 0 } }, body: { nonce: "opaque", payload: "tombstone" } };
 };
 const size = (row: BridgeEnvelope) => Buffer.byteLength(JSON.stringify(row));
@@ -176,4 +178,18 @@ it("reclaims every charged copy of an attachment reused in independent run strea
   await p.call({ op: "push", stream: copies[1].header.stream, records: [copies[1]] });
   await p.call({ op: "compact" }); await p.evict();
   expect((await p.call<BridgeQuota>({ op: "status" })).value.recordBytes).toBe(size(roots[0]) + size(roots[1]) + size(tombstone));
+});
+
+it("collects only indexed due candidates without scanning thousands of live blobs", async () => {
+  const p = await probe(); await p.call({ op: "status" });
+  await p.sql(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<2000)
+    INSERT INTO blob_objects SELECT 'live-'||x,1,NULL FROM n`);
+  const key = `${createHash("sha256").update("test").digest("hex")}/${"a".repeat(43)}/0`;
+  await p.sql("INSERT INTO quota_chunks VALUES(?,140,1,0)", key);
+  await p.sql("UPDATE blob_objects SET delete_after=0 WHERE refs=0");
+  const collected = await p.call({ op: "gc" });
+  expect(collected.rowsRead).toBeLessThan(25);
+  expect((await p.call<BridgeQuota>({ op: "status" })).value.blobBytes).toBe(0);
+  expect(await p.sql("SELECT count(*) count FROM blob_objects")).toEqual([{ count: 2000 }]);
+  const idle = await p.call({ op: "gc" }); expect(idle.rowsRead).toBeLessThan(10); expect(idle.rowsWritten).toBe(0);
 });

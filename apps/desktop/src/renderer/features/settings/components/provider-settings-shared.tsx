@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { AsciiSpinner, Button, Text, toast } from "@/components/ui";
+import { AsciiSpinner, Button, Text, UsageTicks, toast } from "@/components/ui";
 import {
   SettingsPageShell,
   SettingsSection,
@@ -254,65 +254,6 @@ export interface ProviderUsageSummary {
  * (`24 / 200`) when it reports them.
  */
 export type UsageReadout = "percentLeft" | "counts";
-
-const USAGE_TICK_COUNT = 24;
-
-/**
- * Tick colour by how much of the window is left — the same quantity the meter
- * draws, so the colour can't disagree with the fill. Half the allowance gone
- * turns it amber, a fifth left turns it red.
- */
-function usageLevelClass(remainingPercent: number): string {
-  if (remainingPercent <= 20) return "bg-danger";
-  if (remainingPercent <= 50) return "bg-warning";
-  return "bg-accent";
-}
-
-/**
- * Segmented meter: a row of thin ticks, the ones covering what's *left* in the
- * level colour, the rest muted. Rounds to the nearest tick but always lights at
- * least one for a non-zero remainder so a 1% reading isn't drawn empty.
- *
- * The meter reads the same way on every provider — a full row means a full
- * allowance — so it takes consumption and derives the fill itself rather than
- * letting a caller hand it the opposite quantity.
- */
-function UsageTicks({
-  usedPercent,
-  label,
-}: {
-  usedPercent: number;
-  label: string;
-}) {
-  const clamped = Math.min(100, Math.max(0, 100 - usedPercent));
-  const filled =
-    clamped === 0
-      ? 0
-      : Math.max(1, Math.round((clamped / 100) * USAGE_TICK_COUNT));
-  const levelClass = usageLevelClass(clamped);
-
-  return (
-    <div
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={Math.round(clamped)}
-      className="flex items-center gap-1.25"
-    >
-      {Array.from({ length: USAGE_TICK_COUNT }, (_, i) => (
-        <span
-          key={i}
-          className={`h-3.5 w-0.75 rounded-full transition-colors duration-300 ${
-            i < filled
-              ? levelClass
-              : "bg-primary-300/70 dark:bg-primary-600/50"
-          }`}
-        />
-      ))}
-    </div>
-  );
-}
 
 /**
  * One rate-limit row. The meter always draws what's left; `readout` only picks

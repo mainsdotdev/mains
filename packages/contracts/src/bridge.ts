@@ -15,7 +15,7 @@ export interface BridgeRunState {
 }
 export interface BridgeStatus {
   enabled: boolean;
-  state: "disabled" | "connecting" | "syncing" | "connected" | "offline" | "error";
+  state: "disabled" | "connecting" | "syncing" | "connected" | "read-only" | "offline" | "error";
   backendId: string;
   label: string;
   lastSyncedAt: string | null;
@@ -28,6 +28,8 @@ export interface BridgeStatus {
 export interface BridgeQuota {
   plan: string; limitBytes: number; usedBytes: number; recordBytes: number; blobBytes: number; reservedBytes: number;
   fileLimitBytes: number; writesPerMinute: number;
+  subscription?: import("./bridge-subscription").BridgeSubscription;
+  plans?: import("./bridge-subscription").BridgePlan[];
 }
 export interface BridgeProjectScope {
   id: string; name: string; localOnly: boolean; workspaces: number; runs: number;

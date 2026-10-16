@@ -135,6 +135,8 @@ export { default as BrowserCursor } from "./browser-cursor";
 export { default as Crop } from "./crop";
 export { default as DeviceMobile } from "./device-mobile";
 export { default as DeviceTablet } from "./device-tablet";
+export { default as DeviceDesktop } from "./device-desktop";
+export { default as DeviceLaptop } from "./device-laptop";
 export { default as RotateDevice } from "./rotate-device";
 export { default as Gmail } from "./gmail";
 export { default as GoogleCalendar } from "./google-calendar";
@@ -195,6 +197,7 @@ export { default as MainsStroke} from "./mains-stroke"
 export { default as Import} from "./import"
 export { default as Export} from "./export"
 export { default as Palm} from "./palm"
+export { default as Bridge} from "./bridge"
 
 
 

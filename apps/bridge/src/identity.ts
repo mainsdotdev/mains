@@ -3,6 +3,7 @@ import { bearer, deviceAuthorization, magicLink } from "better-auth/plugins";
 import { BRIDGE_AUTH_CLIENT_ID } from "@mains/contracts/bridge-auth";
 
 export interface AuthEnv {
+  BRIDGE_ENV?: "local" | "staging" | "production";
   AUTH_DB?: D1Database;
   BETTER_AUTH_SECRET?: string;
   BRIDGE_AUTH_URL?: string;

@@ -1,6 +1,8 @@
 import type { BridgeEnvelope, BridgeLogRecord, BridgePushResult, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES } from "@mains/contracts/bridge-wire";
 import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
+import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
+import { installBlobReferences } from "./blob-gc";
 
 type LogRow = { seq: number; envelope: string };
 const order = (a: BridgeEnvelope, b: BridgeEnvelope) => a.header.hlc.physicalMs - b.header.hlc.physicalMs || a.header.hlc.counter - b.header.hlc.counter ||
@@ -45,6 +47,7 @@ export function createHubStore(storage: DurableObjectStorage) {
         UPDATE record_usage SET bytes=bytes+length(CAST(NEW.envelope AS BLOB))-length(CAST(OLD.envelope AS BLOB)) WHERE id=1;
       END;`);
   });
+  installBlobReferences(storage);
   const api = {
     recordBytes(): number {
       return first<{ bytes: number }>("SELECT bytes FROM record_usage WHERE id=1")!.bytes;
@@ -56,7 +59,7 @@ export function createHubStore(storage: DurableObjectStorage) {
       sql.exec("INSERT INTO write_rate VALUES(?,?,1) ON CONFLICT(backend_id) DO UPDATE SET window=excluded.window,count=CASE WHEN write_rate.window=excluded.window THEN count+1 ELSE 1 END", backendId, window);
       return true;
     },
-    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number }) {
+    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number; canUpload?: boolean; hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean }) {
       return storage.transactionSync(() => {
         const changed: BridgeLogRecord[] = [];
         const results = envelopes.map((envelope): BridgePushResult => {
@@ -76,7 +79,14 @@ export function createHubStore(storage: DurableObjectStorage) {
           const deleted = first<LogRow>("SELECT seq,envelope FROM deleted WHERE row_key=?", h.rowKey);
           if (deleted) return { deleted: JSON.parse(deleted.envelope) };
           const previous = h.op === "upsert" ? first<LogRow>("SELECT seq,envelope FROM latest WHERE stream=? AND register_key=?", stream, h.registerKey) : undefined;
-          if (previous && order(envelope, JSON.parse(previous.envelope)) <= 0) return { seq: previous.seq };
+          const previousEnvelope: BridgeEnvelope | undefined = previous && JSON.parse(previous.envelope);
+          const comparison = previousEnvelope && order(envelope, previousEnvelope);
+          // Upgrade only the original writer's exact legacy clock. This changes
+          // neither LWW order nor application data; a stale image still loses.
+          const rootsUpgrade = comparison === 0 && h.blobs !== undefined && previousEnvelope?.header.blobs === undefined;
+          if (previous && comparison !== undefined && comparison <= 0 && !rootsUpgrade) return { seq: previous.seq };
+          if (h.op === "upsert" && budget?.canUpload === false) return { error: "subscriptionRequired" };
+          if (h.op === "upsert" && h.blobs && budget?.hasBlobs && !budget.hasBlobs(h.blobs)) return { error: "blobMissing" };
           const encoded = JSON.stringify(envelope);
           if (h.op === "upsert" && budget) {
             const delta = new TextEncoder().encode(encoded).length - (previous ? new TextEncoder().encode(previous.envelope).length : 0);

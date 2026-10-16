@@ -178,7 +178,7 @@ export function prepareRecord(store: BridgeStore, entry: OutboxEntry): PreparedR
 }
 
 /** Backfill/recovery use the same clock, images and coalescing as SQL capture. */
-export function captureExisting(store: BridgeStore, table: string, pk: string): void {
+export function captureExisting(store: BridgeStore, table: string, pk: string, announceBlobRoots = false): void {
   if (isAtlas(table) && !store.atlasEnabled) return;
   const def = definition(table), row = readRow(store, table, pk);
   if (!row) return;
@@ -200,7 +200,7 @@ export function captureExisting(store: BridgeStore, table: string, pk: string): 
     const upgrade = store.filesEnabled && existing && !existing.dirty && existing.origin === store.backendId && existing.synced_seq !== null && existing.blob_refs_json === null &&
       def.blobColumns.some((column) => columns.includes(column));
     if (existing && !upgrade) {
-      if (publish && existing.dirty && existing.origin === store.backendId) {
+      if (publish && (existing.dirty || announceBlobRoots && existing.synced_seq !== null) && existing.origin === store.backendId) {
         store.sqlite.exec("UPDATE bridge_clock SET generation=generation+1 WHERE id=1");
         store.sqlite.prepare(`INSERT INTO bridge_outbox(table_name,pk,register,op,generation,stream,owner,run_id,changed_at)
           VALUES(?,?,?,'upsert',(SELECT generation FROM bridge_clock WHERE id=1),?,?,?,?)

@@ -63,6 +63,10 @@ starts after Bridge sign-in and key approval, or with an explicit
 `<userData>/bridge/dev.json` / `MAINS_BRIDGE_CONFIG`;
 see `../bridge/README.md` for the two-backend demo and acceptance commands.
 
+Local renderer previews and test fixtures must use their own Vite `cacheDir`
+inside an ignored disposable directory. Never share the app's dependency cache:
+another Vite server can replace its prebundles and break later dynamic imports.
+
 Tests require `better-sqlite3` to be rebuilt against the local Node ABI — the `test*` scripts handle this automatically, but running `vitest` directly will fail if you skip that step (use `npm rebuild better-sqlite3` first). Desktop-adapter tests live next to the file under test; backend tests and shared fixtures/factories live in `../../packages/backend`.
 
 ## Architecture Overview

@@ -14,7 +14,7 @@ export function recoverAtlasPage({ sqlite, table, row, captureAfterDelete }: Bri
   const pending = sqlite.prepare(`SELECT r.* FROM atlas_page_revisions r
     LEFT JOIN bridge_row_clock c ON c.table_name='atlas_page_revisions' AND c.pk=r.id AND c.register='row'
     WHERE r.item_id=? AND NOT EXISTS (SELECT 1 FROM bridge_atlas_recoveries saved WHERE saved.revision_id=r.id)
-      AND (c.synced_seq IS NULL OR EXISTS
+      AND (c.synced_seq IS NULL OR c.dirty=1 AND EXISTS
       (SELECT 1 FROM bridge_outbox o WHERE o.table_name='atlas_page_revisions' AND o.pk=r.id AND o.op='upsert'))
     ORDER BY r.version`).all(row.id) as SqlRow[];
   if (!pending.length) return;

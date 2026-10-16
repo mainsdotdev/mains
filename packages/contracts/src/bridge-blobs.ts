@@ -2,7 +2,18 @@
 export const BRIDGE_BLOB_CHUNK_BYTES = 4 * 1024 * 1024;
 export const BRIDGE_BLOB_MAX_BYTES = 50 * 1024 * 1024;
 export const BRIDGE_BLOB_CIPHER_OVERHEAD = 24 + 16;
+/** Lets in-flight pulls and uploads finish before unreferenced ciphertext is reclaimed. */
+export const BRIDGE_BLOB_GC_GRACE_MS = 24 * 60 * 60 * 1000;
 export interface BridgeBlobIdentity { blobId: string; size: number }
+export function bridgeBlobRoots(refs: readonly BridgeBlobIdentity[]): BridgeBlobIdentity[] {
+  const roots = new Map<string, number>();
+  for (const ref of refs) {
+    validateBridgeBlobIdentity(ref);
+    if (roots.has(ref.blobId) && roots.get(ref.blobId) !== ref.size) throw new Error("Conflicting Bridge blob lengths");
+    roots.set(ref.blobId, ref.size);
+  }
+  return [...roots].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([blobId, size]) => ({ blobId, size }));
+}
 /** This manifest only travels inside an authenticated, encrypted record body. */
 export interface BridgeBlobRef extends BridgeBlobIdentity {
   /** Schema 4: a JSON-encoded database string, restored before applying its row. */

@@ -1,4 +1,4 @@
-import type { BridgeBlobRef } from "./bridge-blobs";
+import type { BridgeBlobIdentity, BridgeBlobRef } from "./bridge-blobs";
 /** Bridge v1 wire contract. No Electron, database, or crypto implementation here. */
 export const BRIDGE_PROTOCOL_VERSION = 1 as const;
 export type BridgeStream = "account" | `run:${string}`;
@@ -17,8 +17,8 @@ interface BridgeHeaderBase {
 }
 export const BRIDGE_IDLE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export type BridgeHeader = BridgeHeaderBase & (
-  | { op: "upsert"; registerKey: string }
-  | { op: "delete"; registerKey?: never }
+  | { op: "upsert"; registerKey: string; /** Authenticated, account-private liveness roots; absent on legacy records. */ blobs?: BridgeBlobIdentity[] }
+  | { op: "delete"; registerKey?: never; blobs?: never }
 );
 export type BridgeValue = string | number | boolean | null;
 export interface BridgeUpsertBody {
@@ -41,7 +41,7 @@ export interface BridgeLogRecord { seq: number; envelope: BridgeEnvelope }
 export type BridgePushResult =
   | { seq: number }
   | { deleted: BridgeEnvelope }
-  | { error: "notOwner" | "quotaExceeded" | "rateLimited" };
+  | { error: "notOwner" | "quotaExceeded" | "rateLimited" | "subscriptionRequired" | "blobMissing" };
 export type BridgeClientMessage =
   | { type: "hello"; label: string; platform: string }
   | { type: "push"; stream: BridgeStream; records: BridgeEnvelope[] }

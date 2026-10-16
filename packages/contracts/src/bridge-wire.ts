@@ -1,4 +1,5 @@
 import { BRIDGE_PROTOCOL_VERSION, type BridgeEnvelope, type BridgeHeader, type BridgeRpcRequest, type BridgeRpcResponse, type BridgeServerMessage, type BridgeStream } from "./bridge-protocol";
+import { validateBridgeBlobIdentity } from "./bridge-blobs";
 
 // Leave room for routing columns below the Durable Object SQL row/string limit (2 MB).
 export const BRIDGE_MAX_RECORD_BYTES = 1024 * 1024;
@@ -13,15 +14,22 @@ const opaqueKey = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_
 
 /** Header-only validation. The hub never imports record schemas or opens bodies. */
 export function validateBridgeHeader(value: unknown): asserts value is BridgeHeader {
-  if (!object(value) || Object.keys(value).some((key) => !["v", "stream", "rowKey", "registerKey", "hlc", "origin", "op", "owner", "runId", "retention"].includes(key)) ||
+  if (!object(value) || Object.keys(value).some((key) => !["v", "stream", "rowKey", "registerKey", "hlc", "origin", "op", "owner", "runId", "retention", "blobs"].includes(key)) ||
       value.v !== BRIDGE_PROTOCOL_VERSION || !isBridgeStream(value.stream) || !identifier(value.origin) ||
       !opaqueKey(value.rowKey) || !object(value.hlc) || Object.keys(value.hlc).length !== 2 ||
       !safeClock(value.hlc.physicalMs) || !safeClock(value.hlc.counter) ||
       value.owner !== undefined && !identifier(value.owner) || value.runId !== undefined && !identifier(value.runId) ||
       value.retention !== undefined && (value.retention !== "30d-idle" || value.op !== "upsert" || value.stream === "account" || !value.owner || value.stream !== `run:${value.runId}`) ||
       value.op !== "upsert" && value.op !== "delete" ||
-      value.op === "upsert" && !opaqueKey(value.registerKey) || value.op === "delete" && value.registerKey !== undefined)
+      value.op === "upsert" && !opaqueKey(value.registerKey) || value.op === "delete" && (value.registerKey !== undefined || value.blobs !== undefined))
     throw new Error("Invalid Bridge header");
+  if (value.blobs !== undefined) {
+    if (!Array.isArray(value.blobs) || value.blobs.length > 64) throw new Error("Invalid Bridge blob roots");
+    for (const [index, blob] of value.blobs.entries()) {
+      validateBridgeBlobIdentity(blob);
+      if (Object.keys(blob).length !== 2 || index > 0 && value.blobs[index - 1].blobId >= blob.blobId) throw new Error("Invalid Bridge blob roots");
+    }
+  }
 }
 
 export function validateEncryptedBridgeEnvelope(value: unknown): asserts value is BridgeEnvelope {
@@ -91,7 +99,7 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
         else if ("deleted" in result) {
           validateEncryptedBridgeEnvelope(result.deleted);
           if (result.deleted.header.op !== "delete") throw new Error("Invalid Bridge deleted ACK");
-        } else if (!["notOwner", "quotaExceeded", "rateLimited"].includes(result.error)) throw new Error("Invalid Bridge ACK error");
+        } else if (!["notOwner", "quotaExceeded", "rateLimited", "subscriptionRequired", "blobMissing"].includes(result.error)) throw new Error("Invalid Bridge ACK error");
       }
       break;
     case "records":

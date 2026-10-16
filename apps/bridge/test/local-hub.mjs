@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
- * @param {{ auth?: boolean, storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
+ * @param {{ auth?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
 export async function startLocalBridgeHub(settings = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hub-"));
   const bundle = join(dir, "hub.mjs");
@@ -25,6 +25,7 @@ export async function startLocalBridgeHub(settings = {}) {
       mail.push(/** @type {{to: string, url: string}} */ (await request.json())); return Response.json({ ok: true });
     } } } : {}),
     resourcePersistencePath: join(dir, "storage"), bindings: { BRIDGE_DEV_AUTH: settings.auth ? "false" : "true", BRIDGE_DEV_SECRET: secret,
+      ...(settings.environment ? { BRIDGE_ENV: settings.environment } : {}),
       ...(settings.maintenance ? { BRIDGE_RESET_ACCOUNT: settings.maintenance.accountId, BRIDGE_RESET_TOKEN: settings.maintenance.token, BRIDGE_AUTH_URL: "https://mains-bridge-staging.team-68e.workers.dev" } : {}),
       ...(settings.storageLimitBytes !== undefined ? { BRIDGE_STORAGE_LIMIT_BYTES: String(settings.storageLimitBytes) } : {}),
       ...(settings.writesPerMinute !== undefined ? { BRIDGE_WRITES_PER_MINUTE: String(settings.writesPerMinute) } : {}),
@@ -36,10 +37,18 @@ export async function startLocalBridgeHub(settings = {}) {
   catch (error) { await mf.dispose().catch(() => {}); await rm(dir, { recursive: true, force: true }); throw error; }
   if (settings.auth) {
     const db = await mf.getD1Database("AUTH_DB");
-    for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql"]) {
+    for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql"]) {
       const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8");
       await db.batch(sql.split(";").filter((part) => part.trim()).map((part) => db.prepare(part)));
     }
+  }
+  /** Explicit paid test fixture; production sign-in never grants membership.
+   * @param {string} accountId @param {'monthly' | 'yearly'} interval @param {number} [expiresAt] */
+  async function grantSubscription(accountId, interval, expiresAt = Date.now() + 86_400_000) {
+    const db = await mf.getD1Database("AUTH_DB");
+    await db.prepare(`INSERT INTO account_entitlements VALUES(?,'bridge','standard',?,'active',?,?,?)
+      ON CONFLICT(account_id,feature) DO UPDATE SET billing_interval=excluded.billing_interval,status='active',starts_at=excluded.starts_at,expires_at=excluded.expires_at,updated_at=excluded.updated_at`)
+      .bind(accountId, interval, Date.now() - 1000, expiresAt, Date.now()).run();
   }
   return {
     get url() { return address.toString(); },
@@ -57,8 +66,10 @@ export async function startLocalBridgeHub(settings = {}) {
       const session = await fetch(new URL("/api/auth/get-session", address), { headers: { Cookie: cookie, "CF-Connecting-IP": ip } });
       const value = await session.json();
       if (!value?.user?.emailVerified) throw new Error(`Magic-link verification failed (${callback.status})`);
+      if (settings.subscriptionInterval) await grantSubscription(value.user.id, settings.subscriptionInterval);
       return { cookie, user: value.user };
     },
+    grantSubscription,
     async database() { return mf.getD1Database("AUTH_DB"); },
     /** @param {string} accountId @param {string} backendId @param {string | number} [expiresIn] */
     async token(accountId, backendId, expiresIn = "1h") {

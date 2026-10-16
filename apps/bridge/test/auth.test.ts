@@ -14,7 +14,7 @@ import { createNodeBackendRuntime } from "../../../packages/backend/src/runtime/
 import { startLocalBridgeHub } from "./local-hub.mjs";
 
 let hub: Awaited<ReturnType<typeof startLocalBridgeHub>>;
-beforeAll(async () => { hub = await startLocalBridgeHub({ auth: true }); }, 30_000);
+beforeAll(async () => { hub = await startLocalBridgeHub({ auth: true, subscriptionInterval: "monthly" }); }, 30_000);
 afterAll(async () => { await hub?.dispose(); });
 const login = () => hub.login(`${randomUUID()}@example.com`);
 async function rpc(path: string, token: string, body?: unknown, method = body === undefined ? "GET" : "POST") {

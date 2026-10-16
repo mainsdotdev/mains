@@ -42,6 +42,32 @@ describe("Bridge development configuration", () => {
 });
 
 describe.skipIf(!networkMode)("Bridge background replication for desktop/server viewers", () => {
+  it("leaves inactive changes queued without repeated uploads or quota queries and resumes after the renewal refresh", async () => {
+    const original = globalThis.fetch, now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    let active = false;
+    const fetches = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+      const response = await original(url, options);
+      if (new URL(String(url)).pathname !== "/v1/quota") return response;
+      return Response.json({ ...await response.json(), subscription: { status: active ? "active" : "expired", canUpload: active, planId: "standard", billingInterval: "monthly",
+        startsAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(active ? now + 120_000 : now - 1).toISOString() } });
+    });
+    const quotaRequests = () => fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1/quota").length;
+    const account = randomUUID(), a = await node(account, "A");
+    await a.replicator.syncNow(); expect(a.replicator.getStatus().state).toBe("read-only");
+    run(a);
+    for (let i = 0; i < 20; i++) await a.replicator.syncNow();
+    expect(quotaRequests()).toBe(1);
+    expect(a.replicator.getStatus()).toMatchObject({ state: "read-only", pendingRecords: 1, error: null });
+    active = true; clock.mockReturnValue(now + 60_001);
+    await a.replicator.syncNow();
+    expect(quotaRequests()).toBe(2);
+    expect(a.replicator.getStatus()).toMatchObject({ state: "connected", pendingRecords: 0, error: null });
+    const b = await node(account, "B"); await b.replicator.syncNow();
+    expect(b.sqlite.prepare("SELECT title FROM runs WHERE id='r'").get()).toEqual({ title: "Synced chat" });
+    // Even a previously active local cache cannot display upload access past its period.
+    clock.mockReturnValue(now + 120_001);
+    expect(a.replicator.getStatus()).toMatchObject({ state: "read-only", quota: { subscription: { status: "expired", canUpload: false } } });
+  });
   it("samples quota after writes, skips idle polling and coalesces live updates to one request per minute", async () => {
     const fetches = vi.spyOn(globalThis, "fetch"), now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const quotaRequests = () => fetches.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1/quota").length;

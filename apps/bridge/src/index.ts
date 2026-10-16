@@ -8,6 +8,9 @@ import type { BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import { createHubStore } from "./store";
 import { handleBlobs, type BlobEnv } from "./blobs";
 import { createBlobQuota, BridgeQuotaError, type BlobReservation, type QuotaEnv } from "./quota";
+import { createBridgeSubscriptions } from "./subscriptions";
+import { signedInUser } from "./identity";
+import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
 
 interface Env extends DevAuthEnv, BlobEnv, QuotaEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
@@ -15,6 +18,14 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") return Response.json({ ok: true, protocol: 1 });
+    if (url.pathname === "/v1/subscription") {
+      if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET" } });
+      const identity = await authenticate(request, env);
+      const accountId = identity?.accountId ?? (env.AUTH_DB && request.headers.has("Cookie") ? (await signedInUser(env, request))?.id : null);
+      if (!accountId) return new Response("Unauthorized", { status: 401 });
+      try { return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(accountId)).getSubscription(accountId), { headers: { "Cache-Control": "no-store" } }); }
+      catch { return new Response("Bridge subscription status is unavailable", { status: 503 }); }
+    }
     if (env.AUTH_DB && (url.pathname.startsWith("/api/auth/") || ["/sign-in", "/device", "/authorize"].includes(url.pathname) || url.pathname.startsWith("/v1/auth/"))) {
       const response = await handleSignIn(request, env); if (response) return response;
     }
@@ -26,6 +37,7 @@ export default {
     if (url.pathname.startsWith("/v1/blobs/")) return handleBlobs(request, env, {
       reserve: (identity, entries, expires) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).reserveBlobs(identity, entries, expires),
       put: (identity, key, expires, bytes) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).putBlob(identity, key, expires, bytes),
+      read: (identity, blobs, expires) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).protectBlobReads(identity, blobs, expires),
     });
     if (url.pathname === "/v1/quota" && request.method === "GET") {
       const identity = await authenticate(request, env);
@@ -47,16 +59,31 @@ export default {
 export class AccountHub extends DurableObject<Env> {
   private store: ReturnType<typeof createHubStore>;
   private quota: ReturnType<typeof createBlobQuota>;
+  private subscriptions: ReturnType<typeof createBridgeSubscriptions>;
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env); this.store = createHubStore(ctx.storage); this.quota = createBlobQuota(ctx.storage, env, () => this.store.recordBytes());
+    super(ctx, env); this.store = createHubStore(ctx.storage); this.subscriptions = createBridgeSubscriptions(env);
+    this.quota = createBlobQuota(ctx.storage, env, () => this.store.recordBytes(), this.subscriptions);
   }
-  async getQuota(identity: BridgeIdentity) { return this.ctx.blockConcurrencyWhile(() => this.quota.status(identity.accountId)); }
+  async getSubscription(accountId: string) { return this.subscriptions.status(accountId); }
+  /** Internal RPC seam for a future billing event consumer; no HTTP mutation route. */
+  async subscriptionChanged(accountId: string) { this.subscriptions.invalidate(accountId); }
+  async getQuota(identity: BridgeIdentity) {
+    return this.ctx.blockConcurrencyWhile(async () => {
+      const quota = await this.quota.status(identity.accountId);
+      // Also arms collection for inventories imported from pre-GC stores that
+      // have no new writes (and therefore no existing maintenance alarm).
+      await this.schedule(this.quota.nextExpiry());
+      return quota;
+    });
+  }
   async reserveBlobs(identity: BridgeIdentity, entries: BlobReservation[], expires: number) {
     return this.ctx.blockConcurrencyWhile(async () => {
       try {
+        if (!(await this.subscriptions.status(identity.accountId)).subscription.canUpload) return { status: 403, error: "Bridge subscription required; local changes remain queued" };
         const limit = (await this.quota.status(identity.accountId)).writesPerMinute;
         if (!this.store.takeWrite(identity.backendId, limit)) return { status: 429, error: "Bridge write rate limit reached" };
         await this.quota.reserve(identity, entries, expires);
+        await this.schedule(this.quota.nextExpiry());
         return { status: 200, error: null };
       } catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
     });
@@ -64,6 +91,12 @@ export class AccountHub extends DurableObject<Env> {
   async putBlob(identity: BridgeIdentity, key: string, expires: number, bytes: Uint8Array) {
     return this.ctx.blockConcurrencyWhile(async () => {
       try { await this.quota.put(identity, key, expires, bytes); return { status: 204, error: null }; }
+      catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
+    });
+  }
+  async protectBlobReads(identity: BridgeIdentity, blobs: BridgeBlobIdentity[], expires: number) {
+    return this.ctx.blockConcurrencyWhile(async () => {
+      try { await this.quota.protectReads(identity, blobs, expires); return { status: 200, error: null }; }
       catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
     });
   }
@@ -97,15 +130,20 @@ export class AccountHub extends DurableObject<Env> {
           this.broadcast({ type: "presence", backendId: session.backendId, online: true, lastSeen: new Date().toISOString(), label: message.label.trim(), platform: message.platform });
           response = { type: "identified", backendId: session.backendId }; break;
         case "push": {
-          const { results, changed } = await this.ctx.blockConcurrencyWhile(async () => {
-            const quota = await this.quota.status(session.accountId);
-            return this.store.push(session.backendId, message.stream, message.records, { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes });
+          const publication = await this.ctx.blockConcurrencyWhile(async () => {
+            try {
+              if (message.records.every((record) => record.header.op === "delete")) return this.store.push(session.backendId, message.stream, message.records);
+              const quota = await this.quota.status(session.accountId);
+              return this.store.push(session.backendId, message.stream, message.records, { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes, canUpload: quota.subscription!.canUpload,
+                hasBlobs: (blobs) => this.quota.hasBlobs(blobs) });
+            } catch { return null; } // A lookup failure denies publication without resetting every socket in the DO.
           });
+          if (!publication) throw new Error("Bridge publication unavailable");
+          const { results, changed } = publication;
           response = { type: "ack", stream: message.stream, results };
           if (changed.length) {
             this.broadcast({ type: "changed", stream: message.stream }, message.stream);
-            const alarm = await this.ctx.storage.getAlarm(), compactAt = Date.now() + 60_000;
-            if (alarm === null || alarm > compactAt) await this.ctx.storage.setAlarm(compactAt);
+            await this.schedule(Date.now() + 60_000);
           }
           break;
         }
@@ -113,7 +151,7 @@ export class AccountHub extends DurableObject<Env> {
         case "subscribe":
           session.streams = [...new Set(message.streams)]; socket.serializeAttachment(session);
           response = { type: "subscribed", streams: session.streams }; break;
-        case "compact": this.store.compact(); response = { type: "compacted" }; break;
+        case "compact": await this.maintain(); response = { type: "compacted" }; break;
       }
       this.send(socket, { requestId, message: response });
     } catch {
@@ -129,9 +167,21 @@ export class AccountHub extends DurableObject<Env> {
   }
   webSocketError(socket: WebSocket): void { this.webSocketClose(socket, 1011, "Connection error"); }
   async alarm(): Promise<void> {
-    this.store.compact();
-    const next = this.store.nextExpiry();
-    if (next !== null) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, next));
+    await this.maintain();
+  }
+  private async maintain() {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      this.store.compact();
+      await this.quota.collect();
+      const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry()].filter((value): value is number => value !== null);
+      if (deadlines.length) await this.schedule(Math.max(Date.now() + 1000, Math.min(...deadlines)));
+    });
+  }
+  private async schedule(at: number | null) {
+    if (at === null) return;
+    at = Math.max(Date.now() + 1000, at);
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null || alarm > at) await this.ctx.storage.setAlarm(at);
   }
   async notifyApproval(request: BridgeApprovalRequest): Promise<void> { this.broadcast({ type: "approval", ...request }); }
   async revoke(backendId: string): Promise<void> {

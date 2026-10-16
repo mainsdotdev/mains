@@ -6,7 +6,7 @@ import { BRIDGE_PROTOCOL_VERSION, type BridgeBody, type BridgeEnvelope, type Bri
 import { validateBridgeHeader, validateEncryptedBridgeEnvelope } from "@mains/contracts/bridge-wire";
 import { fromBase64Url, toBase64Url, utf8 } from "./bridge.encoding";
 import { deriveBridgeKeys } from "./bridge.keys";
-import { validateBridgeBlobIdentity, type BridgeBlobRef } from "@mains/contracts/bridge-blobs";
+import { bridgeBlobRoots, validateBridgeBlobIdentity, type BridgeBlobRef } from "@mains/contracts/bridge-blobs";
 
 export interface BridgeCodec {
   seal(header: BridgeHeader, body: BridgeBody): BridgeEnvelope;
@@ -27,7 +27,8 @@ export function bridgeHeaderAad(header: BridgeHeader): Uint8Array {
   validateBridgeHeader(header);
   return utf8(JSON.stringify([header.v, header.stream, header.rowKey, header.registerKey ?? null,
     header.hlc.physicalMs, header.hlc.counter, header.origin, header.op, header.owner ?? null, header.runId ?? null,
-    ...(header.retention === undefined ? [] : [header.retention])]));
+    ...(header.blobs === undefined ? header.retention === undefined ? [] : [header.retention] :
+      [header.retention ?? null, header.blobs.map(({ blobId, size }) => [blobId, size])])]));
 }
 
 export function createBridgeSealingCodec(accountKey: Uint8Array): BridgeCodec {
@@ -38,6 +39,7 @@ export function createBridgeSealingCodec(accountKey: Uint8Array): BridgeCodec {
   };
   return {
     seal(header, body) {
+      if (header.op === "upsert" && "blobRefs" in body) header = { ...header, blobs: bridgeBlobRoots(body.blobRefs) };
       validateRecord(header, body); verifyIdentity(header, body);
       const nonce = randomBytes(24);
       const ciphertext = xchacha20poly1305(keys.bodyKey, nonce, bridgeHeaderAad(header)).encrypt(utf8(JSON.stringify(body)));
@@ -62,6 +64,7 @@ export function createBridgeSealingCodec(accountKey: Uint8Array): BridgeCodec {
 /** In-memory tests only. The WebSocket transport and hub reject this plaintext format. */
 export const bridgePassThroughCodec: BridgeCodec = {
   seal(header, body) {
+    if (header.op === "upsert" && "blobRefs" in body) header = { ...header, blobs: bridgeBlobRoots(body.blobRefs) };
     validateRecord(header, body);
     return { header: structuredClone(header), body: { nonce: null, payload: JSON.stringify(body) } };
   },
@@ -88,7 +91,7 @@ function validateRecord(header: BridgeHeader, value: unknown): asserts value is 
   if (typeof body.table !== "string" || !body.table || typeof body.pk !== "string" || !body.pk)
     throw new Error("Invalid Bridge record identity");
   if (header.op === "delete") {
-    if (header.registerKey !== undefined || Object.keys(body).some((key) => key !== "table" && key !== "pk"))
+    if (header.registerKey !== undefined || header.blobs !== undefined || Object.keys(body).some((key) => key !== "table" && key !== "pk"))
       throw new Error("Bridge deletes are minimal row-level records");
   } else if (header.op !== "upsert" || typeof header.registerKey !== "string" || !header.registerKey || typeof body.register !== "string" || !body.register ||
       !Number.isSafeInteger(body.schemaVersion) || (body.schemaVersion as number) < 1 ||
@@ -108,6 +111,11 @@ function validateRecord(header: BridgeHeader, value: unknown): asserts value is 
           /[\\/]/.test(ref.name) || [...ref.name].some((char) => char.charCodeAt(0) < 32) || ref.mime !== null && (typeof ref.mime !== "string" || ref.mime.length > 200) ||
           ref.sourcePath !== undefined && (typeof ref.sourcePath !== "string" || ref.sourcePath.length > 8192) || slots.has(slot)) throw new Error("Invalid Bridge file manifest");
       slots.add(slot);
+    }
+    if (header.blobs !== undefined) {
+      const roots = bridgeBlobRoots(blobs);
+      if (header.blobs.length !== roots.length || roots.some((root, index) => root.blobId !== header.blobs![index].blobId || root.size !== header.blobs![index].size))
+        throw new Error("Bridge blob roots do not match the encrypted manifest");
     }
     const values = (value as BridgeBody & { values: Record<string, unknown> }).values;
     if (Object.values(values).some((entry) => entry !== null &&

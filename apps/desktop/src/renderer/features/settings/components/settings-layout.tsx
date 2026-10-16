@@ -88,7 +88,7 @@ export function SettingsSection({
           </Body>
         )
       )}
-      <div className="rounded-3xl glass-surface px-4 py-1">
+      <div className="rounded-3xl glass-surface px-6 py-1.5">
         {children}
       </div>
     </div>

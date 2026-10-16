@@ -178,7 +178,7 @@ export const bridgeService = {
       catch (error) { startupError = error instanceof Error ? error.message : "Sign-out cleanup failed; retry signing out"; changed(); throw error; }
     });
   },
-  async syncNow(): Promise<void> { if (!replicator) throw new Error(startupError ?? "Bridge is not configured"); await replicator.syncNow(); },
+  async syncNow(): Promise<void> { if (!replicator) throw new Error(startupError ?? "Bridge is not configured"); await replicator.syncNow(true); },
   resolveFile(table: BridgeFileTable, id: string | number, column?: string, sourcePath?: string): Promise<string> {
     if (!replicator) throw new Error(startupError ?? "Bridge is not configured");
     return replicator.resolveFile(table, id, column, sourcePath);

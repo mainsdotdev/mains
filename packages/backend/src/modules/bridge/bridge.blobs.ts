@@ -104,8 +104,11 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     const token = typeof options.token === "function" ? await options.token() : options.token;
     const response = await request(new URL("/v1/blobs/presign", origin).toString(), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ op, blobs: [{ blobId: ref.blobId, size: ref.size }] }) });
-    if (!response.ok) throw new Error(response.status === 413 ? "Bridge storage quota exceeded; local files remain queued" :
+    if (!response.ok) {
+      if (response.status === 403 && (await response.text()).includes("Bridge subscription required")) throw new Error("Bridge subscription required; local files remain queued");
+      throw new Error(response.status === 413 ? "Bridge storage quota exceeded; local files remain queued" :
       response.status === 429 ? "Bridge write rate limit reached; local files remain queued" : `Bridge blob authorization failed (${response.status})`);
+    }
     const body = await response.json() as BridgeBlobPresignResult;
     const blob = body.blobs?.[0];
     if (body.blobs?.length !== 1 || blob?.blobId !== ref.blobId || blob.size !== ref.size || !Array.isArray(blob.chunks) || blob.chunks.length !== bridgeBlobChunkCount(ref.size))
@@ -175,18 +178,32 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
       finally { await fs.unlink(temp).catch(() => {}); }
       return ref;
     },
-    async publishCaptured(ref: BridgeBlobRef): Promise<void> {
+    async publishCaptured(ref: BridgeBlobRef, recover?: () => Promise<Uint8Array | undefined>): Promise<void> {
       validateBridgeBlobIdentity(ref);
       const chunks = await urls(ref, "put");
       if (chunks.every((chunk) => chunk.exists)) return;
       await directory();
-      if ((await fs.lstat(uploads)).isSymbolicLink()) throw new Error("Unsafe Bridge upload directory");
-      const handle = await fs.open(join(uploads, ref.blobId), constants.O_RDONLY | constants.O_NOFOLLOW);
-      let bytes: Uint8Array;
+      let bytes: Uint8Array | undefined;
       try {
-        if ((await handle.stat()).size !== ref.size) throw new Error("Bridge output snapshot is damaged");
-        bytes = await handle.readFile(); verify(ref, bytes);
-      } finally { await handle.close(); }
+        if ((await fs.lstat(uploads)).isSymbolicLink()) throw new Error("Unsafe Bridge upload directory");
+        const handle = await fs.open(join(uploads, ref.blobId), constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          if ((await handle.stat()).size !== ref.size) throw new Error("Bridge output snapshot is damaged");
+          bytes = await handle.readFile(); verify(ref, bytes);
+        } finally { await handle.close(); }
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      if (!bytes) {
+        const file = await cached(ref);
+        if (file) {
+          const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try {
+            if ((await handle.stat()).size !== ref.size) throw new Error("Bridge cached file has changed");
+            bytes = await handle.readFile();
+          } finally { await handle.close(); }
+        } else bytes = await recover?.();
+      }
+      if (!bytes) throw new Error("Bridge file is unavailable locally; its change remains queued");
+      verify(ref, bytes);
       await api.publish(bytes, ref);
       // Snapshots remain durable until their metadata is acknowledged. They are
       // separate from the disposable download LRU, including across restarts.
@@ -205,7 +222,10 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
           if (chunk.exists) continue;
           const plaintext = bytes.subarray(chunk.index * BRIDGE_BLOB_CHUNK_BYTES, (chunk.index + 1) * BRIDGE_BLOB_CHUNK_BYTES);
           const response = await request(chunk.url, { method: "PUT", body: Buffer.from(crypto.seal(ref, chunk.index, plaintext)) });
-          if (!response.ok) throw new Error(`Bridge blob upload failed (${response.status})`);
+          if (!response.ok) {
+            if (response.status === 403 && (await response.text()).includes("Bridge subscription required")) throw new Error("Bridge subscription required; local files remain queued");
+            throw new Error(`Bridge blob upload failed (${response.status})`);
+          }
         }
         return ref;
       } finally { pinned.delete(path); }

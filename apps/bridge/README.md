@@ -26,8 +26,8 @@ session content. Any accepted run activity refreshes retention; compaction and
 scheduled alarms expire idle mirror records after 30 days. Visible chat records,
 writer bindings and permanent tombstones survive. Locally active owners whose
 old mirror may have expired requeue original clocks before backfill. Expired
-record ciphertext stops counting toward record quota; stored R2 chunks still
-require the later blob GC feature.
+record ciphertext stops counting toward record quota; unreferenced R2 chunks
+enter the blob collection grace period described below.
 
 Upgrade the hub and backends together for B9's new authenticated retention
 header. Clients that understand the header but use an older record schema park
@@ -224,7 +224,7 @@ never receives a private account key or stores an independent SQLite database.
 
 The development demo remains available without an identity service. For normal
 sign-in, create a Cloudflare D1 database and private R2 bucket, put the returned
-D1 id into `wrangler.jsonc`, then apply all three migrations:
+D1 id into `wrangler.jsonc`, then apply all migrations (including account entitlements):
 
 ```sh
 npx wrangler d1 create mains-bridge-auth
@@ -313,7 +313,127 @@ recovery. Test run history, Atlas and files, A offline, revocation and recovery.
 An iPad browser still connects to B's running backend, which connects to this
 hub. It does not store the account key or an independent SQLite database.
 
-### Lost all account keys
+The signed-out Bridge settings page opens device setup in a modal. A previous
+hub origin is reused when available. Set `MAINS_BRIDGE_HUB_URL` in
+`apps/desktop/.env.local` or the packaging environment to give fresh desktop and
+web builds a default origin; the renderer bundles only that public URL. Use the
+staging origin for a staging build and the production origin for a production
+build. A custom origin remains available under **Advanced** in the modal. If no
+default exists, Advanced opens automatically and requires an origin before sign-in.
+
+## Subscriptions (payment integration pending)
+
+The `standard` tier is **Bridge**: 1 GiB per account, 50 MiB per file and 600
+writes per backend per minute. Monthly and yearly periods have identical rights;
+the plan catalog in `src/plans.ts` is the extension point for later storage tiers.
+No prices, checkout, payment provider or automatic renewal are wired yet.
+
+Better Auth's D1 `user.id` is the account ID. Migration `0004` adds
+`account_entitlements`, keyed by `(account_id, feature)` with `feature='bridge'`.
+It records the plan, billing interval, active/revoked state, period start/end and
+update time. This row is authoritative; local SQLite, the billing-cycle selector
+and quota overrides cannot grant access. All approved backends of the account
+share the entitlement. Another account cannot query or use it.
+
+Only an active, recognized plan in `[starts_at, expires_at)` permits new encrypted
+record upserts and R2 uploads. An expired, missing, scheduled or revoked subscription
+leaves approved backends **Read only**: existing reads, lazy file downloads and
+permanent deletions continue. Login, backend approval and recovery remain available.
+Identity keys, local content and pending outbox entries are preserved. Renewal
+resumes the same queue without re-enrollment. Existing PUT capabilities and open
+WebSockets recheck permission; an idempotent ACK for an already committed object
+does not upload new data. A D1/schema failure denies new writes.
+
+Settings › Bridge shows the server-backed period, tier and upload state. Monthly
+and Yearly are previews of the two billing options while purchases are unavailable;
+choosing one makes no request and grants no access. **Refresh subscription status**
+uses the existing owner-only manual sync action. Other remote-control permissions
+and local agent execution are independent of a Bridge subscription.
+
+### Grant a period for local testing
+
+Start an authentication-enabled local hub, apply migrations locally and sign in
+normally. Obtain the verified account ID from `mains bridge status` or local D1's
+`user` table. The operator command defaults to **local D1**:
+
+```sh
+npx wrangler d1 migrations apply AUTH_DB --local
+npm run subscription -- show --account USER_ID
+npm run subscription -- grant --account USER_ID --interval monthly --starts-at 2026-10-16T00:00:00Z
+npm run subscription -- grant --account USER_ID --interval yearly --starts-at 2026-11-16T00:00:00Z
+npm run subscription -- revoke --account USER_ID
+```
+
+Grant replaces the current period; it does not queue a second future period.
+Use the intended explicit start time when renewing. The same command is safe to
+retry: it does not add another month/year or write an unchanged row. Period ends
+use UTC calendar months/years with month-end clamping (January 31 → February's
+last day; leap-day yearly periods → February 28). Revoking disables uploads;
+it does not delete any account data.
+
+For a separate local config pass `--config PATH`. A deployed database is changed
+only with **both** `--remote` and an explicit `--config`; no remote command is part
+of the automated tests. There is no public grant/revoke endpoint. GET
+`/v1/subscription` accepts an approved backend credential or a verified browser
+session, derives the account from authentication, and returns no credentials.
+
+The account DO caches one indexed D1 lookup for 60 seconds and coalesces concurrent
+requests. It checks cached period expiry on every use, so the cache never extends
+the end of a subscription. Direct operator grants/revocations take up to 60 seconds
+to appear at the hub; client refresh does not bypass that server cache. An idle
+client updates its displayed status on the next upload attempt or manual refresh;
+pending inactive clients check for renewal in the background. A future trusted
+billing-event consumer can call the internal `subscriptionChanged(accountId)` RPC
+after committing D1 to invalidate it immediately. No payment-event handler is
+implemented yet. Inactive clients with pending writes check for renewal at most
+once a minute in the background instead of retrying uploads every second.
+
+Migration `0004` grants **nothing automatically**, including for existing staging
+users. During rollout, grant the intended period to each test account before
+enabling the new write policy. Keep the current identities, encrypted keys and
+data; a Bridge reset also preserves the D1 entitlement. Upgrade hub and backends
+together: older clients do not understand the new `subscriptionRequired` push
+result, fail closed and retain their queue until upgraded. Development bypass
+requires `BRIDGE_DEV_AUTH=true` and a local (or untagged legacy development)
+environment; it is refused when `BRIDGE_ENV` is staging or production.
+
+Local acceptance covers monthly/yearly rights, account isolation, missing/expired/
+revoked/scheduled plans, exact expiry on existing sockets and PUT URLs, D1 failure,
+idempotent operator grants, bounded D1 reads, and two real backends resuming queued
+Pages/large values/images after expiry and restart. It invokes no payment or
+Cloudflare account API and uses disposable workerd/D1/DO/R2 stores.
+
+## Production preparation (not provisioned)
+
+`wrangler.production.example.jsonc` is an intentionally incomplete template.
+No production resources or domain are assigned by it. When provisioning is
+authorized, copy it to `wrangler.production.jsonc` and supply the chosen public
+HTTPS host, account ID, **separate** D1 database ID, private R2 bucket and OAuth
+client ID. The distinct Worker owns its own SQLite Durable Object namespace;
+never point it at staging data or use the staging reset entry.
+
+```sh
+npm run production:check -- wrangler.production.jsonc
+```
+
+This command is entirely offline. It rejects placeholders, development auth,
+staging resource reuse, unsafe origins, external DO namespaces and inline secrets.
+It does not prove that resources, DNS or deployed secrets exist. The example is
+expected to fail the check until configured; no production deploy script is enabled.
+
+The first authorized production rollout needs all D1 migrations applied **before**
+the new Worker, a configured custom-domain route, a separate GitHub callback at
+`<production-origin>/api/auth/callback/github`, and Worker secrets
+`BETTER_AUTH_SECRET` and `GITHUB_CLIENT_SECRET` (or mail delivery credentials).
+Keep development auth off, preview URLs off and secrets out of config/source.
+Plan explicit initial entitlement grants until the future verified payment-event
+consumer manages periods. Back up D1 before migrations, deploy compatible clients
+and verify login/approval/recovery, paid uploads, expired read access and renewal
+against isolated production test accounts. Creating resources, remote migrations,
+secret provisioning, deployment and live checks are separate operator actions;
+none are performed by local validation or tests.
+
+## Lost all account keys
 
 GitHub sign-in cannot recover an account encryption key. Signing out removes
 this backend's protected identity; save the recovery code before signing out of
@@ -371,9 +491,8 @@ report usage without exposing keys or content.
 Storage counts current encrypted registers, permanent tombstones, stored R2
 chunks and unexpired upload reservations. Retried/duplicate chunks count once.
 Expired reservations reconcile R2 before releasing space, including a crash
-between a PUT and its receipt. Stored chunks remain charged until a later blob
-retention/garbage-collection feature; deleting a file’s metadata does not yet
-reclaim those bytes. Record replacements and deletes reclaim their superseded
+between a PUT and its receipt. Stored chunks remain charged until physically
+deleted by blob collection. Record replacements and deletes reclaim their superseded
 logical register bytes. Reads and tombstones remain available at quota/rate
 limits. Failed writes stay in the local outbox and retry after capacity returns.
 
@@ -393,6 +512,55 @@ For headless management, use `mains bridge projects`,
 `mains bridge local-only <project-id> --on|--off`,
 `mains bridge sync-history`, and `mains bridge sync`. `mains bridge status`
 includes sync health, queued changes and account usage.
+
+## R2 garbage collection
+
+Every new upsert authenticates a sorted, deduplicated `header.blobs` list of
+`{ blobId, size }`, including an empty list for records with no blobs. The list
+must exactly match the decrypted manifests. The hub can correlate opaque records
+with their account-private blob identities, but filenames, paths, MIME types,
+tables, columns and contents remain encrypted. Old envelope AAD still verifies.
+
+Transactional log triggers maintain blob links and reference counts. All current
+registers and not-yet-compacted log versions protect their chunks, including
+shared attachments in different run streams, Atlas files retained in Trash or
+history, and generic large values. Deletes, replacement compaction, run deletion
+and idle mirror expiry release those links. Removing one reference never removes
+another record's file. Tombstones remain whole and permanent.
+
+After the last link is removed, collection waits **24 hours**. Upload reservations
+also renew this grace period, protecting the interval between upload and metadata
+publication. A read begun near the deadline protects the chunks until its
+ten-minute signed capability expires. Abandoned/partial uploads are collected
+after the same grace. A Durable Object alarm processes at most 32 blobs per invocation and reschedules
+remaining work. Candidate/byte counters and indexes are persistent: quota queries
+do not run GC, scan records or list the bucket. Existing log/chunk inventories
+are indexed once when upgrading; later wakes do not rebuild them.
+
+Publication, reservations, PUTs and collection share the account concurrency
+gate. A durable deletion intent fences stale chunk receipts before R2 deletion;
+quota is decremented only after the R2 delete succeeds. Failed deletion stays
+charged, and a crash before the SQLite receipt retries idempotently. A new upload
+finishes any pending deletion before reserving the same content again. Incomplete
+or collected blobs cannot acquire new record ACKs. Backends republish exact large
+values, captured/cache bytes or verified source files before retrying; unavailable
+bytes leave their changes queued.
+
+Upgrade hub and backends together: earlier validators do not recognize the new
+authenticated header or `blobMissing` ACK. Backend migration `0038` runs a
+resumable, one-time announcement of the original writer's acknowledged register
+clocks. Only an equal-clock legacy envelope can receive a roots-only refresh;
+stale records still lose LWW and permanent deletes still win. Announcements do
+not create fresh conflict clocks or recovered Page copies. Any remaining legacy
+upsert with unknown roots **pauses new collection for that account** until its
+writer updates/rejoins, its scope resumes, or the record is deleted. Unknown
+references are never guessed; this can delay reclamation on older accounts.
+
+Local acceptance uses disposable workerd/SQLite/R2 stores and two independent
+backend databases. It verifies physical deletion and exact quota reduction,
+shared/history/Trash files opening on B with A offline, orphan retry, legacy
+upgrade, retention, real alarms, bounded batches, account isolation and injected
+R2/crash failures. No deployed Cloudflare resource is queried or changed.
 
 ## Test two independent backends
 
