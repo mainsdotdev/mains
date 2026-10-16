@@ -6,6 +6,8 @@ import { join } from "node:path";
 import WebSocket from "ws";
 import { bridgeApprovalCode, bridgeBase64, type BridgeAccountKeys, type BridgeApprovalRequest, type BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
 import type { BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
+import { parseBridgeServerFrame } from "@mains/contracts/bridge-wire";
+import type { BridgeServerMessage } from "@mains/contracts/bridge-protocol";
 import { generateBridgeDeviceKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
 import { bridgeRecoveryPublicKey, signBridgeRecovery } from "../../../packages/backend/src/modules/bridge/bridge.recovery";
 import { startBridgeLoopback } from "../../../packages/backend/src/modules/bridge/bridge.login";
@@ -79,6 +81,8 @@ describe("Verified sign-in and backend key ceremonies", () => {
     const a = await owner(), b = await register(a.browser), outsider = await owner(), request = await requestApproval(b);
     const body = { ...request, wrap: sealBridgeAccountKey(a.key, b.pair.publicKey) };
     expect(request.code).toBe(await bridgeApprovalCode(b.publicKey));
+    expect(request.code.replaceAll("-", "")).toHaveLength(12);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...body, code: "ABC234" })).status).toBe(400);
     expect((await rpc("/v1/keys/wraps", a.token, { ...body, code: "WRONG1" })).status).toBe(400);
     expect((await rpc("/v1/keys/wraps", a.token, { ...body, requestId: randomUUID() })).status).toBe(409);
     expect((await rpc("/v1/keys/wraps", outsider.token, body)).status).toBe(409);
@@ -122,7 +126,12 @@ describe("Verified sign-in and backend key ceremonies", () => {
   it("notifies online approvers and revokes open sockets plus previously issued R2 capabilities", async () => {
     const a = await owner(), b = await register(a.browser), socket = await socketFor(a.token);
     try {
-      const event = new Promise<Record<string, unknown>>((resolve) => socket.on("message", (data) => { const frame = JSON.parse(data.toString()); if (frame.type === "approval") resolve(frame); }));
+      const event = new Promise<Extract<BridgeServerMessage, { type: "approval" }>>((resolve, reject) => socket.on("message", (data) => {
+        try {
+          const frame = parseBridgeServerFrame(data.toString());
+          if ("type" in frame && frame.type === "approval") resolve(frame);
+        } catch (error) { reject(error); }
+      }));
       const request = await approval(a, b); expect(await event).toMatchObject({ type: "approval", backendId: b.backendId, code: request.code });
       const bSocket = await socketFor(b.token);
       try {

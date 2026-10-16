@@ -7,6 +7,10 @@ import { bridgeBytes } from "@mains/contracts/bridge-auth";
 export interface BridgeSavedIdentity {
   v: 1; backendId: string; hubUrl: string; label: string; accountId: string; email: string;
   publicKey: string; privateKey: string; token: string; expiresAt: number; accountKey: string | null;
+  /** A received key cannot enter the active identity before local comparison. */
+  pendingAccountKey?: string | null;
+  /** Once an existing account has been observed, the hub cannot trigger re-bootstrap. */
+  accountInitialized?: boolean;
   includeExisting: boolean;
   activationPending: boolean;
 }
@@ -22,6 +26,11 @@ export function createBridgeIdentityStorage(dir: string, storage: SecretStorageA
       const identity: BridgeSavedIdentity = JSON.parse(storage.decryptString(Buffer.from(envelope.sealed, "base64")));
       if (identity.v !== 1 || !identity.backendId || !identity.accountId || !identity.token?.startsWith("b7_") || !Number.isSafeInteger(identity.expiresAt)) throw new Error("Saved Bridge identity is invalid");
       bridgeBytes(identity.privateKey, 32); bridgeBytes(identity.publicKey, 32); if (identity.accountKey) bridgeBytes(identity.accountKey, 32);
+      if (identity.pendingAccountKey != null) {
+        bridgeBytes(identity.pendingAccountKey, 32);
+        if (identity.accountKey) throw new Error("Bridge identity contains both active and unverified keys");
+      }
+      if (identity.accountInitialized !== undefined && typeof identity.accountInitialized !== "boolean") throw new Error("Invalid Bridge account initialization state");
       return identity;
     },
     async write(identity: BridgeSavedIdentity): Promise<void> {

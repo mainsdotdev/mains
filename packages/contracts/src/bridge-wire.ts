@@ -1,5 +1,6 @@
 import { BRIDGE_PROTOCOL_VERSION, type BridgeEnvelope, type BridgeHeader, type BridgeRpcRequest, type BridgeRpcResponse, type BridgeServerMessage, type BridgeStream } from "./bridge-protocol";
 import { validateBridgeBlobIdentity } from "./bridge-blobs";
+import { isBridgeVerificationCode } from "./bridge-auth";
 
 // Leave room for routing columns below the Durable Object SQL row/string limit (2 MB).
 export const BRIDGE_MAX_RECORD_BYTES = 1024 * 1024;
@@ -118,7 +119,7 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
     case "approval":
       if (!identifier(message.requestId) || !identifier(message.backendId) || typeof message.publicKey !== "string" ||
         !/^[A-Za-z0-9_-]{43}$/.test(message.publicKey) || typeof message.label !== "string" || !message.label || message.label.length > 128 ||
-        typeof message.platform !== "string" || !message.platform || message.platform.length > 32 || typeof message.code !== "string" || !/^[A-HJ-NP-Z2-9]{6}$/.test(message.code) ||
+        typeof message.platform !== "string" || !message.platform || message.platform.length > 32 || !isBridgeVerificationCode(message.code) ||
         typeof message.expiresAt !== "string" || !Number.isFinite(Date.parse(message.expiresAt))) throw new Error("Invalid Bridge approval");
       break;
     case "presence":

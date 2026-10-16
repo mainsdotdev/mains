@@ -4,7 +4,7 @@ import { Writable } from "node:stream";
 import WebSocket from "ws";
 import { CHANNELS } from "@mains/contracts/channels";
 import { buildSubprotocols, decodeWsMessage, encodeWsMessage } from "@mains/contracts/ws-protocol";
-import type { BridgeAuthStatus } from "@mains/contracts/bridge-auth";
+import { normalizeBridgeVerificationCode, type BridgeAuthStatus } from "@mains/contracts/bridge-auth";
 import type { AdminClientOptions } from "./pairing-client";
 
 export function parseBridgeArguments(argv: string[]) {
@@ -31,10 +31,13 @@ export function parseBridgeArguments(argv: string[]) {
     else if (arg.startsWith("--")) throw new Error(`Unknown Bridge option: ${arg}`);
     else positional.push(arg);
   }
-  if (!["status", "login", "logout", "approve", "reject", "revoke", "recover", "recovery", "projects", "local-only", "sync-history", "sync"].includes(action)) throw new Error("Unknown Bridge action");
+  if (!["status", "login", "logout", "approve", "confirm", "reject", "revoke", "recover", "recovery", "projects", "local-only", "sync-history", "sync"].includes(action)) throw new Error("Unknown Bridge action");
   if (action === "login" && !hubUrl) throw new Error("Pass --hub <Bridge URL> to sign in");
   if (["approve", "reject", "revoke"].includes(action) && positional.length !== 1) throw new Error(`Pass the backend id to bridge ${action}`);
-  if (action === "approve" && !code) throw new Error("Compare the new backend’s code and pass --code <six characters>");
+  if (action === "approve" || action === "confirm") {
+    if (!code) throw new Error("Compare the devices and pass --code <12-character code>");
+    code = normalizeBridgeVerificationCode(code);
+  }
   if (action === "recovery" && !replace) throw new Error("Use bridge recovery --replace to replace the recovery code");
   if (action === "local-only" && (positional.length !== 1 || localOnly === undefined)) throw new Error("Use bridge local-only <project-id> --on|--off");
   if (localOnly !== undefined && action !== "local-only") throw new Error("--on and --off require local-only");
@@ -85,6 +88,10 @@ export async function runBridgeCommand(options: ReturnType<typeof parseBridgeArg
     if (options.action === "local-only") { await client.call(CHANNELS.bridge.setProjectLocalOnly, options.positional[0], options.localOnly); console.log(options.localOnly ? "Project is Local only." : "Project sync resumed."); return; }
     if (options.action === "sync-history") { await client.call(CHANNELS.bridge.includeLocalHistory); console.log("Existing local history queued for sync."); return; }
     if (options.action === "sync") { await client.call(CHANNELS.bridge.syncNow); console.log("Sync complete."); return; }
+    if (options.action === "confirm") {
+      await client.call(CHANNELS.bridge.confirmAccountKey, options.code);
+      console.log("Account key verified. Sync is enabled."); return;
+    }
     if (options.action === "logout") { await client.call(CHANNELS.bridge.signOut, options.removeSynced); console.log("Signed out of Bridge. Stored keys and replicas removed."); return; }
     if (options.action === "recover") { const code = await readRecoveryCode(); await client.call(CHANNELS.bridge.enterRecoveryCode, code); console.log("Recovery complete. Sync is enabled."); return; }
     if (options.action === "recovery") { const code = await client.call(CHANNELS.bridge.regenerateRecoveryCode); console.log("Save this recovery code now. The previous code no longer works:"); console.log(code); return; }
@@ -95,7 +102,9 @@ export async function runBridgeCommand(options: ReturnType<typeof parseBridgeArg
       if (!request) throw new Error("No pending approval exists for that backend");
       if (options.action === "approve") await client.call(CHANNELS.bridge.approveBackend, { ...request, code: options.code });
       else await client.call(CHANNELS.bridge.rejectBackend, request.requestId);
-      console.log(options.action === "approve" ? "Backend approved." : "Request declined."); return;
+      console.log(options.action === "approve"
+        ? `Backend approved. Trusted account fingerprint: ${status.accountFingerprint}. On the new device, enter it with mains bridge confirm --code <fingerprint-from-approved-device> before syncing.`
+        : "Request declined."); return;
     }
     await client.call(CHANNELS.bridge.signIn, { hubUrl: options.hubUrl, label: options.label, includeExisting: options.includeExisting, flow: "device" });
     let status = await client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus);
@@ -108,7 +117,8 @@ export async function runBridgeCommand(options: ReturnType<typeof parseBridgeArg
       console.log("Signed in. Sync is enabled.");
       const recovery = await client.call<string | null>(CHANNELS.bridge.takeRecoveryCode);
       if (recovery) console.log(`Save this recovery code now; it is shown once:\n${recovery}`);
-    } else if (status.state === "needs-approval") console.log(`Compare code ${status.verificationCode} on an approved backend, then approve ${status.backendId}.\nOr run mains bridge recover and enter your recovery code.`);
+    } else if (status.state === "needs-approval") console.log(`Compare code ${status.verificationCode} on an approved backend, then approve ${status.backendId}.\nAfter approval, get the account fingerprint on an approved device and run mains bridge confirm --code <fingerprint-from-approved-device>.\nOr run mains bridge recover and enter your recovery code.`);
+    else if (status.state === "needs-verification") console.log("Sync is paused. Get the account fingerprint from Settings > Bridge or mains bridge status on an approved device, then run mains bridge confirm --code <fingerprint-from-approved-device>.");
     else throw new Error(status.error ?? "Bridge sign-in failed");
   } finally { client.close(); }
 }

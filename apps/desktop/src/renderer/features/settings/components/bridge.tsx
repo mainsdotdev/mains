@@ -1,5 +1,5 @@
 import { Fragment, useId, useRef, useState } from "react";
-import type { BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
+import { normalizeBridgeVerificationCode, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import type { ServiceResponse } from "@mains/contracts/service-response";
 import {
   Button,
@@ -29,6 +29,7 @@ import {
 import { BridgeSubscriptionSection } from "./bridge-subscription";
 import { BridgeDeviceRow } from "./bridge-device-row";
 import { BridgeSignInSection } from "./bridge-sign-in";
+import { BridgeKeyVerification } from "./bridge-key-verification";
 import { bridgeConnectionDescription } from "../lib/bridge-connection";
 
 async function value<T>(promise: Promise<ServiceResponse<T>>): Promise<T> {
@@ -90,7 +91,15 @@ function Approval({
   busy: boolean;
   act: (action: () => Promise<unknown>) => Promise<void>;
 }) {
-  const [matches, setMatches] = useState(false);
+  const [input, setInput] = useState("");
+  let code: string | null = null;
+  try { code = normalizeBridgeVerificationCode(input); } catch { /* Wait for a complete code. */ }
+  // The expected code is never displayed: typing it from the new device's
+  // screen is the comparison. The backend checks the typed code again.
+  const matches = code !== null && code === request.code;
+  const approve = () => {
+    if (code && matches && !busy) void act(() => value(appApi.bridge.approveBackend({ ...request, code })));
+  };
   return (
     <div className="space-y-3 py-4">
       <div className="space-y-1">
@@ -100,26 +109,35 @@ function Approval({
           {new Date(request.expiresAt).toLocaleTimeString()}
         </Muted>
       </div>
-      <Text
-        size="xl"
-        className="w-fit rounded-xl glass-input px-4 py-2 font-mono tracking-[0.25em]"
+      <form
+        className="max-w-xl space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          approve();
+        }}
       >
-        {request.code}
-      </Text>
-      <CheckboxField
-        label="This code matches the new device’s screen"
-        checked={matches}
-        disabled={busy}
-        onChange={setMatches}
-      />
+        <Muted className="max-w-2xl">
+          Enter the code shown on the new device to approve it.
+        </Muted>
+        <Input
+          aria-label="Code shown on the new device"
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          placeholder="Enter the code from the new device"
+          value={input}
+          disabled={busy}
+          onChange={(event) => setInput(event.target.value)}
+        />
+        {code && !matches && (
+          <Text role="alert" tone="danger">
+            This code does not match. Check it again, and decline the request
+            if the new device shows a different code.
+          </Text>
+        )}
+      </form>
       <div className="flex flex-wrap gap-2">
-        <Button
-          variant="primary"
-          disabled={busy || !matches}
-          onClick={() =>
-            void act(() => value(appApi.bridge.approveBackend(request)))
-          }
-        >
+        <Button variant="primary" disabled={busy || !matches} onClick={approve}>
           Approve device
         </Button>
         <Button
@@ -268,7 +286,7 @@ export default function BridgeSettings() {
             </Text>
             {status.verificationCode && (
               <div className="flex w-fit items-center gap-3 rounded-xl glass-input px-3 py-2">
-                <Text as="code" size="2xl" className="whitespace-nowrap font-mono select-all tracking-[0.25em]">
+                <Text as="code" size="xl" className="whitespace-nowrap font-mono select-all tracking-wider">
                   {status.verificationCode}
                 </Text>
                 <CopyButton
@@ -279,8 +297,8 @@ export default function BridgeSettings() {
               </div>
             )}
             <Muted className="max-w-2xl">
-              Sync starts after approval. You can also unlock your account with
-              its recovery code.
+              After approval, compare the account fingerprint on both devices to
+              start sync. You can also unlock your account with its recovery code.
             </Muted>
             <form
               className="space-y-3"
@@ -333,6 +351,13 @@ export default function BridgeSettings() {
           </div>
         </SettingsSection>
       )}
+      {status?.state === "needs-verification" && (
+        <BridgeKeyVerification
+          key={`${status.backendId}:${status.accountId}`}
+          busy={busy}
+          onConfirm={(fingerprint) => act(() => value(appApi.bridge.confirmAccountKey(fingerprint)))}
+        />
+      )}
       {status?.state === "ready" && (
         <>
           <SettingsSection title="Account">
@@ -350,6 +375,19 @@ export default function BridgeSettings() {
                 {status.logoutPending ? "Finish disconnecting" : "Disconnect"}
               </Button>
             </SettingsRow>
+            {status.accountFingerprint && (
+              <SettingsRow
+                title="Account fingerprint"
+                description="Compare this on the new device before enabling its sync."
+              >
+                <div className="flex items-center gap-3">
+                  <Text as="code" className="whitespace-nowrap font-mono tracking-wider select-all">
+                    {status.accountFingerprint}
+                  </Text>
+                  <CopyButton text={status.accountFingerprint} tooltip="Copy account fingerprint" copiedTooltip="Copied!" />
+                </div>
+              </SettingsRow>
+            )}
             {sync?.error && (
               <Text role="alert" tone="danger" className="pb-3">
                 {sync.error}
@@ -418,7 +456,7 @@ export default function BridgeSettings() {
             <SettingsSection title="Device approval requests">
               {status.approvals.map((request) => (
                 <Approval
-                  key={request.requestId}
+                  key={`${status.backendId}:${status.accountId}:${request.requestId}:${request.publicKey}:${request.code}`}
                   request={request}
                   busy={busy}
                   act={act}

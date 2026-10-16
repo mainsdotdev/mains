@@ -224,6 +224,7 @@ export const CHANNELS = {
     signOut: "bridge:signOut",
     refreshAuth: "bridge:refreshAuth",
     approveBackend: "bridge:approveBackend",
+    confirmAccountKey: "bridge:confirmAccountKey",
     rejectBackend: "bridge:rejectBackend",
     requestApproval: "bridge:requestApproval",
     revokeBackend: "bridge:revokeBackend",

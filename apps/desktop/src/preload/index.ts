@@ -252,6 +252,7 @@ const api = {
     signOut: (removeAccountObjects = false) => ipcRenderer.invoke(CHANNELS.bridge.signOut, removeAccountObjects),
     refreshAuth: () => ipcRenderer.invoke(CHANNELS.bridge.refreshAuth),
     approveBackend: (input: Pick<BridgeApprovalRequest, "requestId" | "backendId" | "publicKey" | "code">) => ipcRenderer.invoke(CHANNELS.bridge.approveBackend, input),
+    confirmAccountKey: (fingerprint: string) => ipcRenderer.invoke(CHANNELS.bridge.confirmAccountKey, fingerprint),
     rejectBackend: (requestId: string) => ipcRenderer.invoke(CHANNELS.bridge.rejectBackend, requestId),
     requestApproval: () => ipcRenderer.invoke(CHANNELS.bridge.requestApproval),
     revokeBackend: (backendId: string) => ipcRenderer.invoke(CHANNELS.bridge.revokeBackend, backendId),

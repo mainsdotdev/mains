@@ -37,6 +37,7 @@ export const appApi = {
     includeLocalHistory: method<typeof window.api.bridge.includeLocalHistory>(CHANNELS.bridge.includeLocalHistory),
     refreshAuth: method<typeof window.api.bridge.refreshAuth>(CHANNELS.bridge.refreshAuth),
     approveBackend: method<typeof window.api.bridge.approveBackend>(CHANNELS.bridge.approveBackend),
+    confirmAccountKey: method<typeof window.api.bridge.confirmAccountKey>(CHANNELS.bridge.confirmAccountKey),
     rejectBackend: method<typeof window.api.bridge.rejectBackend>(CHANNELS.bridge.rejectBackend),
     requestApproval: method<typeof window.api.bridge.requestApproval>(CHANNELS.bridge.requestApproval),
     revokeBackend: method<typeof window.api.bridge.revokeBackend>(CHANNELS.bridge.revokeBackend),

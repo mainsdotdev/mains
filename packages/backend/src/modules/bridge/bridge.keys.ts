@@ -4,7 +4,7 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
 import { fromBase64Url, toBase64Url, utf8 } from "./bridge.encoding";
-import type { BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
+import { formatBridgeVerificationCode, type BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
 export type { BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
 
 const salt = utf8("mains.bridge.v1");
@@ -17,6 +17,12 @@ export function deriveBridgeKeys(accountKey: Uint8Array) {
   return { bodyKey: derive("body"), recordKey: derive("record"), blobIdKey: derive("blob-id") };
 }
 export function generateBridgeAccountKey(): Uint8Array { return randomBytes(32); }
+/** A separate domain from device codes, recovery signing, record and blob keys. */
+export function bridgeAccountFingerprint(accountKey: Uint8Array): string {
+  requireBridgeKey(accountKey);
+  const bytes = hkdf(sha256, accountKey, utf8("mains.bridge.v2"), utf8("account-verification"), 32);
+  try { return formatBridgeVerificationCode(bytes); } finally { bytes.fill(0); }
+}
 export function generateBridgeDeviceKeyPair() { return x25519.keygen(); }
 function wrapMaterial(shared: Uint8Array, ephemeral: Uint8Array, recipient: Uint8Array) {
   const aad = utf8(JSON.stringify([1, "mains.bridge.v1/account-key", toBase64Url(ephemeral), toBase64Url(recipient)]));

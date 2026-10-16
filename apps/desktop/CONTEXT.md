@@ -177,6 +177,18 @@ loopback callback; Server uses device-code authorization through `mains bridge`
 or Settings › Bridge. The first backend generates the account key and one-time
 Argon2id recovery code. Later backends need a matching public-key approval or a
 fresh recipient-bound recovery signature before receiving log/blob access.
+Device approval codes are independently derived on backends, with 60 bits shown
+as twelve grouped base32 characters. Hub-provided codes are ignored. The
+approving side never displays the expected code; its operator types the code
+shown on the new backend, which must match the local derivation. A received
+account key stays in protected pending storage until the operator enters the
+account fingerprint from an approved device and the new backend verifies it
+locally. Only trusted active keys expose a fingerprint through status, UI or
+CLI; a pending backend never supplies its own confirmation answer.
+Pending verification never starts replication, survives restart
+and cannot replace an existing trusted key. Recovery pins its locally decrypted
+key directly, independently of later hub wraps. See the untrusted-hub tests in
+`bridge.identity.test.ts` and the ceremony in `docs/design/bridge.md`.
 `bridge.identity-storage` encrypts the credential and private keys using the
 host secret-storage adapter, never plaintext fallback. Only public identity
 state reaches the renderer; recovery values use imperative calls outside Redux

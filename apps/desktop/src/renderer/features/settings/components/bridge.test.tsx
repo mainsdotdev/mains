@@ -5,14 +5,14 @@ import type { BridgeAuthStatus } from "@mains/contracts/bridge-auth";
 import type { BridgeStatus, BridgeProjectScope } from "@mains/contracts/bridge";
 import BridgeSettings from "./bridge";
 
-const fixture = vi.hoisted(() => ({ transportKind: "ws" as "ws" | "ipc", status: {} as BridgeAuthStatus, sync: undefined as BridgeStatus | undefined, projects: [] as BridgeProjectScope[], scope: vi.fn(), include: vi.fn(), approve: vi.fn(), revoke: vi.fn(), recover: vi.fn(), take: vi.fn(), regenerate: vi.fn(), signIn: vi.fn(), signOut: vi.fn(), syncNow: vi.fn(), refetch: vi.fn() }));
+const fixture = vi.hoisted(() => ({ transportKind: "ws" as "ws" | "ipc", status: {} as BridgeAuthStatus, sync: undefined as BridgeStatus | undefined, projects: [] as BridgeProjectScope[], scope: vi.fn(), include: vi.fn(), approve: vi.fn(), confirmKey: vi.fn(), revoke: vi.fn(), recover: vi.fn(), take: vi.fn(), regenerate: vi.fn(), signIn: vi.fn(), signOut: vi.fn(), syncNow: vi.fn(), refetch: vi.fn() }));
 vi.mock("@/lib/redux/api/bridgeApi", () => ({
   useGetBridgeAuthStatusQuery: () => ({ data: fixture.status, refetch: fixture.refetch }),
   useGetBridgeStatusQuery: () => ({ data: fixture.sync, refetch: fixture.refetch }),
   useGetBridgeProjectScopesQuery: () => ({ data: fixture.projects, refetch: fixture.refetch }),
   useSyncBridgeNowMutation: () => [fixture.syncNow],
 }));
-vi.mock("@/lib/transport", () => ({ getTransport: () => ({ kind: fixture.transportKind }), appApi: { bridge: { approveBackend: fixture.approve, revokeBackend: fixture.revoke, enterRecoveryCode: fixture.recover, takeRecoveryCode: fixture.take, regenerateRecoveryCode: fixture.regenerate, signIn: fixture.signIn, signOut: fixture.signOut, setProjectLocalOnly: fixture.scope, includeLocalHistory: fixture.include } } }));
+vi.mock("@/lib/transport", () => ({ getTransport: () => ({ kind: fixture.transportKind }), appApi: { bridge: { approveBackend: fixture.approve, confirmAccountKey: fixture.confirmKey, revokeBackend: fixture.revoke, enterRecoveryCode: fixture.recover, takeRecoveryCode: fixture.take, regenerateRecoveryCode: fixture.regenerate, signIn: fixture.signIn, signOut: fixture.signOut, setProjectLocalOnly: fixture.scope, includeLocalHistory: fixture.include } } }));
 vi.mock("@/hooks/use-suppress-browser-view", () => ({ useSuppressBrowserView: () => {} }));
 
 beforeEach(() => {
@@ -21,15 +21,60 @@ beforeEach(() => {
   fixture.transportKind = "ws";
   fixture.projects = []; fixture.sync = undefined; fixture.scope.mockResolvedValue({ success: true }); fixture.include.mockResolvedValue({ success: true });
   fixture.approve.mockResolvedValue({ success: true }); fixture.revoke.mockResolvedValue({ success: true }); fixture.recover.mockResolvedValue({ success: false, error: "Recovery code does not match" });
+  fixture.confirmKey.mockResolvedValue({ success: true });
   fixture.take.mockResolvedValue({ success: true, data: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH" });
   fixture.regenerate.mockResolvedValue({ success: true, data: "JJJJ-KKKK-LLLL-MMMM-NNNN-PPPP-QQQQ-RRRR" });
   fixture.signIn.mockResolvedValue({ success: true }); fixture.signOut.mockResolvedValue({ success: true }); fixture.syncNow.mockImplementation(() => ({ unwrap: () => Promise.resolve(true) }));
-  fixture.status = { state: "ready", backendId: "A", hubUrl: "https://bridge.example", accountId: "account", email: "owner@example.com", label: "A", verificationCode: null, login: null,
-    approvals: [{ requestId: "request", backendId: "B", publicKey: "key", label: "New laptop", platform: "darwin", code: "ABC234", expiresAt: "2026-10-15T20:00:00Z" }], backends: [], recoveryCodeAvailable: true, existing: { runs: 2, pages: 3 }, error: null };
+  fixture.status = { state: "ready", backendId: "A", hubUrl: "https://bridge.example", accountId: "account", email: "owner@example.com", label: "A", verificationCode: null, accountFingerprint: "JKLM-NPQR-STUV", login: null,
+    approvals: [{ requestId: "request", backendId: "B", publicKey: "key", label: "New laptop", platform: "darwin", code: "ABCD-EFGH-JKLM", expiresAt: "2026-10-15T20:00:00Z" }], backends: [], recoveryCodeAvailable: true, existing: { runs: 2, pages: 3 }, error: null };
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("Bridge key management", () => {
+  it("keeps sync controls hidden until the fingerprint from the approved device is explicitly verified", async () => {
+    fixture.status = { ...fixture.status, state: "needs-verification", accountFingerprint: null, approvals: [] };
+    fixture.projects = [{ id: "p", name: "Private project", localOnly: false, workspaces: 1, runs: 1 }];
+    render(<BridgeSettings />);
+    expect(screen.getByText("Verify account key")).toBeTruthy();
+    expect(screen.queryByText("Project sync")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
+    expect(screen.queryByText("JKLM-NPQR-STUV")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy account fingerprint" })).toBeNull();
+    const input = screen.getByRole("textbox", { name: "Fingerprint from approved device" });
+    const button = screen.getByRole("button", { name: "Verify and start sync" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true); expect(fixture.confirmKey).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "ABC234" } });
+    expect(button.disabled).toBe(true);
+    fireEvent.submit(input.closest("form")!); expect(fixture.confirmKey).not.toHaveBeenCalled();
+    fixture.confirmKey.mockResolvedValueOnce({ success: false, error: "Account fingerprints do not match; do not enable sync" });
+    fireEvent.change(input, { target: { value: "AAAA-BBBB-CCCC" } });
+    expect(button.disabled).toBe(false);
+    await act(async () => { fireEvent.click(button); });
+    expect(fixture.confirmKey).toHaveBeenCalledExactlyOnceWith("AAAA-BBBB-CCCC");
+    expect(screen.getByRole("alert").textContent).toContain("fingerprints do not match");
+    expect(fixture.syncNow).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "jklm npqr stuv" } });
+    expect(button.disabled).toBe(false);
+    await act(async () => { fireEvent.click(button); });
+    expect(fixture.confirmKey).toHaveBeenLastCalledWith("JKLM-NPQR-STUV");
+    expect(fixture.confirmKey).toHaveBeenCalledTimes(2);
+  });
+  it("never renders the new device's local fingerprint even if an older backend includes it in pending status", () => {
+    fixture.status = { ...fixture.status, state: "needs-verification", approvals: [] };
+    render(<BridgeSettings />);
+    expect(screen.getByText("Verify account key")).toBeTruthy();
+    expect(screen.queryByText("JKLM-NPQR-STUV")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy account fingerprint" })).toBeNull();
+  });
+  it("discards a completed code comparison when the approval recipient changes", () => {
+    const view = render(<BridgeSettings />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Code shown on the new device" }), { target: { value: "ABCD-EFGH-JKLM" } });
+    expect((screen.getByRole("button", { name: "Approve device" }) as HTMLButtonElement).disabled).toBe(false);
+    fixture.status = { ...fixture.status, approvals: [{ ...fixture.status.approvals[0], publicKey: "changed-key", code: "JKLM-NPQR-STUV" }] };
+    view.rerender(<BridgeSettings />);
+    expect((screen.getByRole("textbox", { name: "Code shown on the new device" }) as HTMLInputElement).value).toBe("");
+    expect((screen.getByRole("button", { name: "Approve device" }) as HTMLButtonElement).disabled).toBe(true);
+  });
   it.each([false, true])("shows connection details and confirms disconnect before removing data (remove synced: %s)", async (removeSynced) => {
     fixture.status.label = "Studio Mac";
     fixture.sync = { enabled: true, state: "connected", backendId: "A", label: "Studio Mac", lastSyncedAt: "2026-10-16T00:25:00Z", pendingRecords: 0, backends: [], runs: [], error: null };
@@ -188,14 +233,19 @@ describe("Bridge key management", () => {
     expect(screen.getByText(text)).toBeTruthy();
     expect(!!screen.queryByText(/Storage is full/)).toBe(used >= limit);
   });
-  it("requires an explicit matching-code check before approving the displayed backend", async () => {
+  it("approves only after the new device's code is typed, without displaying the expected code", async () => {
     render(<BridgeSettings />);
     const button = screen.getByRole("button", { name: "Approve device" }) as HTMLButtonElement;
-    expect(screen.getByText("ABC234")).toBeTruthy(); expect(button.disabled).toBe(true);
+    const input = screen.getByRole("textbox", { name: "Code shown on the new device" });
+    expect(screen.queryByText("ABCD-EFGH-JKLM")).toBeNull(); expect(button.disabled).toBe(true);
     fireEvent.click(button); expect(fixture.approve).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("checkbox", { name: /code matches/ }));
+    fireEvent.change(input, { target: { value: "ABCD-EFGH-JKLN" } });
+    expect(screen.getByRole("alert").textContent).toMatch(/does not match/); expect(button.disabled).toBe(true);
+    fireEvent.submit(input); expect(fixture.approve).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "abcd efgh jklm" } });
+    expect(screen.queryByText(/does not match/)).toBeNull(); expect(button.disabled).toBe(false);
     await act(async () => { fireEvent.click(button); });
-    expect(fixture.approve).toHaveBeenCalledExactlyOnceWith(fixture.status.approvals[0]);
+    expect(fixture.approve).toHaveBeenCalledExactlyOnceWith({ ...fixture.status.approvals[0], code: "ABCD-EFGH-JKLM" });
   });
   it.each([
     { flow: "setup", code: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH" },
@@ -235,11 +285,11 @@ describe("Bridge key management", () => {
   it("copies the verification code without unlocking, confirms disconnect and clears a failed recovery attempt", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    fixture.status = { ...fixture.status, state: "needs-approval", verificationCode: "ABC234", approvals: [] };
+    fixture.status = { ...fixture.status, state: "needs-approval", verificationCode: "ABCD-EFGH-JKLM", accountFingerprint: null, approvals: [] };
     render(<BridgeSettings />);
     expect(writeText).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy verification code" })); });
-    expect(writeText).toHaveBeenCalledExactlyOnceWith("ABC234");
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("ABCD-EFGH-JKLM");
     expect(fixture.recover).not.toHaveBeenCalled();
     expect(screen.getAllByRole("button", { name: "Disconnect from Bridge" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Disconnect from Bridge" }));

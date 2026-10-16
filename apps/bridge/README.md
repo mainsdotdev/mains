@@ -198,9 +198,12 @@ The fixed recovery KDF uses 64 MiB, three iterations and one lane.
 
 A later backend remains **pending** with no log or R2 access until either:
 
-- An approved backend compares the six-character public-key code on both screens
-  and approves that exact request and public key. Desktop also posts an OS
-  notification when a request arrives.
+- An approved backend derives the twelve-character (60-bit) public-key code
+  locally. Its operator types the code shown on the new backend; only a match
+  approves that exact request and public key. The approving side never displays
+  the expected code. The new backend then requires the account fingerprint from
+  the trusted backend before starting sync. Desktop also posts an OS
+  notification, without the code, when a request arrives.
 - The new backend decrypts the recovery wrap locally and proves possession of
   the recovered key using a fresh, signed challenge. The proof binds the account,
   backend, public key and exact device wrap; it cannot be replayed or transferred
@@ -231,7 +234,8 @@ second SQLite owner:
 ```sh
 mains bridge login --hub https://bridge.example.com --data-dir /path/to/profile
 mains bridge status --data-dir /path/to/profile
-mains bridge approve <backend-id> --code <matching-six-character-code>
+mains bridge approve <backend-id> --code <matching-12-character-device-code>
+mains bridge confirm --code <account-fingerprint-from-approved-device>
 mains bridge recover
 mains bridge revoke <backend-id>
 mains bridge recovery --replace
@@ -244,6 +248,35 @@ like the existing server admin commands. `login` prints the verification URL and
 sign-in code, then the public-key comparison code if approval is still required.
 Settings in a browser manages the backend that browser is connected to; Safari
 never receives a private account key or stores an independent SQLite database.
+
+Device approval uses two local comparisons. A derives B's 60-bit device code
+from B's public key; it never displays or validates against the hub's supplied
+`code` field. Codes are twelve base32 characters grouped as `ABCD-EFGH-JKLM`.
+After A approves, B decrypts the offered account key into protected **pending**
+storage. B cannot start replication (including log pulls, blob downloads and
+local-history uploads) until its operator obtains the account fingerprint from
+Settings › Bridge (or `mains bridge status`) on the trusted device and enters it
+on B. B compares the input locally without exposing its pending key's expected
+fingerprint through status, UI or CLI. Likewise, A's Settings and notification
+never show B's expected code; the operator types it from B's screen (or passes
+it to `mains bridge approve --code`). A typed code for an old recipient is
+discarded when a request's public key changes.
+
+The account fingerprint is independently derived on each backend using
+HKDF-SHA256 (`mains.bridge.v2`, `account-verification`) and retains 60 bits.
+Only backends with a trusted active key display it; pending backends cannot
+provide their own confirmation value.
+Neither a hub-supplied recovery verifier nor an HTTP approval response establishes
+trust. Pending keys stay pending across restarts and cannot be silently replaced
+by a different hub wrap. Recovery instead trusts the key decrypted locally by
+the user-held recovery code. The first backend trusts its locally generated key.
+Previously stored active keys remain pinned and are not replaced by hub data.
+
+Update the hub and both backends together: six-character approval codes are
+rejected, with no automatic downgrade. This changes the approval ceremony and
+local status/API only; it does not rotate account keys or change existing
+record/blob ciphertext, D1 data or R2 objects. Comparisons must use trusted Mains
+clients, not two values shown by the hub's sign-in page.
 
 ### Configure an authentication hub
 

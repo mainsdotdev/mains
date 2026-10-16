@@ -97,6 +97,7 @@ Bridge options (operate on the running backend; it keeps ownership of SQLite):
   login --hub <url> [--label <name>] [--local-history]
   status | logout [--remove-synced]
   approve <backend-id> --code <matching-code> | reject <backend-id>
+  confirm --code <account-fingerprint-from-approved-device>
   revoke <backend-id> | recover | recovery --replace
   projects | local-only <project-id> --on|--off
   sync-history | sync

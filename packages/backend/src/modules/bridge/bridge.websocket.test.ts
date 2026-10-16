@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
+import { bridgeApprovalCode, bridgeBase64, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
+import { parseBridgeServerFrame } from "@mains/contracts/bridge-wire";
 import { createBridgeWebSocketTransport } from "./bridge.websocket";
 
 const clients: ReturnType<typeof createBridgeWebSocketTransport>[] = [];
@@ -25,6 +27,30 @@ function client(url: string, extra: Partial<Parameters<typeof createBridgeWebSoc
 const emptyPage = { type: "records", stream: "account", records: [], next: 0, hasMore: false };
 
 describe("Bridge WebSocket failure handling", () => {
+  it("delivers a 60-bit approval during a pending pull without dropping or reconnecting the replication socket", async () => {
+    const publicKey = bridgeBase64(new Uint8Array(32).fill(7));
+    const approval = { type: "approval", requestId: "request-B", backendId: "B", publicKey, label: "New device", platform: "darwin",
+      code: await bridgeApprovalCode(publicKey), expiresAt: new Date(Date.now() + 600000).toISOString() };
+    const approvals: BridgeApprovalRequest[] = [], statuses: string[] = [];
+    let connections = 0, requests = 0;
+    const url = await server((socket) => {
+      connections++;
+      socket.on("message", (data) => {
+        if (requests++ === 0) socket.send(JSON.stringify(approval));
+        socket.send(JSON.stringify({ requestId: JSON.parse(data.toString()).requestId, message: emptyPage }));
+      });
+    });
+    const transport = client(url, { onApproval: (request) => approvals.push(request), onStatusChange: (status) => statuses.push(status) });
+    await expect(transport.pull("account", 0, 100)).resolves.toEqual({ records: [], next: 0, hasMore: false });
+    expect(approvals).toEqual([approval]);
+    await expect(transport.pull("account", 0, 100)).resolves.toEqual({ records: [], next: 0, hasMore: false });
+    expect(connections).toBe(1); expect(statuses).toEqual(["connecting", "connected"]);
+  });
+  it.each(["ABC234", "ABCDEFGHJKLM", "ABCD-EFGH-JKLO", "ABCD-EFGH-JKLM-", "abcd-efgh-jklm"])("rejects obsolete or malformed approval codes on the wire (%s)", (code) => {
+    expect(() => parseBridgeServerFrame(JSON.stringify({ type: "approval", requestId: "request-B", backendId: "B",
+      publicKey: bridgeBase64(new Uint8Array(32).fill(7)), label: "New device", platform: "darwin", code,
+      expiresAt: "2026-10-17T12:00:00Z" }))).toThrow("Invalid Bridge approval");
+  });
   it.each([null, [], { error: null }, { message: null }, { message: { type: "records", stream: "account", records: [null], next: 1, hasMore: false } }])("rejects malformed hub replies without throwing out of the socket listener (%j)", async (malformed) => {
     const url = await server((socket) => socket.on("message", (data) => {
       const { requestId } = JSON.parse(data.toString());

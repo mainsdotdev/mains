@@ -18,5 +18,11 @@ export async function approve(fixture: Fixture) {
   const status = await waitFor(() => fixture.a.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth),
     (value) => value.approvals.some((entry) => entry.backendId === fixture.b.backendId), "approval request");
   await fixture.a.client.call(CHANNELS.bridge.approveBackend, status.approvals.find((entry) => entry.backendId === fixture.b.backendId));
+  const offered = await waitFor(() => fixture.b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth),
+    (value) => value.state === "needs-verification", "account key comparison");
+  expect(offered.accountFingerprint).toBeNull();
+  expect(status.accountFingerprint).toBeTruthy();
+  expect((await fixture.b.client.call(CHANNELS.bridge.getStatus)).enabled).toBe(false);
+  await fixture.b.client.call(CHANNELS.bridge.confirmAccountKey, status.accountFingerprint);
   return waitFor(() => fixture.b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth), (value) => value.state === "ready", "approved backend");
 }
