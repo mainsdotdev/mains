@@ -1,15 +1,12 @@
+import { Buffer } from "node:buffer";
+
 export const utf8 = (value: string) => new TextEncoder().encode(value);
 export function toBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 32768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64url");
 }
 export function fromBase64Url(value: string, length?: number): Uint8Array {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("Invalid Bridge encoding");
-  let decoded: string;
-  try { decoded = atob(value.replace(/-/g, "+").replace(/_/g, "/")); }
-  catch { throw new Error("Invalid Bridge encoding"); }
-  const bytes = Uint8Array.from(decoded, (char) => char.charCodeAt(0));
+  const bytes = new Uint8Array(Buffer.from(value, "base64url"));
   if (toBase64Url(bytes) !== value || length !== undefined && bytes.length !== length) throw new Error("Invalid Bridge encoding");
   return bytes;
 }

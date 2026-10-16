@@ -44,6 +44,30 @@ async function settle(a: Node, b: Node) {
 }
 
 describe("Atlas editing between independent migrated backends", () => {
+  it("bounds ciphertext decoding when a long revision chain arrives before its ancestors", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), remote = hub.connect("B");
+    const base = await create(a);
+    let latest = base;
+    for (let version = 0; version < 16; version++) latest = await on(a, (service) => service.savePage({
+      ...identity(latest), expectedVersion: latest.item.version, title: `Revision ${version}`, markdown: `Revision ${version}\n${"content ".repeat(512)}`,
+    }));
+    await drain(a);
+    const open = vi.fn((envelope: Parameters<typeof bridgeTestCodec.open>[0]) => bridgeTestCodec.open(envelope));
+    const b = await node(hub, "B", { codec: { seal: bridgeTestCodec.seal, open }, transport: { push: remote.push, async pull(...args) {
+      const result = await remote.pull(...args);
+      return { ...result, records: result.records.map((record, index) => ({ seq: record.seq, envelope: result.records[result.records.length - index - 1].envelope })) };
+    } } });
+    const received = await page(b, base);
+    expect(received.revision.id).toBe(latest.revision.id);
+    expect(received.revision.markdown).toBe(latest.revision.markdown);
+    expect(b.sqlite.prepare("SELECT count(*) n FROM bridge_parked").get()).toEqual({ n: 0 });
+    // Count expensive decoding work, independent of machine speed. Retrying
+    // missing parents must not repeatedly decrypt the same immutable ciphertext.
+    const decoded = new Map<string, number>();
+    for (const [envelope] of open.mock.calls) decoded.set(envelope.body.payload, (decoded.get(envelope.body.payload) ?? 0) + 1);
+    expect(Math.max(...decoded.values())).toBeLessThanOrEqual(4);
+  });
+
   it("backfills existing Atlas Pages when a B5 backend first enables Atlas", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A", { experimentalAtlas: false }), b = await node(hub, "B");
     const original = await create(a);

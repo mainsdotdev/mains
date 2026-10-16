@@ -384,6 +384,20 @@ function fillLinks(store: BridgeStore) {
 export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, records: BridgeLogRecord[], cursor?: number): AppliedChange[] {
   const changes: AppliedChange[] = [], recovered: RecoveredRow[] = [];
   store.sqlite.transaction(() => {
+    // Missing ancestors can require many passes. Reuse authenticated immutable
+    // records only within this transaction, with a bounded serialized footprint.
+    const verified = new Map<string, { envelope: BridgeEnvelope; opened: ReturnType<typeof verifyEnvelope> }>();
+    let cachedChars = 0;
+    const remember = (encoded: string, envelope: BridgeEnvelope, opened: ReturnType<typeof verifyEnvelope>) => {
+      if (!verified.has(encoded) && cachedChars + encoded.length <= 4 * 1024 * 1024) {
+        verified.set(encoded, { envelope, opened }); cachedChars += encoded.length;
+      }
+    };
+    const park = (record: BridgeLogRecord, opened: ReturnType<typeof verifyEnvelope>, reason: string) => {
+      const encoded = JSON.stringify(record.envelope);
+      store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)").run(stream, record.seq, encoded, reason);
+      remember(encoded, record.envelope, opened);
+    };
     store.sqlite.pragma("defer_foreign_keys = ON");
     store.sqlite.prepare("UPDATE bridge_state SET applying=1 WHERE id=1").run();
     for (const record of records) {
@@ -392,15 +406,15 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
       advanceClock(store, record.envelope);
       if (opened.header.op === "delete") {
         const reason = !BRIDGE_TABLES[opened.body.table] ? "schema" : isAtlas(opened.body.table) && !store.atlasEnabled ? "disabled" : undefined;
-        if (reason) store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)").run(stream, record.seq, JSON.stringify(record.envelope), reason);
+        if (reason) park(record, opened, reason);
         else {
           const outcome = applyDelete(store, record.envelope, recovered, changes);
-          if (outcome !== "applied") store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)").run(stream, record.seq, JSON.stringify(record.envelope), outcome);
+          if (outcome !== "applied") park(record, opened, outcome);
         }
       }
       else {
         const outcome = attemptUpsert(store, record, opened.body as BridgeUpsertBody);
-        if (outcome !== "applied" && outcome !== "ignored") store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)").run(stream, record.seq, JSON.stringify(record.envelope), outcome);
+        if (outcome !== "applied" && outcome !== "ignored") park(record, opened, outcome);
         else if (outcome === "applied") changes.push({ table: opened.body.table, pk: opened.body.pk, op: "upsert", ...(opened.header.runId ? { runId: opened.header.runId } : {}) });
       }
     }
@@ -410,7 +424,10 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
       progress = false;
       const parked = store.sqlite.prepare("SELECT * FROM bridge_parked ORDER BY seq").all() as { stream: BridgeStream; seq: number; envelope: string }[];
       for (const entry of parked) {
-        const envelope: BridgeEnvelope = JSON.parse(entry.envelope), { body, header } = verifyEnvelope(store, envelope);
+        const cached = verified.get(entry.envelope);
+        const envelope: BridgeEnvelope = cached?.envelope ?? JSON.parse(entry.envelope);
+        const opened = cached?.opened ?? verifyEnvelope(store, envelope), { body, header } = opened;
+        remember(entry.envelope, envelope, opened);
         let outcome: Outcome;
         if (header.op === "delete") {
           if (!BRIDGE_TABLES[body.table] || isAtlas(body.table) && !store.atlasEnabled) continue;
@@ -418,6 +435,7 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
         } else outcome = attemptUpsert(store, { seq: entry.seq, envelope }, body as BridgeUpsertBody);
         if (outcome === "applied" || outcome === "ignored") {
           store.sqlite.prepare("DELETE FROM bridge_parked WHERE stream=? AND seq=?").run(entry.stream, entry.seq);
+          if (verified.delete(entry.envelope)) cachedChars -= entry.envelope.length;
           progress = true;
           if (outcome === "applied") changes.push({ table: body.table, pk: body.pk, op: "upsert", ...(envelope.header.runId ? { runId: envelope.header.runId } : {}) });
         }
