@@ -18129,7 +18129,7 @@ Repository: https://github.com/steveukx/git-js.git
 (No license file shipped in the package; see the repository above for the full MIT text.)
 
 ========================================================================
-source-map-js@1.2.1
+source-map-js@1.2.2
 License: BSD-3-Clause
 Repository: 7rulnik/source-map-js
 ========================================================================
