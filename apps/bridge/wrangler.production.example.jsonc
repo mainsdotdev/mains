@@ -9,6 +9,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "preview_urls": false,
+  "secrets": { "required": ["BETTER_AUTH_SECRET", "GITHUB_CLIENT_SECRET"] },
   "routes": [{ "pattern": "REPLACE_WITH_PRODUCTION_HOST", "custom_domain": true }],
   "vars": {
     "BRIDGE_ENV": "production",

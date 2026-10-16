@@ -9,6 +9,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
+# Preview candidates and stable releases share the production Bridge service.
+# This also reaches the web renderer built by the standalone server job.
+env:
+  MAINS_BRIDGE_HUB_URL: https://bridge.mains.dev
+
 # Desktop jobs run in apps/desktop; the standalone job overrides this default.
 defaults:
   run:

@@ -189,15 +189,22 @@ import { configureBackendRuntime } from "@mains/backend/runtime/backend-runtime"
 import { createElectronBackendRuntime } from "./runtime/electron-backend-runtime";
 import { configureIpcMainAdapter } from "@mains/backend/ipc-kit/ipc-main";
 import { runPackageSmoke } from "./package-smoke";
+import { desktopUserDataPath } from "./user-data-path";
 
 const SMOKE_TEST = process.argv.includes("--smoke-test");
-// A development replica demo must never share the user's normal profile or database.
-const DEV_USER_DATA = !app.isPackaged ? process.env.MAINS_DEV_USER_DATA : undefined;
-if (DEV_USER_DATA) {
-  if (!path.isAbsolute(DEV_USER_DATA)) throw new Error("MAINS_DEV_USER_DATA must be an absolute directory");
-  fs.mkdirSync(DEV_USER_DATA, { recursive: true });
-  app.setPath("userData", DEV_USER_DATA);
-}
+// Select the complete profile before Chromium, single-instance and database locks.
+const requestedUserData = app.commandLine.hasSwitch("user-data-dir")
+  ? app.commandLine.getSwitchValue("user-data-dir") : undefined;
+const userDataPath = desktopUserDataPath({
+  appData: app.getPath("appData"), isPackaged: app.isPackaged,
+  requestedPath: requestedUserData, devPath: process.env.MAINS_DEV_USER_DATA || undefined,
+  smokeTest: SMOKE_TEST, smokePath: process.env.MAINS_SMOKE_USER_DATA,
+});
+fs.mkdirSync(userDataPath, { recursive: true });
+app.setPath("userData", userDataPath);
+// The development database uses this existing opt-in to leave .data/mains.db.
+if (!app.isPackaged && (requestedUserData !== undefined || SMOKE_TEST))
+  process.env.MAINS_DEV_USER_DATA = userDataPath;
 function finishPackageSmoke(error?: unknown): void {
   if (!process.env.MAINS_SMOKE_RESULT) throw new Error("Package smoke requires a result file");
   fs.writeFileSync(process.env.MAINS_SMOKE_RESULT, JSON.stringify({
@@ -1339,14 +1346,6 @@ if (!SERVE.serve && !SMOKE_TEST) {
 if (!app.isPackaged) {
   app.setName("Mains");
 }
-// The display name is "Mains", but userData has always lived under the
-// lowercase dir — pin it so existing installs keep their data even on
-// case-sensitive filesystems.
-if (SMOKE_TEST && (!process.env.MAINS_SMOKE_USER_DATA || !path.isAbsolute(process.env.MAINS_SMOKE_USER_DATA))) {
-  throw new Error("Package smoke requires an isolated absolute userData directory");
-}
-app.setPath("userData", SMOKE_TEST ? process.env.MAINS_SMOKE_USER_DATA! : DEV_USER_DATA ?? path.join(app.getPath("appData"), "mains"));
-
 // Custom About panel
 app.setAboutPanelOptions({
   applicationName: "Mains",

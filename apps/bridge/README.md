@@ -403,14 +403,30 @@ idempotent operator grants, bounded D1 reads, and two real backends resuming que
 Pages/large values/images after expiry and restart. It invokes no payment or
 Cloudflare account API and uses disposable workerd/D1/DO/R2 stores.
 
-## Production preparation (not provisioned)
+## Production
 
-`wrangler.production.example.jsonc` is an intentionally incomplete template.
-No production resources or domain are assigned by it. When provisioning is
-authorized, copy it to `wrangler.production.jsonc` and supply the chosen public
-HTTPS host, account ID, **separate** D1 database ID, private R2 bucket and OAuth
-client ID. The distinct Worker owns its own SQLite Durable Object namespace;
-never point it at staging data or use the staging reset entry.
+The production origin is `https://bridge.mains.dev`.
+`wrangler.production.jsonc` pins the domain owner's Cloudflare account, the
+`mains-bridge-production` Worker, `mains-bridge-production-auth` D1 database and
+private `mains-bridge-production-blobs` R2 bucket. They are in a separate account
+from staging; the production Worker owns its own SQLite Durable Object namespace.
+`wrangler.production.example.jsonc` remains an intentionally incomplete template
+for provisioning a fresh environment.
+
+Use the Cloudflare account that owns the `mains.dev` zone. Keep its login in the
+`mains-production` Wrangler profile so the existing default staging login stays
+available:
+
+```sh
+npx wrangler auth create mains-production
+```
+
+Production commands pass `--profile mains-production` explicitly and the config
+pins the production account ID. Use command-scoped profiles in this shared
+directory so staging commands keep their existing login. Provision a **separate**
+D1 database, private R2 bucket and Worker in that account. The distinct Worker
+owns its own SQLite Durable Object namespace. Staging data and Mac profiles stay
+in their existing environments.
 
 ```sh
 npm run production:check -- wrangler.production.jsonc
@@ -419,12 +435,38 @@ npm run production:check -- wrangler.production.jsonc
 This command is entirely offline. It rejects placeholders, development auth,
 staging resource reuse, unsafe origins, external DO namespaces and inline secrets.
 It does not prove that resources, DNS or deployed secrets exist. The example is
-expected to fail the check until configured; no production deploy script is enabled.
+expected to fail the check until configured. A blank GitHub client ID also blocks
+the check until a sign-in provider is configured. The following commands all run
+the offline check first:
+
+```sh
+npm run production:build     # Local dry run, no remote changes
+npm run production:migrate   # Apply production D1 migrations
+npm run production:deploy    # Publish the production Worker and custom domain
+```
+
+Initial resource provisioning can upload the normal Worker with no routes,
+`workers_dev=false` and `preview_urls=false` while DNS and OAuth are pending.
+That private bootstrap creates its Durable Object namespace without exposing a
+sign-in service. A bootstrap config is a local provisioning artifact, kept under
+the ignored `.wrangler` directory; public rollout uses the checked production
+config above. Bootstrap never uses the staging reset entry.
 
 The first authorized production rollout needs all D1 migrations applied **before**
 the new Worker, a configured custom-domain route, a separate GitHub callback at
 `<production-origin>/api/auth/callback/github`, and Worker secrets
 `BETTER_AUTH_SECRET` and `GITHUB_CLIENT_SECRET` (or mail delivery credentials).
+The checked-in GitHub configuration declares both secrets as required for deploy;
+their values live only in Cloudflare. Enter a GitHub secret from `apps/bridge`:
+
+```sh
+npx wrangler secret put GITHUB_CLIENT_SECRET --config wrangler.production.jsonc --profile mains-production
+```
+
+Paste the secret only at the command's hidden input prompt. The production OAuth
+App's homepage is `https://bridge.mains.dev/sign-in` and its callback is
+`https://bridge.mains.dev/api/auth/callback/github`.
+
 Keep development auth off, preview URLs off and secrets out of config/source.
 Plan explicit initial entitlement grants until the future verified payment-event
 consumer manages periods. Back up D1 before migrations, deploy compatible clients
@@ -432,6 +474,16 @@ and verify login/approval/recovery, paid uploads, expired read access and renewa
 against isolated production test accounts. Creating resources, remote migrations,
 secret provisioning, deployment and live checks are separate operator actions;
 none are performed by local validation or tests.
+
+Desktop/web releases select this environment with
+`MAINS_BRIDGE_HUB_URL=https://bridge.mains.dev` at build time. The GitHub release
+workflow sets this for both stable and preview desktop and standalone web
+packages. Preview is a candidate app release using the same production Bridge
+service; staging requires an explicitly selected development/test build origin.
+Existing profiles keep their current hub until the user explicitly connects to
+a different one;
+provisioning production does not migrate the Mac's staging data or switch its
+account. Payments and automatic subscription renewal remain unconfigured.
 
 ## Lost all account keys
 

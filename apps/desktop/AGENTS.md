@@ -58,6 +58,9 @@ in `../server`. Keep server-only composition code out of this Electron app.
 For a second development backend, set `MAINS_DEV_USER_DATA` to an absolute
 disposable directory before `npm start`. Unpackaged Electron then isolates both
 Chromium state and `mains.db` there, before acquiring its instance/database locks.
+For a packaged app, launch its executable with `--user-data-dir=/absolute/path`
+to select an isolated profile before those same locks. Without an explicit path,
+the existing canonical `mains` profile is preserved.
 Do not redirect HOME or use the installed app's profile for replica tests. Bridge
 starts after Bridge sign-in and key approval, or with an explicit
 `<userData>/bridge/dev.json` / `MAINS_BRIDGE_CONFIG`;

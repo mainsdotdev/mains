@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mains-bridge-production",
+  "account_id": "e83555d890f345869bdb6e595455af6b",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "secrets": { "required": ["BETTER_AUTH_SECRET", "GITHUB_CLIENT_SECRET"] },
+  "routes": [{ "pattern": "bridge.mains.dev", "custom_domain": true }],
+  "vars": {
+    "BRIDGE_ENV": "production",
+    "BRIDGE_DEV_AUTH": "false",
+    "BRIDGE_AUTH_URL": "https://bridge.mains.dev",
+    "GITHUB_CLIENT_ID": "Ov23liObqQHXTr0rw24b"
+  },
+  "d1_databases": [{
+    "binding": "AUTH_DB",
+    "database_name": "mains-bridge-production-auth",
+    "database_id": "decf0acd-32ca-4d48-bea1-e88692ae1747",
+    "migrations_dir": "migrations"
+  }],
+  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "mains-bridge-production-blobs" }],
+  "durable_objects": { "bindings": [{ "name": "ACCOUNT_HUB", "class_name": "AccountHub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountHub"] }]
+}
