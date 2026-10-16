@@ -1,6 +1,7 @@
 import { bridgeBase64, bridgeBytes } from "@mains/contracts/bridge-auth";
 import { bridgeAuth, digestToken, randomToken, signedInUser, type AuthEnv } from "./identity";
 import { HttpError, json, jsonInput, rateLimit, textField } from "./auth-http";
+import { reportBridgeFailure } from "./observability";
 
 function loopback(value: unknown): string {
   const uri = new URL(textField(value, "redirect URI", 256));
@@ -73,5 +74,8 @@ export async function handleSignIn(request: Request, env: AuthEnv): Promise<Resp
       return json({ redirect: callback.toString() });
     }
     return json({ error: "Not found" }, 404);
-  } catch (error) { return json({ error: error instanceof HttpError ? error.message : "Sign-in is unavailable" }, error instanceof HttpError ? error.status : 400); }
+  } catch (error) {
+    if (!(error instanceof HttpError)) reportBridgeFailure(env, "auth", 400);
+    return json({ error: error instanceof HttpError ? error.message : "Sign-in is unavailable" }, error instanceof HttpError ? error.status : 400);
+  }
 }

@@ -32,6 +32,14 @@ export function productionConfigErrors(config: Config, staging: Config): string[
   const bucket = config.r2_buckets?.find((entry: Config) => entry.binding === "BLOBS");
   require(bucket && typeof bucket.bucket_name === "string" && bucket.bucket_name.length >= 3, "Configure the private production R2 bucket.");
   require(bucket && !staging.r2_buckets?.some((entry: Config) => entry.bucket_name === bucket.bucket_name), "Production must not share staging R2.");
+  const archive = config.r2_buckets?.find((entry: Config) => entry.binding === "BLOB_ARCHIVE");
+  require(archive && typeof archive.bucket_name === "string" && archive.bucket_name !== bucket?.bucket_name &&
+    !staging.r2_buckets?.some((entry: Config) => entry.bucket_name === archive.bucket_name), "Configure a separate private ciphertext archive bucket.");
+  const observability = config.observability;
+  require(observability?.enabled === true && observability.redact_query_string === true && observability.logs?.enabled === true &&
+    observability.logs.invocation_logs === false && observability.traces?.enabled === false && observability.issues?.enabled === false,
+    "Enable redacted application logs without invocation logs, traces or raw exception issues.");
+  require(config.version_metadata?.binding === "CF_VERSION_METADATA", "Include deployment version metadata in diagnostics.");
   const hub = config.durable_objects?.bindings?.find((entry: Config) => entry.name === "ACCOUNT_HUB");
   require(hub?.class_name === "AccountHub" && !hub.script_name && !hub.environment, "Keep ACCOUNT_HUB in this production Worker's namespace.");
   require(config.migrations?.some((entry: Config) => entry.new_sqlite_classes?.includes("AccountHub")), "Declare the SQLite AccountHub migration for the new Worker.");

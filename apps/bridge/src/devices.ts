@@ -2,6 +2,7 @@ import { bridgeApprovalCode, bridgeBytes, bridgeRecoveryMessage, validateBridgeD
   type BridgeApprovalRequest, type BridgeRegisteredBackend, type BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
 import { digestToken, randomToken, signedInUser, type AuthEnv } from "./identity";
 import { HttpError, identifier, json, jsonInput, rateLimit, textField } from "./auth-http";
+import { reportBridgeFailure } from "./observability";
 
 export interface BackendRow {
   account_id: string; backend_id: string; public_key: string; label: string; platform: string;
@@ -192,6 +193,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
     }
     return json({ error: "Not found" }, 404);
   } catch (error) {
+    if (!(error instanceof HttpError)) reportBridgeFailure(env, "identity", 400);
     return json({ error: error instanceof HttpError ? error.message : "Invalid identity or key request" }, error instanceof HttpError ? error.status : 400);
   }
 }

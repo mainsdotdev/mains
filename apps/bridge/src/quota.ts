@@ -8,6 +8,7 @@ import { createBlobCollector, installBlobInventory } from "./blob-gc";
 
 export interface QuotaEnv extends DevAuthEnv {
   BLOBS: R2Bucket;
+  BLOB_ARCHIVE?: R2Bucket;
   BRIDGE_STORAGE_LIMIT_BYTES?: string;
   BRIDGE_WRITES_PER_MINUTE?: string;
 }
@@ -52,7 +53,7 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
       END;`);
   });
   installBlobInventory(storage);
-  const collector = createBlobCollector(storage, env.BLOBS);
+  const collector = createBlobCollector(storage, env.BLOBS, env.BLOB_ARCHIVE);
   let accountPrefix: string | undefined;
   let initialized = false;
   async function reconcile(accountId: string) {

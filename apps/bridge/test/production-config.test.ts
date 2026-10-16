@@ -5,10 +5,12 @@ import { parseBridgeConfig, productionConfigErrors } from "../scripts/production
 const staging = { name: "mains-bridge-staging", vars: { BRIDGE_AUTH_URL: "https://staging.mains.test" },
   d1_databases: [{ database_id: "00000000-0000-4000-8000-000000000001", database_name: "staging-auth" }], r2_buckets: [{ bucket_name: "staging-blobs" }] };
 const config = () => ({ name: "mains-bridge-production", account_id: "a".repeat(32), main: "src/index.ts", compatibility_flags: ["nodejs_compat"], workers_dev: false, preview_urls: false,
+  observability: { enabled: true, redact_query_string: true, logs: { enabled: true, invocation_logs: false }, traces: { enabled: false }, issues: { enabled: false } },
+  version_metadata: { binding: "CF_VERSION_METADATA" },
   vars: { BRIDGE_ENV: "production", BRIDGE_DEV_AUTH: "false", BRIDGE_AUTH_URL: "https://bridge.mains.test", GITHUB_CLIENT_ID: "test-public-id" },
   routes: [{ pattern: "bridge.mains.test", custom_domain: true }],
   d1_databases: [{ binding: "AUTH_DB", database_name: "production-auth", database_id: "00000000-0000-4000-8000-000000000002", migrations_dir: "migrations" }],
-  r2_buckets: [{ binding: "BLOBS", bucket_name: "production-blobs" }], durable_objects: { bindings: [{ name: "ACCOUNT_HUB", class_name: "AccountHub" }] },
+  r2_buckets: [{ binding: "BLOBS", bucket_name: "production-blobs" }, { binding: "BLOB_ARCHIVE", bucket_name: "production-archive" }], durable_objects: { bindings: [{ name: "ACCOUNT_HUB", class_name: "AccountHub" }] },
   migrations: [{ tag: "v1", new_sqlite_classes: ["AccountHub"] }] });
 
 describe("offline production readiness checks", () => {
@@ -33,5 +35,12 @@ describe("offline production readiness checks", () => {
     expect(errors).toContain("Use the normal Worker entry, without maintenance overlays.");
     expect(errors).toContain("Configure a public HTTPS authentication origin without a path.");
     expect(errors).toContain("Keep ACCOUNT_HUB in this production Worker's namespace.");
+  });
+  it("refuses logs that could capture OAuth/R2 capability URLs and reused archive storage", () => {
+    const bad = config(); bad.observability.redact_query_string = false; bad.observability.logs.invocation_logs = true;
+    bad.r2_buckets[1].bucket_name = bad.r2_buckets[0].bucket_name;
+    const errors = productionConfigErrors(bad, staging);
+    expect(errors).toContain("Configure a separate private ciphertext archive bucket.");
+    expect(errors).toContain("Enable redacted application logs without invocation logs, traces or raw exception issues.");
   });
 });

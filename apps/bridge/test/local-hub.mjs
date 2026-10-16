@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
- * @param {{ auth?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
+ * @param {{ auth?: boolean, archive?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
 export async function startLocalBridgeHub(settings = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hub-"));
   const bundle = join(dir, "hub.mjs");
@@ -20,7 +20,7 @@ export async function startLocalBridgeHub(settings = {}) {
   /** @type {import('miniflare').V4MiniflareOptions} */
   const options = { name: "bridge-test", modules: true, script: await readFile(bundle, "utf8"), compatibilityDate: "2026-07-30", compatibilityFlags: ["nodejs_compat"], host: "127.0.0.1", port: 0, unsafeInspectDurableObjects: true,
     durableObjects: { ACCOUNT_HUB: { className: "AccountHub", useSQLite: true } },
-    r2Buckets: { BLOBS: "bridge-test-blobs" },
+    r2Buckets: { BLOBS: "bridge-test-blobs", ...(settings.archive ? { BLOB_ARCHIVE: "bridge-test-archive" } : {}) },
     ...(settings.auth ? { d1Databases: { AUTH_DB: "bridge-auth-test" }, serviceBindings: { AUTH_MAILER: async (request) => {
       mail.push(/** @type {{to: string, url: string}} */ (await request.json())); return Response.json({ ok: true });
     } } } : {}),
@@ -98,6 +98,7 @@ export async function startLocalBridgeHub(settings = {}) {
       await mf.unsafeEvictDurableObject("bridge-test", "AccountHub", { id: namespace.idFromName(accountId).toString() });
     },
     async bucket() { return mf.getR2Bucket("BLOBS"); },
+    async archiveBucket() { return mf.getR2Bucket("BLOB_ARCHIVE"); },
     async dispose() { await mf.dispose(); await rm(dir, { recursive: true, force: true }); },
   };
 }

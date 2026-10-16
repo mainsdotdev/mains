@@ -1,8 +1,9 @@
 import { betterAuth } from "better-auth";
 import { bearer, deviceAuthorization, magicLink } from "better-auth/plugins";
 import { BRIDGE_AUTH_CLIENT_ID } from "@mains/contracts/bridge-auth";
+import { reportBridgeFailure, type BridgeDiagnosticsEnv } from "./observability";
 
-export interface AuthEnv {
+export interface AuthEnv extends BridgeDiagnosticsEnv {
   BRIDGE_ENV?: "local" | "staging" | "production";
   AUTH_DB?: D1Database;
   BETTER_AUTH_SECRET?: string;
@@ -22,6 +23,7 @@ function createAuth(env: AuthEnv, baseURL: string) {
     baseURL,
     basePath: "/api/auth",
     trustedOrigins: [baseURL],
+    logger: { level: "error", log(level) { if (level === "error") reportBridgeFailure(env, "auth"); } },
     socialProviders: env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET ? { github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET } } : {},
     session: { expiresIn: 60 * 60 * 24, cookieCache: { enabled: false } },
     account: { accountLinking: { enabled: true, trustedProviders: ["github"] }, encryptOAuthTokens: true },

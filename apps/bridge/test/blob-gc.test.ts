@@ -8,7 +8,7 @@ import { startLocalBridgeHub } from "./local-hub.mjs";
 
 let hub: Awaited<ReturnType<typeof startLocalBridgeHub>>;
 const sockets: WebSocket[] = [];
-beforeAll(async () => { hub = await startLocalBridgeHub(); });
+beforeAll(async () => { hub = await startLocalBridgeHub({ archive: true }); });
 afterEach(() => { for (const socket of sockets.splice(0)) socket.terminate(); });
 afterAll(async () => { await hub?.dispose(); });
 const opaque = (id: string) => createHash("sha256").update(id).digest().subarray(0,16).toString("base64url");
@@ -74,6 +74,8 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
   it("reclaims deleted files from physical R2 and quota after grace, preserving every live/shared register", async () => {
     const account = randomUUID(), a = await client(account), shared = blob(), removed = blob(2048);
     const kept = await upload(account, shared), gone = await upload(account, removed);
+    const bucket = await hub.bucket(), archive = await hub.archiveBucket();
+    const encrypted = Buffer.from(await (await bucket.get(gone.keys[0]))!.arrayBuffer());
     const first = record("first", [shared]), second = record("second", [shared]), file = record("removed", [removed]);
     await a.push([first, second, file]);
     expect(await usage(account)).toMatchObject({ blobBytes: shared.size + removed.size + 80, reservedBytes: 0 });
@@ -88,6 +90,10 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
     expect((await fetch(read.chunks[0].url)).status).toBe(200);
     await elapseGrace(account); await hub.evict(account); await a.compact();
     expect(await exists(gone.keys)).toEqual([false]); expect(await exists(kept.keys)).toEqual([true]);
+    const copies = (await archive.list({ include: ["customMetadata"] })).objects.filter((entry) => entry.customMetadata?.sourceKey === gone.keys[0]);
+    expect(copies).toHaveLength(1);
+    expect(Buffer.from(await (await archive.get(copies[0].key))!.arrayBuffer())).toEqual(encrypted);
+    expect((await archive.list({ include: ["customMetadata"] })).objects.some((entry) => entry.customMetadata?.sourceKey === kept.keys[0])).toBe(false);
     expect(await usage(account)).toMatchObject({ blobBytes: shared.size + 40, reservedBytes: 0 });
     const after = await usage(account);
     expect(after.usedBytes).toBe(after.recordBytes + shared.size + 40);

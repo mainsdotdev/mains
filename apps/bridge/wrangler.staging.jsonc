@@ -7,6 +7,14 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": false },
+    "traces": { "enabled": false },
+    "issues": { "enabled": false }
+  },
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "vars": {
     "BRIDGE_ENV": "staging",
     "BRIDGE_DEV_AUTH": "false",
@@ -19,7 +27,10 @@
     "database_id": "c2c1b89b-566e-49da-8aab-0a0bda098a81",
     "migrations_dir": "migrations"
   }],
-  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "mains-bridge-staging-blobs" }],
+  "r2_buckets": [
+    { "binding": "BLOBS", "bucket_name": "mains-bridge-staging-blobs" },
+    { "binding": "BLOB_ARCHIVE", "bucket_name": "mains-bridge-staging-archive" }
+  ],
   "durable_objects": {
     "bindings": [{ "name": "ACCOUNT_HUB", "class_name": "AccountHub" }]
   },

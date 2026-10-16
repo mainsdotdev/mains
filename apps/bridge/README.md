@@ -1,5 +1,10 @@
 # Bridge hub
 
+Production/staging error tracking, verified backup commands, local restore drills
+and code/data rollback procedures: [Operations runbook](OPERATIONS.md).
+Daily encrypted backups, incremental file retention and scheduler activation:
+[Automatic backups](AUTOMATIC-BACKUP.md).
+
 B3–B9's Cloudflare Worker, account-scoped SQLite Durable Object, D1 identity store and private R2 bucket. Desktop and
 standalone backends seal records before sending them over WebSocket. The hub
 stores routing headers and ciphertext; it never receives an account key or a

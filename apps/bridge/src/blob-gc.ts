@@ -1,4 +1,5 @@
 import { BRIDGE_BLOB_GC_GRACE_MS } from "@mains/contracts/bridge-blobs";
+import { archiveBlobChunks } from "./blob-archive";
 
 const nowSql = "CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)";
 const deadlineSql = `${nowSql}+${BRIDGE_BLOB_GC_GRACE_MS}`;
@@ -53,7 +54,7 @@ export function installBlobInventory(storage: DurableObjectStorage) {
   });
 }
 
-export function createBlobCollector(storage: DurableObjectStorage, bucket: R2Bucket) {
+export function createBlobCollector(storage: DurableObjectStorage, bucket: R2Bucket, archive?: R2Bucket) {
   const sql = storage.sql;
   function enabled() { return sql.exec<{ legacy_records: number }>("SELECT legacy_records FROM blob_gc_state WHERE id=1").toArray()[0].legacy_records === 0; }
   async function finish(id: string) {
@@ -61,7 +62,10 @@ export function createBlobCollector(storage: DurableObjectStorage, bucket: R2Buc
     if (!prefix) throw new Error("Bridge blob namespace is not initialized");
     const start = `${prefix}${id}/`, end = `${prefix}${id}0`;
     const keys = sql.exec<{ key: string }>("SELECT key FROM quota_chunks WHERE key>=? AND key<?", start, end).toArray().map((row) => row.key);
-    if (keys.length) await bucket.delete(keys);
+    if (keys.length) {
+      await archiveBlobChunks(bucket, archive, keys);
+      await bucket.delete(keys);
+    }
     storage.transactionSync(() => {
       sql.exec("DELETE FROM quota_chunks WHERE key>=? AND key<?", start, end);
       sql.exec("DELETE FROM blob_objects WHERE blob_id=? AND refs=0", id);

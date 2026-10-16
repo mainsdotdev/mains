@@ -15,6 +15,8 @@
     "production:migrate": "npm run production:check && wrangler d1 migrations apply AUTH_DB --config wrangler.production.jsonc --profile mains-production --remote",
     "production:deploy": "npm run production:check && wrangler deploy --config wrangler.production.jsonc --profile mains-production",
     "subscription": "tsx scripts/subscription.ts",
+    "ops": "tsx scripts/operations.ts",
+    "backup": "tsx scripts/automatic-backup.ts",
     "dev:setup": "tsx scripts/dev-setup.ts",
     "dev:token": "tsx scripts/dev-token.ts",
     "dev:client": "tsx scripts/dev-client.ts",

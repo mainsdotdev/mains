@@ -1,4 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type { BridgeRpcRequest, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES, parseBridgeRpcRequest } from "@mains/contracts/bridge-wire";
 import { authenticate, identityIsActive, type BridgeIdentity, type DevAuthEnv } from "./auth";
@@ -11,11 +11,17 @@ import { createBlobQuota, BridgeQuotaError, type BlobReservation, type QuotaEnv 
 import { createBridgeSubscriptions } from "./subscriptions";
 import { signedInUser } from "./identity";
 import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
+import { observeBridgeRequest, reportBridgeFailure } from "./observability";
+import { createHubBackup } from "./hub-backup";
 
 interface Env extends DevAuthEnv, BlobEnv, QuotaEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    return observeBridgeRequest(env, () => handleRequest(request, env));
+  },
+};
+async function handleRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") return Response.json({ ok: true, protocol: 1 });
     if (url.pathname === "/v1/subscription") {
@@ -24,7 +30,7 @@ export default {
       const accountId = identity?.accountId ?? (env.AUTH_DB && request.headers.has("Cookie") ? (await signedInUser(env, request))?.id : null);
       if (!accountId) return new Response("Unauthorized", { status: 401 });
       try { return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(accountId)).getSubscription(accountId), { headers: { "Cache-Control": "no-store" } }); }
-      catch { return new Response("Bridge subscription status is unavailable", { status: 503 }); }
+      catch { reportBridgeFailure(env, "subscription"); return new Response("Bridge subscription status is unavailable", { status: 503 }); }
     }
     if (env.AUTH_DB && (url.pathname.startsWith("/api/auth/") || ["/sign-in", "/device", "/authorize"].includes(url.pathname) || url.pathname.startsWith("/v1/auth/"))) {
       const response = await handleSignIn(request, env); if (response) return response;
@@ -52,21 +58,54 @@ export default {
     const headers = new Headers(request.headers);
     headers.set("X-Bridge-Identity", JSON.stringify(identity));
     return env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).fetch(new Request(request, { headers }));
-  },
-};
+}
+
+/** Available only through an authenticated Cloudflare service binding. The
+ * public fetch handler has no operations route or data-restore endpoint. */
+export class BridgeOperations extends WorkerEntrypoint<Env> {
+  private async account(accountId: string) {
+    if (typeof accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) throw new Error("Invalid backup account");
+    if (!this.env.AUTH_DB || !await this.env.AUTH_DB.prepare("SELECT 1 FROM bridge_accounts WHERE account_id=?").bind(accountId).first()) throw new Error("Unknown backup account");
+    return this.env.ACCOUNT_HUB.get(this.env.ACCOUNT_HUB.idFromName(accountId));
+  }
+  async snapshotBegin(accountId: string) { return (await this.account(accountId)).snapshotBegin(); }
+  async snapshotPage(accountId: string, token: string, table: string, after: number) { return (await this.account(accountId)).snapshotPage(token, table, after); }
+  async snapshotValid(accountId: string, token: string) { return (await this.account(accountId)).snapshotValid(token); }
+  async accounts(after = "") {
+    if (typeof after !== "string" || after.length > 128) throw new Error("Invalid backup cursor");
+    if (!this.env.AUTH_DB) throw new Error("Authentication database is not configured");
+    const result = await this.env.AUTH_DB.prepare("SELECT account_id FROM bridge_accounts WHERE account_id>? ORDER BY account_id LIMIT 100").bind(after).all<{ account_id: string }>();
+    return result.results.map((row) => row.account_id);
+  }
+  async checkpoint(accountId: string) {
+    if (typeof accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(accountId)) throw new Error("Invalid backup account");
+    if (!this.env.AUTH_DB || !await this.env.AUTH_DB.prepare("SELECT 1 FROM bridge_accounts WHERE account_id=?").bind(accountId).first()) throw new Error("Unknown backup account");
+    const id = this.env.ACCOUNT_HUB.idFromName(accountId);
+    const value = await this.env.ACCOUNT_HUB.get(id).recoveryCheckpoint();
+    return { ...value, objectId: id.toString() };
+  }
+}
 
 /** Cloudflare requires a class at this runtime boundary; storage/domain helpers remain functions. */
 export class AccountHub extends DurableObject<Env> {
   private store: ReturnType<typeof createHubStore>;
   private quota: ReturnType<typeof createBlobQuota>;
   private subscriptions: ReturnType<typeof createBridgeSubscriptions>;
+  private backup: ReturnType<typeof createHubBackup>;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env); this.store = createHubStore(ctx.storage); this.subscriptions = createBridgeSubscriptions(env);
     this.quota = createBlobQuota(ctx.storage, env, () => this.store.recordBytes(), this.subscriptions);
+    this.backup = createHubBackup(ctx.storage);
   }
+  snapshotBegin() { return this.backup.begin(); }
+  snapshotPage(token: string, table: string, after: number) { return this.backup.page(token, table, after); }
+  snapshotValid(token: string) { return this.backup.valid(token); }
   async getSubscription(accountId: string) { return this.subscriptions.status(accountId); }
   /** Internal RPC seam for a future billing event consumer; no HTTP mutation route. */
   async subscriptionChanged(accountId: string) { this.subscriptions.invalidate(accountId); }
+  async recoveryCheckpoint() {
+    return this.ctx.blockConcurrencyWhile(async () => ({ bookmark: await this.ctx.storage.getCurrentBookmark(), capturedAt: new Date().toISOString() }));
+  }
   async getQuota(identity: BridgeIdentity) {
     return this.ctx.blockConcurrencyWhile(async () => {
       const quota = await this.quota.status(identity.accountId);
@@ -114,6 +153,10 @@ export class AccountHub extends DurableObject<Env> {
     return new Response(null, { status: 101, webSocket: client });
   }
   async webSocketMessage(socket: WebSocket, data: string | ArrayBuffer): Promise<void> {
+    try { await this.receiveMessage(socket, data); }
+    catch { reportBridgeFailure(this.env, "websocket"); socket.close(1011, "Bridge is temporarily unavailable"); }
+  }
+  private async receiveMessage(socket: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const session = this.session(socket);
     if (!await identityIsActive(session, this.env)) { socket.close(1008, "Backend access expired or was revoked"); return; }
     if (typeof data !== "string" || data.length > BRIDGE_MAX_FRAME_BYTES) { socket.close(1009, "Invalid message size"); return; }
@@ -155,6 +198,7 @@ export class AccountHub extends DurableObject<Env> {
       }
       this.send(socket, { requestId, message: response });
     } catch {
+      reportBridgeFailure(this.env, "rpc");
       this.send(socket, { requestId, error: { code: "storageError", message: "Bridge hub could not commit this request" } });
     }
   }
@@ -167,7 +211,8 @@ export class AccountHub extends DurableObject<Env> {
   }
   webSocketError(socket: WebSocket): void { this.webSocketClose(socket, 1011, "Connection error"); }
   async alarm(): Promise<void> {
-    await this.maintain();
+    try { await this.maintain(); }
+    catch { reportBridgeFailure(this.env, "maintenance"); throw new Error("Bridge maintenance failed"); }
   }
   private async maintain() {
     await this.ctx.blockConcurrencyWhile(async () => {
