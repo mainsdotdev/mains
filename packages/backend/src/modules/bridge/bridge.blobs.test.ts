@@ -12,7 +12,10 @@ import { createBridgeBlobs } from "./bridge.blobs";
 import { createBridgeBlobRecords } from "./bridge.blob-records";
 import { createBridgeEngine } from "./bridge.engine";
 import { createBridgeWebSocketTransport } from "./bridge.websocket";
-import { createBridgeSealingCodec } from "./bridge.crypto";
+import { bridgeHeaderAad, createBridgeSealingCodec, type BridgeCodec } from "./bridge.crypto";
+import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
+import { randomBytes } from "@noble/hashes/utils.js";
+import { toBase64Url, utf8 } from "./bridge.encoding";
 import { deriveBridgeKeys } from "./bridge.keys";
 import { createClaudeSessionMirror } from "./bridge.session-mirror";
 import { largeToolFixture, seedLargeTools } from "../../../test/large-tool-fixture";
@@ -28,7 +31,7 @@ async function files(account: string, backend: string, extra: { cacheLimitBytes?
   const blobs = createBridgeBlobs({ accountKey: key, dataDir, url: hub.wsUrl, token: () => hub.token(account, backend), ...extra });
   cleanup.push(() => blobs.stop()); return { blobs, dataDir, hub };
 }
-async function node(account: string, backendId: string, options: { schemaVersion?: number; cacheLimitBytes?: number } = {}) {
+async function node(account: string, backendId: string, options: { schemaVersion?: number; cacheLimitBytes?: number; codec?: BridgeCodec } = {}) {
   const fixture = createTestDb(); cleanup.push(fixture.cleanup);
   const { sqlite } = fixture;
   sqlite.prepare("INSERT INTO accounts(id) VALUES('default')").run();
@@ -37,12 +40,122 @@ async function node(account: string, backendId: string, options: { schemaVersion
   const { blobs, dataDir, hub } = await files(account, backendId, { cacheLimitBytes: options.cacheLimitBytes });
   const records = createBridgeBlobRecords({ sqlite, backendId, dataDir, blobs });
   const transport = createBridgeWebSocketTransport({ url: hub.wsUrl, token: () => hub.token(account, backendId) }); cleanup.push(() => transport.close());
-  const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(key).recordKey, codec: createBridgeSealingCodec(key), transport, blobs: records, experimentalAtlas: true, schemaVersion: options.schemaVersion });
+  const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(key).recordKey, codec: options.codec ?? createBridgeSealingCodec(key), transport, blobs: records, experimentalAtlas: true, schemaVersion: options.schemaVersion });
   cleanup.push(() => engine.stop()); await engine.bootstrap();
   return { sqlite, blobs, dataDir, records, engine, transport };
 }
 
 describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQLite backends", () => {
+  it("backfills legacy roots once with original clocks, preserving files across upgrade and restart", async () => {
+    const sealing = createBridgeSealingCodec(key);
+    const legacy: BridgeCodec = { open: sealing.open, seal(header, body) {
+      const nonce = randomBytes(24);
+      return { header, body: { nonce: toBase64Url(nonce), payload: toBase64Url(xchacha20poly1305(deriveBridgeKeys(key).bodyKey, nonce, bridgeHeaderAad(header)).encrypt(utf8(JSON.stringify(body)))) } };
+    } };
+    const account = randomUUID(), a = await node(account, "A", { codec: legacy }), b = await node(account, "B"), hub = await getLocalBridgeTestWorker();
+    await fs.mkdir(join(a.dataDir, "atlas/files/legacy"), { recursive: true }); await fs.writeFile(join(a.dataDir, "atlas/files/legacy/image.png"), image);
+    a.sqlite.prepare("INSERT INTO atlas_items(id,account_id,kind,title,file_name,storage_key,mime_type,byte_size,content_hash) VALUES('legacy','default','image','Legacy','image.png','legacy/image.png','image/png',?,?)")
+      .run(image.length, createHash("sha256").update(image).digest("hex"));
+    await a.engine.push(); await b.engine.pull();
+    const before = a.sqlite.prepare("SELECT physical_ms,counter,origin FROM bridge_row_clock WHERE table_name='atlas_items' AND pk='legacy' AND register='content'").get();
+    const orphan = await a.blobs.publish(Buffer.from("unused upload"), { column: "path", name: "orphan.bin", mime: null });
+    await hub.quotaSql(account, "UPDATE blob_objects SET delete_after=0 WHERE refs=0"); await a.transport.compact();
+    expect((await hub.quotaSql(account, "SELECT legacy_records FROM blob_gc_state") as { legacy_records: number }[])[0].legacy_records).toBeGreaterThan(0);
+    await a.engine.stop();
+    a.sqlite.exec("UPDATE bridge_config SET blob_roots_version=0,backfill_done=0,backfill_table=NULL,backfill_pk=NULL");
+    const upgraded = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: deriveBridgeKeys(key).recordKey, codec: sealing, transport: a.transport, blobs: a.records });
+    cleanup.push(() => upgraded.stop()); await upgraded.bootstrap();
+    expect(a.sqlite.prepare("SELECT physical_ms,counter,origin FROM bridge_row_clock WHERE table_name='atlas_items' AND pk='legacy' AND register='content'").get()).toEqual(before);
+    await upgraded.push(); await a.transport.compact();
+    expect(await hub.quotaSql(account, "SELECT legacy_records FROM blob_gc_state")).toEqual([{ legacy_records: 0 }]);
+    const prefix = createHash("sha256").update(account).digest("hex");
+    expect((await (await hub.bucket()).list()).objects.some((object) => object.key.startsWith(prefix) && object.key.includes(orphan.blobId))).toBe(false);
+    await b.engine.pull(); expect(await fs.readFile(await b.records.resolve("atlas_items", "legacy"))).toEqual(image);
+    await upgraded.stop();
+    const restarted = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: deriveBridgeKeys(key).recordKey, codec: sealing, transport: a.transport, blobs: a.records });
+    cleanup.push(() => restarted.stop()); await restarted.bootstrap(); expect(restarted.pending()).toEqual([]);
+  });
+
+  it("reclaims deleted Atlas files from quota and still opens shared/history files on B with A offline", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B"), hub = await getLocalBridgeTestWorker();
+    for (const [id, bytes] of [["first", image], ["history-file", image], ["removed", Buffer.concat([image, Buffer.from("different-file")])]] as const) {
+      await fs.mkdir(join(a.dataDir, "atlas", "files", id), { recursive: true });
+      await fs.writeFile(join(a.dataDir, "atlas", "files", id, "image.png"), bytes);
+      a.sqlite.prepare("INSERT INTO atlas_items(id,account_id,kind,title,file_name,storage_key,mime_type,byte_size,content_hash) VALUES(?,'default','image',?,'image.png',?,'image/png',?,?)")
+        .run(id, id, `${id}/image.png`, bytes.length, createHash("sha256").update(bytes).digest("hex"));
+    }
+    a.sqlite.exec(`INSERT INTO atlas_items(id,account_id,kind,title) VALUES('page','default','page','History');
+      INSERT INTO atlas_page_revisions(id,item_id,version,title,blocks_json,markdown,actor) VALUES('old','page',1,'Old','[]','![image](atlas-file://history-file)','user');
+      INSERT INTO atlas_page_file_refs(revision_id,file_id) VALUES('old','history-file');
+      INSERT INTO atlas_page_revisions(id,item_id,version,title,blocks_json,markdown,parent_revision_id,actor) VALUES('new','page',2,'New','[]','No current image','old','user');
+      UPDATE atlas_items SET current_revision_id='new',version=2 WHERE id='page';`);
+    await a.engine.push(); await b.engine.pull();
+    const usage = async () => (await fetch(new URL("/v1/quota", hub.url), { headers: { Authorization: `Bearer ${await hub.token(account, "B")}` } })).json() as Promise<{ usedBytes: number; recordBytes: number; blobBytes: number; reservedBytes: number }>;
+    expect((await usage()).blobBytes).toBe(image.length * 2 + "different-file".length + 80);
+    a.sqlite.exec("DELETE FROM atlas_items WHERE id IN('first','removed'); UPDATE atlas_items SET trashed_at=datetime('now') WHERE id='history-file'");
+    await a.engine.push(); await b.engine.pull(); await a.transport.compact();
+    expect(b.sqlite.prepare("SELECT 1 FROM atlas_items WHERE id='removed'").get()).toBeUndefined();
+    await hub.quotaSql(account, "UPDATE blob_objects SET delete_after=0 WHERE refs=0");
+    await a.transport.compact();
+    const after = await usage(); expect(after.blobBytes).toBe(image.length + 40); expect(after.reservedBytes).toBe(0);
+    expect(after.usedBytes).toBe(after.recordBytes + after.blobBytes);
+    a.transport.close(); await a.blobs.stop(); await fs.rm(a.dataDir, { recursive: true, force: true });
+    expect(b.sqlite.prepare("SELECT file_id FROM atlas_page_file_refs WHERE revision_id='old'").get()).toEqual({ file_id: "history-file" });
+    expect(await fs.readFile(await b.records.resolve("atlas_items", "history-file"))).toEqual(image);
+    await expect(b.records.resolve("atlas_items", "removed")).rejects.toThrow(/no longer exists/);
+    expect(b.sqlite.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("republishes a captured large value if its abandoned upload was collected before metadata ACK", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B"), hub = await getLocalBridgeTestWorker();
+    const bio = "unchanged captured text after orphan collection".repeat(30_000);
+    a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run(bio);
+    const push = vi.spyOn(a.transport, "push").mockRejectedValueOnce(new Error("offline before metadata commit"));
+    await expect(a.engine.push()).rejects.toThrow(/offline/); push.mockRestore();
+    await hub.quotaSql(account, "UPDATE blob_objects SET delete_after=0 WHERE refs=0");
+    await a.transport.compact();
+    await fs.rm(join(a.dataDir, "bridge", "blobs"), { recursive: true, force: true });
+    await expect(a.engine.push()).rejects.toThrow(/republishing/);
+    expect(a.engine.pending()).not.toEqual([]);
+    await a.engine.push(); await b.engine.pull();
+    expect((b.sqlite.prepare("SELECT bio FROM accounts").get() as { bio: string }).bio === bio).toBe(true);
+    expect(a.engine.pending()).toEqual([]);
+  });
+
+  it("republishes an orphaned file from its verified source after cache eviction", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B"), hub = await getLocalBridgeTestWorker();
+    await fs.mkdir(join(a.dataDir, "atlas/files/orphan"), { recursive: true }); await fs.writeFile(join(a.dataDir, "atlas/files/orphan/image.png"), image);
+    a.sqlite.prepare("INSERT INTO atlas_items(id,account_id,kind,title,file_name,storage_key,mime_type,byte_size,content_hash) VALUES('orphan','default','image','Orphan','image.png','orphan/image.png','image/png',?,?)")
+      .run(image.length, createHash("sha256").update(image).digest("hex"));
+    const push = vi.spyOn(a.transport, "push").mockRejectedValueOnce(new Error("offline before metadata commit"));
+    await expect(a.engine.push()).rejects.toThrow(/offline/); push.mockRestore();
+    await hub.quotaSql(account, "UPDATE blob_objects SET delete_after=0 WHERE refs=0"); await a.transport.compact();
+    await fs.rm(join(a.dataDir, "bridge", "blobs"), { recursive: true, force: true });
+    await fs.unlink(join(a.dataDir, "atlas/files/orphan/image.png"));
+    await expect(a.engine.push()).rejects.toThrow(/unavailable locally/);
+    expect(a.engine.pending().some((entry) => entry.pk === "orphan")).toBe(true);
+    await fs.writeFile(join(a.dataDir, "atlas/files/orphan/image.png"), image);
+    await expect(a.engine.push()).rejects.toThrow(/republishing/); await a.engine.push(); await b.engine.pull();
+    expect(await fs.readFile(await b.records.resolve("atlas_items", "orphan"))).toEqual(image);
+  });
+
+  it("republishes an orphaned native session blob from its captured SQLite entry after cache eviction", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B"), hub = await getLocalBridgeTestWorker(), sessionId = randomUUID();
+    for (const n of [a, b]) n.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
+    a.sqlite.prepare("INSERT INTO runs(id,owner_backend_id,account_id,provider_id,session_id) VALUES('mirror-orphan','A','default','claude_code',?)").run(sessionId);
+    const entry = { type: "assistant", uuid: randomUUID(), message: { role: "assistant", content: "session output".repeat(30_000) } };
+    await createClaudeSessionMirror({ sqlite: a.sqlite, backendId: "A", runId: "mirror-orphan", sessionId }).append({ projectKey: "fixture", sessionId }, [entry]);
+    await a.engine.push(); await b.engine.pull();
+    const push = vi.spyOn(a.transport, "push").mockRejectedValueOnce(new Error("offline before metadata commit"));
+    await expect(a.engine.push("run:mirror-orphan")).rejects.toThrow(/offline/); push.mockRestore();
+    await hub.quotaSql(account, "UPDATE blob_objects SET delete_after=0 WHERE refs=0"); await a.transport.compact();
+    await fs.rm(join(a.dataDir, "bridge", "blobs"), { recursive: true, force: true });
+    await expect(a.engine.push("run:mirror-orphan")).rejects.toThrow(/republishing/);
+    await a.engine.push("run:mirror-orphan"); await b.engine.pull("run:mirror-orphan");
+    const row = b.sqlite.prepare("SELECT id FROM provider_session_entries").get() as { id: string };
+    expect(JSON.parse(await fs.readFile(await b.records.resolve("provider_session_entries", row.id, "entry"), "utf8"))).toEqual(entry);
+  });
+
   it("restores the complete Read, Read and Grep records byte for byte on B with A offline", async () => {
     const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
     const records = await largeToolFixture();

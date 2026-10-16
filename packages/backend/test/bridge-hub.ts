@@ -4,6 +4,11 @@ import { createMemoryBridgeHub, type BridgeTransport } from "../src/modules/brid
 import { createBridgeWebSocketTransport } from "../src/modules/bridge/bridge.websocket";
 import { bridgePassThroughCodec, createBridgeSealingCodec } from "../src/modules/bridge/bridge.crypto";
 import { deriveBridgeKeys } from "../src/modules/bridge/bridge.keys";
+import { createBridgeBlobs } from "../src/modules/bridge/bridge.blobs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { BridgeBlobRef } from "@mains/contracts/bridge-blobs";
 
 export const networkMode = process.env.MAINS_BRIDGE_TEST_TRANSPORT === "ws";
 export const bridgeTestAccountKey = new Uint8Array(32).fill(17);
@@ -13,11 +18,13 @@ export interface BridgeTestHub {
   connect(backendId: string): BridgeTransport;
   inspect(stream: BridgeStream): BridgeLogRecord[] | Promise<BridgeLogRecord[]>;
   compact(): void | Promise<void>;
+  publishBlob?(bytes: Uint8Array): Promise<BridgeBlobRef>;
 }
 export interface LocalBridgeTestWorker {
   readonly url: string; readonly wsUrl: string;
   token(accountId: string, backendId: string, expiresIn?: string | number): Promise<string>;
   restart(): Promise<void>; dispose(): Promise<void>; inspect(accountId: string): Promise<unknown>; evict(accountId: string): Promise<void>;
+  quotaSql(accountId: string, query: string): Promise<unknown>;
   bucket(): Promise<{ list(): Promise<{ objects: { key: string }[] }>; get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>; put(key: string, value: Uint8Array): Promise<unknown> }>;
 }
 let worker: Promise<LocalBridgeTestWorker> | undefined;
@@ -53,6 +60,12 @@ export async function createBridgeTestHub(): Promise<BridgeTestHub> {
       }
     },
     async compact() { await connect("inspector").compact(); },
+    async publishBlob(bytes) {
+      const dataDir = await mkdtemp(join(tmpdir(), "mains-bridge-test-blob-"));
+      const blobs = createBridgeBlobs({ accountKey: bridgeTestAccountKey, dataDir, url: hub.wsUrl, token: () => hub.token(accountId, "fixture") });
+      try { return await blobs.publish(bytes, { column: "storage_key", name: "test.png", mime: "image/png" }); }
+      finally { await blobs.stop(); await rm(dataDir, { recursive: true, force: true }); }
+    },
   };
 }
 export function closeBridgeTestConnections() { for (const client of clients) client.close(); clients.clear(); }

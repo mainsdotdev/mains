@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { BRIDGE_BLOB_CIPHER_OVERHEAD, bridgeBlobChunkCount, bridgeBlobChunkSize, validateBridgeBlobIdentity,
-  type BridgeBlobPresignRequest, type BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
+  type BridgeBlobIdentity, type BridgeBlobPresignRequest, type BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
 import { authenticate, identityIsActive, type DevAuthEnv } from "./auth";
 import { bridgeAccountPrefix, type BlobReservation } from "./quota";
 import type { BridgeIdentity } from "./auth";
@@ -31,6 +31,7 @@ async function boundedBytes(request: Request, limit: number): Promise<Uint8Array
 export async function handleBlobs(request: Request, env: BlobEnv, quota: {
   reserve(identity: BridgeIdentity, entries: BlobReservation[], expires: number): Promise<{ status: number; error: string | null }>;
   put(identity: BridgeIdentity, key: string, expires: number, bytes: Uint8Array): Promise<{ status: number; error: string | null }>;
+  read(identity: BridgeIdentity, blobs: BridgeBlobIdentity[], expires: number): Promise<{ status: number; error: string | null }>;
 }): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/v1/blobs/presign" && request.method === "POST") {
@@ -48,6 +49,9 @@ export async function handleBlobs(request: Request, env: BlobEnv, quota: {
       const entries = input.blobs.flatMap((blob) => Array.from({ length: bridgeBlobChunkCount(blob.size) }, (_, index) =>
         ({ key: `${prefix}${blob.blobId}/${index}`, bytes: bridgeBlobChunkSize(blob.size, index) + BRIDGE_BLOB_CIPHER_OVERHEAD })));
       const result = await quota.reserve(identity, entries, expires * 1000);
+      if (result.error) return Response.json({ error: result.error }, { status: result.status });
+    } else {
+      const result = await quota.read(identity, input.blobs, expires * 1000);
       if (result.error) return Response.json({ error: result.error }, { status: result.status });
     }
     const blobs: BridgeBlobPresignResult["blobs"] = [];

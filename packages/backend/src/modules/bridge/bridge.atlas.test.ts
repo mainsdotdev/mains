@@ -155,6 +155,18 @@ describe("Atlas editing between independent migrated backends", () => {
     expect(await on(b, (s) => s.list({ accountId: "default" }))).toEqual([]);
   });
 
+  it("does not mistake a blob-root announcement for an unsent Page revision during remote deletion", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    const base = await create(a); await settle(a, b); await a.engine.stop();
+    a.sqlite.exec("UPDATE bridge_config SET blob_roots_version=0,backfill_done=0,backfill_table=NULL,backfill_pk=NULL");
+    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: bridgeTestRecordKey, codec: bridgeTestCodec, transport: hub.connect("A") });
+    await a.engine.bootstrap();
+    expect(a.engine.pending().some((entry) => entry.table_name === "atlas_page_revisions")).toBe(true);
+    await on(b, async (s) => { await s.update({ ...identity(base), trashed: true }); await s.remove(identity(base)); }); await drain(b);
+    await a.engine.pull();
+    expect(await on(a, (s) => s.list({ accountId: "default" }))).toEqual([]);
+  });
+
   it("restores by UUID when the same revisions have different ordinals on A and B", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
     const base = await create(a); await settle(a, b);
@@ -214,8 +226,10 @@ describe("Atlas editing between independent migrated backends", () => {
     a.sqlite.exec(`INSERT INTO atlas_items(id,account_id,kind,title,storage_key,content_hash)
       VALUES('image','default','image','Image','image/test.png','same-bytes')`);
     await settle(a, b);
+    const manifest = hub.publishBlob ? await hub.publishBlob(new Uint8Array([1])) :
+      { column: "storage_key", blobId: "a".repeat(43), size: 1, name: "test.png", mime: "image/png" };
     b.sqlite.prepare("UPDATE bridge_row_clock SET blob_refs_json=? WHERE table_name='atlas_items' AND pk='image' AND register='content'")
-      .run(JSON.stringify([{ column: "storage_key", blobId: "a".repeat(43), size: 1, name: "test.png", mime: "image/png" }]));
+      .run(JSON.stringify([manifest]));
     await on(b, (s) => s.savePage({ ...identity(base), expectedVersion: 1, title: "Offline embed", markdown: "![Image](atlas-file://image)" }));
     await on(a, async (s) => { await s.update({ id: "image", accountId: "default", trashed: true }); await s.remove({ id: "image", accountId: "default" }); });
     await drain(a); await b.engine.pull();

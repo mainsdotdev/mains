@@ -14,7 +14,7 @@ it("resets only the armed staging account and preserves its login and every othe
     for (const id of [accountId, other]) {
       await db.prepare('INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES(?,?,?,1,?,?)').bind(id, id, `${id}@example.test`, Date.now(), Date.now()).run();
       await db.prepare("INSERT INTO bridge_accounts VALUES(?,?,?,?,?,?)").bind(id, "old-backend", "old-hash", "old-public-key", "old-wrap", Date.now()).run();
-      await bucket.put(`${prefix(id)}opaque/0`, new Uint8Array([1, 2, 3]));
+      await bucket.put(`${prefix(id)}${"a".repeat(43)}/0`, new Uint8Array([1, 2, 3]));
     }
     expect((await post(accountId, "wrong")).status).toBe(403);
     expect((await post(other)).status).toBe(403);
@@ -23,7 +23,7 @@ it("resets only the armed staging account and preserves its login and every othe
     await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,'approved',?,?,?)")
       .bind(other, "keep-backend", "keep-key", "Other", "node", createHash("sha256").update(otherToken).digest("hex"), Date.now() + 60_000, Date.now()).run();
     expect((await fetch(new URL("/v1/quota", hub.url), { headers: { Authorization: `Bearer ${otherToken}` } })).status).toBe(200);
-    for (const id of [accountId, other]) await hub.quotaSql(id, "INSERT INTO streams VALUES('account',1); INSERT INTO log VALUES('account',1,'opaque','register','upsert','ciphertext'); INSERT INTO deleted VALUES('deleted','account',1,'ciphertext');");
+    for (const id of [accountId, other]) await hub.quotaSql(id, "INSERT INTO streams VALUES('account',1); INSERT INTO log VALUES('account',1,'opaque','register','upsert',json_object('header',json_object('blobs',json('[]')),'body','ciphertext')); INSERT INTO deleted VALUES('deleted','account',1,'ciphertext');");
     const dryRun = await (await post()).json() as { records: number; blobs: number; initialized: boolean };
     expect(dryRun).toMatchObject({ records: 1, blobs: 1, initialized: true });
     expect(await hub.inspect(accountId)).toHaveLength(1);
@@ -39,6 +39,9 @@ it("resets only the armed staging account and preserves its login and every othe
     expect(await hub.quotaSql(accountId, "SELECT count(*) n FROM deleted")).toMatchObject([{ n: 0 }]);
     expect(await hub.quotaSql(accountId, "SELECT bytes FROM record_usage WHERE id=1")).toEqual([{ bytes: 0 }]);
     expect(await hub.quotaSql(accountId, "SELECT blob_bytes,reserved_bytes FROM quota_usage WHERE id=1")).toEqual([{ blob_bytes: 0, reserved_bytes: 0 }]);
+    expect(await hub.quotaSql(accountId, "SELECT count(*) n FROM blob_objects")).toEqual([{ n: 0 }]);
+    expect(await hub.quotaSql(accountId, "SELECT count(*) n FROM blob_deletions")).toEqual([{ n: 0 }]);
+    expect(await hub.quotaSql(accountId, "SELECT legacy_records FROM blob_gc_state")).toEqual([{ legacy_records: 0 }]);
     expect(await hub.inspect(other)).toHaveLength(1);
     expect((await bucket.list({ prefix: prefix(accountId) })).objects).toHaveLength(0);
     expect((await bucket.list({ prefix: prefix(other) })).objects).toHaveLength(1);

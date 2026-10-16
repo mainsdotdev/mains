@@ -197,7 +197,17 @@ file dependencies. Hub quotas count current encrypted records, permanent
 tombstones, immutable R2 chunks and pending reservations; account plan limits
 and per-backend write limits preserve reads/deletes and keep refused writes in
 the local outbox. Settings and owner CLI expose scope, retry and public usage.
-Billing and reclamation of stored unreferenced blob chunks remain later work.
+Payment integration remains later work. R2 collection now uses authenticated,
+opaque blob roots and incremental log reference counts. All current records and
+uncompacted versions protect shared files, Trash and restorable Atlas history.
+After the last reference disappears, a 24-hour grace period precedes indexed,
+bounded alarm batches. Quota falls only after physical R2 deletion succeeds;
+durable deletion intents fence stale receipts and recover interrupted cleanup.
+Orphan uploads expire too, and a missing chunk prevents metadata ACK until its
+exact captured values/cache/source bytes are republished. Migration 0038 announces
+legacy roots once with original clocks; unknown legacy references pause new GC
+until the original writer updates/resumes or those records are deleted. Hub and
+backends must upgrade together for the authenticated header extension.
 
 B9 adds a dormant Claude session mirror. After a turn, the Claude driver closes
 the query and imports native main/subagent JSONL and metadata through the SDK's
