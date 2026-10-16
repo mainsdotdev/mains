@@ -1,18 +1,17 @@
 import { betterAuth } from "better-auth";
+import { waitUntil } from "cloudflare:workers";
 import { bearer, deviceAuthorization, magicLink } from "better-auth/plugins";
 import { BRIDGE_AUTH_CLIENT_ID } from "@mains/contracts/bridge-auth";
 import { reportBridgeFailure, type BridgeDiagnosticsEnv } from "./observability";
+import { bridgeMailConfigured, sendBridgeMail, type BridgeMailEnv } from "./auth-mail";
 
-export interface AuthEnv extends BridgeDiagnosticsEnv {
+export interface AuthEnv extends BridgeDiagnosticsEnv, BridgeMailEnv {
   BRIDGE_ENV?: "local" | "staging" | "production";
   AUTH_DB?: D1Database;
   BETTER_AUTH_SECRET?: string;
   BRIDGE_AUTH_URL?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
-  RESEND_API_KEY?: string;
-  MAIL_FROM?: string;
-  AUTH_MAILER?: Fetcher;
 }
 const cache = new WeakMap<object, Map<string, ReturnType<typeof createAuth>>>();
 function createAuth(env: AuthEnv, baseURL: string) {
@@ -25,23 +24,21 @@ function createAuth(env: AuthEnv, baseURL: string) {
     trustedOrigins: [baseURL],
     logger: { level: "error", log(level) { if (level === "error") reportBridgeFailure(env, "auth"); } },
     socialProviders: env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET ? { github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET } } : {},
+    emailAndPassword: {
+      enabled: bridgeMailConfigured(env), requireEmailVerification: true, autoSignIn: false,
+      minPasswordLength: 12, maxPasswordLength: 128, resetPasswordTokenExpiresIn: 900, revokeSessionsOnPasswordReset: true,
+      sendResetPassword: ({ user, url }) => sendBridgeMail(env, { to: user.email, url, kind: "reset-password" }),
+    },
+    emailVerification: {
+      sendOnSignUp: true, sendOnSignIn: true, autoSignInAfterVerification: false, expiresIn: 3600,
+      sendVerificationEmail: ({ user, url }) => sendBridgeMail(env, { to: user.email, url, kind: "verify-email" }),
+    },
     session: { expiresIn: 60 * 60 * 24, cookieCache: { enabled: false } },
-    account: { accountLinking: { enabled: true, trustedProviders: ["github"] }, encryptOAuthTokens: true },
+    account: { accountLinking: { enabled: true, trustedProviders: ["github"], requireLocalEmailVerified: true }, encryptOAuthTokens: true },
     rateLimit: { enabled: true, storage: "database", window: 60, max: 60 },
-    advanced: { database: { generateId: () => crypto.randomUUID() }, useSecureCookies: baseURL.startsWith("https:"), ipAddress: { ipAddressHeaders: ["CF-Connecting-IP"] } },
+    advanced: { database: { generateId: () => crypto.randomUUID() }, useSecureCookies: baseURL.startsWith("https:"), ipAddress: { ipAddressHeaders: ["CF-Connecting-IP"] }, backgroundTasks: { handler: waitUntil } },
     plugins: [bearer(), deviceAuthorization({ verificationUri: `${baseURL}/device`, expiresIn: "10m", interval: "5s", validateClient: (id) => id === BRIDGE_AUTH_CLIENT_ID }),
-      magicLink({ expiresIn: 300, storeToken: "hashed", async sendMagicLink({ email, url }) {
-        let response: Response;
-        if (env.AUTH_MAILER) response = await env.AUTH_MAILER.fetch("https://bridge-mail.internal/send", {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: email, url }),
-        });
-        else if (env.RESEND_API_KEY && env.MAIL_FROM) response = await fetch("https://api.resend.com/emails", {
-          method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ from: env.MAIL_FROM, to: [email], subject: "Sign in to Mains Bridge", text: `Sign in to Mains Bridge: ${url}\nThis link expires in five minutes.` }),
-        });
-        else throw new Error("Email sign-in is not configured");
-        if (!response.ok) throw new Error("Could not send the sign-in email");
-      } })],
+      magicLink({ expiresIn: 300, storeToken: "hashed", sendMagicLink: ({ email, url }) => sendBridgeMail(env, { to: email, url, kind: "sign-in" }) })],
   });
 }
 export function bridgeAuth(env: AuthEnv, request: Request) {

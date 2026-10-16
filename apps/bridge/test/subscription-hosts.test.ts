@@ -6,6 +6,7 @@ import type { BridgeAuthStatus } from "@mains/contracts/bridge-auth";
 import type { BridgeStatus } from "@mains/contracts/bridge";
 import { startLocalBackends, waitFor } from "./local-backends";
 import { approve, signIn } from "./auth-helpers";
+import { bridgeBetaInvite } from "../src/beta-admin";
 
 type Host = Awaited<ReturnType<typeof startLocalBackends>>["a"];
 const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64");
@@ -17,8 +18,14 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Subscriptions thro
   it("keeps unpaid/expired edits durable, allows recovery/reads/deletes, and resumes with the same keys after renewal", async () => {
     const fixture = await startLocalBackends({ auth: true, subscriptionInterval: null }), { a, b } = fixture;
     try {
+      // Closed beta rejects new, uninvited enrollment. Model a pre-existing
+      // initialized owner whose previous explicit period has been removed.
+      const browser = await fixture.hub.login("owner@example.com"), db = await fixture.hub.database();
+      await fixture.hub.grantSubscription(browser.user.id, "monthly");
       const owner = await signIn(fixture, a); expect(owner.state).toBe("ready");
-      // Account/device approval does not itself grant a subscription.
+      await db.prepare("DELETE FROM account_entitlements WHERE account_id=?").bind(owner.accountId).run();
+      await fixture.hub.evict(owner.accountId!);
+      // Existing account/device approval does not itself grant a subscription.
       await signIn(fixture, b); await approve(fixture);
       const original = await page(a, "Initially unpaid", "Private text ".repeat(4000));
       const file = await a.client.call<AtlasItem>(CHANNELS.atlas.uploadFile, { accountId: "default", pageId: original.item.id, fileName: "private.png", data: image.toString("base64") });
@@ -37,7 +44,7 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Subscriptions thro
       await a.client.call(CHANNELS.bridge.syncNow); await b.client.call(CHANNELS.bridge.syncNow);
       expect(await get(b, removable.item.id)).not.toBeNull();
 
-      const db = await fixture.hub.database(), now = Date.now();
+      const now = Date.now();
       await db.prepare("UPDATE account_entitlements SET starts_at=?,expires_at=? WHERE account_id=? AND feature='bridge'").bind(now - 60_000, now - 1, owner.accountId).run();
       await fixture.hub.evict(owner.accountId!);
       await a.client.call(CHANNELS.bridge.syncNow); await b.client.call(CHANNELS.bridge.syncNow);
@@ -73,6 +80,30 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Subscriptions thro
       expect(await readFile(resumedFile)).toEqual(image);
       expect(await status(a)).toMatchObject({ state: "connected", pendingRecords: 0, quota: { subscription: { status: "active", billingInterval: "yearly" } } });
       expect(await b.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).toMatchObject({ state: "ready", accountId: owner.accountId });
+    } finally { await fixture.dispose(); }
+  }, 120_000);
+
+  it("shares one activated beta across independent devices and transfers Pages/files without a subscription row", async () => {
+    const fixture = await startLocalBackends({ auth: true, subscriptionInterval: null }), { a, b } = fixture;
+    try {
+      const email = "selected-beta@example.test", db = await fixture.hub.database(), invitation = bridgeBetaInvite(email);
+      await db.prepare(invitation.sql).bind(...invitation.params).run();
+      const browser = await fixture.hub.login(email);
+      const activation = await fetch(new URL("/v1/beta/activate", fixture.hub.url), { method: "POST", headers: { Cookie: browser.cookie, Origin: new URL(fixture.hub.url).origin, "Content-Type": "application/json" }, body: "{}" });
+      expect(activation.status).toBe(200);
+      const dates = await activation.json() as { startsAt: string; expiresAt: string };
+      const owner = await signIn(fixture, a, email); expect(owner.state).toBe("ready");
+      expect((await signIn(fixture, b, email)).state).toBe("needs-approval");
+      await approve(fixture);
+      const original = await page(a, "Selected beta Page", "Synced during beta.");
+      const file = await a.client.call<AtlasItem>(CHANNELS.atlas.uploadFile, { accountId: "default", pageId: original.item.id, fileName: "beta.png", data: image.toString("base64") });
+      await a.client.call(CHANNELS.bridge.syncNow); await b.client.call(CHANNELS.bridge.syncNow);
+      await waitFor(() => get(b, original.item.id), (value) => value?.revision.id === original.revision.id, "beta Page on B");
+      const downloaded = await b.client.call<string>(CHANNELS.atlas.resolveFile, { accountId: "default", id: file.id });
+      expect(await readFile(downloaded)).toEqual(image);
+      for (const host of [a, b]) expect(await status(host)).toMatchObject({ state: "connected", quota: { subscription: { source: "beta", status: "active", canUpload: true, startsAt: dates.startsAt, expiresAt: dates.expiresAt } } });
+      expect(await db.prepare("SELECT activated_at,expires_at FROM bridge_beta_invites WHERE email=?").bind(email).first()).toEqual({ activated_at: Date.parse(dates.startsAt), expires_at: Date.parse(dates.expiresAt) });
+      expect(await db.prepare("SELECT count(*) n FROM account_entitlements").first()).toEqual({ n: 0 });
     } finally { await fixture.dispose(); }
   }, 120_000);
 });

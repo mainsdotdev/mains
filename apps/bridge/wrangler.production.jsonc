@@ -15,13 +15,14 @@
     "issues": { "enabled": false }
   },
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
-  "secrets": { "required": ["BETTER_AUTH_SECRET", "GITHUB_CLIENT_SECRET"] },
+  "secrets": { "required": ["BETTER_AUTH_SECRET", "GITHUB_CLIENT_SECRET", "RESEND_API_KEY"] },
   "routes": [{ "pattern": "bridge.mains.dev", "custom_domain": true }],
   "vars": {
     "BRIDGE_ENV": "production",
     "BRIDGE_DEV_AUTH": "false",
     "BRIDGE_AUTH_URL": "https://bridge.mains.dev",
-    "GITHUB_CLIENT_ID": "Ov23liObqQHXTr0rw24b"
+    "GITHUB_CLIENT_ID": "Ov23liObqQHXTr0rw24b",
+    "MAIL_FROM": "Mains <no-reply@auth.mains.dev>"
   },
   "d1_databases": [{
     "binding": "AUTH_DB",

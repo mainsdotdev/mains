@@ -83,6 +83,7 @@ export function BridgeSignInSection({
           }}
         >
           {error && <Text role="alert" tone="danger">{error}</Text>}
+          <Muted size="xs">Continue in your browser with GitHub or your email and password.</Muted>
           <Text as="label" className="block space-y-2">
             <span className="block">Device name</span>
             <Input

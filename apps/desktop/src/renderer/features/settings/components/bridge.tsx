@@ -250,7 +250,7 @@ export default function BridgeSettings() {
                 <Muted>
                   Expires{" "}
                   {new Date(status.login.expiresAt).toLocaleTimeString()}. Sign
-                  in with GitHub or an email link.
+                  in with GitHub or your email and password.
                 </Muted>
               </>
             ) : (
@@ -262,24 +262,22 @@ export default function BridgeSettings() {
       {status?.state === "needs-approval" && (
         <SettingsSection title={`Approve ${deviceLabel}`}>
           <div className="space-y-4 py-4">
-            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between md:gap-6">
-              <Text className="min-w-0 max-w-2xl flex-1">
-                On an approved device, open Settings › Bridge and compare this
-                code before approving {status.label}.
-              </Text>
-              {status.verificationCode && (
-                <div className="flex shrink-0 items-center gap-3 self-end rounded-xl glass-input px-3 py-2 md:self-auto">
-                  <Text as="code" size="2xl" className="whitespace-nowrap font-mono select-all tracking-[0.25em]">
-                    {status.verificationCode}
-                  </Text>
-                  <CopyButton
-                    text={status.verificationCode}
-                    tooltip="Copy verification code"
-                    copiedTooltip="Copied!"
-                  />
-                </div>
-              )}
-            </div>
+            <Text className="max-w-2xl">
+              On an approved device, open Settings › Bridge and compare this
+              code before approving {status.label}.
+            </Text>
+            {status.verificationCode && (
+              <div className="flex w-fit items-center gap-3 rounded-xl glass-input px-3 py-2">
+                <Text as="code" size="2xl" className="whitespace-nowrap font-mono select-all tracking-[0.25em]">
+                  {status.verificationCode}
+                </Text>
+                <CopyButton
+                  text={status.verificationCode}
+                  tooltip="Copy verification code"
+                  copiedTooltip="Copied!"
+                />
+              </div>
+            )}
             <Muted className="max-w-2xl">
               Sync starts after approval. You can also unlock your account with
               its recovery code.
@@ -431,40 +429,40 @@ export default function BridgeSettings() {
           <SettingsSection title="Recovery code">
             <div className="space-y-4 py-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-6">
-                <Muted className="min-w-0 flex-1">
-                  Save this code in your password manager. You’ll need it if you
-                  lose access to every approved device.
-                </Muted>
-              <div className="flex flex-col items-end gap-2 self-end md:w-48 md:shrink-0 md:self-auto">
+                <div className="min-w-0 flex-1 space-y-3">
+                  <Muted>
+                    Save this code in your password manager. You’ll need it if you
+                    lose access to every approved device.
+                  </Muted>
+                  {!visibleRecoveryCode && status.recoveryCodeAvailable && (
+                    <Button
+                      variant="primary"
+                      disabled={busy}
+                      className="whitespace-nowrap"
+                      onClick={() =>
+                        void act(async () =>
+                          showRecoveryCode(
+                            await value<string | null>(
+                              appApi.bridge.takeRecoveryCode(),
+                            ),
+                          ),
+                        )
+                      }
+                    >
+                      Show setup code
+                    </Button>
+                  )}
+                </div>
                 <Button
                   variant="secondary"
                   disabled={busy}
-                  className="w-full"
+                  className="self-end whitespace-nowrap md:w-48 md:shrink-0 md:self-auto"
                   onClick={visibleRecoveryCode
                     ? () => setRecoveryCode(null)
                     : () => setConfirm({ kind: "recovery" })}
                 >
                   {visibleRecoveryCode ? "I saved it — hide code" : "New recovery code"}
                 </Button>
-                {!visibleRecoveryCode && status.recoveryCodeAvailable && (
-                  <Button
-                    variant="primary"
-                    disabled={busy}
-                    className="w-full"
-                    onClick={() =>
-                      void act(async () =>
-                        showRecoveryCode(
-                          await value<string | null>(
-                            appApi.bridge.takeRecoveryCode(),
-                          ),
-                        ),
-                      )
-                    }
-                  >
-                    Show setup recovery code once
-                  </Button>
-                )}
-              </div>
               </div>
               {visibleRecoveryCode && (
                 <div className="relative max-w-2xl">

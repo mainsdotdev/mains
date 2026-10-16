@@ -8,27 +8,30 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
- * @param {{ auth?: boolean, archive?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
+ * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
 export async function startLocalBridgeHub(settings = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hub-"));
   const bundle = join(dir, "hub.mjs");
   const secret = randomBytes(32).toString("hex");
-  await build({ entryPoints: [fileURLToPath(new URL(settings.maintenance ? "../src/staging-reset-worker.ts" : "../src/index.ts", import.meta.url))], bundle: true, format: "esm", platform: "browser", target: "es2022", outfile: bundle, external: ["cloudflare:workers", "node:*"] });
-  /** @type {Array<{to: string, url: string}>} */
+  // Match Wrangler's runtime exports. The browser condition selects Better
+  // Auth's synchronous request-state fallback, which breaks concurrent login.
+  await build({ entryPoints: [fileURLToPath(new URL(settings.maintenance ? "../src/staging-reset-worker.ts" : "../src/index.ts", import.meta.url))], bundle: true, format: "esm", platform: "browser", conditions: ["workerd"], target: "es2022", outfile: bundle, external: ["cloudflare:workers", "node:*"] });
+  /** @type {Array<{to: string, url: string, kind: 'sign-in' | 'verify-email' | 'reset-password'}>} */
   const mail = [];
   let loginCount = 0;
   /** @type {import('miniflare').V4MiniflareOptions} */
   const options = { name: "bridge-test", modules: true, script: await readFile(bundle, "utf8"), compatibilityDate: "2026-07-30", compatibilityFlags: ["nodejs_compat"], host: "127.0.0.1", port: 0, unsafeInspectDurableObjects: true,
     durableObjects: { ACCOUNT_HUB: { className: "AccountHub", useSQLite: true } },
     r2Buckets: { BLOBS: "bridge-test-blobs", ...(settings.archive ? { BLOB_ARCHIVE: "bridge-test-archive" } : {}) },
-    ...(settings.auth ? { d1Databases: { AUTH_DB: "bridge-auth-test" }, serviceBindings: { AUTH_MAILER: async (request) => {
-      mail.push(/** @type {{to: string, url: string}} */ (await request.json())); return Response.json({ ok: true });
-    } } } : {}),
+    ...(settings.auth ? { d1Databases: { AUTH_DB: "bridge-auth-test" }, ...(settings.mail !== false ? { serviceBindings: { AUTH_MAILER: async (request) => {
+      mail.push(/** @type {typeof mail[number]} */ (await request.json())); return Response.json({ ok: true });
+    } } } : {}) } : {}),
     resourcePersistencePath: join(dir, "storage"), bindings: { BRIDGE_DEV_AUTH: settings.auth ? "false" : "true", BRIDGE_DEV_SECRET: secret,
       ...(settings.environment ? { BRIDGE_ENV: settings.environment } : {}),
       ...(settings.maintenance ? { BRIDGE_RESET_ACCOUNT: settings.maintenance.accountId, BRIDGE_RESET_TOKEN: settings.maintenance.token, BRIDGE_AUTH_URL: "https://mains-bridge-staging.team-68e.workers.dev" } : {}),
       ...(settings.storageLimitBytes !== undefined ? { BRIDGE_STORAGE_LIMIT_BYTES: String(settings.storageLimitBytes) } : {}),
       ...(settings.writesPerMinute !== undefined ? { BRIDGE_WRITES_PER_MINUTE: String(settings.writesPerMinute) } : {}),
+      ...(settings.github ? { GITHUB_CLIENT_ID: "local-public-github-id", GITHUB_CLIENT_SECRET: "local-only-github-secret" } : {}),
       ...(settings.auth ? { BETTER_AUTH_SECRET: randomBytes(32).toString("hex") } : {}) } };
   let mf = new Miniflare(convertV4MiniflareOptions(options));
   /** @type {URL} */
@@ -37,10 +40,20 @@ export async function startLocalBridgeHub(settings = {}) {
   catch (error) { await mf.dispose().catch(() => {}); await rm(dir, { recursive: true, force: true }); throw error; }
   if (settings.auth) {
     const db = await mf.getD1Database("AUTH_DB");
-    for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql"]) {
+    for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql"]) {
       const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8");
       await db.batch(sql.split(";").filter((part) => part.trim()).map((part) => db.prepare(part)));
     }
+  }
+  /** Mail is queued through the Worker's real waitUntil; only delivery is local.
+   * @param {string} email @param {'sign-in' | 'verify-email' | 'reset-password'} kind */
+  async function deliveredMail(email, kind) {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const entry = mail.filter((item) => item.to === email && item.kind === kind).at(-1);
+      if (entry) return entry;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error("Account email was not delivered");
   }
   /** Explicit paid test fixture; production sign-in never grants membership.
    * @param {string} accountId @param {'monthly' | 'yearly'} interval @param {number} [expiresAt] */
@@ -59,8 +72,7 @@ export async function startLocalBridgeHub(settings = {}) {
       const ip = `198.51.100.${++loginCount}`;
       const response = await fetch(new URL("/api/auth/sign-in/magic-link", address), { method: "POST", headers: { "Content-Type": "application/json", Origin: address.origin, "CF-Connecting-IP": ip }, body: JSON.stringify({ email, callbackURL: new URL("/device", address).toString() }) });
       if (!response.ok) throw new Error(`Magic-link request failed (${response.status}): ${await response.text()}`);
-      const entry = mail.filter((item) => item.to === email).at(-1);
-      if (!entry) throw new Error("Magic link was not delivered");
+      const entry = await deliveredMail(email, "sign-in");
       const callback = await fetch(entry.url, { redirect: "manual", headers: { "CF-Connecting-IP": ip } });
       const cookie = callback.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
       const session = await fetch(new URL("/api/auth/get-session", address), { headers: { Cookie: cookie, "CF-Connecting-IP": ip } });
@@ -69,6 +81,8 @@ export async function startLocalBridgeHub(settings = {}) {
       if (settings.subscriptionInterval) await grantSubscription(value.user.id, settings.subscriptionInterval);
       return { cookie, user: value.user };
     },
+    deliveredMail,
+    mail,
     grantSubscription,
     async database() { return mf.getD1Database("AUTH_DB"); },
     /** @param {string} accountId @param {string} backendId @param {string | number} [expiresIn] */

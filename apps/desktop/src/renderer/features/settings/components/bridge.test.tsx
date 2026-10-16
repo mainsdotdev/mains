@@ -139,6 +139,22 @@ describe("Bridge key management", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh subscription status" })); });
     expect(fixture.syncNow).toHaveBeenCalledOnce();
   });
+  it.each(["active", "expired", "revoked"] as const)("shows selected beta access and its expiry without purchase choices (%s)", async (status) => {
+    fixture.sync = { state: status === "active" ? "connected" : "read-only", pendingRecords: 3, error: null, quota: {
+      usedBytes: 0, limitBytes: 1024 ** 3, fileLimitBytes: 50 * 1024 ** 2, plan: "standard",
+      subscription: { source: "beta", status, planId: "standard", billingInterval: null, startsAt: "2026-10-16T12:00:00Z", expiresAt: "2026-11-15T12:00:00Z", canUpload: status === "active" },
+      plans: [{ id: "standard", name: "Bridge", storageLimitBytes: 1024 ** 3, fileLimitBytes: 50 * 1024 ** 2, writesPerMinute: 600, billingIntervals: ["monthly", "yearly"] }],
+    } } as BridgeStatus;
+    render(<BridgeSettings />);
+    expect(screen.getByText("Beta access", { exact: true })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "Monthly" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Yearly" })).toBeNull();
+    expect(screen.queryByText(/Purchases are not available yet/)).toBeNull();
+    if (status === "active") expect(screen.getByText(/^Beta access ends /)).toBeTruthy();
+    else expect(screen.getByText(/New uploads are paused/)).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh access status" })); });
+    expect(fixture.syncNow).toHaveBeenCalledOnce();
+  });
   it.each([true, false])("toggles sync for only the selected project and offers a separate history opt-in (local only: %s)", async (localOnly) => {
     fixture.projects = [
       { id: "p1", name: "Private project", localOnly, workspaces: 2, runs: 3 },
@@ -191,7 +207,7 @@ describe("Bridge key management", () => {
     render(<BridgeSettings />);
     expect(fixture.take).not.toHaveBeenCalled(); expect(fixture.regenerate).not.toHaveBeenCalled();
     if (flow === "setup") {
-      await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Show setup recovery/ })); });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show setup code" })); });
     } else {
       fireEvent.click(screen.getByRole("button", { name: "New recovery code" }));
       expect(fixture.regenerate).not.toHaveBeenCalled();
@@ -210,7 +226,7 @@ describe("Bridge key management", () => {
   });
   it("hides a revealed code when the selected backend changes", async () => {
     const view = render(<BridgeSettings />);
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Show setup recovery/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show setup code" })); });
     expect(screen.getByDisplayValue("AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH")).toBeTruthy();
     fixture.status = { ...fixture.status, backendId: "B" }; view.rerender(<BridgeSettings />);
     expect(screen.queryByDisplayValue("AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH")).toBeNull();

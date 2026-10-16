@@ -3,6 +3,7 @@ import { bridgeApprovalCode, bridgeBytes, bridgeRecoveryMessage, validateBridgeD
 import { digestToken, randomToken, signedInUser, type AuthEnv } from "./identity";
 import { HttpError, identifier, json, jsonInput, rateLimit, textField } from "./auth-http";
 import { reportBridgeFailure } from "./observability";
+import { requireBridgeAccess, requireBridgeBootstrapAccess } from "./beta";
 
 export interface BackendRow {
   account_id: string; backend_id: string; public_key: string; label: string; platform: string;
@@ -43,6 +44,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       const user = await signedInUser(env, request);
       if (!user) throw new HttpError(401, "Sign in first");
       await rateLimit(env, `register:${user.id}`, 20);
+      await requireBridgeAccess(env, user);
       const body = await jsonInput(request), backendId = identifier(body.backendId), label = textField(body.label, "label"), platform = textField(body.platform, "platform", 32);
       bridgeBytes(body.publicKey, 32); const publicKey = body.publicKey as string;
       const token = `b7_${randomToken()}`, hash = await digestToken(token), now = Date.now();
@@ -70,6 +72,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
         wrap: mine ? JSON.parse(mine.wrap) : null, approval });
     }
     if (path === "/v1/keys/bootstrap" && request.method === "POST") {
+      await requireBridgeBootstrapAccess(env, account);
       const body = await jsonInput(request); validateBridgeDeviceWrap(body.wrap); validateBridgeRecoveryWrap(body.recovery); bridgeBytes(body.recoveryPublicKey, 32);
       if (ready) throw new HttpError(409, "This account already has keys");
       const now = Date.now();

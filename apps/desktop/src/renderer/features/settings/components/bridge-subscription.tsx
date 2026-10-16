@@ -10,8 +10,10 @@ export function BridgeSubscriptionSection({ subscription, plans, busy, onRefresh
   const plan = plans.find((entry) => entry.id === subscription.planId) ?? plans[0];
   const expires = subscription.expiresAt ? new Date(subscription.expiresAt).toLocaleDateString(undefined, { dateStyle: "medium" }) : null;
   const starts = subscription.startsAt ? new Date(subscription.startsAt).toLocaleDateString(undefined, { dateStyle: "medium" }) : null;
+  const beta = subscription.source === "beta";
+  const betaExpires = subscription.expiresAt ? new Date(subscription.expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : null;
   return (
-    <SettingsSection title="Subscription">
+    <SettingsSection title={beta ? "Beta access" : "Subscription"}>
       <div className="space-y-4 py-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
@@ -22,7 +24,9 @@ export function BridgeSubscriptionSection({ subscription, plans, busy, onRefresh
             {subscription.canUpload && <span aria-hidden="true" className="size-1.5 rounded-full bg-success" />}{labels[subscription.status]}
           </Text>
         </div>
-        {subscription.status === "active" || subscription.status === "scheduled" ? (
+        {beta ? (
+          <Muted>{subscription.status === "active" ? `Beta access ends ${betaExpires}.` : subscription.status === "expired" ? `Beta access ended ${betaExpires}.` : "Beta access is inactive."}</Muted>
+        ) : subscription.status === "active" || subscription.status === "scheduled" ? (
           <Muted>{subscription.billingInterval === "yearly" ? "Yearly" : "Monthly"} subscription · {subscription.status === "scheduled" ? `Starts ${starts}` : `Active until ${expires}`}</Muted>
         ) : (
           <div className="max-w-xl space-y-3">
@@ -32,8 +36,8 @@ export function BridgeSubscriptionSection({ subscription, plans, busy, onRefresh
             <Muted size="xs">{interval === "yearly" ? "One year" : "One month"} of Bridge with the same storage and sync features. Purchases are not available yet.</Muted>
           </div>
         )}
-        {!subscription.canUpload && <Text size="xs" tone="muted" className="max-w-xl">New uploads are paused. You can still read, download and delete synced data. Changes on {deviceLabel} stay queued until your subscription is active.</Text>}
-        <Button variant="secondary" disabled={busy} onClick={onRefresh}>Refresh subscription status</Button>
+        {!subscription.canUpload && <Text size="xs" tone="muted" className="max-w-xl">New uploads are paused. You can still read, download and delete synced data. Changes on {deviceLabel} stay queued until {beta ? "Bridge access" : "your subscription"} is active.</Text>}
+        <Button variant="secondary" disabled={busy} onClick={onRefresh}>{beta ? "Refresh access status" : "Refresh subscription status"}</Button>
       </div>
     </SettingsSection>
   );

@@ -135,8 +135,9 @@ it("reuses unchanged encrypted files, publishes only verified snapshots, and loc
     files.push({ path, size: raw.length, sha256: sha256(raw), key: object.receipt.key }); refs.push(object.receipt);
   };
   let sql = "";
-  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
+  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
   sql += "INSERT INTO user VALUES('fixture','Local user','fixture@example.test',1,NULL,1,1);\n";
+  sql += "INSERT INTO bridge_beta_invites VALUES('fixture@example.test','fixture','active',1,2,2592000002,2);\n";
   await save("auth.sql", sql); await save("deployments.json", "[]"); await save("d1-time-travel.json", "{}");
   const captured = await captureAccount(ops, "fixture", save, "hub/0");
   const bytes = randomBytes(4096), object = await storeSealed(bucket, root, "attachment:unchanged-etag", pair.publicKey, async () => bytes);
@@ -156,6 +157,9 @@ it("reuses unchanged encrypted files, publishes only verified snapshots, and loc
     { env: { ...process.env, CLOUDFLARE_API_TOKEN: "invalid-local-only", WRANGLER_SEND_METRICS: "false" }, timeout: 30_000 });
   expect(result.stdout).toContain("Local recovery verified");
   expect(JSON.parse(await readFile(join(local, "restore-verification.json"), "utf8"))).toMatchObject({ environment: "local", users: 1, accounts: 1, restoredObjects: 1, remoteWrites: false });
+  const restoredBeta = await execute(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "d1", "execute", "AUTH_DB", "--local", "--config", join(local, "wrangler.jsonc"), "--persist-to", join(local, "state"), "--json", "--command", "SELECT status,activated_at,expires_at FROM bridge_beta_invites"],
+    { env: { ...process.env, CLOUDFLARE_API_TOKEN: "invalid-local-only", WRANGLER_SEND_METRICS: "false" }, timeout: 30_000 });
+  expect(JSON.parse(restoredBeta.stdout)[0].results).toEqual([{ status: "active", activated_at: 2, expires_at: 2592000002 }]);
   await expect(downloadSnapshot(bucket, index, await loadOperationsTarget("production"), pair.privateKey, async () => {})).rejects.toThrow(/another environment/);
   const head = await bucket.head(object.receipt.key);
   await bucket.put(object.receipt.key, "corrupt", { customMetadata: head!.customMetadata });
@@ -219,7 +223,7 @@ it("runs two complete daily jobs locally, reads unchanged source objects once, a
   const sourceProxy = { list: (...args: any[]) => (source.list as any)(...args), head: (...args: any[]) => (source.head as any)(...args),
     get: async (...args: any[]) => { gets++; return singleTransfer(await (source.get as any)(...args)); } };
   let sql = "";
-  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
+  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
   sql += "INSERT INTO user VALUES('fixture','Local user','fixture@example.test',1,NULL,1,1);\n";
   sql += "INSERT INTO bridge_accounts VALUES('fixture','device-a','hash','pub','{}',1);\n";
   const dependencies = {

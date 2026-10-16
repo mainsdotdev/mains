@@ -166,8 +166,28 @@ an account. Desktop opens the system browser and receives a one-use, 60-second
 authorization code on an ephemeral loopback listener, bound with state and PKCE
 S256. A Node backend uses Better Auth’s device authorization flow: the browser
 shows the account login, then explicitly authorizes the displayed sign-in code.
-GitHub and verified email magic links use the same Better Auth account. Signing
-in does not grant an existing account’s decryption key.
+GitHub, email/password and verified email sign-in links use the same Better Auth
+account. Signing in does not grant an existing account’s decryption key, beta
+access or a subscription.
+
+When mail delivery is configured, the secure browser page offers **Sign in**,
+**Create an account**, **Forgot password?** and the existing email-link option.
+These pages, device authorization and the native-app handoff share Mains' mark,
+default neutral palette and rounded controls, with blue submit actions and
+separate secondary actions. They follow the browser's light/dark appearance,
+adapt to narrow screens and need no external images, fonts or scripts.
+Passwords must contain 12–128 characters and Better Auth stores only their
+salted password hashes in the existing D1 credential rows. New email accounts
+must verify their mailbox before password sign-in; verification does not create
+a signed-in session automatically. Verification links expire after one hour.
+
+An existing GitHub user can use **Forgot password?** with their verified account
+email to add a password to that same account. Password reset links last 15 minutes
+and are single-use. Reset revokes browser sessions while preserving the account
+ID, subscription, device credentials and encrypted key wraps. It does not replace
+the Bridge recovery code or approve a new device. Passwords are submitted only
+on the hub's secure browser page, never through renderer IPC, Redux or local
+storage. A reset page removes its token from the address bar after loading.
 
 The first backend creates the random 256-bit account key. It uploads an X25519
 wrap for its own public key plus an Argon2id recovery wrap. The recovery code
@@ -243,12 +263,79 @@ npx wrangler secret put RESEND_API_KEY
 Set `BRIDGE_AUTH_URL` to the HTTPS hub origin and `GITHUB_CLIENT_ID` in Worker
 vars (or use `.dev.vars` locally). Configure the GitHub OAuth callback as
 `<BRIDGE_AUTH_URL>/api/auth/callback/github`. Set `MAIL_FROM` to a verified sending
-address for email links. `BETTER_AUTH_SECRET` must be at least 32 random
+address for verification, password-reset and sign-in emails. `BETTER_AUTH_SECRET` must be at least 32 random
 characters. The mail implementation uses Resend, or an `AUTH_MAILER` service
-binding; local tests replace only delivery and consume real Better Auth links.
+binding; Workers `waitUntil` keeps background account emails alive. Local tests
+replace only delivery and consume real Better Auth links. Password registration
+is disabled when no mail service is configured; no migration or existing account
+reset is needed to enable it.
 Choose the OAuth and mail methods you configure; unavailable buttons are hidden.
 Disable `BRIDGE_DEV_AUTH` on a normal hub. No production deployment or provider
 credentials are required for the automated tests.
+
+### Resend production setup
+
+The production sender is `Mains <no-reply@auth.mains.dev>`, set with `MAIL_FROM`
+in `wrangler.production.jsonc`. Verify `auth.mains.dev` in Resend using the exact
+DNS records shown for that domain. Keep open/click tracking disabled for account
+emails. This sending domain does not require moving the existing `mains.dev`
+mailbox or enabling inbound mail in Resend.
+
+Create a Resend API key named **Mains Bridge Production**, with **Sending access**
+restricted to `auth.mains.dev`. From `apps/bridge`, enter the key at Wrangler's
+hidden prompt, never in a command argument, source file or chat:
+
+```sh
+npx wrangler secret put RESEND_API_KEY --config wrangler.production.jsonc --profile mains-production
+```
+
+After Resend reports **Verified** and the secret is provisioned, run
+`npm run production:build` locally before an authorized `npm run production:deploy`.
+No new D1 migration is needed for this mail/password change. Deployment preserves
+existing identities, subscriptions, encrypted data and device credentials.
+Use a new test email address to check registration/verification, password sign-in
+and reset; do not reset an existing user's password for a smoke test.
+
+The production rollout was verified on **2026-10-16** with a separate test account:
+registration, mailbox verification, password sign-in, reset-mail delivery and
+sign-in with the new password all passed. D1 checks confirmed the same account
+identity, revocation of the prior browser session and a new active session, with
+no automatic entitlement grant. Original records in eight auth/Bridge tables
+matched the pre-release backup. Private receipts and the code rollback plan are
+kept under the ignored `.wrangler/mail-rollout/` directory.
+
+### Resend staging setup
+
+Staging uses the same verified `auth.mains.dev` sending domain with a separate
+sender, `Mains Staging <no-reply-staging@auth.mains.dev>`, configured in
+`wrangler.staging.jsonc`. Create a different Resend key named **Mains Bridge
+Staging**, with **Sending access** restricted to `auth.mains.dev`. Do not copy the
+production API key. From `apps/bridge`, enter the new key at the hidden prompt:
+
+```sh
+npx wrangler secret put RESEND_API_KEY --config wrangler.staging.jsonc --profile default
+```
+
+The staging configuration requires this secret before publishing. Run
+`npm run staging:build`, take and verify the staging backup, and apply any pending
+D1 migrations before deploying the current Worker. In particular, a staging hub
+that predates closed beta needs the additive `0005_closed_beta.sql` migration.
+Keep the existing GitHub and Better Auth secrets, Cloudflare account, D1, R2 and
+Durable Object namespace. No production configuration or client profiles change.
+
+After deployment, use a separate staging test identity to check verification,
+password sign-in and password reset. Account creation does not grant Bridge
+access; use the staging beta operator command for selected beta testers.
+Automated tests use mocked delivery and disposable databases; they never send
+real mail.
+
+The staging rollout was verified on **2026-10-16** with a separate test identity:
+mailbox verification, password sign-in, password reset and sign-in with the new
+password passed. Both mails used the staging sender and staging links. Reset
+revoked the previous session; no beta invitation or entitlement was added. The
+original records in eight auth/Bridge tables and all 12 encrypted R2 objects
+matched the pre-release backup. Private receipts are kept under the ignored
+`.wrangler/staging-mail-rollout/` directory. Production was not changed.
 
 `npm test` includes approval/recovery isolation, challenge replay and tampering,
 bootstrap races, revoked initializer re-enrollment, PKCE/state/redirect checks,
@@ -340,6 +427,13 @@ update time. This row is authoritative; local SQLite, the billing-cycle selector
 and quota overrides cannot grant access. All approved backends of the account
 share the entitlement. Another account cannot query or use it.
 
+Selected testers can instead activate a separate 30-day closed-beta grant. See
+[Closed beta access](CLOSED-BETA.md) for the user flow, safe operator commands and
+rollout order. Migration `0005` grants nothing automatically. New accounts need
+an invitation/activation or an operator subscription before Bridge enrollment;
+existing initialized accounts retain read/recovery access. Public login pages
+and uninvited accounts receive no beta offer.
+
 Only an active, recognized plan in `[starts_at, expires_at)` permits new encrypted
 record upserts and R2 uploads. An expired, missing, scheduled or revoked subscription
 leaves approved backends **Read only**: existing reads, lazy file downloads and
@@ -382,7 +476,7 @@ of the automated tests. There is no public grant/revoke endpoint. GET
 `/v1/subscription` accepts an approved backend credential or a verified browser
 session, derives the account from authentication, and returns no credentials.
 
-The account DO caches one indexed D1 lookup for 60 seconds and coalesces concurrent
+The account DO caches one indexed D1 query over subscription and beta grants for 60 seconds and coalesces concurrent
 requests. It checks cached period expiry on every use, so the cache never extends
 the end of a subscription. Direct operator grants/revocations take up to 60 seconds
 to appear at the hub; client refresh does not bypass that server cache. An idle
@@ -390,7 +484,8 @@ client updates its displayed status on the next upload attempt or manual refresh
 pending inactive clients check for renewal in the background. A future trusted
 billing-event consumer can call the internal `subscriptionChanged(accountId)` RPC
 after committing D1 to invalidate it immediately. No payment-event handler is
-implemented yet. Inactive clients with pending writes check for renewal at most
+implemented yet. Beta activation uses that RPC after committing its one-time
+grant. Inactive clients with pending writes check for renewal at most
 once a minute in the background instead of retrying uploads every second.
 
 Migration `0004` grants **nothing automatically**, including for existing staging
@@ -461,7 +556,8 @@ The first authorized production rollout needs all D1 migrations applied **before
 the new Worker, a configured custom-domain route, a separate GitHub callback at
 `<production-origin>/api/auth/callback/github`, and Worker secrets
 `BETTER_AUTH_SECRET` and `GITHUB_CLIENT_SECRET` (or mail delivery credentials).
-The checked-in GitHub configuration declares both secrets as required for deploy;
+The checked-in production configuration also requires `RESEND_API_KEY` for its
+configured email sender. These secrets are required for deploy;
 their values live only in Cloudflare. Enter a GitHub secret from `apps/bridge`:
 
 ```sh

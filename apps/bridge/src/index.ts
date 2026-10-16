@@ -32,8 +32,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       try { return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(accountId)).getSubscription(accountId), { headers: { "Cache-Control": "no-store" } }); }
       catch { reportBridgeFailure(env, "subscription"); return new Response("Bridge subscription status is unavailable", { status: 503 }); }
     }
-    if (env.AUTH_DB && (url.pathname.startsWith("/api/auth/") || ["/sign-in", "/device", "/authorize"].includes(url.pathname) || url.pathname.startsWith("/v1/auth/"))) {
-      const response = await handleSignIn(request, env); if (response) return response;
+    if (env.AUTH_DB && (url.pathname.startsWith("/api/auth/") || ["/sign-in", "/reset-password", "/device", "/authorize", "/v1/beta/activate"].includes(url.pathname) || url.pathname.startsWith("/v1/auth/"))) {
+      const response = await handleSignIn(request, env, async (accountId) => {
+        await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(accountId)).subscriptionChanged(accountId);
+      }); if (response) return response;
     }
     if (url.pathname.startsWith("/v1/backends") || url.pathname.startsWith("/v1/keys/") || url.pathname.startsWith("/v1/approvals"))
       return handleDevices(request, env, {

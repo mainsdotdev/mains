@@ -9,6 +9,8 @@ export interface BridgePlan {
   billingIntervals: BridgeBillingInterval[];
 }
 export interface BridgeSubscription {
+  /** Omitted by older hubs and by ordinary manual/paid subscriptions. */
+  source?: "beta";
   status: "none" | "scheduled" | "active" | "expired" | "revoked" | "unavailable" | "development";
   planId: string | null;
   billingInterval: BridgeBillingInterval | null;
