@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 // JSDOM resolves its worker file at runtime. Keep the server converter as real
-// packages rather than flattening it into main.js, including nested versions.
+// packages rather than flattening it into main.cjs, including nested versions.
 function copyPageConverterDependencies(destinationRoot) {
   const sourceRoot = path.resolve('node_modules');
   const visited = new Set();
@@ -81,7 +81,7 @@ export default defineConfig(({ command }) => {
     lib: {
       entry: 'src/main/index.ts',
       formats: ['cjs'],
-      fileName: () => 'main.js',
+      fileName: () => 'main.cjs',
     },
     rollupOptions: {
       external: [
@@ -107,7 +107,7 @@ export default defineConfig(({ command }) => {
         '@github/copilot-darwin-x64',
         '@github/copilot-win32-x64',
         // Content search's ripgrep: the package resolves its per-arch binary
-        // package at runtime, so neither can be inlined into main.js.
+        // package at runtime, so neither can be inlined into main.cjs.
         '@vscode/ripgrep',
         '@vscode/ripgrep-darwin-arm64',
         '@vscode/ripgrep-darwin-x64',

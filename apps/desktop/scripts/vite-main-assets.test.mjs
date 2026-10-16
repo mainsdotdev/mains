@@ -47,7 +47,7 @@ async function verifyRuntimeAssets(command) {
     const ready = Promise.withResolvers();
     const copiesComplete = Promise.withResolvers();
     const requiredAssets = [
-      'main.js',
+      'main.cjs',
       'db/migrations/0000_initial.sql',
       'db/migrations/meta/_journal.json',
       ...['better-sqlite3', 'node-pty', 'ws', '@blocknote/server-util', 'converter-dependency', '@github/copilot-sdk',
@@ -63,7 +63,7 @@ async function verifyRuntimeAssets(command) {
       build: {
         watch: command === 'serve' ? {} : null,
         outDir: output,
-        lib: { entry, formats: ['cjs'], fileName: () => 'main.js' },
+        lib: { entry, formats: ['cjs'], fileName: () => 'main.cjs' },
       },
       plugins: [
         // Forge prepends this hook and starts Electron as soon as it resolves.

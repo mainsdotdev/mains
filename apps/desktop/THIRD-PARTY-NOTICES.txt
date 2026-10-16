@@ -2819,7 +2819,7 @@ CC-BY-4.0. See https://creativecommons.org/licenses/by/4.0/legalcode for
 the full license text.
 
 ========================================================================
-@modelcontextprotocol/sdk@1.30.0
+@modelcontextprotocol/sdk@1.32.1
 License: MIT
 Repository: git+https://github.com/modelcontextprotocol/typescript-sdk.git
 ========================================================================
@@ -2847,7 +2847,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@napi-rs/canvas-darwin-arm64@0.1.100
+@napi-rs/canvas-darwin-arm64@1.0.11
 License: MIT
 Repository: git+https://github.com/Brooooooklyn/canvas.git
 ========================================================================
@@ -2855,7 +2855,7 @@ Repository: git+https://github.com/Brooooooklyn/canvas.git
 (No license file shipped in the package; see the repository above for the full MIT text.)
 
 ========================================================================
-@napi-rs/canvas@0.1.100
+@napi-rs/canvas@1.0.11
 License: MIT
 Repository: git+https://github.com/Brooooooklyn/canvas.git
 ========================================================================
@@ -4701,20 +4701,58 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-@simple-git/args-pathspec@1.0.3
+@simple-git/args-pathspec@1.0.4
 License: MIT
 Repository: git+https://github.com/steveukx/git-js.git
 ========================================================================
 
-(No license file shipped in the package; see the repository above for the full MIT text.)
+The MIT License (MIT)
+
+Copyright (c) 2025 Steve King
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-@simple-git/argv-parser@1.1.1
+@simple-git/argv-parser@2.0.1
 License: MIT
 Repository: git+https://github.com/steveukx/git-js.git
 ========================================================================
 
-(No license file shipped in the package; see the repository above for the full MIT text.)
+The MIT License (MIT)
+
+Copyright (c) 2025 Steve King
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ========================================================================
 @stablelib/base64@1.0.1
@@ -6656,7 +6694,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-brace-expansion@1.1.18
+brace-expansion@1.1.21
 License: MIT
 Repository: git://github.com/juliangruber/brace-expansion.git
 ========================================================================
@@ -6684,7 +6722,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-brace-expansion@2.1.4
+brace-expansion@2.1.7
 License: MIT
 Repository: git://github.com/juliangruber/brace-expansion.git
 ========================================================================
@@ -9861,7 +9899,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 For more information, please refer to <http://unlicense.org>
 
 ========================================================================
-fast-uri@3.1.6
+fast-uri@3.1.8
 License: BSD-3-Clause
 Repository: git+https://github.com/fastify/fast-uri.git
 ========================================================================
@@ -15862,7 +15900,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ========================================================================
-pdfjs-dist@5.7.284
+pdfjs-dist@6.4.299
 License: Apache-2.0
 Repository: git+https://github.com/mozilla/pdf.js.git
 ========================================================================
@@ -16501,7 +16539,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ========================================================================
-proxy-addr@2.0.7
+proxy-addr@2.0.8
 License: MIT
 Repository: jshttp/proxy-addr
 ========================================================================
@@ -18121,12 +18159,31 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-simple-git@3.36.0
+simple-git@4.0.2
 License: MIT
 Repository: https://github.com/steveukx/git-js.git
 ========================================================================
 
-(No license file shipped in the package; see the repository above for the full MIT text.)
+The MIT License (MIT)
+
+Copyright (c) 2025 Steve King
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ========================================================================
 source-map-js@1.2.2
@@ -19009,7 +19066,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ========================================================================
-undici@7.29.0
+undici@7.30.1
 License: MIT
 Repository: git+https://github.com/nodejs/undici.git
 ========================================================================
