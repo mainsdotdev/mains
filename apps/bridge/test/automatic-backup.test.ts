@@ -101,7 +101,7 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   await restore("initialize", [snapshot]);
   for (const page of capture.pages) await restore("page", [page.table, JSON.parse(source.get(page.path)!)]);
   const expectedRows = capture.pages.reduce((sum, page) => sum + JSON.parse(source.get(page.path)!).rows.length, 0);
-  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 20, rows: expectedRows });
+  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 21, rows: expectedRows });
   const pulled = await restore("pull", ["account", 0]);
   expect(pulled.records).toHaveLength(91); expect(pulled.next).toBe(91);
   expect(pulled.records.at(-1).envelope.header.op).toBe("delete");
@@ -111,8 +111,8 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   // Previously published 18-table backups have no cleanup queue/indexes or
   // triggers. Restore those bytes into a separate empty hub and let normal
   // initialization seed resumable legacy work without changing user data.
-  const legacy: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => !["compaction_jobs", "blob_uploads"].includes(table)),
-    schema: snapshot.schema.filter((entry) => !["compaction_jobs", "blob_uploads"].includes(entry.tbl_name) && !entry.sql.includes("compaction_jobs") &&
+  const legacy: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => !["compaction_jobs", "blob_uploads", "write_budget"].includes(table)),
+    schema: snapshot.schema.filter((entry) => !["compaction_jobs", "blob_uploads", "write_budget"].includes(entry.tbl_name) && !entry.sql.includes("compaction_jobs") &&
       !["log_register_seq", "latest_retention"].includes(entry.name)) };
   const oldRestore = (action: string, args: unknown[]) => call("recovery", { account: "legacy", action, args });
   await oldRestore("initialize", [legacy]);
@@ -120,8 +120,8 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   expect(await oldRestore("finish", [legacy])).toMatchObject({ tables: 18 });
   expect(await oldRestore("pull", ["account", 0])).toEqual(pulled);
   expect(await oldRestore("push", ["A", "account", [record(4)]])).toMatchObject({ results: [{ deleted: { header: { op: "delete" } } }] });
-  const previous: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => table !== "blob_uploads"),
-    schema: snapshot.schema.filter((entry) => entry.tbl_name !== "blob_uploads") };
+  const previous: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => !["blob_uploads", "write_budget"].includes(table)),
+    schema: snapshot.schema.filter((entry) => !["blob_uploads", "write_budget"].includes(entry.tbl_name)) };
   const previousRestore = (action: string, args: unknown[]) => call("recovery", { account: "previous", action, args });
   await previousRestore("initialize", [previous]);
   for (const page of capture.pages.filter((page) => previous.tables.includes(page.table))) await previousRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);

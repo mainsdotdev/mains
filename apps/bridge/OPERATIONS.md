@@ -39,6 +39,12 @@ are capped at 20 per isolate per minute to bound an outage's log volume. This is
 not a global rate limit and not an exact error counter. Ordinary successful
 traffic and quota reads add no application log events or logging SQL writes.
 
+Two non-failure events use the same restrictions: sampled `bridge.sql_usage`
+SQL cost measurements and `bridge.write_budget`, logged once when an account's
+accepted records cross 80% or 100% of the monthly fair-use budget. Both carry
+only the opaque account DO `hubId`; the budget is monitoring only and refuses
+nothing. See the README's write-budget and SQL cost sections.
+
 The `/health` endpoint checks the Worker handler/protocol only; it does not prove
 D1, R2, OAuth or replication works. Diagnose an incident with a disposable account
 or existing approved test profiles, checking pending writes and an already

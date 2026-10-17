@@ -15,6 +15,7 @@ import { observeBridgeRequest, reportBridgeFailure } from "./observability";
 import { createHubBackup } from "./hub-backup";
 import { createBridgeLimits } from "./limits";
 import { createSqlUsage, type SqlUsageEnv } from "./sql-usage";
+import { reportWriteBudget, subscriptionWriteBudgetPeriod, type WriteBudgetPeriod } from "./write-budget";
 
 interface Env extends DevAuthEnv, BlobEnv, QuotaEnv, SqlUsageEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
@@ -209,16 +210,19 @@ export class AccountHub extends DurableObject<Env> {
             this.broadcast({ type: "presence", backendId: session.backendId, online: true, lastSeen: new Date().toISOString(), label: message.label.trim(), platform: message.platform });
             response = { type: "identified", backendId: session.backendId }; break;
           case "push": {
+            let period: WriteBudgetPeriod | undefined;
             const publication = await this.ctx.blockConcurrencyWhile(async () => {
               try {
                 if (message.records.every((record) => record.header.op === "delete")) return this.store.push(session.backendId, message.stream, message.records);
                 const quota = await this.quota.status(session.accountId);
+                period = subscriptionWriteBudgetPeriod(quota.subscription);
                 return this.store.push(session.backendId, message.stream, message.records, { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes, canUpload: quota.subscription!.canUpload,
-                  hasBlobs: (blobs) => this.quota.hasBlobs(blobs) });
+                  hasBlobs: (blobs) => this.quota.hasBlobs(blobs), periodStart: period.start });
               } catch { return null; } // A lookup failure denies publication without resetting every socket in the DO.
             });
             if (!publication) throw new Error("Bridge publication unavailable");
-            const { results, changed } = publication;
+            const { results, changed, periodRecords } = publication;
+            if (period && periodRecords) reportWriteBudget(this.env, this.ctx.id.toString(), period, periodRecords.before, periodRecords.after);
             response = { type: "ack", stream: message.stream, results };
             if (changed.length) {
               this.broadcast({ type: "changed", stream: message.stream }, message.stream, socket);

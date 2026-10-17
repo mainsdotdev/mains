@@ -1,15 +1,13 @@
 // Operator tooling only. Never imported by the public Worker entry.
 import type { BridgeBillingInterval } from "@mains/contracts/bridge-subscription";
 import { bridgePlans, type BridgePlanEnv } from "./plans";
+import { addUtcMonths } from "./periods";
 
 export function bridgePeriodEnd(startsAt: number, interval: BridgeBillingInterval): number {
   if (!Number.isSafeInteger(startsAt) || startsAt < 0 || !["monthly", "yearly"].includes(interval)) throw new Error("Invalid Bridge subscription period");
-  const start = new Date(startsAt), end = new Date(startsAt);
-  end.setUTCDate(1); end.setUTCMonth(start.getUTCMonth() + (interval === "monthly" ? 1 : 12));
-  const lastDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0)).getUTCDate();
-  end.setUTCDate(Math.min(start.getUTCDate(), lastDay));
-  if (!Number.isSafeInteger(end.getTime()) || end.getTime() <= startsAt) throw new Error("Invalid Bridge subscription period");
-  return end.getTime();
+  const end = addUtcMonths(startsAt, interval === "monthly" ? 1 : 12);
+  if (!Number.isSafeInteger(end) || end <= startsAt) throw new Error("Invalid Bridge subscription period");
+  return end;
 }
 export const bridgeEntitlementSelect = "SELECT account_id,plan_id,billing_interval,status,starts_at,expires_at,updated_at FROM account_entitlements WHERE account_id=? AND feature='bridge'";
 export function bridgeAccountId(value: string): string {

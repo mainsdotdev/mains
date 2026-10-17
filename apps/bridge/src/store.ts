@@ -21,7 +21,8 @@ export function createHubStore(storage: DurableObjectStorage) {
     CREATE TABLE IF NOT EXISTS presence(backend_id TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS backend_metadata(backend_id TEXT PRIMARY KEY, label TEXT NOT NULL, platform TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS write_rate(backend_id TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS stream_activity(stream TEXT PRIMARY KEY,last_activity INTEGER NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS stream_activity(stream TEXT PRIMARY KEY,last_activity INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS write_budget(period_start INTEGER PRIMARY KEY,records INTEGER NOT NULL CHECK(records>=0));`);
   const first = <T>(query: string, ...args: (string | number | null)[]): T | undefined => sql.exec(query, ...args).toArray()[0] as T | undefined;
   storage.transactionSync(() => {
     sql.exec(`CREATE INDEX IF NOT EXISTS latest_row_key ON latest(json_extract(envelope,'$.header.rowKey'));
@@ -60,7 +61,8 @@ export function createHubStore(storage: DurableObjectStorage) {
       sql.exec("INSERT INTO write_rate VALUES(?,?,1) ON CONFLICT(backend_id) DO UPDATE SET window=excluded.window,count=CASE WHEN write_rate.window=excluded.window THEN count+1 ELSE 1 END", backendId, window);
       return true;
     },
-    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number; canUpload?: boolean; hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean }) {
+    push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number; canUpload?: boolean;
+      hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean; periodStart?: number }) {
       return storage.transactionSync(() => {
         const changed: BridgeLogRecord[] = [];
         const results = envelopes.map((envelope): BridgePushResult => {
@@ -111,7 +113,13 @@ export function createHubStore(storage: DurableObjectStorage) {
           changed.push({ seq, envelope });
           return { seq };
         });
-        return { results, changed };
+        // Fair-use accounting: newly accepted upserts only, one counter write
+        // per publication. Idempotent re-ACKs, refusals and deletes are free.
+        const accepted = changed.filter((record) => record.envelope.header.op === "upsert").length;
+        if (!accepted || budget?.periodStart === undefined) return { results, changed };
+        const after = first<{ records: number }>(`INSERT INTO write_budget(period_start,records) VALUES(?,?)
+          ON CONFLICT(period_start) DO UPDATE SET records=records+excluded.records RETURNING records`, budget.periodStart, accepted)!.records;
+        return { results, changed, periodRecords: { before: after - accepted, after } };
       });
     },
     pull(stream: BridgeStream, after: number, limit: number) {

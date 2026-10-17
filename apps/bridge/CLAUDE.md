@@ -31,6 +31,9 @@ profile to Electron with `MAINS_DEV_USER_DATA`. Never bypass ownership locks.
   Reconcile interrupted intents before releasing reservations after restart.
   Reads and tombstones stay available; rejected writes remain queued on backends.
   D1 plan overrides require migration 0003. Keep quota responses content-free.
+- The monthly fair-use write budget (`write_budget`, `BRIDGE_RECORDS_PER_MONTH`)
+  is monitoring only: count accepted upserts once per publication, log
+  `bridge.write_budget` at 80%/100%, and never refuse writes or expose it in plans.
 - `test/local-hub.mjs` starts the real Worker in workerd with temporary durable
   stores. Reuse the backend's B2 scenarios for network/E2EE regression coverage.
 

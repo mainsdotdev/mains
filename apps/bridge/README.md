@@ -709,6 +709,23 @@ sample while idle. Entering/recovering from a quota refusal refreshes the sample
 repeated refusals and failed samples remain throttled. A failed usage request
 does not interrupt replication. The hub still enforces every upload/write.
 
+### Fair-use write budget (monitoring only)
+
+Each account DO counts newly accepted upsert records per monthly period in
+`write_budget`, with one counter write per publication. Idempotent re-ACKs,
+refused writes and permanent deletes are not counted; initial history sync
+counts like any other publication. Periods follow the active entitlement's
+start day and time (UTC calendar months with month-end clamping, like billing
+grants); without a started entitlement the UTC calendar month is used.
+
+The default budget is **250,000 records per month**, set with
+`BRIDGE_RECORDS_PER_MONTH`. It is deliberately outside the public plan
+contract and is **not enforced**: nothing is refused or shown to users. When a
+publication crosses 80% or 100% of the period's budget, the hub logs one
+`bridge.write_budget` event with the opaque `hubId`, threshold, record count,
+budget and period bounds. No account ID, record content or SQL is logged.
+Filter Workers Logs for `bridge.write_budget` to find accounts above fair use.
+
 For headless management, use `mains bridge projects`,
 `mains bridge local-only <project-id> --on|--off`,
 `mains bridge sync-history`, and `mains bridge sync`. `mains bridge status`
