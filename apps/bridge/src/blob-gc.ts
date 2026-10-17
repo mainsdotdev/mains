@@ -12,6 +12,8 @@ export function installBlobReferences(storage: DurableObjectStorage) {
     sql.exec(`CREATE TABLE IF NOT EXISTS blob_gc_state(id INTEGER PRIMARY KEY CHECK(id=1),legacy_records INTEGER NOT NULL CHECK(legacy_records>=0),chunks_initialized INTEGER NOT NULL DEFAULT 0,account_prefix TEXT);
       CREATE TABLE IF NOT EXISTS blob_objects(blob_id TEXT PRIMARY KEY,refs INTEGER NOT NULL CHECK(refs>=0),delete_after INTEGER);
       CREATE TABLE IF NOT EXISTS blob_deletions(blob_id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS blob_uploads(key TEXT PRIMARY KEY,blob_id TEXT NOT NULL,upload_id TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS blob_uploads_object ON blob_uploads(blob_id);
       CREATE INDEX IF NOT EXISTS blob_objects_due ON blob_objects(delete_after) WHERE refs=0;
       CREATE TABLE IF NOT EXISTS blob_links(stream TEXT NOT NULL,seq INTEGER NOT NULL,blob_id TEXT NOT NULL,PRIMARY KEY(stream,seq,blob_id));
       CREATE TRIGGER IF NOT EXISTS blob_links_insert AFTER INSERT ON blob_links BEGIN
@@ -58,6 +60,7 @@ export function createBlobCollector(storage: DurableObjectStorage, bucket: R2Buc
   const sql = storage.sql;
   function enabled() { return sql.exec<{ legacy_records: number }>("SELECT legacy_records FROM blob_gc_state WHERE id=1").toArray()[0].legacy_records === 0; }
   async function finish(id: string) {
+    if (sql.exec("SELECT 1 FROM blob_uploads WHERE blob_id=? LIMIT 1", id).toArray().length) throw new Error("Blob upload is still in flight");
     const prefix = sql.exec<{ account_prefix: string | null }>("SELECT account_prefix FROM blob_gc_state WHERE id=1").toArray()[0].account_prefix;
     if (!prefix) throw new Error("Bridge blob namespace is not initialized");
     const start = `${prefix}${id}/`, end = `${prefix}${id}0`;
@@ -88,9 +91,10 @@ export function createBlobCollector(storage: DurableObjectStorage, bucket: R2Buc
     nextExpiry(): number | null {
       if (sql.exec("SELECT 1 FROM blob_deletions LIMIT 1").toArray().length) return Date.now();
       if (!enabled()) return null;
-      return sql.exec<{ expires: number | null }>("SELECT min(delete_after) expires FROM blob_objects WHERE refs=0").toArray()[0].expires;
+      return sql.exec<{ expires: number | null }>(`SELECT delete_after expires FROM blob_objects o WHERE refs=0 AND delete_after IS NOT NULL
+        AND NOT EXISTS(SELECT 1 FROM blob_uploads u WHERE u.blob_id=o.blob_id) ORDER BY delete_after LIMIT 1`).toArray()[0]?.expires ?? null;
     },
-    /** Only under the same account concurrency gate as publication/reservation/PUT.
+    /** Under the same account gate as publication, reservation and upload receipts.
      * R2 first, receipts second: a crash/failure stays charged and retries safely. */
     async collect() {
       // Finish durable deletion intents even when a legacy writer has since
@@ -100,7 +104,8 @@ export function createBlobCollector(storage: DurableObjectStorage, bucket: R2Buc
       if (!enabled()) return;
       const prefix = sql.exec<{ account_prefix: string | null }>("SELECT account_prefix FROM blob_gc_state WHERE id=1").toArray()[0].account_prefix;
       if (!prefix) return;
-      const candidates = sql.exec<{ blob_id: string }>("SELECT blob_id FROM blob_objects WHERE refs=0 AND delete_after<=? ORDER BY delete_after LIMIT ?", Date.now(), 32 - pending.length).toArray();
+      const candidates = sql.exec<{ blob_id: string }>(`SELECT blob_id FROM blob_objects o WHERE refs=0 AND delete_after<=?
+        AND NOT EXISTS(SELECT 1 FROM blob_uploads u WHERE u.blob_id=o.blob_id) ORDER BY delete_after LIMIT ?`, Date.now(), 32 - pending.length).toArray();
       for (const { blob_id: id } of candidates) {
         sql.exec("INSERT OR IGNORE INTO blob_deletions VALUES(?)", id);
         await finish(id);

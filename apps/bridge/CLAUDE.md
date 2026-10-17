@@ -25,10 +25,12 @@ profile to Electron with `MAINS_DEV_USER_DATA`. Never bypass ownership locks.
   Only approved, unexpired credentials can use log/R2; recheck existing sockets
   and capabilities after revocation. Keep dev-token support explicitly gated
   and all secrets/local state ignored.
-- B8 quotas are enforced in the account DO, including reservations and immutable
-  R2 commits under one concurrency gate. Reads and tombstones stay available;
-  rejected writes remain queued on backends. D1 plan overrides require migration
-  0003. Keep quota responses public and content-free.
+- B8 quota decisions, reservations, upload admission/receipts and GC share the
+  account concurrency gate. R2 PUT I/O runs outside that gate, protected by a
+  durable upload intent: active uploads stay charged and cannot be collected.
+  Reconcile interrupted intents before releasing reservations after restart.
+  Reads and tombstones stay available; rejected writes remain queued on backends.
+  D1 plan overrides require migration 0003. Keep quota responses content-free.
 - `test/local-hub.mjs` starts the real Worker in workerd with temporary durable
   stores. Reuse the backend's B2 scenarios for network/E2EE regression coverage.
 

@@ -34,6 +34,10 @@ it("resets only the armed staging account and preserves its login and every othe
     expect(await hub.inspect(accountId)).toHaveLength(1);
     expect((await bucket.list({ prefix: prefix(accountId) })).objects).toHaveLength(1);
     await db.prepare("UPDATE bridge_backends SET status='revoked' WHERE account_id=?").bind(accountId).run();
+    await hub.quotaSql(accountId, `INSERT INTO blob_uploads VALUES('${prefix(accountId)}${"a".repeat(43)}/0','${"a".repeat(43)}','pending-upload')`);
+    expect((await post(accountId, token, true)).status).toBe(409);
+    expect((await bucket.list({ prefix: prefix(accountId) })).objects).toHaveLength(1);
+    await hub.quotaSql(accountId, "DELETE FROM blob_uploads");
     expect((await post(accountId, token, true)).status).toBe(200);
     expect(await hub.inspect(accountId)).toHaveLength(0);
     expect(await hub.quotaSql(accountId, "SELECT count(*) n FROM deleted")).toMatchObject([{ n: 0 }]);

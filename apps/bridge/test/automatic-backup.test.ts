@@ -26,7 +26,11 @@ async function runtime() {
     export class AccountHub extends Base {
       seed(records){return createHubStore(this.ctx.storage).push('A','account',records)}
       futureSchema(){this.ctx.storage.sql.exec("CREATE TABLE future_schema(id TEXT)");return true}
-      track(key,bytes){this.ctx.storage.sql.exec('INSERT INTO quota_chunks VALUES(?,?,1,0)',key,bytes);return true}
+      track(key,bytes,uploadId){
+        this.ctx.storage.sql.exec('INSERT INTO quota_chunks VALUES(?,?,?,?)',key,bytes,uploadId?0:1,uploadId?Date.now()+600000:0);
+        if(uploadId)this.ctx.storage.sql.exec('INSERT INTO blob_uploads VALUES(?,?,?)',key,key.slice(65,108),uploadId);
+        return true;
+      }
       restartBackupSession(){this.backup=createHubBackup(this.ctx.storage);return true}
       state(){const sql=this.ctx.storage.sql;return {changes:sql.exec('SELECT total_changes() AS n').one().n,
         rows:sql.exec('SELECT * FROM streams').toArray(),deleted:sql.exec('SELECT * FROM deleted').toArray(),
@@ -72,6 +76,7 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   const { call, ops } = await runtime(), source = new Map<string, string>();
   await call("hub", { account: "fixture", method: "seed", args: [Array.from({ length: 90 }, (_, i) => record(i))] });
   await call("hub", { account: "fixture", method: "seed", args: [[record(4, "delete")]] });
+  await call("hub", { account: "fixture", method: "track", args: [`${sha256("fixture")}/${"a".repeat(43)}/0`, 140, "pending-upload"] });
   const before = await call("hub", { account: "fixture", method: "state" });
   const capture = await captureAccount(ops, "fixture", async (path, bytes) => { source.set(path, bytes); }, "hub/0");
   expect(await call("hub", { account: "fixture", method: "state" })).toEqual(before);
@@ -91,10 +96,12 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
     expect(exporter.begin().schema.some((entry) => entry.tbl_name === "_cf_METADATA")).toBe(false);
   } finally { catalog.close(); }
   expect(snapshot.schema.some((entry) => entry.tbl_name === "_cf_METADATA")).toBe(false);
+  expect(capture.pages.filter((page) => page.table === "blob_uploads").flatMap((page) => JSON.parse(source.get(page.path)!).rows)).toHaveLength(1);
   const restore = (action: string, args: unknown[]) => call("recovery", { account: "fixture", action, args });
   await restore("initialize", [snapshot]);
   for (const page of capture.pages) await restore("page", [page.table, JSON.parse(source.get(page.path)!)]);
-  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 19 });
+  const expectedRows = capture.pages.reduce((sum, page) => sum + JSON.parse(source.get(page.path)!).rows.length, 0);
+  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 20, rows: expectedRows });
   const pulled = await restore("pull", ["account", 0]);
   expect(pulled.records).toHaveLength(91); expect(pulled.next).toBe(91);
   expect(pulled.records.at(-1).envelope.header.op).toBe("delete");
@@ -104,15 +111,22 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   // Previously published 18-table backups have no cleanup queue/indexes or
   // triggers. Restore those bytes into a separate empty hub and let normal
   // initialization seed resumable legacy work without changing user data.
-  const legacy: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => table !== "compaction_jobs"),
-    schema: snapshot.schema.filter((entry) => entry.tbl_name !== "compaction_jobs" && !entry.sql.includes("compaction_jobs") &&
+  const legacy: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => !["compaction_jobs", "blob_uploads"].includes(table)),
+    schema: snapshot.schema.filter((entry) => !["compaction_jobs", "blob_uploads"].includes(entry.tbl_name) && !entry.sql.includes("compaction_jobs") &&
       !["log_register_seq", "latest_retention"].includes(entry.name)) };
   const oldRestore = (action: string, args: unknown[]) => call("recovery", { account: "legacy", action, args });
   await oldRestore("initialize", [legacy]);
-  for (const page of capture.pages.filter((page) => page.table !== "compaction_jobs")) await oldRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);
+  for (const page of capture.pages.filter((page) => legacy.tables.includes(page.table))) await oldRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);
   expect(await oldRestore("finish", [legacy])).toMatchObject({ tables: 18 });
   expect(await oldRestore("pull", ["account", 0])).toEqual(pulled);
   expect(await oldRestore("push", ["A", "account", [record(4)]])).toMatchObject({ results: [{ deleted: { header: { op: "delete" } } }] });
+  const previous: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => table !== "blob_uploads"),
+    schema: snapshot.schema.filter((entry) => entry.tbl_name !== "blob_uploads") };
+  const previousRestore = (action: string, args: unknown[]) => call("recovery", { account: "previous", action, args });
+  await previousRestore("initialize", [previous]);
+  for (const page of capture.pages.filter((page) => previous.tables.includes(page.table))) await previousRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);
+  expect(await previousRestore("finish", [previous])).toMatchObject({ tables: 19 });
+  expect(await previousRestore("pull", ["account", 0])).toEqual(pulled);
   // A write between pages fences the original snapshot instead of creating a
   // mixture that never existed. Unknown table/cursor cannot inject SQL.
   const old = await ops.snapshotBegin("fixture");

@@ -757,8 +757,21 @@ remaining work. Candidate/byte counters and indexes are persistent: quota querie
 do not run GC, scan records or list the bucket. Existing log/chunk inventories
 are indexed once when upgrading; later wakes do not rebuild them.
 
-Publication, reservations, PUTs and collection share the account concurrency
-gate. A durable deletion intent fences stale chunk receipts before R2 deletion;
+Publication, reservations, upload admission/receipts and collection share the
+account concurrency gate. R2 PUT I/O runs outside that gate: a durable
+`blob_uploads` intent pins the chunk's reservation and its whole blob against
+expiry reconciliation and GC until the write settles. Up to eight distinct
+chunks can be in flight per account; duplicate requests for a chunk coalesce
+and revalidate before acknowledgement. Conditional creation preserves immutable
+bytes. Other records, quota reads and uploads can progress during a slow PUT.
+The receipt atomically converts reserved bytes to stored bytes, renews GC grace
+and clears the intent. Credential/capability and subscription checks run again
+after I/O; a refusal still accounts for bytes physically stored. A caller
+disconnect does not abandon a dispatched write. After an object reset, unresolved
+intents are reconciled against R2 before their bytes/pins are released; failures
+remain charged and retry on the maintenance alarm.
+
+A durable deletion intent fences stale chunk receipts before R2 deletion;
 quota is decremented only after the R2 delete succeeds. Failed deletion stays
 charged, and a crash before the SQLite receipt retries idempotently. A new upload
 finishes any pending deletion before reserving the same content again. Incomplete
@@ -781,6 +794,14 @@ backend databases. It verifies physical deletion and exact quota reduction,
 shared/history/Trash files opening on B with A offline, orphan retry, legacy
 upgrade, retention, real alarms, bounded batches, account isolation and injected
 R2/crash failures. No deployed Cloudflare resource is queried or changed.
+
+The backend remembers the SQLite change/schema version and active capabilities
+after checking parked records. Empty pulls with unchanged state do not scan or
+decrypt them again; cursor-only advancement across compacted gaps is excluded
+from that change detection. New records, local SQL dependency changes, restart,
+schema/feature changes and explicit `engine.retryParked()` recheck the queue.
+A failed blob restoration stays retryable. Decrypted records are never cached
+across calls, and durable parking/cursor/ownership checks retain their rules.
 
 ## Test two independent backends
 

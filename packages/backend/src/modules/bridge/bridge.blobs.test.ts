@@ -241,12 +241,16 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
   });
 
   it("parks schema 4 values on an older backend and restores them after upgrading", async () => {
-    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B", { schemaVersion: 3 });
+    const sealing = createBridgeSealingCodec(key), open = vi.fn((envelope: BridgeEnvelope) => sealing.open(envelope));
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B", { schemaVersion: 3, codec: { ...sealing, open } });
     const bio = "waiting for an upgraded backend".repeat(50_000);
     a.sqlite.prepare("UPDATE accounts SET bio=? WHERE id='default'").run(bio); await a.engine.push();
     await b.engine.pull();
     expect(b.sqlite.prepare("SELECT bio FROM accounts WHERE id='default'").get()).toMatchObject({ bio: null });
     expect(b.sqlite.prepare("SELECT reason FROM bridge_parked").get()).toMatchObject({ reason: "schema" });
+    open.mockClear();
+    for (let i = 0; i < 3; i++) await b.engine.pull();
+    expect(open.mock.calls.length).toBe(0);
     await b.engine.stop();
     const upgraded = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: deriveBridgeKeys(key).recordKey, codec: createBridgeSealingCodec(key), transport: b.transport, blobs: b.records });
     cleanup.push(() => upgraded.stop()); await upgraded.retryParked();

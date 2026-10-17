@@ -8,7 +8,7 @@ type ResetEnv = Omit<Parameters<typeof worker.fetch>[1], "ACCOUNT_HUB"> & {
   BRIDGE_RESET_TOKEN?: string;
 };
 const route = "/__maintenance/bridge-reset";
-const tables = ["log", "latest", "deleted", "row_owners", "runs", "streams", "presence", "backend_metadata", "write_rate", "stream_activity", "quota_chunks", "quota_state", "blob_links", "blob_objects", "blob_deletions", "compaction_jobs"];
+const tables = ["log", "latest", "deleted", "row_owners", "runs", "streams", "presence", "backend_metadata", "write_rate", "stream_activity", "quota_chunks", "quota_state", "blob_links", "blob_objects", "blob_deletions", "compaction_jobs", "blob_uploads"];
 function allowed(env: ResetEnv, account: unknown, token: string): account is string {
   if (env.BRIDGE_AUTH_URL !== "https://mains-bridge-staging.team-68e.workers.dev" || env.BRIDGE_DEV_AUTH === "true" ||
       !env.AUTH_DB || !env.BRIDGE_RESET_ACCOUNT || !env.BRIDGE_RESET_TOKEN || env.BRIDGE_RESET_TOKEN.length < 43 ||
@@ -41,6 +41,8 @@ export class AccountHub extends CoreAccountHub {
       const db = env.AUTH_DB!, prefix = await bridgeAccountPrefix(account);
       const active = await db.prepare("SELECT count(*) n FROM bridge_backends WHERE account_id=? AND status='approved' AND (token_expires_at>? OR next_token_expires_at>?)").bind(account, Date.now(), Date.now()).first<{ n: number }>();
       if (confirmed && active!.n) throw new Error("An approved backend still exists; use approval instead");
+      if (confirmed && this.ctx.storage.sql.exec("SELECT 1 FROM blob_uploads LIMIT 1").toArray().length)
+        throw new Error("An upload is still in flight or awaiting reconciliation; retry after maintenance");
       const records = this.ctx.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM log").toArray()[0].n;
       const initialized = !!await db.prepare("SELECT 1 FROM bridge_accounts WHERE account_id=?").bind(account).first();
       let blobs = 0, bytes = 0, cursor: string | undefined;

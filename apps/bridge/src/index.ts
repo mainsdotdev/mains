@@ -147,10 +147,23 @@ export class AccountHub extends DurableObject<Env> {
     }));
   }
   async putBlob(identity: BridgeIdentity, key: string, expires: number, bytes: Uint8Array) {
-    return this.usage.run("put", () => this.ctx.blockConcurrencyWhile(async () => {
-      try { await this.quota.put(identity, key, expires, bytes); return { status: 204, error: null }; }
+    const task = this.usage.run("put", async () => {
+      // Expected admission/authorization failures must not reset the object.
+      const gate = async <T>(work: () => Promise<T>): Promise<T> => {
+        const result = await this.ctx.blockConcurrencyWhile(async () => {
+          try { return { value: await work() }; } catch (error) { return { error }; }
+        });
+        if ("error" in result) throw result.error;
+        return result.value;
+      };
+      try { await this.quota.put(identity, key, expires, bytes, gate); return { status: 204, error: null }; }
       catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
-    }));
+      finally { await gate(async () => this.schedule(this.quota.nextExpiry())); }
+    });
+    // A caller disconnect must not abandon a dispatched R2 write or its
+    // receipt. A full object reset is handled by the durable upload intent.
+    this.ctx.waitUntil(task.catch(() => {}));
+    return task;
   }
   async protectBlobReads(identity: BridgeIdentity, blobs: BridgeBlobIdentity[], expires: number) {
     return this.usage.run("protectRead", () => this.ctx.blockConcurrencyWhile(async () => {

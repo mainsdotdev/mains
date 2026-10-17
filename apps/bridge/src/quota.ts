@@ -21,8 +21,9 @@ export async function bridgeAccountPrefix(accountId: string) {
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(accountId)))].map((b) => b.toString(16).padStart(2, "0")).join("") + "/";
 }
 
-/** Called only inside the account Durable Object's concurrency gate. Reservations and
- * immutable R2 commits share that gate, including expiry/restart reconciliation. */
+type AccountGate = <T>(work: () => Promise<T>) => Promise<T>;
+/** Quota decisions and receipts use the account gate. Immutable PUT I/O runs
+ * outside it, pinned by a durable intent until completion or restart recovery. */
 export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, recordBytes: () => number, subscriptions = createBridgeSubscriptions(env), limits = createBridgeLimits(env)) {
   const sql = storage.sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS quota_chunks(key TEXT PRIMARY KEY,bytes INTEGER NOT NULL,stored INTEGER NOT NULL,expires_at INTEGER NOT NULL);
@@ -48,8 +49,29 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
   });
   installBlobInventory(storage);
   const collector = createBlobCollector(storage, env.BLOBS, env.BLOB_ARCHIVE);
+  const activeUploads = new Set<string>(), inFlight = new Map<string, Promise<void>>();
   let accountPrefix: string | undefined;
   let initialized = false;
+  async function recoverUploads(key?: string) {
+    const pending = key ? sql.exec<{ key: string; upload_id: string }>("SELECT key,upload_id FROM blob_uploads WHERE key=?", key).toArray() :
+      sql.exec<{ key: string; upload_id: string }>("SELECT key,upload_id FROM blob_uploads LIMIT 32").toArray();
+    for (const entry of pending) {
+      // A deadline alone must never release a live writer's reservation. The
+      // current DO retains its promises while I/O is pending; after a reset,
+      // unresolved intents are reconciled before releasing bytes or GC pins.
+      if (activeUploads.has(entry.upload_id)) continue;
+      const object = await env.BLOBS.head(entry.key);
+      const reservation = sql.exec<{ bytes: number }>("SELECT bytes FROM quota_chunks WHERE key=?", entry.key).toArray()[0];
+      if (object && (!reservation || object.size !== reservation.bytes)) throw new Error("Unresolved blob upload length differs");
+      storage.transactionSync(() => {
+        if (object) {
+          sql.exec("UPDATE quota_chunks SET stored=1,expires_at=0 WHERE key=?", entry.key);
+          collector.protect(entry.key.slice(65,108));
+        }
+        sql.exec("DELETE FROM blob_uploads WHERE key=? AND upload_id=?", entry.key, entry.upload_id);
+      });
+    }
+  }
   async function reconcile(accountId: string) {
     if (!initialized) {
       accountPrefix = await bridgeAccountPrefix(accountId);
@@ -65,7 +87,9 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
       }
       initialized = true;
     }
-    const expired = sql.exec<{ key: string }>("SELECT key FROM quota_chunks WHERE stored=0 AND expires_at<=?", Date.now()).toArray();
+    await recoverUploads();
+    const expired = sql.exec<{ key: string }>(`SELECT key FROM quota_chunks q WHERE stored=0 AND expires_at<=?
+      AND NOT EXISTS(SELECT 1 FROM blob_uploads u WHERE u.key=q.key)`, Date.now()).toArray();
     for (const entry of expired) {
       // Covers a crash after R2 commit but before the SQLite receipt.
       const object = await env.BLOBS.head(entry.key);
@@ -79,8 +103,11 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
   }
   const api = {
     invalidateLimits: limits.invalidate,
-    collect: collector.collect,
-    nextExpiry: collector.nextExpiry,
+    async collect() { await recoverUploads(); await collector.collect(); },
+    nextExpiry() {
+      if (sql.exec<{ upload_id: string }>("SELECT upload_id FROM blob_uploads LIMIT 32").toArray().some((entry) => !activeUploads.has(entry.upload_id))) return Date.now();
+      return collector.nextExpiry();
+    },
     hasBlobs(blobs: BridgeBlobIdentity[]) {
       if (!blobs.length) return true;
       if (!accountPrefix) return false;
@@ -121,16 +148,52 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
         for (const id of new Set(entries.map((entry) => entry.key.slice(65,108)))) collector.protect(id);
       });
     },
-    async put(identity: BridgeIdentity, key: string, expiresAt: number, bytes: Uint8Array) {
-      if (expiresAt <= Date.now() || !await identityIsActive(identity, env)) throw new BridgeQuotaError(403, "Blob capability expired or revoked");
-      if (!key.startsWith(await bridgeAccountPrefix(identity.accountId))) throw new BridgeQuotaError(403, "Invalid account prefix");
-      if (collector.isDeleting(key.slice(65,108))) throw new BridgeQuotaError(403, "Blob cleanup is pending; request a new upload capability");
-      const reservation = sql.exec<{ bytes: number; stored: number; expires_at: number }>("SELECT bytes,stored,expires_at FROM quota_chunks WHERE key=?", key).toArray()[0];
-      if (!reservation || reservation.bytes !== bytes.length || !reservation.stored && reservation.expires_at <= Date.now()) throw new BridgeQuotaError(403, "Blob reservation expired");
-      if (reservation.stored) return;
-      if (!(await subscriptions.status(identity.accountId)).subscription.canUpload) throw new BridgeQuotaError(403, "Bridge subscription required; local changes remain queued");
-      await env.BLOBS.put(key, bytes, { onlyIf: { etagDoesNotMatch: "*" }, httpMetadata: { contentType: "application/octet-stream" } });
-      sql.exec("UPDATE quota_chunks SET stored=1,expires_at=0 WHERE key=?", key);
+    async put(identity: BridgeIdentity, key: string, expiresAt: number, bytes: Uint8Array, gate: AccountGate): Promise<void> {
+      const previous = inFlight.get(key);
+      if (previous) { await previous.catch(() => {}); return api.put(identity, key, expiresAt, bytes, gate); }
+      if (inFlight.size >= 8) throw new BridgeQuotaError(429, "Too many blob uploads in flight; retry shortly");
+      let uploadId: string | undefined;
+      const validate = async () => {
+        if (expiresAt <= Date.now() || !await identityIsActive(identity, env)) throw new BridgeQuotaError(403, "Blob capability expired or revoked");
+      };
+      const work = (async () => {
+        await gate(async () => {
+          await validate();
+          if (!key.startsWith(await bridgeAccountPrefix(identity.accountId))) throw new BridgeQuotaError(403, "Invalid account prefix");
+          if (collector.isDeleting(key.slice(65,108))) throw new BridgeQuotaError(403, "Blob cleanup is pending; request a new upload capability");
+          await recoverUploads(key);
+          const reservation = sql.exec<{ bytes: number; stored: number; expires_at: number }>("SELECT bytes,stored,expires_at FROM quota_chunks WHERE key=?", key).toArray()[0];
+          if (!reservation || reservation.bytes !== bytes.length || !reservation.stored && reservation.expires_at <= Date.now()) throw new BridgeQuotaError(403, "Blob reservation expired");
+          if (reservation.stored) return;
+          if (!(await subscriptions.status(identity.accountId)).subscription.canUpload) throw new BridgeQuotaError(403, "Bridge subscription required; local changes remain queued");
+          uploadId = crypto.randomUUID();
+          sql.exec("INSERT INTO blob_uploads VALUES(?,?,?)", key, key.slice(65,108), uploadId);
+          activeUploads.add(uploadId);
+        });
+        if (!uploadId) return;
+        // No account-wide gate spans this network write. Conditional creation
+        // and per-chunk coalescing retain immutable bytes on retries.
+        const result = await env.BLOBS.put(key, bytes, { onlyIf: { etagDoesNotMatch: "*" }, httpMetadata: { contentType: "application/octet-stream" } });
+        const object = result ?? await env.BLOBS.head(key);
+        if (!object || object.size !== bytes.length) throw new Error("Blob upload receipt length differs");
+        await gate(async () => {
+          storage.transactionSync(() => {
+            if (!sql.exec("SELECT 1 FROM blob_uploads WHERE key=? AND upload_id=?", key, uploadId!).toArray().length ||
+                !sql.exec("SELECT 1 FROM quota_chunks WHERE key=? AND bytes=?", key, bytes.length).toArray().length)
+              throw new Error("Blob upload intent changed");
+            // Physical storage remains charged even if access expired while
+            // the PUT was pending. Metadata cannot publish without its receipt.
+            sql.exec("UPDATE quota_chunks SET stored=1,expires_at=0 WHERE key=?", key);
+            collector.protect(key.slice(65,108));
+            sql.exec("DELETE FROM blob_uploads WHERE key=? AND upload_id=?", key, uploadId!);
+          });
+          await validate();
+          if (!(await subscriptions.status(identity.accountId)).subscription.canUpload) throw new BridgeQuotaError(403, "Bridge subscription required; local changes remain queued");
+        });
+      })();
+      inFlight.set(key, work);
+      try { await work; }
+      finally { if (uploadId) activeUploads.delete(uploadId); if (inFlight.get(key) === work) inFlight.delete(key); }
     },
   };
   return api;

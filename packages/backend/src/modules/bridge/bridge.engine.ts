@@ -61,6 +61,12 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   })();
   let stopped = false;
   let queue: Promise<unknown> = Promise.resolve();
+  let parkedCheckedAt: string | undefined;
+  const parkedState = () => JSON.stringify([
+    (sqlite.prepare("SELECT total_changes() n").get() as { n: number }).n,
+    sqlite.pragma("data_version", { simple: true }), sqlite.pragma("schema_version", { simple: true }),
+    store.schemaVersion, store.atlasEnabled, store.filesEnabled,
+  ]);
   function serial<T>(work: () => Promise<T>): Promise<T> {
     const next = queue.then(() => { if (stopped) throw new Error("Bridge engine is stopped"); return work(); });
     queue = next.catch(() => undefined);
@@ -116,6 +122,16 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     })();
   }
   async function applyRecords(stream: BridgeStream, records: BridgeLogRecord[], cursor?: number) {
+    if (!records.length) {
+      // An empty page can advance past compacted log entries without changing
+      // any dependency. Do not count our own cursor bookkeeping as a reason to
+      // decrypt the durable parked queue again on the next idle pull.
+      const unchanged = parkedCheckedAt === parkedState();
+      if (cursor !== undefined) sqlite.prepare(`INSERT INTO bridge_cursors(stream,seq) VALUES(?,?)
+        ON CONFLICT(stream) DO UPDATE SET seq=excluded.seq WHERE bridge_cursors.seq<excluded.seq`).run(stream, cursor);
+      if (unchanged) parkedCheckedAt = parkedState();
+      return;
+    }
     const values = new Map<string, string>();
     for (const record of records) {
       const { body, header } = verifyEnvelope(store, record.envelope);
@@ -128,19 +144,24 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     try { announce(applyBridgeBatch(store, stream, records, cursor)); }
     finally { store.materializedValues = undefined; }
   }
-  async function retryParked() {
+  async function retryParked(force = false) {
+    if (!force && parkedCheckedAt === parkedState()) return;
+    // Keep failures retryable even if no further SQL data changes. No opened
+    // plaintext is retained between calls; restart/capability changes recheck.
+    parkedCheckedAt = undefined;
     announce(applyBridgeBatch(store, "account", []));
-    if (!options.blobs) return;
+    if (!options.blobs) { parkedCheckedAt = parkedState(); return; }
     let previous = -1;
     for (;;) {
       const pending = sqlite.prepare("SELECT stream,seq,envelope FROM bridge_parked ORDER BY seq").all() as { stream: BridgeStream; seq: number; envelope: string }[];
-      if (!pending.length || pending.length === previous) return;
+      if (!pending.length || pending.length === previous) break;
       previous = pending.length;
       for (const entry of pending) {
         const record = { seq: entry.seq, envelope: JSON.parse(entry.envelope) }, { body } = verifyEnvelope(store, record.envelope);
         if ("schemaVersion" in body && body.schemaVersion <= store.schemaVersion && valueBlobBytes(body)) await applyRecords(entry.stream, [record]);
       }
     }
+    parkedCheckedAt = parkedState();
   }
   async function pull(stream: BridgeStream, full: boolean, limit: number): Promise<number> {
     validateLimit(limit);
@@ -273,7 +294,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     pull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, false, limit)); },
     /** The shared queue drains in-flight pushes before pulling; local SQL writers stay unblocked. */
     fullPull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, true, limit)); },
-    retryParked() { return serial(retryParked); },
+    retryParked() { return serial(() => retryParked(true)); },
     pending() { return sqlite.prepare("SELECT * FROM bridge_outbox ORDER BY generation").all() as OutboxEntry[]; },
     async stop() { await queue; stopped = true; },
   };

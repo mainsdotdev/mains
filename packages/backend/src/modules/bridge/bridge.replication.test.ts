@@ -340,6 +340,36 @@ describe("Bridge transfer between independent SQLite databases", () => {
 });
 
 describe("Bridge parking, deterministic merges and durable recovery", () => {
+  it("does not decrypt parked records again on unchanged empty pulls, but explicit retry and restart still check them", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A", { schemaVersion: 5 });
+    const open = vi.fn((envelope: BridgeEnvelope) => bridgeTestCodec.open(envelope));
+    const b = await node(hub, "B", { codec: { ...bridgeTestCodec, open } });
+    space(a, "future"); await drain(a); await b.engine.pull();
+    expect(b.sqlite.prepare("SELECT reason FROM bridge_parked WHERE reason='schema'").get()).toBeTruthy();
+    open.mockClear();
+    for (let i = 0; i < 20; i++) await b.engine.pull();
+    expect(open.mock.calls.length).toBe(0);
+    const gap = vi.spyOn(b.transport, "pull").mockImplementationOnce(async (_stream, after) => ({ records: [], next: after + 10, hasMore: false }));
+    await b.engine.pull(); gap.mockRestore(); await b.engine.pull();
+    expect(open.mock.calls.length).toBe(0);
+    await b.engine.retryParked(); expect(open).toHaveBeenCalled(); open.mockClear();
+    await b.engine.stop();
+    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: { ...bridgeTestCodec, open }, transport: hub.connect("B"), schemaVersion: 5 });
+    await b.engine.pull();
+    expect(row(b, "spaces", "future")).toBeTruthy(); expect(open).toHaveBeenCalled();
+  });
+
+  it("retries parked dependencies after a local parent arrives even if the remote pull is empty", async () => {
+    const staging = await createBridgeTestHub(), a = await node(staging, "A"); space(a, "s"); run(a, "r", null, "s"); await drain(a);
+    const hub = await createBridgeTestHub(), b = await node(hub, "B"); await drain(b);
+    b.sqlite.exec("DELETE FROM providers");
+    await hub.connect("A").push("account", (await staging.inspect("account")).map((record) => record.envelope));
+    await b.engine.pull(); expect(row(b, "runs", "r")).toBeUndefined();
+    b.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
+    await b.engine.pull(); expect(row(b, "runs", "r")).toBeTruthy();
+    expect(b.sqlite.prepare("SELECT count(*) n FROM bridge_parked").get()).toEqual({ n: 0 });
+  });
+
   it.each([true, false])("parks a new secondary register across batches until its primary arrives (secondary first: %s)", async (secondaryFirst) => {
     const staging = await createBridgeTestHub(), a = await node(staging, "A"); item(a, "i"); a.sqlite.exec("UPDATE atlas_items SET is_favorite=1 WHERE id='i'"); await drain(a);
     const hub = await createBridgeTestHub(), b = await node(hub, "B"); await drain(b);

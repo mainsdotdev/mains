@@ -69,12 +69,12 @@ be retried after release/expiry; no incomplete capture is listed as successful.
    Enumerate accounts from that exported point, not a later live account listing.
 2. Capture every account hub's SQL schema and rows, including log, latest
    registers, permanent tombstones, writer/run ownership, stream positions,
-   quotas, pending blob-deletion intents and the durable compaction queue/cursor.
-   New captures contain 19 application tables. Older 18-table captures restore
-   through the normal local upgrade path, which creates the queue without
+   quotas, pending upload/deletion intents and the durable compaction queue/cursor.
+   New captures contain 20 application tables. Older 18/19-table captures restore
+   through the normal local upgrade path, which creates the new metadata without
    altering tombstones, usage or stream positions. Rollback builds must retain
-   the 19-table export allowlist: an older strict exporter refuses the new
-   schema instead of silently omitting the queue. No D1 migration is needed for
+   the 20-table export allowlist: an older strict exporter refuses the new
+   schema instead of silently omitting recovery state. No D1 migration is needed for
    this additive DO schema change. Pages are bounded by rows and bytes;
    they are read synchronously, then spooled to private runner disk. A per-object
    session nonce plus SQLite `total_changes()` rejects intervening SQL writes or
