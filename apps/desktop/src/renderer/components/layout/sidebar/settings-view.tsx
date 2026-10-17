@@ -58,9 +58,11 @@ export default function SettingsView({ onClose }: SettingsViewProps) {
     { accountId: account?.id ?? "" },
     { skip: !showCollections || !account?.id },
   );
+  // Project settings are device-local: another device's checkout of the same
+  // repository is managed on that device, so only this device's projects show.
   const projects = showCollections
     ? collections.filter((collection) => !collection.isArchived)
-    : codeProjects;
+    : codeProjects.filter((project) => !project.isReplica);
   const projectKind = showCollections ? "collection" : "code";
 
   const handleSectionClick = (sectionId: SettingsRouteId) => {

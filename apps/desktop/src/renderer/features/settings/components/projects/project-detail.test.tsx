@@ -102,3 +102,13 @@ describe("Project settings icon picker", () => {
     expect(violet.closest(".invisible")).toBeNull();
   });
 });
+
+describe("Another device's project", () => {
+  it("shows a notice instead of device-local settings and never reads git at that device's path", async () => {
+    project = { ...project, ownerBackendId: "other-device", isReplica: true };
+    render(<Provider store={store}><MemoryRouter><ProjectDetail id={project.id} /></MemoryRouter></Provider>);
+    expect(await screen.findByText(/This project is on another device/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Choose an icon|Change icon/ })).toBeNull();
+    expect(mocks.invoke.mock.calls.some(([handler]) => handler === CHANNELS.projects.listBranches)).toBe(false);
+  });
+});

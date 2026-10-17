@@ -24,6 +24,8 @@ interface AddProjectModalProps {
   onClone: (url: string, targetPath: string) => void;
   onCreate: (name: string, parentPath?: string) => void;
   onClose: () => void;
+  /** Prefills the clone URL, e.g. for a repository that exists on another device. */
+  initialUrl?: string;
 }
 
 const PROJECT_TABS: ReadonlyArray<{ value: ProjectTab; label: string }> = [
@@ -43,6 +45,7 @@ export default function AddProjectModal({
   onClone,
   onCreate,
   onClose,
+  initialUrl = "",
 }: AddProjectModalProps) {
   const { nativeDialogs } = useCapabilities();
   const titleId = useId();
@@ -50,7 +53,7 @@ export default function AddProjectModal({
   const panelId = useId();
   const primaryInputRef = useRef<HTMLInputElement>(null);
 
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl);
   const [clonePath, setClonePath] = useState(() =>
     nativeDialogs ? window.api.platform.homedir + "/Desktop" : "",
   );

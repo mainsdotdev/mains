@@ -197,6 +197,19 @@ export const workspaceRepo = {
     return this.findById(id);
   },
 
+  /** Records the checked-out branch as a hint for other Bridge devices; this
+   * device keeps reading git live. Owned rows only, without bumping updatedAt. */
+  async recordLastBranch(id: string, branch: string): Promise<boolean> {
+    const db = getDb();
+    const owned = and(eq(workspaces.id, id), ownedHere(workspaces.ownerBackendId));
+    const [row] = await db.select({ metadata: workspaces.metadata }).from(workspaces).where(owned).limit(1);
+    if (!row) return false;
+    const metadata = safeJsonParse<Record<string, unknown>>(row.metadata) ?? {};
+    if (metadata.lastBranch === branch) return false;
+    await db.update(workspaces).set({ metadata: JSON.stringify({ ...metadata, lastBranch: branch }) }).where(owned);
+    return true;
+  },
+
   async delete(id: string): Promise<void> {
     const db = getDb();
     await db.delete(workspaces).where(eq(workspaces.id, id));

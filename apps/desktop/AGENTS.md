@@ -205,7 +205,7 @@ Core tables:
 **Workspace System** (`../../packages/backend/src/modules/workspace/`)
 - Aggregate module: workspaces + activity + diffs + reviews + findings under one 6-file layout and one `workspace:*` channel namespace
 - **Workspace intake**: `workspace:createFromSource` turns a repo into a project + workspace pair. Four acquisitions (`folder`, `clone`, `init`, `worktree`) feed one shared intake tail (git import → `findOrCreateProject` → derive `workspacesPath` → assemble metadata → `createWorkspace`). Never re-inline this at call sites.
-- **Workspace git operations**: `workspace:createBranch`, `workspace:renameBranch`, `workspace:switchBranch`, `workspace:discardPaths`, `workspace:listGitStates` (+ the `workspace:gitStateChanged` watcher event). The current branch is never persisted — it is read live from git.
+- **Workspace git operations**: `workspace:createBranch`, `workspace:renameBranch`, `workspace:switchBranch`, `workspace:discardPaths`, `workspace:listGitStates` (+ the `workspace:gitStateChanged` watcher event). The current branch is read live from git; its only persisted form is `metadata.lastBranch`, a last-known hint that Bridge replicas show for other devices' checkouts and that this device never reads back.
 - **Branch model**: `projects.defaultBranch` = repository integration branch; `workspaces.baseBranch` = that workspace's PR target (repointed at the parent branch by `workspace:createBranch`); the checked-out branch lives only in git.
 - Cross-module writers use the named barrel functions `logWorkspaceActivity`, `recordWorkspaceDiff`, `clearWorkspaceDiff`.
 

@@ -65,6 +65,8 @@ export function useSidebarActions() {
   const [createCollection] = useCreateCollectionMutation();
 
   const [addProjectTab, setAddProjectTab] = useState<"clone" | "create" | null>(null);
+  // Prefilled only when cloning a repository that exists on another Bridge device.
+  const [cloneDraftUrl, setCloneDraftUrl] = useState("");
   const [isAddingLocal, setIsAddingLocal] = useState(false);
   const [cloneJobs, setCloneJobs] = useState<PendingWorkspaceClone[]>([]);
   const activeCloneRequests = useRef(new Set<string>());
@@ -246,12 +248,18 @@ export function useSidebarActions() {
     setCloneJobs((jobs) => jobs.filter((job) => job.id !== id || job.status !== "failed"));
   };
 
-  const handleOpenAddProjectModal = () => setAddProjectTab("clone");
+  const handleOpenAddProjectModal = () => { setCloneDraftUrl(""); setAddProjectTab("clone"); };
   const handleAddProjectTabChange = (tab: "clone" | "create") => {
     setAddProjectTab(tab);
   };
 
   const handleOpenCloneModal = () => {
+    setCloneDraftUrl("");
+    setAddProjectTab("clone");
+  };
+
+  const handleOpenCloneFor = (url: string) => {
+    setCloneDraftUrl(url);
     setAddProjectTab("clone");
   };
 
@@ -292,6 +300,8 @@ export function useSidebarActions() {
     isAddingLocal,
     handleCloneRepo,
     handleOpenCloneModal,
+    handleOpenCloneFor,
+    cloneDraftUrl,
     pendingClones,
     handleCancelClone,
     handleRetryClone,

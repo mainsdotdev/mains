@@ -1,6 +1,6 @@
 import type { BridgeBackendInfo } from "@mains/contracts/bridge";
 import { Tooltip } from "@/components/ui";
-import { Relay as DeviceIcon } from "@/components/ui/icons";
+import { Bridge as DeviceIcon } from "@/components/ui/icons";
 import { bridgePresence } from "../lib/backends";
 
 export function DeviceBadge({ backend, compact = false }: { backend: BridgeBackendInfo; compact?: boolean }) {

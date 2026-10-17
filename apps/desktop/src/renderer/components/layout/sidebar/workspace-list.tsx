@@ -2,7 +2,15 @@ import { useState, useMemo, type MouseEvent, type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
 import { setWorkspaceListGrouping } from "@/lib/redux/slices/appSettingsSlice";
-import { Button, DropdownMenu, DropdownMenuItem, SortableItem, SortableList, Text, toast, type SortableHandle } from "@/components/ui";
+import {
+  DropdownMenu,
+  DropdownMenuItem,
+  SortableItem,
+  SortableList,
+  Text,
+  toast,
+  type SortableHandle,
+} from "@/components/ui";
 import WorkspaceItem from "./workspace-item";
 import PendingWorkspaceItem from "./pending-workspace-item";
 import type { PendingWorkspaceClone } from "@/hooks/use-sidebar-actions";
@@ -12,9 +20,15 @@ import type {
 } from "@/lib/redux/api/workspaceApi";
 import { LinkResourcesModal } from "@/features/workspace/components/link-resources-modal";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
-import { Option, Plus, Settings, Lock, Relay } from "@/components/ui/icons";
+import { Option, Plus, Settings, Bridge, Download } from "@/components/ui/icons";
 import { useBridgeStatus } from "@/features/bridge/hooks/use-bridge";
-import { bridgePresence, groupReplicaItems } from "@/features/bridge/lib/backends";
+import {
+  bridgeBackend,
+  bridgePresence,
+  groupReplicaItems,
+} from "@/features/bridge/lib/backends";
+import { planReplicaWorkspaces } from "@/features/bridge/lib/repo-identity";
+import { ReplicaWorkspaceRow } from "@/features/bridge/components/replica-workspace-row";
 import {
   useListProjectsQuery,
   useCreateWorkspaceFromSourceMutation,
@@ -26,8 +40,11 @@ import {
 } from "@/lib/redux/api";
 import type { Project } from "@/lib/redux/api/projectsApi";
 import { ProjectIcon } from "./project-icon";
-import { SidebarGroupSection } from "./sidebar-group-section";
-import { WorkspaceGroupDropdown, type GroupingMode } from "./workspace-group-dropdown";
+import { SIDEBAR_ACTION_ICON, SidebarGroupSection } from "./sidebar-group-section";
+import {
+  WorkspaceGroupDropdown,
+  type GroupingMode,
+} from "./workspace-group-dropdown";
 import { reorderVisibleIds } from "./sidebar-order";
 
 type WorkspaceGroup = {
@@ -65,6 +82,8 @@ interface WorkspacesListProps {
   searchQuery: string;
   onDeleteWorkspace?: (workspaceId: string, e: MouseEvent) => void;
   onArchiveWorkspace?: (workspaceId: string) => void;
+  /** Opens the clone dialog for a repository that exists only on another device. */
+  onCloneRepository?: (url: string) => void;
 }
 
 export default function WorkspacesList({
@@ -78,6 +97,7 @@ export default function WorkspacesList({
   searchQuery,
   onDeleteWorkspace,
   onArchiveWorkspace,
+  onCloneRepository,
 }: WorkspacesListProps) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isExpanded, setIsExpanded] = useState(true);
@@ -92,8 +112,10 @@ export default function WorkspacesList({
   const location = useLocation();
   const [createWorkspaceFromSource] = useCreateWorkspaceFromSourceMutation();
   const [renameWorkspaceBranch] = useRenameWorkspaceBranchMutation();
-  const [reorderProjects, { isLoading: isReorderingProjects }] = useReorderProjectsMutation();
-  const [reorderWorkspaces, { isLoading: isReorderingWorkspaces }] = useReorderWorkspacesMutation();
+  const [reorderProjects, { isLoading: isReorderingProjects }] =
+    useReorderProjectsMutation();
+  const [reorderWorkspaces, { isLoading: isReorderingWorkspaces }] =
+    useReorderWorkspacesMutation();
   const [setWorkspacePinned] = useSetWorkspacePinnedMutation();
   const { data: account } = useGetAccountQuery();
   const activeWorkspaceId = useAppSelector(
@@ -107,7 +129,8 @@ export default function WorkspacesList({
   );
   // Older saved preferences can still contain "status". Display the new
   // default until the persisted-state migration replaces that preference.
-  const grouping: GroupingMode = savedGrouping === "status" ? "project" : savedGrouping;
+  const grouping: GroupingMode =
+    savedGrouping === "status" ? "project" : savedGrouping;
   const setGrouping = (mode: GroupingMode) =>
     dispatch(setWorkspaceListGrouping(mode));
 
@@ -125,8 +148,13 @@ export default function WorkspacesList({
   const basePath = WORKSPACE_BASE_PATH;
   const { data: bridgeStatus } = useBridgeStatus();
   const cloneSearch = searchQuery.toLowerCase().trim();
-  const visibleClones = pendingClones.filter((clone) => !cloneSearch ||
-    [clone.name, clone.url, clone.targetPath].some((value) => value.toLowerCase().includes(cloneSearch)));
+  const visibleClones = pendingClones.filter(
+    (clone) =>
+      !cloneSearch ||
+      [clone.name, clone.url, clone.targetPath].some((value) =>
+        value.toLowerCase().includes(cloneSearch),
+      ),
+  );
 
   if (isLoading && visibleClones.length === 0) {
     return (
@@ -147,7 +175,6 @@ export default function WorkspacesList({
   const handleWorkspaceClick = (workspace: WorkspaceResponse) => {
     navigate(`${basePath}/${workspace.id}`);
   };
-
 
   const handleLinkIssues = (workspace: WorkspaceResponse) => {
     if (!workspace.projectId) return;
@@ -174,13 +201,19 @@ export default function WorkspacesList({
     }
   };
 
-  const openProjectMenu = (project: Project, event: MouseEvent<HTMLElement>) => {
+  const openProjectMenu = (
+    project: Project,
+    event: MouseEvent<HTMLElement>,
+  ) => {
     const rect = event.currentTarget.getBoundingClientRect();
     setMenuPosition({ x: rect.right, y: rect.bottom + 4 });
     setMenuProject(project);
   };
 
-  const handleRenameBranch = async (workspace: WorkspaceResponse, newBranchName: string) => {
+  const handleRenameBranch = async (
+    workspace: WorkspaceResponse,
+    newBranchName: string,
+  ) => {
     try {
       await renameWorkspaceBranch({
         id: workspace.id,
@@ -193,37 +226,51 @@ export default function WorkspacesList({
     }
   };
 
-  const replicaGroups = groupReplicaItems(workspaces, bridgeStatus);
-  const sortedWorkspaces = workspaces.filter((workspace) => !workspace.isReplica).sort((a, b) =>
-    a.sortOrder - b.sortOrder || a.id.localeCompare(b.id),
+  const sortedWorkspaces = workspaces
+    .filter((workspace) => !workspace.isReplica)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+  const pinnedWorkspaces = sortedWorkspaces.filter(
+    (workspace) => workspace.pinnedAt !== null,
   );
-  const pinnedWorkspaces = sortedWorkspaces.filter((workspace) => workspace.pinnedAt !== null);
-  const unpinnedWorkspaces = sortedWorkspaces.filter((workspace) => workspace.pinnedAt === null);
+  const unpinnedWorkspaces = sortedWorkspaces.filter(
+    (workspace) => workspace.pinnedAt === null,
+  );
   const allWorkspaceIds = sortedWorkspaces.map((workspace) => workspace.id);
   const allProjectIds = [...projects]
-    .filter((project) => !project.isReplica && project.accountId === account?.id && !project.isArchived)
+    .filter(
+      (project) =>
+        !project.isReplica &&
+        project.accountId === account?.id &&
+        !project.isArchived,
+    )
     .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id))
     .map((project) => project.id);
-  const canReorderWorkspaces = !searchQuery.trim() && !!account &&
+  const canReorderWorkspaces =
+    !searchQuery.trim() &&
+    !!account &&
     sortedWorkspaces.every((workspace) => workspace.accountId === account.id) &&
     !isReorderingWorkspaces;
 
   const persistWorkspaceOrder = (orderedVisibleIds: string[]) => {
     if (!account) return;
     const orderedIds = reorderVisibleIds(allWorkspaceIds, orderedVisibleIds);
-    void reorderWorkspaces({ accountId: account.id, orderedIds }).unwrap().catch((error) => {
-      console.error("Failed to reorder workspaces:", error);
-      toast.error("Failed to reorder workspaces");
-    });
+    void reorderWorkspaces({ accountId: account.id, orderedIds })
+      .unwrap()
+      .catch((error) => {
+        console.error("Failed to reorder workspaces:", error);
+        toast.error("Failed to reorder workspaces");
+      });
   };
 
   const persistProjectOrder = (orderedVisibleIds: string[]) => {
     if (!account) return;
     const orderedIds = reorderVisibleIds(allProjectIds, orderedVisibleIds);
-    void reorderProjects({ accountId: account.id, orderedIds }).unwrap().catch((error) => {
-      console.error("Failed to reorder projects:", error);
-      toast.error("Failed to reorder projects");
-    });
+    void reorderProjects({ accountId: account.id, orderedIds })
+      .unwrap()
+      .catch((error) => {
+        console.error("Failed to reorder projects:", error);
+        toast.error("Failed to reorder projects");
+      });
   };
 
   const toggleWorkspacePin = (workspace: WorkspaceResponse) => {
@@ -233,7 +280,9 @@ export default function WorkspacesList({
       .unwrap()
       .catch((error) => {
         console.error("Failed to change workspace pin:", error);
-        toast.error(pinned ? "Failed to pin workspace" : "Failed to unpin workspace");
+        toast.error(
+          pinned ? "Failed to pin workspace" : "Failed to unpin workspace",
+        );
       });
   };
 
@@ -252,8 +301,10 @@ export default function WorkspacesList({
         .sort(([a], [b]) => {
           const nameA = projectDataMap.get(a!)?.name ?? a!;
           const nameB = projectDataMap.get(b!)?.name ?? b!;
-          const orderA = projectDataMap.get(a!)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
-          const orderB = projectDataMap.get(b!)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+          const orderA =
+            projectDataMap.get(a!)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+          const orderB =
+            projectDataMap.get(b!)?.sortOrder ?? Number.MAX_SAFE_INTEGER;
           return orderA - orderB || nameA.localeCompare(nameB);
         });
       for (const [pid, wsList] of projectEntries) {
@@ -278,7 +329,9 @@ export default function WorkspacesList({
         result.push({
           key: "project-ungrouped",
           label: "Ungrouped",
-          workspaces: ungrouped.filter((workspace) => workspace.pinnedAt === null),
+          workspaces: ungrouped.filter(
+            (workspace) => workspace.pinnedAt === null,
+          ),
         });
       }
       return result;
@@ -288,21 +341,92 @@ export default function WorkspacesList({
   };
 
   const groups = grouping !== "none" ? computeGroups() : [];
-  const sortableProjectGroups = groups.filter((group) =>
-    !!account && !!group.project && group.project.accountId === account.id,
+  // Another device's checkout of the same remote joins this device's project
+  // group; a remote that exists only elsewhere gets its own repository group.
+  // Only workspaces without a remote identity stay under their device.
+  const replicaWorkspaces = workspaces.filter(
+    (workspace) => workspace.isReplica,
   );
-  const otherGroups = groups.filter((group) =>
-    !account || !group.project || group.project.accountId !== account.id,
+  const replicaPlan =
+    grouping === "project"
+      ? planReplicaWorkspaces(
+          replicaWorkspaces,
+          projectDataMap,
+          groups.flatMap((group) =>
+            group.project && !group.project.isReplica ? [group.project.id] : [],
+          ),
+        )
+      : {
+          merged: new Map<string, WorkspaceResponse[]>(),
+          remoteOnly: [],
+          unmatched: replicaWorkspaces,
+        };
+  // One list has no groups: every replica is a two-line row like a local one.
+  const replicaGroups =
+    grouping === "project"
+      ? groupReplicaItems(replicaPlan.unmatched, bridgeStatus)
+      : [];
+  const listedReplicas =
+    grouping === "none"
+      ? [...replicaWorkspaces].sort(
+          (a, b) =>
+            (
+              projectDataMap.get(a.projectId ?? "")?.name ?? a.name
+            ).localeCompare(
+              projectDataMap.get(b.projectId ?? "")?.name ?? b.name,
+            ) ||
+            bridgeBackend(bridgeStatus, a.ownerBackendId).label.localeCompare(
+              bridgeBackend(bridgeStatus, b.ownerBackendId).label,
+            ) ||
+            a.id.localeCompare(b.id),
+        )
+      : [];
+  const renderReplicaRow = (
+    workspace: WorkspaceResponse,
+    layout: "project" | "list",
+  ) => {
+    const project = workspace.projectId
+      ? projectDataMap.get(workspace.projectId)
+      : undefined;
+    const projectName = project?.name ?? workspace.name;
+    return (
+      <ReplicaWorkspaceRow
+        key={workspace.id}
+        workspace={workspace}
+        layout={layout}
+        projectName={projectName}
+        projectIcon={
+          project ? (
+            <ProjectIcon icon={project.icon} projectName={projectName} />
+          ) : undefined
+        }
+        backend={bridgeBackend(bridgeStatus, workspace.ownerBackendId)}
+        isActive={location.pathname === `${basePath}/${workspace.id}`}
+        onClick={() => handleWorkspaceClick(workspace)}
+      />
+    );
+  };
+  const sortableProjectGroups = groups.filter(
+    (group) =>
+      !!account && !!group.project && group.project.accountId === account.id,
   );
-  const canReorderProjects = !searchQuery.trim() && !!account &&
-    sortableProjectGroups.length > 1 && !isReorderingProjects;
+  const otherGroups = groups.filter(
+    (group) =>
+      !account || !group.project || group.project.accountId !== account.id,
+  );
+  const canReorderProjects =
+    !searchQuery.trim() &&
+    !!account &&
+    sortableProjectGroups.length > 1 &&
+    !isReorderingProjects;
 
   const renderWorkspaceItem = (
     workspace: WorkspaceResponse,
     sortHandle?: SortableHandle,
     asPinned = false,
   ) => {
-    const isActive = location.pathname === `${basePath}/${workspace.id}` ||
+    const isActive =
+      location.pathname === `${basePath}/${workspace.id}` ||
       (location.pathname === basePath && activeWorkspaceId === workspace.id);
     const projectData = workspace.projectId
       ? projectDataMap.get(workspace.projectId)
@@ -329,9 +453,12 @@ export default function WorkspacesList({
         isActive={isActive}
         projectId={workspace.projectId}
         projectIcon={
-          projectData
-            ? <ProjectIcon icon={projectData.icon} projectName={projectData.name} />
-            : undefined
+          projectData ? (
+            <ProjectIcon
+              icon={projectData.icon}
+              projectName={projectData.name}
+            />
+          ) : undefined
         }
         grouping={asPinned ? "none" : grouping}
         isPinned={workspace.pinnedAt !== null}
@@ -382,30 +509,56 @@ export default function WorkspacesList({
     </SortableList>
   );
 
-  const renderProjectGroup = (group: WorkspaceGroup, sortHandle?: SortableHandle) => (
-    <SidebarGroupSection
-      groupKey={group.key}
-      label={group.label}
-      labelWeight="medium"
-      icon={group.icon}
-      count={group.workspaces.length}
-      sortHandle={sortHandle}
-      action={group.project ? {
-        label: "Project options",
-        onClick: (event) => openProjectMenu(group.project!, event),
-        icon: <Option className="size-3.5 text-primary-800 dark:text-primary-200" />,
-        menuOpen: menuProject?.id === group.project.id,
-      } : undefined}
-    >
-      {group.workspaces.length > 0 ? (
-        renderSortableWorkspaces(group.workspaces, "flex flex-col space-y-0.5")
-      ) : (
-        <div className="pl-7 pr-2.5 py-1">
-          <Text as="span" size="xxs" tone="muted">No workspaces</Text>
-        </div>
-      )}
-    </SidebarGroupSection>
-  );
+  const renderProjectGroup = (
+    group: WorkspaceGroup,
+    sortHandle?: SortableHandle,
+  ) => {
+    const replicas = group.project
+      ? (replicaPlan.merged.get(group.project.id) ?? [])
+      : [];
+    return (
+      <SidebarGroupSection
+        groupKey={group.key}
+        label={group.label}
+        labelWeight="medium"
+        icon={group.icon}
+        count={group.workspaces.length + replicas.length}
+        sortHandle={sortHandle}
+        action={
+          group.project
+            ? {
+                label: "Project options",
+                onClick: (event) => openProjectMenu(group.project!, event),
+                icon: (
+                  <Option className="size-3.5 text-primary-800 dark:text-primary-200" />
+                ),
+                menuOpen: menuProject?.id === group.project.id,
+              }
+            : undefined
+        }
+      >
+        {group.workspaces.length > 0 ? (
+          renderSortableWorkspaces(
+            group.workspaces,
+            "flex flex-col space-y-0.5",
+          )
+        ) : replicas.length === 0 ? (
+          <div className="pl-7 pr-2.5 py-1">
+            <Text as="span" size="xxs" tone="muted">
+              No workspaces
+            </Text>
+          </div>
+        ) : null}
+        {replicas.length > 0 && (
+          <div className="mt-0.5 flex flex-col space-y-0.5">
+            {replicas.map((workspace) =>
+              renderReplicaRow(workspace, "project"),
+            )}
+          </div>
+        )}
+      </SidebarGroupSection>
+    );
+  };
 
   return (
     <div className="pb-2 pt-2">
@@ -432,11 +585,16 @@ export default function WorkspacesList({
         // onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setIsExpanded(!isExpanded); } }}
         className="w-full flex items-center justify-between transition-all duration-200 bg-transparent px-2 py-1 "
       >
-            <Text as="span" size="s" tone="muted" weight="medium">
-            Workspaces
+        <Text as="span" size="s" tone="muted" weight="medium">
+          Workspaces
         </Text>
         <div className="flex items-center ">
-          <div className="-mr-1" role="presentation" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          <div
+            className="-mr-1"
+            role="presentation"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
             <WorkspaceGroupDropdown
               grouping={grouping}
               onGroupingChange={setGrouping}
@@ -469,7 +627,19 @@ export default function WorkspacesList({
           </div>
         )}
         {grouping === "none" ? (
-          renderSortableWorkspaces(unpinnedWorkspaces, "flex flex-col space-y-1")
+          <>
+            {renderSortableWorkspaces(
+              unpinnedWorkspaces,
+              "flex flex-col space-y-1",
+            )}
+            {listedReplicas.length > 0 && (
+              <div className="mt-1 flex flex-col space-y-1">
+                {listedReplicas.map((workspace) =>
+                  renderReplicaRow(workspace, "list"),
+                )}
+              </div>
+            )}
+          </>
         ) : (
           <div className="flex flex-col gap-1">
             <SortableList
@@ -487,18 +657,59 @@ export default function WorkspacesList({
             {otherGroups.map((group) => (
               <div key={group.key}>{renderProjectGroup(group)}</div>
             ))}
+            {replicaPlan.remoteOnly.map((repo) => (
+              <SidebarGroupSection
+                key={repo.identity}
+                groupKey={`bridge-repo-${repo.identity}`}
+                label={repo.project.name}
+                labelWeight="medium"
+                count={repo.workspaces.length}
+                icon={(expanded: boolean) => (
+                  <ProjectIcon
+                    icon={repo.project.icon}
+                    projectName={repo.project.name}
+                    expanded={expanded}
+                  />
+                )}
+                action={
+                  onCloneRepository && repo.cloneUrl
+                    ? {
+                        label: "Clone to this device",
+                        onClick: () => onCloneRepository(repo.cloneUrl!),
+                        icon: <Download className={SIDEBAR_ACTION_ICON} />,
+                      }
+                    : undefined
+                }
+              >
+                <div className="flex flex-col space-y-0.5">
+                  {repo.workspaces.map((workspace) =>
+                    renderReplicaRow(workspace, "project"),
+                  )}
+                </div>
+              </SidebarGroupSection>
+            ))}
           </div>
         )}
       </div>
 
-      {replicaGroups.map(({ backend, rows }) => <SidebarGroupSection key={backend.backendId} groupKey={`bridge-workspaces-${backend.backendId}`}
-        label={backend.label} icon={<Relay className="size-3.5" />} count={rows.length}>
-        <div className="px-2.5 pb-1"><Text size="xxs" tone="muted">{bridgePresence(backend)}</Text></div>
-        {rows.map((workspace) => <Button key={workspace.id} onClick={() => handleWorkspaceClick(workspace)}
-          className="flex w-full min-w-0 items-center gap-1.5 rounded-[10px] px-2.5 py-1 text-left hover:bg-primary/50 dark:hover:bg-primary/5">
-          <Lock aria-hidden="true" className="size-3 shrink-0 text-primary-500" /><Text size="s" className="truncate">{workspace.name}</Text>
-        </Button>)}
-      </SidebarGroupSection>)}
+      {replicaGroups.map(({ backend, rows }) => (
+        <SidebarGroupSection
+          key={backend.backendId}
+          groupKey={`bridge-workspaces-${backend.backendId}`}
+          label={backend.label}
+          icon={<Bridge className="size-3.5" />}
+          count={rows.length}
+        >
+          <div className="px-2.5 pb-1">
+            <Text size="xxs" tone="muted">
+              {bridgePresence(backend)}
+            </Text>
+          </div>
+          <div className="flex flex-col space-y-0.5">
+            {rows.map((workspace) => renderReplicaRow(workspace, "list"))}
+          </div>
+        </SidebarGroupSection>
+      ))}
 
       <DropdownMenu
         isOpen={!!menuProject}
@@ -534,7 +745,9 @@ export default function WorkspacesList({
         projectId={linkModalState.projectId}
         workspaceName={linkModalState.workspaceName}
         isOpen={linkModalState.isOpen}
-        onClose={() => setLinkModalState({ isOpen: false, projectId: "", workspaceName: "" })}
+        onClose={() =>
+          setLinkModalState({ isOpen: false, projectId: "", workspaceName: "" })
+        }
       />
     </div>
   );

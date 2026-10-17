@@ -34,6 +34,9 @@ export interface WorkspaceMetadata {
   behind?: number;
   worktree?: WorktreeMetadata | NoWorktreeMetadata;
   origin?: OriginMetadata;
+  /** Last checked-out branch, shared as a hint for other Bridge devices. The
+   * owning device's UI reads the live branch from git instead. */
+  lastBranch?: string;
   language?: string;
   framework?: string;
   packageManager?: string;

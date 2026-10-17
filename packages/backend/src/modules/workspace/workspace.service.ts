@@ -337,9 +337,19 @@ interface GitStateWatcher {
 
 const gitStateWatchers = new Map<string, GitStateWatcher>();
 
+/** Shares the checked-out branch with other Bridge devices. Never read back
+ * for this device's UI, which keeps using the live git state. */
+function recordLastBranch(workspaceId: string, branch: string | null): void {
+  if (!branch) return;
+  void workspaceRepo.recordLastBranch(workspaceId, branch).catch((error) => {
+    console.warn("Failed to record workspace branch", error);
+  });
+}
+
 function emitGitStateChanged(state: WorkspaceGitState): void {
   const existing = gitStateWatchers.get(state.workspaceId);
   if (existing) existing.branch = state.branch;
+  recordLastBranch(state.workspaceId, state.branch);
   emit(CHANNELS.workspace.gitStateChanged, state);
 }
 
@@ -559,6 +569,10 @@ export const workspaceService = {
       }),
     );
     await syncGitStateWatchers(workspaces, states);
+    // Covers switches made while the app was closed; unchanged rows write nothing.
+    for (const [index, state] of states.entries()) {
+      if (state.branch && workspaces[index].metadata?.lastBranch !== state.branch) recordLastBranch(state.workspaceId, state.branch);
+    }
     return states;
   },
 

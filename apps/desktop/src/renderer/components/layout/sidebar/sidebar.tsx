@@ -155,6 +155,8 @@ export default function Sidebar({ collapsed }: SidebarProps) {
     isAddingLocal,
     handleCloneRepo,
     handleOpenCloneModal,
+    handleOpenCloneFor,
+    cloneDraftUrl,
     pendingClones,
     handleCancelClone,
     handleRetryClone,
@@ -531,6 +533,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
               searchQuery={searchQuery}
               onNewChatInCollection={handleNewChat}
               onCreateCollection={handleOpenCreateCollectionModal}
+              onCloneRepository={handleOpenCloneFor}
             />
             <BackgroundRunsDock />
             <UpdateBanner />
@@ -588,6 +591,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           addLocalShortcut={addLocalShortcut}
           onAddLocal={() => void handleAddProject()}
           onClone={handleCloneRepo}
+          initialUrl={cloneDraftUrl}
           onCreate={handleCreateProject}
           onClose={handleCloseAddProjectModal}
         />
