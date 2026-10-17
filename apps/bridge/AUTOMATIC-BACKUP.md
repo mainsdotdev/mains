@@ -69,7 +69,13 @@ be retried after release/expiry; no incomplete capture is listed as successful.
    Enumerate accounts from that exported point, not a later live account listing.
 2. Capture every account hub's SQL schema and rows, including log, latest
    registers, permanent tombstones, writer/run ownership, stream positions,
-   quotas and pending blob-deletion intents. Pages are bounded by rows and bytes;
+   quotas, pending blob-deletion intents and the durable compaction queue/cursor.
+   New captures contain 19 application tables. Older 18-table captures restore
+   through the normal local upgrade path, which creates the queue without
+   altering tombstones, usage or stream positions. Rollback builds must retain
+   the 19-table export allowlist: an older strict exporter refuses the new
+   schema instead of silently omitting the queue. No D1 migration is needed for
+   this additive DO schema change. Pages are bounded by rows and bytes;
    they are read synchronously, then spooled to private runner disk. A per-object
    session nonce plus SQLite `total_changes()` rejects intervening SQL writes or
    object restarts on each page. Cloudflare's native PITR commit bookmark fences
@@ -86,6 +92,10 @@ be retried after release/expiry; no incomplete capture is listed as successful.
    UPDATE and leaves an already armed maintenance alarm unchanged. Initial
    inventory/GC setup, connection transitions and actual maintenance remain
    writes; a capture crossing them must still retry.
+   SQL usage logging adds no SQL counters or alarm writes. Once compaction work
+   drains, empty maintenance passes are read-only too; a restart retains the
+   completed legacy-discovery marker. First-time index creation and queue
+   backfill are real writes and must finish before expecting a stable bookmark.
    A continuously busy account fails the run visibly; it never produces a mixed
    snapshot. Source tables are not copied, locked across network I/O or written
    just to take a backup. Future unknown tables, KV or column types fail closed.

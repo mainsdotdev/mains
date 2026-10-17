@@ -140,6 +140,28 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
     expect(await usage(account)).toMatchObject({ blobBytes: latest.size + 40 });
   });
 
+  it("drains a multi-pass register backlog through alarms before releasing its final blob root", async () => {
+    const account = randomUUID(), a = await client(account), old = blob(), latest = blob(1536);
+    const oldFile = await upload(account, old), newFile = await upload(account, latest);
+    for (let start = 0; start < 260; start += 100) {
+      await a.push(Array.from({ length: Math.min(100, 260 - start) }, (_, i) => record("busy-version", [old], start + i + 1)));
+    }
+    await a.push([record("busy-version", [latest], 261)]);
+    const before = await usage(account);
+    await a.compact();
+    expect(await exists([...oldFile.keys, ...newFile.keys])).toEqual([true, true]);
+    // No further compact RPCs: the persisted account alarm must finish every
+    // remaining bounded pass while normal quota reads stay read-only.
+    await expect.poll(async () => hub.quotaSql(account, "SELECT count(*) n FROM log"), { timeout: 10_000, interval: 100 }).toEqual([{ n: 1 }]);
+    expect(await hub.quotaSql(account, "SELECT refs FROM blob_objects ORDER BY refs")).toEqual([{ refs: 0 }, { refs: 1 }]);
+    expect((await usage(account)).recordBytes).toBe(before.recordBytes);
+    const page = await a.rpc({ type: "pull", stream: "account", after: 0, limit: 100 });
+    expect(page).toMatchObject({ records: [{ seq: 261 }], next: 261 });
+    await elapseGrace(account); await a.compact();
+    expect(await exists(oldFile.keys)).toEqual([false]); expect(await exists(newFile.keys)).toEqual([true]);
+    expect(await usage(account)).toMatchObject({ blobBytes: latest.size + 40 });
+  });
+
   it("collects abandoned multi-chunk uploads/reservations and refuses stale PUTs and dangling manifests", async () => {
     const account = randomUUID(), a = await client(account), ref = blob(BRIDGE_BLOB_CHUNK_BYTES + 100);
     const signed = await presign(account, ref);

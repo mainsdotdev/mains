@@ -135,6 +135,10 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("B8 through two ind
       const removable = await page(a, "Delete while full"); await a.client.call(CHANNELS.bridge.syncNow); await received(b, removable.item.id);
       const db = await fixture.hub.database();
       await db.prepare("INSERT INTO bridge_account_quotas(account_id,plan,storage_limit_bytes,writes_per_minute) VALUES(?,'small',0,600)").bind(auth.accountId).run();
+      // Console-style D1 changes wait for the policy TTL. Reopen this local DO
+      // to drop its cache immediately; real D1 TTL/invalidation behavior has
+      // separate coverage, without adding a minute to this host scenario.
+      await fixture.hub.evict(auth.accountId!);
       const pending = await page(a, "Queued Page", "Pending content ".repeat(4000));
       const file = await a.client.call<AtlasItem>(CHANNELS.atlas.uploadFile, { accountId: "default", pageId: pending.item.id, fileName: "queued.png", data: image.toString("base64") });
       expect(await a.client.invoke(CHANNELS.bridge.syncNow)).toMatchObject({ success: false });
@@ -146,6 +150,7 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("B8 through two ind
       await a.client.invoke(CHANNELS.bridge.syncNow); await b.client.invoke(CHANNELS.bridge.syncNow);
       expect(await get(b, removable.item.id)).toBeNull();
       await db.prepare("UPDATE bridge_account_quotas SET storage_limit_bytes=?,plan='expanded' WHERE account_id=?").bind(1024 ** 2, auth.accountId).run();
+      await fixture.hub.evict(auth.accountId!);
       await a.client.call(CHANNELS.bridge.syncNow); await b.client.call(CHANNELS.bridge.syncNow);
       expect((await get(b, pending.item.id))?.revision.id).toBe(pending.revision.id);
       const opened = await b.client.call<string>(CHANNELS.atlas.resolveFile, { accountId: "default", id: file.id }); expect(await readFile(opened)).toEqual(image);

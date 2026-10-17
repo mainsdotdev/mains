@@ -681,6 +681,14 @@ adds optional `bridge_account_quotas` overrides (`account_id`, `plan`,
 there is no billing integration. Public `/v1/quota`, Settings and CLI status
 report usage without exposing keys or content.
 
+Each account DO caches **policy only** (plan, byte ceiling and write rate) for
+60 seconds, including missing D1 overrides, and shares an in-flight lookup.
+Account/plan keys are isolated; hibernation drops the cache. The internal
+`subscriptionChanged` notification invalidates both entitlement and limits
+caches; direct Console SQL changes become visible within 60 seconds. An expired
+lookup that fails denies publication rather than reusing stale policy. Current
+usage and outstanding reservations are never cached by this policy helper.
+
 Storage counts current encrypted registers, permanent tombstones, stored R2
 chunks and unexpired upload reservations. Retried/duplicate chunks count once.
 Expired reservations reconcile R2 before releasing space, including a crash
@@ -705,6 +713,25 @@ For headless management, use `mains bridge projects`,
 `mains bridge local-only <project-id> --on|--off`,
 `mains bridge sync-history`, and `mains bridge sync`. `mains bridge status`
 includes sync health, queued changes and account usage.
+
+### Account SQL cost measurements
+
+`bridge.sql_usage` structured log events measure native DO SQLite `rowsRead`,
+`rowsWritten`, query count, duration and limits-cache hits/misses per operation.
+`hubId` is the opaque account Durable Object id, also returned by the private
+operations checkpoint; it is not an email, token or public account lookup.
+SQL text, bindings and record contents are never logged. The native cursors are
+measured after consumption, including lazy/partial iteration and trigger/index
+work reported by workerd. Async operations have independent measurement scopes.
+
+`BRIDGE_SQL_USAGE_SAMPLE_RATE` accepts `0`–`1`: the default is `0.1` in staging
+and production and `0` locally. Set `1` for a complete local or temporary
+diagnostic capture, or `0` to disable. When enabled, maintenance is always
+sampled. Every event carries its actual `sampleRate`; aggregate ordinary
+operations with that sampling weight and keep maintenance separate. These are
+DO SQL measurements, not a monthly budget, billing ledger, or D1/R2 request
+totals. Metrics do not write counters, create SQL tables or arm alarms, and a
+logging failure cannot change a quota or publication decision.
 
 ## R2 garbage collection
 
@@ -898,6 +925,16 @@ capped at 16 MiB. Oversized records fail before sending and stay in the outbox.
 Compaction keeps the latest ciphertext per register and every whole delete envelope;
 deleting a run closes its stream. A persisted alarm schedules compaction after
 new writes. The `compact` RPC also makes local maintenance/tests deterministic.
+An indexed, durable `compaction_jobs` queue tracks superseded registers, closed
+runs and mirror-retention deadlines. Each pass discovers/removes at most 128
+source rows and handles at most 16 jobs; remaining due work resumes on an alarm
+after one second. It never scans unrelated registers. Existing stores build the
+new indexes once on first open (that index construction scales with existing
+data), then discover legacy log cleanup in bounded rowid batches that survive
+hibernation. Completed discovery retains its marker, so a restart does not
+rescan the log. Empty passes read only; stream counters and permanent tombstones
+are retained. Existing blob-reference triggers release only removed log roots,
+with the same reservation/read protection and GC grace rules.
 
 Records use XChaCha20-Poly1305 with fresh 24-byte nonces. HKDF-SHA256 derives
 separate body, record-id and blob-id keys from the account key. A fixed-order

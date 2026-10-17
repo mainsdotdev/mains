@@ -2,9 +2,10 @@ import { BRIDGE_BLOB_CIPHER_OVERHEAD, BRIDGE_BLOB_MAX_BYTES, bridgeBlobChunkCoun
 import type { BridgeQuota } from "@mains/contracts/bridge";
 import type { BridgeIdentity, DevAuthEnv } from "./auth";
 import { identityIsActive } from "./auth";
-import { bridgePlans } from "./plans";
 import { createBridgeSubscriptions } from "./subscriptions";
 import { createBlobCollector, installBlobInventory } from "./blob-gc";
+import { createBridgeLimits } from "./limits";
+export { bridgeLimits } from "./limits";
 
 export interface QuotaEnv extends DevAuthEnv {
   BLOBS: R2Bucket;
@@ -16,20 +17,13 @@ export interface BlobReservation { key: string; bytes: number }
 export class BridgeQuotaError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
-export async function bridgeLimits(env: QuotaEnv, accountId: string, planId = "standard") {
-  const plan = bridgePlans(env).find((plan) => plan.id === planId) ?? bridgePlans(env)[0];
-  const override = env.AUTH_DB ? await env.AUTH_DB.prepare("SELECT plan,storage_limit_bytes,writes_per_minute FROM bridge_account_quotas WHERE account_id=?").bind(accountId)
-    .first<{ plan: string; storage_limit_bytes: number; writes_per_minute: number }>() : null;
-  return { plan: override?.plan ?? plan.id, limitBytes: override?.storage_limit_bytes ?? plan.storageLimitBytes,
-    writesPerMinute: override?.writes_per_minute ?? plan.writesPerMinute };
-}
 export async function bridgeAccountPrefix(accountId: string) {
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(accountId)))].map((b) => b.toString(16).padStart(2, "0")).join("") + "/";
 }
 
 /** Called only inside the account Durable Object's concurrency gate. Reservations and
  * immutable R2 commits share that gate, including expiry/restart reconciliation. */
-export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, recordBytes: () => number, subscriptions = createBridgeSubscriptions(env)) {
+export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, recordBytes: () => number, subscriptions = createBridgeSubscriptions(env), limits = createBridgeLimits(env)) {
   const sql = storage.sql;
   sql.exec(`CREATE TABLE IF NOT EXISTS quota_chunks(key TEXT PRIMARY KEY,bytes INTEGER NOT NULL,stored INTEGER NOT NULL,expires_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS quota_state(id INTEGER PRIMARY KEY,initialized INTEGER NOT NULL);`);
@@ -84,6 +78,7 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
     return row;
   }
   const api = {
+    invalidateLimits: limits.invalidate,
     collect: collector.collect,
     nextExpiry: collector.nextExpiry,
     hasBlobs(blobs: BridgeBlobIdentity[]) {
@@ -100,8 +95,8 @@ export function createBlobQuota(storage: DurableObjectStorage, env: QuotaEnv, re
     async status(accountId: string): Promise<BridgeQuota> {
       await reconcile(accountId);
       const subscription = await subscriptions.status(accountId);
-      const limits = await bridgeLimits(env, accountId, subscription.subscription.planId ?? undefined), bytes = usage(), records = recordBytes();
-      return { ...limits, ...bytes, recordBytes: records, usedBytes: records + bytes.blobBytes + bytes.reservedBytes, fileLimitBytes: BRIDGE_BLOB_MAX_BYTES, ...subscription };
+      const policy = await limits.get(accountId, subscription.subscription.planId ?? undefined), bytes = usage(), records = recordBytes();
+      return { ...policy, ...bytes, recordBytes: records, usedBytes: records + bytes.blobBytes + bytes.reservedBytes, fileLimitBytes: BRIDGE_BLOB_MAX_BYTES, ...subscription };
     },
     async reserve(identity: BridgeIdentity, entries: BlobReservation[], expiresAt: number) {
       if (!await identityIsActive(identity, env)) throw new BridgeQuotaError(403, "Backend access revoked");

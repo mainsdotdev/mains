@@ -94,13 +94,25 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   const restore = (action: string, args: unknown[]) => call("recovery", { account: "fixture", action, args });
   await restore("initialize", [snapshot]);
   for (const page of capture.pages) await restore("page", [page.table, JSON.parse(source.get(page.path)!)]);
-  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 18 });
+  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 19 });
   const pulled = await restore("pull", ["account", 0]);
   expect(pulled.records).toHaveLength(91); expect(pulled.next).toBe(91);
   expect(pulled.records.at(-1).envelope.header.op).toBe("delete");
   expect(await restore("push", ["A", "account", [record(4)]])).toMatchObject({ results: [{ deleted: { header: { op: "delete" } } }] });
   expect(await restore("push", ["B", "account", [{ ...record(1), header: { ...record(1).header, origin: "B" } }]])).toMatchObject({ results: [{ error: "notOwner" }] });
   await expect(restore("initialize", [snapshot])).rejects.toThrow();
+  // Previously published 18-table backups have no cleanup queue/indexes or
+  // triggers. Restore those bytes into a separate empty hub and let normal
+  // initialization seed resumable legacy work without changing user data.
+  const legacy: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => table !== "compaction_jobs"),
+    schema: snapshot.schema.filter((entry) => entry.tbl_name !== "compaction_jobs" && !entry.sql.includes("compaction_jobs") &&
+      !["log_register_seq", "latest_retention"].includes(entry.name)) };
+  const oldRestore = (action: string, args: unknown[]) => call("recovery", { account: "legacy", action, args });
+  await oldRestore("initialize", [legacy]);
+  for (const page of capture.pages.filter((page) => page.table !== "compaction_jobs")) await oldRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);
+  expect(await oldRestore("finish", [legacy])).toMatchObject({ tables: 18 });
+  expect(await oldRestore("pull", ["account", 0])).toEqual(pulled);
+  expect(await oldRestore("push", ["A", "account", [record(4)]])).toMatchObject({ results: [{ deleted: { header: { op: "delete" } } }] });
   // A write between pages fences the original snapshot instead of creating a
   // mixture that never existed. Unknown table/cursor cannot inject SQL.
   const old = await ops.snapshotBegin("fixture");

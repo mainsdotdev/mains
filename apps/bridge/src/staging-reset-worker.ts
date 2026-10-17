@@ -8,7 +8,7 @@ type ResetEnv = Omit<Parameters<typeof worker.fetch>[1], "ACCOUNT_HUB"> & {
   BRIDGE_RESET_TOKEN?: string;
 };
 const route = "/__maintenance/bridge-reset";
-const tables = ["log", "latest", "deleted", "row_owners", "runs", "streams", "presence", "backend_metadata", "write_rate", "stream_activity", "quota_chunks", "quota_state", "blob_links", "blob_objects", "blob_deletions"];
+const tables = ["log", "latest", "deleted", "row_owners", "runs", "streams", "presence", "backend_metadata", "write_rate", "stream_activity", "quota_chunks", "quota_state", "blob_links", "blob_objects", "blob_deletions", "compaction_jobs"];
 function allowed(env: ResetEnv, account: unknown, token: string): account is string {
   if (env.BRIDGE_AUTH_URL !== "https://mains-bridge-staging.team-68e.workers.dev" || env.BRIDGE_DEV_AUTH === "true" ||
       !env.AUTH_DB || !env.BRIDGE_RESET_ACCOUNT || !env.BRIDGE_RESET_TOKEN || env.BRIDGE_RESET_TOKEN.length < 43 ||

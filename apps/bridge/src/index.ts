@@ -13,8 +13,10 @@ import { signedInUser } from "./identity";
 import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
 import { observeBridgeRequest, reportBridgeFailure } from "./observability";
 import { createHubBackup } from "./hub-backup";
+import { createBridgeLimits } from "./limits";
+import { createSqlUsage, type SqlUsageEnv } from "./sql-usage";
 
-interface Env extends DevAuthEnv, BlobEnv, QuotaEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
+interface Env extends DevAuthEnv, BlobEnv, QuotaEnv, SqlUsageEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -100,32 +102,40 @@ export class AccountHub extends DurableObject<Env> {
   private subscriptions: ReturnType<typeof createBridgeSubscriptions>;
   private backup: ReturnType<typeof createHubBackup>;
   private socketAuth: ReturnType<typeof createBridgeSocketAuth>;
+  private usage: ReturnType<typeof createSqlUsage>;
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env); this.store = createHubStore(ctx.storage); this.subscriptions = createBridgeSubscriptions(env);
-    this.quota = createBlobQuota(ctx.storage, env, () => this.store.recordBytes(), this.subscriptions);
-    this.backup = createHubBackup(ctx.storage);
+    super(ctx, env);
+    this.usage = createSqlUsage(ctx.storage, env, ctx.id.toString());
+    const domain = this.usage.run("initialize", () => {
+      const store = createHubStore(this.usage.storage), subscriptions = createBridgeSubscriptions(env);
+      const limits = createBridgeLimits(env, { onCache: (hit) => this.usage.limitsCache(hit) });
+      return { store, subscriptions, quota: createBlobQuota(this.usage.storage, env, () => store.recordBytes(), subscriptions, limits),
+        backup: createHubBackup(this.usage.storage) };
+    });
+    this.store = domain.store; this.subscriptions = domain.subscriptions; this.quota = domain.quota; this.backup = domain.backup;
     this.socketAuth = createBridgeSocketAuth(env);
   }
-  snapshotBegin() { return this.backup.begin(); }
-  snapshotPage(token: string, table: string, after: number) { return this.backup.page(token, table, after); }
-  snapshotValid(token: string) { return this.backup.valid(token); }
+  snapshotBegin() { return this.usage.run("snapshot", () => this.backup.begin()); }
+  snapshotPage(token: string, table: string, after: number) { return this.usage.run("snapshot", () => this.backup.page(token, table, after)); }
+  snapshotValid(token: string) { return this.usage.run("snapshot", () => this.backup.valid(token)); }
   async getSubscription(accountId: string) { return this.subscriptions.status(accountId); }
   /** Internal RPC seam for a future billing event consumer; no HTTP mutation route. */
-  async subscriptionChanged(accountId: string) { this.subscriptions.invalidate(accountId); }
+  async subscriptionChanged(accountId: string) { this.subscriptions.invalidate(accountId); this.quota.invalidateLimits(accountId); }
   async recoveryCheckpoint() {
-    return this.ctx.blockConcurrencyWhile(async () => ({ bookmark: await this.ctx.storage.getCurrentBookmark(), capturedAt: new Date().toISOString() }));
+    return this.usage.run("checkpoint", () => this.ctx.blockConcurrencyWhile(async () => ({ bookmark: await this.ctx.storage.getCurrentBookmark(), capturedAt: new Date().toISOString() })));
   }
   async getQuota(identity: BridgeIdentity) {
-    return this.ctx.blockConcurrencyWhile(async () => {
+    return this.usage.run("quota", () => this.ctx.blockConcurrencyWhile(async () => {
       const quota = await this.quota.status(identity.accountId);
       // Also arms collection for inventories imported from pre-GC stores that
       // have no new writes (and therefore no existing maintenance alarm).
-      await this.schedule(this.quota.nextExpiry());
+      const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry()].filter((value): value is number => value !== null);
+      if (deadlines.length) await this.schedule(Math.min(...deadlines));
       return quota;
-    });
+    }));
   }
   async reserveBlobs(identity: BridgeIdentity, entries: BlobReservation[], expires: number) {
-    return this.ctx.blockConcurrencyWhile(async () => {
+    return this.usage.run("reserve", () => this.ctx.blockConcurrencyWhile(async () => {
       try {
         if (!(await this.subscriptions.status(identity.accountId)).subscription.canUpload) return { status: 403, error: "Bridge subscription required; local changes remain queued" };
         const limit = (await this.quota.status(identity.accountId)).writesPerMinute;
@@ -134,32 +144,34 @@ export class AccountHub extends DurableObject<Env> {
         await this.schedule(this.quota.nextExpiry());
         return { status: 200, error: null };
       } catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
-    });
+    }));
   }
   async putBlob(identity: BridgeIdentity, key: string, expires: number, bytes: Uint8Array) {
-    return this.ctx.blockConcurrencyWhile(async () => {
+    return this.usage.run("put", () => this.ctx.blockConcurrencyWhile(async () => {
       try { await this.quota.put(identity, key, expires, bytes); return { status: 204, error: null }; }
       catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
-    });
+    }));
   }
   async protectBlobReads(identity: BridgeIdentity, blobs: BridgeBlobIdentity[], expires: number) {
-    return this.ctx.blockConcurrencyWhile(async () => {
+    return this.usage.run("protectRead", () => this.ctx.blockConcurrencyWhile(async () => {
       try { await this.quota.protectReads(identity, blobs, expires); return { status: 200, error: null }; }
       catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
-    });
+    }));
   }
   async fetch(request: Request): Promise<Response> {
-    const identity = JSON.parse(request.headers.get("X-Bridge-Identity")!) as BridgeIdentity;
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
-    this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ ...identity, streams: [] } satisfies Session);
-    this.store.seen(identity.backendId);
-    for (const entry of this.store.presence()) this.send(server, { type: "presence", backendId: entry.backend_id,
-      online: this.sockets().some((socket) => this.session(socket).backendId === entry.backend_id), lastSeen: new Date(entry.last_seen).toISOString(),
-      ...(entry.label ? { label: entry.label } : {}), ...(entry.platform ? { platform: entry.platform } : {}) });
-    this.broadcast({ type: "presence", backendId: identity.backendId, online: true, lastSeen: new Date().toISOString() });
-    return new Response(null, { status: 101, webSocket: client });
+    return this.usage.run("connect", () => {
+      const identity = JSON.parse(request.headers.get("X-Bridge-Identity")!) as BridgeIdentity;
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      this.ctx.acceptWebSocket(server);
+      server.serializeAttachment({ ...identity, streams: [] } satisfies Session);
+      this.store.seen(identity.backendId);
+      for (const entry of this.store.presence()) this.send(server, { type: "presence", backendId: entry.backend_id,
+        online: this.sockets().some((socket) => this.session(socket).backendId === entry.backend_id), lastSeen: new Date(entry.last_seen).toISOString(),
+        ...(entry.label ? { label: entry.label } : {}), ...(entry.platform ? { platform: entry.platform } : {}) });
+      this.broadcast({ type: "presence", backendId: identity.backendId, online: true, lastSeen: new Date().toISOString() });
+      return new Response(null, { status: 101, webSocket: client });
+    });
   }
   async webSocketMessage(socket: WebSocket, data: string | ArrayBuffer): Promise<void> {
     try { await this.receiveMessage(socket, data); }
@@ -176,59 +188,66 @@ export class AccountHub extends DurableObject<Env> {
     catch { socket.close(1008, "Invalid Bridge request"); return; }
     const { message, requestId } = request;
     try {
-      let response: BridgeServerMessage;
-      switch (message.type) {
-        case "hello":
-          this.store.identify(session.backendId, message.label, message.platform);
-          this.broadcast({ type: "presence", backendId: session.backendId, online: true, lastSeen: new Date().toISOString(), label: message.label.trim(), platform: message.platform });
-          response = { type: "identified", backendId: session.backendId }; break;
-        case "push": {
-          const publication = await this.ctx.blockConcurrencyWhile(async () => {
-            try {
-              if (message.records.every((record) => record.header.op === "delete")) return this.store.push(session.backendId, message.stream, message.records);
-              const quota = await this.quota.status(session.accountId);
-              return this.store.push(session.backendId, message.stream, message.records, { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes, canUpload: quota.subscription!.canUpload,
-                hasBlobs: (blobs) => this.quota.hasBlobs(blobs) });
-            } catch { return null; } // A lookup failure denies publication without resetting every socket in the DO.
-          });
-          if (!publication) throw new Error("Bridge publication unavailable");
-          const { results, changed } = publication;
-          response = { type: "ack", stream: message.stream, results };
-          if (changed.length) {
-            this.broadcast({ type: "changed", stream: message.stream }, message.stream, socket);
-            await this.schedule(Date.now() + 60_000);
+      await this.usage.run(message.type, async () => {
+        let response: BridgeServerMessage;
+        switch (message.type) {
+          case "hello":
+            this.store.identify(session.backendId, message.label, message.platform);
+            this.broadcast({ type: "presence", backendId: session.backendId, online: true, lastSeen: new Date().toISOString(), label: message.label.trim(), platform: message.platform });
+            response = { type: "identified", backendId: session.backendId }; break;
+          case "push": {
+            const publication = await this.ctx.blockConcurrencyWhile(async () => {
+              try {
+                if (message.records.every((record) => record.header.op === "delete")) return this.store.push(session.backendId, message.stream, message.records);
+                const quota = await this.quota.status(session.accountId);
+                return this.store.push(session.backendId, message.stream, message.records, { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes, canUpload: quota.subscription!.canUpload,
+                  hasBlobs: (blobs) => this.quota.hasBlobs(blobs) });
+              } catch { return null; } // A lookup failure denies publication without resetting every socket in the DO.
+            });
+            if (!publication) throw new Error("Bridge publication unavailable");
+            const { results, changed } = publication;
+            response = { type: "ack", stream: message.stream, results };
+            if (changed.length) {
+              this.broadcast({ type: "changed", stream: message.stream }, message.stream, socket);
+              await this.schedule(Date.now() + 60_000);
+            }
+            break;
           }
-          break;
+          case "pull": response = { type: "records", stream: message.stream, ...this.store.pull(message.stream, message.after, message.limit) }; break;
+          case "subscribe":
+            session.streams = [...new Set(message.streams)]; socket.serializeAttachment(session);
+            response = { type: "subscribed", streams: session.streams }; break;
+          case "compact": await this.maintain(); response = { type: "compacted" }; break;
         }
-        case "pull": response = { type: "records", stream: message.stream, ...this.store.pull(message.stream, message.after, message.limit) }; break;
-        case "subscribe":
-          session.streams = [...new Set(message.streams)]; socket.serializeAttachment(session);
-          response = { type: "subscribed", streams: session.streams }; break;
-        case "compact": await this.maintain(); response = { type: "compacted" }; break;
-      }
-      this.send(socket, { requestId, message: response });
+        this.send(socket, { requestId, message: response });
+      });
     } catch {
       reportBridgeFailure(this.env, "rpc");
       this.send(socket, { requestId, error: { code: "storageError", message: "Bridge hub could not commit this request" } });
     }
   }
   webSocketClose(socket: WebSocket, code: number, reason: string): void {
-    const session = this.session(socket);
-    try { socket.close(code, reason); } catch { /* Already closed. */ }
-    this.store.seen(session.backendId);
-    this.broadcast({ type: "presence", backendId: session.backendId,
-      online: this.sockets().some((other) => other !== socket && this.session(other).backendId === session.backendId), lastSeen: new Date().toISOString() });
+    this.usage.run("disconnect", () => {
+      const session = this.session(socket);
+      try { socket.close(code, reason); } catch { /* Already closed. */ }
+      this.store.seen(session.backendId);
+      this.broadcast({ type: "presence", backendId: session.backendId,
+        online: this.sockets().some((other) => other !== socket && this.session(other).backendId === session.backendId), lastSeen: new Date().toISOString() });
+    });
   }
   webSocketError(socket: WebSocket): void { this.webSocketClose(socket, 1011, "Connection error"); }
   async alarm(): Promise<void> {
-    try { await this.maintain(); }
-    catch { reportBridgeFailure(this.env, "maintenance"); throw new Error("Bridge maintenance failed"); }
+    return this.usage.run("compact", async () => {
+      try { await this.maintain(); }
+      catch { reportBridgeFailure(this.env, "maintenance"); throw new Error("Bridge maintenance failed"); }
+    });
   }
   private async maintain() {
     await this.ctx.blockConcurrencyWhile(async () => {
-      this.store.compact();
+      const { hasMore } = this.store.compact();
       await this.quota.collect();
       const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry()].filter((value): value is number => value !== null);
+      if (hasMore) deadlines.push(Date.now() + 1000);
       if (deadlines.length) await this.schedule(Math.max(Date.now() + 1000, Math.min(...deadlines)));
     });
   }

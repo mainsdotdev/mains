@@ -37,7 +37,7 @@ export class UsageProbe extends DurableObject {
           { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes });
         if (input.op === "push") value = push();
         else { try { this.ctx.storage.transactionSync(() => { push(); throw new Error("rollback"); }); } catch { value = "rolled back"; } }
-      } else if (input.op === "compact") this.store.compact();
+      } else if (input.op === "compact") value = this.store.compact();
       else if (input.op === "gc") { await this.quota.collect(); value = this.quota.nextExpiry(); }
       else value = await this.quota.status("test");
     }
@@ -192,4 +192,57 @@ it("collects only indexed due candidates without scanning thousands of live blob
   expect((await p.call<BridgeQuota>({ op: "status" })).value.blobBytes).toBe(0);
   expect(await p.sql("SELECT count(*) count FROM blob_objects")).toEqual([{ count: 2000 }]);
   const idle = await p.call({ op: "gc" }); expect(idle.rowsRead).toBeLessThan(10); expect(idle.rowsWritten).toBe(0);
+});
+
+it("compacts a changed register without scanning thousands of untouched records", async () => {
+  const p = await probe(), count = 3000;
+  for (let start = 0; start < count; start += 100) {
+    await p.call({ op: "push", records: Array.from({ length: 100 }, (_, i) => record(`clean-${start + i}`)) });
+  }
+  await p.call({ op: "push", records: [record("clean-100", 2)] });
+  const compacted = await p.call({ op: "compact" });
+  expect(compacted.rowsRead).toBeLessThan(150);
+  expect(await p.sql("SELECT count(*) n FROM log")).toEqual([{ n: count }]);
+  const idle = await p.call({ op: "compact" });
+  expect(idle.rowsRead).toBeLessThan(10); expect(idle.rowsWritten).toBe(0);
+  await p.evict();
+  const restarted = await p.call({ op: "compact" });
+  expect(restarted.rowsWritten).toBe(0);
+  console.info("Local compaction metrics", { records: count, changedRegisters: 1, rowsRead: compacted.rowsRead,
+    rowsWritten: compacted.rowsWritten, idleRowsRead: idle.rowsRead, idleRowsWritten: idle.rowsWritten });
+});
+
+it("resumes bounded legacy cleanup after eviction, retaining tombstones, latest values, exact quota and stream positions", async () => {
+  const p = await probe();
+  for (let start = 0; start < 500; start += 100) {
+    await p.call({ op: "push", records: Array.from({ length: 100 }, (_, i) => record(`live-${start + i}`)) });
+    await p.call({ op: "push", records: Array.from({ length: 100 }, (_, i) => record("hot", start + i + 1)) });
+  }
+  const gone = record("gone"), tombstone = deleted(gone);
+  await p.call({ op: "push", records: [gone, tombstone] });
+  const before = (await p.call<BridgeQuota>({ op: "status" })).value;
+  const sequence = await p.sql("SELECT * FROM streams");
+  // A pre-queue store has the same ciphertext/ownership schema but no durable
+  // cleanup cursor. Reopen that state through the real upgrade path.
+  const triggers = await p.sql("SELECT name FROM sqlite_master WHERE type='trigger' AND sql LIKE '%compaction_jobs%'");
+  for (const row of triggers) await p.sql(`DROP TRIGGER "${row.name}"`);
+  await p.sql("DROP TABLE compaction_jobs; DROP INDEX log_register_seq; DROP INDEX latest_retention");
+  await p.evict();
+  type Pass = { hasMore: boolean; rowsRemoved: number; legacyRows: number };
+  const first = (await p.call<Pass>({ op: "compact" })).value;
+  expect(first.hasMore).toBe(true); expect(first.legacyRows + first.rowsRemoved).toBeLessThanOrEqual(128);
+  const cursor = await p.sql("SELECT after_rowid FROM compaction_jobs WHERE kind='legacy'");
+  expect(Number(cursor[0].after_rowid)).toBeGreaterThan(0);
+  await p.evict();
+  let pass = first, attempts = 0;
+  do {
+    pass = (await p.call<Pass>({ op: "compact" })).value;
+    expect(pass.legacyRows + pass.rowsRemoved).toBeLessThanOrEqual(128);
+  } while (pass.hasMore && ++attempts < 100);
+  expect(pass.hasMore).toBe(false);
+  expect(await p.sql("SELECT count(*) n FROM log")).toEqual([{ n: 502 }]);
+  expect(await p.sql("SELECT envelope FROM deleted")).toEqual([{ envelope: JSON.stringify(tombstone) }]);
+  expect(await p.sql("SELECT * FROM streams")).toEqual(sequence);
+  expect((await p.call<BridgeQuota>({ op: "status" })).value).toEqual(before);
+  const idle = await p.call({ op: "compact" }); expect(idle.rowsWritten).toBe(0); expect(idle.rowsRead).toBeLessThan(10);
 });

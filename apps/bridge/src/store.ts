@@ -1,8 +1,8 @@
 import type { BridgeEnvelope, BridgeLogRecord, BridgePushResult, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES } from "@mains/contracts/bridge-wire";
-import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
 import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
 import { installBlobReferences } from "./blob-gc";
+import { createHubCompaction } from "./compaction";
 
 type LogRow = { seq: number; envelope: string };
 const order = (a: BridgeEnvelope, b: BridgeEnvelope) => a.header.hlc.physicalMs - b.header.hlc.physicalMs || a.header.hlc.counter - b.header.hlc.counter ||
@@ -48,6 +48,7 @@ export function createHubStore(storage: DurableObjectStorage) {
       END;`);
   });
   installBlobReferences(storage);
+  const compaction = createHubCompaction(storage);
   const api = {
     recordBytes(): number {
       return first<{ bytes: number }>("SELECT bytes FROM record_usage WHERE id=1")!.bytes;
@@ -126,19 +127,8 @@ export function createHubStore(storage: DurableObjectStorage) {
       }
       return { records, next: records.at(-1)?.seq ?? Math.max(after, first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)?.seq ?? 0), hasMore };
     },
-    compact() {
-      storage.transactionSync(() => {
-        sql.exec(`DELETE FROM latest WHERE json_extract(envelope,'$.header.retention')='30d-idle'
-          AND stream IN(SELECT stream FROM stream_activity WHERE last_activity<=?)`, Date.now() - BRIDGE_IDLE_RETENTION_MS);
-        sql.exec(`DELETE FROM log WHERE op='upsert' AND (EXISTS(SELECT 1 FROM deleted d WHERE d.row_key=log.row_key) OR NOT EXISTS(SELECT 1 FROM latest l WHERE l.stream=log.stream AND l.register_key=log.register_key AND l.seq=log.seq));
-          DELETE FROM log WHERE stream IN (SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL);
-          DELETE FROM latest WHERE json_extract(envelope,'$.header.rowKey') IN (SELECT row_key FROM deleted) OR stream IN (SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL);`);
-      });
-    },
-    nextExpiry(): number | null {
-      return first<{ expires: number | null }>(`SELECT min(a.last_activity)+? expires FROM stream_activity a
-        WHERE EXISTS(SELECT 1 FROM latest l WHERE l.stream=a.stream AND json_extract(l.envelope,'$.header.retention')='30d-idle')`, BRIDGE_IDLE_RETENTION_MS)!.expires;
-    },
+    compact: compaction.compact,
+    nextExpiry: compaction.nextExpiry,
     // Persist connection transitions only. Pulls and pings must not turn an
     // otherwise idle account into a writer or invalidate its backup bookmark.
     seen(backendId: string) {
