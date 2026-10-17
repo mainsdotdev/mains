@@ -20,7 +20,7 @@ import type {
 } from "@/lib/redux/api/workspaceApi";
 import { LinkResourcesModal } from "@/features/workspace/components/link-resources-modal";
 import { WORKSPACE_BASE_PATH } from "@/lib/route-utils";
-import { Option, Plus, Settings, Bridge, Download } from "@/components/ui/icons";
+import { Option, Plus, Settings, Bridge, Clone } from "@/components/ui/icons";
 import { useBridgeStatus } from "@/features/bridge/hooks/use-bridge";
 import {
   bridgeBackend,
@@ -550,7 +550,7 @@ export default function WorkspacesList({
           </div>
         ) : null}
         {replicas.length > 0 && (
-          <div className="mt-0.5 flex flex-col space-y-0.5">
+          <div className="mt-0.5 flex flex-col gap-0.5">
             {replicas.map((workspace) =>
               renderReplicaRow(workspace, "project"),
             )}
@@ -633,7 +633,9 @@ export default function WorkspacesList({
               "flex flex-col space-y-1",
             )}
             {listedReplicas.length > 0 && (
-              <div className="mt-1 flex flex-col space-y-1">
+              // Replica rows sit in a display:contents tooltip trigger, which
+              // takes no margin; gap spaces the rows themselves.
+              <div className="mt-1 flex flex-col gap-1">
                 {listedReplicas.map((workspace) =>
                   renderReplicaRow(workspace, "list"),
                 )}
@@ -676,12 +678,12 @@ export default function WorkspacesList({
                     ? {
                         label: "Clone to this device",
                         onClick: () => onCloneRepository(repo.cloneUrl!),
-                        icon: <Download className={SIDEBAR_ACTION_ICON} />,
+                        icon: <Clone className={SIDEBAR_ACTION_ICON} />,
                       }
                     : undefined
                 }
               >
-                <div className="flex flex-col space-y-0.5">
+                <div className="flex flex-col gap-0.5">
                   {repo.workspaces.map((workspace) =>
                     renderReplicaRow(workspace, "project"),
                   )}
@@ -705,7 +707,7 @@ export default function WorkspacesList({
               {bridgePresence(backend)}
             </Text>
           </div>
-          <div className="flex flex-col space-y-0.5">
+          <div className="flex flex-col gap-0.5">
             {rows.map((workspace) => renderReplicaRow(workspace, "list"))}
           </div>
         </SidebarGroupSection>

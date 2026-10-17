@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/icons";
 import type { Collection, RecentRun } from "@/lib/redux/api";
 import { useSuppressBrowserView } from "@/hooks/use-suppress-browser-view";
+import { getModeConfig } from "@/lib/mode-config";
 import { ProjectIcon } from "./project-icon";
 import { SidebarItemHoverCard } from "./sidebar-item-hover-card";
 import type { BridgeBackendInfo } from "@mains/contracts/bridge";
@@ -132,7 +133,7 @@ export function ChatItem({
       updatedAt={run.updatedAt}
       description={
         collections.find((collection) => collection.id === run.collectionId)
-          ?.name ?? "Chat"
+          ?.name ?? getModeConfig(run.mode).label
       }
       disabled={isEditing || isMenuOpen}
       actions={run.isReplica ? [] : [

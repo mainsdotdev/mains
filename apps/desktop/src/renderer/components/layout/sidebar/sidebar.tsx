@@ -591,7 +591,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           addLocalShortcut={addLocalShortcut}
           onAddLocal={() => void handleAddProject()}
           onClone={handleCloneRepo}
-          initialUrl={cloneDraftUrl}
+          cloneUrl={cloneDraftUrl || undefined}
           onCreate={handleCreateProject}
           onClose={handleCloseAddProjectModal}
         />

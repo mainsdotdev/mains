@@ -10,7 +10,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RecentRun } from "@/lib/redux/api";
+import type { Collection, RecentRun } from "@/lib/redux/api";
 import { ChatItem } from "./chat-item";
 
 const run: RecentRun = {
@@ -58,7 +58,10 @@ function flushFrames() {
     pending.forEach((callback) => callback(0));
   });
 }
-function setup(overrides: Partial<RecentRun> = {}) {
+function setup(
+  overrides: Partial<RecentRun> = {},
+  collections: Collection[] = [],
+) {
   const callbacks = {
     onSelect: vi.fn(),
     onArchive: vi.fn(),
@@ -75,7 +78,7 @@ function setup(overrides: Partial<RecentRun> = {}) {
       isActive={false}
       isRecent
       isPinned={false}
-      collections={[]}
+      collections={collections}
       {...callbacks}
     />,
   );
@@ -88,6 +91,34 @@ function openCard(row: HTMLElement) {
   flushFrames();
   return screen.getByRole("dialog", { name: run.title! });
 }
+
+const project: Collection = {
+  id: "project-1",
+  accountId: "account-1",
+  name: "Work Stuff",
+  icon: null,
+  isArchived: false,
+  sortOrder: 0,
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+};
+
+describe("ChatItem hover card", () => {
+  it.each([
+    ["work", "Work"],
+    ["chat", "Chat"],
+  ] as const)("labels a projectless %s chat as %s", (mode, label) => {
+    const { row } = setup({ mode });
+    expect(within(openCard(row)).getByText(label)).toBeTruthy();
+  });
+
+  it("keeps the project name when the chat belongs to one", () => {
+    const { row } = setup({ mode: "work", collectionId: project.id }, [project]);
+    const card = openCard(row);
+    expect(within(card).getByText("Work Stuff")).toBeTruthy();
+    expect(within(card).queryByText("Work")).toBeNull();
+  });
+});
 
 describe("ChatItem quick actions", () => {
   it("opens a replica without offering rename, pin, move, archive or delete", async () => {

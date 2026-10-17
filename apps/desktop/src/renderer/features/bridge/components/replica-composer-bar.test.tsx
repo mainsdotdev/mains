@@ -51,7 +51,7 @@ describe("ReplicaComposerBar", () => {
 
   it("opens Relay to take control on the source device", () => {
     renderBar({});
-    fireEvent.click(screen.getByRole("button", { name: "Control on device" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue with remote control" }));
     expect(screen.getByText("Relay page")).toBeTruthy();
   });
 });

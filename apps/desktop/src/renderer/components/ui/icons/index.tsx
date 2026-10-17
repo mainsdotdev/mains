@@ -198,6 +198,7 @@ export { default as Import} from "./import"
 export { default as Export} from "./export"
 export { default as Palm} from "./palm"
 export { default as Bridge} from "./bridge"
+export { default as Clone} from "./clone"
 
 
 

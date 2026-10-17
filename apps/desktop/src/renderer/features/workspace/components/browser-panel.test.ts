@@ -353,6 +353,10 @@ describe("BrowserPanel browser menu", () => {
       expect(panel.style.top).toBe("var(--shell-header-height)");
       expect(chatTab.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(actions.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      // The main header already reserves the layout controls. A second inset
+      // would slide Restore left of where Expand sat in the docked strip.
+      const restore = screen.getByRole("button", { name: "Restore browser panel" });
+      expect(restore.closest("[data-shell-header]")?.className.split(" ")).not.toContain("pr-2");
       expect(screen.getByLabelText("Browser chat")).toBe(chatStage);
     }
     fireEvent.click(screen.getByRole("button", { name: "Chat options" }));

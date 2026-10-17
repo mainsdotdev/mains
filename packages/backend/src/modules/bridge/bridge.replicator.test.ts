@@ -6,6 +6,7 @@ import { createBridgeReplicator, type BridgeReplicatorOptions } from "./bridge.r
 import { parseBridgeDevConfig } from "./bridge.config";
 import { toBase64Url } from "./bridge.encoding";
 import * as websocket from "./bridge.websocket";
+import * as engine from "./bridge.engine";
 
 const key = new Uint8Array(32).fill(51);
 const config = { version: 1, backendId: "A", url: "ws://127.0.0.1:8790/v1/log", token: "test-token", accountKey: toBase64Url(key), label: "MacBook" };
@@ -163,6 +164,31 @@ describe.skipIf(!networkMode)("Bridge background replication for desktop/server 
       await flushBackground(() => token.mock.calls.length === attempts && offline.getStatus().state === "offline");
     }
     expect(offline.getStatus().pendingRecords).toBeGreaterThan(0);
+  });
+  it("backs off a queued change that sends nothing, yet publishes a new local write within a second", async () => {
+    const createEngine = engine.createBridgeEngine, createTransport = websocket.createBridgeWebSocketTransport, attempts = vi.fn();
+    vi.spyOn(websocket, "createBridgeWebSocketTransport").mockImplementation((options) => createTransport({ ...options, heartbeatIntervalMs: 3_600_000 }));
+    vi.spyOn(engine, "createBridgeEngine").mockImplementation((options) => {
+      const real = createEngine(options);
+      // Like a change whose files can never be prepared: no error and no progress.
+      return { ...real, push: (stream = "account", limit = 100, deletesOnly = false) =>
+        stream === "run:stuck" ? (attempts(), Promise.resolve(0)) : real.push(stream, limit, deletesOnly) };
+    });
+    const n = await node(randomUUID(), "A"); await n.replicator.stop();
+    run(n, "stuck"); n.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('stuck','report','Never sendable')");
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const replicator = createBridgeReplicator({ ...n.options, autoStart: true }); cleanups.push(() => replicator.stop());
+    await replicator.syncNow(); expect(attempts).toHaveBeenCalledTimes(1);
+    let count = 1;
+    for (const delay of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000]) {
+      await vi.advanceTimersByTimeAsync(delay - 1); expect(attempts).toHaveBeenCalledTimes(count);
+      await vi.advanceTimersByTimeAsync(1); count++;
+      await flushBackground(() => attempts.mock.calls.length === count && replicator.getStatus().lastSyncedAt === new Date().toISOString());
+    }
+    run(n, "fresh");
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushBackground(() => !n.sqlite.prepare("SELECT 1 FROM bridge_outbox WHERE stream='account'").get());
+    expect(replicator.getStatus()).toMatchObject({ error: null, pendingRecords: 1 });
   });
   it("leaves inactive changes queued without repeated uploads or quota queries and resumes after the renewal refresh", async () => {
     const original = globalThis.fetch, now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);

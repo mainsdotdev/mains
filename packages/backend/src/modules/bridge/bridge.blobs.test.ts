@@ -314,6 +314,26 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     expect(await replica.load(key)).toEqual([entry]);
   });
 
+  it("sends a medium Claude session entry as a value blob once instead of re-uploading it while queued", async () => {
+    const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B"), sessionId = randomUUID();
+    for (const n of [a, b]) n.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
+    a.sqlite.prepare("INSERT INTO runs(id,owner_backend_id,account_id,provider_id,session_id) VALUES('medium','A','default','claude_code',?)").run(sessionId);
+    const entry = { type: "user", uuid: randomUUID(), message: { role: "user", content: [{ type: "tool_result", content: "medium-tool-output-".repeat(8_000) }] } };
+    const key = { projectKey: "source-directory", sessionId };
+    await createClaudeSessionMirror({ sqlite: a.sqlite, backendId: "A", runId: "medium", sessionId }).append(key, [entry]);
+    // Above the 128 KiB inline field limit, below the 256 KiB native entry file threshold.
+    const stored = (a.sqlite.prepare("SELECT entry FROM provider_session_entries").get() as { entry: string }).entry;
+    expect(Buffer.byteLength(JSON.stringify(stored))).toBeGreaterThan(128 * 1024); expect(Buffer.byteLength(stored)).toBeLessThan(256 * 1024);
+    await a.engine.push("account"); await b.engine.pull();
+    const presigns = vi.spyOn(globalThis, "fetch");
+    expect(await a.engine.push("run:medium")).toBeGreaterThan(0);
+    expect(a.engine.pending().filter((queued) => queued.table_name === "provider_session_entries")).toEqual([]);
+    expect(presigns.mock.calls.filter(([url]) => new URL(String(url)).pathname === "/v1/blobs/presign")).toHaveLength(1);
+    await b.engine.pull("run:medium");
+    expect((b.sqlite.prepare("SELECT entry FROM provider_session_entries").get() as { entry: string }).entry).toBe(stored);
+    expect(await createClaudeSessionMirror({ sqlite: b.sqlite, backendId: "B", runId: "medium", sessionId }).load(key)).toEqual([entry]);
+  });
+
   it("lazily opens A's attached image on B, with A disconnected, without reading A's path", async () => {
     const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
     a.sqlite.exec("INSERT INTO runs(id,owner_backend_id,account_id,provider_id,title) VALUES('r','A','default','codex','Image attachment');");

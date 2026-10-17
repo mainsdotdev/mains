@@ -332,6 +332,52 @@
 .bn-root.bn-shadcn [data-slot="input"]:focus-visible {
   box-shadow: 0 0 0 2px var(--color-accent);
 }
+/* The native file button ships transparent, and the embed action uses the
+   accent fill. Both sit on the same panel, so they share one neutral step. */
+.bn-root.bn-shadcn [data-slot="input"][type="file"] {
+  padding-inline: 0.375rem 0.75rem;
+}
+.bn-root.bn-shadcn :is(
+  [data-slot="input"][type="file"]::file-selector-button,
+  .bn-panel .bn-button
+) {
+  border: 0;
+  border-radius: 0.625rem;
+  background-color: var(--color-primary-200);
+  color: var(--color-primary-900);
+  padding: 0.25rem 0.75rem;
+  font: inherit;
+  font-size: var(--text-xs);
+  line-height: 1.25rem;
+  cursor: pointer;
+}
+.bn-root.bn-shadcn [data-slot="input"][type="file"]::file-selector-button {
+  margin-inline-end: 0.75rem;
+  vertical-align: middle;
+}
+.bn-root.bn-shadcn .bn-panel .bn-button {
+  height: auto;
+  box-shadow: none;
+}
+.bn-root.bn-shadcn :is(
+  [data-slot="input"][type="file"]::file-selector-button,
+  .bn-panel .bn-button
+):hover {
+  background-color: var(--color-primary-300);
+}
+.bn-root.bn-shadcn[data-color-scheme="dark"] :is(
+  [data-slot="input"][type="file"]::file-selector-button,
+  .bn-panel .bn-button
+) {
+  background-color: var(--color-primary-700);
+  color: var(--color-primary-50);
+}
+.bn-root.bn-shadcn[data-color-scheme="dark"] :is(
+  [data-slot="input"][type="file"]::file-selector-button,
+  .bn-panel .bn-button
+):hover {
+  background-color: var(--color-primary-600);
+}
 .bn-root.bn-shadcn .bn-panel { padding: 0.5rem; }
 .bn-root.bn-shadcn .bn-panel [data-slot="card"] {
   padding-block: 0;

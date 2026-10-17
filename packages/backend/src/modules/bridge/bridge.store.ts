@@ -110,7 +110,9 @@ export function portableValues(store: BridgeStore, table: string, clock: RowCloc
     }
   }
   // Paths describe the source filesystem. Replicas open authenticated blob manifests.
-  if (table === "provider_session_entries" && (JSON.parse(clock.blob_refs_json ?? "[]") as { column: string }[]).some((ref) => ref.column === "entry")) values.entry = null;
+  // A value blob is not such a file: its inline entry is the bytes the manifest verifies.
+  if (table === "provider_session_entries" && (JSON.parse(clock.blob_refs_json ?? "[]") as { column: string; kind?: string }[])
+    .some((ref) => ref.column === "entry" && ref.kind !== "value")) values.entry = null;
   if (table === "run_artifacts") {
     if (values.path) refs.path = { path: values.path };
     values.path = null; values.blob_data = null;

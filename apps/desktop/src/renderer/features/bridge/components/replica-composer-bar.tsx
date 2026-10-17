@@ -52,7 +52,7 @@ export function ReplicaComposerBar({ run, owner, status, hydration, variant }: {
       </div>
     </div>
     <Button variant="primary" onClick={() => navigate("/relay")} title={`Connect to ${owner.label} in Relay to control this conversation`}>
-      Control on device
+      Continue with remote control
     </Button>
   </div>;
 }

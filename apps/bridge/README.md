@@ -22,7 +22,8 @@ continuing a run on another backend.
 
 Entries travel in the owner's lazy run stream under E2EE and the same project
 Local only rules. Entries above 256 KiB use the existing encrypted R2 blob/cache
-path; the 50 MiB per-entry blob limit applies. Failed import leaves the Claude
+path; the 50 MiB per-entry blob limit applies. Smaller entries above the 128 KiB
+field limit travel as ordinary value blobs and arrive inline. Failed import leaves the Claude
 turn's outcome unchanged and is retried after the next turn. Refused uploads stay
 queued locally.
 
@@ -867,7 +868,8 @@ lost hints; opening a conversation and reconnecting also pull immediately.
 Publishing never postpones that safety deadline. A one-second **local-only**
 outbox check catches direct SQL writers without contacting the hub. Queued
 uploads keep progressing, and connection failures retain exponential retry up
-to 30 seconds.
+to 30 seconds. A write cycle that sends nothing while changes stay queued backs
+off from 2 to 60 seconds; a new local write ends that wait at the next check.
 Opening a replica leases its run subscription for 90 seconds; clients renew it
 every 30 seconds and release it on navigation. Renewing an existing lease sends
 no RPC. Multiple viewers share the stream.
