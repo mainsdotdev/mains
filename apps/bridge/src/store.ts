@@ -139,7 +139,11 @@ export function createHubStore(storage: DurableObjectStorage) {
       return first<{ expires: number | null }>(`SELECT min(a.last_activity)+? expires FROM stream_activity a
         WHERE EXISTS(SELECT 1 FROM latest l WHERE l.stream=a.stream AND json_extract(l.envelope,'$.header.retention')='30d-idle')`, BRIDGE_IDLE_RETENTION_MS)!.expires;
     },
-    seen(backendId: string) { sql.exec("INSERT INTO presence(backend_id,last_seen) VALUES(?,?) ON CONFLICT(backend_id) DO UPDATE SET last_seen=excluded.last_seen", backendId, Date.now()); },
+    // Persist connection transitions only. Pulls and pings must not turn an
+    // otherwise idle account into a writer or invalidate its backup bookmark.
+    seen(backendId: string) {
+      sql.exec(`INSERT INTO presence(backend_id,last_seen) VALUES(?,?) ON CONFLICT(backend_id) DO UPDATE SET last_seen=excluded.last_seen`, backendId, Date.now());
+    },
     identify(backendId: string, label: string, platform: string) {
       sql.exec("INSERT INTO backend_metadata(backend_id,label,platform) VALUES(?,?,?) ON CONFLICT(backend_id) DO UPDATE SET label=excluded.label,platform=excluded.platform", backendId, label.trim(), platform);
     },

@@ -39,7 +39,7 @@ export class AccountHub extends CoreAccountHub {
     if (!allowed(env, account, token) || this.ctx.id.toString() !== env.ACCOUNT_HUB.idFromName(account).toString()) throw new Error("Reset scope mismatch");
     return this.ctx.blockConcurrencyWhile(async () => {
       const db = env.AUTH_DB!, prefix = await bridgeAccountPrefix(account);
-      const active = await db.prepare("SELECT count(*) n FROM bridge_backends WHERE account_id=? AND status='approved' AND token_expires_at>?").bind(account, Date.now()).first<{ n: number }>();
+      const active = await db.prepare("SELECT count(*) n FROM bridge_backends WHERE account_id=? AND status='approved' AND (token_expires_at>? OR next_token_expires_at>?)").bind(account, Date.now(), Date.now()).first<{ n: number }>();
       if (confirmed && active!.n) throw new Error("An approved backend still exists; use approval instead");
       const records = this.ctx.storage.sql.exec<{ n: number }>("SELECT count(*) n FROM log").toArray()[0].n;
       const initialized = !!await db.prepare("SELECT 1 FROM bridge_accounts WHERE account_id=?").bind(account).first();
@@ -54,7 +54,7 @@ export class AccountHub extends CoreAccountHub {
       }
       // Revoke first, retaining the old account row until every destructive step
       // succeeds. A failed reset remains locked and can be retried safely.
-      await db.prepare("UPDATE bridge_backends SET status='revoked',token_expires_at=0,recovery_challenge=NULL,challenge_expires_at=NULL WHERE account_id=?").bind(account).run();
+      await db.prepare("UPDATE bridge_backends SET status='revoked',token_expires_at=0,next_token_hash=NULL,next_token_expires_at=NULL,recovery_challenge=NULL,challenge_expires_at=NULL WHERE account_id=?").bind(account).run();
       for (const socket of this.ctx.getWebSockets()) socket.close(1008, "Bridge account reset");
       for (;;) {
         const page = await env.BLOBS.list({ prefix, limit: 500 });

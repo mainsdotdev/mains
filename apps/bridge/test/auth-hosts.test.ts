@@ -3,13 +3,16 @@ import { readFile, stat, access } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { CHANNELS } from "@mains/contracts/channels";
 import { bridgeBytes, type BridgeAuthStatus } from "@mains/contracts/bridge-auth";
 import type { AtlasPage } from "@mains/contracts/atlas";
 import { startLocalBackends, waitFor } from "./local-backends";
-import { signIn } from "./auth-helpers";
+import { approve, signIn } from "./auth-helpers";
 import { generateBridgeAccountKey, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
 import { bridgeRecoveryPublicKey } from "../../../packages/backend/src/modules/bridge/bridge.recovery";
+import { createNodeBackendRuntime } from "../../../packages/backend/src/runtime/node-backend-runtime";
+import { createBridgeIdentityStorage } from "../../../packages/backend/src/modules/bridge/bridge.identity-storage";
 
 type Fixture = Awaited<ReturnType<typeof startLocalBackends>>;
 function cli(backend: Fixture["a"], args: string[], input = ""): Promise<string> {
@@ -23,6 +26,40 @@ function cli(backend: Fixture["a"], args: string[], input = ""): Promise<string>
 }
 
 describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity through real Better Auth, D1 and two backends", () => {
+  it("survives a truncated renewal response, retries after process restart and continues two-device sync with the same key", async () => {
+    const fixture = await startLocalBackends({ auth: true, truncateRefreshOnce: true }), { a, b } = fixture;
+    try {
+      const trusted = await signIn(fixture, a); await signIn(fixture, b); await approve(fixture);
+      await a.stop(); // Edit only the stopped disposable profile, never a live database or user profile.
+      const storage = createNodeBackendRuntime({ dataDir: a.dir, appVersion: "test" }).secretStorage;
+      const vault = createBridgeIdentityStorage(a.dir, storage), before = (await vault.read())!;
+      await vault.write({ ...before, expiresAt: Date.now() + 86400_000 });
+      await a.start();
+      const failed = await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
+        (value) => !!value.error?.includes("renewal response"), "truncated refresh response");
+      expect(failed).toMatchObject({ state: "ready", accountFingerprint: trusted.accountFingerprint });
+      expect((await vault.read())!.token).toBe(before.token);
+      expect((await vault.read())!.accountKey).toBe(before.accountKey);
+      const proposed = (await vault.read())!.pendingToken;
+      expect(proposed).toMatch(/^b7_[a-f0-9]{64}$/);
+      await a.client.call(CHANNELS.bridge.syncNow); // The old credential still works.
+      const db = await fixture.hub.database();
+      const pending = await db.prepare("SELECT token_hash,next_token_hash FROM bridge_backends WHERE account_id=? AND backend_id=?").bind(trusted.accountId, a.backendId).first();
+      expect(pending!.token_hash).toBe(createHash("sha256").update(before.token).digest("hex"));
+      expect(pending!.next_token_hash).toBe(createHash("sha256").update(proposed!).digest("hex"));
+      await a.stop(); await a.start();
+      const renewed = await waitFor(() => vault.read(), (value) => !!value && value.token !== before.token, "durable replacement credential");
+      expect(renewed!.token).toBe(proposed); expect(renewed!.pendingToken).toBeNull();
+      await waitFor(() => db.prepare("SELECT next_token_hash FROM bridge_backends WHERE account_id=? AND backend_id=?").bind(trusted.accountId, a.backendId).first(),
+        (value) => value?.next_token_hash === null, "committed handover");
+      expect(renewed!.accountKey).toBe(before.accountKey);
+      expect(await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).toMatchObject({ state: "ready", accountFingerprint: trusted.accountFingerprint });
+      const page = await a.client.call<AtlasPage>(CHANNELS.atlas.createPage, { accountId: "default", title: "After token handover", markdown: "No reapproval or new key" });
+      await a.client.call(CHANNELS.bridge.syncNow);
+      await waitFor(() => b.client.call<AtlasPage | null>(CHANNELS.atlas.get, { accountId: "default", id: page.item.id }),
+        (value) => value?.revision.id === page.revision.id, "Page after recovered renewal");
+    } finally { await fixture.dispose(); }
+  }, 120_000);
   it("blocks a compromised hub's substituted wrap and verifier before any replication starts", async () => {
     const fixture = await startLocalBackends({ auth: true }); const { a, b } = fixture;
     try {
@@ -82,7 +119,9 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       const pending = await signIn(fixture, b); expect(pending.state).toBe("needs-approval");
       expect(pending.verificationCode).toMatch(/^(?:[A-HJ-NP-Z2-9]{4}-){2}[A-HJ-NP-Z2-9]{4}$/);
       expect(await b.client.call(CHANNELS.atlas.get, { accountId: "default", id: page.item.id })).toBeNull();
-      const approver = await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth), (value) => value.approvals.some((entry) => entry.backendId === b.backendId), "approval request");
+      // Observe notifications only: an explicit HTTP refresh would conceal a
+      // broken event path now that the ready fallback is five minutes.
+      const approver = await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus), (value) => value.approvals.some((entry) => entry.backendId === b.backendId), "approval notification");
       const request = approver.approvals.find((entry) => entry.backendId === b.backendId)!;
       expect(request.code).toBe(pending.verificationCode);
       expect(await a.client.invoke(CHANNELS.bridge.approveBackend, { ...request, code: "WRONG1" })).toMatchObject({ success: false });
@@ -109,7 +148,7 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       expect((await b.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).state).toBe("ready");
       expect((await b.client.call<AtlasPage>(CHANNELS.atlas.get, { accountId: "default", id: page.item.id })).revision.markdown).toContain("Private content");
       await a.client.call(CHANNELS.bridge.revokeBackend, b.backendId);
-      await waitFor(() => b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth), (value) => value.state === "revoked", "immediate revocation");
+      await waitFor(() => b.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus), (value) => value.state === "revoked", "revocation notification");
       expect(await b.client.invoke(CHANNELS.bridge.syncNow)).toMatchObject({ success: false });
     } finally { await fixture.dispose(); }
   }, 120_000);

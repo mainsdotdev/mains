@@ -189,6 +189,36 @@ compatible before rollback; do not roll back schema blindly. If rolling back to
 code from before archival was introduced, archive protection stops with that
 code: choose a compatible forward fix or control physical GC during the incident.
 
+Migration 0006 adds nullable pending-credential fields. Apply it before deploying
+the token-handover Worker; it preserves current token hashes and account keys.
+Once handovers have been issued, roll back only to code that understands these
+fields. Older code rejects a delivered successor before its first use and can
+make a client erase its trusted identity. Do not clear pending fields to work
+around an incident: the successor may already be durable on an offline client.
+The client creates a random successor and durably saves it in its encrypted
+identity before proposing only its SHA-256 hash. Repeating that hash returns the
+same expiry; a competing hash returns 409 without replacing the proposal. The
+response echoes the hash, never the token. Token renewal does not use
+`BETTER_AUTH_SECRET`, including while a handover is pending. First authenticated
+use still commits the successor and best-effort invalidates the predecessor.
+A saved successor can acknowledge itself after the predecessor's natural expiry.
+
+Both `npm run staging:deploy` and `npm run production:deploy` now run
+`wrangler d1 migrations list AUTH_DB --remote` with the matching configuration
+and authentication profile **before** deploying. Pending migrations, a failed
+check or unrecognized output stops deployment. The gate never applies migrations
+automatically; take a backup, review and use the matching `*:migrate` command
+before retrying. Offline `*:build` dry runs remain available without cloud access.
+
+Roll out migration 0006, then the hub, then the matching desktop/server builds.
+New clients refuse to propose a token to a hub without `client-hash-v1` support.
+Old clients can keep using unexpired current credentials but need the new build
+before renewal. A rollback must support the client-generated-hash protocol as
+well as the pending columns; server-generated-token code is not a compatible
+rollback once handovers begin. Never fix a conflict by clearing pending fields:
+the legitimate offline client may already have saved that successor. Investigate
+the conflict and explicitly revoke/re-enroll a compromised device if needed.
+
 After rollback check `/health`, sign-in, an approved device's connection and
 pending queue, plus a known existing file from a second isolated profile. Capture
 the rollback version and times in the incident record. Do not revoke/reinitialize

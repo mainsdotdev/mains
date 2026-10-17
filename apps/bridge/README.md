@@ -211,7 +211,14 @@ A later backend remains **pending** with no log or R2 access until either:
 
 The hub stores verified-account metadata, hashed 90-day backend credentials,
 public keys, encrypted key wraps and expiring approval requests. Backends renew
-credentials before expiry. Private device keys, account keys and backend tokens
+credentials before expiry. The backend generates a fresh random token, saves it
+as pending in protected storage, and sends only its SHA-256 hash. Repeating the
+same proposal is idempotent; a different proposal returns a visible 409 conflict.
+The hub acknowledges the exact hash and expiry without returning the token or
+deriving it from a server secret. The saved successor is published to replication
+only after the acknowledgement is validated and persisted; its first use retires
+the predecessor. Lost responses and restart retry the same saved proposal.
+Private device keys, account keys and backend tokens
 live only in an encrypted `bridge/identity.json` (mode 0600). Electron uses
 `safeStorage`; standalone uses its protected `server-secret.key` storage adapter.
 The host adapters’ formats are intentionally incompatible and fail closed; use
@@ -786,12 +793,65 @@ The host composition roots register Bridge IPC, start `bridgeService` after the
 database is ready, and stop it before closing SQLite. A missing config leaves
 capture disabled; connection failure leaves local writes usable and retries
 from durable outbox/cursors. The serialized background loop pulls account roots
-first, publishes their acknowledged parents before children, and polls watched
-run streams (1 second active, 10 seconds idle, exponential retry up to 30 seconds).
+first and publishes their acknowledged parents before children. Local write
+events and hub `changed` hints wake it immediately. Local writes run a push-only
+cycle. Change hints pull account roots and the affected watched conversation,
+without re-reading unrelated transcripts; the publishing socket receives no
+echoed hint. Account and watched-run streams use a five-minute safety pull for
+lost hints; opening a conversation and reconnecting also pull immediately.
+Publishing never postpones that safety deadline. A one-second **local-only**
+outbox check catches direct SQL writers without contacting the hub. Queued
+uploads keep progressing, and connection failures retain exponential retry up
+to 30 seconds.
 Opening a replica leases its run subscription for 90 seconds; clients renew it
-every 30 seconds and release it on navigation. Multiple viewers share the stream.
+every 30 seconds and release it on navigation. Renewing an existing lease sends
+no RPC. Multiple viewers share the stream.
 Device labels/last-seen times are cached locally; unavailable presence is shown
 as unknown, rather than treating cached state as a current online signal.
+
+Each account DO caches WebSocket identity checks for 30 seconds, bound to the
+account, backend, credential hash and exact credential expiry. Concurrent
+messages share one lookup. Revocation invalidates that backend's cache and
+closes its sockets immediately. On first use of a replacement credential,
+rotation attempts to invalidate only its predecessor's cache and sockets; new
+sockets are unaffected. A DO failure is reported without failing successful
+authentication. Hibernation discards the
+in-memory cache; a surviving socket is revalidated on its next message. No cache
+timer keeps the DO awake. R2 capabilities and HTTP credentials retain their
+per-request validation. Presence writes are limited to once per 30 seconds per
+backend, with immediate updates on connection and disconnection.
+
+Ready identities and devices waiting for the user's fingerprint confirmation
+check every five minutes. An unchanged pending key is never re-written to
+protected storage. Sign-in and pending approval keep their short polling
+interval. WebSocket approval notifications and policy closure (1008) trigger an
+immediate HTTP identity recheck, queued after any in-progress snapshot. A socket
+closure alone never erases a trusted account key.
+
+The Node transport sends WebSocket protocol pings every 25 seconds, requires a
+matching pong within 10 seconds and reconnects after an unresponsive connection.
+Cloudflare answers these control frames without invoking the DO message handler
+or interrupting hibernation. Heartbeats add no D1 reads or presence writes.
+Timers belong to the individual connection and are canceled on disconnect.
+
+Migration `0006_backend_token_handover.sql` adds nullable successor hash/expiry
+fields without changing existing credentials. Refresh stages a successor while
+the current token retains its original expiry. Repeated and concurrent retries
+return the same candidate and expiry, using domain-separated HMAC-SHA256 with
+`BETTER_AUTH_SECRET`; D1 stores only hashes. The client validates the response
+and durably saves the successor before exposing it to replication. Its first
+authenticated HTTP/WebSocket use commits the handover with a conditional D1
+update, then clears the candidate and invalidates the predecessor. Until that
+first use, a lost/truncated response or local storage failure leaves the old
+credential usable. Revocation clears both credentials and cannot be undone by
+a concurrent handover. Natural token expiry still applies.
+
+Apply migration 0006 before deploying a handover-aware Worker. During rollout,
+keep `BETTER_AUTH_SECRET` stable while proposals are pending, and choose a
+handover-aware rollback version. Changing the signing secret cannot replace an
+already issued proposal silently: renewal returns a retryable error and keeps
+the current credential. A client that already saved its successor can still
+commit it, independently of that secret.
 
 For an existing development database, start it once to create its backend id,
 stop it, and generate a config against your `npm run dev` hub:

@@ -5,11 +5,15 @@ import { disposeBridgeTestHub, getLocalBridgeTestWorker, networkMode } from "../
 import { createBridgeReplicator, type BridgeReplicatorOptions } from "./bridge.replicator";
 import { parseBridgeDevConfig } from "./bridge.config";
 import { toBase64Url } from "./bridge.encoding";
+import * as websocket from "./bridge.websocket";
 
 const key = new Uint8Array(32).fill(51);
 const config = { version: 1, backendId: "A", url: "ws://127.0.0.1:8790/v1/log", token: "test-token", accountKey: toBase64Url(key), label: "MacBook" };
 const cleanups: (() => void | Promise<void>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.restoreAllMocks(); });
+afterEach(async () => {
+  try { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); }
+  finally { vi.useRealTimers(); vi.restoreAllMocks(); }
+});
 afterAll(disposeBridgeTestHub);
 async function node(account: string, backendId: string, extra: Partial<BridgeReplicatorOptions> = {}) {
   const hub = await getLocalBridgeTestWorker(), fixture = createTestDb(); cleanups.push(fixture.cleanup);
@@ -29,6 +33,36 @@ async function until(predicate: () => boolean) {
 function run(n: Awaited<ReturnType<typeof node>>, id = "r") {
   n.sqlite.prepare("INSERT INTO runs(id,account_id,owner_backend_id,provider_id,title,status) VALUES(?,'default',?,'claude_code','Synced chat','running')").run(id, n.options.backendId);
 }
+async function flushBackground(predicate: () => boolean) {
+  for (let i = 0; i < 2000; i++) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(0);
+    if (predicate()) return;
+  }
+  expect(predicate()).toBe(true);
+}
+async function scheduledPair() {
+  const account = randomUUID(), a = await node(account, "A"); run(a); await a.replicator.syncNow();
+  const createTransport = websocket.createBridgeWebSocketTransport;
+  const hints = vi.fn();
+  let receiver!: ReturnType<typeof createTransport>, dropHints = false;
+  vi.spyOn(websocket, "createBridgeWebSocketTransport").mockImplementation((options) => {
+    const transport = createTransport({ ...options, heartbeatIntervalMs: 3_600_000, onChanged: (stream) => {
+      if (options.metadata?.label === "Computer B") hints(stream);
+      if (!dropHints) options.onChanged?.(stream);
+    } });
+    if (options.metadata?.label === "Computer B") receiver = transport;
+    return transport;
+  });
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const b = await node(account, "B", { autoStart: true });
+  await b.replicator.syncNow(); b.replicator.watchRun("r", "view"); await b.replicator.syncNow();
+  await flushBackground(() => b.replicator.getStatus().runs.some((run) => run.runId === "r" && run.ready));
+  await b.replicator.syncNow();
+  const pulls = vi.spyOn(receiver, "pull");
+  hints.mockClear();
+  return { a, b, pulls, hints, dropHints() { dropHints = true; }, disconnect() { receiver.disconnect(); } };
+}
 
 describe("Bridge development configuration", () => {
   it("requires an explicit complete config, keeps dev keys private, and permits disabling it", () => {
@@ -42,6 +76,94 @@ describe("Bridge development configuration", () => {
 });
 
 describe.skipIf(!networkMode)("Bridge background replication for desktop/server viewers", () => {
+  it("publishes local writes without re-pulling watched streams or notifying its own socket", async () => {
+    const f = await scheduledPair();
+    run(f.a, "r2"); await f.a.replicator.syncNow();
+    await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM runs WHERE id='r2'").get());
+    f.b.replicator.watchRun("r2", "second-view"); await f.b.replicator.syncNow();
+    f.pulls.mockClear(); f.hints.mockClear();
+    run(f.b, "local-write"); f.b.replicator.wake();
+    await vi.advanceTimersByTimeAsync(1);
+    await flushBackground(() => f.b.replicator.getStatus().pendingRecords === 0);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.pulls).not.toHaveBeenCalled(); expect(f.hints).not.toHaveBeenCalled();
+    f.a.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('r','report','One changed stream')");
+    await f.a.replicator.syncNow();
+    await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content='One changed stream'").get());
+    expect(f.pulls.mock.calls.map(([stream]) => stream)).toEqual(["account", "run:r"]);
+  });
+  it("does not postpone a lost-hint safety read while continuously publishing local changes", async () => {
+    const f = await scheduledPair(); f.dropHints();
+    f.a.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('r','report','Missed while publishing')");
+    await f.a.replicator.syncNow();
+    for (let i = 1; i <= 9; i++) {
+      await vi.advanceTimersByTimeAsync(30_000); f.b.replicator.watchRun("r", "view");
+      run(f.b, `local-${i}`); f.b.replicator.wake(); await vi.advanceTimersByTimeAsync(0);
+      await flushBackground(() => f.b.replicator.getStatus().pendingRecords === 0 && f.b.replicator.getStatus().lastSyncedAt === new Date().toISOString());
+    }
+    await vi.advanceTimersByTimeAsync(29_999); expect(f.pulls).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content='Missed while publishing'").get());
+    expect(f.pulls).toHaveBeenCalled();
+  });
+  it("keeps idle and watched streams quiet for five minutes, including lease renewal, and applies change hints immediately", async () => {
+    const { a, b, pulls } = await scheduledPair();
+    for (let i = 0; i < 9; i++) {
+      await vi.advanceTimersByTimeAsync(30_000);
+      b.replicator.watchRun("r", "view"); // Renewing a UI lease must not poll the hub.
+    }
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(pulls).not.toHaveBeenCalled();
+    a.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('r','report','Hint-driven content')");
+    await a.replicator.syncNow();
+    await flushBackground(() => !!b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content='Hint-driven content'").get());
+    expect(pulls).toHaveBeenCalled();
+  });
+  it("recovers a missed hint at five minutes and discovers local writes with no pull", async () => {
+    const f = await scheduledPair(); f.dropHints();
+    f.a.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('r','report','Missed hint')");
+    await f.a.replicator.syncNow();
+    for (let i = 0; i < 9; i++) { await vi.advanceTimersByTimeAsync(30_000); f.b.replicator.watchRun("r", "view"); }
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(f.pulls).not.toHaveBeenCalled();
+    expect(f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content='Missed hint'").get()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content='Missed hint'").get());
+    await f.b.replicator.syncNow(); // Let the fallback cycle finish before the next local write.
+    // Direct SQLite writers need no renderer event to enter the durable outbox.
+    run(f.b, "local-write"); f.pulls.mockClear();
+    await vi.advanceTimersByTimeAsync(1000);
+    await flushBackground(() => f.b.replicator.getStatus().pendingRecords === 0);
+    expect(f.pulls).not.toHaveBeenCalled();
+    await f.a.replicator.syncNow();
+    expect(f.a.sqlite.prepare("SELECT owner_backend_id FROM runs WHERE id='local-write'").get()).toEqual({ owner_backend_id: "B" });
+  });
+  it("reconnects promptly after an idle socket closes instead of waiting for the safety poll", async () => {
+    const f = await scheduledPair(); f.disconnect();
+    expect(f.b.replicator.getStatus().state).toBe("offline");
+    f.a.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('r','report','During disconnect')");
+    await f.a.replicator.syncNow();
+    await vi.advanceTimersByTimeAsync(999); expect(f.pulls).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content='During disconnect'").get());
+    expect(f.pulls).toHaveBeenCalled();
+  });
+  it("retains exponential failure backoff despite the one-second local outbox check", async () => {
+    const n = await node(randomUUID(), "A"); await n.replicator.stop(); run(n);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const token = vi.fn().mockResolvedValue("test-token");
+    const offline = createBridgeReplicator({ ...n.options, autoStart: true, token,
+      config: { ...n.options.config, url: "ws://127.0.0.1:1/v1/log" }, requestTimeoutMs: 100 });
+    cleanups.push(() => offline.stop());
+    await expect(offline.syncNow()).rejects.toThrow(/connection/i);
+    let attempts = 1;
+    for (const delay of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+      await vi.advanceTimersByTimeAsync(delay - 1); expect(token).toHaveBeenCalledTimes(attempts);
+      await vi.advanceTimersByTimeAsync(1); attempts++;
+      await flushBackground(() => token.mock.calls.length === attempts && offline.getStatus().state === "offline");
+    }
+    expect(offline.getStatus().pendingRecords).toBeGreaterThan(0);
+  });
   it("leaves inactive changes queued without repeated uploads or quota queries and resumes after the renewal refresh", async () => {
     const original = globalThis.fetch, now = Date.now(), clock = vi.spyOn(Date, "now").mockReturnValue(now);
     let active = false;

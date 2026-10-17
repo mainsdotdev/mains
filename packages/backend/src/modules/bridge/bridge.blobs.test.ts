@@ -269,6 +269,9 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
 
   it("spills accumulated small fields and returns to inline values when they shrink", async () => {
     const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
+    // Converge the seeded account before testing subsequent field edits.
+    await a.engine.push(); await b.engine.pull();
+    await b.engine.push(); await a.engine.pull();
     const value = "x".repeat(100_000);
     a.sqlite.prepare("UPDATE accounts SET bio=?,company=?,website=? WHERE id='default'").run(value, value, value);
     await a.engine.push(); await b.engine.pull();

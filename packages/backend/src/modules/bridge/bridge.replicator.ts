@@ -14,6 +14,7 @@ import { refreshClaudeSessionMirrors } from "./bridge.session-mirror";
 
 export interface BridgeReplicatorOptions {
   onApproval?: (request: import("@mains/contracts/bridge-auth").BridgeApprovalRequest) => void;
+  onAccessChanged?: () => void;
   sqlite: SQLiteInstance;
   backendId: string;
   config: BridgeDevConfig;
@@ -22,7 +23,9 @@ export interface BridgeReplicatorOptions {
   onApplied?: (changes: AppliedChange[]) => void;
   /** Tests can pump explicitly or use short intervals without changing production defaults. */
   autoStart?: boolean;
+  /** Local outbox inspection and queued upload progress; no idle remote RPC. */
   activeIntervalMs?: number;
+  /** Safety pull for missed change hints; defaults to five minutes. */
   idleIntervalMs?: number;
   requestTimeoutMs?: number;
   dataDir?: string;
@@ -30,6 +33,7 @@ export interface BridgeReplicatorOptions {
 }
 const watcherLeaseMs = 90_000;
 const quotaRefreshIntervalMs = 60_000;
+const fallbackPollIntervalMs = 300_000;
 
 /** One serialized background loop per database; a hub outage never blocks local execution. */
 export function createBridgeReplicator(options: BridgeReplicatorOptions) {
@@ -43,6 +47,8 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   let lastSyncedAt: string | null = null, error: string | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined, inFlight: Promise<void> | undefined;
   let requested = false, failures = 0, subscribed = "";
+  let pullAllRequested = true, nextSafetyPullAt = 0;
+  const changedStreams = new Set<BridgeStream>();
   let quota: BridgeQuota | null = null;
   let quotaDirty = true, nextQuotaRefreshAt = 0;
   function readOnly() {
@@ -84,10 +90,14 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     requestTimeoutMs: options.requestTimeoutMs,
     onPresence: presence,
     onApproval: options.onApproval,
-    onChanged: () => { quotaDirty = true; requested = true; schedule(0); },
+    onAccessChanged: options.onAccessChanged,
+    onChanged: (stream) => { changedStreams.add(stream); quotaDirty = true; requested = true; schedule(0); },
     onStatusChange(next) {
       if (stopped) return;
-      if (next === "offline") { online.clear(); subscribed = ""; state = "offline"; }
+      if (next === "offline") {
+        online.clear(); subscribed = ""; pullAllRequested = true; state = "offline";
+        if (!inFlight && !failures) { requested = true; schedule(1000); }
+      }
       else if (next === "connecting") state = "connecting";
       else if (next === "connected") quotaDirty = true;
       notify();
@@ -111,7 +121,17 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   function schedule(delay: number) {
     if (stopped || paused || options.autoStart === false) return;
     if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { timer = undefined; void syncNow().catch(() => {}); }, delay);
+    const due = Date.now() + delay;
+    timer = setTimeout(() => {
+      timer = undefined;
+      // Discover durable local writes without sending a remote pull. This also
+      // covers SQL writers that do not emit a renderer/domain event.
+      const streams = ["account", ...watchedRuns().map((id) => `run:${id}`)].join(",");
+      const work = !failures && (!readOnly() && pending() > 0 || streams !== subscribed ||
+        readOnly() && pending() > 0 && Date.now() >= nextQuotaRefreshAt);
+      if (Date.now() < due && (failures > 0 || !requested && !work)) { schedule(due - Date.now()); return; }
+      void runCycle().catch(() => {});
+    }, Math.min(delay, options.activeIntervalMs ?? 1000));
     timer.unref();
   }
   async function drain(stream: BridgeStream, deletesOnly = false) {
@@ -124,14 +144,17 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   }
   async function cycle(refreshUsage = false) {
     requested = false;
+    const incoming = new Set(changedStreams); changedStreams.clear();
+    let pullAll = pullAllRequested || !initialized || Date.now() >= nextSafetyPullAt;
+    pullAllRequested = false;
     try {
       const streams: BridgeStream[] = ["account", ...watchedRuns().map((id): BridgeStream => `run:${id}`)];
       const signature = streams.join(",");
-      if (subscribed !== signature) { await transport.subscribe(streams); subscribed = signature; }
+      if (subscribed !== signature) { await transport.subscribe(streams); subscribed = signature; pullAll = true; }
       if (!initialized) {
         state = "syncing"; notify();
         await engine.bootstrap(); initialized = true;
-      } else await engine.pull("account");
+      } else if (pullAll || incoming.size) await engine.pull("account");
       if (stopped || paused) return;
       const wasReadOnly = readOnly();
       // An inactive publisher checks for renewal once a minute, without retrying
@@ -168,9 +191,12 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       }
       for (const runId of watchedRuns()) {
         if (stopped || paused) return;
+        if (!pullAll && !incoming.has(`run:${runId}`)) continue;
         await engine.pull(`run:${runId}`);
         runStates.set(runId, { runId, ready: true, error: null });
       }
+      // Local publishing and incremental hints cannot postpone the safety read.
+      if (pullAll) nextSafetyPullAt = Date.now() + (options.idleIntervalMs ?? fallbackPollIntervalMs);
       if (writeError) throw writeError;
       // Entering/leaving a quota refusal needs a fresh plan/usage sample. The
       // ordinary live-update path and repeated refusals remain rate limited.
@@ -180,12 +206,17 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       if (stopped) return;
       if (/quota|rate limit|subscription required/i.test(String(cause))) { quotaDirty = true; await refreshQuota(!error || !/quota|rate limit|subscription required/i.test(error)); }
       if (/subscription required/i.test(String(cause)) && readOnly()) {
+        // Bootstrap can discover inactive access before completing its first
+        // read. Retry with the renewal sample, not a zero-delay timer loop.
+        pullAllRequested = true;
+        nextSafetyPullAt = Date.now() + Math.min(quotaRefreshIntervalMs, options.idleIntervalMs ?? fallbackPollIntervalMs);
         state = "read-only"; error = null; failures = 0; lastSyncedAt = new Date().toISOString(); notify(); return;
       }
       failures++;
       error = cause instanceof Error ? cause.message : "Bridge replication failed";
       state = /connection|timed out/i.test(error) ? "offline" : "error";
-      online.clear(); subscribed = "";
+      online.clear(); subscribed = ""; pullAllRequested = true;
+      for (const stream of incoming) changedStreams.add(stream);
       for (const runId of watchedRuns()) {
         const previous = runStates.get(runId);
         runStates.set(runId, { runId, ready: previous?.ready ?? false, error });
@@ -193,24 +224,30 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       notify(); throw cause;
     } finally {
       if (!stopped) {
-        const active = watchedRuns().length > 0 || pending() > 0 && !readOnly();
-        const interval = active ? options.activeIntervalMs ?? 1000 : readOnly() ? Math.max(quotaRefreshIntervalMs, options.idleIntervalMs ?? 10_000) : options.idleIntervalMs ?? 10_000;
+        const active = pending() > 0 && !readOnly();
+        const safety = Math.max(0, nextSafetyPullAt - Date.now());
+        const interval = active ? Math.min(options.activeIntervalMs ?? 1000, safety) :
+          readOnly() && pending() > 0 ? Math.min(safety, Math.max(0, nextQuotaRefreshAt - Date.now())) : safety;
         const delay = failures ? Math.min(30_000, 1000 * 2 ** Math.min(failures - 1, 5)) : requested ? 0 : interval;
         schedule(delay);
       }
     }
   }
-  function syncNow(refreshUsage = false): Promise<void> {
+  function runCycle(refreshUsage = false): Promise<void> {
     if (stopped) return Promise.reject(new Error("Bridge replicator is stopped"));
     if (paused) return Promise.reject(new Error("Bridge replication is paused"));
-    if (inFlight) return refreshUsage ? inFlight.catch(() => {}).then(() => syncNow(true)) : inFlight;
+    if (inFlight) return inFlight;
     inFlight = cycle(refreshUsage).finally(() => { inFlight = undefined; });
     return inFlight;
+  }
+  function syncNow(refreshUsage = false): Promise<void> {
+    pullAllRequested = true;
+    return inFlight ? inFlight.catch(() => {}).then(() => runCycle(refreshUsage)) : runCycle(refreshUsage);
   }
   const api = {
     syncNow,
     async pause() { paused = true; if (timer) clearTimeout(timer); timer = undefined; await inFlight?.catch(() => {}); },
-    resume() { if (stopped) return; paused = false; api.wake(); },
+    resume() { if (stopped) return; paused = false; pullAllRequested = true; api.wake(); },
     async preserveAccountFiles() { await files?.preserveAccountFiles(); },
     isCachedFile(realPath: string): Promise<boolean> { return blobs?.isCachedFile(realPath) ?? Promise.resolve(false); },
     captureOutput(file: string, roots: string[], mime: string | null) { return files?.captureOutput(file, roots, mime); },
@@ -232,9 +269,12 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         const cached = !!sqlite.prepare("SELECT 1 FROM bridge_cursors WHERE stream=?").get(`run:${runId}`);
         runStates.set(runId, { runId, ready: cached, error: null });
       }
-      notify(); api.wake();
+      notify(); if (!runs.includes(runId)) api.wake();
     },
-    unwatchRun(watcherId: string) { if (watchers.delete(watcherId)) { watchedRuns(); notify(); api.wake(); } },
+    unwatchRun(watcherId: string) {
+      const before = watchedRuns().join(",");
+      if (watchers.delete(watcherId)) { const after = watchedRuns().join(","); notify(); if (before !== after) api.wake(); }
+    },
     getStatus(): BridgeStatus {
       const peers = sqlite.prepare("SELECT backend_id,label,platform,last_seen_ms FROM bridge_peers ORDER BY backend_id").all() as { backend_id: string; label: string; platform: string | null; last_seen_ms: number | null }[];
       const backends = new Map<string, BridgeBackendInfo>(peers.map((peer) => [peer.backend_id, { backendId: peer.backend_id, label: peer.label, platform: peer.platform,

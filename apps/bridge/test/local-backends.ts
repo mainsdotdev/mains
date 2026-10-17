@@ -119,7 +119,7 @@ async function createHost(dir: string, label: string, lan = false) {
 }
 
 /** Two actual composition roots, independent data dirs/identities, one temporary workerd hub. */
-export async function startLocalBackends(settings: { auth?: boolean; lan?: boolean; subscriptionInterval?: "monthly" | "yearly" | null } = {}) {
+export async function startLocalBackends(settings: { auth?: boolean; lan?: boolean; truncateRefreshOnce?: boolean; subscriptionInterval?: "monthly" | "yearly" | null } = {}) {
   await access(serverEntry).catch(() => { throw new Error("Build apps/server and apps/desktop's web renderer before running host acceptance tests"); });
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hosts-"));
   const { subscriptionInterval, ...hubSettings } = settings;

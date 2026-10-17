@@ -19,6 +19,17 @@ async function fixture() {
   return { dir, file: join(dir, "bridge", "identity.json"), vault, identity, storage };
 }
 describe("Bridge identity vault", () => {
+  it("protects a pending successor across restart and rejects malformed or reused proposals", async () => {
+    const f = await fixture(); f.identity.pendingToken = `b7_${"b".repeat(64)}`;
+    await f.vault.write(f.identity);
+    const raw = await readFile(f.file, "utf8");
+    expect(raw).not.toContain(f.identity.pendingToken); expect(raw).not.toContain("pendingToken");
+    expect(await createBridgeIdentityStorage(f.dir, f.storage).read()).toEqual(f.identity);
+    for (const invalid of ["invalid", f.identity.token]) {
+      await f.vault.write({ ...f.identity, pendingToken: invalid });
+      await expect(f.vault.read()).rejects.toThrow("successor credential is invalid");
+    }
+  });
   it("encrypts an unverified candidate separately and rejects ambiguous active-plus-pending identities", async () => {
     const f = await fixture(), key = f.identity.accountKey!;
     f.identity.accountKey = null; f.identity.pendingAccountKey = key; await f.vault.write(f.identity);

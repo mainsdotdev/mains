@@ -4,6 +4,7 @@ import { BRIDGE_BLOB_CIPHER_OVERHEAD, bridgeBlobChunkCount, bridgeBlobChunkSize,
 import { authenticate, identityIsActive, type DevAuthEnv } from "./auth";
 import { bridgeAccountPrefix, type BlobReservation } from "./quota";
 import type { BridgeIdentity } from "./auth";
+import type { CredentialRotated } from "./devices";
 
 export interface BlobEnv extends DevAuthEnv { BLOBS: R2Bucket }
 const audience = "mains-bridge-blob";
@@ -29,13 +30,14 @@ async function boundedBytes(request: Request, limit: number): Promise<Uint8Array
 /** Short-lived Worker capabilities stream ciphertext to a private R2 binding.
  * These are Worker-signed URLs, not S3 SigV4 URLs; no S3 credential is needed locally. */
 export async function handleBlobs(request: Request, env: BlobEnv, quota: {
+  rotated?: CredentialRotated;
   reserve(identity: BridgeIdentity, entries: BlobReservation[], expires: number): Promise<{ status: number; error: string | null }>;
   put(identity: BridgeIdentity, key: string, expires: number, bytes: Uint8Array): Promise<{ status: number; error: string | null }>;
   read(identity: BridgeIdentity, blobs: BridgeBlobIdentity[], expires: number): Promise<{ status: number; error: string | null }>;
 }): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/v1/blobs/presign" && request.method === "POST") {
-    const identity = await authenticate(request, env);
+    const identity = await authenticate(request, env, quota.rotated);
     if (!identity) return new Response("Unauthorized", { status: 401 });
     let input: BridgeBlobPresignRequest;
     try {

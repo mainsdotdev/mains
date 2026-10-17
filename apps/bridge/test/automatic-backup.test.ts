@@ -21,11 +21,13 @@ async function runtime() {
   const fixture = await build({ stdin: { contents: `
     import {AccountHub as Base, BridgeOperations} from './src/index';
     import {createHubStore} from './src/store';
+    import {createHubBackup} from './src/hub-backup';
     export {BridgeOperations};
     export class AccountHub extends Base {
       seed(records){return createHubStore(this.ctx.storage).push('A','account',records)}
       futureSchema(){this.ctx.storage.sql.exec("CREATE TABLE future_schema(id TEXT)");return true}
       track(key,bytes){this.ctx.storage.sql.exec('INSERT INTO quota_chunks VALUES(?,?,1,0)',key,bytes);return true}
+      restartBackupSession(){this.backup=createHubBackup(this.ctx.storage);return true}
       state(){const sql=this.ctx.storage.sql;return {changes:sql.exec('SELECT total_changes() AS n').one().n,
         rows:sql.exec('SELECT * FROM streams').toArray(),deleted:sql.exec('SELECT * FROM deleted').toArray(),
         usage:sql.exec('SELECT * FROM record_usage').toArray()}}
@@ -125,6 +127,64 @@ it("retries concurrent changes, rejects continuously busy accounts, and rejects 
   expect(await ops.snapshotValid("fixture", snapshot.token.replace(/^[^:]+/, "00000000-0000-4000-8000-000000000000"))).toBe(false);
 });
 
+it("continues a coherent capture after a read-only object restart when its durable bookmark has not changed", async () => {
+  const { call, ops } = await runtime(), source = new Map<string, string>();
+  await call("hub", { account: "fixture", method: "seed", args: [Array.from({ length: 90 }, (_, i) => record(i))] });
+  // Local workerd has no PITR log. Model the native commit bookmark using the
+  // real SQL write counter, preserved while only the export session restarts.
+  const durable = { ...ops, checkpoint: async () => ({ bookmark: `local-${(await call("hub", { account: "fixture", method: "state" })).changes}` }) };
+  const before = await call("hub", { account: "fixture", method: "state" });
+  let restarts = 0;
+  const capture = await captureAccount(durable, "fixture", async (path, bytes) => {
+    source.set(path, bytes);
+    if (path.endsWith("snapshot.json")) return;
+    // Invalidate every original session between pages. No SQL data is changed.
+    await call("hub", { account: "fixture", method: "restartBackupSession" }); restarts++;
+  }, "hub/0");
+  expect(restarts).toBeGreaterThan(18);
+  expect(capture.snapshot).toContain("/0/");
+  const snapshot = JSON.parse(source.get(capture.snapshot)!) as HubSnapshot;
+  expect(snapshot).toHaveProperty("sourceBookmark", `local-${before.changes}`);
+  expect(capture.pages.filter((page) => page.table === "log").flatMap((page) => JSON.parse(source.get(page.path)!).rows)).toHaveLength(90);
+  expect(await call("hub", { account: "fixture", method: "state" })).toEqual(before);
+});
+
+it("never accepts writes during bookmark-based resumption, including a write racing its checkpoint", async () => {
+  const { call, ops } = await runtime(); let checkpoints = 0, restarted = false;
+  const durable = { ...ops, checkpoint: async () => {
+    const { changes } = await call("hub", { account: "fixture", method: "state" });
+    // A write after the resume checkpoint but before the new session token must
+    // still invalidate the whole attempt at the final checkpoint.
+    if (++checkpoints === 2) await call("hub", { account: "fixture", method: "seed", args: [[record(1)]] });
+    return { bookmark: `local-${changes}` };
+  } };
+  const source = new Map<string, string>();
+  const capture = await captureAccount(durable, "fixture", async (path, bytes) => {
+    source.set(path, bytes);
+    if (!restarted) { restarted = true; await call("hub", { account: "fixture", method: "restartBackupSession" }); }
+  }, "hub/0");
+  expect(capture.snapshot).toContain("/1/");
+  expect(capture.pages.filter((page) => page.table === "log").flatMap((page) => JSON.parse(source.get(page.path)!).rows)).toHaveLength(1);
+  let i = 2;
+  await expect(captureAccount(durable, "fixture", async () => {
+    await call("hub", { account: "fixture", method: "seed", args: [[record(i++)]] });
+  }, "hub/1")).rejects.toThrow(/three backup attempts/);
+  await expect(captureAccount({ ...ops, checkpoint: async () => { throw new Error("PITR unavailable"); } }, "fixture", async () => {}, "hub/2")).rejects.toThrow(/PITR unavailable/);
+});
+
+it("bounds read-only restart churn when the source never makes page progress", async () => {
+  const { call, ops } = await runtime(); let reads = 0, wrote = false;
+  const unstable = { ...ops, checkpoint: async () => ({ bookmark: `local-${(await call("hub", { account: "fixture", method: "state" })).changes}` }),
+    snapshotPage: async (...args: any[]) => {
+      reads++;
+      await call("hub", { account: "fixture", method: "restartBackupSession" });
+      return ops.snapshotPage(...args);
+    } };
+  await expect(captureAccount(unstable, "fixture", async () => { wrote = true; }, "hub/0")).rejects.toThrow(/session churn/);
+  expect(reads).toBeGreaterThan(0); expect(reads).toBeLessThan(50);
+  expect(wrote).toBe(false);
+});
+
 it("reuses unchanged encrypted files, publishes only verified snapshots, and locally restores D1/hubs/files from the encrypted R2 backup", async () => {
   const { call, ops, bucket } = await runtime(), pair = backupKeyPair(), target = await loadOperationsTarget("staging"), root = backupRoot(target, pair.publicKey);
   await call("hub", { account: "fixture", method: "seed", args: [[record(1), record(2), record(2, "delete")]] });
@@ -135,8 +195,9 @@ it("reuses unchanged encrypted files, publishes only verified snapshots, and loc
     files.push({ path, size: raw.length, sha256: sha256(raw), key: object.receipt.key }); refs.push(object.receipt);
   };
   let sql = "";
-  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
+  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql", "0006_backend_token_handover.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
   sql += "INSERT INTO user VALUES('fixture','Local user','fixture@example.test',1,NULL,1,1);\n";
+  sql += "INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at,next_token_hash,next_token_expires_at) VALUES('fixture','B','public','Local','test','approved','current-fixture-hash',9999999999999,1,'pending-fixture-hash',9999999999999);\n";
   sql += "INSERT INTO bridge_beta_invites VALUES('fixture@example.test','fixture','active',1,2,2592000002,2);\n";
   await save("auth.sql", sql); await save("deployments.json", "[]"); await save("d1-time-travel.json", "{}");
   const captured = await captureAccount(ops, "fixture", save, "hub/0");
@@ -160,6 +221,9 @@ it("reuses unchanged encrypted files, publishes only verified snapshots, and loc
   const restoredBeta = await execute(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "d1", "execute", "AUTH_DB", "--local", "--config", join(local, "wrangler.jsonc"), "--persist-to", join(local, "state"), "--json", "--command", "SELECT status,activated_at,expires_at FROM bridge_beta_invites"],
     { env: { ...process.env, CLOUDFLARE_API_TOKEN: "invalid-local-only", WRANGLER_SEND_METRICS: "false" }, timeout: 30_000 });
   expect(JSON.parse(restoredBeta.stdout)[0].results).toEqual([{ status: "active", activated_at: 2, expires_at: 2592000002 }]);
+  const restoredHandover = await execute(process.execPath, ["node_modules/wrangler/bin/wrangler.js", "d1", "execute", "AUTH_DB", "--local", "--config", join(local, "wrangler.jsonc"), "--persist-to", join(local, "state"), "--json", "--command", "SELECT token_hash,next_token_hash,next_token_expires_at FROM bridge_backends"],
+    { env: { ...process.env, CLOUDFLARE_API_TOKEN: "invalid-local-only", WRANGLER_SEND_METRICS: "false" }, timeout: 30_000 });
+  expect(JSON.parse(restoredHandover.stdout)[0].results).toEqual([{ token_hash: "current-fixture-hash", next_token_hash: "pending-fixture-hash", next_token_expires_at: 9999999999999 }]);
   await expect(downloadSnapshot(bucket, index, await loadOperationsTarget("production"), pair.privateKey, async () => {})).rejects.toThrow(/another environment/);
   const head = await bucket.head(object.receipt.key);
   await bucket.put(object.receipt.key, "corrupt", { customMetadata: head!.customMetadata });
@@ -223,7 +287,7 @@ it("runs two complete daily jobs locally, reads unchanged source objects once, a
   const sourceProxy = { list: (...args: any[]) => (source.list as any)(...args), head: (...args: any[]) => (source.head as any)(...args),
     get: async (...args: any[]) => { gets++; return singleTransfer(await (source.get as any)(...args)); } };
   let sql = "";
-  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
+  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql", "0006_backend_token_handover.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
   sql += "INSERT INTO user VALUES('fixture','Local user','fixture@example.test',1,NULL,1,1);\n";
   sql += "INSERT INTO bridge_accounts VALUES('fixture','device-a','hash','pub','{}',1);\n";
   const dependencies = {

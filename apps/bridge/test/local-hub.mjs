@@ -8,14 +8,26 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
- * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
+ * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
 export async function startLocalBridgeHub(settings = {}) {
   const dir = await mkdtemp(join(tmpdir(), "mains-bridge-hub-"));
   const bundle = join(dir, "hub.mjs");
   const secret = randomBytes(32).toString("hex");
   // Match Wrangler's runtime exports. The browser condition selects Better
   // Auth's synchronous request-state fallback, which breaks concurrent login.
-  await build({ entryPoints: [fileURLToPath(new URL(settings.maintenance ? "../src/staging-reset-worker.ts" : "../src/index.ts", import.meta.url))], bundle: true, format: "esm", platform: "browser", conditions: ["workerd"], target: "es2022", outfile: bundle, external: ["cloudflare:workers", "node:*"] });
+  const entry = settings.truncateRefreshOnce ? { stdin: { resolveDir: fileURLToPath(new URL("../", import.meta.url)), sourcefile: "refresh-fault-probe.ts", contents: `
+    import worker from './src/index.ts'; export {AccountHub, BridgeOperations} from './src/index.ts';
+    let truncated = false;
+    export default { async fetch(request, env) {
+      const response = await worker.fetch(request, env);
+      if (!truncated && new URL(request.url).pathname === '/v1/backends/refresh' && response.status === 200) {
+        truncated = true; await response.arrayBuffer();
+        return new Response('{"nextTokenHash":', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return response;
+    } };
+  ` } } : { entryPoints: [fileURLToPath(new URL(settings.maintenance ? "../src/staging-reset-worker.ts" : "../src/index.ts", import.meta.url))] };
+  await build({ ...entry, bundle: true, format: "esm", platform: "browser", conditions: ["workerd"], target: "es2022", outfile: bundle, external: ["cloudflare:workers", "node:*"] });
   /** @type {Array<{to: string, url: string, kind: 'sign-in' | 'verify-email' | 'reset-password'}>} */
   const mail = [];
   let loginCount = 0;
@@ -40,7 +52,7 @@ export async function startLocalBridgeHub(settings = {}) {
   catch (error) { await mf.dispose().catch(() => {}); await rm(dir, { recursive: true, force: true }); throw error; }
   if (settings.auth) {
     const db = await mf.getD1Database("AUTH_DB");
-    for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql"]) {
+    for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql", "0006_backend_token_handover.sql"]) {
       const sql = await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8");
       await db.batch(sql.split(";").filter((part) => part.trim()).map((part) => db.prepare(part)));
     }

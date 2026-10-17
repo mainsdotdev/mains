@@ -8,16 +8,38 @@ import { requireBridgeAccess, requireBridgeBootstrapAccess } from "./beta";
 export interface BackendRow {
   account_id: string; backend_id: string; public_key: string; label: string; platform: string;
   status: "pending" | "approved" | "revoked"; token_hash: string; token_expires_at: number; created_at: number; last_seen: number | null;
+  next_token_hash: string | null; next_token_expires_at: number | null;
   recovery_challenge: string | null; challenge_expires_at: number | null;
 }
-export type IdentityControl = { approval(accountId: string, request: BridgeApprovalRequest): Promise<void>; revoked(accountId: string, backendId: string): Promise<void> };
+export type CredentialRotated = (accountId: string, backendId: string, oldHash: string) => Promise<void>;
+export type IdentityControl = { approval(accountId: string, request: BridgeApprovalRequest): Promise<void>; revoked(accountId: string, backendId: string): Promise<void>; rotated?: CredentialRotated };
 const ttl = 90 * 24 * 60 * 60 * 1000;
-export async function backendIdentity(request: Request, env: AuthEnv, pending = false): Promise<BackendRow | null> {
+export async function backendIdentity(request: Request, env: AuthEnv, pending = false, rotated?: CredentialRotated): Promise<BackendRow | null> {
   const token = request.headers.get("Authorization")?.replace(/^Bearer /, "");
   if (!env.AUTH_DB || !token?.startsWith("b7_")) return null;
-  const row = await env.AUTH_DB.prepare("SELECT * FROM bridge_backends WHERE token_hash=? AND token_expires_at>?")
-    .bind(await digestToken(token), Date.now()).first<BackendRow>();
-  return row && row.status !== "revoked" && (pending || row.status === "approved") ? row : null;
+  const hash = await digestToken(token), now = Date.now();
+  let row = await env.AUTH_DB.prepare(`SELECT * FROM bridge_backends WHERE
+    (token_hash=? AND token_expires_at>?) OR (next_token_hash=? AND next_token_expires_at>?)`)
+    .bind(hash, now, hash, now).first<BackendRow>();
+  if (row?.status === "approved" && row.next_token_hash === hash) {
+    const previous = row.token_hash;
+    row = await env.AUTH_DB.prepare(`UPDATE bridge_backends SET token_hash=next_token_hash,token_expires_at=next_token_expires_at,
+      next_token_hash=NULL,next_token_expires_at=NULL WHERE account_id=? AND backend_id=? AND token_hash=? AND next_token_hash=?
+      AND next_token_expires_at>? AND status='approved' RETURNING *`)
+      .bind(row.account_id, row.backend_id, previous, hash, now).first<BackendRow>();
+    if (row) {
+      // A committed successor is already durable on the client. Invalidation
+      // is best effort and closes only sockets carrying the previous hash.
+      try { await rotated?.(row.account_id, row.backend_id, previous); }
+      catch { reportBridgeFailure(env, "identity"); }
+    } else {
+      // Another request may have committed this same successor concurrently.
+      // Never restore a revoked row or a superseded pending credential.
+      row = await env.AUTH_DB.prepare("SELECT * FROM bridge_backends WHERE token_hash=? AND token_expires_at>?")
+        .bind(hash, now).first<BackendRow>();
+    }
+  }
+  return row && row.token_hash === hash && row.status !== "revoked" && (pending || row.status === "approved") ? row : null;
 }
 export async function backendStillApproved(env: AuthEnv, account: string, backend: string, hash: string): Promise<boolean> {
   return !!await env.AUTH_DB?.prepare("SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND token_hash=? AND status='approved' AND token_expires_at>?")
@@ -52,14 +74,15 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       const row = await db.prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at)
         VALUES(?,?,?,?,?,'pending',?,?,?) ON CONFLICT(account_id,backend_id) DO UPDATE SET public_key=excluded.public_key,label=excluded.label,
         platform=excluded.platform,status='pending',token_hash=excluded.token_hash,token_expires_at=excluded.token_expires_at,created_at=excluded.created_at,
-        recovery_challenge=NULL,challenge_expires_at=NULL WHERE bridge_backends.status='revoked' OR bridge_backends.token_expires_at<? RETURNING *`)
-        .bind(user.id, backendId, publicKey, label, platform, hash, now + ttl, now, now).first<BackendRow>();
+        recovery_challenge=NULL,challenge_expires_at=NULL,next_token_hash=NULL,next_token_expires_at=NULL
+        WHERE bridge_backends.status='revoked' OR (bridge_backends.token_expires_at<? AND coalesce(bridge_backends.next_token_expires_at,0)<?) RETURNING *`)
+        .bind(user.id, backendId, publicKey, label, platform, hash, now + ttl, now, now, now).first<BackendRow>();
       if (!row) throw new HttpError(409, "This backend is already registered; revoke its old registration before signing in again");
       await db.batch([db.prepare("DELETE FROM bridge_key_wraps WHERE account_id=? AND backend_id=?").bind(user.id, backendId),
         db.prepare("DELETE FROM bridge_approvals WHERE account_id=? AND backend_id=?").bind(user.id, backendId)]);
       return json({ accountId: user.id, email: user.email, backend: format(row), token, expiresAt: row.token_expires_at }, 201);
     }
-    const backend = await backendIdentity(request, env, true);
+    const backend = await backendIdentity(request, env, true, control.rotated);
     if (!backend) throw new HttpError(401, "Backend sign-in expired or was revoked");
     await rateLimit(env, `backend:${backend.account_id}:${backend.backend_id}`, 180);
     const account = backend.account_id, id = backend.backend_id, ready = backend.status === "approved";
@@ -69,7 +92,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       const mine = ready ? await db.prepare("SELECT wrap FROM bridge_key_wraps WHERE account_id=? AND backend_id=?").bind(account, id).first<{ wrap: string }>() : null;
       const approval = await db.prepare("SELECT status,expires_at FROM bridge_approvals WHERE account_id=? AND backend_id=?").bind(account, id).first();
       return json({ accountId: account, backend: format(backend), initialized: !!keys, recoveryPublicKey: keys?.recovery_public_key ?? null,
-        wrap: mine ? JSON.parse(mine.wrap) : null, approval });
+        wrap: mine ? JSON.parse(mine.wrap) : null, approval, tokenRenewal: "client-hash-v1" });
     }
     if (path === "/v1/keys/bootstrap" && request.method === "POST") {
       await requireBridgeBootstrapAccess(env, account);
@@ -102,7 +125,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       const authorized = target === id ? "token_hash=? AND token_expires_at>?" : approvedSql;
       const authorizedArgs = target === id ? [backend.token_hash, Date.now()] : approvalArgs(backend);
       const result = await db.batch([
-        db.prepare(`UPDATE bridge_backends SET status='revoked',recovery_challenge=NULL WHERE account_id=? AND backend_id=? AND ${authorized}`)
+        db.prepare(`UPDATE bridge_backends SET status='revoked',recovery_challenge=NULL,next_token_hash=NULL,next_token_expires_at=NULL WHERE account_id=? AND backend_id=? AND ${authorized}`)
           .bind(account, target, ...authorizedArgs),
         db.prepare("DELETE FROM bridge_key_wraps WHERE account_id=? AND backend_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='revoked')")
           .bind(account, target, account, target),
@@ -189,10 +212,25 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       if (!result[0].meta.changes) throw new HttpError(409, "Recovery challenge was already used"); return json({ ok: true });
     }
     if (path === "/v1/backends/refresh" && request.method === "POST") {
-      requireApproved(); const token = `b7_${randomToken()}`, expiresAt = Date.now() + ttl;
-      const result = await db.prepare("UPDATE bridge_backends SET token_hash=?,token_expires_at=? WHERE account_id=? AND backend_id=? AND token_hash=? AND status='approved'")
-        .bind(await digestToken(token), expiresAt, account, id, backend.token_hash).run();
-      if (!result.meta.changes) throw new HttpError(401, "Backend access changed"); return json({ token, expiresAt });
+      requireApproved();
+      const { nextTokenHash: hash } = await jsonInput(request);
+      if (typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)) throw new HttpError(400, "Provide a SHA-256 successor token hash");
+      // A saved proposal can authenticate itself if its predecessor expired
+      // during an outage, or a previous first use already committed it.
+      // This acknowledges the existing expiry; it never extends that token.
+      if (hash === backend.token_hash) return json({ nextTokenHash: hash, expiresAt: backend.token_expires_at });
+      const now = Date.now();
+      const next = await db.prepare(`UPDATE bridge_backends SET next_token_hash=?,next_token_expires_at=CASE WHEN next_token_expires_at>? THEN next_token_expires_at ELSE ? END
+        WHERE account_id=? AND backend_id=? AND token_hash=? AND status='approved' AND token_expires_at>?
+        AND (next_token_hash IS NULL OR next_token_hash=?) RETURNING next_token_expires_at`)
+        .bind(hash, now, now + ttl, account, id, backend.token_hash, now, hash).first<{ next_token_expires_at: number }>();
+      if (!next) {
+        if (!await backendStillApproved(env, account, id, backend.token_hash)) throw new HttpError(401, "Backend access changed");
+        throw new HttpError(409, "Bridge token renewal conflict; another successor is already pending");
+      }
+      // The client generated and saved the token before proposing this hash.
+      // A holder of the predecessor cannot retrieve it from the hub.
+      return json({ nextTokenHash: hash, expiresAt: next.next_token_expires_at });
     }
     return json({ error: "Not found" }, 404);
   } catch (error) {

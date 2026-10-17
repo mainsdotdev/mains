@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { createHash, randomBytes } from "node:crypto";
 import { x25519 } from "@noble/curves/ed25519.js";
 import { bridgeApprovalCode, bridgeBase64, bridgeBytes, normalizeBridgeVerificationCode, type BridgeApprovalRequest, type BridgeAuthStatus, type BridgeRegisteredBackend,
   type BridgeSignInInput, type BridgeSealedAccountKey, type BridgeAccountKeys } from "@mains/contracts/bridge-auth";
@@ -9,7 +10,7 @@ import { bridgeRecoveryPublicKey, generateBridgeRecoveryCode, openBridgeRecovery
 import { bridgeHttp, bridgeHubUrl, BridgeHttpError, pollBridgeDeviceLogin, startBridgeDeviceLogin, startBridgeLoopback } from "./bridge.login";
 import type { BridgeDevConfig } from "./bridge.config";
 
-type Mine = { accountId: string; initialized: boolean; backend: BridgeRegisteredBackend; wrap: BridgeSealedAccountKey | null; recoveryPublicKey: string | null; approval: { status: string; expires_at: number } | null };
+type Mine = { accountId: string; initialized: boolean; backend: BridgeRegisteredBackend; wrap: BridgeSealedAccountKey | null; recoveryPublicKey: string | null; approval: { status: string; expires_at: number } | null; tokenRenewal?: string };
 export interface BridgeIdentityOptions {
   backendId: string; dataDir: string; storage: SecretStorageAdapter; kind: "electron" | "node";
   openExternal(url: string): Promise<unknown>;
@@ -33,7 +34,11 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
   }
   const notified = new Set<string>();
   const notify = () => { if (!closed) options.changed(); };
-  const schedule = (ms = 5000) => { if (closed || cancelling || !saved && !deviceCode) return; if (timer) clearTimeout(timer); timer = setTimeout(() => { timer = undefined; void refresh(); }, ms); timer.unref(); };
+  const schedule = (ms = state === "ready" || state === "needs-verification" ? 300_000 : state === "signing-in" ? interval : 5000) => {
+    if (timer) clearTimeout(timer); timer = undefined;
+    if (closed || cancelling || state === "revoked" || !saved && !deviceCode) return;
+    timer = setTimeout(() => { timer = undefined; void refresh(); }, ms); timer.unref();
+  };
   async function request<T>(path: string, body?: unknown, method?: string): Promise<T> {
     if (!saved) throw new Error("Sign in to Bridge first");
     return bridgeHttp<T>(saved.hubUrl, path, saved.token, body, method);
@@ -42,6 +47,29 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     if (!saved?.accountKey) throw new Error("Backend approval is required");
     return { url: new URL("/v1/log", saved.hubUrl).toString().replace(/^http/, "ws"), token: saved.token,
       accountKey: bridgeBytes(saved.accountKey, 32), backendId: options.backendId, label: saved.label };
+  }
+  async function renewToken() {
+    if (!saved?.accountKey) throw new Error("Backend approval is required");
+    if (!saved.pendingToken) {
+      const proposed = { ...saved, pendingToken: `b7_${randomBytes(32).toString("hex")}` };
+      // Persist before contacting the hub, including before a request whose
+      // reply is lost. Retry/restart always proposes the same random token.
+      await vault.write(proposed); saved = proposed;
+    }
+    const token = saved.pendingToken!, body = { nextTokenHash: createHash("sha256").update(token).digest("hex") };
+    let reply: { nextTokenHash: string; expiresAt: number };
+    try { reply = await request("/v1/backends/refresh", body); }
+    catch (failure) {
+      if (!(failure instanceof BridgeHttpError && failure.status === 401)) throw failure;
+      // Both credentials are already durable. The proposal may have been
+      // accepted before an outage outlasted the predecessor's natural expiry.
+      reply = await bridgeHttp(saved.hubUrl, "/v1/backends/refresh", token, body);
+    }
+    if (!reply || reply.nextTokenHash !== body.nextTokenHash || !Number.isSafeInteger(reply.expiresAt) || reply.expiresAt <= Date.now()) throw new Error("Invalid Bridge token renewal response");
+    const renewed = { ...saved, token, expiresAt: reply.expiresAt, pendingToken: null };
+    // Replication only sees the successor after this write succeeds. A failed
+    // write retains the saved proposal and retries the acknowledgement.
+    await vault.write(renewed); saved = renewed;
   }
   async function activate(key: Uint8Array, publicVerifier: string) {
     if (!saved || closed || cancelling) throw new Error("Sign-in was cancelled");
@@ -54,10 +82,11 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       try { await options.ready(value, saved.includeExisting, saved.activationPending, saved.accountId); activated = true; saved.includeExisting = true; saved.activationPending = false; await vault.write(saved); }
       finally { value.accountKey.fill(0); }
     }
-    state = "ready"; error = null; login = null; deviceCode = null; stopLogin = undefined; notify();
+    state = "ready"; error = null; login = null; deviceCode = null; stopLogin = undefined; schedule(); notify();
   }
   async function update() {
     if (!saved || closed || cancelling) return;
+    if (saved.pendingToken) await renewToken();
     const mine = await request<Mine>("/v1/keys/mine");
     if (mine.accountId !== saved.accountId || mine.backend.backendId !== options.backendId || mine.backend.publicKey !== saved.publicKey)
       throw new Error("Backend identity changed; sign in again");
@@ -71,8 +100,10 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         try { await activate(key, bridgeRecoveryPublicKey(key)); } finally { key.fill(0); }
       } else { state = "ready"; error = null; }
       if (saved.expiresAt - Date.now() < 7 * 24 * 60 * 60 * 1000) {
-        const next = await request<{ token: string; expiresAt: number }>("/v1/backends/refresh", {});
-        saved.token = next.token; saved.expiresAt = next.expiresAt; await vault.write(saved);
+        // Do not let an older hub issue a different, server-generated token
+        // which this client cannot safely acknowledge as its own proposal.
+        if (mine.tokenRenewal !== "client-hash-v1") throw new Error("Update the Bridge hub before renewing this device's credential");
+        await renewToken();
       }
       const [incoming, devices] = await Promise.all([request<BridgeApprovalRequest[]>("/v1/approvals"), request<BridgeRegisteredBackend[]>("/v1/backends")]);
       const verified = await Promise.all(incoming.map(async (entry) => {
@@ -141,9 +172,11 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       await bridgeHttp(hub!, "/api/auth/sign-out", token, {}).catch(() => {});
     }
   }
-  async function refresh() {
+  async function refresh(afterCurrent = false): Promise<void> {
     if (closed) return;
-    if (running) return running;
+    // A notification received during a stale HTTP snapshot must run once more
+    // afterwards, rather than disappear until the five-minute fallback.
+    if (running) return afterCurrent ? running.catch(() => {}).then(() => refresh()) : running;
     const generation = epoch;
     running = exclusive(async () => {
       try {
@@ -157,10 +190,10 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         if (generation !== epoch || closed) return;
         if (failure instanceof BridgeHttpError && /authorization_pending|slow_down/i.test(failure.code ?? failure.message)) { if (/slow_down/i.test(failure.code ?? failure.message)) interval += 5000; }
         else if (failure instanceof BridgeHttpError && failure.status === 401 && saved) {
-          state = "revoked"; saved.accountKey = null; saved.pendingAccountKey = null; accountFingerprint = null; await vault.write(saved); await options.revoked(); activated = false;
+          state = "revoked"; saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingToken = null; accountFingerprint = null; await vault.write(saved); await options.revoked(); activated = false;
           error = "Backend access expired or was revoked; sign out and sign in again";
         } else { error = failure instanceof Error ? failure.message : "Bridge sign-in failed"; if (!saved) state = "error"; }
-      } finally { if (generation === epoch && !closed) { notify(); schedule(state === "signing-in" ? interval : 5000); } }
+      } finally { if (generation === epoch && !closed) { notify(); schedule(); } }
     });
     try { await running; } finally { running = undefined; }
   }
@@ -240,7 +273,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     async reject(requestId: string) { return exclusive(async () => { await request(`/v1/approvals/${encodeURIComponent(requestId)}`, undefined, "DELETE"); await update(); notify(); }); },
     async revoke(backendId: string) { return exclusive(async () => {
       await request(`/v1/backends/${encodeURIComponent(backendId)}`, undefined, "DELETE");
-      if (backendId === options.backendId && saved) { saved.accountKey = null; saved.pendingAccountKey = null; accountFingerprint = null; await vault.write(saved); state = "revoked"; activated = false; await options.revoked(); }
+      if (backendId === options.backendId && saved) { saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingToken = null; accountFingerprint = null; await vault.write(saved); state = "revoked"; activated = false; await options.revoked(); }
       else await update(); notify();
     }); },
     async enterRecoveryCode(value: string) { return exclusive(async () => {

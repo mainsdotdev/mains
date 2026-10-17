@@ -1,11 +1,12 @@
 /** Private operator export, never part of the client sync protocol. No snapshot
- * tables/triggers/writes are added to the live database. Pages are optimistic:
- * ANY intervening SQL write or object restart invalidates the entire attempt. */
+ * tables/triggers/writes are added to the live database. A page rejects any SQL
+ * write or object restart; the operator may resume a new session only behind an
+ * unchanged durable commit bookmark, checked again after the complete capture. */
 const tables = new Set(["streams", "log", "latest", "deleted", "row_owners", "runs", "presence", "backend_metadata",
   "write_rate", "stream_activity", "record_usage", "quota_chunks", "quota_state", "quota_usage",
   "blob_gc_state", "blob_objects", "blob_deletions", "blob_links"]);
 export interface HubSchema { type: string; name: string; tbl_name: string; sql: string }
-export interface HubSnapshot { version: 1; token: string; capturedAt: string; schema: HubSchema[]; tables: string[] }
+export interface HubSnapshot { version: 1; token: string; capturedAt: string; schema: HubSchema[]; tables: string[]; sourceBookmark?: string }
 export interface HubPage { changed: boolean; rows: { rowid: number; values: (string | number | null)[] }[]; next: number; done: boolean }
 
 export function createHubBackup(storage: any) {

@@ -114,16 +114,42 @@ export async function storeSealed(bucket: any, root: string, id: string, publicK
   return { receipt: proof, plainSize: Number(stored.customMetadata.plainSize), plainSha: stored.customMetadata.plainSha as string };
 }
 
+async function hubBookmark(ops: any, accountId: string): Promise<string> {
+  const point = await ops.checkpoint(accountId);
+  if (typeof point?.bookmark !== "string" || !/^[A-Za-z0-9-]{1,128}$/.test(point.bookmark)) throw new OperationsError("Invalid Durable Object backup checkpoint");
+  return point.bookmark;
+}
+
 export async function captureAccount(ops: any, accountId: string, write: (path: string, bytes: string, table?: string) => Promise<void>, prefix: string) {
+  // Cloudflare's durable commit bookmark survives a read-only hibernation;
+  // total_changes + the instance nonce deliberately do not. Local workerd has
+  // no PITR log and retains the stricter session-only fence. A failed native
+  // checkpoint must never silently downgrade to that local path.
+  const durable = typeof ops.checkpoint === "function";
+  let storageChanges = 0, sessionChanges = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
+    const bookmark = durable ? await hubBookmark(ops, accountId) : undefined;
     const snapshot: HubSnapshot = await ops.snapshotBegin(accountId), pages: { table: string; path: string }[] = [];
     if (snapshot.version !== 1 || !Array.isArray(snapshot.tables) || snapshot.tables.length > 64) throw new OperationsError("Unsupported hub snapshot");
-    let changed = false;
+    const schema = JSON.stringify([snapshot.tables, snapshot.schema]);
+    let changed = false, token = snapshot.token;
     for (const table of snapshot.tables) {
-      let after = 0;
+      let after = 0, resumes = 0;
       for (;;) {
-        const page: HubPage = await ops.snapshotPage(accountId, snapshot.token, table, after);
-        if (page.changed) { changed = true; break; }
+        const page: HubPage = await ops.snapshotPage(accountId, token, table, after);
+        if (page.changed) {
+          if (!durable) { changed = true; sessionChanges++; break; }
+          if (await hubBookmark(ops, accountId) !== bookmark) { changed = true; storageChanges++; break; }
+          // Resume only the unread page. Bound restart loops that make no
+          // progress; successful pages reset the budget. The final bookmark
+          // check also catches writes racing this check and snapshotBegin.
+          if (++resumes > 3) { changed = true; sessionChanges++; break; }
+          const resumed: HubSnapshot = await ops.snapshotBegin(accountId);
+          if (resumed.version !== snapshot.version || JSON.stringify([resumed.tables, resumed.schema]) !== schema) throw new OperationsError("Hub schema changed during backup");
+          token = resumed.token;
+          continue;
+        }
+        resumes = 0;
         if (!Array.isArray(page.rows) || (!page.done && (!Number.isSafeInteger(page.next) || page.next <= after))) throw new OperationsError("Invalid hub snapshot page");
         const path = `${prefix}/${attempt}/${pages.length}.json`;
         await write(path, JSON.stringify(page), table); pages.push({ table, path }); after = page.next;
@@ -131,13 +157,17 @@ export async function captureAccount(ops: any, accountId: string, write: (path: 
       }
       if (changed) break;
     }
-    if (!changed && await ops.snapshotValid(accountId, snapshot.token)) {
-      const path = `${prefix}/${attempt}/snapshot.json`;
-      await write(path, JSON.stringify(snapshot));
-      return { accountId, snapshot: path, pages };
+    if (!changed) {
+      const valid = durable ? await hubBookmark(ops, accountId) === bookmark : await ops.snapshotValid(accountId, token);
+      if (valid) {
+        const path = `${prefix}/${attempt}/snapshot.json`;
+        await write(path, JSON.stringify({ ...snapshot, ...(bookmark ? { sourceBookmark: bookmark } : {}) }));
+        return { accountId, snapshot: path, pages };
+      }
+      if (durable) storageChanges++; else sessionChanges++;
     }
   }
-  throw new OperationsError("Account changed during all three backup attempts; no completed backup was published. Retry when activity settles");
+  throw new OperationsError(`Account invalidated during all three backup attempts (storage changes: ${storageChanges}; session churn: ${sessionChanges}); no completed backup was published. Retry when activity settles`);
 }
 
 /** Caller serializes runs per environment (the workflow has a concurrency

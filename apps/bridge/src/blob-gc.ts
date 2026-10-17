@@ -73,7 +73,13 @@ export function createBlobCollector(storage: DurableObjectStorage, bucket: R2Buc
     });
   }
   const api = {
-    setAccountPrefix(prefix: string) { sql.exec("UPDATE blob_gc_state SET account_prefix=? WHERE id=1 AND account_prefix IS NULL", prefix); },
+    setAccountPrefix(prefix: string) {
+      // A fresh in-memory quota helper reuses the durable prefix. Avoid even a
+      // zero-row UPDATE on ordinary reads: it can open a write transaction.
+      if (sql.exec("SELECT 1 FROM blob_gc_state WHERE id=1 AND account_prefix IS NULL").toArray().length) {
+        sql.exec("UPDATE blob_gc_state SET account_prefix=? WHERE id=1 AND account_prefix IS NULL", prefix);
+      }
+    },
     isDeleting(id: string) { return !!sql.exec("SELECT 1 FROM blob_deletions WHERE blob_id=?", id).toArray().length; },
     async resume(id: string) { if (api.isDeleting(id)) await finish(id); },
     /** An upload renews the grace period even if it reuses previously stored bytes. */

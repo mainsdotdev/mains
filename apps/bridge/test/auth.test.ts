@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { mkdtemp, access, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,6 +21,14 @@ afterAll(async () => { await hub?.dispose(); });
 const login = () => hub.login(`${randomUUID()}@example.com`);
 async function rpc(path: string, token: string, body?: unknown, method = body === undefined ? "GET" : "POST") {
   return fetch(new URL(path, hub.url), { method, headers: { Authorization: `Bearer ${token}`, Origin: new URL(hub.url).origin, "Content-Type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+}
+const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
+async function renew(token: string, successor = `b7_${randomBytes(32).toString("hex")}`) {
+  const response = await rpc("/v1/backends/refresh", token, { nextTokenHash: tokenHash(successor) });
+  expect(response.status).toBe(200);
+  const receipt = await response.json() as { expiresAt: number };
+  expect(Object.keys(receipt)).toEqual(["nextTokenHash", "expiresAt"]);
+  return { token: successor, ...receipt };
 }
 async function register(browser: Awaited<ReturnType<typeof login>>, backendId = randomUUID()) {
   const pair = generateBridgeDeviceKeyPair(), publicKey = bridgeBase64(pair.publicKey);
@@ -50,6 +58,22 @@ async function approval(a: Backend & { key: Uint8Array }, b: Backend) {
 async function socketFor(token: string) {
   const socket = new WebSocket(hub.wsUrl, { headers: { Authorization: `Bearer ${token}` } });
   await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); }); return socket;
+}
+async function pullSocket(socket: WebSocket) {
+  const requestId = randomUUID();
+  const reply = new Promise<void>((resolve, reject) => {
+    const closed = () => { socket.off("message", receive); reject(new Error("Socket closed before pull response")); };
+    const receive = (data: WebSocket.RawData) => {
+      const frame = parseBridgeServerFrame(data.toString());
+      if ("requestId" in frame && frame.requestId === requestId) {
+        socket.off("message", receive); socket.off("close", closed);
+        if ("error" in frame) reject(new Error(frame.error.message)); else resolve();
+      }
+    };
+    socket.on("message", receive); socket.once("close", closed);
+  });
+  socket.send(JSON.stringify({ requestId, message: { type: "pull", stream: "account", after: 0, limit: 10 } }));
+  await reply;
 }
 
 describe("Verified sign-in and backend key ceremonies", () => {
@@ -135,6 +159,7 @@ describe("Verified sign-in and backend key ceremonies", () => {
       const request = await approval(a, b); expect(await event).toMatchObject({ type: "approval", backendId: b.backendId, code: request.code });
       const bSocket = await socketFor(b.token);
       try {
+        await pullSocket(bSocket); // Warm the credential cache before revocation.
         const blob = { blobId: randomBytes(32).toString("base64url"), size: 3 };
         const presign = async (op: string) => (await (await rpc("/v1/blobs/presign", b.token, { op, blobs: [blob] })).json() as BridgeBlobPresignResult).blobs[0].chunks[0].url;
         const put = await presign("put"), bytes = randomBytes(43);
@@ -148,11 +173,95 @@ describe("Verified sign-in and backend key ceremonies", () => {
       } finally { bSocket.terminate(); }
     } finally { socket.terminate(); }
   });
-  it("rotates a backend credential without retaining access for the old credential", async () => {
+  it("keeps the old credential and its socket until the replacement is first used", async () => {
+    const a = await owner(), socket = await socketFor(a.token);
+    let closed: number | null = null; socket.once("close", (code) => { closed = code; });
+    try {
+      await pullSocket(socket);
+      const blob = { blobId: randomBytes(32).toString("base64url"), size: 3 };
+      const presign = async (token: string, op: string) => (await (await rpc("/v1/blobs/presign", token, { op, blobs: [blob] })).json() as BridgeBlobPresignResult).blobs[0].chunks[0].url;
+      const put = await presign(a.token, "put");
+      expect((await fetch(put, { method: "PUT", body: randomBytes(43) })).status).toBe(204);
+      const capability = await presign(a.token, "get");
+      const next = await renew(a.token);
+      expect((await rpc("/v1/keys/mine", a.token)).status).toBe(200);
+      expect((await fetch(capability)).status).toBe(200);
+      await pullSocket(socket); expect(closed).toBeNull();
+      expect((await rpc("/v1/log", next.token)).status).toBe(426);
+      expect((await rpc("/v1/log", a.token)).status).toBe(401);
+      expect((await fetch(capability)).status).toBe(403);
+      expect((await fetch(await presign(next.token, "get"))).status).toBe(200);
+      await vi.waitFor(() => expect(closed).toBe(1008));
+    } finally { socket.terminate(); }
+  });
+  it.each(["/v1/quota", "/v1/subscription", "/v1/blobs/presign"])("commits first use through %s and invalidates the predecessor's cached socket", async (path) => {
+    const a = await owner(), socket = await socketFor(a.token);
+    let closed: number | null = null; socket.once("close", (code) => { closed = code; });
+    try {
+      await pullSocket(socket);
+      const next = await renew(a.token);
+      const body = path === "/v1/blobs/presign" ? { op: "put", blobs: [{ blobId: randomBytes(32).toString("base64url"), size: 3 }] } : undefined;
+      expect((await rpc(path, next.token, body)).status).toBe(200);
+      expect((await rpc("/v1/keys/mine", a.token)).status).toBe(401);
+      await vi.waitFor(() => expect(closed).toBe(1008));
+    } finally { socket.terminate(); }
+  });
+  it("recovers a lost refresh response with an idempotent retry, including concurrent retries and first use", async () => {
+    const a = await owner(), token = `b7_${randomBytes(32).toString("hex")}`, proposal = { nextTokenHash: tokenHash(token) };
+    // Deliberately discard the first response after D1 committed it.
+    const discarded = await rpc("/v1/backends/refresh", a.token, proposal); expect(discarded.status).toBe(200); await discarded.arrayBuffer();
+    expect((await rpc("/v1/keys/mine", a.token)).status).toBe(200);
+    const replies = await Promise.all(Array.from({ length: 5 }, () => rpc("/v1/backends/refresh", a.token, proposal)));
+    expect(replies.map((response) => response.status)).toEqual([200, 200, 200, 200, 200]);
+    const replacements = await Promise.all(replies.map((response) => response.json())) as { expiresAt: number }[];
+    expect(replacements.every((value) => Object.keys(value).length === 2)).toBe(true);
+    expect(new Set(replacements.map((value) => value.expiresAt)).size).toBe(1);
+    const uses = await Promise.all(Array.from({ length: 5 }, () => rpc("/v1/keys/mine", token)));
+    expect(uses.map((response) => response.status)).toEqual([200, 200, 200, 200, 200]);
+    expect((await rpc("/v1/keys/mine", a.token)).status).toBe(401);
+    expect((await rpc("/v1/backends/refresh", a.token, {})).status).toBe(401);
+    const row = await (await hub.database()).prepare("SELECT token_hash,next_token_hash,next_token_expires_at FROM bridge_backends WHERE account_id=? AND backend_id=?").bind(a.accountId, a.backendId).first();
+    expect(row).toEqual({ token_hash: tokenHash(token), next_token_hash: null, next_token_expires_at: null });
+  });
+  it("revokes both credentials during a pending handover and never revives the revoked backend", async () => {
+    const a = await owner(), next = await renew(a.token);
+    expect((await rpc(`/v1/backends/${a.backendId}`, a.token, undefined, "DELETE")).status).toBe(200);
+    expect((await rpc("/v1/keys/mine", a.token)).status).toBe(401);
+    expect((await rpc("/v1/keys/mine", next.token)).status).toBe(401);
+  });
+  it("does not extend the old token's natural expiry and can still activate its unexpired successor", async () => {
+    const a = await owner(), next = await renew(a.token);
+    await (await hub.database()).prepare("UPDATE bridge_backends SET token_expires_at=? WHERE account_id=? AND backend_id=?").bind(Date.now() - 1, a.accountId, a.backendId).run();
+    expect((await rpc("/v1/keys/mine", a.token)).status).toBe(401);
+    // A restarting client can acknowledge its saved proposal using that token.
+    expect(await renew(next.token, next.token)).toEqual(next);
+    expect((await rpc("/v1/keys/mine", next.token)).status).toBe(200);
+  });
+  it("rejects an expired candidate without erasing or replacing the valid current token", async () => {
+    const a = await owner(), next = await renew(a.token);
+    await (await hub.database()).prepare("UPDATE bridge_backends SET next_token_expires_at=? WHERE account_id=? AND backend_id=?").bind(Date.now() - 1, a.accountId, a.backendId).run();
+    expect((await rpc("/v1/keys/mine", next.token)).status).toBe(401);
+    expect((await rpc("/v1/keys/mine", a.token)).status).toBe(200);
+    const renewed = await renew(a.token, next.token);
+    expect(renewed.token).toBe(next.token); expect(renewed.expiresAt).toBeGreaterThan(Date.now());
+    expect((await rpc("/v1/keys/mine", renewed.token)).status).toBe(200);
+    expect((await rpc("/v1/keys/mine", a.token)).status).toBe(401);
+  });
+  it.each(["client", "thief"])("detects a conflicting proposal when the %s proposes first", async (first) => {
+    const a = await owner(), candidates = { client: `b7_${randomBytes(32).toString("hex")}`, thief: `b7_${randomBytes(32).toString("hex")}` };
+    const winner = candidates[first as keyof typeof candidates], loser = candidates[first === "client" ? "thief" : "client"];
+    const next = await renew(a.token, winner);
+    const response = await rpc("/v1/backends/refresh", a.token, { nextTokenHash: tokenHash(loser) });
+    expect(response.status).toBe(409); expect(JSON.stringify(await response.json())).not.toContain(winner);
+    expect(await renew(a.token, winner)).toEqual(next);
+    expect((await rpc("/v1/keys/mine", loser)).status).toBe(401);
+    expect((await rpc("/v1/keys/mine", a.token)).status).toBe(200);
+  });
+  it.each([{}, { nextTokenHash: "invalid" }, { nextTokenHash: `b7_${"a".repeat(64)}` }, { nextTokenHash: "A".repeat(64) }])("rejects a malformed hash without staging a credential (%j)", async (body) => {
     const a = await owner();
-    const next = await (await rpc("/v1/backends/refresh", a.token, {})).json() as { token: string };
-    expect((await rpc("/v1/log", a.token)).status).toBe(401);
-    expect((await rpc("/v1/log", next.token)).status).toBe(426);
+    expect((await rpc("/v1/backends/refresh", a.token, body)).status).toBe(400);
+    expect(await (await hub.database()).prepare("SELECT next_token_hash FROM bridge_backends WHERE account_id=? AND backend_id=?")
+      .bind(a.accountId, a.backendId).first()).toEqual({ next_token_hash: null });
   });
 });
 

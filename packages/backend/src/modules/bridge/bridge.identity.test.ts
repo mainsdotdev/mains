@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash, hkdfSync } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bridgeApprovalCode, bridgeBase64, formatBridgeVerificationCode, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
@@ -21,8 +21,154 @@ const accountCode = (key: Uint8Array) => fingerprint(new Uint8Array(hkdfSync("sh
 const dirs: string[] = [], clients: BridgeIdentityClient[] = [];
 afterEach(async () => {
   for (const client of clients.splice(0)) await client.stop();
-  vi.unstubAllGlobals();
+  vi.unstubAllGlobals(); vi.useRealTimers(); vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+});
+
+describe("Bridge identity background cadence", () => {
+  it.each([null, {}, { expiresAt: "invalid" }, { expiresAt: 0 }, { nextTokenHash: "a".repeat(64), expiresAt: 9999999999999 },
+    { token: `b7_${"2".repeat(64)}`, expiresAt: 9999999999999 }])("preserves trusted keys and the current token for a truncated or malformed renewal response (%j)", async (response) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const restarted = f.makeClient(); await restarted.start(); f.state.renewalResponse = response;
+    await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("renewal response") });
+    expect(restarted.token()).toBe(f.saved.token);
+    expect((await f.vault.read())!.token).toBe(f.saved.token);
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("keeps trusted keys after a lost refresh response and retries with the old token after restart", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const beforeRestart = f.makeClient(); await beforeRestart.start(); f.state.refreshFailures = 1;
+    await beforeRestart.refresh();
+    expect(beforeRestart.status()).toMatchObject({ state: "ready", error: expect.stringContaining("lost refresh response") });
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key)); expect(beforeRestart.token()).toBe(f.saved.token);
+    const pending = (await f.vault.read())!.pendingToken;
+    expect(pending).toBe(f.state.replacement.token);
+    expect(f.state.calls.filter((call) => call.path.endsWith("/refresh")).at(-1)!.body)
+      .toEqual({ nextTokenHash: createHash("sha256").update(pending!).digest("hex") });
+    await beforeRestart.stop();
+    const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: null });
+    expect(restarted.token()).toBe(f.state.replacement.token);
+    expect(restarted.token()).toBe(pending);
+    expect((await f.vault.read())!.pendingToken).toBeNull();
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("does not send a proposal before its random token is durable", async () => {
+    const f = await fixture(generateBridgeAccountKey()); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const restarted = f.makeClient(); await restarted.start(); f.state.calls = [];
+    const encrypt = f.storage.encryptString.bind(f.storage);
+    vi.spyOn(f.storage, "encryptString").mockImplementation((value) => {
+      if (JSON.parse(value).pendingToken) throw new Error("Injected proposal-storage failure");
+      return encrypt(value);
+    });
+    await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("proposal-storage failure") });
+    expect(f.state.calls.some((call) => call.path.endsWith("/refresh"))).toBe(false);
+    expect((await f.vault.read())!.pendingToken).toBeUndefined();
+    expect(restarted.token()).toBe(f.saved.token);
+  });
+  it("does not stage a proposal on a hub that still uses server-generated credentials", async () => {
+    const f = await fixture(generateBridgeAccountKey()); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    f.state.mine.tokenRenewal = undefined;
+    const restarted = f.makeClient(); await restarted.start(); f.state.calls = []; await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("Update the Bridge hub") });
+    expect(f.state.calls.some((call) => call.path.endsWith("/refresh"))).toBe(false);
+    expect((await f.vault.read())!.pendingToken).toBeUndefined(); expect(restarted.token()).toBe(f.saved.token);
+  });
+  it("reports a competing successor as a conflict without erasing trusted keys", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const restarted = f.makeClient(); await restarted.start(); f.state.proposedHash = "a".repeat(64);
+    await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("conflict") });
+    expect(restarted.token()).toBe(f.saved.token);
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("resumes a saved successor even after the predecessor expires during an outage", async () => {
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    const pendingToken = `b7_${"3".repeat(64)}`;
+    await f.vault.write({ ...(await f.vault.read())!, pendingToken, expiresAt: Date.now() - 1 });
+    f.state.proposedHash = createHash("sha256").update(pendingToken).digest("hex");
+    f.state.rejectedTokens.add(f.saved.token);
+    const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status()).toMatchObject({ state: "ready", error: null });
+    expect(restarted.token()).toBe(pendingToken);
+    expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+  });
+  it("publishes a replacement token only after protected storage succeeds and preserves the old identity on failure", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const key = generateBridgeAccountKey(), f = await fixture(key); await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, expiresAt: Date.now() + 86400_000 });
+    const restarted = f.makeClient(); await restarted.start();
+    const encrypt = f.storage.encryptString.bind(f.storage), observed: string[] = [];
+    let fail = true;
+    const write = vi.spyOn(f.storage, "encryptString").mockImplementation((value) => {
+      if (JSON.parse(value).token === f.state.replacement.token) {
+        observed.push(restarted.token());
+        if (fail) throw new Error("Injected protected-storage failure");
+      }
+      return encrypt(value);
+    });
+    try {
+      await restarted.refresh();
+      expect(restarted.status()).toMatchObject({ state: "ready", error: expect.stringContaining("protected-storage failure") });
+      expect(restarted.token()).toBe(f.saved.token);
+      expect((await f.vault.read())!.token).toBe(f.saved.token);
+      expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+      fail = false; await restarted.refresh();
+      expect(observed).toEqual([f.saved.token, f.saved.token]);
+      expect(restarted.token()).toBe(f.state.replacement.token);
+      expect((await f.vault.read())!.token).toBe(f.state.replacement.token);
+      expect((await f.vault.read())!.accountKey).toBe(bridgeBase64(key));
+    } finally { write.mockRestore(); }
+  });
+  it("does not lose an approval notification that arrives during an older HTTP snapshot", async () => {
+    const f = await fixture(generateBridgeAccountKey()), original = globalThis.fetch;
+    let release!: () => void, entered!: () => void, hold = true;
+    const blocked = new Promise<void>((resolve) => { release = resolve; }), snapshot = new Promise<void>((resolve) => { entered = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      const response = await original(...args);
+      if (new URL(String(args[0])).pathname === "/v1/approvals" && hold) { hold = false; entered(); await blocked; }
+      return response;
+    }));
+    const current = f.client.refresh(); await snapshot;
+    const request = approval(bridgeBase64(generateBridgeDeviceKeyPair().publicKey)); f.state.approvals = [request];
+    const notified = f.client.refresh(true); release(); await Promise.all([current, notified]);
+    expect(f.client.status().approvals).toEqual([request]);
+  });
+  it("checks a ready identity every five minutes instead of every five seconds", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const f = await fixture(generateBridgeAccountKey()); f.state.calls = [];
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(f.state.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.state.calls.map((call) => call.path)).toEqual(["/v1/keys/mine", "/v1/approvals", "/v1/backends"]);
+  });
+  it("keeps short approval checks, but waits five minutes without rewriting a pending fingerprint", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const f = await fixture(); f.state.calls = [];
+    await vi.advanceTimersByTimeAsync(4999); expect(f.state.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.state.calls.map((call) => call.path)).toEqual(["/v1/keys/mine"]);
+    const key = generateBridgeAccountKey(); f.offer(key); await f.client.refresh(); f.state.calls = [];
+    const identityFile = join(f.dir, "bridge", "identity.json"), before = await readFile(identityFile);
+    await vi.advanceTimersByTimeAsync(299_999); expect(f.state.calls).toEqual([]);
+    expect(await readFile(identityFile)).toEqual(before);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.state.calls.map((call) => call.path)).toEqual(["/v1/keys/mine"]);
+    expect(await readFile(identityFile)).toEqual(before);
+    await f.client.confirmAccountKey(accountCode(key)); f.state.calls = [];
+    await vi.advanceTimersByTimeAsync(299_999); expect(f.state.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.state.calls.map((call) => call.path)).toEqual(["/v1/keys/mine", "/v1/approvals", "/v1/backends"]);
+  });
 });
 
 async function fixture(accountKey: Uint8Array | null = null) {
@@ -34,22 +180,39 @@ async function fixture(accountKey: Uint8Array | null = null) {
     accountKey: accountKey ? bridgeBase64(accountKey) : null, includeExisting: true, activationPending: !accountKey };
   await vault.write(saved);
   const state = {
-    mine: { accountId: saved.accountId, initialized: true, backend: { backendId: saved.backendId, publicKey, label: "Local", platform: "test", status: accountKey ? "approved" : "pending" },
+    mine: { accountId: saved.accountId, initialized: true, tokenRenewal: "client-hash-v1" as string | undefined,
+      backend: { backendId: saved.backendId, publicKey, label: "Local", platform: "test", status: accountKey ? "approved" : "pending" },
       wrap: accountKey ? sealBridgeAccountKey(accountKey, pair.publicKey) : null, recoveryPublicKey: accountKey ? bridgeRecoveryPublicKey(accountKey) : null,
       approval: { status: "pending", expires_at: Date.now() + 600_000 } },
     approvals: [] as BridgeApprovalRequest[],
     calls: [] as { path: string; body: any }[],
     recovery: null as any,
+    replacement: { token: `b7_${"2".repeat(64)}`, expiresAt: Date.now() + 90 * 86400_000 },
+    renewalResponse: undefined as unknown,
+    proposedHash: null as string | null,
+    rejectedTokens: new Set<string>(),
+    refreshFailures: 0,
     unlocked: () => {},
   };
   vi.stubGlobal("fetch", vi.fn(async (url: URL, options: RequestInit) => {
     expect(url.origin).toBe("https://hub.invalid");
     const path = url.pathname, body = options.body ? JSON.parse(options.body as string) : undefined;
     state.calls.push({ path, body });
+    const credential = new Headers(options.headers).get("Authorization")?.replace(/^Bearer /, "");
+    if (credential && state.rejectedTokens.has(credential)) return Response.json({ error: "Expired fixture credential" }, { status: 401 });
     let value: unknown;
     if (path === "/v1/keys/mine") value = state.mine;
     else if (path === "/v1/approvals") value = state.approvals;
     else if (path === "/v1/backends") value = [];
+    else if (path === "/v1/backends/refresh") {
+      const pending = (await vault.read())!.pendingToken;
+      expect(pending).toMatch(/^b7_[a-f0-9]{64}$/);
+      expect(body).toEqual({ nextTokenHash: createHash("sha256").update(pending!).digest("hex") });
+      if (state.proposedHash && state.proposedHash !== body.nextTokenHash) return Response.json({ error: "Bridge token renewal conflict" }, { status: 409 });
+      state.proposedHash = body.nextTokenHash; state.replacement.token = pending!;
+      if (state.refreshFailures > 0) { state.refreshFailures--; throw new TypeError("Injected lost refresh response"); }
+      value = state.renewalResponse === undefined ? { nextTokenHash: body.nextTokenHash, expiresAt: state.replacement.expiresAt } : state.renewalResponse;
+    }
     else if (path === "/v1/keys/wraps") value = { ok: true };
     else if (path === "/v1/keys/recovery") value = state.recovery;
     else if (path === "/v1/keys/recovery/challenge") value = { challenge: "synthetic-challenge" };
@@ -70,7 +233,7 @@ async function fixture(accountKey: Uint8Array | null = null) {
     state.mine.wrap = sealBridgeAccountKey(key, pair.publicKey);
     state.mine.recoveryPublicKey = bridgeRecoveryPublicKey(key);
   }
-  return { state, client, makeClient, ready, activatedKeys, vault, saved, pair, offer };
+  return { state, client, makeClient, ready, activatedKeys, vault, saved, pair, offer, dir, storage };
 }
 function approval(publicKey: string, code = deviceCode(publicKey)): BridgeApprovalRequest {
   return { requestId: "request", backendId: "new-device", publicKey, code, label: "New device", platform: "test", expiresAt: new Date(Date.now() + 600_000).toISOString() };

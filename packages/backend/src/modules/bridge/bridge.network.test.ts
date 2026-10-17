@@ -57,6 +57,16 @@ describe.skipIf(!networkMode)("Bridge real network and encrypted persistence", (
     await waitFor(() => changed.includes("account")); a.close();
     await waitFor(() => presence.some((p) => p.backendId === "A" && !p.online));
   });
+  it("excludes only the publishing socket from change hints, keeping other sockets for that backend informed", async () => {
+    const account = randomUUID(), own: string[] = [], sibling: string[] = [], remote: string[] = [];
+    const publisher = await client(account, "A", { onChanged: (stream) => own.push(stream) });
+    const sameBackend = await client(account, "A", { onChanged: (stream) => sibling.push(stream) });
+    const otherBackend = await client(account, "B", { onChanged: (stream) => remote.push(stream) });
+    await publisher.subscribe(["account"]); await sameBackend.subscribe(["account"]); await otherBackend.subscribe(["account"]);
+    await publisher.push("account", [envelope("published")]);
+    await waitFor(() => sibling.length === 1 && remote.length === 1);
+    expect(own).toEqual([]); expect(sibling).toEqual(["account"]); expect(remote).toEqual(["account"]);
+  });
   it("restores the client subscription on reconnect and continues from a durable pull cursor", async () => {
     const account = randomUUID(), a = await client(account, "A"), events: string[] = [], b = await client(account, "B", { onChanged: (stream) => events.push(stream) });
     await b.subscribe(["account"]); await a.push("account", [envelope("one")]); const first = await b.pull("account", 0, 1);

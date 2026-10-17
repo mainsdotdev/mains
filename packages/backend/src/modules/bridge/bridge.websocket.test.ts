@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { bridgeApprovalCode, bridgeBase64, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import { parseBridgeServerFrame } from "@mains/contracts/bridge-wire";
@@ -13,8 +13,8 @@ afterEach(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
-async function server(onConnection: (socket: WebSocket) => void) {
-  const listener = new WebSocketServer({ host: "127.0.0.1", port: 0 }); servers.push(listener);
+async function server(onConnection: (socket: WebSocket) => void, options: { autoPong?: boolean } = {}) {
+  const listener = new WebSocketServer({ host: "127.0.0.1", port: 0, ...options }); servers.push(listener);
   listener.on("connection", onConnection);
   await new Promise<void>((resolve) => listener.once("listening", resolve));
   const address = listener.address();
@@ -27,6 +27,63 @@ function client(url: string, extra: Partial<Parameters<typeof createBridgeWebSoc
 const emptyPage = { type: "records", stream: "account", records: [], next: 0, hasMore: false };
 
 describe("Bridge WebSocket failure handling", () => {
+  it("keeps an idle socket alive with protocol pings without any extra application requests", async () => {
+    let pings = 0, requests = 0;
+    const statuses: string[] = [];
+    const url = await server((socket) => {
+      socket.on("ping", () => pings++);
+      socket.on("message", (data) => { requests++; socket.send(JSON.stringify({ requestId: JSON.parse(data.toString()).requestId, message: emptyPage })); });
+    });
+    const transport = client(url, { heartbeatIntervalMs: 20, heartbeatTimeoutMs: 100, onStatusChange: (s) => statuses.push(s) });
+    await transport.pull("account", 0, 10);
+    await vi.waitFor(() => expect(pings).toBeGreaterThanOrEqual(2), { interval: 5 });
+    expect(requests).toBe(1); expect(statuses).toEqual(["connecting", "connected"]);
+    transport.close(); const stoppedAt = pings;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(pings).toBe(stoppedAt);
+  });
+  it("detects a half-open idle socket even when no RPC is pending and rejects unrelated pongs", async () => {
+    const statuses: string[] = [];
+    let pings = 0;
+    const url = await server((socket) => {
+      socket.on("ping", () => { pings++; socket.pong("not-the-requested-nonce"); });
+      socket.on("message", (data) => socket.send(JSON.stringify({ requestId: JSON.parse(data.toString()).requestId, message: emptyPage })));
+    }, { autoPong: false });
+    const transport = client(url, { heartbeatIntervalMs: 20, heartbeatTimeoutMs: 40, onStatusChange: (s) => statuses.push(s) });
+    await transport.pull("account", 0, 10);
+    await vi.waitFor(() => expect(statuses.at(-1)).toBe("offline"), { interval: 5, timeout: 1000 });
+    expect(pings).toBe(1);
+    await expect(transport.pull("account", 0, 10)).resolves.toMatchObject({ next: 0 });
+  });
+  it("cancels the old pong deadline when reconnecting so it cannot kill the replacement socket", async () => {
+    let connected = 0, firstPing!: () => void, replacementPings = 0;
+    const pinged = new Promise<void>((resolve) => { firstPing = resolve; }), statuses: string[] = [];
+    const url = await server((socket) => {
+      const connection = ++connected;
+      socket.on("ping", (data) => { if (connection === 1) firstPing(); else { replacementPings++; socket.pong(data); } });
+      socket.on("message", (data) => socket.send(JSON.stringify({ requestId: JSON.parse(data.toString()).requestId, message: emptyPage })));
+    }, { autoPong: false });
+    const transport = client(url, { heartbeatIntervalMs: 20, heartbeatTimeoutMs: 50, onStatusChange: (s) => statuses.push(s) });
+    await transport.pull("account", 0, 10); await pinged; transport.disconnect();
+    await transport.pull("account", 0, 10);
+    await vi.waitFor(() => expect(replacementPings).toBeGreaterThanOrEqual(3), { interval: 5 });
+    expect(statuses).toEqual(["connecting", "connected", "offline", "connecting", "connected"]);
+    expect(connected).toBe(2);
+  });
+  it("requests an identity recheck for policy closure, without treating ordinary disconnects as revocation", async () => {
+    let peer!: WebSocket;
+    const recheck = vi.fn();
+    const url = await server((socket) => {
+      peer = socket;
+      socket.on("message", (data) => socket.send(JSON.stringify({ requestId: JSON.parse(data.toString()).requestId, message: emptyPage })));
+    });
+    const transport = client(url, { onAccessChanged: recheck });
+    await transport.pull("account", 0, 10); peer.close(1008, "Access changed");
+    await vi.waitFor(() => expect(recheck).toHaveBeenCalledOnce());
+    await transport.pull("account", 0, 10); peer.close(1011, "Reset");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(recheck).toHaveBeenCalledOnce();
+  });
   it("delivers a 60-bit approval during a pending pull without dropping or reconnecting the replication socket", async () => {
     const publicKey = bridgeBase64(new Uint8Array(32).fill(7));
     const approval = { type: "approval", requestId: "request-B", backendId: "B", publicKey, label: "New device", platform: "darwin",

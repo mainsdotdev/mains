@@ -9,10 +9,14 @@ export interface BridgeWebSocketOptions {
   url: string;
   token: string | (() => string | Promise<string>);
   requestTimeoutMs?: number;
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
   metadata?: { label: string; platform: string };
   onStatusChange?: (status: "connecting" | "connected" | "offline") => void;
   onPresence?: (presence: Extract<BridgeServerMessage, { type: "presence" }>) => void;
   onChanged?: (stream: BridgeStream) => void;
+  /** Policy closure is a hint to recheck HTTP identity, never proof of revocation. */
+  onAccessChanged?: () => void;
 }
 /** Reconnects lazily. Disconnection/timeouts reject RPCs, leaving the engine's outbox/cursor intact. */
 export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) {
@@ -21,6 +25,7 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
   if (url.username || url.password || url.search || url.hash) throw new Error("Bridge credentials belong in the Authorization header");
   let socket: WebSocket | undefined, connecting: Promise<WebSocket> | undefined, closed = false;
   let connectionGeneration = 0;
+  let stopHeartbeat: (() => void) | undefined;
   let subscriptions: BridgeStream[] = [];
   const pending = new Map<string, { resolve: (message: BridgeServerMessage) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   const timeout = options.requestTimeoutMs ?? 15000;
@@ -30,6 +35,33 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
   function rejectAll(error: Error) {
     for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
     pending.clear();
+  }
+  function heartbeat(candidate: WebSocket) {
+    let pingTimer: ReturnType<typeof setTimeout> | undefined, pongTimer: ReturnType<typeof setTimeout> | undefined, nonce: string | undefined;
+    const stop = () => {
+      if (pingTimer) clearTimeout(pingTimer); if (pongTimer) clearTimeout(pongTimer);
+      pingTimer = pongTimer = undefined; nonce = undefined; candidate.off("pong", pong);
+      if (stopHeartbeat === stop) stopHeartbeat = undefined;
+    };
+    function next() {
+      pingTimer = setTimeout(() => {
+        pingTimer = undefined;
+        if (closed || socket !== candidate || candidate.readyState !== WebSocket.OPEN) { stop(); return; }
+        nonce = randomUUID();
+        pongTimer = setTimeout(() => { stop(); candidate.terminate(); }, options.heartbeatTimeoutMs ?? 10_000);
+        pongTimer.unref();
+        // Cloudflare handles protocol ping/pong without waking the account DO.
+        candidate.ping(nonce, undefined, (error) => { if (error) { stop(); candidate.terminate(); } });
+      }, options.heartbeatIntervalMs ?? 25_000);
+      pingTimer.unref();
+    }
+    function pong(data: Buffer) {
+      if (!nonce || data.toString() !== nonce) return;
+      if (pongTimer) clearTimeout(pongTimer); pongTimer = undefined; nonce = undefined;
+      next();
+    }
+    candidate.on("pong", pong); candidate.once("close", stop);
+    stopHeartbeat = stop; next();
   }
   function receive(data: WebSocket.RawData) {
     let value: BridgeServerMessage | BridgeRpcResponse;
@@ -69,14 +101,20 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
         candidate.once("open", () => {
           if (closed || generation !== connectionGeneration) { candidate.terminate(); reject(new Error("Bridge connection cancelled")); return; }
           resolve(candidate);
+          heartbeat(candidate);
           status("connected");
           if (options.metadata) candidate.send(JSON.stringify({ requestId: randomUUID(), message: { type: "hello", ...options.metadata } }));
           // Socket attachments contain subscriptions, so restore them after any reconnect.
           if (subscriptions.length) candidate.send(JSON.stringify({ requestId: randomUUID(), message: { type: "subscribe", streams: subscriptions } }));
         });
         candidate.on("error", () => { reject(new Error("Bridge connection failed")); });
-        candidate.once("close", () => {
-          if (socket === candidate) { socket = undefined; rejectAll(new Error("Bridge connection closed")); status("offline"); }
+        candidate.once("close", (code) => {
+          if (socket === candidate) {
+            socket = undefined; rejectAll(new Error("Bridge connection closed")); status("offline");
+            if (!closed && code === 1008) {
+              try { options.onAccessChanged?.(); } catch (error) { console.error("Bridge identity listener failed", error); }
+            }
+          }
           reject(new Error("Bridge connection closed"));
         });
       });
@@ -136,6 +174,7 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
     async compact() { if ((await rpc({ type: "compact" })).type !== "compacted") throw new Error("Invalid Bridge compaction response"); },
     disconnect() {
       connectionGeneration++; const previous = socket; socket = undefined; connecting = undefined;
+      stopHeartbeat?.();
       rejectAll(new Error("Bridge connection closed")); previous?.terminate();
       status("offline");
     },

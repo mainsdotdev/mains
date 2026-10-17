@@ -71,14 +71,35 @@ be retried after release/expiry; no incomplete capture is listed as successful.
    registers, permanent tombstones, writer/run ownership, stream positions,
    quotas and pending blob-deletion intents. Pages are bounded by rows and bytes;
    they are read synchronously, then spooled to private runner disk. A per-object
-   session nonce plus SQLite `total_changes()` detects **all SQL mutations** or
-   object restarts between pages. A changed capture retries up to three times.
+   session nonce plus SQLite `total_changes()` rejects intervening SQL writes or
+   object restarts on each page. Cloudflare's native PITR commit bookmark fences
+   the **whole capture**, from before its first page to after its last page.
+   A read-only hibernation can resume at the unread page with a fresh session
+   token only while the original bookmark and schema remain unchanged. The
+   final bookmark check also rejects a write racing that resumption. Repeated
+   restarts without page progress are bounded; actual storage changes retry the
+   whole capture up to three times. A missing/failed native checkpoint stops the
+   job. Local workerd, which has no PITR log, keeps the stricter session fence.
+   Connected, idle devices do not count as writers: presence timestamps are
+   persisted on connect/disconnect, not on pull messages or keepalives. An
+   initialized quota read reuses its durable account prefix without a no-op
+   UPDATE and leaves an already armed maintenance alarm unchanged. Initial
+   inventory/GC setup, connection transitions and actual maintenance remain
+   writes; a capture crossing them must still retry.
    A continuously busy account fails the run visibly; it never produces a mixed
    snapshot. Source tables are not copied, locked across network I/O or written
    just to take a backup. Future unknown tables, KV or column types fail closed.
    Cloudflare's platform-owned `_cf_METADATA` is excluded; a destination runtime
    creates its own replication metadata. Tests cover that production/local
    catalog difference without treating unknown application tables as optional.
+   Release verification on staging must also exercise native PITR: keep two
+   initialized clients idle and connected, pause the account reader for longer
+   than a five-minute safety pull, then finish all pages behind the same native
+   bookmark. Check transport closures directly; periodic status samples can miss
+   a quick reconnect, which correctly invalidates a capture. Verify a completed
+   encrypted backup by downloading it and comparing every restored SQL row in
+   an isolated local recovery environment. Local workerd alone cannot prove
+   native bookmark or edge keepalive behavior.
 3. List live R2 and the deletion archive. New source key/ETag combinations are
    downloaded, encrypted, uploaded immutably, read back and checksum-verified.
    Unchanged combinations reuse their verified backup object using HEAD; they

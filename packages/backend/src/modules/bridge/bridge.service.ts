@@ -31,7 +31,8 @@ async function stopReplication() {
 function replicate(config: BridgeDevConfig, token: () => Promise<string>, stageLocalBeforePull = false, autoStart = true) {
   replicator = createBridgeReplicator({ sqlite: getSqlite(), backendId: getLocalBackendId(), config,
     dataDir: getBackendRuntime().getPath("userData"), token, onStatus: changed, stageLocalBeforePull, autoStart,
-    onApproval() { void identity?.refresh(); },
+    onApproval() { void identity?.refresh(true); },
+    onAccessChanged() { void identity?.refresh(true); },
     onApplied(changes) { emit(CHANNELS.bridge.recordsApplied, { tables: [...new Set(changes.map((entry) => entry.table))] }); },
   });
   removeSink = registerEventSink({ kind: "bridge-local-writes", send(channel) { if (localWrites.has(channel)) replicator?.wake(); } });

@@ -7,6 +7,8 @@ import { bridgeBytes } from "@mains/contracts/bridge-auth";
 export interface BridgeSavedIdentity {
   v: 1; backendId: string; hubUrl: string; label: string; accountId: string; email: string;
   publicKey: string; privateKey: string; token: string; expiresAt: number; accountKey: string | null;
+  /** Random successor saved before its hash is sent; never exposed to replicas. */
+  pendingToken?: string | null;
   /** A received key cannot enter the active identity before local comparison. */
   pendingAccountKey?: string | null;
   /** Once an existing account has been observed, the hub cannot trigger re-bootstrap. */
@@ -25,6 +27,8 @@ export function createBridgeIdentityStorage(dir: string, storage: SecretStorageA
       if (envelope.v !== 1 || envelope.format !== storage.format || typeof envelope.sealed !== "string") throw new Error("Bridge keys use an unsupported storage format");
       const identity: BridgeSavedIdentity = JSON.parse(storage.decryptString(Buffer.from(envelope.sealed, "base64")));
       if (identity.v !== 1 || !identity.backendId || !identity.accountId || !identity.token?.startsWith("b7_") || !Number.isSafeInteger(identity.expiresAt)) throw new Error("Saved Bridge identity is invalid");
+      if (identity.pendingToken != null && (typeof identity.pendingToken !== "string" || !/^b7_[a-f0-9]{64}$/.test(identity.pendingToken) || identity.pendingToken === identity.token))
+        throw new Error("Saved Bridge successor credential is invalid");
       bridgeBytes(identity.privateKey, 32); bridgeBytes(identity.publicKey, 32); if (identity.accountKey) bridgeBytes(identity.accountKey, 32);
       if (identity.pendingAccountKey != null) {
         bridgeBytes(identity.pendingAccountKey, 32);

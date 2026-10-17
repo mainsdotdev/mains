@@ -15,7 +15,7 @@ async function directory() { const dir = await mkdtemp(join(tmpdir(), "mains-bri
 async function fixture(dir: string): Promise<BackupManifest> {
   const files = [];
   let sql = "";
-  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql"]) sql += await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8") + "\n";
+  for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql", "0006_backend_token_handover.sql"]) sql += await readFile(new URL(`../migrations/${file}`, import.meta.url), "utf8") + "\n";
   sql += "INSERT INTO user VALUES('fixture','O''Brien','fixture@example.test',1,NULL,1,1);\n";
   sql += "INSERT INTO bridge_accounts VALUES('fixture','device-a','test-hash','test-key','{\"encrypted\":true}',1);\n";
   sql += "INSERT INTO account_entitlements VALUES('fixture','bridge','standard','monthly','active',1,9999999999999,1);\n";

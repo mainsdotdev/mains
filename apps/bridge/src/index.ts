@@ -1,7 +1,7 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type { BridgeRpcRequest, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES, parseBridgeRpcRequest } from "@mains/contracts/bridge-wire";
-import { authenticate, identityIsActive, type BridgeIdentity, type DevAuthEnv } from "./auth";
+import { authenticate, createBridgeSocketAuth, type BridgeIdentity, type DevAuthEnv } from "./auth";
 import { handleSignIn } from "./sign-in";
 import { handleDevices } from "./devices";
 import type { BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
@@ -22,11 +22,14 @@ export default {
   },
 };
 async function handleRequest(request: Request, env: Env): Promise<Response> {
+    const rotated = async (account: string, backend: string, oldHash: string) => {
+      await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).revoke(backend, oldHash);
+    };
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") return Response.json({ ok: true, protocol: 1 });
     if (url.pathname === "/v1/subscription") {
       if (request.method !== "GET") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET" } });
-      const identity = await authenticate(request, env);
+      const identity = await authenticate(request, env, rotated);
       const accountId = identity?.accountId ?? (env.AUTH_DB && request.headers.has("Cookie") ? (await signedInUser(env, request))?.id : null);
       if (!accountId) return new Response("Unauthorized", { status: 401 });
       try { return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(accountId)).getSubscription(accountId), { headers: { "Cache-Control": "no-store" } }); }
@@ -39,22 +42,24 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     }
     if (url.pathname.startsWith("/v1/backends") || url.pathname.startsWith("/v1/keys/") || url.pathname.startsWith("/v1/approvals"))
       return handleDevices(request, env, {
+        rotated,
         async approval(account, entry) { await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).notifyApproval(entry); },
         async revoked(account, backend) { await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).revoke(backend); },
       });
     if (url.pathname.startsWith("/v1/blobs/")) return handleBlobs(request, env, {
+      rotated,
       reserve: (identity, entries, expires) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).reserveBlobs(identity, entries, expires),
       put: (identity, key, expires, bytes) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).putBlob(identity, key, expires, bytes),
       read: (identity, blobs, expires) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).protectBlobReads(identity, blobs, expires),
     });
     if (url.pathname === "/v1/quota" && request.method === "GET") {
-      const identity = await authenticate(request, env);
+      const identity = await authenticate(request, env, rotated);
       if (!identity) return new Response("Unauthorized", { status: 401 });
       return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).getQuota(identity), { headers: { "Cache-Control": "no-store" } });
     }
     if (url.pathname !== "/v1/log") return new Response("Not found", { status: 404 });
     // This development auth is deliberately unavailable without explicit local configuration.
-    const identity = await authenticate(request, env);
+    const identity = await authenticate(request, env, rotated);
     if (!identity) return new Response("Unauthorized", { status: 401 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("WebSocket required", { status: 426 });
     const headers = new Headers(request.headers);
@@ -94,10 +99,12 @@ export class AccountHub extends DurableObject<Env> {
   private quota: ReturnType<typeof createBlobQuota>;
   private subscriptions: ReturnType<typeof createBridgeSubscriptions>;
   private backup: ReturnType<typeof createHubBackup>;
+  private socketAuth: ReturnType<typeof createBridgeSocketAuth>;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env); this.store = createHubStore(ctx.storage); this.subscriptions = createBridgeSubscriptions(env);
     this.quota = createBlobQuota(ctx.storage, env, () => this.store.recordBytes(), this.subscriptions);
     this.backup = createHubBackup(ctx.storage);
+    this.socketAuth = createBridgeSocketAuth(env);
   }
   snapshotBegin() { return this.backup.begin(); }
   snapshotPage(token: string, table: string, after: number) { return this.backup.page(token, table, after); }
@@ -160,14 +167,15 @@ export class AccountHub extends DurableObject<Env> {
   }
   private async receiveMessage(socket: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const session = this.session(socket);
-    if (!await identityIsActive(session, this.env)) { socket.close(1008, "Backend access expired or was revoked"); return; }
+    if (socket.readyState !== WebSocket.OPEN) return;
+    if (!await this.socketAuth.active(session)) { socket.close(1008, "Backend access expired or was revoked"); return; }
+    if (socket.readyState !== WebSocket.OPEN) return;
     if (typeof data !== "string" || data.length > BRIDGE_MAX_FRAME_BYTES) { socket.close(1009, "Invalid message size"); return; }
     let request: BridgeRpcRequest;
     try { request = parseBridgeRpcRequest(data); }
     catch { socket.close(1008, "Invalid Bridge request"); return; }
     const { message, requestId } = request;
     try {
-      this.store.seen(session.backendId);
       let response: BridgeServerMessage;
       switch (message.type) {
         case "hello":
@@ -187,7 +195,7 @@ export class AccountHub extends DurableObject<Env> {
           const { results, changed } = publication;
           response = { type: "ack", stream: message.stream, results };
           if (changed.length) {
-            this.broadcast({ type: "changed", stream: message.stream }, message.stream);
+            this.broadcast({ type: "changed", stream: message.stream }, message.stream, socket);
             await this.schedule(Date.now() + 60_000);
           }
           break;
@@ -231,13 +239,17 @@ export class AccountHub extends DurableObject<Env> {
     if (alarm === null || alarm > at) await this.ctx.storage.setAlarm(at);
   }
   async notifyApproval(request: BridgeApprovalRequest): Promise<void> { this.broadcast({ type: "approval", ...request }); }
-  async revoke(backendId: string): Promise<void> {
-    for (const socket of this.sockets()) if (this.session(socket).backendId === backendId) socket.close(1008, "Backend access revoked");
+  async revoke(backendId: string, credentialHash?: string): Promise<void> {
+    this.socketAuth.invalidate(backendId, credentialHash);
+    for (const socket of this.sockets()) {
+      const session = this.session(socket);
+      if (session.backendId === backendId && (!credentialHash || session.credentialHash === credentialHash)) socket.close(1008, "Backend access revoked");
+    }
   }
   private session(socket: WebSocket): Session { return socket.deserializeAttachment() as Session; }
   private sockets() { return this.ctx.getWebSockets().filter((socket) => socket.readyState === WebSocket.OPEN); }
-  private broadcast(message: BridgeServerMessage, stream?: BridgeStream) {
-    for (const socket of this.sockets()) if (!stream || this.session(socket).streams.includes(stream)) this.send(socket, message);
+  private broadcast(message: BridgeServerMessage, stream?: BridgeStream, except?: WebSocket) {
+    for (const socket of this.sockets()) if (socket !== except && (!stream || this.session(socket).streams.includes(stream))) this.send(socket, message);
   }
   private send(socket: WebSocket, value: BridgeServerMessage | BridgeRpcResponse) {
     try { socket.send(JSON.stringify(value)); } catch { /* A disconnected client will pull from its durable cursor. */ }
