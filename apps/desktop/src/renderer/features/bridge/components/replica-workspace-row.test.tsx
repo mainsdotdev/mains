@@ -9,11 +9,11 @@ const worktree = { id: "w2", name: "docs", baseBranch: "master", metadata: { wor
 afterEach(cleanup);
 
 describe("ReplicaWorkspaceRow", () => {
-  it("shows the checkout's branch with the device beside it, like a local branch row", () => {
+  it("shows the checkout's branch like a local branch row, with the device only in the accessible name", () => {
     const onClick = vi.fn();
     render(<ReplicaWorkspaceRow workspace={worktree} projectName="docs" backend={backend} layout="project" isActive={false} onClick={onClick} />);
     const row = screen.getByRole("button", { name: "docs, mango on M4 Pro, read-only" });
-    expect(row.textContent).toBe("mangoM4 Pro");
+    expect(row.textContent).toBe("mango");
     fireEvent.click(row); expect(onClick).toHaveBeenCalledOnce();
   });
 
@@ -24,7 +24,30 @@ describe("ReplicaWorkspaceRow", () => {
         projectName="docs" backend={backend} layout="list" isActive={false} onClick={() => {}} />
     </>);
     const rows = screen.getAllByRole("button");
-    expect(rows.map((row) => row.textContent)).toEqual(["docsmangoM4 Pro", "docsmasterM4 Pro"]);
+    expect(rows.map((row) => row.textContent)).toEqual(["docsmango", "docsmaster"]);
     expect(rows[0].getAttribute("aria-current")).toBe("page");
+  });
+
+  it("names the device and its presence on the Bridge mark, like a chat badge", async () => {
+    const { container } = render(<ReplicaWorkspaceRow workspace={worktree} projectName="docs"
+      backend={{ ...backend, online: true, lastSeen: null }} layout="project" isActive={false} onClick={() => {}} />);
+    const row = screen.getByRole("button", { name: "docs, mango on M4 Pro, read-only" });
+    fireEvent.mouseEnter(row);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.mouseEnter(container.querySelector("svg")!.parentElement!);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("M4 Pro · Online");
+  });
+
+  it("tints the Bridge mark while the device is online and shows no presence dot", () => {
+    const { container, rerender } = render(<ReplicaWorkspaceRow workspace={worktree} projectName="docs"
+      backend={{ ...backend, online: true }} layout="project" isActive={false} onClick={() => {}} />);
+    const mark = () => container.querySelector("svg");
+    expect(mark()?.classList.contains("text-success")).toBe(true);
+    expect(container.querySelector(".rounded-full")).toBeNull();
+
+    rerender(<ReplicaWorkspaceRow workspace={worktree} projectName="docs" backend={backend} layout="project" isActive={false} onClick={() => {}} />);
+    expect(mark()?.classList.contains("text-success")).toBe(false);
+    expect(mark()?.classList.contains("text-primary-500")).toBe(true);
   });
 });

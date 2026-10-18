@@ -85,6 +85,7 @@ import {
 import { sanitizeRunAttachments } from "./run-attachments";
 import {
   listRunAttachmentFiles,
+  listRunAttachmentRecords,
   prepareRunAttachments,
   pruneUnreferencedAttachments,
   resolveRunAttachment,
@@ -1913,6 +1914,7 @@ export const runsService = {
   },
 
   listRunAttachmentFiles,
+  listRunAttachmentRecords,
 
   async readAttachmentFile(
     payload: ResolveAttachmentPathPayload,

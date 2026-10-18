@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   pendingPage: undefined as number | undefined,
   fetchApps: vi.fn(), openWith: vi.fn(), openWithApp: true, appsLoading: false,
   appsByPath: {} as Record<string, FileHandlerApp[]>,
+  bridgeStatus: undefined as { backends: Array<{ backendId: string; label: string; online: boolean | null; lastSeen: string | null; platform: string | null }> } | undefined,
+  resolveAttachmentPath: vi.fn(), resolveFilePath: vi.fn(),
 }));
 
 vi.mock("@/lib/redux/api", () => ({
@@ -59,7 +61,10 @@ vi.mock("@/hooks/use-space-provider-variant", async () => {
   const { getProviderVariantById } = await import("@/lib/provider-variants");
   return { useSpaceProviderVariant: () => getProviderVariantById(mocks.providerId) };
 });
-vi.mock("@/lib/transport", () => ({ appApi: {}, getTransport: () => mocks.transport }));
+vi.mock("@/lib/transport", () => ({ appApi: { runArtifacts: {
+  resolveAttachmentPath: mocks.resolveAttachmentPath, resolveFilePath: mocks.resolveFilePath,
+} }, getTransport: () => mocks.transport }));
+vi.mock("@/features/bridge/hooks/use-bridge", () => ({ useBridgeStatus: () => ({ data: mocks.bridgeStatus }) }));
 vi.mock("@/hooks/use-document-viewer", () => ({ useDocumentViewer: () => ({ open: vi.fn() }) }));
 vi.mock("@/hooks/use-local-image-url", () => ({ useLocalImageUrl: (path?: string) => path ? "mains-localimg://preview" : undefined }));
 vi.mock("@/features/workspace/hooks/use-jump-to-run", () => ({ useJumpToRun: () => vi.fn() }));
@@ -127,6 +132,7 @@ beforeEach(() => {
   mocks.openWithApp = true;
   mocks.appsLoading = false;
   mocks.appsByPath = {};
+  mocks.bridgeStatus = undefined;
   mocks.openWith.mockResolvedValue({ success: true });
   vi.stubGlobal("api", { shell: { openFileWithBundle: mocks.openWith } });
   mocks.create.mockImplementation(() => ({ unwrap: async () => ({ item: { id: "new-page" } }) }));
@@ -283,6 +289,23 @@ describe("Atlas image sources", () => {
     expect(screen.queryByRole("button", { name: "Open old.png" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open other.png" })).toBeNull();
     expect(screen.getByRole("button", { name: "Open changed.png" })).toBeTruthy();
+  });
+  it("shows another device's upload with its device, downloads it on demand and leaves saving to that device", async () => {
+    mocks.bridgeStatus = { backends: [{ backendId: "laptop", label: "M4 Pro", online: true, lastSeen: null, platform: "darwin" }] };
+    mocks.resolveAttachmentPath.mockResolvedValue({ success: true, data: "/bridge/cache/screenshot.png" });
+    const upload: AtlasGeneratedFile = { sourceKey: "laptop-upload", origin: "attachment", contentHash: "bytes", runId: "laptop-chat",
+      runTitle: "Hello Greeting", collectionId: null, kind: "image", path: "Screenshot.png", fileName: "Screenshot.png",
+      mimeType: "image/png", byteSize: 125636, modifiedAt: "2026-10-17", replica: { backendId: "laptop", attachmentId: "a".repeat(64) } };
+    mocks.queryResult = () => libraryPage([{ ...generatedEntry(upload), path: null }]);
+    setup("/atlas?type=image");
+    expect(screen.getByText("Uploaded on M4 Pro")).toBeTruthy();
+    expect(screen.getByText("From M4 Pro")).toBeTruthy();
+    expect(await screen.findByRole("img", { name: "Screenshot.png" })).toBeTruthy();
+    expect(mocks.resolveAttachmentPath).toHaveBeenCalledWith({ runId: "laptop-chat", attachmentId: "a".repeat(64) });
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Screenshot.png" }));
+    expect(screen.queryByRole("menuitem", { name: "Save to Atlas" })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Save a copy" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Open chat" })).toBeTruthy();
   });
   it("prefers a saved copy in All while each source view retains its matching image", () => {
     const image: AtlasGeneratedFile = { sourceKey: "generated", contentHash: "same-bytes", runId: "chat", runTitle: "Images",

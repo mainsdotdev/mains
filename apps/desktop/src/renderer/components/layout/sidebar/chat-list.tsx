@@ -16,6 +16,11 @@ import {
   toast,
 } from "@/components/ui";
 import { Option, Plus, Settings, Trash } from "@/components/ui/icons";
+import {
+  normalizeWorkspaceListSources,
+  setChatListSourceVisible,
+} from "@/lib/redux/slices/appSettingsSlice";
+import { SourceFilterButton } from "./source-filter-menu";
 import type { BridgeBackendInfo } from "@mains/contracts/bridge";
 import { useBridgeStatus } from "@/features/bridge/hooks/use-bridge";
 import { bridgeBackend } from "@/features/bridge/lib/backends";
@@ -102,14 +107,22 @@ export function SidebarChatList({
     { skip: !account },
   );
 
+  const sources = normalizeWorkspaceListSources(
+    useAppSelector((state) => state.appSettings.chatListSources),
+  );
+  const setSourceVisible = (source: "local" | "bridge", visible: boolean) =>
+    dispatch(setChatListSourceVisible({ source, visible }));
+
   const query = searchQuery.trim().toLowerCase();
   // Other devices' chats sit with this device's own: in their project when it
   // exists here, otherwise in Recents. Their device badge marks them read-only.
   const runs = useMemo(() => {
-    const all = recentRuns ?? [];
+    const all = (recentRuns ?? []).filter((run) =>
+      run.isReplica ? sources.bridge : sources.local,
+    );
     if (!query) return all;
     return all.filter((run) => chatLabel(run).toLowerCase().includes(query));
-  }, [recentRuns, query]);
+  }, [recentRuns, query, sources.bridge, sources.local]);
   const knownCollectionIds = useMemo(() => new Set((collections ?? []).map((collection) => collection.id)), [collections]);
   // A pinned chat is lifted out of wherever it would otherwise sit and rendered
   // once, at the top; project chats render inside their collection group, and
@@ -144,7 +157,9 @@ export function SidebarChatList({
   // are no chats at all; a search that matches nothing says so instead of
   // leaving the sidebar blank.
   const hasNoProjects = !!collections && collectionRows.length === 0;
-  const hasNoChats = !query && runs.length === 0;
+  const hasNoChats = !query && (recentRuns?.length ?? 0) === 0;
+  const filterHidesChats =
+    !query && (recentRuns?.length ?? 0) > 0 && runs.length === 0;
   const hasNoMatches =
     !!query &&
     pinnedRuns.length === 0 &&
@@ -266,7 +281,7 @@ export function SidebarChatList({
     }
   };
 
-  const renderChat = (run: RecentRun, isRecent = false, device: BridgeBackendInfo | undefined = run.isReplica ? bridgeBackend(bridgeStatus, run.ownerBackendId) : undefined) => {
+  const renderChat = (run: RecentRun, device: BridgeBackendInfo | undefined = run.isReplica ? bridgeBackend(bridgeStatus, run.ownerBackendId) : undefined) => {
     const provider = getProviderVariantById(run.providerId);
     const linkedPageId = run.configSnapshot?.atlasPageId;
     const pageId = typeof linkedPageId === "string" ? linkedPageId.trim() : "";
@@ -277,7 +292,6 @@ export function SidebarChatList({
       device={device}
       variant={provider?.variant ?? "null"}
       isActive={activeTab === run.id}
-      isRecent={isRecent}
       onSelect={() => void handleSelectChat(run)}
       onOpenPage={canOpenPage ? () => void handleOpenPage(run, pageId) : undefined}
       onArchive={() => void archiveChat(run)}
@@ -314,9 +328,7 @@ export function SidebarChatList({
           count={pinnedRuns.length}
         >
           <div className="flex flex-col space-y-0.5 mt">
-            {/* Flush rows, like Recents: a pinned chat is shown outside its
-                project, so there is no gutter to indent under. */}
-            {pinnedRuns.map((run) => renderChat(run, true))}
+            {pinnedRuns.map((run) => renderChat(run))}
           </div>
         </SidebarGroupSection>
       )}
@@ -326,15 +338,22 @@ export function SidebarChatList({
             <Text as="span" size="s" tone="muted" weight="medium">
               Projects
             </Text>
-            <Button
-              variant="icon"
-              tooltip="Create project"
-              aria-label="Create project"
-              onClick={onCreateCollection}
-              className="ml-auto -mr-1"
-            >
-              <Plus className="size-3" />
-            </Button>
+            <div className="ml-auto flex items-center">
+              <Button
+                variant="icon"
+                tooltip="Create project"
+                aria-label="Create project"
+                onClick={onCreateCollection}
+              >
+                <Plus className="size-3" />
+              </Button>
+              <div className="-mr-1">
+                <SourceFilterButton
+                  sources={sources}
+                  onSourceVisibleChange={setSourceVisible}
+                />
+              </div>
+            </div>
           </div>
           <SortableList
             ids={collectionIds}
@@ -382,9 +401,7 @@ export function SidebarChatList({
                         {collectionRuns.length > 0 ? (
                           collectionRuns.map((run) => renderChat(run))
                         ) : (
-                          // Same gutter a chat row inside a project takes, so
-                          // the placeholder sits where the missing chats would.
-                          <div className="pl-7 pr-2.5 py-1">
+                          <div className="pl-2.5 pr-2.5 py-1">
                             <Text as="span" size="xxs" tone="muted">
                               No chats
                             </Text>
@@ -400,7 +417,9 @@ export function SidebarChatList({
           {hasNoProjects && <EmptyListNote>No projects yet</EmptyListNote>}
         </div>
       )}
-      {(standaloneRuns.length > 0 || hasNoChats) && (
+      {(standaloneRuns.length > 0 ||
+        hasNoChats ||
+        (filterHidesChats && collectionRows.length === 0)) && (
         <SidebarGroupSection
           groupKey="recents"
           label="Recents"
@@ -409,13 +428,15 @@ export function SidebarChatList({
           // arrive.
           count={Math.min(standaloneRuns.length, RECENTS_LIMIT)}
         >
-          {hasNoChats ? (
-            <EmptyListNote>No chats yet</EmptyListNote>
+          {hasNoChats || filterHidesChats ? (
+            <EmptyListNote>
+              {hasNoChats ? "No chats yet" : "No chats"}
+            </EmptyListNote>
           ) : (
             <div className="flex flex-col space-y-0.5">
               {standaloneRuns
                 .slice(0, RECENTS_LIMIT)
-                .map((run) => renderChat(run, true))}
+                .map((run) => renderChat(run))}
             </div>
           )}
         </SidebarGroupSection>

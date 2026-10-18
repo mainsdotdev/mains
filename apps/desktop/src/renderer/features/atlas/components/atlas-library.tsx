@@ -18,6 +18,7 @@ import {
   toast,
 } from "@/components/ui";
 import {
+  Bridge,
   Chat,
   Document,
   Download,
@@ -53,6 +54,8 @@ import { useSpaceProviderVariant } from "@/hooks/use-space-provider-variant";
 import { useAppDispatch } from "@/lib/redux/hooks";
 import { updateAtlasPageChat } from "@/lib/redux/slices/atlasSlice";
 import { useJumpToRun } from "@/features/workspace/hooks/use-jump-to-run";
+import { useBridgeStatus } from "@/features/bridge/hooks/use-bridge";
+import { bridgeBackend } from "@/features/bridge/lib/backends";
 import { atlasError, useSaveToAtlas } from "../hooks/use-save-to-atlas";
 import { useAtlasSearch } from "../hooks/use-atlas-search";
 import {
@@ -66,7 +69,7 @@ import { AtlasMenu } from "./atlas-menu";
 import { AtlasFileIcon } from "./atlas-file-icon";
 import { AtlasPageIcon } from "./atlas-page-icon";
 import { AtlasPageCard } from "./atlas-page-card";
-import { useAtlasFilePath } from "../hooks/use-atlas-file-path";
+import { resolveReplicaFile, useAtlasFilePath } from "../hooks/use-atlas-file-path";
 import { AtlasImagePreview } from "./atlas-image-preview";
 import { useAtlasOwnerKey } from "../hooks/use-atlas-tabs";
 
@@ -89,36 +92,45 @@ function activity(date: string) {
   return new Date(date).toLocaleDateString();
 }
 
-function ImageTile({ entry, onOpen, fill = false }: { entry: Entry; onOpen: () => void; fill?: boolean }) {
-  const path = useAtlasFilePath(entry.saved?.accountId, entry.saved?.id, entry.path);
+/** `device` names the other device whose conversation holds this file. */
+function ImageTile({ entry, onOpen, fill = false, device }: { entry: Entry; onOpen: () => void; fill?: boolean; device?: string | null }) {
+  const path = useAtlasFilePath(entry.saved?.accountId, entry.saved?.id, entry.path, entry.generated);
   const src = useLocalImageUrl(path ?? "", 768, entry.date);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return (
-    <Button
-      onClick={onOpen}
-      aria-label={`Open ${entry.title}`}
-      className={`block w-full overflow-hidden bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/60 dark:bg-primary-900 ${fill ? "relative aspect-square h-full focus-visible:ring-inset" : "rounded-xl"}`}
-    >
-      {src && src !== failedSrc ? (
-        <img
-          src={src}
-          onError={() => setFailedSrc(src)}
-          alt={entry.title}
-          loading="lazy"
-          decoding="async"
-          className={fill ? "absolute inset-0 size-full object-cover" : "block h-auto w-full"}
-        />
-      ) : (
-        <span className={`flex items-center justify-center ${fill ? "absolute inset-0" : "aspect-4/3"}`}>
-          <Picture className="size-8 text-primary-400" />
+    <>
+      <Button
+        onClick={onOpen}
+        aria-label={`Open ${entry.title}`}
+        className={`block w-full overflow-hidden bg-primary-100 focus-visible:ring-2 focus-visible:ring-accent/60 dark:bg-primary-900 ${fill ? "relative aspect-square h-full focus-visible:ring-inset" : "rounded-xl"}`}
+      >
+        {src && src !== failedSrc ? (
+          <img
+            src={src}
+            onError={() => setFailedSrc(src)}
+            alt={entry.title}
+            loading="lazy"
+            decoding="async"
+            className={fill ? "absolute inset-0 size-full object-cover" : "block h-auto w-full"}
+          />
+        ) : (
+          <span className={`flex items-center justify-center ${fill ? "absolute inset-0" : "aspect-4/3"}`}>
+            <Picture className="size-8 text-primary-400" />
+          </span>
+        )}
+      </Button>
+      {device && (
+        <span className="pointer-events-none absolute left-2 top-2 flex size-6 items-center justify-center rounded-full bg-primary-950/75 text-primary-100">
+          <Bridge aria-hidden="true" className="size-3.5" />
+          <span className="sr-only">From {device}</span>
         </span>
       )}
-    </Button>
+    </>
   );
 }
 
 function ImageThumbnail({ entry }: { entry: Entry }) {
-  const path = useAtlasFilePath(entry.saved?.accountId, entry.saved?.id, entry.path);
+  const path = useAtlasFilePath(entry.saved?.accountId, entry.saved?.id, entry.path, entry.generated);
   const src = useLocalImageUrl(path, 256, entry.date);
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return src && src !== failedSrc ? (
@@ -190,6 +202,15 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
   const [fetchApps, { currentData: handlerApps = [], isFetching: appsLoading, originalArgs: appsPath }] =
     useLazyGetAppsForFileQuery();
   const jumpToRun = useJumpToRun();
+  const { data: bridgeStatus } = useBridgeStatus();
+  const deviceOf = (entry: Entry) => !entry.saved && entry.generated?.replica
+    ? bridgeBackend(bridgeStatus, entry.generated.replica.backendId).label : null;
+  const originLabel = (entry: Entry) => {
+    if (entry.saved) return "Saved to Atlas";
+    const origin = entry.generated?.origin === "attachment" ? "Uploaded" : "Generated";
+    const device = deviceOf(entry);
+    return device ? `${origin} on ${device}` : origin;
+  };
   const focusSearch = params.get("focus") === "search";
   useEffect(() => {
     if (focusSearch) searchRef.current?.focus();
@@ -245,6 +266,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
     }
   };
   const resolvePath = async (entry: Entry) => {
+    if (!entry.saved && entry.generated?.replica) return resolveReplicaFile(entry.generated.runId, entry.generated.replica);
     if (!entry.saved) return entry.path;
     const response = await appApi.atlas.resolveFile({ accountId: entry.saved.accountId, id: entry.saved.id });
     if (!response.success) throw new Error(response.error ?? "File unavailable");
@@ -278,7 +300,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
     }
   };
   const saveCopy = async (entry: Entry) => {
-    if (!entry.path) return;
+    if (!entry.path && !entry.generated?.replica) return;
     try {
       const response = await appApi.fileExplorer.saveFileAs(
         (await resolvePath(entry))!,
@@ -321,7 +343,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
             <Page className="size-4" />
             Open
           </DropdownMenuItem>
-          {entry.generated && !entry.saved && (
+          {/* Another device's file is saved to Atlas from that device. */}
+          {entry.generated && !entry.saved && !entry.generated.replica && (
             <DropdownMenuItem
               disabled={saving}
               onClick={() => {
@@ -333,7 +356,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               Save to Atlas
             </DropdownMenuItem>
           )}
-          {entry.path && (
+          {(entry.path || entry.generated?.replica) && (
             <DropdownMenuItem
               onClick={() => {
                 close();
@@ -698,7 +721,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
               key={entry.key}
               className="group relative mb-4 break-inside-avoid overflow-hidden rounded-xl border border-primary-200/60 dark:border-primary-800/70"
             >
-              <ImageTile entry={entry} onOpen={() => show(entry)} />
+              <ImageTile entry={entry} onOpen={() => show(entry)} device={deviceOf(entry)} />
               <div className="absolute right-2 top-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                 {itemMenu(entry, true)}
               </div>
@@ -707,7 +730,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                   {entry.title}
                 </p>
                 <p className="mt-1 text-xxs text-primary-300">
-                  {entry.saved ? "Saved to Atlas" : entry.generated?.origin === "attachment" ? "Uploaded" : "Generated"}
+                  {originLabel(entry)}
                 </p>
               </div>
             </div>
@@ -731,7 +754,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
             );
             if (entry.kind === "image") return (
               <div key={entry.key} className="group relative min-w-0 overflow-hidden rounded-3xl bg-primary-100 dark:bg-primary-900">
-                <ImageTile entry={entry} onOpen={() => show(entry)} fill={type !== "all"} />
+                <ImageTile entry={entry} onOpen={() => show(entry)} fill={type !== "all"} device={deviceOf(entry)} />
                 <div className="absolute right-3 top-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                   {itemMenu(entry, true)}
                 </div>
@@ -847,6 +870,7 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
                         onClick={() => void source(entry)}
                       >
                         {entry.generated?.runTitle ?? "Conversation"}
+                        {deviceOf(entry) && ` · ${deviceOf(entry)}`}
                       </Button>
                     ) : (
                       "—"
@@ -885,7 +909,8 @@ export function AtlasLibrary({ accountId }: { accountId: string }) {
         </nav>
       )}
       {preview && (
-        <AtlasImagePreview accountId={preview.saved?.accountId} id={preview.saved?.id} title={preview.title} path={preview.path} onClose={() => setPreview(null)} />
+        <AtlasImagePreview accountId={preview.saved?.accountId} id={preview.saved?.id} title={preview.title} path={preview.path}
+          generated={preview.saved ? undefined : preview.generated} onClose={() => setPreview(null)} />
       )}
     </PageShell>
   );

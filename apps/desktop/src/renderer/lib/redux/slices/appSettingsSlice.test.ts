@@ -9,6 +9,8 @@ import reducer, {
   setRightPanelOpen,
   setSessionPanelOpen,
   setWorkspaceGroupExpanded,
+  setWorkspaceListSourceVisible,
+  setChatListSourceVisible,
   setMcpAppPinned,
   forgetRunRightPane,
   forgetWorkspaceRightPanes,
@@ -214,6 +216,43 @@ describe("appSettingsSlice — right pane per conversation", () => {
 // These two used to be one localStorage key per group / per project. As slice
 // records their defaults are no longer "whatever the key parsed to", so the
 // absent case is what needs pinning down.
+describe("appSettingsSlice — workspace list sources", () => {
+  const visible = (source: "local" | "bridge", shown: boolean) =>
+    setWorkspaceListSourceVisible({ source, visible: shown });
+
+  it("shows local and bridge workspaces until one is hidden", () => {
+    const state = reducer(undefined, { type: "init" });
+    expect(state.workspaceListSources).toEqual({ local: true, bridge: true });
+    expect(reducer(state, visible("bridge", false)).workspaceListSources).toEqual({
+      local: true,
+      bridge: false,
+    });
+  });
+
+  it("keeps the last source visible", () => {
+    let state = reducer(undefined, visible("local", false));
+    state = reducer(state, visible("bridge", false));
+    expect(state.workspaceListSources).toEqual({ local: false, bridge: true });
+    state = reducer(state, visible("local", true));
+    expect(state.workspaceListSources).toEqual({ local: true, bridge: true });
+  });
+
+  it("filters chats separately from workspaces", () => {
+    let state = reducer(undefined, visible("bridge", false));
+    state = reducer(
+      state,
+      setChatListSourceVisible({ source: "local", visible: false }),
+    );
+    expect(state.workspaceListSources).toEqual({ local: true, bridge: false });
+    expect(state.chatListSources).toEqual({ local: false, bridge: true });
+    state = reducer(
+      state,
+      setChatListSourceVisible({ source: "bridge", visible: false }),
+    );
+    expect(state.chatListSources).toEqual({ local: false, bridge: true });
+  });
+});
+
 describe("appSettingsSlice — per-entity UI records", () => {
   it("defaults a group to expanded and only stores the ones touched", () => {
     const state = reducer(

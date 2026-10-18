@@ -8,24 +8,32 @@ import { createTestDb } from "../../../test/setup-db";
 import { createAccount, createRun, createRunArtifact, createToolCall } from "../../../test/factories";
 import { installTestBackendRuntime } from "../../../test/backend-runtime";
 import type { DatabaseInstance } from "../../db/types";
-import { atlasItems, atlasPageRevisions, collections, runs } from "../../db/schema";
+import { atlasItems, atlasPageRevisions, collections, runAttachmentRefs, runAttachments, runs } from "../../db/schema";
+import { ownershipOf } from "../bridge/bridge.ownership";
 import { atlasRepo } from "./atlas.repo";
+import { sourceKey } from "./atlas.storage";
 
 let db: DatabaseInstance;
 let directory: string;
 let cleanup: () => void;
 let restoreRuntime: () => void;
 const root = (id: string, mode = "work") => path.join(directory, "runs", id, mode);
+// Another device's selected outputs, as the runs projection rebuilds them from synced manifests.
+const replicaOutputs = new Map<string, unknown[]>();
 vi.mock("../../db/client", () => ({ getDb: () => db }));
 // Keep the integration focused on Atlas' real SQLite/storage boundary.
 vi.mock("../runs", () => ({ runsService: {
-  getRunById: async (id: string) => db.select().from(runs).where(eq(runs.id, id)).get() ?? null,
+  getRunById: async (id: string) => {
+    const run = db.select().from(runs).where(eq(runs.id, id)).get();
+    return run ? { ...run, ...ownershipOf(run.ownerBackendId) } : null;
+  },
   getRunExecutionRoot: async (id: string) => {
     const run = db.select().from(runs).where(eq(runs.id, id)).get();
     return root(id, run?.mode ?? "work");
   },
   listRunOutputFiles: vi.fn(async (_id: string): Promise<RunOutputFile[]> => []),
   getOutputArtifacts: async (id: string) => {
+    if (replicaOutputs.has(id)) return replicaOutputs.get(id);
     const { runsRepo } = await import("../runs/runs.repo");
     const { projectRunDeliverables } = await import("../runs/run-deliverables");
     const run = await runsRepo.findRunById(id);
@@ -40,9 +48,10 @@ vi.mock("../runs", () => ({ runsService: {
     const { listRunAttachmentFiles } = await import("../runs/run-attachment-storage");
     return listRunAttachmentFiles(id);
   },
+  listRunAttachmentRecords: (id: string) => listRunAttachmentRecords(id),
 } }));
 import { atlasService } from "./atlas.service";
-import { attachmentDescriptor, prepareRunAttachments, resolveRunAttachment } from "../runs/run-attachment-storage";
+import { attachmentDescriptor, listRunAttachmentRecords, prepareRunAttachments, resolveRunAttachment } from "../runs/run-attachment-storage";
 import { runsRepo } from "../runs/runs.repo";
 import { insertRunInputArtifact } from "../runs/run-input-artifact";
 import { handleAtlasCreatePage, handleAtlasReadPage, handleAtlasUpdatePage } from "../providers/adapters/atlas-tools";
@@ -251,6 +260,30 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     runsRepo.inheritAttachmentRefs("annotation-source", "annotation-fork");
     expect((await atlasService.generated({ accountId: "default" })).items).toEqual([]);
     expect(await resolveRunAttachment("annotation-fork", image.attachmentId!)).toMatchObject({ path: image.sourcePath });
+  });
+  it("lists another device's uploads and selected outputs from their records, without opening its files", async () => {
+    createRun(db, { id: "replica", title: "On the laptop", ownerBackendId: "laptop" });
+    const id = "b".repeat(64), hash = "c".repeat(64), source = "/Users/laptop/out/chart.png";
+    db.insert(runAttachments).values({ id, name: "Screenshot.png", type: "image", mimeType: "image/png",
+      storageKey: `attachments/${id}/Screenshot.png`, byteSize: 125636, contentHash: hash, createdAt: new Date("2026-10-16T09:00:00Z") }).run();
+    db.insert(runAttachmentRefs).values({ runId: "replica", attachmentId: id, inputKey: "prompt", ordinal: 0 }).run();
+    replicaOutputs.set("replica", [{ id: -42, runId: "replica", kind: "image", path: null, content: "", blobData: null, entityId: null,
+      contentHash: null, createdAt: new Date("2026-10-17T10:00:00Z"), metadata: { outputSelected: true, path: source, fileName: "chart.png", byteSize: 2048 } }]);
+    try {
+      const images = (await atlasService.library({ accountId: "default", type: "image" })).items;
+      expect(images.map((entry) => [entry.title, entry.path, entry.generated?.origin, entry.generated?.replica])).toEqual([
+        ["chart.png", null, "generated", { backendId: "laptop", artifactId: -42 }],
+        ["Screenshot.png", null, "attachment", { backendId: "laptop", attachmentId: id }],
+      ]);
+      // The laptop keys its own output by that path, so a copy it saved to Atlas is not listed twice.
+      expect(images[0].generated?.sourceKey).toBe(sourceKey("replica", source));
+      expect(images[1]).toMatchObject({ contentHash: hash, generated: { runTitle: "On the laptop", byteSize: 125636 } });
+      // A saved copy of the same image replaces the upload in All; Uploads still lists it.
+      db.insert(atlasItems).values({ id: "saved-copy", accountId: "default", kind: "image", title: "Saved", contentHash: hash }).run();
+      expect((await atlasService.library({ accountId: "default", type: "image" })).items.some((entry) => entry.generated?.replica?.attachmentId)).toBe(false);
+      expect((await atlasService.library({ accountId: "default", scope: "uploads" })).items.map((entry) => entry.generated?.replica?.attachmentId)).toEqual([id]);
+      await expect(atlasService.saveFile({ accountId: "default", runId: "replica", path: source })).rejects.toThrow("source backend");
+    } finally { replicaOutputs.clear(); }
   });
   it("projects image content hashes across uploads and generated files and refreshes changed outputs", async () => {
     createRun(db, { id: "hash-uploads" });

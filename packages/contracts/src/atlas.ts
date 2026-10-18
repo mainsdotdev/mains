@@ -65,10 +65,14 @@ export interface AtlasGeneratedFile {
   runTitle: string;
   collectionId: string | null;
   kind: "file" | "image";
+  /** On another device's conversation, that device's path: display-only, never opened here. */
   path: string;
   fileName: string;
   mimeType: string;
   byteSize: number;
+  /** A file of another device's conversation. It opens through the synced attachment or
+   * selected output it names, downloaded on demand; it is saved to Atlas from that device. */
+  replica?: { backendId: string; attachmentId?: string; artifactId?: number };
   modifiedAt: string;
 }
 export interface AtlasGeneratedOptions {

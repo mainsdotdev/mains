@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -106,11 +106,41 @@ async function runContext(runId: string, accountId: string) {
     roots: [...(root ? [root] : []), imageRoot, ...(codexImages ? [codexImages] : []),
       ...attachments.map((file) => path.dirname(file.path))] };
 }
+/** Another device's conversation offers the uploads and selected outputs Bridge synced
+ * from it. Only their records are read: a card downloads its file when it opens. */
+async function replicaFilesForRun({ run, runsService }: Awaited<ReturnType<typeof runContext>>): Promise<AtlasGeneratedFile[]> {
+  const common = { runId: run.id, runTitle: run.title ?? "Conversation", collectionId: run.collectionId };
+  const backendId = run.ownerBackendId ?? "";
+  const replicaKey = (...identity: unknown[]) => createHash("sha256").update(JSON.stringify([run.id, ...identity])).digest("hex");
+  const result: AtlasGeneratedFile[] = [];
+  for (const { attachment, isBrowserAnnotation } of runsService.listRunAttachmentRecords(run.id)) {
+    const type = classify(attachment.name);
+    if (isBrowserAnnotation || !type) continue;
+    result.push({ ...common, ...type, origin: "attachment", contentHash: attachment.contentHash,
+      sourceKey: replicaKey("attachment", attachment.id), path: attachment.name, fileName: attachment.name,
+      byteSize: attachment.byteSize, modifiedAt: attachment.createdAt.toISOString(),
+      replica: { backendId, attachmentId: attachment.id } });
+  }
+  for (const output of await runsService.getOutputArtifacts(run.id)) {
+    const source = output.metadata?.path;
+    const type = typeof source === "string" ? classify(source) : null;
+    if (typeof source !== "string" || !type) continue;
+    const modified = Number(output.metadata?.modifiedAt);
+    // The source device keys its own copy by this path, so a file it saved to Atlas is not listed twice.
+    result.push({ ...common, ...type, origin: "generated",
+      sourceKey: path.isAbsolute(source) ? sourceKey(run.id, source) : replicaKey("output", output.id), path: source,
+      fileName: typeof output.metadata?.fileName === "string" ? output.metadata.fileName : path.basename(source),
+      byteSize: Number(output.metadata?.byteSize) || 0,
+      modifiedAt: (modified > 0 ? new Date(modified) : output.createdAt).toISOString(),
+      replica: { backendId, artifactId: output.id } });
+  }
+  return [...new Map(result.map((item) => [item.sourceKey, item])).values()];
+}
 async function generatedForRun(runId: string, accountId: string, hashImages = true): Promise<AtlasGeneratedFile[]> {
-  const { run, runsService, roots, attachments } = await runContext(runId, accountId);
-  // Generated discovery walks this backend's execution folders. Replicas expose
-  // their selected outputs through the read-only conversation/file cache.
-  if (run.isReplica) return [];
+  const context = await runContext(runId, accountId);
+  const { run, runsService, roots, attachments } = context;
+  // Generated discovery walks this backend's execution folders.
+  if (run.isReplica) return replicaFilesForRun(context);
   const candidates = new Set<string>();
   for (const artifact of await runsService.getOutputArtifacts(runId)) {
     if (artifact.metadata?.outputSelected && artifact.path) candidates.add(artifact.path);
@@ -207,11 +237,11 @@ async function* generatedLibraryEntries(options: AtlasLibraryOptions, query: str
       if (options.scope === "generated" && file.origin === "attachment") continue;
       if (options.scope === "uploads" && file.origin !== "attachment") continue;
       const entry: AtlasLibraryEntry = { key: file.sourceKey, kind: file.kind, title: file.fileName,
-        date: file.modifiedAt, collectionId: file.collectionId, path: file.path, generated: file };
+        date: file.modifiedAt, collectionId: file.collectionId, path: file.replica ? null : file.path, generated: file };
       if (!matchesLibrary(entry, options, query)) continue;
       const saved = atlasRepo.bySource(options.accountId, file.sourceKey);
       if (options.scope === "all" && saved && (saved.trashedAt || matchesLibrary(savedEntry(format(saved)), options, query))) continue;
-      if (file.kind === "image" && !file.contentHash) {
+      if (file.kind === "image" && !file.contentHash && !file.replica) {
         try { file.contentHash = await imageContentHash(file.path, await fs.stat(file.path)); }
         catch { continue; }
       }

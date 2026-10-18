@@ -49,6 +49,7 @@ describe("handle", () => {
             "Move it back, or delete the workspace.",
         ),
       ],
+      ["Bridge file without bytes here", new Error("File is available only on its source device (missing or above 50 MiB)")],
     ] as const;
 
     for (const [label, error] of absences) {

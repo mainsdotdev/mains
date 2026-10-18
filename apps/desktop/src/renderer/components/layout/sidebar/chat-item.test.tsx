@@ -76,7 +76,6 @@ function setup(
       device={overrides.isReplica ? { backendId: "source", label: "Source Mac", online: false, lastSeen: null, platform: "darwin" } : undefined}
       variant="codex"
       isActive={false}
-      isRecent
       isPinned={false}
       collections={collections}
       {...callbacks}

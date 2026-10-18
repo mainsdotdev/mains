@@ -79,6 +79,8 @@ const appSettingsPersistConfig = {
     // and survives tab switches and restarts.
     "subagentPanelCollapsed",
     "workspaceListGrouping",
+    "workspaceListSources",
+    "chatListSources",
     "workspaceGroupExpanded",
     "pinnedMcpAppKeysByProvider",
     "onboardingCliAutoSelectApplied",

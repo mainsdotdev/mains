@@ -1,7 +1,11 @@
 import { useState, useMemo, type MouseEvent, type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/lib/redux/hooks";
-import { setWorkspaceListGrouping } from "@/lib/redux/slices/appSettingsSlice";
+import {
+  normalizeWorkspaceListSources,
+  setWorkspaceListGrouping,
+  setWorkspaceListSourceVisible,
+} from "@/lib/redux/slices/appSettingsSlice";
 import {
   DropdownMenu,
   DropdownMenuItem,
@@ -133,6 +137,15 @@ export default function WorkspacesList({
     savedGrouping === "status" ? "project" : savedGrouping;
   const setGrouping = (mode: GroupingMode) =>
     dispatch(setWorkspaceListGrouping(mode));
+  const sources = normalizeWorkspaceListSources(
+    useAppSelector((state) => state.appSettings.workspaceListSources),
+  );
+  const showLocal = sources.local;
+  const showBridge = sources.bridge;
+  const setSourceVisible = (
+    source: "local" | "bridge",
+    visible: boolean,
+  ) => dispatch(setWorkspaceListSourceVisible({ source, visible }));
 
   // Project data for icons and grouping
   const { data: projects = [] } = useListProjectsQuery();
@@ -226,9 +239,10 @@ export default function WorkspacesList({
     }
   };
 
-  const sortedWorkspaces = workspaces
+  const allLocalWorkspaces = workspaces
     .filter((workspace) => !workspace.isReplica)
     .sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+  const sortedWorkspaces = showLocal ? allLocalWorkspaces : [];
   const pinnedWorkspaces = sortedWorkspaces.filter(
     (workspace) => workspace.pinnedAt !== null,
   );
@@ -290,7 +304,7 @@ export default function WorkspacesList({
   const computeGroups = (): WorkspaceGroup[] => {
     if (grouping === "project") {
       const byProject = new Map<string | null, WorkspaceResponse[]>();
-      for (const ws of sortedWorkspaces) {
+      for (const ws of allLocalWorkspaces) {
         const list = byProject.get(ws.projectId) ?? [];
         list.push(ws);
         byProject.set(ws.projectId, list);
@@ -344,9 +358,9 @@ export default function WorkspacesList({
   // Another device's checkout of the same remote joins this device's project
   // group; a remote that exists only elsewhere gets its own repository group.
   // Only workspaces without a remote identity stay under their device.
-  const replicaWorkspaces = workspaces.filter(
-    (workspace) => workspace.isReplica,
-  );
+  const replicaWorkspaces = showBridge
+    ? workspaces.filter((workspace) => workspace.isReplica)
+    : [];
   const replicaPlan =
     grouping === "project"
       ? planReplicaWorkspaces(
@@ -406,13 +420,23 @@ export default function WorkspacesList({
       />
     );
   };
+  const replicasInGroup = (group: WorkspaceGroup) =>
+    group.project ? (replicaPlan.merged.get(group.project.id) ?? []) : [];
+  // Hiding local rows keeps a project header when another device's checkout
+  // still belongs under it. A project with nothing left to show drops out.
+  const groupIsVisible = (group: WorkspaceGroup) =>
+    showLocal || replicasInGroup(group).length > 0;
   const sortableProjectGroups = groups.filter(
     (group) =>
-      !!account && !!group.project && group.project.accountId === account.id,
+      groupIsVisible(group) &&
+      !!account &&
+      !!group.project &&
+      group.project.accountId === account.id,
   );
   const otherGroups = groups.filter(
     (group) =>
-      !account || !group.project || group.project.accountId !== account.id,
+      groupIsVisible(group) &&
+      (!account || !group.project || group.project.accountId !== account.id),
   );
   const canReorderProjects =
     !searchQuery.trim() &&
@@ -513,16 +537,15 @@ export default function WorkspacesList({
     group: WorkspaceGroup,
     sortHandle?: SortableHandle,
   ) => {
-    const replicas = group.project
-      ? (replicaPlan.merged.get(group.project.id) ?? [])
-      : [];
+    const localRows = showLocal ? group.workspaces : [];
+    const replicas = replicasInGroup(group);
     return (
       <SidebarGroupSection
         groupKey={group.key}
         label={group.label}
         labelWeight="medium"
         icon={group.icon}
-        count={group.workspaces.length + replicas.length}
+        count={localRows.length + replicas.length}
         sortHandle={sortHandle}
         action={
           group.project
@@ -537,11 +560,8 @@ export default function WorkspacesList({
             : undefined
         }
       >
-        {group.workspaces.length > 0 ? (
-          renderSortableWorkspaces(
-            group.workspaces,
-            "flex flex-col space-y-0.5",
-          )
+        {localRows.length > 0 ? (
+          renderSortableWorkspaces(localRows, "flex flex-col space-y-0.5")
         ) : replicas.length === 0 ? (
           <div className="pl-7 pr-2.5 py-1">
             <Text as="span" size="xxs" tone="muted">
@@ -598,6 +618,8 @@ export default function WorkspacesList({
             <WorkspaceGroupDropdown
               grouping={grouping}
               onGroupingChange={setGrouping}
+              sources={sources}
+              onSourceVisibleChange={setSourceVisible}
             />
           </div>
           {/* <ArrowUp
@@ -613,7 +635,7 @@ export default function WorkspacesList({
           isExpanded ? "max-h-250 opacity-100" : "max-h-0 opacity-0"
         }`}
       >
-        {visibleClones.length > 0 && (
+        {showLocal && visibleClones.length > 0 && (
           <div className="mb-1 flex flex-col gap-1">
             {visibleClones.map((clone) => (
               <PendingWorkspaceItem
@@ -626,7 +648,14 @@ export default function WorkspacesList({
             ))}
           </div>
         )}
-        {grouping === "none" ? (
+        {pinnedWorkspaces.length === 0 &&
+        unpinnedWorkspaces.length === 0 &&
+        (!showLocal || visibleClones.length === 0) &&
+        replicaWorkspaces.length === 0 ? (
+          <div className="flex items-center justify-center h-16">
+            <Text size="xs">No workspaces</Text>
+          </div>
+        ) : grouping === "none" ? (
           <>
             {renderSortableWorkspaces(
               unpinnedWorkspaces,
