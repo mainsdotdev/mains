@@ -4,6 +4,7 @@ import { Check } from "@/components/ui/icons";
 import {
   appIconAssetPath,
   ATLAS_APP_ICON_ID,
+  BRIDGE_APP_ICON_ID,
   DEFAULT_APP_ICON_ID,
   type AppIconId,
 } from "../../../../shared/app-icons";
@@ -95,6 +96,7 @@ export function AppIconPicker() {
         >
           {renderChoice(DEFAULT_APP_ICON_ID, "Default")}
           {renderChoice(ATLAS_APP_ICON_ID, "Atlas")}
+          {renderChoice(BRIDGE_APP_ICON_ID, "Bridge")}
         </div>
       </SettingsRow>
     </SettingsSection>

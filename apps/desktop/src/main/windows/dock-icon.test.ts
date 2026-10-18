@@ -117,7 +117,7 @@ describe("Dock icons", () => {
   });
 
   it("preserves every active choice and includes both appearances plus Icon Composer sources", () => {
-    expect(APP_ICON_IDS).toEqual(["mains-default", "mains-atlas"]);
+    expect(APP_ICON_IDS).toEqual(["mains-default", "mains-atlas", "mains-bridge"]);
     for (const id of APP_ICON_IDS) {
       saveIcon(id);
       expect(getSavedDockIcon()).toBe(id);
@@ -130,10 +130,13 @@ describe("Dock icons", () => {
     }
   });
 
-  it("uses the new flat asset path with a 96px transparent margin", () => {
-    setDockIcon("mains-atlas");
-    expect(mocks.nativeImage.createFromPath.mock.calls[0][0]).toMatch(
-      /icons\/atlas\.png$/,
+  it.each([
+    ["mains-atlas", "atlas.png"],
+    ["mains-bridge", "bridge.png"],
+  ] as const)("loads %s with a 96px transparent margin", (id, filename) => {
+    setDockIcon(id);
+    expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(
+      path.join(process.cwd(), ".vite/renderer/icons", filename),
     );
     const bitmap = mocks.nativeImage.createFromBitmap.mock.calls[0][0] as Buffer;
     expect(bitmap.length).toBe(1024 * 1024 * 4);
@@ -169,10 +172,12 @@ describe("Dock icons", () => {
   });
 
   it.each([
-    ["", "atlas.png"],
-    ["Dark", "atlas-dark.png"],
-  ])("restores Atlas with the Mac's %j appearance at startup", (style, filename) => {
-    saveIcon("mains-atlas");
+    ["mains-atlas", "", "atlas.png"],
+    ["mains-atlas", "Dark", "atlas-dark.png"],
+    ["mains-bridge", "", "bridge.png"],
+    ["mains-bridge", "Dark", "bridge-dark.png"],
+  ])("restores %s with the Mac's %j appearance at startup", (id, style, filename) => {
+    saveIcon(id);
     mocks.systemPreferences.getUserDefault.mockReturnValue(style);
     applySavedDockIcon();
     expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(
