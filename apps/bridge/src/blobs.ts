@@ -62,7 +62,8 @@ export async function handleBlobs(request: Request, env: BlobEnv, quota: {
       for (let index = 0; index < bridgeBlobChunkCount(blob.size); index++) {
         const key = `${prefix}${blob.blobId}/${index}`;
         const token = await new SignJWT({ key, blobId: blob.blobId, size: blob.size, index, op: input.op,
-          identity: { accountId: identity.accountId, backendId: identity.backendId, expiresAt: identity.expiresAt, ...(identity.credentialHash ? { credentialHash: identity.credentialHash } : {}) } })
+          identity: { accountId: identity.accountId, backendId: identity.backendId, signingPublicKey: identity.signingPublicKey, expiresAt: identity.expiresAt,
+            ...(identity.credentialHash ? { credentialHash: identity.credentialHash } : {}) } })
           .setProtectedHeader({ alg: "HS256", typ: "JWT" }).setAudience(audience).setIssuer(audience)
           .setIssuedAt().setExpirationTime(expires).sign(signingKey(env));
         const signed = new URL("/v1/blobs/chunk", url); signed.searchParams.set("cap", token);

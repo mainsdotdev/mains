@@ -67,6 +67,24 @@ export async function backendStillApproved(env: AuthEnv, account: string, backen
   return !!await env.AUTH_DB?.prepare("SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND token_hash=? AND status='approved' AND token_expires_at>?")
     .bind(account, backend, hash, Date.now()).first();
 }
+/** A revoked registration's wrap and approval go with it. */
+const revocationCleanup = (db: D1Database, account: string, backend: string) => [
+  db.prepare("DELETE FROM bridge_key_wraps WHERE account_id=? AND backend_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='revoked')")
+    .bind(account, backend, account, backend),
+  db.prepare("DELETE FROM bridge_approvals WHERE account_id=? AND backend_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='revoked')")
+    .bind(account, backend, account, backend),
+];
+/** Revokes the registration holding keys a removal took out of the log. The signed removal is the authority,
+ * so this finishes a revocation interrupted between the log and D1. A newer registration of the same
+ * backend holds other keys and stays as it is. Returns whether a registration was still live. */
+export async function revokeRemovedRegistration(db: D1Database, account: string, backend: string, signingPublicKey: string): Promise<boolean> {
+  const result = await db.batch([
+    db.prepare("UPDATE bridge_backends SET status='revoked',next_token_hash=NULL,next_token_expires_at=NULL WHERE account_id=? AND backend_id=? AND signing_public_key=? AND status<>'revoked'")
+      .bind(account, backend, signingPublicKey),
+    ...revocationCleanup(db, account, backend),
+  ]);
+  return !!result[0].meta.changes;
+}
 const format = (row: BackendRow): BridgeRegisteredBackend => ({ backendId: row.backend_id, publicKey: row.public_key, signingPublicKey: row.signing_public_key, label: row.label, platform: row.platform,
   status: row.status, createdAt: new Date(row.created_at).toISOString(), lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null });
 const approvedSql = "EXISTS(SELECT 1 FROM bridge_backends authorizer WHERE authorizer.account_id=? AND authorizer.backend_id=? AND authorizer.token_hash=? AND authorizer.status='approved' AND authorizer.token_expires_at>?)";
@@ -113,6 +131,10 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
     if (!backend) throw new HttpError(401, "Backend sign-in expired or was revoked");
     await rateLimit(env, `backend:${backend.account_id}:${backend.backend_id}`, 180);
     const account = backend.account_id, id = backend.backend_id, ready = backend.status === "approved";
+    // The log decides membership: an approval whose keys it no longer admits is revoked, even before D1 has
+    // caught up with an interrupted removal (the hub finishes that revocation on its own).
+    if (ready && !sameMember(currentMember(await control.membership.state(account), id), registeredMember(backend)))
+      throw new HttpError(401, "Backend sign-in expired or was revoked");
     const requireApproved = () => { if (!ready) throw new HttpError(403, "Approve this backend on another device or enter its recovery code"); };
     if (path === "/v1/keys/mine" && request.method === "GET") {
       const keys = await db.prepare("SELECT recovery_public_key FROM bridge_accounts WHERE account_id=?").bind(account).first<{ recovery_public_key: string }>();
@@ -195,10 +217,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       const result = await db.batch([
         db.prepare(`UPDATE bridge_backends SET status='revoked',next_token_hash=NULL,next_token_expires_at=NULL WHERE account_id=? AND backend_id=? AND ${authorized} AND signing_public_key=?`)
           .bind(account, target, ...authorizedArgs, registration.signing_public_key),
-        db.prepare("DELETE FROM bridge_key_wraps WHERE account_id=? AND backend_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='revoked')")
-          .bind(account, target, account, target),
-        db.prepare("DELETE FROM bridge_approvals WHERE account_id=? AND backend_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='revoked')")
-          .bind(account, target, account, target),
+        ...revocationCleanup(db, account, target),
       ]);
       if (!result[0].meta.changes) throw new HttpError(404, "Backend unavailable");
       await control.revoked(account, target); return json({ ok: true });

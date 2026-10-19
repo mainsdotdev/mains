@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bridgeApprovalCode, bridgeBase64, formatBridgeVerificationCode, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
-import { verifyBridgeMembershipLog, type BridgeMember, type BridgeMembershipChange, type BridgeMembershipEntry, type BridgeMembershipSigner } from "@mains/contracts/bridge-membership";
+import { bridgeMember, verifyBridgeMembershipLog, type BridgeMember, type BridgeMembershipChange, type BridgeMembershipEntry, type BridgeMembershipSigner } from "@mains/contracts/bridge-membership";
 import { createNodeBackendRuntime } from "../../runtime/node-backend-runtime";
 import { createBridgeIdentity, type BridgeIdentityClient } from "./bridge.identity";
 import { createBridgeIdentityStorage, createBridgeMembershipStorage, type BridgeSavedIdentity } from "./bridge.identity-storage";
@@ -309,13 +309,17 @@ async function fixture(accountKey: Uint8Array | null = null, options: { recovery
     else if (path === "/v1/membership" && method === "GET") value = { entries: log.entries.slice(Number(url.searchParams.get("after")) + 1) };
     else if (path === "/v1/membership" || path === "/v1/keys/wraps" || path === "/v1/keys/recovery/unlock" || path === "/v1/keys/bootstrap" ||
         path === "/v1/keys/recovery" && method === "PUT" || path.startsWith("/v1/backends/") && method === "DELETE") {
-      // Like the hub: compare-and-swap on the head, and only entries that verify extend the log.
-      if (body?.entry) {
+      // Like the hub: compare-and-swap on the head, and only entries that verify extend the log. A retry
+      // after a lost reply finds its own entry already there.
+      if (body?.entry && JSON.stringify(log.entries[body.entry.seq]) !== JSON.stringify(body.entry)) {
         if (body.entry.seq !== log.entries.length) return Response.json({ error: "Account membership changed; refresh and try again" }, { status: 409 });
         try { await verifyBridgeMembershipLog([...log.entries, body.entry], verifyBridgeSignature); }
         catch (failure) { return Response.json({ error: failure instanceof Error ? failure.message : "Invalid entry" }, { status: 403 }); }
         log.entries.push(body.entry);
       }
+      // Like the hub: a registration holding a member's keys leaves only with a signed removal.
+      if (path.startsWith("/v1/backends/") && !body?.entry && log.entries.length && bridgeMember(await log.verified(), decodeURIComponent(path.slice("/v1/backends/".length))))
+        return Response.json({ error: "Invalid identity or key request" }, { status: 400 });
       if (path === "/v1/keys/recovery/unlock") state.unlocked();
       // Like the hub: the initializer's registration is approved together with the account.
       if (path === "/v1/keys/bootstrap") { state.mine.backend.status = "approved"; state.mine.initialized = true; }
@@ -539,6 +543,66 @@ describe("Bridge membership on an active backend", () => {
     expect(await f.vault.read()).toMatchObject({ membership: { seq: 0, hash: await f.log.hashOf(0) }, accountKey: bridgeBase64(opened.accountKey) });
     expect(JSON.parse(await readFile(join(f.dir, "bridge", "membership.json"), "utf8")).entries).toEqual([posted.entry]);
   }, 30_000);
+  /** A fresh account the hub has not initialized; `bootstrap` sees each initialization request first. */
+  async function uninitialized(bootstrap: (body: any, send: () => Promise<Response>) => Promise<Response>) {
+    const f = await fixture();
+    f.log.entries.splice(0); f.state.mine.initialized = false; await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, accountInitialized: false });
+    const original = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => new URL(String(args[0])).pathname === "/v1/keys/bootstrap"
+      ? bootstrap(JSON.parse(String(args[1]!.body)), () => original(...args)) : original(...args)));
+    return f;
+  }
+  it("keeps its bootstrap proposal across a lost reply and activates exactly that account, with its recovery code", async () => {
+    let lost = false;
+    const f = await uninitialized(async (_, send) => { const reply = await send(); if (lost) return reply; lost = true; throw new TypeError("Injected lost bootstrap reply"); });
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    expect(client.status()).toMatchObject({ state: "needs-approval", error: expect.stringContaining("lost bootstrap reply") });
+    const proposal = (await f.vault.read())!.pendingBootstrap!;
+    expect(proposal.entry).toEqual(f.log.entries[0]); expect(f.state.mine.backend.status).toBe("approved");
+    // After a restart it finds the proposal accepted, sends nothing new and activates the saved key.
+    await client.stop(); const restarted = f.makeClient(); await restarted.start(); await restarted.refresh();
+    expect(restarted.status().state).toBe("ready");
+    expect(f.state.calls.filter((call) => call.path === "/v1/keys/bootstrap")).toHaveLength(1);
+    expect(f.activatedKeys).toEqual([proposal.accountKey]);
+    expect(restarted.takeRecoveryCode()).toBe(proposal.recoveryCode);
+    expect(await f.vault.read()).toMatchObject({ accountKey: proposal.accountKey, pendingBootstrap: null, membership: { seq: 0, hash: await f.log.hashOf(0) } });
+  }, 30_000);
+  it("resends the identical proposal when the hub kept its genesis but lost the account", async () => {
+    const sent: unknown[] = [];
+    const f = await uninitialized(async (body, send) => {
+      sent.push(body); if (sent.length > 1) return send();
+      f.log.entries.push(body.entry); return Response.json({ error: "Invalid identity or key request" }, { status: 400 });
+    });
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    expect(client.status().state).not.toBe("ready");
+    await client.refresh();
+    expect(client.status().state).toBe("ready");
+    expect(sent).toHaveLength(2); expect(sent[1]).toEqual(sent[0]); expect(f.log.entries).toHaveLength(1);
+  }, 30_000);
+  it("drops its proposal once another backend's genesis has won", async () => {
+    const f = await fixture(); f.state.mine.initialized = false; await f.client.stop();
+    await f.vault.write({ ...(await f.vault.read())!, accountInitialized: false });
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    expect((await f.vault.read())!.pendingBootstrap).toBeNull();
+    f.state.mine.initialized = true; await client.refresh();
+    expect(client.status().state).toBe("needs-approval");
+    expect(f.state.calls.filter((call) => call.path === "/v1/keys/bootstrap")).toHaveLength(1);
+  }, 30_000);
+  it("signs out before its join code is entered through its own signed removal", async () => {
+    const f = await fixture(); await f.offer(f.trueKey); await f.client.refresh();
+    expect(f.client.status().state).toBe("needs-verification");
+    await f.client.signOut();
+    expect(f.state.calls.find((call) => call.path === "/v1/backends/local")).toMatchObject({ method: "DELETE",
+      body: { entry: { kind: "remove", body: { backendId: "local", account: noRecords }, signer: { backendId: "local" } } } });
+    expect((await f.log.verified()).keys.find((key) => key.backendId === "local")!.until).not.toBeNull();
+    expect(f.client.status().state).toBe("signed-out"); expect(await f.vault.read()).toBeNull();
+  });
+  it("signs out a backend the log never admitted by its credential alone", async () => {
+    const f = await fixture(); await f.client.signOut();
+    expect(f.state.calls.filter((call) => call.path === "/v1/backends/local")).toEqual([{ path: "/v1/backends/local", body: undefined, method: "DELETE" }]);
+    expect(f.client.status().state).toBe("signed-out"); expect(await f.vault.read()).toBeNull();
+  });
   it("extends its pinned history, and stops at a hub history that does not contain it", async () => {
     const f = await fixture(generateBridgeAccountKey()), other = testDevice("other");
     await f.log.append({ kind: "add", body: { member: other.member, via: "approval" } }, f.approver.signer, f.approver.secret);

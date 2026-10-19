@@ -21,8 +21,11 @@ export const currentMember = (state: BridgeMembershipState | null, backendId: st
  * Clients verify the same rules independently and never rely on this check. */
 export function createHubMembership(storage: DurableObjectStorage) {
   const sql = storage.sql;
+  // A removal also queues the revocation of the registration holding the removed keys; the removing
+  // request revokes it in D1 right after, and the hub finishes one interrupted in between.
   sql.exec(`CREATE TABLE IF NOT EXISTS membership(seq INTEGER PRIMARY KEY,hash TEXT NOT NULL,entry TEXT NOT NULL,appended_at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS membership_fences(entry_seq INTEGER NOT NULL,ordinal INTEGER NOT NULL,signature TEXT NOT NULL,PRIMARY KEY(entry_seq,ordinal));`);
+    CREATE TABLE IF NOT EXISTS membership_fences(entry_seq INTEGER NOT NULL,ordinal INTEGER NOT NULL,signature TEXT NOT NULL,PRIMARY KEY(entry_seq,ordinal));
+    CREATE TABLE IF NOT EXISTS membership_revocations(backend_id TEXT NOT NULL,signing_public_key TEXT NOT NULL,PRIMARY KEY(backend_id,signing_public_key));`);
   let cached: BridgeMembershipState | null | undefined;
   async function state(): Promise<BridgeMembershipState | null> {
     // A maintenance reset or restore can replace the rows under a live object.
@@ -55,6 +58,14 @@ export function createHubMembership(storage: DurableObjectStorage) {
       return sql.exec<{ signature: string }>("SELECT signature FROM membership_fences WHERE entry_seq=? AND ordinal>? ORDER BY ordinal LIMIT ?", seq, after, BRIDGE_FENCE_PAGE)
         .toArray().map((row) => row.signature);
     },
+    /** Removed keys whose registration D1 has not yet been confirmed to revoke. */
+    revocations(): { backendId: string; signingPublicKey: string }[] {
+      return sql.exec<{ backend_id: string; signing_public_key: string }>("SELECT backend_id,signing_public_key FROM membership_revocations ORDER BY backend_id")
+        .toArray().map((row) => ({ backendId: row.backend_id, signingPublicKey: row.signing_public_key }));
+    },
+    revocationFinished(key: { backendId: string; signingPublicKey: string }) {
+      sql.exec("DELETE FROM membership_revocations WHERE backend_id=? AND signing_public_key=?", key.backendId, key.signingPublicKey);
+    },
     /** The caller holds the account gate: appends are compare-and-swap on the head. A removal is stored
      * together with the signature list its entry commits to. */
     async append(value: unknown, fence?: unknown): Promise<MembershipAppend> {
@@ -73,10 +84,12 @@ export function createHubMembership(storage: DurableObjectStorage) {
       let next: BridgeMembershipState;
       try { next = await applyBridgeMembershipEntry(current, value, verifyEd25519); }
       catch (error) { return { status: "invalid", error: error instanceof Error ? error.message : "Invalid Bridge membership entry" }; }
+      const removed = value.kind === "remove" ? bridgeMember(current!, value.body.backendId)! : null;
       storage.transactionSync(() => {
         sql.exec("INSERT INTO membership(seq,hash,entry,appended_at) VALUES(?,?,?,?)", next.seq, next.head, JSON.stringify(value), Date.now());
         if (value.kind === "remove") for (const [ordinal, signature] of (fence as string[]).entries())
           sql.exec("INSERT INTO membership_fences(entry_seq,ordinal,signature) VALUES(?,?,?)", next.seq, ordinal, signature);
+        if (removed) sql.exec("INSERT OR IGNORE INTO membership_revocations(backend_id,signing_public_key) VALUES(?,?)", removed.backendId, removed.signingPublicKey);
       });
       cached = next;
       return { status: "appended", head: { seq: next.seq, hash: next.head } };

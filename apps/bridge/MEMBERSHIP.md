@@ -357,7 +357,10 @@ registration, which a pending device can still cancel and an approver still revo
 removal's list before their view exposes that removal, and refuse a removed
 writer's account record outside it, however early it binds. The hub refuses pushes
 from non-members, and removing a member revokes only the D1 registration holding
-its keys. Approving a backend that re-enrolled with new keys while its old ones are
+its keys. Reads follow the log too: sockets, blob capabilities and device routes
+(token renewal included) admit only a current member's key, so a removal that lands
+before its D1 revocation fails still ends access, and the hub's alarm finishes that
+revocation from a queue the removal writes in its own transaction. Approving a backend that re-enrolled with new keys while its old ones are
 still admitted (its credential lapsed before it could remove itself) first removes
 the old keys with their fence, which leaves the new registration pending. Sign-out
 remains a fenced self-removal that needs the hub. Still open: a backend whose old

@@ -1,8 +1,11 @@
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterEach, expect, it } from "vitest";
+import { fixtureEntryHash, fixtureGenesis, fixturePublicKey } from "./record-signing.mjs";
 
 const cleanup: Array<() => Promise<void>> = [];
+/** The hub admits only its log's members, so A is the account's genesis member. */
+const genesis = fixtureGenesis("fixture", "A", new Uint8Array(32));
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
 async function fixture(storageLimit = 1000) {
   let release!: () => void, entered!: () => void, failure = "", puts = 0;
@@ -24,8 +27,9 @@ async function fixture(storageLimit = 1000) {
           };
           const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
         }})});this.approval=approval;
+        ctx.storage.sql.exec('INSERT OR IGNORE INTO membership(seq,hash,entry,appended_at) VALUES(0,?,?,0)',${JSON.stringify(fixtureEntryHash(genesis))},${JSON.stringify(JSON.stringify(genesis))});
       }
-      identity(){return {accountId:'fixture',backendId:'A',credentialHash:'test-credential',expiresAt:Date.now()+3600000}}
+      identity(){return {accountId:'fixture',backendId:'A',signingPublicKey:${JSON.stringify(fixturePublicKey("fixture", "A"))},credentialHash:'test-credential',expiresAt:Date.now()+3600000}}
       async key(id='a'){return await bridgeAccountPrefix('fixture')+id.repeat(43)+'/0'}
       async reserve(id='a',bytes=140){return this.reserveBlobs(this.identity(),[{key:await this.key(id),bytes}],Date.now()+600000)}
       async put(id='a',byte=7){return this.putBlob(this.identity(),await this.key(id),Date.now()+600000,new Uint8Array(140).fill(byte))}

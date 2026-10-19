@@ -2,9 +2,14 @@ import { promises as fs, constants } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SecretStorageAdapter } from "../../runtime/backend-runtime";
-import { bridgeBytes } from "@mains/contracts/bridge-auth";
-import type { BridgeMembershipHead } from "@mains/contracts/bridge-membership";
+import { bridgeBytes, validateBridgeDeviceWrap, validateBridgeRecoveryWrap, type BridgeRecoveryWrap, type BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
+import { validateBridgeMembershipEntry, type BridgeMembershipEntry, type BridgeMembershipHead } from "@mains/contracts/bridge-membership";
 import { verifyBridgeDeviceKeyPairs } from "./bridge.keys";
+
+/** A new account's key, recovery code and the exact request that initializes it. */
+export interface BridgeBootstrapProposal {
+  accountKey: string; recoveryCode: string; wrap: BridgeSealedAccountKey; recovery: BridgeRecoveryWrap; entry: BridgeMembershipEntry;
+}
 
 export interface BridgeSavedIdentity {
   v: 3; backendId: string; hubUrl: string; label: string; accountId: string; email: string;
@@ -19,6 +24,9 @@ export interface BridgeSavedIdentity {
   /** The membership head this backend pinned in an authenticated ceremony (genesis, join code or
    * recovery); every log it accepts afterwards must contain it. Required with `accountKey`. */
   membership?: BridgeMembershipHead | null;
+  /** Saved before the first bootstrap request, so a lost reply is resent unchanged or found accepted; the
+   * hub may already hold this account's only key and recovery authority. */
+  pendingBootstrap?: BridgeBootstrapProposal | null;
   /** Once an existing account has been observed, the hub cannot trigger re-bootstrap. */
   accountInitialized?: boolean;
   includeExisting: boolean;
@@ -97,6 +105,11 @@ export function createBridgeIdentityStorage(dir: string, storage: SecretStorageA
       for (const head of [identity.membership, identity.pendingMembership]) if (head != null) validateMembershipHead(head);
       if (identity.accountKey && !identity.membership) throw new Error("Saved Bridge identity has no pinned membership; sign out and sign in again");
       if (identity.pendingAccountKey && !identity.pendingMembership) throw new Error("Saved Bridge identity has an unpinned candidate key");
+      if (identity.pendingBootstrap != null) {
+        const proposal = identity.pendingBootstrap;
+        if (identity.accountKey || identity.pendingAccountKey || typeof proposal.recoveryCode !== "string") throw new Error("Saved Bridge account proposal is invalid");
+        bridgeBytes(proposal.accountKey, 32); validateBridgeDeviceWrap(proposal.wrap); validateBridgeRecoveryWrap(proposal.recovery); validateBridgeMembershipEntry(proposal.entry);
+      }
       return identity;
     },
   };

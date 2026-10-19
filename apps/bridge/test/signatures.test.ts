@@ -23,6 +23,7 @@ async function client(account: string, backend = "A", token?: string, source = h
   socket.on("close", () => { for (const entry of pending.values()) entry.reject(new Error("closed")); pending.clear(); });
   await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
   const send = (message: unknown) => new Promise<any>((resolve, reject) => {
+    if (socket.readyState !== WebSocket.OPEN) { reject(new Error("closed")); return; }
     const requestId = randomUUID(); pending.set(requestId, { resolve, reject }); socket.send(JSON.stringify({ requestId, message }));
   });
   return Object.assign((records: BridgeEnvelope[]) => send({ type: "push", stream: "account", records }), { compact: () => send({ type: "compact" }) });
@@ -119,10 +120,11 @@ describe("Bridge publication signature admission", () => {
     expect((await post(remove(complete))).status).toBe(200);
     const served = await fetch(new URL(`/v1/membership/fence?seq=${head.seq + 1}&after=-1`, hub.url), { headers: { Authorization: `Bearer ${token}` } });
     expect(await served.json()).toEqual({ signatures: complete.signatures });
-    // B still holds a credential (development tokens have no revocation), but a removed writer cannot publish,
-    // whatever head it binds.
+    // B still holds a credential (development tokens have no revocation), but the removal disconnects it and
+    // the hub admits no new session for its key, so it cannot publish whatever head it binds.
     const late = record(account); late.header.origin = "B"; delete late.auth;
-    await expect(b([signFixture(late, account, "B", head)])).rejects.toThrow(/membership/);
+    await expect(b([signFixture(late, account, "B", head)])).rejects.toThrow(/closed/);
+    await expect(client(account, "B")).rejects.toThrow(/401/);
     expect(await publicationState(account)).toEqual([{ log: 2, latest: 1, deleted: 1, runs: 0, owners: 0, publications: 2 }]);
   });
   it("drops receipts below the replay horizon, freeing their quota, and refuses replays bound there", async () => {

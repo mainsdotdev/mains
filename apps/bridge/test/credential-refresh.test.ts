@@ -5,14 +5,16 @@ import { readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 
 it("commits first use despite a DO reset without leaking credentials to diagnostics", async () => {
-  // Real handleDevices and D1, with a fault only at the socket-control boundary.
+  // Real handleDevices and D1, with a fault only at the socket-control boundary. B is a member of the account's log.
+  const member = { backendId: "B", publicKey: randomBytes(32).toString("base64url"), signingPublicKey: randomBytes(32).toString("base64url") };
   const bundle = await build({ stdin: { resolveDir: process.cwd(), sourcefile: "refresh-probe.ts", contents: `
     import { handleDevices } from './src/devices.ts';
     const diagnostics = [];
     console.error = console.warn = value => { diagnostics.push(value); };
     export default { fetch(request, env) {
       if (new URL(request.url).pathname === '/diagnostics') return Response.json(diagnostics);
-      return handleDevices(request, env, { approval: async () => {}, revoked: async () => {}, rotated: async () => { throw new Error('Injected DO reset'); } });
+      return handleDevices(request, env, { approval: async () => {}, revoked: async () => {}, rotated: async () => { throw new Error('Injected DO reset'); },
+        membership: { state: async () => ({ keys: [{ ...${JSON.stringify(member)}, from: 0, until: null }] }) } });
     } };
   ` }, bundle: true, write: false, format: "esm", platform: "browser", conditions: ["workerd"], external: ["cloudflare:workers", "node:*"] });
   const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: bundle.outputFiles[0].text,
@@ -26,7 +28,7 @@ it("commits first use despite a DO reset without leaking credentials to diagnost
     const old = `b7_${randomBytes(32).toString("hex")}`, expires = Date.now() + 86400_000;
     await db.prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at)
       VALUES('test-account','B',?,?,'Test','test','approved',?,?,?)`)
-      .bind(randomBytes(32).toString("base64url"), randomBytes(32).toString("base64url"), createHash("sha256").update(old).digest("hex"), expires, Date.now()).run();
+      .bind(member.publicKey, member.signingPublicKey, createHash("sha256").update(old).digest("hex"), expires, Date.now()).run();
     const before = await db.prepare("SELECT * FROM bridge_backends").first();
     await db.prepare(await readFile(new URL("../migrations/0006_backend_token_handover.sql", import.meta.url), "utf8")).run();
     expect(await db.prepare("SELECT * FROM bridge_backends").first()).toEqual({ ...before, next_token_hash: null, next_token_expires_at: null });

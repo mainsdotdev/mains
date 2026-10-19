@@ -111,14 +111,15 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     }
     return membership.state;
   }
-  /** Signs `change` on the newest verified head and sends it, re-signing if another change lands first. */
+  /** Signs `change` on the newest verified head and sends it, re-signing if another change lands first.
+   * `read` supplies that head; without a log there is nothing to sign. */
   async function changeMembership(change: (state: BridgeMembershipState) => BridgeMembershipChange | null | Promise<BridgeMembershipChange | null>,
-    send: (entry: BridgeMembershipEntry | undefined) => Promise<unknown>, refreshAfter = true) {
+    send: (entry: BridgeMembershipEntry | undefined) => Promise<unknown>, refreshAfter = true, read: () => Promise<BridgeMembershipState | null> = syncMembership) {
     for (let attempt = 0; ; attempt++) {
-      const current = await syncMembership(), wanted = await change(current);
+      const current = await read(), wanted = current && await change(current);
       const secret = bridgeBytes(saved!.signingPrivateKey, 32);
       let entry: BridgeMembershipEntry | undefined;
-      try { entry = wanted ? signBridgeMembershipEntry(current, wanted, deviceSigner(self()), secret) : undefined; } finally { secret.fill(0); }
+      try { entry = wanted ? signBridgeMembershipEntry(current!, wanted, deviceSigner(self()), secret) : undefined; } finally { secret.fill(0); }
       try { await send(entry); break; }
       catch (failure) { if (!membershipMoved(failure) || attempt >= 2) throw failure; }
     }
@@ -133,14 +134,26 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
    * the list from what it stores and refuses a removal whose fence no longer matches it. Keys its
    * registration holds leave with that registration; keys no registration holds any more (it re-enrolled
    * with new ones) leave through the membership route, apart from any newer registration. */
-  async function removeMember(backendId: string, refreshAfter = true, via: "registration" | "membership" = "registration") {
+  async function removeMember(backendId: string, refreshAfter = true, via: "registration" | "membership" = "registration", read?: () => Promise<BridgeMembershipState | null>) {
     await changeMembership(async (current) => {
       if (!bridgeMember(current, backendId)) return null;
       return { kind: "remove", body: { backendId, account: (await accountFence(backendId)).account } };
     }, async (entry) => {
       if (via === "membership") { if (entry) await request("/v1/membership", { entry }); }
       else await request(`/v1/backends/${encodeURIComponent(backendId)}`, entry ? { entry } : undefined, "DELETE");
-    }, refreshAfter);
+    }, refreshAfter, read);
+  }
+  /** This backend leaving. Before it pins a head (its join code not yet entered, or its bootstrap reply lost)
+   * the log may already admit it, and then only its own signed, fenced removal revokes it. It signs on the
+   * hub's current log, verified from the entry that admitted it when it has one; a backend the log never
+   * admitted is revoked by credential alone. */
+  function removeSelf() {
+    if (saved!.accountKey && saved!.membership) return removeMember(options.backendId, false);
+    const anchor = saved!.pendingMembership ?? undefined;
+    return removeMember(options.backendId, false, "registration", async () => {
+      const entries = await fetchMembership(-1);
+      return entries.length ? verifyBridgeMembershipLog(entries, verifyBridgeSignature, anchor) : null;
+    });
   }
   /** Replication extends its own copy without waiting on this queue; its verified progress is pinned here. */
   async function adoptMembership(next: BridgeVerifiedMembership) {
@@ -194,6 +207,45 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     }
     state = "ready"; error = null; login = null; deviceCode = null; stopLogin = undefined; schedule(); notify();
   }
+  /** Initializes the account from a proposal saved before it is first sent. A lost reply is then resent
+   * unchanged, or found accepted (`accepted`: the hub approved this backend), and never strands the account's
+   * only key and recovery code on the hub. */
+  async function bootstrap(accepted: boolean) {
+    if (!saved!.pendingBootstrap) {
+      const key = generateBridgeAccountKey(), code = generateBridgeRecoveryCode(), secret = bridgeBytes(saved!.signingPrivateKey, 32);
+      try {
+        const recovery = await sealBridgeRecovery(key, code);
+        const entry = signBridgeMembershipEntry({ accountId: saved!.accountId, seq: -1, head: null }, { kind: "genesis", body: { member: self(),
+          recoverySigningPublicKey: recovery.signingPublicKey, accountKeyCommitment: bridgeAccountKeyCommitment(key) } }, deviceSigner(self()), secret);
+        if (closed || cancelling) return;
+        const proposed = { ...saved!, pendingBootstrap: { accountKey: bridgeBase64(key), recoveryCode: code,
+          wrap: sealBridgeAccountKey(key, bridgeBytes(saved!.publicKey, 32)), recovery: recovery.wrap, entry } };
+        // Persist before contacting the hub, including before a request whose reply is lost.
+        await vault.write(proposed); saved = proposed;
+      } finally { key.fill(0); secret.fill(0); }
+    }
+    const proposal = saved!.pendingBootstrap!;
+    if (closed || cancelling) return;
+    if (!accepted) {
+      try { await request("/v1/keys/bootstrap", { wrap: proposal.wrap, recovery: proposal.recovery, entry: proposal.entry }); }
+      catch (failure) {
+        if (!(failure instanceof BridgeHttpError && failure.status === 409)) throw failure;
+        // Another backend initialized the account first, so this proposal can never land.
+        const declined = { ...saved!, pendingBootstrap: null }; await vault.write(declined); saved = declined;
+        return;
+      }
+    }
+    // The log must start with exactly the proposed genesis, which only this backend could sign.
+    const genesis = await applyBridgeMembershipEntry(null, proposal.entry, verifyBridgeSignature);
+    const remote = await verifiedRemote({ seq: 0, hash: genesis.head }), key = bridgeBytes(proposal.accountKey, 32);
+    try {
+      await pinMembership(remote.state, remote.entries);
+      recoveryCode = proposal.recoveryCode; saved!.pendingBootstrap = null;
+      await activate(key);
+    } finally { key.fill(0); }
+    // Read devices and requests now rather than at the next scheduled refresh; that refresh retries a failure.
+    if (saved?.accountKey) await update().catch(() => {});
+  }
   async function update() {
     if (!saved || closed || cancelling) return;
     if (saved.pendingToken) await renewToken();
@@ -228,6 +280,8 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       for (const entry of requests) if (!notified.has(entry.requestId)) { notified.add(entry.requestId); options.approval(entry); }
       return;
     }
+    // A proposal whose reply was lost is resent unchanged, or found accepted, before anything else.
+    if (saved.pendingBootstrap) { login = null; await bootstrap(mine.backend.status === "approved"); return; }
     if (mine.backend.status === "approved") {
       if (!mine.wrap) throw new Error("Approved account key is unavailable");
       const secret = bridgeBytes(saved.privateKey, 32);
@@ -252,20 +306,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     login = null;
     if (!mine.initialized) {
       if (saved.accountInitialized) throw new Error("Account keys disappeared; use recovery or disconnect instead of creating a new key");
-      const key = generateBridgeAccountKey(), generated = generateBridgeRecoveryCode(), secret = bridgeBytes(saved.signingPrivateKey, 32);
-      try {
-        const wrap = sealBridgeAccountKey(key, bridgeBytes(saved.publicKey, 32)), recovery = await sealBridgeRecovery(key, generated);
-        const genesis = signBridgeMembershipEntry({ accountId: saved.accountId, seq: -1, head: null }, { kind: "genesis", body: { member: self(),
-          recoverySigningPublicKey: recovery.signingPublicKey, accountKeyCommitment: bridgeAccountKeyCommitment(key) } }, deviceSigner(self()), secret);
-        if (closed || cancelling) return;
-        try {
-          await request("/v1/keys/bootstrap", { wrap, recovery: recovery.wrap, entry: genesis }); recoveryCode = generated;
-          await pinMembership(await applyBridgeMembershipEntry(null, genesis, verifyBridgeSignature), [genesis]);
-          await activate(key);
-        } catch (failure) { if (!(failure instanceof BridgeHttpError && failure.status === 409)) throw failure; }
-      } finally { key.fill(0); secret.fill(0); }
-      // Read devices and requests now rather than at the next scheduled refresh; that refresh retries a failure.
-      if (saved.accountKey) await update().catch(() => {});
+      await bootstrap(false);
       return;
     }
     state = "needs-approval";
@@ -432,6 +473,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
           if (registration && registration.status !== "revoked") await request(path, undefined, "DELETE");
         }
       }
+      else if (leaving) await removeSelf();
       else await request(path, undefined, "DELETE");
       if (leaving && saved) { saved.accountKey = null; saved.pendingAccountKey = null; saved.pendingMembership = null; saved.pendingToken = null; joinCodes = []; await vault.write(saved); state = "revoked"; activated = false; await options.revoked(); }
       else await update(); notify();
@@ -480,12 +522,9 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         try {
           epoch++;
           if (!logout.skipRevoke && saved && state !== "revoked" && saved.expiresAt > Date.now()) {
-            const path = `/v1/backends/${encodeURIComponent(options.backendId)}`;
-            try {
-              // A member leaves the account through its own signed, fenced removal.
-              if (saved.accountKey && saved.membership) await removeMember(options.backendId, false);
-              else await request(path, undefined, "DELETE");
-            } catch (failure) { if (!(failure instanceof BridgeHttpError && failure.status === 401)) throw failure; }
+            // A member leaves the account through its own signed, fenced removal.
+            try { await removeSelf(); }
+            catch (failure) { if (!(failure instanceof BridgeHttpError && failure.status === 401)) throw failure; }
           }
           await options.revoked(); await vault.remove(); await membershipFiles.remove();
           saved = null; membership = null; joinCodes = []; recoveryCode = null; activated = false;

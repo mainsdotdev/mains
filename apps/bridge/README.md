@@ -211,7 +211,10 @@ wrap for its own public key plus an Argon2id recovery wrap. The recovery code
 has 160 random bits, is shown once, and is never sent to the hub. Save it before
 closing Mains; if the setup code was not saved, an approved backend can generate
 a replacement in Settings. Replacing it invalidates the previous recovery code.
-The fixed recovery KDF uses 64 MiB, three iterations and one lane.
+The fixed recovery KDF uses 64 MiB, three iterations and one lane. The key, the
+code and the exact bootstrap request are saved in the protected identity before
+they are first sent: a lost reply is resent unchanged, or found accepted, so the
+hub never holds an account whose only key and code the backend has lost.
 
 A later backend remains **pending** with no log or R2 access until either:
 
@@ -277,7 +280,14 @@ publications from a backend that is no longer a member. Revoking a backend revok
 its registration: a registration holding a member's keys needs that signed
 removal, any other one (pending, or re-enrolled with new keys) is revoked by
 credential alone, and old keys no registration holds leave through
-`POST /v1/membership`. After learning of a removal, other backends accept the removed writer's
+`POST /v1/membership`. The log decides access as well as publication: sockets,
+blob capabilities and every device route, token renewal included, admit only a
+current member's key, and a removal closes the removed key's sockets as it lands.
+The removal queues its registration's D1 revocation in the same transaction; the
+removing request revokes it right after, and the hub's alarm finishes one that was
+interrupted in between, retrying while D1 is unavailable. Sign-out before the join
+code is entered is the same signed, fenced self-removal, signed on the hub's log
+verified from the entry that admitted the backend. After learning of a removal, other backends accept the removed writer's
 account records only if their signatures are in its fence, so a hub cannot later
 insert backdated ones. Its run-stream records are fenced in a later slice.
 Approving a backend that re-enrolled with new keys while its old keys are still in

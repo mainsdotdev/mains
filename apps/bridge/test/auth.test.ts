@@ -364,6 +364,40 @@ describe("Verified sign-in and backend key ceremonies", () => {
       } finally { bSocket.terminate(); }
     } finally { socket.terminate(); }
   });
+  it("refuses a removed backend that D1 still approves, then finishes the interrupted revocation itself", async () => {
+    const a = await owner(), b = await register(a.browser); await approval(a, b);
+    const bSocket = await socketFor(b.token), db = await hub.database(), blob = { blobId: randomBytes(32).toString("base64url"), size: 3 };
+    const status = async () => (await db.prepare("SELECT status FROM bridge_backends WHERE account_id=? AND backend_id=?").bind(b.accountId, b.backendId).first<{ status: string }>())!.status;
+    await db.prepare(`CREATE TRIGGER interrupted_revocation BEFORE UPDATE OF status ON bridge_backends WHEN NEW.status='revoked'
+      BEGIN SELECT RAISE(ABORT, 'injected D1 failure'); END`).run();
+    try {
+      await pullSocket(bSocket);
+      const closed = new Promise<number>((resolve) => bSocket.once("close", resolve));
+      // The removal lands in the log; the revocation in D1 after it fails.
+      expect((await revoke(a, b)).status).toBe(400);
+      expect(await status()).toBe("approved");
+      expect(await closed).toBe(1008);
+      await expect(socketFor(b.token)).rejects.toThrow(/401/);
+      expect((await rpc("/v1/blobs/presign", b.token, { op: "get", blobs: [blob] })).status).toBe(401);
+      expect((await rpc("/v1/backends/refresh", b.token, { nextTokenHash: tokenHash(`b7_${randomBytes(32).toString("hex")}`) })).status).toBe(401);
+      expect((await rpc("/v1/keys/mine", b.token)).status).toBe(401);
+    } finally { bSocket.terminate(); await db.prepare("DROP TRIGGER interrupted_revocation").run(); }
+    // Nobody retries the request: the hub revokes the registration from its log once D1 is available.
+    await vi.waitFor(async () => expect(await status()).toBe("revoked"), { timeout: 15_000, interval: 250 });
+    expect(await db.prepare("SELECT 1 FROM bridge_key_wraps WHERE account_id=? AND backend_id=?").bind(b.accountId, b.backendId).first()).toBeNull();
+    expect((await rpc("/v1/keys/mine", a.token)).status).toBe(200);
+  }, 30_000);
+  it("completes an initialization whose genesis landed without its account when the same proposal is sent again", async () => {
+    const a = await register(await login()), material = bootstrapBody(a), entry = material.body.entry;
+    // The log took the genesis; the D1 writes after it were lost.
+    await hub.quotaSql(a.accountId, `INSERT INTO membership(seq,hash,entry,appended_at) VALUES(0,'${await bridgeMembershipEntryHash(entry)}','${JSON.stringify(entry)}',${Date.now()})`);
+    expect(await (await rpc("/v1/keys/mine", a.token)).json()).toMatchObject({ initialized: false, backend: { status: "pending" } });
+    expect((await rpc("/v1/keys/bootstrap", a.token, bootstrapBody(a).body)).status).toBe(409);
+    expect((await rpc("/v1/keys/bootstrap", a.token, material.body)).status).toBe(200);
+    const mine = await (await rpc("/v1/keys/mine", a.token)).json() as { initialized: boolean; backend: { status: string }; wrap: BridgeSealedAccountKey };
+    expect(mine).toMatchObject({ initialized: true, backend: { status: "approved" } });
+    expect(openBridgeAccountKey(mine.wrap, a.pair.secretKey)).toEqual(Uint8Array.from(material.key));
+  });
   it("leaves compaction to the hub's own schedule outside local development", async () => {
     const a = await owner(), socket = await socketFor(a.token), requestId = randomUUID();
     try {

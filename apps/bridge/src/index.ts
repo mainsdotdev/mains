@@ -3,7 +3,7 @@ import type { BridgeEnvelope, BridgeRpcRequest, BridgeRpcResponse, BridgeServerM
 import { BRIDGE_MAX_FRAME_BYTES, parseBridgeRpcRequest } from "@mains/contracts/bridge-wire";
 import { authenticate, bridgeDevelopmentEnabled, createBridgeSocketAuth, type BridgeIdentity, type DevAuthEnv } from "./auth";
 import { handleSignIn } from "./sign-in";
-import { handleDevices } from "./devices";
+import { handleDevices, revokeRemovedRegistration } from "./devices";
 import type { BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import { BRIDGE_READS_PER_MINUTE, createHubStore } from "./store";
 import { handleBlobs, type BlobEnv } from "./blobs";
@@ -22,6 +22,8 @@ import { bridgeMember, bridgeWriterKeyAt, validateBridgeFence, validateBridgeMem
 
 interface Env extends DevAuthEnv, BlobEnv, QuotaEnv, SqlUsageEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
+/** How soon the hub checks that D1 caught up with a removal, and retries while D1 is unavailable. */
+const REVOCATION_CHECK_MS = 5_000, REVOCATION_RETRY_MS = 60_000;
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     return observeBridgeRequest(env, () => handleRequest(request, env));
@@ -157,11 +159,17 @@ export class AccountHub extends DurableObject<Env> {
     return this.usage.run("membership", () => this.membership.pull(after));
   }
   membershipState() { return this.usage.run("membership", () => this.membership.state()); }
+  /** Only a current member's key reads, uploads or connects. D1 approval alone is not enough: a removal
+   * lands in the log first, and its D1 revocation can be interrupted. */
+  private async admitted(identity: BridgeIdentity) {
+    const state = await this.membership.state();
+    return !!state && bridgeMember(state, identity.backendId)?.signingPublicKey === identity.signingPublicKey;
+  }
   /** Only a current member publishes, and each record binds a head of this log at which the session's key
    * was its backend's (MEMBERSHIP.md §5). A removal therefore fences everything after it. */
   private async boundToMembership(session: Session, records: BridgeEnvelope[]) {
     const state = await this.membershipState();
-    return !!state && bridgeMember(state, session.backendId)?.signingPublicKey === session.signingPublicKey &&
+    return !!state && await this.admitted(session) &&
       records.every(({ auth }) => !!auth && state.hashes[auth.membership.seq] === auth.membership.hash &&
         bridgeWriterKeyAt(state, session.backendId, session.signingPublicKey, auth.membership.seq));
   }
@@ -187,7 +195,10 @@ export class AccountHub extends DurableObject<Env> {
         }
       }
       const result = await this.membership.append(entry, fence);
-      if (result.status === "appended") { this.broadcast({ type: "membership", seq: result.head.seq }); await this.schedule(this.membership.nextHorizonAt()); }
+      if (result.status === "appended") {
+        if (entry.kind === "remove") { await this.closeRemoved(); await this.schedule(Date.now() + REVOCATION_CHECK_MS); }
+        this.broadcast({ type: "membership", seq: result.head.seq }); await this.schedule(this.membership.nextHorizonAt());
+      }
       return result;
     }));
   }
@@ -213,6 +224,7 @@ export class AccountHub extends DurableObject<Env> {
   async reserveBlobs(identity: BridgeIdentity, entries: BlobReservation[], expires: number) {
     return this.usage.run("reserve", () => this.ctx.blockConcurrencyWhile(async () => {
       try {
+        if (!await this.admitted(identity)) return { status: 401, error: "Backend access expired or was revoked" };
         if (!(await this.subscriptions.status(identity.accountId)).subscription.canUpload) return { status: 403, error: "Bridge subscription required; local changes remain queued" };
         const limit = (await this.quota.status(identity.accountId)).writesPerMinute;
         if (!this.store.takeWrite(identity.backendId, limit)) return { status: 429, error: "Bridge write rate limit reached" };
@@ -232,6 +244,7 @@ export class AccountHub extends DurableObject<Env> {
         if ("error" in result) throw result.error;
         return result.value;
       };
+      if (!await this.admitted(identity)) return { status: 403, error: "Backend access revoked" };
       try { await this.quota.put(identity, key, expires, bytes, gate); return { status: 204, error: null }; }
       catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
       finally { await gate(async () => this.schedule(this.quota.nextExpiry())); }
@@ -244,6 +257,7 @@ export class AccountHub extends DurableObject<Env> {
   async protectBlobReads(identity: BridgeIdentity, blobs: BridgeBlobIdentity[], expires: number) {
     return this.usage.run("protectRead", () => this.ctx.blockConcurrencyWhile(async () => {
       try {
+        if (!await this.admitted(identity)) return { status: 401, error: "Backend access expired or was revoked" };
         // Backend ids never contain ':', so this bucket cannot collide with the write ones.
         if (!this.store.takeWrite(`${identity.backendId}:read`, BRIDGE_READS_PER_MINUTE)) return { status: 429, error: "Bridge download rate limit reached" };
         await this.quota.protectReads(identity, blobs, expires); return { status: 200, error: null };
@@ -252,8 +266,9 @@ export class AccountHub extends DurableObject<Env> {
     }));
   }
   async fetch(request: Request): Promise<Response> {
-    return this.usage.run("connect", () => {
+    return this.usage.run("connect", async () => {
       const identity = JSON.parse(request.headers.get("X-Bridge-Identity")!) as BridgeIdentity;
+      if (!await this.admitted(identity)) return new Response("Backend access expired or was revoked", { status: 401 });
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server);
@@ -273,7 +288,7 @@ export class AccountHub extends DurableObject<Env> {
   private async receiveMessage(socket: WebSocket, data: string | ArrayBuffer): Promise<void> {
     const session = this.session(socket);
     if (socket.readyState !== WebSocket.OPEN) return;
-    if (!await this.socketAuth.active(session)) { socket.close(1008, "Backend access expired or was revoked"); return; }
+    if (!await this.socketAuth.active(session) || !await this.admitted(session)) { socket.close(1008, "Backend access expired or was revoked"); return; }
     if (socket.readyState !== WebSocket.OPEN) return;
     if (typeof data !== "string" || data.length > BRIDGE_MAX_FRAME_BYTES) { socket.close(1009, "Invalid message size"); return; }
     let request: BridgeRpcRequest;
@@ -351,12 +366,14 @@ export class AccountHub extends DurableObject<Env> {
     });
   }
   private async maintain() {
+    const revoked = await this.finishRevocations();
     await this.ctx.blockConcurrencyWhile(async () => {
       const { hasMore } = this.store.compact();
       await this.quota.collect();
       const receipts = this.store.compactReceipts(this.membership.horizon());
       const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry(), this.membership.nextHorizonAt()].filter((value): value is number => value !== null);
       if (hasMore || receipts.hasMore) deadlines.push(Date.now() + 1000);
+      if (!revoked) deadlines.push(Date.now() + REVOCATION_RETRY_MS);
       if (deadlines.length) await this.schedule(Math.max(Date.now() + 1000, Math.min(...deadlines)));
     });
   }
@@ -367,6 +384,25 @@ export class AccountHub extends DurableObject<Env> {
     if (alarm === null || alarm > at) await this.ctx.storage.setAlarm(at);
   }
   async notifyApproval(request: BridgeApprovalRequest): Promise<void> { this.broadcast({ type: "approval", ...request }); }
+  /** Revokes in D1, from the log, each registration whose keys a removal took out. The removing request
+   * does this right after the entry lands; this finishes one interrupted in between. Returns false while
+   * D1 is unavailable, so maintenance tries again. */
+  private async finishRevocations(): Promise<boolean> {
+    const pending = this.membership.revocations();
+    if (!pending.length) return true;
+    const state = await this.membership.state(), db = this.env.AUTH_DB;
+    try {
+      for (const key of pending) {
+        if (db && state) await revokeRemovedRegistration(db, state.accountId, key.backendId, key.signingPublicKey);
+        this.membership.revocationFinished(key);
+      }
+      return true;
+    } catch { reportBridgeFailure(this.env, "maintenance"); return false; }
+  }
+  /** Closes every session whose key the log no longer admits, before anything else reaches it. */
+  private async closeRemoved() {
+    for (const socket of this.sockets()) if (!await this.admitted(this.session(socket))) socket.close(1008, "Backend access revoked");
+  }
   async revoke(backendId: string, credentialHash?: string): Promise<void> {
     this.socketAuth.invalidate(backendId, credentialHash);
     for (const socket of this.sockets()) {

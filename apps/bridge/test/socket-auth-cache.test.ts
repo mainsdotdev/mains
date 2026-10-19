@@ -3,10 +3,13 @@ import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import WebSocket from "ws";
 import { afterEach, expect, it, vi } from "vitest";
 import { parseBridgeServerFrame } from "@mains/contracts/bridge-wire";
+import { fixtureEntryHash, fixtureGenesis, fixturePublicKey } from "./record-signing.mjs";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
 const start = Date.parse("2030-01-01T00:00:00Z");
+/** The hub admits only its log's members, so B is the account's genesis member. */
+const genesis = fixtureGenesis("account", "B", new Uint8Array(32));
 
 /** Instrument the real AccountHub message handler; only its D1 boundary and
  * wall clock are controlled. No test endpoints are added to the shipped hub. */
@@ -25,6 +28,7 @@ async function probe() {
           return result;
         } }; } }; } } });
         this.probeState = state;
+        ctx.storage.sql.exec('INSERT OR IGNORE INTO membership(seq,hash,entry,appended_at) VALUES(0,?,?,0)', ${JSON.stringify(fixtureEntryHash(genesis))}, ${JSON.stringify(JSON.stringify(genesis))});
         ctx.blockConcurrencyWhile(async () => Object.assign(state, await ctx.storage.get('probe-state') ?? {}));
       }
       async configure(input) {
@@ -44,7 +48,7 @@ async function probe() {
       if (url.pathname === '/metrics') return Response.json(await hub.metrics());
       if (url.pathname === '/revoke') { const input = request.method === 'POST' ? await request.json() : {}; await hub.revoke('B', input.hash); return Response.json({ ok: true }); }
       if (url.pathname === '/release') { await hub.releaseRead(); return Response.json({ ok: true }); }
-      const identity = { accountId: 'account', backendId: 'B', credentialHash: url.searchParams.get('hash') ?? 'credential-one', expiresAt: Number(url.searchParams.get('expires') ?? ${start + 3_600_000}) };
+      const identity = { accountId: 'account', backendId: 'B', signingPublicKey: ${JSON.stringify(fixturePublicKey("account", "B"))}, credentialHash: url.searchParams.get('hash') ?? 'credential-one', expiresAt: Number(url.searchParams.get('expires') ?? ${start + 3_600_000}) };
       const headers = new Headers(request.headers); headers.set('X-Bridge-Identity', JSON.stringify(identity));
       return hub.fetch(new Request(request, { headers }));
     } };
