@@ -372,11 +372,16 @@ describe("Verified sign-in and backend key ceremonies", () => {
       BEGIN SELECT RAISE(ABORT, 'injected D1 failure'); END`).run();
     try {
       await pullSocket(bSocket);
+      const presign = async (op: string) => (await (await rpc("/v1/blobs/presign", b.token, { op, blobs: [blob] })).json() as BridgeBlobPresignResult).blobs[0].chunks[0].url;
+      expect((await fetch(await presign("put"), { method: "PUT", body: randomBytes(43) })).status).toBe(204);
+      const download = await presign("get"); expect((await fetch(download)).status).toBe(200);
       const closed = new Promise<number>((resolve) => bSocket.once("close", resolve));
       // The removal lands in the log; the revocation in D1 after it fails.
       expect((await revoke(a, b)).status).toBe(400);
       expect(await status()).toBe("approved");
       expect(await closed).toBe(1008);
+      // A download URL issued before the removal ends with it.
+      expect((await fetch(download)).status).toBe(403);
       await expect(socketFor(b.token)).rejects.toThrow(/401/);
       expect((await rpc("/v1/blobs/presign", b.token, { op: "get", blobs: [blob] })).status).toBe(401);
       expect((await rpc("/v1/backends/refresh", b.token, { nextTokenHash: tokenHash(`b7_${randomBytes(32).toString("hex")}`) })).status).toBe(401);

@@ -318,7 +318,9 @@ async function fixture(accountKey: Uint8Array | null = null, options: { recovery
         log.entries.push(body.entry);
       }
       // Like the hub: a registration holding a member's keys leaves only with a signed removal.
-      if (path.startsWith("/v1/backends/") && !body?.entry && log.entries.length && bridgeMember(await log.verified(), decodeURIComponent(path.slice("/v1/backends/".length))))
+      const target = path.startsWith("/v1/backends/") ? decodeURIComponent(path.slice("/v1/backends/".length)) : null;
+      const registration = target === "local" ? state.mine.backend : state.backends.find((entry) => entry.backendId === target);
+      if (target && !body?.entry && log.entries.length && bridgeMember(await log.verified(), target)?.signingPublicKey === registration?.signingPublicKey)
         return Response.json({ error: "Invalid identity or key request" }, { status: 400 });
       if (path === "/v1/keys/recovery/unlock") state.unlocked();
       // Like the hub: the initializer's registration is approved together with the account.
@@ -580,6 +582,20 @@ describe("Bridge membership on an active backend", () => {
     expect(client.status().state).toBe("ready");
     expect(sent).toHaveLength(2); expect(sent[1]).toEqual(sent[0]); expect(f.log.entries).toHaveLength(1);
   }, 30_000);
+  it("keeps its proposal when a retry is refused because its own timed-out attempt completed meanwhile", async () => {
+    let attempts = 0;
+    const f = await uninitialized(async (_, send) => {
+      // The first attempt times out; the hub finishes it just before it reads the retry.
+      if (++attempts === 1) throw new TypeError("Injected bootstrap timeout");
+      await send(); return Response.json({ error: "This account already has keys" }, { status: 409 });
+    });
+    const client = f.makeClient(); await client.start(); await client.refresh();
+    const proposal = (await f.vault.read())!.pendingBootstrap!;
+    await client.refresh();
+    expect(client.status().state).toBe("ready"); expect(attempts).toBe(2);
+    expect(f.activatedKeys).toEqual([proposal.accountKey]); expect(client.takeRecoveryCode()).toBe(proposal.recoveryCode);
+    expect((await f.vault.read())!.pendingBootstrap).toBeNull();
+  }, 30_000);
   it("drops its proposal once another backend's genesis has won", async () => {
     const f = await fixture(); f.state.mine.initialized = false; await f.client.stop();
     await f.vault.write({ ...(await f.vault.read())!, accountInitialized: false });
@@ -596,6 +612,15 @@ describe("Bridge membership on an active backend", () => {
     expect(f.state.calls.find((call) => call.path === "/v1/backends/local")).toMatchObject({ method: "DELETE",
       body: { entry: { kind: "remove", body: { backendId: "local", account: noRecords }, signer: { backendId: "local" } } } });
     expect((await f.log.verified()).keys.find((key) => key.backendId === "local")!.until).not.toBeNull();
+    expect(f.client.status().state).toBe("signed-out"); expect(await f.vault.read()).toBeNull();
+  });
+  it("signs out a re-enrolled backend by its credential alone while its earlier keys are still admitted", async () => {
+    const f = await fixture(), earlier = testDevice("local");
+    await f.log.append({ kind: "add", body: { member: earlier.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    accountFence.mockClear(); await f.client.signOut();
+    // A pending registration cannot read the account stream for a fence, and those keys are not its own.
+    expect(accountFence).not.toHaveBeenCalled();
+    expect(f.state.calls.filter((call) => call.path === "/v1/backends/local")).toEqual([{ path: "/v1/backends/local", body: undefined, method: "DELETE" }]);
     expect(f.client.status().state).toBe("signed-out"); expect(await f.vault.read()).toBeNull();
   });
   it("signs out a backend the log never admitted by its credential alone", async () => {

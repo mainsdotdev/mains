@@ -86,6 +86,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       reserve: (identity, entries, expires) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).reserveBlobs(identity, entries, expires),
       put: (identity, key, expires, bytes) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).putBlob(identity, key, expires, bytes),
       read: (identity, blobs, expires) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).protectBlobReads(identity, blobs, expires),
+      admits: (identity) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).admits(identity),
     });
     if (url.pathname === "/v1/quota" && request.method === "GET") {
       const identity = await authenticate(request, env, rotated);
@@ -165,6 +166,8 @@ export class AccountHub extends DurableObject<Env> {
     const state = await this.membership.state();
     return !!state && bridgeMember(state, identity.backendId)?.signingPublicKey === identity.signingPublicKey;
   }
+  /** The same check for blob capabilities, which are used outside the hub. */
+  admits(identity: BridgeIdentity) { return this.usage.run("membership", () => this.admitted(identity)); }
   /** Only a current member publishes, and each record binds a head of this log at which the session's key
    * was its backend's (MEMBERSHIP.md §5). A removal therefore fences everything after it. */
   private async boundToMembership(session: Session, records: BridgeEnvelope[]) {

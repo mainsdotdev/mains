@@ -34,6 +34,8 @@ export async function handleBlobs(request: Request, env: BlobEnv, quota: {
   reserve(identity: BridgeIdentity, entries: BlobReservation[], expires: number): Promise<{ status: number; error: string | null }>;
   put(identity: BridgeIdentity, key: string, expires: number, bytes: Uint8Array): Promise<{ status: number; error: string | null }>;
   read(identity: BridgeIdentity, blobs: BridgeBlobIdentity[], expires: number): Promise<{ status: number; error: string | null }>;
+  /** Whether the account's membership log still admits the capability's key. */
+  admits(identity: BridgeIdentity): Promise<boolean>;
 }): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/v1/blobs/presign" && request.method === "POST") {
@@ -80,7 +82,9 @@ export async function handleBlobs(request: Request, env: BlobEnv, quota: {
     const { payload } = await jwtVerify(url.searchParams.get("cap") ?? "", signingKey(env), { algorithms: ["HS256"], issuer: audience, audience, maxTokenAge: "10m", requiredClaims: ["exp", "iat"] });
     validateBridgeBlobIdentity(payload);
     const identity = payload.identity as import("./auth").BridgeIdentity | undefined;
-    if (!identity || !await identityIsActive(identity, env)) return new Response("Backend access revoked", { status: 403 });
+    // A removal ends a capability even while D1 still approves its registration; the hub checks uploads as it stores them.
+    if (!identity || !await identityIsActive(identity, env) || request.method === "GET" && !await quota.admits(identity))
+      return new Response("Backend access revoked", { status: 403 });
     const index = payload.index as number;
     const size = bridgeBlobChunkSize(payload.size as number, index) + BRIDGE_BLOB_CIPHER_OVERHEAD;
     if (typeof payload.key !== "string" || !/^[a-f0-9]{64}\/[A-Za-z0-9_-]{43}\/\d+$/.test(payload.key) || payload.op !== request.method.toLowerCase())

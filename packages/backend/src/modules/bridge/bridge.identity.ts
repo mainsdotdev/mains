@@ -2,7 +2,7 @@ import { hostname } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { bridgeApprovalCode, bridgeBase64, bridgeBytes, normalizeBridgeVerificationCode, type BridgeApprovalRequest, type BridgeAuthStatus, type BridgeJoinCode,
   type BridgeRegisteredBackend, type BridgeSignInInput, type BridgeSealedAccountKey, type BridgeAccountKeys } from "@mains/contracts/bridge-auth";
-import { applyBridgeMembershipEntry, bridgeMember, currentBridgeMembers, extendBridgeMembership, verifyBridgeMembershipLog, type BridgeMember,
+import { applyBridgeMembershipEntry, bridgeMember, bridgeMembershipEntryHash, currentBridgeMembers, extendBridgeMembership, verifyBridgeMembershipLog, type BridgeMember,
   type BridgeMembershipChange, type BridgeMembershipEntry, type BridgeMembershipHead, type BridgeMembershipSigner, type BridgeMembershipState } from "@mains/contracts/bridge-membership";
 import type { SecretStorageAdapter } from "../../runtime/backend-runtime";
 import { createBridgeIdentityStorage, createBridgeMembershipStorage, type BridgeSavedIdentity } from "./bridge.identity-storage";
@@ -145,14 +145,15 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
   }
   /** This backend leaving. Before it pins a head (its join code not yet entered, or its bootstrap reply lost)
    * the log may already admit it, and then only its own signed, fenced removal revokes it. It signs on the
-   * hub's current log, verified from the entry that admitted it when it has one; a backend the log never
-   * admitted is revoked by credential alone. */
+   * hub's current log, verified from the entry that admitted it when it has one; a registration whose keys
+   * the log never admitted is revoked by credential alone. */
   function removeSelf() {
     if (saved!.accountKey && saved!.membership) return removeMember(options.backendId, false);
     const anchor = saved!.pendingMembership ?? undefined;
     return removeMember(options.backendId, false, "registration", async () => {
-      const entries = await fetchMembership(-1);
-      return entries.length ? verifyBridgeMembershipLog(entries, verifyBridgeSignature, anchor) : null;
+      const entries = await fetchMembership(-1), state = entries.length ? await verifyBridgeMembershipLog(entries, verifyBridgeSignature, anchor) : null;
+      // Keys an earlier registration of this backend left in the log are not this registration's to remove.
+      return state && sameMember(bridgeMember(state, options.backendId), self()) ? state : null;
     });
   }
   /** Replication extends its own copy without waiting on this queue; its verified progress is pinned here. */
@@ -226,17 +227,22 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     }
     const proposal = saved!.pendingBootstrap!;
     if (closed || cancelling) return;
+    // The log must start with exactly the proposed genesis, which only this backend could sign.
+    const genesis = await applyBridgeMembershipEntry(null, proposal.entry, verifyBridgeSignature);
     if (!accepted) {
       try { await request("/v1/keys/bootstrap", { wrap: proposal.wrap, recovery: proposal.recovery, entry: proposal.entry }); }
       catch (failure) {
         if (!(failure instanceof BridgeHttpError && failure.status === 409)) throw failure;
-        // Another backend initialized the account first, so this proposal can never land.
-        const declined = { ...saved!, pendingBootstrap: null }; await vault.write(declined); saved = declined;
-        return;
+        // A retry is refused too once its own earlier attempt has completed in the meantime. Only another
+        // backend's genesis rules this proposal out; with its own, it activates once the hub approves it.
+        const [first] = await fetchMembership(-1);
+        if (first && await bridgeMembershipEntryHash(first as BridgeMembershipEntry) !== genesis.head) {
+          const declined = { ...saved!, pendingBootstrap: null }; await vault.write(declined); saved = declined;
+          return;
+        }
+        if ((await request<Mine>("/v1/keys/mine")).backend.status !== "approved") throw failure;
       }
     }
-    // The log must start with exactly the proposed genesis, which only this backend could sign.
-    const genesis = await applyBridgeMembershipEntry(null, proposal.entry, verifyBridgeSignature);
     const remote = await verifiedRemote({ seq: 0, hash: genesis.head }), key = bridgeBytes(proposal.accountKey, 32);
     try {
       await pinMembership(remote.state, remote.entries);
