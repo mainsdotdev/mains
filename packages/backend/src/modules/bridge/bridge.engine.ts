@@ -1,4 +1,4 @@
-import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeLogRecord, type BridgeStream } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeEnvelope, type BridgeLogRecord, type BridgeStream } from "@mains/contracts/bridge-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { SQLiteInstance } from "../../db/types";
 import { emit } from "../../ipc-kit/event-bus";
@@ -27,6 +27,7 @@ export interface BridgeEngineOptions {
   blobs?: BridgeBlobRecords;
   /** Enrollment stages existing UUID data before the first pull; untouched seeds still pull first. */
   stageLocalBeforePull?: boolean;
+  prepareIncoming?: (envelopes: BridgeEnvelope[]) => Promise<void>;
 }
 const backfillTables = dependencyOrder();
 function dependencyOrder(): string[] {
@@ -198,6 +199,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       if (!Number.isSafeInteger(page.next) || page.next < after || page.records.length > requestLimit || page.records.some((record, index) =>
           !Number.isSafeInteger(record.seq) || record.seq <= (index ? page.records[index - 1].seq : after) || record.seq > page.next) || page.hasMore && page.next === after)
         throw new Error("Invalid Bridge pull page");
+      await options.prepareIncoming?.(page.records.map((record) => record.envelope));
       // Authenticate the entire page before downloading bytes or mutating SQL.
       // A record that fails is set aside by the apply below, not retried forever.
       let restoredBytes = 0;
@@ -284,9 +286,16 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     if (!prepared.length) { if (preparationError) throw preparationError; return 0; }
     const results = await transport.push(stream, prepared.map((record) => record.envelope));
     if (results.length !== prepared.length) throw new Error("Bridge ACK count does not match the push");
+    for (const [index, result] of results.entries()) {
+      if ("error" in result) continue;
+      if (result.publicationId !== (prepared[index].envelope.auth?.publicationId ?? "")) throw new Error("Bridge ACK identifies a different publication");
+      if ("seq" in result && (!Number.isSafeInteger(result.seq) || result.seq < 1)) throw new Error("Invalid Bridge ACK sequence");
+    }
+    await options.prepareIncoming?.(results.flatMap((result) => "deleted" in result ? [result.deleted] : []));
     // A batch can accept new revisions whose encrypted Page identity is unknown
     // to the hub, then reject their Page pointer as deleted. Recover before any
     // accepted child is marked synced; otherwise its offline content disappears.
+    let deletionRefused = false;
     for (let i = 0; i < results.length; i++) {
       const result = results[i], { entry } = prepared[i];
       if (!("deleted" in result)) continue;
@@ -294,9 +303,9 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       catch (error) {
         if (!isRejectedRecord(error)) throw error;
         console.warn(`[bridge] Refused the deletion returned for ${entry.table_name} ${entry.pk}: ${error.message}`);
+        deletionRefused = true;
+        continue;
       }
-      // The hub answers every retry of this write with the same deletion. Whether it applied
-      // here or was refused, resending it cannot help and would hold back the whole stream.
       // Attachment metadata has no outbox entry of its own; its reference is ACKed separately.
       if (i >= attachmentCount) sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
     }
@@ -313,9 +322,11 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
           result.error === "blobMissing" ? "Bridge files need republishing; local changes remain queued" : "Bridge hub rejected a non-owner write";
         continue;
       }
-      if (!Number.isSafeInteger(result.seq) || result.seq < 1) throw new Error("Invalid Bridge ACK sequence");
-      if (i < attachmentCount) continue;
+      const clearPublication = () => sqlite.prepare("DELETE FROM bridge_publications WHERE table_name=? AND pk=? AND register=? AND stream=? AND envelope=?")
+        .run(entry.table_name, entry.pk, entry.register, entry.stream, JSON.stringify(sent.envelope));
+      if (i < attachmentCount) { clearPublication(); continue; }
       sqlite.transaction(() => {
+        clearPublication();
         const clock = getClock(sqlite, entry.table_name, entry.pk, entry.register);
         if (clock && clock.physical_ms === sent.clock.physical_ms && clock.counter === sent.clock.counter && clock.origin === sent.clock.origin)
           sqlite.prepare("UPDATE bridge_row_clock SET synced_seq=max(coalesce(synced_seq,0),?),dirty=0,last_ack_ms=? WHERE table_name=? AND pk=? AND register=?").run(result.seq, Date.now(), entry.table_name, entry.pk, entry.register);
@@ -326,6 +337,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     if (hubMs !== undefined && rebaseClocks(hubMs) && !rebased && !rejection && !preparationError) return push(stream, limit, deletesOnly, true);
     if (hubMs !== undefined) rejection ??= "This device's clock is ahead of Bridge; local changes remain queued";
     if (rejection) throw new Error(rejection);
+    if (deletionRefused) throw new Error("Bridge returned an invalid deletion; local changes remain queued");
     if (preparationError) throw preparationError;
     return prepared.length - attachmentCount;
   }
@@ -358,7 +370,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     pending() { return sqlite.prepare("SELECT * FROM bridge_outbox ORDER BY generation").all() as OutboxEntry[]; },
     /** Pulled records set aside because this device could not verify or apply them. */
     unverified() { return (sqlite.prepare("SELECT count(*) AS n FROM bridge_parked WHERE reason=?").get(UNVERIFIED_REASON) as { n: number }).n; },
-    async stop() { await queue; stopped = true; },
+    async stop() { await queue; stopped = true; store.codec.destroy?.(); },
   };
 }
 export type BridgeEngine = ReturnType<typeof createBridgeEngine>;

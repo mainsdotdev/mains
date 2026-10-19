@@ -3,7 +3,8 @@ import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { BRIDGE_PROTOCOL_VERSION, type BridgeBody, type BridgeEnvelope, type BridgeHeader } from "@mains/contracts/bridge-protocol";
-import { validateBridgeHeader, validateEncryptedBridgeEnvelope } from "@mains/contracts/bridge-wire";
+import { validateBridgeHeader, validateBridgeCiphertext } from "@mains/contracts/bridge-wire";
+import { bridgeHeaderFields } from "@mains/contracts/bridge-signing";
 import { fromBase64Url, toBase64Url, utf8 } from "./bridge.encoding";
 import { deriveBridgeKeys } from "./bridge.keys";
 import { bridgeBlobRoots, validateBridgeBlobIdentity, type BridgeBlobRef } from "@mains/contracts/bridge-blobs";
@@ -11,6 +12,7 @@ import { bridgeBlobRoots, validateBridgeBlobIdentity, type BridgeBlobRef } from 
 export interface BridgeCodec {
   seal(header: BridgeHeader, body: BridgeBody): BridgeEnvelope;
   open(envelope: BridgeEnvelope): { header: BridgeHeader; body: BridgeBody };
+  destroy?(): void;
 }
 
 export function bridgeRecordKeys(key: Uint8Array, table: string, pk: string, register?: string) {
@@ -25,10 +27,7 @@ export function bridgeRecordKeys(key: Uint8Array, table: string, pk: string, reg
 /** A fixed field order authenticates the complete routing header independently of JSON key order. */
 export function bridgeHeaderAad(header: BridgeHeader): Uint8Array {
   validateBridgeHeader(header);
-  return utf8(JSON.stringify([header.v, header.stream, header.rowKey, header.registerKey ?? null,
-    header.hlc.physicalMs, header.hlc.counter, header.origin, header.op, header.owner ?? null, header.runId ?? null,
-    ...(header.blobs === undefined ? header.retention === undefined ? [] : [header.retention] :
-      [header.retention ?? null, header.blobs.map(({ blobId, size }) => [blobId, size])])]));
+  return utf8(JSON.stringify(bridgeHeaderFields(header)));
 }
 
 export function createBridgeSealingCodec(accountKey: Uint8Array): BridgeCodec {
@@ -44,11 +43,11 @@ export function createBridgeSealingCodec(accountKey: Uint8Array): BridgeCodec {
       const nonce = randomBytes(24);
       const ciphertext = xchacha20poly1305(keys.bodyKey, nonce, bridgeHeaderAad(header)).encrypt(utf8(JSON.stringify(body)));
       const envelope = { header: structuredClone(header), body: { nonce: toBase64Url(nonce), payload: toBase64Url(ciphertext) } };
-      validateEncryptedBridgeEnvelope(envelope);
+      validateBridgeCiphertext(envelope);
       return envelope;
     },
     open(envelope) {
-      validateEncryptedBridgeEnvelope(envelope);
+      validateBridgeCiphertext(envelope);
       let plaintext: Uint8Array;
       try { plaintext = xchacha20poly1305(keys.bodyKey, fromBase64Url(envelope.body.nonce!, 24), bridgeHeaderAad(envelope.header)).decrypt(fromBase64Url(envelope.body.payload)); }
       catch { throw new Error("Bridge record authentication failed"); }

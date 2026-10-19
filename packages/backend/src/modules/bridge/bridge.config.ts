@@ -9,6 +9,10 @@ export interface BridgeDevConfig {
   accountKey: Uint8Array;
   backendId: string;
   label: string;
+  accountId: string;
+  signingPrivateKey: Uint8Array;
+  /** Protected local history, supplied by identity storage rather than dev.json or the hub. */
+  localSigningPublicKeys?: readonly string[];
 }
 export function parseBridgeDevConfig(value: unknown): BridgeDevConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Bridge development configuration");
@@ -16,7 +20,8 @@ export function parseBridgeDevConfig(value: unknown): BridgeDevConfig | null {
   if (v.enabled === false) return null;
   if (v.version !== 1 || typeof v.url !== "string" || typeof v.token !== "string" || !v.token || v.token.length > 16384 ||
       typeof v.backendId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(v.backendId) ||
-      typeof v.label !== "string" || !v.label.trim() || v.label.length > 128 || typeof v.accountKey !== "string")
+      typeof v.label !== "string" || !v.label.trim() || v.label.length > 128 || typeof v.accountKey !== "string" ||
+      typeof v.accountId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(v.accountId) || typeof v.signingPrivateKey !== "string")
     throw new Error("Invalid Bridge development configuration");
   let url: URL;
   try { url = new URL(v.url); } catch { throw new Error("Invalid Bridge hub URL"); }
@@ -25,7 +30,9 @@ export function parseBridgeDevConfig(value: unknown): BridgeDevConfig | null {
   if (url.username || url.password || url.search || url.hash || url.pathname !== "/v1/log") throw new Error("Invalid Bridge hub URL");
   let accountKey: Uint8Array;
   try { accountKey = fromBase64Url(v.accountKey, 32); } catch { throw new Error("Invalid Bridge account key"); }
-  return { url: url.toString(), token: v.token, backendId: v.backendId, label: v.label.trim(), accountKey };
+  let signingPrivateKey: Uint8Array;
+  try { signingPrivateKey = fromBase64Url(v.signingPrivateKey, 32); } catch { accountKey.fill(0); throw new Error("Invalid Bridge signing key"); }
+  return { url: url.toString(), token: v.token, backendId: v.backendId, label: v.label.trim(), accountKey, accountId: v.accountId, signingPrivateKey };
 }
 export async function readBridgeDevConfig(file: string): Promise<BridgeDevConfig | null> {
   let text: string;

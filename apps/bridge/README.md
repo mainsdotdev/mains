@@ -1,5 +1,17 @@
 # Bridge hub
 
+Unreleased writer-authentication work is tracked in
+[Authenticated writers](AUTHENTICATED-WRITERS.md).
+Stage 1 requires independent X25519 encryption and Ed25519 signing identities.
+Comparison codes bind the account, backend and both public keys; approval and
+recovery proofs cannot substitute either recipient key. Identity vault format 2
+is mandatory. The initial D1 identity schema now includes required signing keys;
+use fresh disposable Bridge profiles and D1 stores for this work. No old-vault
+conversion or unsigned-data migration is provided. Stage 2 requires a device
+signature on every record and tombstone, a durable publication journal, and
+publication-bound ACKs. Authenticated membership and revocation key epochs remain
+subsequent stages, required before release.
+
 Production/staging error tracking, verified backup commands, local restore drills
 and code/data rollback procedures: [Operations runbook](OPERATIONS.md).
 Daily encrypted backups, incremental file retention and scheduler activation:
@@ -151,12 +163,13 @@ In another terminal, generate a token for each backend in the same demo account:
 
 ```sh
 cd apps/bridge
-npm run dev:token -- --account demo --backend A
-npm run dev:token -- --account demo --backend B
+npm run dev:token -- --account demo --backend A --signing-public-key <A-Ed25519-public-key>
+npm run dev:token -- --account demo --backend B --signing-public-key <B-Ed25519-public-key>
 ```
 
 Clients send the token in `Authorization: Bearer <token>` during the WebSocket
-handshake. These development JWTs bind `accountId` and backend id, expire after
+handshake. These development JWTs bind `accountId`, backend id and the independent
+Ed25519 signing public key, expire after
 24 hours, and are accepted only with `BRIDGE_DEV_AUTH=true` and a configured
 signing secret. These are development credentials only; normal sign-in and approval are described below. The dev token and the E2EE account key are separate credentials.
 
@@ -219,13 +232,27 @@ The hub acknowledges the exact hash and expiry without returning the token or
 deriving it from a server secret. The saved successor is published to replication
 only after the acknowledgement is validated and persisted; its first use retires
 the predecessor. Lost responses and restart retry the same saved proposal.
-Private device keys, account keys and backend tokens
+Private device encryption/signing keys, account keys and backend tokens
 live only in an encrypted `bridge/identity.json` (mode 0600). Electron uses
 `safeStorage`; standalone uses its protected `server-secret.key` storage adapter.
 The host adapters’ formats are intentionally incompatible and fail closed; use
 separate profiles for simultaneous Desktop/Server backends. Public status and
 notifications contain no credentials. Recovery values bypass Redux and durable
 command receipts.
+
+Locally generated public signing keys also persist in the encrypted
+`bridge/local-writer-keys.json` (mode 0600), scoped to hub origin, account id and
+backend id. Sign-out retains this public-only history so re-enrollment with a
+fresh signing key can verify this backend's old account records. Neither the
+hub's writer directory nor development JSON can add keys to this local trust.
+Because the history outlives sign-out, content this host cannot open (a reset
+keychain, a moved profile, corruption) never blocks enrollment: it is renamed
+beside the file as `local-writer-keys.json.unreadable-*` and a fresh history
+starts with the current key. It grants no trust; only this backend's older
+records signed with the forgotten keys are set aside on pull. Unavailable
+encryption and file system errors still fail without touching the file.
+An enrollment response that substitutes either public key or the backend id is
+rejected and its pending registration is revoked with the issued device token.
 
 Revocation closes open Bridge sockets and blocks later frames and existing blob
 URLs. It cannot remove plaintext already downloaded by the revoked backend.
@@ -258,7 +285,8 @@ Settings in a browser manages the backend that browser is connected to; Safari
 never receives a private account key or stores an independent SQLite database.
 
 Device approval uses two local comparisons. A derives B's 60-bit device code
-from B's public key; it never displays or validates against the hub's supplied
+from the account id, backend id, X25519 public key and Ed25519 signing public key;
+it never displays or validates against the hub's supplied
 `code` field. Codes are twelve base32 characters grouped as `ABCD-EFGH-JKLM`.
 After A approves, B decrypts the offered account key into protected **pending**
 storage. B cannot start replication (including log pulls, blob downloads and
@@ -690,7 +718,8 @@ caches; direct Console SQL changes become visible within 60 seconds. An expired
 lookup that fails denies publication rather than reusing stale policy. Current
 usage and outstanding reservations are never cached by this policy helper.
 
-Storage counts current encrypted registers, permanent tombstones, stored R2
+Storage counts current encrypted registers, permanent tombstones, a conservative
+256-byte charge per permanent signed-publication replay receipt, stored R2
 chunks and unexpired upload reservations. Retried/duplicate chunks count once.
 Expired reservations reconcile R2 before releasing space, including a crash
 between a PUT and its receipt. Stored chunks remain charged until physically
@@ -1006,8 +1035,40 @@ Independent PyNaCl/libsodium known answers live under
 opaque ids, origin/owner and sizes) is visible to the hub. File bytes use the
 encrypted B5 blob transport; the Atlas revision graph remains B6.
 
-The hub cannot open what it stores, so a holder of one device credential could
-publish a well-formed record that no device can authenticate. A pulled record
+Every network envelope carries an Ed25519 signature over the account id, epoch,
+random 256-bit publication id, signing public key, complete routing header, nonce
+and ciphertext. Epoch 1 is mandatory until membership/key rotation is implemented.
+The hub checks the entire batch against the authenticated backend's registered
+key before any LWW, tombstone, ownership, quota or retention mutation. A bearer
+token without that private key cannot publish a new envelope or retimestamp one.
+
+Backends journal each exact signed envelope in migration 0039's
+`bridge_publications` before sending it. A lost ACK or process restart resends the
+same nonce, publication id and signature. A changed capture image is signed as a
+new publication. Success and deleted ACKs identify the publication they answer;
+the client checks all those identifiers before acknowledging any entry. Success
+clears the journal and matching outbox generation atomically. These ACKs associate
+a response with a write; they cannot prove that a compromised hub kept its bytes.
+
+The hub retains replay receipts through compaction and mirror expiry. Replaying
+an accepted signed publication neither restores expired ciphertext nor refreshes
+run activity. An active source may explicitly publish a new signed envelope with
+the original capture clock to restore an expired mirror. Receipts are charged to
+record quota, so replacements cannot grow an uncharged permanent replay ledger.
+They are included in hub backup, restore and account reset.
+
+Receivers verify device signatures before decryption, blob downloads, clock
+advancement or SQL projection. Their current and historical local signing keys
+are pinned from protected local storage; an incoming owner field cannot introduce a locally executable
+root without local row/capture provenance. Peer keys currently come from the
+authenticated hub directory and approved-key history retained across revocation
+and re-enrollment. **That directory is not yet authenticated membership:** a
+compromised hub can still fabricate foreign membership. Signed membership,
+revocation checkpoints and new content-key epochs remain release gates.
+Known peer keys are reused for change hints; directory refreshes occur on full
+pulls and when an incoming record names an unknown peer signing key.
+
+A signed writer can still author invalid encrypted bodies. A pulled record
 that fails authentication or validation is therefore never applied and never
 stops its stream: it is kept in `bridge_parked` as `unverified`, its clock is
 ignored, and the cursor moves on. A record that authenticates but that this
@@ -1016,15 +1077,14 @@ SQLite constraint) is undone and set aside the same way; a local failure, such
 as recovery or I/O, still rolls back the whole batch to be retried. Each engine
 re-checks up to 100 such records once the hub answers, fetching that sequence
 again, so a newer client version or an undamaged copy still applies; one the hub
-no longer serves was superseded and is dropped. Since a leaked token can publish
+no longer serves was superseded and is dropped. Since a compromised signer can publish
 such records at the write rate, one larger than 16 KiB keeps only its header and
 at most 1000 are kept. Settings › Bridge reports how many were skipped.
 
-The same credential can make the hub answer every later write of a row with a
-tombstone. A write answered with a deletion leaves the outbox whether that
-deletion applies or is refused, so it cannot hold back the rest of its stream or
-the run streams queued behind the account stream. The local row is kept; a
-genuine tombstone still arrives through the log.
+An invalid deleted ACK leaves the local row, clock and outbox write intact and
+reports a retryable error. A verified deletion clears a write only after matching
+its row or run and successfully recording the deletion fence. Other valid ACKs in
+that batch can still complete. A genuine tombstone may also arrive through the log.
 
 For the same reason the hub refuses (`notOwner`) an upsert whose register key
 currently holds a value of another row key. Both keys are HMACs of the same table

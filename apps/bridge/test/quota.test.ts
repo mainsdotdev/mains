@@ -1,3 +1,4 @@
+import { signFixture } from "./record-signing.mjs";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import WebSocket from "ws";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import type { BridgeClientMessage, BridgeEnvelope, BridgeRpcResponse, BridgeServ
 import type { BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
 import { startLocalBridgeHub } from "./local-hub.mjs";
 
+const receiptBytes = 256;
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
 async function fixture(options: Parameters<typeof startLocalBridgeHub>[0] = { storageLimitBytes: 4096 }) {
@@ -28,6 +30,7 @@ async function connect(hub: Hub, account: string, backend = "A") {
   });
   await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
   return { socket, rpc(message: BridgeClientMessage): Promise<BridgeServerMessage> {
+      if (message.type === "push") for (const record of message.records) signFixture(record, account);
     return new Promise((resolve) => { const requestId = randomUUID(); pending.set(requestId, resolve); socket.send(JSON.stringify({ requestId, message })); });
   } };
 }
@@ -39,17 +42,17 @@ const presign = (hub: Hub, account: string, blobId: string, size: number) => req
 
 describe("Bridge account quotas in real workerd, SQLite and R2", () => {
   it("charges only current registers, acknowledges partial batches and permits reads/deletes while full", async () => {
-    const hub = await fixture(), account = randomUUID(), a = await connect(hub, account);
+    const hub = await fixture({ storageLimitBytes: 4608 }), account = randomUUID(), a = await connect(hub, account);
     const large = record("large", 2500), other = record("other", 900);
     expect(await a.rpc({ type: "push", stream: "account", records: [large, other] })).toMatchObject({ type: "ack", results: [{ seq: 1 }, { error: "quotaExceeded" }] });
-    const before = await usage(hub, account); expect(before.usedBytes).toBe(Buffer.byteLength(JSON.stringify(large)));
+    const before = await usage(hub, account); expect(before.usedBytes).toBe(Buffer.byteLength(JSON.stringify(large)) + receiptBytes);
     expect(await a.rpc({ type: "push", stream: "account", records: [large] })).toMatchObject({ results: [{ seq: 1 }] });
     expect((await usage(hub, account)).usedBytes).toBe(before.usedBytes);
     expect(await a.rpc({ type: "pull", stream: "account", after: 0, limit: 100 })).toMatchObject({ records: [{ seq: 1 }] });
     const deletion = record("large", 64, "delete");
     expect(await a.rpc({ type: "push", stream: "account", records: [deletion, other] })).toMatchObject({ results: [{ seq: 2 }, { seq: 3 }] });
     const after = await usage(hub, account);
-    expect(after.usedBytes).toBe(Buffer.byteLength(JSON.stringify(deletion)) + Buffer.byteLength(JSON.stringify(other)));
+    expect(after.usedBytes).toBe(Buffer.byteLength(JSON.stringify(deletion)) + Buffer.byteLength(JSON.stringify(other)) + 3 * receiptBytes);
     expect(after.usedBytes).toBeLessThan(before.usedBytes);
     expect(await a.rpc({ type: "push", stream: "account", records: [large] })).toMatchObject({ results: [{ deleted: deletion }] });
     a.socket.terminate(); await hub.restart(); expect(await usage(hub, account)).toEqual(after);

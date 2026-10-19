@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { bridgeBytes, bridgeRecoveryMessage, validateBridgeRecoveryWrap } from "@mains/contracts/bridge-auth";
-import { generateBridgeAccountKey, generateBridgeDeviceKeyPair, sealBridgeAccountKey } from "./bridge.keys";
+import { generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, sealBridgeAccountKey } from "./bridge.keys";
 import { bridgeRecoveryPublicKey, generateBridgeRecoveryCode, openBridgeRecovery, sealBridgeRecovery, signBridgeRecovery } from "./bridge.recovery";
 
 describe("Bridge recovery encryption", () => {
@@ -20,12 +20,14 @@ describe("Bridge recovery encryption", () => {
   }, 30_000);
   it("authenticates the account, backend id, recipient key, challenge and exact wrapped bytes without disclosing the account key", () => {
     const key = generateBridgeAccountKey(), recipient = generateBridgeDeviceKeyPair(), pub = Buffer.from(recipient.publicKey).toString("base64url");
-    const wrap = sealBridgeAccountKey(key, recipient.publicKey), signature = bridgeBytes(signBridgeRecovery(key, "account", "B", pub, "challenge", wrap), 64);
+    const identity = { accountId: "account", backendId: "B", publicKey: pub, signingPublicKey: Buffer.from(generateBridgeSigningKeyPair().publicKey).toString("base64url") };
+    const wrap = sealBridgeAccountKey(key, recipient.publicKey), signature = bridgeBytes(signBridgeRecovery(key, identity, "challenge", wrap), 64);
     const verifyKey = bridgeBytes(bridgeRecoveryPublicKey(key), 32);
-    expect(ed25519.verify(signature, bridgeRecoveryMessage("account", "B", pub, "challenge", wrap), verifyKey)).toBe(true);
-    for (const args of [["other", "B", pub, "challenge"], ["account", "C", pub, "challenge"], ["account", "B", pub, "other"]])
-      expect(ed25519.verify(signature, bridgeRecoveryMessage(args[0], args[1], args[2], args[3], wrap), verifyKey)).toBe(false);
+    expect(ed25519.verify(signature, bridgeRecoveryMessage(identity, "challenge", wrap), verifyKey)).toBe(true);
+    for (const change of [{ accountId: "other" }, { backendId: "C" }, { publicKey: identity.signingPublicKey }, { signingPublicKey: pub }])
+      expect(ed25519.verify(signature, bridgeRecoveryMessage({ ...identity, ...change }, "challenge", wrap), verifyKey)).toBe(false);
+    expect(ed25519.verify(signature, bridgeRecoveryMessage(identity, "other", wrap), verifyKey)).toBe(false);
     const different = sealBridgeAccountKey(key, recipient.publicKey);
-    expect(ed25519.verify(signature, bridgeRecoveryMessage("account", "B", pub, "challenge", different), verifyKey)).toBe(false);
+    expect(ed25519.verify(signature, bridgeRecoveryMessage(identity, "challenge", different), verifyKey)).toBe(false);
   });
 });

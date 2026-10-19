@@ -1,6 +1,6 @@
 /** Disposable LOCAL restore drill only. Never a production entrypoint. */
 import { DurableObject } from "cloudflare:workers";
-import { createHubStore } from "./store";
+import { BRIDGE_PUBLICATION_RECEIPT_BYTES, createHubStore } from "./store";
 import type { HubSnapshot, HubPage } from "./hub-backup";
 
 export class RecoveryHub extends DurableObject {
@@ -26,7 +26,8 @@ export class RecoveryHub extends DurableObject {
     // Re-open through the real store's normal initialization/upgrade path.
     createHubStore(this.ctx.storage);
     const sql = this.ctx.storage.sql;
-    const recordBytes = sql.exec("SELECT coalesce(sum(length(CAST(envelope AS BLOB))),0) AS n FROM (SELECT envelope FROM latest UNION ALL SELECT envelope FROM deleted)").one().n;
+    const recordBytes = Number(sql.exec("SELECT coalesce(sum(length(CAST(envelope AS BLOB))),0) AS n FROM (SELECT envelope FROM latest UNION ALL SELECT envelope FROM deleted)").one().n)
+      + Number(sql.exec("SELECT count(*) n FROM publications").one().n) * BRIDGE_PUBLICATION_RECEIPT_BYTES;
     if (recordBytes !== sql.exec("SELECT bytes FROM record_usage WHERE id=1").one().bytes) throw new Error("Restored record usage mismatch");
     const chunks = sql.exec("SELECT coalesce(sum(CASE WHEN stored=1 THEN bytes ELSE 0 END),0) AS b,coalesce(sum(CASE WHEN stored=0 THEN bytes ELSE 0 END),0) AS r FROM quota_chunks").one();
     const usage = sql.exec("SELECT * FROM quota_usage WHERE id=1").one();

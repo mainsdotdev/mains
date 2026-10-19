@@ -22,6 +22,11 @@ export function verifyEnvelope(store: BridgeStore, envelope: BridgeEnvelope) {
   if (def?.idKind === "run-integer" && header.runId !== body.pk.slice(0, body.pk.lastIndexOf(":"))) throw new Error("Bridge integer identity is routed to a different run");
   if (body.table === "run_attachment_refs" && header.runId !== JSON.parse(body.pk)[0]) throw new Error("Bridge attachment reference is routed to a different run");
   if (def?.ownerRoot && (!header.owner || header.owner !== header.origin)) throw new Error("Invalid Bridge owner");
+  // A remotely supplied owner id must never create an executable root on this host.
+  // Its local capture clock is the provenance; a verified echo may repair a lost projection.
+  if (def?.ownerRoot === body.table && header.owner === store.backendId &&
+      !(def.primaryRegister && getClock(store.sqlite, body.table, body.pk, def.primaryRegister)) && !readRow(store, body.table, body.pk))
+    throw new Error("Bridge cannot introduce a locally owned execution root");
   if (def && !def.ownerRoot && (header.owner || header.runId) || def?.stream === "account" && body.table !== "runs" && header.runId)
     throw new Error("Unexpected Bridge ownership routing");
   if (def && (def.stream === "account" ? header.stream !== "account" : !header.runId || header.stream !== `run:${header.runId}`)) throw new Error("Invalid Bridge stream");
@@ -526,17 +531,21 @@ export function applyDeletedAck(store: BridgeStore, sent: PreparedRecord, tombst
   const { header, body } = opened, expected = sent.envelope.header;
   if (header.op !== "delete" || header.rowKey !== expected.rowKey && !(expected.runId && body.table === "runs" && body.pk === expected.runId && header.runId === expected.runId && header.owner === expected.owner))
     throw new BridgeRecordRejected("Bridge deleted ACK does not identify the sent row or its run");
-  const changes = applyBridgeBatch(store, header.stream, [{ seq: 0, envelope: tombstone }]);
-  if (body.table === "runs" && header.runId === body.pk) {
-    store.sqlite.transaction(() => {
+  return store.sqlite.transaction(() => {
+    const changes = applyBridgeBatch(store, header.stream, [{ seq: 0, envelope: tombstone }]);
+    if (!store.sqlite.prepare("SELECT 1 FROM bridge_tombstones WHERE table_name=? AND pk=? AND envelope IS NOT NULL").get(body.table, body.pk))
+      throw new BridgeRecordRejected("Bridge deleted ACK could not be applied");
+    if (body.table === "runs" && header.runId === body.pk) {
       // The source may already have cascaded the SQL root while it was Local only.
       // A closed run acknowledges all its queued descendants, even without a row to visit.
       store.sqlite.prepare(`UPDATE bridge_row_clock SET dirty=0 WHERE EXISTS(SELECT 1 FROM bridge_outbox o
-        WHERE o.run_id=? AND o.table_name=bridge_row_clock.table_name AND o.pk=bridge_row_clock.pk)` ).run(body.pk);
+        WHERE o.run_id=? AND o.table_name=bridge_row_clock.table_name AND o.pk=bridge_row_clock.pk)`).run(body.pk);
       store.sqlite.prepare(`UPDATE bridge_row_clock SET dirty=0 WHERE EXISTS(SELECT 1 FROM bridge_tombstones t
         WHERE t.run_id=? AND t.table_name=bridge_row_clock.table_name AND t.pk=bridge_row_clock.pk)`).run(body.pk);
       store.sqlite.prepare("DELETE FROM bridge_outbox WHERE run_id=?").run(body.pk);
-    })();
-  }
-  return changes;
+    }
+    store.sqlite.prepare("DELETE FROM bridge_publications WHERE table_name=? AND pk=? AND register=? AND stream=? AND envelope=?")
+      .run(sent.entry.table_name, sent.entry.pk, sent.entry.register, sent.entry.stream, JSON.stringify(sent.envelope));
+    return changes;
+  })();
 }

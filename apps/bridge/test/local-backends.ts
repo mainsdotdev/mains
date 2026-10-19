@@ -1,3 +1,4 @@
+import { fixtureSigningKey } from "./record-signing.mjs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -140,7 +141,7 @@ export async function startLocalBackends(settings: { auth?: boolean; lan?: boole
     const accountId = randomUUID(), accountKey = randomBytes(32).toString("base64url");
     for (const host of [a, b]) {
       await mkdir(join(host.dir, "bridge"), { recursive: true });
-      await writeFile(host.configFile, JSON.stringify({ version: 1, backendId: host.backendId, url: hub.wsUrl, token: await hub.token(accountId, host.backendId), accountKey, label: host.label }), { mode: 0o600, flag: "wx" });
+      await writeFile(host.configFile, JSON.stringify({ version: 1, backendId: host.backendId, url: hub.wsUrl, token: await hub.token(accountId, host.backendId), accountId, signingPrivateKey: fixtureSigningKey(accountId, host.backendId).toString("base64url"), accountKey, label: host.label }), { mode: 0o600, flag: "wx" });
       await host.start();
     }
     return { dir, hub, a, b, dispose };

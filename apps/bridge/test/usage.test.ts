@@ -1,3 +1,4 @@
+import { signFixture } from "./record-signing.mjs";
 import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterEach, expect, it } from "vitest";
@@ -47,6 +48,7 @@ export class UsageProbe extends DurableObject {
 }
 export default { fetch(request, env) { return env.PROBE.get(env.PROBE.idFromName("test")).fetch(request); } };
 `;
+const receiptBytes = 256;
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
 async function probe() {
@@ -73,12 +75,12 @@ async function probe() {
   };
 }
 function record(id: string, clock = 1, size = 64) {
-  return { header: { v: 1 as const, stream: "account" as const, rowKey: id, registerKey: id + ":row", origin: "A", op: "upsert" as const, hlc: { physicalMs: clock, counter: 0 } },
-    body: { nonce: "opaque", payload: "x".repeat(size) } };
+  return signFixture({ header: { v: 1 as const, stream: "account" as const, rowKey: id, registerKey: id + ":row", origin: "A", op: "upsert" as const, hlc: { physicalMs: clock, counter: 0 } },
+    body: { nonce: "opaque", payload: "x".repeat(size) } }, "usage-account");
 }
 const deleted = (row: BridgeEnvelope): BridgeEnvelope => {
   const { registerKey: _register, blobs: _blobs, retention: _retention, ...header } = row.header; void [_register, _blobs, _retention];
-  return { header: { ...header, op: "delete", hlc: { physicalMs: 0, counter: 0 } }, body: { nonce: "opaque", payload: "tombstone" } };
+  return signFixture({ header: { ...header, op: "delete", hlc: { physicalMs: 0, counter: 0 } }, body: { nonce: "opaque", payload: "tombstone" } }, "usage-account");
 };
 const size = (row: BridgeEnvelope) => Buffer.byteLength(JSON.stringify(row));
 
@@ -116,8 +118,11 @@ it("keeps first-upload reads linear and quota reads constant across records, chu
 
 it("keeps exact usage through replacements, register deletes, run deletes, expiry and transaction rollback", async () => {
   const p = await probe();
-  const push = (records: BridgeEnvelope[], stream = "account", op = "push") => p.call({ op, stream, records });
-  const usage = async (expected: number) => expect((await p.call<BridgeQuota>({ op: "status" })).value.recordBytes).toBe(expected);
+  const push = (records: BridgeEnvelope[], stream = "account", op = "push") => p.call({ op, stream, records: records.map((record) => signFixture(record, "usage-account")) });
+  const usage = async (expected: number) => {
+    const receipts = await p.sql("SELECT count(*) n FROM publications") as { n: number }[];
+    expect((await p.call<BridgeQuota>({ op: "status" })).value.recordBytes).toBe(expected + receipts[0].n * receiptBytes);
+  };
   const one = record("one"), metadata = { ...one, header: { ...one.header, registerKey: "one:metadata" } };
   await push([one, metadata]); await usage(size(one) + size(metadata));
   const bigger = record("one", 2, 1024), smaller = record("one", 3, 32);
@@ -172,12 +177,12 @@ it("reclaims every charged copy of an attachment reused in independent run strea
     const row = record("shared"); return { ...row, header: { ...row.header, stream: `run:${root.header.runId}` as const, runId: root.header.runId, owner: "A" } };
   });
   for (const row of copies) await p.call({ op: "push", stream: row.header.stream, records: [row] });
-  expect((await p.call<BridgeQuota>({ op: "status" })).value.recordBytes).toBe([...roots, ...copies].reduce((n, row) => n + size(row), 0));
+  expect((await p.call<BridgeQuota>({ op: "status" })).value.recordBytes).toBe([...roots, ...copies].reduce((n, row) => n + size(row), 0) + 4 * receiptBytes);
   const tombstone = deleted(copies[0]);
   await p.call({ op: "push", stream: tombstone.header.stream, records: [tombstone, copies[0]] });
   await p.call({ op: "push", stream: copies[1].header.stream, records: [copies[1]] });
   await p.call({ op: "compact" }); await p.evict();
-  expect((await p.call<BridgeQuota>({ op: "status" })).value.recordBytes).toBe(size(roots[0]) + size(roots[1]) + size(tombstone));
+  expect((await p.call<BridgeQuota>({ op: "status" })).value.recordBytes).toBe(size(roots[0]) + size(roots[1]) + size(tombstone) + 5 * receiptBytes);
 });
 
 it("collects only indexed due candidates without scanning thousands of live blobs", async () => {

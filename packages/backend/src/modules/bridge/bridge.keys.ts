@@ -1,5 +1,5 @@
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
-import { x25519 } from "@noble/curves/ed25519.js";
+import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
@@ -24,6 +24,18 @@ export function bridgeAccountFingerprint(accountKey: Uint8Array): string {
   try { return formatBridgeVerificationCode(bytes); } finally { bytes.fill(0); }
 }
 export function generateBridgeDeviceKeyPair() { return x25519.keygen(); }
+export function generateBridgeSigningKeyPair() { return ed25519.keygen(); }
+export function verifyBridgeDeviceKeyPairs(identity: { publicKey: string; privateKey: string; signingPublicKey: string; signingPrivateKey: string }) {
+  const secret = fromBase64Url(identity.privateKey, 32);
+  let signingSecret: Uint8Array | undefined;
+  try {
+    signingSecret = fromBase64Url(identity.signingPrivateKey, 32);
+    if (identity.privateKey === identity.signingPrivateKey ||
+        toBase64Url(x25519.getPublicKey(secret)) !== identity.publicKey ||
+        toBase64Url(ed25519.getPublicKey(signingSecret)) !== identity.signingPublicKey)
+      throw new Error("Bridge device key pairs do not match or are reused");
+  } finally { secret.fill(0); signingSecret?.fill(0); }
+}
 function wrapMaterial(shared: Uint8Array, ephemeral: Uint8Array, recipient: Uint8Array) {
   const aad = utf8(JSON.stringify([1, "mains.bridge.v1/account-key", toBase64Url(ephemeral), toBase64Url(recipient)]));
   return { aad, key: hkdf(sha256, shared, concatBytes(ephemeral, recipient), utf8("mains.bridge.v1/device-wrap"), 32) };

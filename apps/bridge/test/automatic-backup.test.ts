@@ -1,3 +1,4 @@
+import { signFixture } from "./record-signing.mjs";
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -57,8 +58,8 @@ async function runtime() {
   return { mf, call, ops: Object.fromEntries(["snapshotBegin", "snapshotPage", "snapshotValid"].map((method) => [method, (...args: any[]) => call("operator", { method, args })])), bucket: await mf.getR2Bucket("BACKUPS", "hub") };
 }
 function record(i: number, op = "upsert") {
-  return { header: { v: 1, stream: "account", rowKey: sha256(`row-${i}`), ...(op === "upsert" ? { registerKey: sha256(`register-${i}`), blobs: [] } : {}), origin: "A", op,
-    hlc: { physicalMs: op === "upsert" ? 1 : 2, counter: 0 }, owner: "A" }, nonce: "opaque", ciphertext: `encrypted-${i}` };
+  return signFixture({ header: { v: 1, stream: "account", rowKey: sha256(`row-${i}`), ...(op === "upsert" ? { registerKey: sha256(`register-${i}`), blobs: [] } : {}), origin: "A", op,
+    hlc: { physicalMs: op === "upsert" ? 1 : 2, counter: 0 }, owner: "A" }, body: { nonce: "opaque", payload: `encrypted-${i}` } }, "fixture");
 }
 
 it("encrypts backups with the public key; tampering, the wrong environment path and wrong private keys fail closed", () => {
@@ -101,14 +102,14 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   await restore("initialize", [snapshot]);
   for (const page of capture.pages) await restore("page", [page.table, JSON.parse(source.get(page.path)!)]);
   const expectedRows = capture.pages.reduce((sum, page) => sum + JSON.parse(source.get(page.path)!).rows.length, 0);
-  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 21, rows: expectedRows });
+  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 23, rows: expectedRows });
   const pulled = await restore("pull", ["account", 0]);
   expect(pulled.records).toHaveLength(91); expect(pulled.next).toBe(91);
   expect(pulled.records.at(-1).envelope.header.op).toBe("delete");
   expect(await restore("push", ["A", "account", [record(4)]])).toMatchObject({ results: [{ deleted: { header: { op: "delete" } } }] });
   expect(await restore("push", ["B", "account", [{ ...record(1), header: { ...record(1).header, origin: "B" } }]])).toMatchObject({ results: [{ error: "notOwner" }] });
   await expect(restore("initialize", [snapshot])).rejects.toThrow();
-  // Previously published 18-table backups have no cleanup queue/indexes or
+  // Earlier backup schema fixtures have no cleanup queue/indexes or
   // triggers. Restore those bytes into a separate empty hub and let normal
   // initialization seed resumable legacy work without changing user data.
   const legacy: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => !["compaction_jobs", "blob_uploads", "write_budget"].includes(table)),
@@ -117,7 +118,7 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   const oldRestore = (action: string, args: unknown[]) => call("recovery", { account: "legacy", action, args });
   await oldRestore("initialize", [legacy]);
   for (const page of capture.pages.filter((page) => legacy.tables.includes(page.table))) await oldRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);
-  expect(await oldRestore("finish", [legacy])).toMatchObject({ tables: 18 });
+  expect(await oldRestore("finish", [legacy])).toMatchObject({ tables: 20 });
   expect(await oldRestore("pull", ["account", 0])).toEqual(pulled);
   expect(await oldRestore("push", ["A", "account", [record(4)]])).toMatchObject({ results: [{ deleted: { header: { op: "delete" } } }] });
   const previous: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => !["blob_uploads", "write_budget"].includes(table)),
@@ -125,7 +126,7 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   const previousRestore = (action: string, args: unknown[]) => call("recovery", { account: "previous", action, args });
   await previousRestore("initialize", [previous]);
   for (const page of capture.pages.filter((page) => previous.tables.includes(page.table))) await previousRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);
-  expect(await previousRestore("finish", [previous])).toMatchObject({ tables: 19 });
+  expect(await previousRestore("finish", [previous])).toMatchObject({ tables: 21 });
   expect(await previousRestore("pull", ["account", 0])).toEqual(pulled);
   // A write between pages fences the original snapshot instead of creating a
   // mixture that never existed. Unknown table/cursor cannot inject SQL.
@@ -223,7 +224,7 @@ it("reuses unchanged encrypted files, publishes only verified snapshots, and loc
   let sql = "";
   for (const file of ["0001_auth.sql", "0002_bridge_identity.sql", "0003_bridge_quotas.sql", "0004_account_entitlements.sql", "0005_closed_beta.sql", "0006_backend_token_handover.sql"]) sql += await readFile(`migrations/${file}`, "utf8") + "\n";
   sql += "INSERT INTO user VALUES('fixture','Local user','fixture@example.test',1,NULL,1,1);\n";
-  sql += "INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at,next_token_hash,next_token_expires_at) VALUES('fixture','B','public','Local','test','approved','current-fixture-hash',9999999999999,1,'pending-fixture-hash',9999999999999);\n";
+  sql += "INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at,next_token_hash,next_token_expires_at) VALUES('fixture','B','public','signing-public','Local','test','approved','current-fixture-hash',9999999999999,1,'pending-fixture-hash',9999999999999);\n";
   sql += "INSERT INTO bridge_beta_invites VALUES('fixture@example.test','fixture','active',1,2,2592000002,2);\n";
   await save("auth.sql", sql); await save("deployments.json", "[]"); await save("d1-time-travel.json", "{}");
   const captured = await captureAccount(ops, "fixture", save, "hub/0");

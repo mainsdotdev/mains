@@ -11,6 +11,8 @@ export const BRIDGE_DELETES_PER_MINUTE = 600;
 /** Download capabilities protect blobs from collection and are free for honest clients, which
  * cache what they download; the budget bounds a looping or leaked client instead. */
 export const BRIDGE_READS_PER_MINUTE = 1200;
+/** Fixed conservative charge for each permanent replay receipt, including its index. */
+export const BRIDGE_PUBLICATION_RECEIPT_BYTES = 256;
 const order = (a: BridgeEnvelope, b: BridgeEnvelope) => a.header.hlc.physicalMs - b.header.hlc.physicalMs || a.header.hlc.counter - b.header.hlc.counter ||
   (a.header.origin < b.header.origin ? -1 : a.header.origin > b.header.origin ? 1 : 0);
 
@@ -29,6 +31,8 @@ export function createHubStore(storage: DurableObjectStorage) {
     CREATE TABLE IF NOT EXISTS write_rate(backend_id TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS stream_activity(stream TEXT PRIMARY KEY,last_activity INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS write_budget(period_start INTEGER PRIMARY KEY,records INTEGER NOT NULL CHECK(records>=0));`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS writer_keys(backend_id TEXT NOT NULL,signing_public_key TEXT NOT NULL,PRIMARY KEY(backend_id,signing_public_key));
+    CREATE TABLE IF NOT EXISTS publications(publication_id TEXT PRIMARY KEY,signature TEXT NOT NULL,seq INTEGER NOT NULL);`);
   const first = <T>(query: string, ...args: (string | number | null)[]): T | undefined => sql.exec(query, ...args).toArray()[0] as T | undefined;
   storage.transactionSync(() => {
     sql.exec(`CREATE INDEX IF NOT EXISTS latest_row_key ON latest(json_extract(envelope,'$.header.rowKey'));
@@ -40,7 +44,8 @@ export function createHubStore(storage: DurableObjectStorage) {
         OR stream IN (SELECT 'run:'||run_id FROM runs WHERE tombstone IS NOT NULL);
         INSERT INTO record_usage SELECT 1,
           coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM latest),0)
-          +coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM deleted),0);`);
+          +coalesce((SELECT sum(length(CAST(envelope AS BLOB))) FROM deleted),0)
+          +(SELECT count(*) FROM publications)*${BRIDGE_PUBLICATION_RECEIPT_BYTES};`);
     }
     for (const table of ["latest", "deleted"]) sql.exec(`
       CREATE TRIGGER IF NOT EXISTS ${table}_usage_insert AFTER INSERT ON ${table} BEGIN
@@ -53,10 +58,18 @@ export function createHubStore(storage: DurableObjectStorage) {
       WHEN length(CAST(NEW.envelope AS BLOB))<>length(CAST(OLD.envelope AS BLOB)) BEGIN
         UPDATE record_usage SET bytes=bytes+length(CAST(NEW.envelope AS BLOB))-length(CAST(OLD.envelope AS BLOB)) WHERE id=1;
       END;`);
+    sql.exec(`CREATE TRIGGER IF NOT EXISTS publications_usage_insert AFTER INSERT ON publications BEGIN
+        UPDATE record_usage SET bytes=bytes+${BRIDGE_PUBLICATION_RECEIPT_BYTES} WHERE id=1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS publications_usage_delete AFTER DELETE ON publications BEGIN
+        UPDATE record_usage SET bytes=bytes-${BRIDGE_PUBLICATION_RECEIPT_BYTES} WHERE id=1;
+      END;`);
   });
   installBlobReferences(storage);
   const compaction = createHubCompaction(storage);
   const api = {
+    rememberWriter(backendId: string, key: string) { sql.exec("INSERT OR IGNORE INTO writer_keys VALUES(?,?)", backendId, key); },
+    writerKeys() { return sql.exec<{ backendId: string; signingPublicKey: string }>("SELECT backend_id AS backendId,signing_public_key AS signingPublicKey FROM writer_keys").toArray(); },
     recordBytes(): number {
       return first<{ bytes: number }>("SELECT bytes FROM record_usage WHERE id=1")!.bytes;
     },
@@ -73,6 +86,12 @@ export function createHubStore(storage: DurableObjectStorage) {
         const changed: BridgeLogRecord[] = [];
         const results = envelopes.map((envelope): BridgePushResult => {
           const h = envelope.header;
+          // Signature verification has already succeeded for the entire batch at the RPC boundary.
+          const auth = envelope.auth!;
+          const ack = (seq: number): BridgePushResult => ({ seq, publicationId: auth.publicationId });
+          const deadAck = (deleted: BridgeEnvelope): BridgePushResult => ({ deleted, publicationId: auth.publicationId });
+          const published = first<{ signature: string; seq: number }>("SELECT signature,seq FROM publications WHERE publication_id=?", auth.publicationId);
+          if (published && published.signature !== auth.signature) throw new Error("Bridge publication identifier was reused");
           if (h.stream !== stream || h.origin !== backendId || h.owner && h.owner !== backendId) return { error: "notOwner" };
           const owner = first<{ owner: string }>("SELECT owner FROM row_owners WHERE row_key=?", h.rowKey);
           if (owner && owner.owner !== backendId) return { error: "notOwner" };
@@ -86,24 +105,26 @@ export function createHubStore(storage: DurableObjectStorage) {
           if (stream !== "account") {
             const run = first<{ owner: string; tombstone: string | null }>("SELECT owner,tombstone FROM runs WHERE run_id=?", stream.slice(4));
             if (h.runId !== stream.slice(4) || !run || run.owner !== backendId || h.owner !== backendId) return { error: "notOwner" };
-            if (run.tombstone) return { deleted: JSON.parse(run.tombstone) };
+            if (run.tombstone) return deadAck(JSON.parse(run.tombstone));
           } else if (h.runId) {
             const run = first<{ owner: string; root_key: string }>("SELECT owner,root_key FROM runs WHERE run_id=?", h.runId);
             if (!h.owner || run && (run.owner !== backendId || run.root_key !== h.rowKey) ||
                 first("SELECT 1 FROM runs WHERE root_key=? AND run_id<>?", h.rowKey, h.runId)) return { error: "notOwner" };
           }
           const deleted = first<LogRow>("SELECT seq,envelope FROM deleted WHERE row_key=?", h.rowKey);
-          if (deleted) return { deleted: JSON.parse(deleted.envelope) };
+          if (deleted) return deadAck(JSON.parse(deleted.envelope));
+          // Compaction/idle expiry cannot turn a captured signed publication into new activity.
+          if (published) return ack(published.seq);
           const comparison = previousEnvelope && order(envelope, previousEnvelope);
           // Upgrade only the original writer's exact legacy clock. This changes
           // neither LWW order nor application data; a stale image still loses.
           const rootsUpgrade = comparison === 0 && h.blobs !== undefined && previousEnvelope?.header.blobs === undefined;
-          if (previous && comparison !== undefined && comparison <= 0 && !rootsUpgrade) return { seq: previous.seq };
+          if (previous && comparison !== undefined && comparison <= 0 && !rootsUpgrade) return ack(previous.seq);
           if (h.op === "upsert" && budget?.canUpload === false) return { error: "subscriptionRequired" };
           if (h.op === "upsert" && h.blobs && budget?.hasBlobs && !budget.hasBlobs(h.blobs)) return { error: "blobMissing" };
           const encoded = JSON.stringify(envelope);
           if (h.op === "upsert" && budget) {
-            const delta = new TextEncoder().encode(encoded).length - (previous ? new TextEncoder().encode(previous.envelope).length : 0);
+            const delta = new TextEncoder().encode(encoded).length - (previous ? new TextEncoder().encode(previous.envelope).length : 0) + BRIDGE_PUBLICATION_RECEIPT_BYTES;
             if (delta > 0 && api.recordBytes() + budget.blobBytes + delta > budget.limitBytes) return { error: "quotaExceeded" };
             if (!api.takeWrite(backendId, budget.writesPerMinute)) return { error: "rateLimited" };
           }
@@ -113,6 +134,7 @@ export function createHubStore(storage: DurableObjectStorage) {
           if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
           sql.exec("INSERT INTO streams(stream,seq) VALUES(?,1) ON CONFLICT(stream) DO UPDATE SET seq=seq+1", stream);
           const seq = first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)!.seq;
+          sql.exec("INSERT INTO publications VALUES(?,?,?)", auth.publicationId, auth.signature, seq);
           if (h.runId) sql.exec("INSERT INTO stream_activity VALUES(?,?) ON CONFLICT(stream) DO UPDATE SET last_activity=excluded.last_activity", `run:${h.runId}`, Date.now());
           sql.exec("INSERT INTO log(stream,seq,row_key,register_key,op,envelope) VALUES(?,?,?,?,?,?)", stream, seq, h.rowKey, h.registerKey ?? null, h.op, encoded);
           if (h.op === "delete") {
@@ -124,7 +146,7 @@ export function createHubStore(storage: DurableObjectStorage) {
             sql.exec("DELETE FROM latest WHERE stream IN(SELECT 'run:'||run_id FROM runs WHERE root_key=?)", h.rowKey);
           } else sql.exec("INSERT INTO latest(stream,register_key,seq,envelope) VALUES(?,?,?,?) ON CONFLICT(stream,register_key) DO UPDATE SET seq=excluded.seq,envelope=excluded.envelope", stream, h.registerKey, seq, encoded);
           changed.push({ seq, envelope });
-          return { seq };
+          return ack(seq);
         });
         // Fair-use accounting: newly accepted upserts only, one counter write
         // per publication. Idempotent re-ACKs, refusals and deletes are free.

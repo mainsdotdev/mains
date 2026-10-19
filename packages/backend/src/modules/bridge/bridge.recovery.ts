@@ -5,7 +5,7 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
 import { BRIDGE_RECOVERY_ALPHABET, bridgeBase64, bridgeBytes, bridgeRecoveryMessage, validateBridgeRecoveryWrap,
-  type BridgeRecoveryWrap, type BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
+  type BridgeDeviceIdentity, type BridgeRecoveryWrap, type BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
 import { requireBridgeKey } from "./bridge.keys";
 
 const utf8 = (value: string) => new TextEncoder().encode(value);
@@ -45,8 +45,8 @@ export async function openBridgeRecovery(wrap: BridgeRecoveryWrap, code: string)
   catch { throw new Error("Recovery code does not match this account"); }
   finally { key.fill(0); }
 }
-export function signBridgeRecovery(accountKey: Uint8Array, accountId: string, backendId: string, publicKey: string, challenge: string, wrap: BridgeSealedAccountKey): string {
+export function signBridgeRecovery(accountKey: Uint8Array, recipient: BridgeDeviceIdentity, challenge: string, wrap: BridgeSealedAccountKey): string {
   const seed = signingSeed(accountKey);
-  try { return bridgeBase64(ed25519.sign(bridgeRecoveryMessage(accountId, backendId, publicKey, challenge, wrap), seed)); }
+  try { return bridgeBase64(ed25519.sign(bridgeRecoveryMessage(recipient, challenge, wrap), seed)); }
   finally { seed.fill(0); }
 }

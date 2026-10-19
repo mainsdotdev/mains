@@ -20,15 +20,15 @@ it("resets only the armed staging account and preserves its login and every othe
     expect((await post(other)).status).toBe(403);
     expect((await post()).status).toBe(200);
     const otherToken = `b7_${randomBytes(32).toString("hex")}`;
-    await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,'approved',?,?,?)")
-      .bind(other, "keep-backend", "keep-key", "Other", "node", createHash("sha256").update(otherToken).digest("hex"), Date.now() + 60_000, Date.now()).run();
+    await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,?,'approved',?,?,?)")
+      .bind(other, "keep-backend", "keep-key", "keep-signing-key", "Other", "node", createHash("sha256").update(otherToken).digest("hex"), Date.now() + 60_000, Date.now()).run();
     expect((await fetch(new URL("/v1/quota", hub.url), { headers: { Authorization: `Bearer ${otherToken}` } })).status).toBe(200);
     for (const id of [accountId, other]) await hub.quotaSql(id, "INSERT INTO streams VALUES('account',1); INSERT INTO log VALUES('account',1,'opaque','register','upsert',json_object('header',json_object('blobs',json('[]')),'body','ciphertext')); INSERT INTO deleted VALUES('deleted','account',1,'ciphertext');");
     const dryRun = await (await post()).json() as { records: number; blobs: number; initialized: boolean };
     expect(dryRun).toMatchObject({ records: 1, blobs: 1, initialized: true });
     expect(await hub.inspect(accountId)).toHaveLength(1);
-    await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,'approved',?,?,?)")
-      .bind(accountId, "last-backend", "last-key", "Last", "node", "last-hash", Date.now() + 60_000, Date.now()).run();
+    await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,?,'approved',?,?,?)")
+      .bind(accountId, "last-backend", "last-key", "last-signing-key", "Last", "node", "last-hash", Date.now() + 60_000, Date.now()).run();
     await db.prepare("INSERT INTO bridge_key_wraps VALUES(?,?,?)").bind(accountId, "last-backend", "sealed-old-key").run();
     expect((await post(accountId, token, true)).status).toBe(409);
     expect(await hub.inspect(accountId)).toHaveLength(1);

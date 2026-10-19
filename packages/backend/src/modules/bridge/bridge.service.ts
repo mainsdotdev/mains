@@ -96,18 +96,20 @@ export const bridgeService = {
         const config = await readBridgeDevConfig(file);
         if (!config) { getSqlite().prepare("UPDATE bridge_config SET enabled=0 WHERE id=1").run(); return; }
         const fingerprint = createHash("sha256").update(config.accountKey).digest("hex");
+        const writerFingerprint = createHash("sha256").update(config.signingPrivateKey).digest("hex");
         const backendId = getLocalBackendId();
         try {
           replicate(config, async () => {
               const next = await readBridgeDevConfig(file);
               if (!next) throw new Error("Bridge configuration was disabled; restart this backend");
               try {
-                if (next.backendId !== backendId || next.url !== config.url || createHash("sha256").update(next.accountKey).digest("hex") !== fingerprint)
+                if (next.backendId !== backendId || next.accountId !== config.accountId || next.url !== config.url || createHash("sha256").update(next.accountKey).digest("hex") !== fingerprint ||
+                    createHash("sha256").update(next.signingPrivateKey).digest("hex") !== writerFingerprint)
                   throw new Error("Bridge account or backend configuration changed; restart this backend");
                 return next.token;
-              } finally { next.accountKey.fill(0); }
+              } finally { next.accountKey.fill(0); next.signingPrivateKey.fill(0); }
           });
-        } finally { config.accountKey.fill(0); }
+        } finally { config.accountKey.fill(0); config.signingPrivateKey.fill(0); }
       } catch (error) {
         getSqlite().prepare("UPDATE bridge_config SET enabled=0 WHERE id=1").run();
         startupError = error instanceof Error ? error.message : "Bridge could not start";

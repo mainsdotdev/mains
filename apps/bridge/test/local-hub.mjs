@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fixturePublicKey } from "./record-signing.mjs";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
  * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
@@ -99,7 +100,7 @@ export async function startLocalBridgeHub(settings = {}) {
     async database() { return mf.getD1Database("AUTH_DB"); },
     /** @param {string} accountId @param {string} backendId @param {string | number} [expiresIn] */
     async token(accountId, backendId, expiresIn = "1h") {
-      return new SignJWT({ accountId }).setProtectedHeader({ alg: "HS256", typ: "JWT" }).setSubject(backendId)
+      return new SignJWT({ accountId, signingPublicKey: fixturePublicKey(accountId, backendId) }).setProtectedHeader({ alg: "HS256", typ: "JWT" }).setSubject(backendId)
         .setIssuer("mains-bridge-dev").setAudience("mains-bridge").setIssuedAt().setExpirationTime(expiresIn).sign(new TextEncoder().encode(secret));
     },
     async restart() { options.port = Number(address.port); await mf.dispose(); mf = new Miniflare(convertV4MiniflareOptions(options)); address = await mf.ready; },

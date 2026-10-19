@@ -6,13 +6,19 @@ export interface BridgeRecoveryWrap {
   nonce: string;
   payload: string;
 }
-export interface BridgeRegisteredBackend {
-  backendId: string; publicKey: string; label: string; platform: string;
+export interface BridgeDevicePublicKeys {
+  /** X25519 recipient key. Independent of the Ed25519 writer key. */
+  publicKey: string;
+  signingPublicKey: string;
+}
+export interface BridgeDeviceIdentity extends BridgeDevicePublicKeys { accountId: string; backendId: string }
+export interface BridgeRegisteredBackend extends BridgeDevicePublicKeys {
+  backendId: string; label: string; platform: string;
   status: "pending" | "approved" | "revoked";
   createdAt: string; lastSeen: string | null;
 }
-export interface BridgeApprovalRequest {
-  requestId: string; backendId: string; publicKey: string; label: string; platform: string;
+export interface BridgeApprovalRequest extends BridgeDevicePublicKeys {
+  requestId: string; backendId: string; label: string; platform: string;
   code: string; expiresAt: string;
 }
 export interface BridgeSignInInput {
@@ -61,9 +67,14 @@ export function validateBridgeRecoveryWrap(value: unknown): asserts value is Bri
     throw new Error("Unsupported Bridge recovery parameters");
   bridgeBytes(kdf.salt, 16); bridgeBytes(wrap.nonce, 24); bridgeBytes(wrap.payload, 48);
 }
-export async function bridgeApprovalCode(publicKey: string): Promise<string> {
-  bridgeBytes(publicKey, 32);
-  const message = new TextEncoder().encode(JSON.stringify([2, "mains.bridge.v2/device-approval", publicKey]));
+function deviceIdentity(identity: BridgeDeviceIdentity): [string, string, string, string] {
+  if (!identity || ![identity.accountId, identity.backendId].every((id) => typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id)))
+    throw new Error("Invalid Bridge device identity");
+  bridgeBytes(identity.publicKey, 32); bridgeBytes(identity.signingPublicKey, 32);
+  return [identity.accountId, identity.backendId, identity.publicKey, identity.signingPublicKey];
+}
+export async function bridgeApprovalCode(identity: BridgeDeviceIdentity): Promise<string> {
+  const message = new TextEncoder().encode(JSON.stringify([3, "mains.bridge.v3/device-approval", ...deviceIdentity(identity)]));
   return formatBridgeVerificationCode(new Uint8Array(await crypto.subtle.digest("SHA-256", message)));
 }
 /** Twelve base32 characters retain 60 bits. No six-character compatibility path. */
@@ -85,7 +96,7 @@ export function normalizeBridgeVerificationCode(value: string): string {
   if (!isBridgeVerificationCode(formatted)) throw new Error("Enter the 12-character verification code");
   return formatted;
 }
-export function bridgeRecoveryMessage(accountId: string, backendId: string, publicKey: string, challenge: string, wrap: BridgeSealedAccountKey): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify([1, "mains.bridge.v1/recovery-approval", accountId, backendId, publicKey, challenge,
+export function bridgeRecoveryMessage(identity: BridgeDeviceIdentity, challenge: string, wrap: BridgeSealedAccountKey): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify([2, "mains.bridge.v2/recovery-approval", ...deviceIdentity(identity), challenge,
     [wrap.v, wrap.ephemeralPublicKey, wrap.nonce, wrap.payload]]));
 }

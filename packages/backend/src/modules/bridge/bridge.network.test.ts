@@ -1,3 +1,4 @@
+import { fixtureSigningCodec, signFixtureEnvelope } from "../../../test/bridge-signing";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { BridgeHeader } from "@mains/contracts/bridge-protocol";
@@ -15,6 +16,8 @@ afterAll(disposeBridgeTestHub);
 async function client(accountId: string, backendId: string, extra: Partial<BridgeWebSocketOptions> = {}) {
   const hub = await getLocalBridgeTestWorker();
   const connection = createBridgeWebSocketTransport({ url: hub.wsUrl, token: () => hub.token(accountId, backendId), ...extra });
+  const push = connection.push;
+  connection.push = (stream, records) => push(stream, records.map((record) => { if (!record.auth) Object.assign(record, signFixtureEnvelope(accountId, record)); return record; }));
   clients.push(connection); return connection;
 }
 function envelope(id: string, counter = 0, op: "upsert" | "delete" = "upsert", text = "private-marker-şifreli") {
@@ -36,12 +39,12 @@ describe.skipIf(!networkMode)("Bridge real network and encrypted persistence", (
     const b = await client(account, "B"); const page = await b.pull("account", 0, 100);
     expect(page.records).toHaveLength(1); expect(page.records[0].envelope).toEqual(tombstone);
     expect(codec.open(page.records[0].envelope).body).toEqual({ table: "collections", pk: "private-row" });
-    const writer = await client(account, "A"); expect(await writer.push("account", [upsert])).toEqual([{ deleted: tombstone }]);
+    const writer = await client(account, "A"); expect(await writer.push("account", [upsert])).toMatchObject([{ deleted: tombstone }]);
   });
   it("isolates accounts and binds the authenticated backend independently from the plaintext origin claim", async () => {
     const first = randomUUID(), a = await client(first, "A"), b = await client(randomUUID(), "B");
     await a.push("account", [envelope("same-row")]); expect((await b.pull("account", 0, 100)).records).toEqual([]);
-    const attacker = await client(first, "B"); expect(await attacker.push("account", [envelope("another")])).toEqual([{ error: "notOwner" }]);
+    const attacker = await client(first, "B"); await expect(attacker.push("account", [envelope("another")])).rejects.toThrow(/signature/i);
     const hub = await getLocalBridgeTestWorker(), invalid = await client(first, "B", { token: "invalid" });
     await expect(invalid.pull("account", 0, 10)).rejects.toThrow(/connection/i);
     const expired = await client(first, "A", { token: await hub.token(first, "A", "-1s") });
@@ -104,7 +107,7 @@ describe.skipIf(!networkMode)("Bridge real network and encrypted persistence", (
       if (corrupt) for (const record of page.records) { const value = record.envelope.body.payload; record.envelope.body.payload = (value[0] === "A" ? "B" : "A") + value.slice(1); }
       return page;
     } };
-    const engine = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec, transport }); await engine.bootstrap();
+    const engine = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec: fixtureSigningCodec(account, "B", codec), transport }); await engine.bootstrap();
     db.exec("INSERT INTO collections(id,account_id,name) VALUES('draft','default','Unsynced draft')");
     await a.push("account", [envelope("draft", 1, "delete")]); corrupt=true;
     await engine.pull();
@@ -112,7 +115,7 @@ describe.skipIf(!networkMode)("Bridge real network and encrypted persistence", (
     expect(engine.unverified()).toBe(1); expect(engine.pending().some((entry) => entry.pk === "draft")).toBe(true);
     // The damaged copy stays set aside; the next engine asks the hub for that record once more.
     corrupt=false; await engine.stop();
-    const restarted = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec, transport });
+    const restarted = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec: fixtureSigningCodec(account, "B", codec), transport });
     try {
       await restarted.pull();
       expect(db.prepare("SELECT 1 FROM collections WHERE id='draft'").get()).toBeUndefined(); expect(restarted.unverified()).toBe(0);

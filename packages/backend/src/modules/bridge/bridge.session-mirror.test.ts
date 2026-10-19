@@ -16,7 +16,7 @@ async function node(hub: BridgeTestHub, backendId: string, schemaVersion?: numbe
   const { sqlite, cleanup } = createTestDb(); cleanups.push(cleanup);
   sqlite.exec("INSERT INTO accounts(id) VALUES('default'); INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
   sqlite.prepare("INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default',?)").run(backendId);
-  const engine = createBridgeEngine({ sqlite, backendId, recordKey: bridgeTestRecordKey, codec: bridgeTestCodec, transport: hub.connect(backendId), schemaVersion });
+  const engine = createBridgeEngine({ sqlite, backendId, recordKey: bridgeTestRecordKey, codec: hub.codec(backendId), transport: hub.connect(backendId), schemaVersion });
   cleanups.push(() => engine.stop()); await engine.bootstrap(); return { sqlite, engine, backendId };
 }
 type Node = Awaited<ReturnType<typeof node>>;
@@ -80,7 +80,7 @@ describe("B9 Claude session mirror between independent SQLite backends", () => {
     await store(a, sessionId).append(key, entries); await drain(a); await b.engine.pull(); await b.engine.pull("run:r");
     expect(await store(b, sessionId).load(key)).toBeNull();
     expect(b.sqlite.prepare("SELECT reason FROM bridge_parked WHERE stream='run:r'").get()).toMatchObject({ reason: "schema" });
-    await b.engine.stop(); const upgraded = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: bridgeTestRecordKey, codec: bridgeTestCodec, transport: hub.connect("B") });
+    await b.engine.stop(); const upgraded = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: bridgeTestRecordKey, codec: hub.codec("B"), transport: hub.connect("B") });
     cleanups.push(() => upgraded.stop()); await upgraded.retryParked(); expect(await store(b, sessionId).load(key)).toEqual(entries);
   });
 

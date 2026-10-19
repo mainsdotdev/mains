@@ -1,3 +1,4 @@
+import { signFixture, fixturePublicKey } from "./record-signing.mjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { afterEach, expect, it } from "vitest";
@@ -17,8 +18,8 @@ async function backend(hub: Hub, email = `${randomUUID()}@example.test`, backend
   const browser = await hub.login(email), token = `b7_${randomBytes(32).toString("hex")}`;
   // Seed an approved credential; the full approval/recovery ceremonies have
   // their own real-workerd tests. All subscription checks use real auth/D1.
-  await (await hub.database()).prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at)
-    VALUES(?,?,?,?,?,'approved',?,?,?)`).bind(browser.user.id, backendId, randomBytes(32).toString("base64url"), backendId, "test",
+  await (await hub.database()).prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at)
+    VALUES(?,?,?,?,?,?,'approved',?,?,?)`).bind(browser.user.id, backendId, randomBytes(32).toString("base64url"), fixturePublicKey(browser.user.id, backendId), backendId, "test",
     createHash("sha256").update(token).digest("hex"), Date.now() + 3_600_000, Date.now()).run();
   return { ...browser, token, accountId: browser.user.id as string, backendId };
 }
@@ -44,6 +45,7 @@ async function connect(hub: Hub, b: Backend) {
   });
   await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
   return { socket, rpc(message: BridgeClientMessage): Promise<Result> {
+    if (message.type === "push") for (const record of message.records) signFixture(record, b.accountId);
     return new Promise((resolve) => { const requestId = randomUUID(); pending.set(requestId, resolve); socket.send(JSON.stringify({ requestId, message })); });
   } };
 }

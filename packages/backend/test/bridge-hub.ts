@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { BridgeLogRecord, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { createMemoryBridgeHub, type BridgeTransport } from "../src/modules/bridge/bridge.transport";
 import { createBridgeWebSocketTransport } from "../src/modules/bridge/bridge.websocket";
-import { bridgePassThroughCodec, createBridgeSealingCodec } from "../src/modules/bridge/bridge.crypto";
+import { bridgePassThroughCodec, createBridgeSealingCodec, type BridgeCodec } from "../src/modules/bridge/bridge.crypto";
+import { fixtureSigningCodec, signFixtureEnvelope } from "./bridge-signing";
 import { deriveBridgeKeys } from "../src/modules/bridge/bridge.keys";
 import { createBridgeBlobs } from "../src/modules/bridge/bridge.blobs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -15,6 +16,8 @@ export const bridgeTestAccountKey = new Uint8Array(32).fill(17);
 export const bridgeTestCodec = networkMode ? createBridgeSealingCodec(bridgeTestAccountKey) : bridgePassThroughCodec;
 export const bridgeTestRecordKey = networkMode ? deriveBridgeKeys(bridgeTestAccountKey).recordKey : bridgeTestAccountKey;
 export interface BridgeTestHub {
+  sign(envelope: import("@mains/contracts/bridge-protocol").BridgeEnvelope): import("@mains/contracts/bridge-protocol").BridgeEnvelope;
+  codec(backendId: string, base?: BridgeCodec): BridgeCodec;
   connect(backendId: string): BridgeTransport;
   inspect(stream: BridgeStream): BridgeLogRecord[] | Promise<BridgeLogRecord[]>;
   compact(): void | Promise<void>;
@@ -37,7 +40,7 @@ async function startWorker(): Promise<LocalBridgeTestWorker> {
 }
 export async function getLocalBridgeTestWorker() { return worker ??= startWorker(); }
 export async function createBridgeTestHub(): Promise<BridgeTestHub> {
-  if (!networkMode) return createMemoryBridgeHub();
+  if (!networkMode) return { ...createMemoryBridgeHub(), sign: (envelope) => envelope, codec: (_backendId, base) => base ?? bridgePassThroughCodec };
   const hub = await (worker ??= startWorker());
   const accountId = randomUUID();
   const transports = new Map<string, ReturnType<typeof createBridgeWebSocketTransport>>();
@@ -50,6 +53,8 @@ export async function createBridgeTestHub(): Promise<BridgeTestHub> {
     return transport;
   };
   return {
+    sign: (envelope) => signFixtureEnvelope(accountId, envelope),
+    codec: (backendId, base = bridgeTestCodec) => fixtureSigningCodec(accountId, backendId, base),
     connect,
     async inspect(stream) {
       const result: BridgeLogRecord[] = []; let after = 0;

@@ -6,7 +6,7 @@ import { reportBridgeFailure } from "./observability";
 import { requireBridgeAccess, requireBridgeBootstrapAccess } from "./beta";
 
 export interface BackendRow {
-  account_id: string; backend_id: string; public_key: string; label: string; platform: string;
+  account_id: string; backend_id: string; public_key: string; signing_public_key: string; label: string; platform: string;
   status: "pending" | "approved" | "revoked"; token_hash: string; token_expires_at: number; created_at: number; last_seen: number | null;
   next_token_hash: string | null; next_token_expires_at: number | null;
   recovery_challenge: string | null; challenge_expires_at: number | null;
@@ -45,17 +45,20 @@ export async function backendStillApproved(env: AuthEnv, account: string, backen
   return !!await env.AUTH_DB?.prepare("SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND token_hash=? AND status='approved' AND token_expires_at>?")
     .bind(account, backend, hash, Date.now()).first();
 }
-const format = (row: BackendRow): BridgeRegisteredBackend => ({ backendId: row.backend_id, publicKey: row.public_key, label: row.label, platform: row.platform,
+const format = (row: BackendRow): BridgeRegisteredBackend => ({ backendId: row.backend_id, publicKey: row.public_key, signingPublicKey: row.signing_public_key, label: row.label, platform: row.platform,
   status: row.status, createdAt: new Date(row.created_at).toISOString(), lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null });
 const approvedSql = "EXISTS(SELECT 1 FROM bridge_backends authorizer WHERE authorizer.account_id=? AND authorizer.backend_id=? AND authorizer.token_hash=? AND authorizer.status='approved' AND authorizer.token_expires_at>?)";
 const approvalArgs = (b: BackendRow) => [b.account_id, b.backend_id, b.token_hash, Date.now()];
+const rememberWriter = (db: D1Database, account: string, backendId: string) => db.prepare(`INSERT OR IGNORE INTO bridge_writer_keys
+  SELECT account_id,backend_id,signing_public_key FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='approved'`).bind(account, backendId);
 async function approvals(env: AuthEnv, account: string): Promise<BridgeApprovalRequest[]> {
   const rows = await env.AUTH_DB!.prepare(`SELECT a.request_id,a.expires_at,b.* FROM bridge_approvals a JOIN bridge_backends b
-    ON a.account_id=b.account_id AND a.backend_id=b.backend_id AND a.public_key=b.public_key
+    ON a.account_id=b.account_id AND a.backend_id=b.backend_id AND a.public_key=b.public_key AND a.signing_public_key=b.signing_public_key
     WHERE a.account_id=? AND a.status='pending' AND b.status='pending' AND a.expires_at>? ORDER BY a.expires_at`)
     .bind(account, Date.now()).all<BackendRow & { request_id: string; expires_at: number }>();
-  return Promise.all(rows.results.map(async (row) => ({ requestId: row.request_id, backendId: row.backend_id, publicKey: row.public_key,
-    label: row.label, platform: row.platform, code: await bridgeApprovalCode(row.public_key), expiresAt: new Date(row.expires_at).toISOString() })));
+  return Promise.all(rows.results.map(async (row) => ({ requestId: row.request_id, backendId: row.backend_id, publicKey: row.public_key, signingPublicKey: row.signing_public_key,
+    label: row.label, platform: row.platform, code: await bridgeApprovalCode({ accountId: account, backendId: row.backend_id,
+      publicKey: row.public_key, signingPublicKey: row.signing_public_key }), expiresAt: new Date(row.expires_at).toISOString() })));
 }
 
 export async function handleDevices(request: Request, env: AuthEnv, control: IdentityControl): Promise<Response> {
@@ -68,15 +71,18 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       await rateLimit(env, `register:${user.id}`, 20);
       await requireBridgeAccess(env, user);
       const body = await jsonInput(request), backendId = identifier(body.backendId), label = textField(body.label, "label"), platform = textField(body.platform, "platform", 32);
-      bridgeBytes(body.publicKey, 32); const publicKey = body.publicKey as string;
+      bridgeBytes(body.publicKey, 32); bridgeBytes(body.signingPublicKey, 32);
+      const publicKey = body.publicKey as string, signingPublicKey = body.signingPublicKey as string;
+      if (await db.prepare("SELECT 1 FROM bridge_writer_keys WHERE account_id=? AND signing_public_key=? AND backend_id<>?")
+        .bind(user.id, signingPublicKey, backendId).first()) throw new HttpError(409, "This signing key already belongs to another backend");
       const token = `b7_${randomToken()}`, hash = await digestToken(token), now = Date.now();
       // Live registrations cannot be replaced merely by logging into the account.
-      const row = await db.prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at)
-        VALUES(?,?,?,?,?,'pending',?,?,?) ON CONFLICT(account_id,backend_id) DO UPDATE SET public_key=excluded.public_key,label=excluded.label,
+      const row = await db.prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at)
+        VALUES(?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(account_id,backend_id) DO UPDATE SET public_key=excluded.public_key,signing_public_key=excluded.signing_public_key,label=excluded.label,
         platform=excluded.platform,status='pending',token_hash=excluded.token_hash,token_expires_at=excluded.token_expires_at,created_at=excluded.created_at,
         recovery_challenge=NULL,challenge_expires_at=NULL,next_token_hash=NULL,next_token_expires_at=NULL
         WHERE bridge_backends.status='revoked' OR (bridge_backends.token_expires_at<? AND coalesce(bridge_backends.next_token_expires_at,0)<?) RETURNING *`)
-        .bind(user.id, backendId, publicKey, label, platform, hash, now + ttl, now, now, now).first<BackendRow>();
+        .bind(user.id, backendId, publicKey, signingPublicKey, label, platform, hash, now + ttl, now, now, now).first<BackendRow>();
       if (!row) throw new HttpError(409, "This backend is already registered; revoke its old registration before signing in again");
       await db.batch([db.prepare("DELETE FROM bridge_key_wraps WHERE account_id=? AND backend_id=?").bind(user.id, backendId),
         db.prepare("DELETE FROM bridge_approvals WHERE account_id=? AND backend_id=?").bind(user.id, backendId)]);
@@ -109,10 +115,17 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
         db.prepare(`UPDATE bridge_backends SET status='approved' WHERE account_id=? AND backend_id=? AND token_hash=?
           AND EXISTS(SELECT 1 FROM bridge_key_wraps WHERE account_id=? AND backend_id=?)`)
           .bind(account, id, backend.token_hash, account, id),
+        rememberWriter(db, account, id),
       ]);
       const initialized = await db.prepare("SELECT initializer_token_hash FROM bridge_accounts WHERE account_id=?").bind(account).first<{ initializer_token_hash: string }>();
       if (initialized?.initializer_token_hash !== backend.token_hash) throw new HttpError(409, "This account is initialized; use device approval or recovery");
       return json({ ok: true });
+    }
+    if (path === "/v1/keys/writers" && request.method === "GET") {
+      requireApproved();
+      const result = await db.prepare(`SELECT backend_id AS backendId,signing_public_key AS signingPublicKey FROM bridge_writer_keys WHERE account_id=?
+        UNION SELECT backend_id,signing_public_key FROM bridge_backends WHERE account_id=? AND status='approved'`).bind(account, account).all();
+      return json(result.results);
     }
     if (path === "/v1/backends" && request.method === "GET") {
       requireApproved();
@@ -125,6 +138,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       const authorized = target === id ? "token_hash=? AND token_expires_at>?" : approvedSql;
       const authorizedArgs = target === id ? [backend.token_hash, Date.now()] : approvalArgs(backend);
       const result = await db.batch([
+        rememberWriter(db, account, target),
         db.prepare(`UPDATE bridge_backends SET status='revoked',recovery_challenge=NULL,next_token_hash=NULL,next_token_expires_at=NULL WHERE account_id=? AND backend_id=? AND ${authorized}`)
           .bind(account, target, ...authorizedArgs),
         db.prepare("DELETE FROM bridge_key_wraps WHERE account_id=? AND backend_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='revoked')")
@@ -132,7 +146,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
         db.prepare("DELETE FROM bridge_approvals WHERE account_id=? AND backend_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='revoked')")
           .bind(account, target, account, target),
       ]);
-      if (!result[0].meta.changes) throw new HttpError(404, "Backend unavailable");
+      if (!result[1].meta.changes) throw new HttpError(404, "Backend unavailable");
       await control.revoked(account, target); return json({ ok: true });
     }
     if (path === "/v1/approvals" && request.method === "GET") { requireApproved(); return json(await approvals(env, account)); }
@@ -140,28 +154,31 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       if (ready) throw new HttpError(409, "Backend is already approved");
       await rateLimit(env, `approval:${account}:${id}`, 5);
       const now = Date.now();
-      await db.prepare(`INSERT INTO bridge_approvals(request_id,account_id,backend_id,public_key,status,expires_at) VALUES(?,?,?,?,'pending',?)
-        ON CONFLICT(account_id,backend_id) DO UPDATE SET request_id=excluded.request_id,public_key=excluded.public_key,status='pending',expires_at=excluded.expires_at
-        WHERE bridge_approvals.status<>'pending' OR bridge_approvals.expires_at<?`).bind(crypto.randomUUID(), account, id, backend.public_key, now + 600_000, now).run();
+      await db.prepare(`INSERT INTO bridge_approvals(request_id,account_id,backend_id,public_key,signing_public_key,status,expires_at) VALUES(?,?,?,?,?,'pending',?)
+        ON CONFLICT(account_id,backend_id) DO UPDATE SET request_id=excluded.request_id,public_key=excluded.public_key,signing_public_key=excluded.signing_public_key,status='pending',expires_at=excluded.expires_at
+        WHERE bridge_approvals.status<>'pending' OR bridge_approvals.expires_at<?`).bind(crypto.randomUUID(), account, id, backend.public_key, backend.signing_public_key, now + 600_000, now).run();
       const entry = (await approvals(env, account)).find((r) => r.backendId === id)!;
       await control.approval(account, entry); return json(entry, 201);
     }
     if (path === "/v1/keys/wraps" && request.method === "POST") {
       requireApproved(); const body = await jsonInput(request); validateBridgeDeviceWrap(body.wrap);
       const target = identifier(body.backendId), publicKey = textField(body.publicKey, "public key"); bridgeBytes(publicKey, 32);
-      const code = await bridgeApprovalCode(publicKey);
+      const signingPublicKey = textField(body.signingPublicKey, "signing public key"); bridgeBytes(signingPublicKey, 32);
+      const code = await bridgeApprovalCode({ accountId: account, backendId: target, publicKey, signingPublicKey });
       if (body.code !== code) throw new HttpError(400, "The approval codes do not match");
       const requestId = textField(body.requestId, "request id");
       const result = await db.batch([
         db.prepare(`INSERT OR IGNORE INTO bridge_key_wraps(account_id,backend_id,wrap) SELECT b.account_id,b.backend_id,? FROM bridge_backends b
           JOIN bridge_approvals a ON a.account_id=b.account_id AND a.backend_id=b.backend_id
-          WHERE b.account_id=? AND b.backend_id=? AND b.public_key=? AND b.status='pending' AND a.request_id=? AND a.public_key=b.public_key
+          WHERE b.account_id=? AND b.backend_id=? AND b.public_key=? AND b.signing_public_key=? AND b.status='pending'
+          AND a.request_id=? AND a.public_key=b.public_key AND a.signing_public_key=b.signing_public_key
           AND a.status='pending' AND a.expires_at>? AND ${approvedSql}`)
-          .bind(JSON.stringify(body.wrap), account, target, publicKey, requestId, Date.now(), ...approvalArgs(backend)),
-        db.prepare(`UPDATE bridge_backends SET status='approved' WHERE account_id=? AND backend_id=? AND public_key=? AND status='pending'
-          AND EXISTS(SELECT 1 FROM bridge_key_wraps WHERE account_id=? AND backend_id=?)`).bind(account, target, publicKey, account, target),
+          .bind(JSON.stringify(body.wrap), account, target, publicKey, signingPublicKey, requestId, Date.now(), ...approvalArgs(backend)),
+        db.prepare(`UPDATE bridge_backends SET status='approved' WHERE account_id=? AND backend_id=? AND public_key=? AND signing_public_key=? AND status='pending'
+          AND EXISTS(SELECT 1 FROM bridge_key_wraps WHERE account_id=? AND backend_id=?)`).bind(account, target, publicKey, signingPublicKey, account, target),
         db.prepare("UPDATE bridge_approvals SET status='approved' WHERE account_id=? AND backend_id=? AND request_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='approved')")
           .bind(account, target, requestId, account, target),
+        rememberWriter(db, account, target),
       ]);
       if (!result[0].meta.changes) throw new HttpError(409, "Approval expired, changed or was already completed");
       return json({ ok: true });
@@ -199,7 +216,8 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
       if (!keys) throw new HttpError(404, "Account keys unavailable");
       const verifyKey = await crypto.subtle.importKey("raw", bridgeBytes(keys.recovery_public_key, 32), "Ed25519", false, ["verify"]);
       if (!await crypto.subtle.verify("Ed25519", verifyKey, bridgeBytes(body.signature, 64),
-        bridgeRecoveryMessage(account, id, backend.public_key, body.challenge as string, body.wrap as BridgeSealedAccountKey))) throw new HttpError(403, "Recovery proof is invalid");
+        bridgeRecoveryMessage({ accountId: account, backendId: id, publicKey: backend.public_key, signingPublicKey: backend.signing_public_key },
+          body.challenge as string, body.wrap as BridgeSealedAccountKey))) throw new HttpError(403, "Recovery proof is invalid");
       const result = await db.batch([
         db.prepare(`INSERT OR IGNORE INTO bridge_key_wraps(account_id,backend_id,wrap) SELECT account_id,backend_id,? FROM bridge_backends
           WHERE account_id=? AND backend_id=? AND token_hash=? AND status='pending' AND recovery_challenge=? AND challenge_expires_at>?`)
@@ -208,6 +226,7 @@ export async function handleDevices(request: Request, env: AuthEnv, control: Ide
           AND EXISTS(SELECT 1 FROM bridge_key_wraps WHERE account_id=? AND backend_id=?)`).bind(account, id, backend.token_hash, account, id),
         db.prepare("UPDATE bridge_approvals SET status='approved' WHERE account_id=? AND backend_id=? AND EXISTS(SELECT 1 FROM bridge_backends WHERE account_id=? AND backend_id=? AND status='approved')")
           .bind(account, id, account, id),
+        rememberWriter(db, account, id),
       ]);
       if (!result[0].meta.changes) throw new HttpError(409, "Recovery challenge was already used"); return json({ ok: true });
     }

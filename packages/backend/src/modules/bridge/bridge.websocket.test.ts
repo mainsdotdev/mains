@@ -86,8 +86,9 @@ describe("Bridge WebSocket failure handling", () => {
   });
   it("delivers a 60-bit approval during a pending pull without dropping or reconnecting the replication socket", async () => {
     const publicKey = bridgeBase64(new Uint8Array(32).fill(7));
-    const approval = { type: "approval", requestId: "request-B", backendId: "B", publicKey, label: "New device", platform: "darwin",
-      code: await bridgeApprovalCode(publicKey), expiresAt: new Date(Date.now() + 600000).toISOString() };
+    const signingPublicKey = bridgeBase64(new Uint8Array(32).fill(8));
+    const approval = { type: "approval", requestId: "request-B", backendId: "B", publicKey, signingPublicKey, label: "New device", platform: "darwin",
+      code: await bridgeApprovalCode({ accountId: "account", backendId: "B", publicKey, signingPublicKey }), expiresAt: new Date(Date.now() + 600000).toISOString() };
     const approvals: BridgeApprovalRequest[] = [], statuses: string[] = [];
     let connections = 0, requests = 0;
     const url = await server((socket) => {

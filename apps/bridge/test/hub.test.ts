@@ -1,3 +1,4 @@
+import { signFixture } from "./record-signing.mjs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import WebSocket from "ws";
@@ -34,6 +35,7 @@ async function connect(account: string, backend = "A") {
   return {
     socket,
     rpc(message: BridgeClientMessage): Promise<BridgeServerMessage> {
+      if (message.type === "push") for (const record of message.records) signFixture(record, account);
       const requestId = randomUUID();
       return new Promise((resolve, reject) => { pending.set(requestId, { resolve, reject }); socket.send(JSON.stringify({ requestId, message })); });
     },
@@ -63,7 +65,8 @@ describe("Cloudflare SQLite Bridge hub", () => {
     expect((await log(client, stream)).records.map((row) => row.envelope)).toEqual([history, tombstone]);
     expect((await log(client, stream, 3)).next).toBe(3);
     expect(await hub.quotaSql(account, "SELECT count(*) n FROM latest")).toMatchObject([{ n: 2 }]);
-    // Expiry is not a permanent delete: the same owner can publish the same HLC.
+    // Replaying a captured publication never restores expired content. The owner must publish a new signed id.
+    delete mirror.auth;
     expect(await client.rpc({ type: "push", stream, records: [mirror] })).toMatchObject({ results: [{ seq: 4 }] });
     expect((await log(client, stream, 3)).records).toEqual([{ seq: 4, envelope: mirror }]);
     const invalid = structuredClone(root); invalid.header.retention = "30d-idle";
@@ -80,7 +83,7 @@ describe("Cloudflare SQLite Bridge hub", () => {
     const account = randomUUID(), client = await connect(account);
     const content = record("item", 5, "upsert", "content"), metadata = record("item", 6, "upsert", "metadata"), newer = record("item", 7, "upsert", "content");
     await client.rpc({ type: "push", stream: "account", records: [content, metadata, newer] });
-    const olderAck = await client.rpc({ type: "push", stream: "account", records: [content] }); expect(olderAck).toMatchObject({ type: "ack", results: [{ seq: 3 }] });
+    const olderAck = await client.rpc({ type: "push", stream: "account", records: [content] }); expect(olderAck).toMatchObject({ type: "ack", results: [{ seq: 1 }] });
     await client.rpc({ type: "compact" });
     expect((await log(client)).records.map((r) => r.envelope)).toEqual([metadata, newer]);
     const tombstone = record("item", 1, "delete"); await client.rpc({ type: "push", stream: "account", records: [tombstone] }); await client.rpc({ type: "compact" });

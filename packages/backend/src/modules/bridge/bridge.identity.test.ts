@@ -7,7 +7,7 @@ import { bridgeApprovalCode, bridgeBase64, formatBridgeVerificationCode, type Br
 import { createNodeBackendRuntime } from "../../runtime/node-backend-runtime";
 import { createBridgeIdentity, type BridgeIdentityClient } from "./bridge.identity";
 import { createBridgeIdentityStorage, type BridgeSavedIdentity } from "./bridge.identity-storage";
-import { generateBridgeAccountKey, generateBridgeDeviceKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
+import { generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
 import { bridgeRecoveryPublicKey, sealBridgeRecovery } from "./bridge.recovery";
 
 const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -16,13 +16,59 @@ function fingerprint(bytes: Uint8Array) {
   const n = BigInt(`0x${Buffer.from(bytes).subarray(0, 8).toString("hex")}`) >> 4n;
   return Array.from({ length: 12 }, (_, i) => alphabet[Number(n >> BigInt(55 - 5 * i) & 31n)]).join("").match(/.{4}/g)!.join("-");
 }
-const deviceCode = (publicKey: string) => fingerprint(createHash("sha256").update(JSON.stringify([2, "mains.bridge.v2/device-approval", publicKey])).digest());
+const approvalSigningKey = bridgeBase64(new Uint8Array(32).fill(17));
+const deviceCode = (publicKey: string, signingPublicKey = approvalSigningKey, backendId = "new-device", accountId = "synthetic-account") =>
+  fingerprint(createHash("sha256").update(JSON.stringify([3, "mains.bridge.v3/device-approval", accountId, backendId, publicKey, signingPublicKey])).digest());
 const accountCode = (key: Uint8Array) => fingerprint(new Uint8Array(hkdfSync("sha256", key, "mains.bridge.v2", "account-verification", 32)));
 const dirs: string[] = [], clients: BridgeIdentityClient[] = [];
 afterEach(async () => {
   for (const client of clients.splice(0)) await client.stop();
   vi.unstubAllGlobals(); vi.useRealTimers(); vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+});
+
+describe("Bridge registration cleanup", () => {
+  it.each(["backendId", "publicKey", "signingPublicKey", "storage"])("revokes the requested pending device after a %s enrollment failure and permits retry", async (field) => {
+    const dir = await mkdtemp(join(tmpdir(), "mains-registration-")); dirs.push(dir);
+    const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
+    const issued = `b7_${"4".repeat(64)}`, ready = vi.fn();
+    let pending: Record<string, string> | null = null, substitute = true;
+    const encrypt = storage.encryptString.bind(storage);
+    vi.spyOn(storage, "encryptString").mockImplementation((value) => {
+      if (substitute && field === "storage" && JSON.parse(value).v === 2) throw new Error("Injected enrollment storage failure");
+      return encrypt(value);
+    });
+    const removed: { id: string; token: string | null }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: URL, options: RequestInit) => {
+      const body = options.body ? JSON.parse(String(options.body)) : undefined;
+      if (url.pathname === "/api/auth/device/code") return Response.json({ device_code: "device", user_code: "code", verification_uri_complete: "https://hub.invalid/verify", expires_in: 600, interval: 5 });
+      if (url.pathname === "/api/auth/device/token") return Response.json({ access_token: "browser-session" });
+      if (url.pathname === "/api/auth/sign-out") return Response.json({ success: true });
+      if (url.pathname === "/v1/backends" && options.method === "POST") {
+        if (pending) return Response.json({ error: "Backend already registered" }, { status: 409 });
+        pending = body;
+        return Response.json({ accountId: "account", email: "owner@example.com", token: issued, expiresAt: Date.now() + 86400_000,
+          backend: { ...body, ...(substitute && field !== "storage" ? { [field]: field === "backendId" ? "other-device" : bridgeBase64(generateBridgeSigningKeyPair().publicKey) } : {}), status: "pending" } });
+      }
+      if (url.pathname.startsWith("/v1/backends/") && options.method === "DELETE") {
+        removed.push({ id: url.pathname, token: new Headers(options.headers).get("Authorization") });
+        pending = null; return Response.json({ success: true });
+      }
+      if (url.pathname === "/v1/keys/mine") return Response.json({ accountId: "account", initialized: true, backend: { ...pending, status: "pending" },
+        wrap: null, recoveryPublicKey: null, approval: { status: "pending", expires_at: Date.now() + 600_000 } });
+      throw new Error(`Unexpected registration request ${url.pathname}`);
+    }));
+    const client = createBridgeIdentity({ backendId: "local", dataDir: dir, storage, kind: "node", openExternal: vi.fn(), ready, changed: vi.fn(), approval: vi.fn(), revoked: vi.fn() });
+    clients.push(client);
+    const input = { hubUrl: "https://hub.invalid", flow: "device" as const, includeExisting: true };
+    await client.signIn(input); await client.refresh();
+    expect(client.status().error).toMatch(field === "storage" ? /enrollment storage failure/ : /device keys changed/);
+    expect(removed).toEqual([{ id: "/v1/backends/local", token: `Bearer ${issued}` }]);
+    expect(await createBridgeIdentityStorage(dir, storage).read()).toBeNull(); expect(ready).not.toHaveBeenCalled();
+    substitute = false;
+    await client.signIn(input); await client.refresh();
+    expect(client.status()).toMatchObject({ state: "needs-approval", error: null });
+  });
 });
 
 describe("Bridge identity background cadence", () => {
@@ -174,14 +220,15 @@ describe("Bridge identity background cadence", () => {
 async function fixture(accountKey: Uint8Array | null = null) {
   const dir = await mkdtemp(join(tmpdir(), "mains-approval-security-")); dirs.push(dir);
   const storage = createNodeBackendRuntime({ dataDir: dir, appVersion: "test" }).secretStorage;
-  const vault = createBridgeIdentityStorage(dir, storage), pair = generateBridgeDeviceKeyPair(), publicKey = bridgeBase64(pair.publicKey);
-  const saved: BridgeSavedIdentity = { v: 1, backendId: "local", hubUrl: "https://hub.invalid", label: "Local", accountId: "synthetic-account", email: "test@example.invalid",
+  const vault = createBridgeIdentityStorage(dir, storage), pair = generateBridgeDeviceKeyPair(), signing = generateBridgeSigningKeyPair(), publicKey = bridgeBase64(pair.publicKey);
+  const saved: BridgeSavedIdentity = { v: 2, backendId: "local", hubUrl: "https://hub.invalid", label: "Local", accountId: "synthetic-account", email: "test@example.invalid",
+    signingPublicKey: bridgeBase64(signing.publicKey), signingPrivateKey: bridgeBase64(signing.secretKey),
     publicKey, privateKey: bridgeBase64(pair.secretKey), token: "b7_synthetic_fixture", expiresAt: Date.now() + 90 * 86400_000,
     accountKey: accountKey ? bridgeBase64(accountKey) : null, includeExisting: true, activationPending: !accountKey };
   await vault.write(saved);
   const state = {
     mine: { accountId: saved.accountId, initialized: true, tokenRenewal: "client-hash-v1" as string | undefined,
-      backend: { backendId: saved.backendId, publicKey, label: "Local", platform: "test", status: accountKey ? "approved" : "pending" },
+      backend: { backendId: saved.backendId, publicKey, signingPublicKey: saved.signingPublicKey, label: "Local", platform: "test", status: accountKey ? "approved" : "pending" },
       wrap: accountKey ? sealBridgeAccountKey(accountKey, pair.publicKey) : null, recoveryPublicKey: accountKey ? bridgeRecoveryPublicKey(accountKey) : null,
       approval: { status: "pending", expires_at: Date.now() + 600_000 } },
     approvals: [] as BridgeApprovalRequest[],
@@ -236,7 +283,7 @@ async function fixture(accountKey: Uint8Array | null = null) {
   return { state, client, makeClient, ready, activatedKeys, vault, saved, pair, offer, dir, storage };
 }
 function approval(publicKey: string, code = deviceCode(publicKey)): BridgeApprovalRequest {
-  return { requestId: "request", backendId: "new-device", publicKey, code, label: "New device", platform: "test", expiresAt: new Date(Date.now() + 600_000).toISOString() };
+  return { requestId: "request", backendId: "new-device", publicKey, signingPublicKey: approvalSigningKey, code, label: "New device", platform: "test", expiresAt: new Date(Date.now() + 600_000).toISOString() };
 }
 
 describe("Bridge approval with an untrusted hub", () => {
@@ -252,8 +299,25 @@ describe("Bridge approval with an untrusted hub", () => {
   });
   it("uses a domain-separated 60-bit device code instead of the legacy six characters", async () => {
     const publicKey = bridgeBase64(new Uint8Array(32).fill(42));
-    expect(await bridgeApprovalCode(publicKey)).toBe(deviceCode(publicKey));
-    expect(await bridgeApprovalCode(publicKey)).toMatch(/^(?:[A-HJ-NP-Z2-9]{4}-){2}[A-HJ-NP-Z2-9]{4}$/);
+    const identity = { accountId: "synthetic-account", backendId: "new-device", publicKey, signingPublicKey: approvalSigningKey };
+    expect(await bridgeApprovalCode(identity)).toBe(deviceCode(publicKey));
+    expect(await bridgeApprovalCode(identity)).toMatch(/^(?:[A-HJ-NP-Z2-9]{4}-){2}[A-HJ-NP-Z2-9]{4}$/);
+  });
+  it("rejects a substituted signing key even when its encryption key stays unchanged", async () => {
+    const f = await fixture(generateBridgeAccountKey()), request = approval(bridgeBase64(generateBridgeDeviceKeyPair().publicKey));
+    f.state.approvals = [request]; await f.client.refresh();
+    const signingPublicKey = bridgeBase64(generateBridgeSigningKeyPair().publicKey);
+    await expect(f.client.approve({ ...request, signingPublicKey })).rejects.toThrow(/codes do not match/i);
+    await expect(f.client.approve({ ...request, signingPublicKey, code: deviceCode(request.publicKey, signingPublicKey) })).rejects.toThrow(/changed/i);
+    expect(f.state.calls.some((call) => call.path === "/v1/keys/wraps")).toBe(false);
+  });
+  it("pins its own signing key against a substituted hub identity", async () => {
+    const f = await fixture(generateBridgeAccountKey());
+    f.state.mine.backend.signingPublicKey = bridgeBase64(generateBridgeSigningKeyPair().publicKey);
+    await f.client.refresh();
+    expect(f.client.status().error).toMatch(/identity changed/i);
+    expect((await f.vault.read())!.signingPublicKey).toBe(f.saved.signingPublicKey);
+    expect(JSON.stringify(f.client.status())).not.toContain(f.saved.signingPrivateKey);
   });
   it("derives displayed codes locally and rejects the real device's code paired with an attacker's key before sealing", async () => {
     const f = await fixture(generateBridgeAccountKey()), honest = generateBridgeDeviceKeyPair(), attacker = generateBridgeDeviceKeyPair();

@@ -24,7 +24,7 @@ async function node(hub: Hub, id: string, extra: Partial<BridgeEngineOptions> = 
   sqlite.exec(`INSERT INTO accounts(id) VALUES('default'); INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default','${id}');
     INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude');`);
   const transport = extra.transport ?? hub.connect(id);
-  const engine = createBridgeEngine({ sqlite, backendId: id, recordKey: key, codec: bridgeTestCodec, transport, experimentalAtlas: true, ...extra });
+  const engine = createBridgeEngine({ sqlite, backendId: id, recordKey: key, transport, experimentalAtlas: true, ...extra, codec: hub.codec(id, extra.codec ?? bridgeTestCodec) });
   await engine.bootstrap();
   return { sqlite, engine, id, hub, transport };
 }
@@ -147,10 +147,10 @@ describe("Bridge transfer between independent SQLite databases", () => {
       try { const body = bodyOf(record.envelope); return body.table === "spaces" && body.pk === id; } catch { return false; }
     })!;
     space(a, "before"); await drain(a);
-    // A leaked device token alone can publish a well-formed record that no device can open.
+    // A signed writer can still author invalid AEAD content; receivers must reject it.
     const forged = structuredClone((await spaceRecord("before")).envelope);
     forged.header.rowKey = "x".repeat(22); forged.header.registerKey = "y".repeat(22);
-    expect(await hub.connect("A").push("account", [forged])).toEqual([{ seq: expect.any(Number) }]);
+    expect(await hub.connect("A").push("account", [hub.sign(forged)])).toMatchObject([{ seq: expect.any(Number) }]);
     space(a, "after"); await drain(a);
     await b.engine.pull();
     expect([row(b, "spaces", "before")?.name, row(b, "spaces", "after")?.name]).toEqual(["before", "after"]);
@@ -165,7 +165,7 @@ describe("Bridge transfer between independent SQLite databases", () => {
     b.sqlite.prepare("UPDATE bridge_cursors SET seq=? WHERE stream='account'").run(later.seq);
     b.sqlite.exec("UPDATE bridge_clock SET physical_ms=0,counter=0 WHERE id=1");
     await b.engine.stop();
-    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: b.transport, experimentalAtlas: true });
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: b.transport, experimentalAtlas: true });
     cleanups.push(() => void restarted.stop());
     await restarted.pull();
     expect(row(b, "spaces", "later")?.name).toBe("later");
@@ -180,7 +180,7 @@ describe("Bridge transfer between independent SQLite databases", () => {
     const forge = (counter: number, bytes: number) => {
       const forged = structuredClone(genuine);
       forged.header.rowKey = "x".repeat(22); forged.header.registerKey = "y".repeat(22); forged.header.hlc = { ...forged.header.hlc, counter };
-      forged.body.payload = randomBytes(bytes).toString("base64url"); return forged;
+      forged.body.payload = randomBytes(bytes).toString("base64url"); return hub.sign(forged);
     };
     const kept = () => b.sqlite.prepare("SELECT seq,length(envelope) AS chars FROM bridge_parked WHERE reason='unverified' AND stream='account' ORDER BY seq").all() as { seq: number; chars: number }[];
     await hub.connect("A").push("account", [forge(1, 64 * 1024)]); await b.engine.pull();
@@ -189,7 +189,7 @@ describe("Bridge transfer between independent SQLite databases", () => {
     await hub.connect("A").push("account", [forge(2, 64)]); await hub.compact(); await b.engine.pull();
     expect(kept()).toHaveLength(2);
     await b.engine.stop();
-    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: b.transport, experimentalAtlas: true });
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: b.transport, experimentalAtlas: true });
     cleanups.push(() => void restarted.stop());
     await restarted.pull();
     expect(kept().map((entry) => entry.seq)).toEqual([large.seq + 1]);
@@ -212,7 +212,7 @@ describe("Bridge transfer between independent SQLite databases", () => {
     b.sqlite.prepare("INSERT INTO bridge_parked(stream,seq,envelope,reason) VALUES('account',?,?,'unverified')").run(record.seq, JSON.stringify(damaged));
     b.sqlite.prepare("UPDATE bridge_cursors SET seq=? WHERE stream='account'").run(record.seq);
     await b.engine.stop(); offline = true;
-    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport, experimentalAtlas: true });
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport, experimentalAtlas: true });
     cleanups.push(() => void restarted.stop());
     await expect(restarted.pull()).rejects.toThrow(/connection/);
     offline = false; await restarted.pull();
@@ -231,25 +231,25 @@ describe("Bridge transfer between independent SQLite databases", () => {
     expect(row(b, "collections", "refused")).toBeUndefined(); expect(row(b, "collections", "after")?.name).toBe("after");
     expect(b.engine.unverified()).toBe(1); expect(b.sqlite.prepare("SELECT applying FROM bridge_state").get()).toEqual({ applying: 0 });
     refuse = false; await b.engine.stop();
-    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: { ...bridgeTestCodec, open }, transport: b.transport, experimentalAtlas: true });
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B", { ...bridgeTestCodec, open }), transport: b.transport, experimentalAtlas: true });
     cleanups.push(() => void restarted.stop());
     await restarted.pull();
     expect(row(b, "collections", "refused")?.name).toBe("refused"); expect(restarted.unverified()).toBe(0);
   });
-  it("keeps publishing a stream after the hub answers one write with a deletion no device can verify", async () => {
+  it("retains an unverifiable deletion refusal while publishing unrelated writes", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
     collection(a, "c"); await settle(a, b);
     const upsert = (await hub.inspect("account")).find((record) => {
       try { const body = bodyOf(record.envelope); return body.table === "collections" && body.pk === "c"; } catch { return false; }
     })!.envelope;
-    // A leaked device token alone can make the hub tombstone a row and return that tombstone to every later write.
+    // A signed writer can author invalid ciphertext; it cannot authorize local data loss.
     const { registerKey: _registerKey, blobs: _blobs, ...header } = upsert.header;
     const forged = { header: { ...header, op: "delete" }, body: upsert.body } as BridgeEnvelope;
-    expect(await hub.connect("A").push("account", [forged])).toEqual([{ seq: expect.any(Number) }]);
+    expect(await hub.connect("A").push("account", [hub.sign(forged)])).toMatchObject([{ seq: expect.any(Number) }]);
     await b.engine.pull(); expect(b.engine.unverified()).toBe(1);
     b.sqlite.exec("UPDATE collections SET name='edited' WHERE id='c'"); collection(b, "next");
-    await drain(b);
-    expect(row(b, "collections", "c")?.name).toBe("edited"); expect(b.engine.pending()).toEqual([]);
+    await expect(b.engine.push()).rejects.toThrow(/invalid deletion/);
+    expect(row(b, "collections", "c")?.name).toBe("edited"); expect(b.engine.pending().map((entry) => entry.pk)).toEqual(["c"]);
     await a.engine.pull();
     expect(row(a, "collections", "next")).toBeTruthy(); expect(row(a, "collections", "c")?.name).toBe("c");
   });
@@ -381,7 +381,7 @@ describe("Bridge transfer between independent SQLite databases", () => {
     run(a, "r"); item(a, "keep", "r"); item(a, "change", "r"); await drain(a);
     const hub = await createBridgeTestHub(), b = await node(hub, "B"); await drain(b);
     const envelopes = (await staging.inspect("account")).map((record) => record.envelope);
-    const send = async (predicate: (body: any) => boolean) => hub.connect("A").push("account", envelopes.filter((envelope) => predicate(bodyOf(envelope))));
+    const send = async (predicate: (body: any) => boolean) => hub.connect("A").push("account", envelopes.filter((envelope) => predicate(bodyOf(envelope))).map(hub.sign));
     await send((body) => body.table !== "runs"); await b.engine.pull();
     expect(row(b, "atlas_items", "keep")?.source_run_id).toBeNull();
     expect(b.sqlite.prepare("SELECT count(*) AS n FROM bridge_pending_links").get()).toEqual({ n: 2 });
@@ -483,7 +483,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     expect(open.mock.calls.length).toBe(0);
     await b.engine.retryParked(); expect(open).toHaveBeenCalled(); open.mockClear();
     await b.engine.stop();
-    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: { ...bridgeTestCodec, open }, transport: hub.connect("B"), schemaVersion: 5 });
+    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B", { ...bridgeTestCodec, open }), transport: hub.connect("B"), schemaVersion: 5 });
     await b.engine.pull();
     expect(row(b, "spaces", "future")).toBeTruthy(); expect(open).toHaveBeenCalled();
   });
@@ -492,7 +492,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     const staging = await createBridgeTestHub(), a = await node(staging, "A"); space(a, "s"); run(a, "r", null, "s"); await drain(a);
     const hub = await createBridgeTestHub(), b = await node(hub, "B"); await drain(b);
     b.sqlite.exec("DELETE FROM providers");
-    await hub.connect("A").push("account", (await staging.inspect("account")).map((record) => record.envelope));
+    await hub.connect("A").push("account", (await staging.inspect("account")).map((record) => hub.sign(record.envelope)));
     await b.engine.pull(); expect(row(b, "runs", "r")).toBeUndefined();
     b.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
     await b.engine.pull(); expect(row(b, "runs", "r")).toBeTruthy();
@@ -504,9 +504,9 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     const hub = await createBridgeTestHub(), b = await node(hub, "B"); await drain(b);
     const records = (await staging.inspect("account")).map((record) => record.envelope).filter((envelope) => bodyOf(envelope).table === "atlas_items");
     records.sort((left) => (bodyOf(left) as BridgeUpsertBody).register === "metadata" ? (secondaryFirst ? -1 : 1) : (secondaryFirst ? 1 : -1));
-    await hub.connect("A").push("account", [records[0]]); await b.engine.pull();
+    await hub.connect("A").push("account", [hub.sign(records[0])]); await b.engine.pull();
     if (secondaryFirst) expect(b.sqlite.prepare("SELECT reason FROM bridge_parked").get()).toEqual({ reason: "primary" });
-    await hub.connect("A").push("account", [records[1]]); await b.engine.pull();
+    await hub.connect("A").push("account", [hub.sign(records[1])]); await b.engine.pull();
     expect(row(b, "atlas_items", "i")).toMatchObject({ title: "i", is_favorite: 1 });
     expect(b.sqlite.prepare("SELECT count(*) AS n FROM bridge_parked").get()).toEqual({ n: 0 }); expect(b.engine.pending()).toEqual([]);
   });
@@ -517,12 +517,12 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     space(a, "s"); run(a, "r", "w", "s"); a.sqlite.exec("INSERT INTO run_turns(run_id,turn_index) VALUES('r',0)"); await drain(a);
     const hub = await createBridgeTestHub(), b = await node(hub, "B"); await drain(b); b.sqlite.exec("DELETE FROM providers");
     const envelopes = (await staging.inspect("account")).map((record) => record.envelope);
-    await hub.connect("A").push("account", envelopes.filter((e) => bodyOf(e).table === "runs"));
-    await hub.connect("A").push("run:r", (await staging.inspect("run:r")).map((r) => r.envelope));
+    await hub.connect("A").push("account", envelopes.filter((e) => bodyOf(e).table === "runs").map(hub.sign));
+    await hub.connect("A").push("run:r", (await staging.inspect("run:r")).map((r) => hub.sign(r.envelope)));
     await b.engine.pull(); await b.engine.pull("run:r"); expect(row(b, "runs", "r")).toBeUndefined();
     await b.engine.stop();
-    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("B"), experimentalAtlas: true });
-    await hub.connect("A").push("account", envelopes.filter((e) => bodyOf(e).table !== "runs")); await b.engine.pull();
+    b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: hub.connect("B"), experimentalAtlas: true });
+    await hub.connect("A").push("account", envelopes.filter((e) => bodyOf(e).table !== "runs").map(hub.sign)); await b.engine.pull();
     expect(row(b, "workspaces", "w")).toBeTruthy(); expect(row(b, "runs", "r")).toBeUndefined();
     b.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')"); await b.engine.retryParked();
     expect(row(b, "runs", "r")).toMatchObject({ workspace_id: "w", space_id: "s" }); expect(rows(b, "run_turns")).toHaveLength(1);
@@ -533,7 +533,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A", { schemaVersion: 5 }), b = await node(hub, "B");
     space(a, "new-schema"); await drain(a); await b.engine.pull();
     expect(row(b, "spaces", "new-schema")).toBeUndefined(); expect(b.sqlite.prepare("SELECT reason FROM bridge_parked WHERE reason='schema'").get()).toBeTruthy();
-    await b.engine.stop(); b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("B"), schemaVersion: 5, experimentalAtlas: true });
+    await b.engine.stop(); b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: hub.connect("B"), schemaVersion: 5, experimentalAtlas: true });
     await b.engine.retryParked(); expect(row(b, "spaces", "new-schema")).toBeTruthy(); expect(b.sqlite.prepare("SELECT * FROM bridge_parked").all()).toEqual([]);
   });
 
@@ -552,7 +552,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     for (const index of order) {
       const n = await node(await createBridgeTestHub(), `N${index}`); space(n, `s${index}`, "Same name"); await drain(n);
       const record = (await n.hub.inspect("account")).find((entry) => bodyOf(entry.envelope).table === "spaces")!;
-      await hub.connect(n.id).push("account", [record.envelope]); await target.engine.pull();
+      await hub.connect(n.id).push("account", [hub.sign(record.envelope)]); await target.engine.pull();
     }
     expect(rows(target, "spaces").map((s) => [s.id, s.name, s.slug])).toEqual([0,1,2].map((i) => [`s${i}`, "Same name", "Same name"]));
   });
@@ -566,7 +566,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
       source(n, ["c-src", "b-src", "a-src"][index], "c"); await drain(n);
       records.push((await n.hub.inspect("account")).find((entry) => bodyOf(entry.envelope).table === "collection_sources")!.envelope);
     }
-    for (const index of order) { await hub.connect(`N${index}`).push("account", [records[index]]); await target.engine.pull(); }
+    for (const index of order) { await hub.connect(`N${index}`).push("account", [hub.sign(records[index])]); await target.engine.pull(); }
     expect(rows(target, "collection_sources").map((s) => [s.id, s.name])).toEqual([["a-src", "a-src"]]);
     expect(target.sqlite.prepare("SELECT alias_pk,canonical_pk FROM bridge_aliases ORDER BY alias_pk").all()).toEqual([{ alias_pk: "b-src", canonical_pk: "a-src" }, { alias_pk: "c-src", canonical_pk: "a-src" }]);
     expect(target.engine.pending()).toEqual([]);
@@ -581,7 +581,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     expect(rows(b, "atlas_items").map((r) => r.id)).toEqual(["b-id"]);
     expect(b.engine.pending().filter((entry) => entry.table_name === "atlas_items")).toMatchObject([{ pk: "b-id", register: "metadata" }]);
     await settle(b, a); expect(row(a, "atlas_items", "b-id")?.is_favorite).toBe(1);
-    await hub.connect("O").push("account", (await staging.inspect("account")).filter((r) => bodyOf(r.envelope).table === "atlas_items").map((r) => r.envelope));
+    await hub.connect("O").push("account", (await staging.inspect("account")).filter((r) => bodyOf(r.envelope).table === "atlas_items").map((r) => hub.sign(r.envelope)));
     await b.engine.pull(); expect(rows(b, "atlas_items").map((r) => r.id)).toEqual(["a-id"]);
     expect(row(b, "atlas_items", "a-id")?.is_favorite).toBe(1);
     b.sqlite.exec("DELETE FROM atlas_items WHERE id='a-id'");
@@ -596,7 +596,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     item(a, "a", null, "output", "bytes-one"); item(b, "b", null, "output", "bytes-two"); await drain(a); await drain(b);
     const hub = await createBridgeTestHub(), target = await node(hub, "T");
     const records = (await staging.inspect("account")).filter((r) => bodyOf(r.envelope).table === "atlas_items"); if (reverse) records.reverse();
-    for (const record of records) { await hub.connect(record.envelope.header.origin).push("account", [record.envelope]); await target.engine.pull(); }
+    for (const record of records) { await hub.connect(record.envelope.header.origin).push("account", [hub.sign(record.envelope)]); await target.engine.pull(); }
     expect(rows(target, "atlas_items").map((r) => [r.id, r.source_key, r.content_hash])).toEqual([["a", "output", "bytes-one"], ["b", null, "bytes-two"]]);
   });
 
@@ -605,12 +605,12 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     run(a, "r"); a.sqlite.exec("INSERT INTO run_turns(run_id,turn_index) VALUES('r',0)"); await settle(a, b);
     const turn = (await hub.inspect("run:r"))[0].envelope;
     const forged = structuredClone(turn); forged.header.origin = "B"; forged.header.owner = "B";
-    expect(await hub.connect("B").push("run:r", [forged])).toEqual([{ error: "notOwner" }]);
+    expect(await hub.connect("B").push("run:r", [hub.sign(forged)])).toEqual([{ error: "notOwner" }]);
     a.sqlite.exec("DELETE FROM runs WHERE id='r'"); await drain(a);
     const tombstone = (await hub.inspect("account")).find((r) => r.envelope.header.op === "delete")!;
     await hub.compact(); expect((await hub.inspect("run:r"))).toEqual([]); expect((await hub.inspect("account"))).toContainEqual(tombstone);
     await b.engine.pull(); expect(row(b, "runs", "r")).toBeUndefined(); expect(rows(b, "run_turns")).toEqual([]);
-    expect(await hub.connect("A").push("run:r", [turn])).toEqual([{ deleted: tombstone.envelope }]);
+    expect(await hub.connect("A").push("run:r", [turn])).toMatchObject([{ deleted: tombstone.envelope }]);
     const c = await node(hub, "C"); expect(row(c, "runs", "r")).toBeUndefined();
   });
 
@@ -621,7 +621,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     // The project's register key under a row key B could own, far ahead of A's clock.
     const forged = structuredClone(owned); forged.header.origin = "B"; forged.header.owner = "B"; forged.header.rowKey = "x".repeat(22);
     forged.header.hlc = { physicalMs: Number.MAX_SAFE_INTEGER, counter: 0 };
-    expect(await hub.connect("B").push("account", [forged])).toEqual([{ error: "notOwner" }]);
+    expect(await hub.connect("B").push("account", [hub.sign(forged)])).toEqual([{ error: "notOwner" }]);
     await hub.compact(); const c = await node(hub, "C"); await pullAll(c);
     expect(row(c, "projects", "p")).toMatchObject({ owner_backend_id: "A" }); expect(c.engine.unverified()).toBe(0);
   });
@@ -632,9 +632,9 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     expect(() => a.sqlite.exec("DELETE FROM accounts WHERE id='default'")).toThrow(/archived/);
     item(a, "not-yet-enabled"); expect(a.engine.pending().some((entry) => entry.table_name === "atlas_items")).toBe(false);
     await drain(a); await a.engine.stop();
-    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("A"), experimentalAtlas: true });
+    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: key, codec: hub.codec("A"), transport: hub.connect("A"), experimentalAtlas: true });
     item(a, "pending-atlas"); await a.engine.stop();
-    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("A"), experimentalAtlas: false });
+    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: key, codec: hub.codec("A"), transport: hub.connect("A"), experimentalAtlas: false });
     expect(await a.engine.push()).toBe(0);
     expect(a.engine.pending().filter((entry) => entry.pk === "pending-atlas")).toHaveLength(2);
     expect((await hub.inspect("account")).some((record) => bodyOf(record.envelope).table === "atlas_items")).toBe(false);
@@ -649,10 +649,10 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     // No connection-specific UDF registration was needed to execute the capture triggers.
     const firstGeneration = (db.prepare("SELECT generation FROM bridge_outbox WHERE pk='s'").get() as { generation: number }).generation;
     db.exec("UPDATE bridge_config SET backfill_done=0,backfill_table='spaces',backfill_pk=NULL");
-    const engine = createBridgeEngine({ sqlite: db, backendId: "A", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("A"), experimentalAtlas: true });
+    const engine = createBridgeEngine({ sqlite: db, backendId: "A", recordKey: key, codec: hub.codec("A"), transport: hub.connect("A"), experimentalAtlas: true });
     expect((await engine.backfill(1)).done).toBe(false);
     await engine.stop();
-    const restarted = createBridgeEngine({ sqlite: db, backendId: "A", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("A"), experimentalAtlas: true });
+    const restarted = createBridgeEngine({ sqlite: db, backendId: "A", recordKey: key, codec: hub.codec("A"), transport: hub.connect("A"), experimentalAtlas: true });
     while (!(await restarted.backfill(2)).done) { /* Resume after the durable cursor. */ }
     expect(restarted.pending().find((entry) => entry.pk === "s")?.generation).toBe(firstGeneration);
     await restarted.push(); const b = await node(hub, "B"); expect(row(b, "spaces", "s")?.name).toBe("while stopped");
@@ -665,7 +665,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
 describe("Bridge verification and interrupted transfers", () => {
   it.each(["different row", "upsert", "stripped body", "changed routing key"])("refuses a bogus deleted ACK (%s) without losing the local row, and takes the genuine tombstone from the log", async (variant) => {
     const hub = await createBridgeTestHub(), raw = hub.connect("B"); let forged: BridgeEnvelope | undefined;
-    const transport: BridgeTransport = { ...raw, async push(stream, records) { return forged ? records.map(() => ({ deleted: forged! })) : raw.push(stream, records); } };
+    const transport: BridgeTransport = { ...raw, async push(stream, records) { return forged ? records.map((envelope) => ({ deleted: forged!, publicationId: envelope.auth?.publicationId ?? "" })) : raw.push(stream, records); } };
     const a = await node(hub, "A"), b = await node(hub, "B", { transport }); collection(a, "c"); collection(a, "other"); await settle(a, b);
     const oldUpsert = (await hub.inspect("account")).find((r) => bodyOf(r.envelope).pk === "c")!.envelope;
     a.sqlite.exec("DELETE FROM collections WHERE id='c'; DELETE FROM collections WHERE id='other'"); await drain(a);
@@ -676,9 +676,8 @@ describe("Bridge verification and interrupted transfers", () => {
     if (variant === "stripped body") forged.body.payload = "{}";
     if (variant === "changed routing key") forged.header.rowKey = "tampered";
     b.sqlite.exec("UPDATE collections SET name='offline draft' WHERE id='c'");
-    // Every retry would receive the same answer, so the write leaves the outbox instead of blocking it.
-    await b.engine.push();
-    expect(row(b, "collections", "c")?.name).toBe("offline draft"); expect(b.engine.pending().some((entry) => entry.pk === "c")).toBe(false);
+    await expect(b.engine.push()).rejects.toThrow(/invalid deletion/);
+    expect(row(b, "collections", "c")?.name).toBe("offline draft"); expect(b.engine.pending().some((entry) => entry.pk === "c")).toBe(true);
     expect(b.sqlite.prepare("SELECT applying FROM bridge_state").get()).toEqual({ applying: 0 });
     forged = undefined; await b.engine.pull(); expect(row(b, "collections", "c")).toBeUndefined();
   });
@@ -691,7 +690,7 @@ describe("Bridge verification and interrupted transfers", () => {
     rejectDelete = true;
     await b.engine.pull(); expect(row(b, "collections", "c")).toBeTruthy(); expect(b.engine.unverified()).toBe(1);
     rejectDelete = false; await b.engine.stop();
-    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: { ...bridgeTestCodec, open }, transport: b.transport, experimentalAtlas: true });
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B", { ...bridgeTestCodec, open }), transport: b.transport, experimentalAtlas: true });
     cleanups.push(() => void restarted.stop());
     await restarted.pull(); expect(row(b, "collections", "c")).toBeUndefined(); expect(restarted.unverified()).toBe(0);
     expect(open.mock.calls.filter(([e]) => e.header.op === "delete").length).toBeGreaterThan(1);
@@ -732,7 +731,7 @@ describe("Bridge verification and interrupted transfers", () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"); space(a, "claude", "Custom Claude"); collection(a, "remote"); await drain(a);
     const fixture = createTestDb(); cleanups.push(fixture.cleanup); const sqlite = fixture.sqlite;
     sqlite.exec("INSERT INTO accounts(id) VALUES('default'); INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default','B'); INSERT INTO spaces(id,account_id,name,slug) VALUES('claude','default','Installation default','claude'); INSERT INTO collections(id,account_id,name) VALUES('local','default','Local collection')");
-    const engine = createBridgeEngine({ sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("B") }); await engine.bootstrap(1);
+    const engine = createBridgeEngine({ sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: hub.connect("B") }); await engine.bootstrap(1);
     expect(sqlite.prepare("SELECT name FROM spaces WHERE id='claude'").get()).toEqual({ name: "Custom Claude" });
     expect(engine.pending().map((entry) => [entry.table_name, entry.pk])).toEqual([["collections", "local"]]);
     await engine.push(); await a.engine.pull(); expect(row(a, "collections", "local")?.name).toBe("Local collection");
@@ -760,7 +759,7 @@ describe("Bridge scope and projection repair", () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B", { experimentalAtlas: false }); item(a, "i");
     item(b, "i"); await drain(a); a.sqlite.exec("DELETE FROM atlas_items WHERE id='i'"); await drain(a); await hub.compact();
     await b.engine.pull(); expect(row(b, "atlas_items", "i")).toBeTruthy(); expect(b.sqlite.prepare("SELECT reason FROM bridge_parked").get()).toEqual({ reason: "disabled" });
-    await b.engine.stop(); b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: hub.connect("B"), experimentalAtlas: true });
+    await b.engine.stop(); b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: hub.codec("B"), transport: hub.connect("B"), experimentalAtlas: true });
     await b.engine.retryParked(); expect(row(b, "atlas_items", "i")).toBeUndefined();
   });
 });

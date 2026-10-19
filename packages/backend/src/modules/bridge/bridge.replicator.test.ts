@@ -4,12 +4,13 @@ import { createTestDb } from "../../../test/setup-db";
 import { disposeBridgeTestHub, getLocalBridgeTestWorker, networkMode } from "../../../test/bridge-hub";
 import { createBridgeReplicator, type BridgeReplicatorOptions } from "./bridge.replicator";
 import { parseBridgeDevConfig } from "./bridge.config";
+import { fixtureSigningKey } from "../../../test/bridge-signing";
 import { toBase64Url } from "./bridge.encoding";
 import * as websocket from "./bridge.websocket";
 import * as engine from "./bridge.engine";
 
 const key = new Uint8Array(32).fill(51);
-const config = { version: 1, backendId: "A", url: "ws://127.0.0.1:8790/v1/log", token: "test-token", accountKey: toBase64Url(key), label: "MacBook" };
+const config = { version: 1, accountId: "account", signingPrivateKey: toBase64Url(fixtureSigningKey("account", "A")), backendId: "A", url: "ws://127.0.0.1:8790/v1/log", token: "test-token", accountKey: toBase64Url(key), label: "MacBook" };
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   try { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); }
@@ -22,7 +23,7 @@ async function node(account: string, backendId: string, extra: Partial<BridgeRep
   fixture.sqlite.prepare("INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default',?)").run(backendId);
   fixture.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
   const options: BridgeReplicatorOptions = { sqlite: fixture.sqlite, backendId, autoStart: false, config: {
-    url: hub.wsUrl, token: await hub.token(account, backendId), accountKey: key, backendId, label: `Computer ${backendId}`,
+    url: hub.wsUrl, token: await hub.token(account, backendId), accountKey: key, backendId, label: `Computer ${backendId}`, accountId: account, signingPrivateKey: fixtureSigningKey(account, backendId),
   }, ...extra };
   const replicator = createBridgeReplicator(options); cleanups.push(() => replicator.stop());
   return { sqlite: fixture.sqlite, replicator, options };
@@ -69,6 +70,7 @@ describe("Bridge development configuration", () => {
   it("requires an explicit complete config, keeps dev keys private, and permits disabling it", () => {
     expect(parseBridgeDevConfig(config)).toMatchObject({ backendId: "A", label: "MacBook", accountKey: key });
     expect(parseBridgeDevConfig({ enabled: false })).toBeNull();
+    expect(parseBridgeDevConfig({ ...config, localSigningPublicKeys: ["untrusted"] })).not.toHaveProperty("localSigningPublicKeys");
   });
   it.each([{ url: "ws://example.com/v1/log" }, { url: "wss://example.com/v1/log?token=x" }, { accountKey: "secret-marker" }, { backendId: "../A" }, { label: " " }, { token: "" }])("rejects unsafe or malformed configuration without echoing credentials (%j)", (change) => {
     expect(() => parseBridgeDevConfig({ ...config, ...change })).toThrow();
@@ -77,6 +79,20 @@ describe("Bridge development configuration", () => {
 });
 
 describe.skipIf(!networkMode)("Bridge background replication for desktop/server viewers", () => {
+  it("reuses known writer keys for live change hints and refreshes for an unknown writer", async () => {
+    const f = await scheduledPair(), fetches = vi.spyOn(globalThis, "fetch");
+    const directoryCalls = () => fetches.mock.calls.filter(([url, options]) => new URL(String(url)).pathname === "/v1/keys/writers" &&
+      new Headers(options?.headers).get("Authorization") === `Bearer ${f.b.options.config.token}`);
+    for (let i = 0; i < 3; i++) {
+      f.a.sqlite.prepare("INSERT INTO run_artifacts(run_id,kind,content) VALUES('r','report',?)").run(`Live ${i}`);
+      await f.a.replicator.syncNow();
+      await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content=?").get(`Live ${i}`));
+    }
+    expect(directoryCalls()).toHaveLength(0);
+    const c = await node(f.a.options.config.accountId, "C"); run(c, "new-writer"); await c.replicator.syncNow();
+    await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM runs WHERE id='new-writer'").get());
+    expect(directoryCalls()).toHaveLength(1);
+  });
   it("publishes local writes without re-pulling watched streams or notifying its own socket", async () => {
     const f = await scheduledPair();
     run(f.a, "r2"); await f.a.replicator.syncNow();

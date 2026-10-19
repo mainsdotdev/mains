@@ -39,11 +39,23 @@ export type BridgeBody = BridgeUpsertBody | BridgeDeleteBody;
 export interface BridgeEnvelope {
   header: BridgeHeader;
   body: { nonce: string | null; payload: string };
+  /** Required on the network. Raw codecs/memory fixtures can represent an unsealed signature. */
+  auth?: BridgeRecordSignature;
 }
+export interface BridgeRecordSignature {
+  v: 1;
+  accountId: string;
+  /** Only epoch 1 is admitted until authenticated membership/key rotation ships. */
+  epoch: 1;
+  publicationId: string;
+  signingPublicKey: string;
+  signature: string;
+}
+export interface BridgeSignedEnvelope extends BridgeEnvelope { auth: BridgeRecordSignature }
 export interface BridgeLogRecord { seq: number; envelope: BridgeEnvelope }
 export type BridgePushResult =
-  | { seq: number }
-  | { deleted: BridgeEnvelope }
+  | { seq: number; publicationId: string }
+  | { deleted: BridgeEnvelope; publicationId: string }
   | { error: "notOwner" | "quotaExceeded" | "rateLimited" | "subscriptionRequired" | "blobMissing" }
   /** Carries the hub's time, so the device can re-stamp what was refused within the hub's bound. */
   | { error: "clockSkew"; hubMs: number };

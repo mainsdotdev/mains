@@ -164,6 +164,31 @@ _Avoid_: routing global search through the canonical-content `entities:search` e
 
 ### Bridge and Cloud
 
+Unreleased writer-authentication work is defined in
+`apps/bridge/AUTHENTICATED-WRITERS.md`. Its first stage adds an independent
+Ed25519 signing identity beside each backend's X25519 recipient identity. Both
+private keys are required in encrypted identity vault format 2 and verified on
+load. The 60-bit approval comparison and recovery recipient proof bind account,
+backend and both public keys; either key changing invalidates approval. No
+old-format identity fallback is supported. Stage 2 signs every network record and
+tombstone with the backend's independent key, binding account, fixed epoch 1,
+publication id, full routing header, nonce and ciphertext. A durable publication
+journal preserves the exact envelope across lost ACKs/restarts; ACKs bind that id,
+and invalid deleted ACKs preserve local writes. Hub batch verification precedes
+permanent state changes, and receiver verification precedes decryption/clock/SQL.
+Replay receipts survive compaction and expiry and count toward quota. A remote
+owner field cannot introduce a locally executable root without local provenance.
+Current and historical self-signing public keys are pinned in protected local
+storage, scoped to hub origin, account and backend, and retained through logout.
+Only locally held key pairs can extend this history; peer directory entries and
+development JSON never do. Re-enrollment with fresh keys therefore preserves
+verification of own account objects. Change hints reuse known peer keys and
+refresh the directory only for unknown peer signers; full pulls also refresh it.
+An invalid enrollment response or failed local enrollment save revokes the
+requested pending backend with its issued device credential.
+Peer key discovery still trusts the hub directory; authenticated membership,
+revocation checkpoints and account-content-key rotation remain release gates.
+
 **Bridge** is account replication between independent Mains backends. **Cloud** is the later hosted agent-execution product; Bridge itself never executes an agent. The shared `bridge` module owns the portable record registry, envelope codec and ownership guards. A **register** is a group of columns with one conflict clock; most rows have one, while Atlas separates content from metadata. Every table names a **primary register**, which carries the fields needed to create its row. An **owner backend** is the backend identified by a backend-owned root's `owner_backend_id`; a **replica** belongs to another backend and is read-only here. Account objects can be edited on every backend.
 
 B1 establishes ownership, the explicit schema registry and the pass-through development envelope. B2 adds explicitly activated SQL capture, durable per-register outbox/clock state, an applier, resumable pulls/backfill and a transport seam tested through a blind in-memory hub over independent databases. A delete is permanent; aliases retain their whole identity set so a local permanent delete covers every known alias. Both pull and verified `deleted` ACKs invoke the same synchronous recovery hook before cascading. B3 adds `apps/bridge`, a Cloudflare Worker with one SQLite Durable Object per account, a reconnectable WebSocket transport and XChaCha20-Poly1305 record sealing. HKDF separates body, opaque record-id and blob-id keys; the complete routing header is authenticated, and device wraps use ephemeral X25519. The real hub rejects plaintext, enforces authenticated writer ownership, compacts registers, retains whole permanent tombstones and reports presence through hibernating sockets. All B2 scenarios also run against this hub with E2EE. Dev JWTs bind account/backend; production sign-in and key ceremonies remain B7. B4 wires `bridgeService` into both host lifecycles. Explicit development config activates a serialized background replicator; absent config leaves capture off. Account roots precede run children, open replica transcripts lease run-stream subscriptions, and offline cursors/outbox retry independently of local execution. `bridge_peers` caches device labels and last-seen times; unavailable presence is unknown. The renderer groups replicas by their owner, reads cached paged history without resolving source filesystem paths, and mounts no composer/provider controller or terminal for them. Relay shows sync state next to existing remote-control connections. The backend-provided `isReplica` determines controls, never a UI connection alias: an iPad/browser attached to A retains control of A’s own runs, while B’s copies stay read-only. Browser clients keep using their chosen backend’s SQLite, without browser SQLite storage. Atlas transfer stays disabled until its B6 revision graph, apart from opt-in core register tests. Listings include replicas, while `ownedHere` predicates limit operational repo queries and `assertOwnedRecord`/`assertOwnedHere` reject mutations before git, filesystem, provider or scheduler effects. The same persisted backend identity is used for pairing and ownership. A seeded Space is identified by its fixed id, never by its editable slug; deleting one archives it, and seed v3 restores a missing legacy seeded id archived. Replica Space names may duplicate, but local creation and renaming validate the final name and slug inside the write transaction. See `docs/design/bridge.md` for the wire, deletion, alias and recovery rules.

@@ -11,6 +11,8 @@ import type { BridgeDevConfig } from "./bridge.config";
 import { createBridgeBlobs } from "./bridge.blobs";
 import { createBridgeBlobRecords, type BridgeFileTable } from "./bridge.blob-records";
 import { refreshClaudeSessionMirrors } from "./bridge.session-mirror";
+import { createBridgeSigningCodec } from "./bridge.signing";
+import { bridgeBytes } from "@mains/contracts/bridge-auth";
 
 export interface BridgeReplicatorOptions {
   onApproval?: (request: import("@mains/contracts/bridge-auth").BridgeApprovalRequest) => void;
@@ -113,8 +115,26 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   });
   const blobs = options.dataDir ? createBridgeBlobs({ dataDir: options.dataDir, accountKey: config.accountKey, url: config.url, token: options.token ?? config.token }) : undefined;
   const files = blobs ? createBridgeBlobRecords({ sqlite, backendId, dataDir: options.dataDir!, blobs }) : undefined;
+  const signedCodec = createBridgeSigningCodec(createBridgeSealingCodec(config.accountKey), config, (writer, key) =>
+    !!sqlite.prepare("SELECT 1 FROM bridge_writer_keys WHERE backend_id=? AND signing_public_key=?").get(writer, key));
+  async function refreshWriters() {
+    const token = options.token ? await options.token() : config.token;
+    const response = await fetch(new URL("/v1/keys/writers", config.url.replace(/^ws/, "http")), { headers: { Authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) throw new Error(`Bridge writer lookup failed (${response.status})`);
+    const entries: unknown = await response.json();
+    if (!Array.isArray(entries) || entries.length > 4096) throw new Error("Invalid Bridge writer directory");
+    for (const entry of entries) {
+      if (!entry || typeof entry.backendId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(entry.backendId)) throw new Error("Invalid Bridge writer identity");
+      bridgeBytes(entry.signingPublicKey, 32);
+    }
+    sqlite.transaction(() => { for (const entry of entries) sqlite.prepare("INSERT OR IGNORE INTO bridge_writer_keys VALUES(?,?)").run(entry.backendId, entry.signingPublicKey); })();
+  }
   const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(config.accountKey).recordKey,
-    codec: createBridgeSealingCodec(config.accountKey), transport, blobs: files,
+    codec: signedCodec, transport, blobs: files,
+    async prepareIncoming(envelopes) {
+      if (envelopes.some(({ header, auth }) => auth?.accountId === config.accountId && header.origin !== backendId &&
+          !sqlite.prepare("SELECT 1 FROM bridge_writer_keys WHERE backend_id=? AND signing_public_key=?").get(header.origin, auth.signingPublicKey))) await refreshWriters();
+    },
     onApplied: (changes) => { quotaDirty = true; options.onApplied?.(changes); },
     stageLocalBeforePull: options.stageLocalBeforePull || !!binding?.enrollment_staging });
   sqlite.prepare("UPDATE bridge_config SET account_fingerprint=? WHERE id=1").run(fingerprint);
@@ -162,6 +182,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       const streams: BridgeStream[] = ["account", ...watchedRuns().map((id): BridgeStream => `run:${id}`)];
       const signature = streams.join(",");
       if (subscribed !== signature) { await transport.subscribe(streams); subscribed = signature; pullAll = true; }
+      if (pullAll || !initialized) await refreshWriters();
       if (!initialized) {
         state = "syncing"; notify();
         await engine.bootstrap(); initialized = true;

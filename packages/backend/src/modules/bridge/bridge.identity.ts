@@ -1,11 +1,10 @@
 import { hostname } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
-import { x25519 } from "@noble/curves/ed25519.js";
 import { bridgeApprovalCode, bridgeBase64, bridgeBytes, normalizeBridgeVerificationCode, type BridgeApprovalRequest, type BridgeAuthStatus, type BridgeRegisteredBackend,
   type BridgeSignInInput, type BridgeSealedAccountKey, type BridgeAccountKeys } from "@mains/contracts/bridge-auth";
 import type { SecretStorageAdapter } from "../../runtime/backend-runtime";
-import { createBridgeIdentityStorage, type BridgeSavedIdentity } from "./bridge.identity-storage";
-import { bridgeAccountFingerprint, generateBridgeAccountKey, generateBridgeDeviceKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
+import { createBridgeIdentityStorage, createBridgeLocalWriterKeysStorage, type BridgeSavedIdentity } from "./bridge.identity-storage";
+import { bridgeAccountFingerprint, generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "./bridge.keys";
 import { bridgeRecoveryPublicKey, generateBridgeRecoveryCode, openBridgeRecovery, sealBridgeRecovery, signBridgeRecovery } from "./bridge.recovery";
 import { bridgeHttp, bridgeHubUrl, BridgeHttpError, pollBridgeDeviceLogin, startBridgeDeviceLogin, startBridgeLoopback } from "./bridge.login";
 import type { BridgeDevConfig } from "./bridge.config";
@@ -22,6 +21,8 @@ export interface BridgeIdentityOptions {
 /** Identity/key state owns no SQLite and has no renderer-facing credential getter. */
 export function createBridgeIdentity(options: BridgeIdentityOptions) {
   const vault = createBridgeIdentityStorage(options.dataDir, options.storage);
+  const localWriterKeys = createBridgeLocalWriterKeysStorage(options.dataDir, options.storage);
+  let localSigningPublicKeys: readonly string[] = [];
   let saved: BridgeSavedIdentity | null = null, state: BridgeAuthStatus["state"] = "signed-out", error: string | null = null;
   let hub: string | null = null, label = hostname(), code: string | null = null, recoveryCode: string | null = null;
   let accountFingerprint: string | null = null;
@@ -46,7 +47,8 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
   function config(): BridgeDevConfig {
     if (!saved?.accountKey) throw new Error("Backend approval is required");
     return { url: new URL("/v1/log", saved.hubUrl).toString().replace(/^http/, "ws"), token: saved.token,
-      accountKey: bridgeBytes(saved.accountKey, 32), backendId: options.backendId, label: saved.label };
+      accountKey: bridgeBytes(saved.accountKey, 32), backendId: options.backendId, label: saved.label,
+      accountId: saved.accountId, signingPrivateKey: bridgeBytes(saved.signingPrivateKey, 32), localSigningPublicKeys };
   }
   async function renewToken() {
     if (!saved?.accountKey) throw new Error("Backend approval is required");
@@ -80,7 +82,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     if (!activated) {
       const value = config();
       try { await options.ready(value, saved.includeExisting, saved.activationPending, saved.accountId); activated = true; saved.includeExisting = true; saved.activationPending = false; await vault.write(saved); }
-      finally { value.accountKey.fill(0); }
+      finally { value.accountKey.fill(0); value.signingPrivateKey.fill(0); }
     }
     state = "ready"; error = null; login = null; deviceCode = null; stopLogin = undefined; schedule(); notify();
   }
@@ -88,7 +90,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     if (!saved || closed || cancelling) return;
     if (saved.pendingToken) await renewToken();
     const mine = await request<Mine>("/v1/keys/mine");
-    if (mine.accountId !== saved.accountId || mine.backend.backendId !== options.backendId || mine.backend.publicKey !== saved.publicKey)
+    if (mine.accountId !== saved.accountId || mine.backend.backendId !== options.backendId || mine.backend.publicKey !== saved.publicKey || mine.backend.signingPublicKey !== saved.signingPublicKey)
       throw new Error("Backend identity changed; sign in again");
     if (typeof mine.initialized !== "boolean") throw new Error("Invalid Bridge account initialization state");
     if (mine.initialized && !saved.accountInitialized) { saved.accountInitialized = true; await vault.write(saved); }
@@ -110,7 +112,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         if (!entry || typeof entry.requestId !== "string" || !entry.requestId || typeof entry.backendId !== "string" || !entry.backendId ||
           !Number.isFinite(Date.parse(entry.expiresAt))) throw new Error("Invalid Bridge approval request");
         // The hub's code is not an authentication source, including for notifications/CLI.
-        return { ...entry, code: await bridgeApprovalCode(entry.publicKey) };
+        return { ...entry, code: await bridgeApprovalCode({ ...entry, accountId: saved!.accountId }) };
       }));
       requests = verified.filter((entry) => Date.parse(entry.expiresAt) > Date.now()); backends = devices;
       for (const entry of requests) if (!notified.has(entry.requestId)) { notified.add(entry.requestId); options.approval(entry); }
@@ -154,21 +156,34 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
   }
   async function complete(token: string, input: BridgeSignInInput, generation: number) {
     if (generation !== epoch || closed) return;
-    const pair = generateBridgeDeviceKeyPair();
+    const pair = generateBridgeDeviceKeyPair(), signing = generateBridgeSigningKeyPair();
+    const publicKey = bridgeBase64(pair.publicKey), signingPublicKey = bridgeBase64(signing.publicKey);
     try {
       const registered = await bridgeHttp<{ accountId: string; email: string; token: string; expiresAt: number; backend: BridgeRegisteredBackend }>(hub!, "/v1/backends", token,
-        { backendId: options.backendId, publicKey: bridgeBase64(pair.publicKey), label, platform: process.platform });
+        { backendId: options.backendId, publicKey, signingPublicKey, label, platform: process.platform });
       if (generation !== epoch || closed) {
         await bridgeHttp(hub!, `/v1/backends/${encodeURIComponent(options.backendId)}`, registered.token, undefined, "DELETE").catch(() => {});
         return;
       }
-      saved = { v: 1, backendId: options.backendId, hubUrl: hub!, label, accountId: registered.accountId, email: registered.email,
-        publicKey: bridgeBase64(pair.publicKey), privateKey: bridgeBase64(pair.secretKey), token: registered.token, expiresAt: registered.expiresAt,
-        accountKey: null, includeExisting: input.includeExisting, activationPending: true };
-      await vault.write(saved); code = await bridgeApprovalCode(saved.publicKey); state = "signing-in"; login = null; deviceCode = null;
+      try {
+        if (registered.backend.backendId !== options.backendId || registered.backend.publicKey !== publicKey || registered.backend.signingPublicKey !== signingPublicKey)
+          throw new Error("Registered Bridge device keys changed");
+        const candidate: BridgeSavedIdentity = { v: 2, backendId: options.backendId, hubUrl: hub!, label, accountId: registered.accountId, email: registered.email,
+          publicKey, privateKey: bridgeBase64(pair.secretKey), signingPublicKey, signingPrivateKey: bridgeBase64(signing.secretKey), token: registered.token, expiresAt: registered.expiresAt,
+          accountKey: null, includeExisting: input.includeExisting, activationPending: true };
+        // Persist local public-key provenance before replication can publish.
+        localSigningPublicKeys = await localWriterKeys.remember(candidate);
+        await vault.write(candidate); saved = candidate;
+      } catch (failure) {
+        // Use the issued device credential and the requested id, never a
+        // substituted response id or the browser session, to revoke this attempt.
+        await bridgeHttp(hub!, `/v1/backends/${encodeURIComponent(options.backendId)}`, registered.token, undefined, "DELETE").catch(() => {});
+        throw failure;
+      }
+      code = await bridgeApprovalCode(saved); state = "signing-in"; login = null; deviceCode = null;
       await update(); schedule();
     } finally {
-      pair.secretKey.fill(0);
+      pair.secretKey.fill(0); signing.secretKey.fill(0);
       await bridgeHttp(hub!, "/api/auth/sign-out", token, {}).catch(() => {});
     }
   }
@@ -202,8 +217,9 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     async start() {
       saved = await vault.read();
       if (!saved) return;
-      if (saved.backendId !== options.backendId || bridgeBase64(x25519.getPublicKey(bridgeBytes(saved.privateKey, 32))) !== saved.publicKey) throw new Error("Bridge identity does not match this backend");
-      hub = bridgeHubUrl(saved.hubUrl); label = saved.label; code = await bridgeApprovalCode(saved.publicKey);
+      if (saved.backendId !== options.backendId) throw new Error("Bridge identity does not match this backend");
+      hub = bridgeHubUrl(saved.hubUrl); label = saved.label; code = await bridgeApprovalCode(saved);
+      localSigningPublicKeys = await localWriterKeys.remember(saved);
       // A stored key can read the local replica offline; network access is still
       // checked by the hub before every request and stops on a revoked response.
       if (saved.accountKey) { const key = bridgeBytes(saved.accountKey, 32); try { await activate(key, bridgeRecoveryPublicKey(key)); } finally { key.fill(0); } }
@@ -247,16 +263,16 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       if (state !== "needs-approval") throw new Error("This device is not waiting for approval");
       await request("/v1/approvals", {}); error = null; await update(); notify();
     }); },
-    async approve(input: { requestId: string; backendId: string; publicKey: string; code: string }) { return exclusive(async () => {
+    async approve(input: Pick<BridgeApprovalRequest, "requestId" | "backendId" | "publicKey" | "signingPublicKey" | "code">) { return exclusive(async () => {
       if (closed || cancelling) throw new Error("Sign-in was cancelled");
       if (!saved?.accountKey || state !== "ready") throw new Error("Backend approval is required");
-      const supplied = normalizeBridgeVerificationCode(input.code), expected = await bridgeApprovalCode(input.publicKey);
+      const supplied = normalizeBridgeVerificationCode(input.code), expected = await bridgeApprovalCode({ ...input, accountId: saved.accountId });
       if (supplied !== expected) throw new Error("The approval codes do not match");
       const pending = requests.find((entry) => entry.requestId === input.requestId);
-      if (!pending || pending.backendId !== input.backendId || pending.publicKey !== input.publicKey || Date.parse(pending.expiresAt) <= Date.now())
+      if (!pending || pending.backendId !== input.backendId || pending.publicKey !== input.publicKey || pending.signingPublicKey !== input.signingPublicKey || Date.parse(pending.expiresAt) <= Date.now())
         throw new Error("Approval expired or changed; compare the current pending request again");
       const key = bridgeBytes(saved.accountKey, 32);
-      try { await request("/v1/keys/wraps", { requestId: pending.requestId, backendId: pending.backendId, publicKey: pending.publicKey,
+      try { await request("/v1/keys/wraps", { requestId: pending.requestId, backendId: pending.backendId, publicKey: pending.publicKey, signingPublicKey: pending.signingPublicKey,
         code: expected, wrap: sealBridgeAccountKey(key, bridgeBytes(pending.publicKey, 32)) }); }
       finally { key.fill(0); }
       await update(); notify();
@@ -283,7 +299,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
         if (bridgeRecoveryPublicKey(key) !== keys.recoveryPublicKey) throw new Error("Recovery key does not match the account");
         if (state === "needs-verification") { await activate(key, bridgeRecoveryPublicKey(key)); await update(); notify(); return; }
         const wrap = sealBridgeAccountKey(key, bridgeBytes(saved.publicKey, 32)), { challenge } = await request<{ challenge: string }>("/v1/keys/recovery/challenge", {});
-        const signature = signBridgeRecovery(key, saved.accountId, options.backendId, saved.publicKey, challenge, wrap);
+        const signature = signBridgeRecovery(key, saved, challenge, wrap);
         await request("/v1/keys/recovery/unlock", { wrap, signature, challenge });
         // Recovery authenticates the locally decrypted key, never a subsequent hub wrap.
         await activate(key, bridgeRecoveryPublicKey(key)); await update(); notify();

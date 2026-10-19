@@ -3,6 +3,7 @@ import type { SQLiteInstance } from "../../db/types";
 import { bridgeRecordKeys, type BridgeCodec } from "./bridge.crypto";
 import { BRIDGE_TABLES } from "./bridge.records";
 import { ownerSql, projectIdSql, runIdSql, tickSql } from "./bridge.capture";
+import { createHash } from "node:crypto";
 import { aliasSet, canonicalPk, clockOf, compareClock, definition, getClock, isAtlas, quote, rowWhere, type RowClock, type SqlRow } from "./bridge.sql";
 
 export interface BridgeRecoveryContext {
@@ -168,7 +169,13 @@ export function prepareRecord(store: BridgeStore, entry: OutboxEntry): PreparedR
   if ("values" in body) for (const ref of body.blobRefs) if (ref.kind === "value") {
     body.schemaVersion = Math.max(body.schemaVersion, 4); body.values[ref.column] = null;
   }
-  // The exact sealed delete survives retries and compaction, including its nonce and tag.
+  // Journal the exact ciphertext/signature before publication. Retries after restart reuse
+  // the publication id, nonce and signature; changed capture/blob images get a new one.
+  const image = createHash("sha256").update(JSON.stringify([header, body])).digest("hex");
+  const publication = store.sqlite.prepare("SELECT image,envelope FROM bridge_publications WHERE table_name=? AND pk=? AND register=? AND stream=?")
+    .get(entry.table_name, entry.pk, entry.register, entry.stream) as { image: string; envelope: string } | undefined;
+  if (publication?.image === image) return { entry, envelope: JSON.parse(publication.envelope), clock };
+  // The exact sealed delete also survives acknowledged retries and compaction.
   let envelope: BridgeEnvelope;
   const previous = entry.op === "delete" ? store.sqlite.prepare("SELECT envelope FROM bridge_tombstones WHERE table_name=? AND pk=?").get(entry.table_name, entry.pk) as { envelope: string | null } | undefined : undefined;
   if (previous?.envelope) envelope = JSON.parse(previous.envelope);
@@ -176,6 +183,8 @@ export function prepareRecord(store: BridgeStore, entry: OutboxEntry): PreparedR
     envelope = store.codec.seal(header, body);
     if (entry.op === "delete") store.sqlite.prepare("UPDATE bridge_tombstones SET envelope=? WHERE table_name=? AND pk=?").run(JSON.stringify(envelope), entry.table_name, entry.pk);
   }
+  store.sqlite.prepare(`INSERT INTO bridge_publications VALUES(?,?,?,?,?,?) ON CONFLICT(table_name,pk,register,stream)
+    DO UPDATE SET image=excluded.image,envelope=excluded.envelope`).run(entry.table_name, entry.pk, entry.register, entry.stream, image, JSON.stringify(envelope));
   return { entry, envelope, clock };
 }
 

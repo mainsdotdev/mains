@@ -26,7 +26,7 @@ beforeEach(() => {
   fixture.regenerate.mockResolvedValue({ success: true, data: "JJJJ-KKKK-LLLL-MMMM-NNNN-PPPP-QQQQ-RRRR" });
   fixture.signIn.mockResolvedValue({ success: true }); fixture.signOut.mockResolvedValue({ success: true }); fixture.syncNow.mockImplementation(() => ({ unwrap: () => Promise.resolve(true) }));
   fixture.status = { state: "ready", backendId: "A", hubUrl: "https://bridge.example", accountId: "account", email: "owner@example.com", label: "A", verificationCode: null, accountFingerprint: "JKLM-NPQR-STUV", login: null,
-    approvals: [{ requestId: "request", backendId: "B", publicKey: "key", label: "New laptop", platform: "darwin", code: "ABCD-EFGH-JKLM", expiresAt: "2026-10-15T20:00:00Z" }], backends: [], recoveryCodeAvailable: true, existing: { runs: 2, pages: 3 }, error: null };
+    approvals: [{ requestId: "request", backendId: "B", publicKey: "key", signingPublicKey: "signing-key", label: "New laptop", platform: "darwin", code: "ABCD-EFGH-JKLM", expiresAt: "2026-10-15T20:00:00Z" }], backends: [], recoveryCodeAvailable: true, existing: { runs: 2, pages: 3 }, error: null };
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -66,11 +66,11 @@ describe("Bridge key management", () => {
     expect(screen.queryByText("JKLM-NPQR-STUV")).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy account fingerprint" })).toBeNull();
   });
-  it("discards a completed code comparison when the approval recipient changes", () => {
+  it.each(["publicKey", "signingPublicKey"] as const)("discards a completed code comparison when the recipient's %s changes", (key) => {
     const view = render(<BridgeSettings />);
     fireEvent.change(screen.getByRole("textbox", { name: "Code shown on the new device" }), { target: { value: "ABCD-EFGH-JKLM" } });
     expect((screen.getByRole("button", { name: "Approve device" }) as HTMLButtonElement).disabled).toBe(false);
-    fixture.status = { ...fixture.status, approvals: [{ ...fixture.status.approvals[0], publicKey: "changed-key", code: "JKLM-NPQR-STUV" }] };
+    fixture.status = { ...fixture.status, approvals: [{ ...fixture.status.approvals[0], [key]: "changed-key" }] };
     view.rerender(<BridgeSettings />);
     expect((screen.getByRole("textbox", { name: "Code shown on the new device" }) as HTMLInputElement).value).toBe("");
     expect((screen.getByRole("button", { name: "Approve device" }) as HTMLButtonElement).disabled).toBe(true);
@@ -118,7 +118,7 @@ describe("Bridge key management", () => {
   });
   it.each(["ws", "ipc"] as const)("identifies the computer affected by sync settings and sign-out over %s", (kind) => {
     fixture.transportKind = kind; fixture.status.label = "Studio Mac";
-    fixture.status.backends = [{ backendId: "A", label: "Studio Mac", publicKey: "key", platform: "darwin", status: "approved", createdAt: "2026-10-16T00:00:00Z", lastSeen: null }];
+    fixture.status.backends = [{ backendId: "A", label: "Studio Mac", publicKey: "key", signingPublicKey: "signing-key", platform: "darwin", status: "approved", createdAt: "2026-10-16T00:00:00Z", lastSeen: null }];
     fixture.projects = [{ id: "p1", name: "Private project", localOnly: false, workspaces: 1, runs: 2 }];
     fixture.sync = { pendingRecords: 1, quota: { usedBytes: 1024 ** 3, limitBytes: 1024 ** 3, fileLimitBytes: 50 * 1024 ** 2, plan: "standard",
       subscription: { status: "none", planId: null, billingInterval: null, startsAt: null, expiresAt: null, canUpload: false } } } as BridgeStatus;
@@ -145,7 +145,7 @@ describe("Bridge key management", () => {
     }
   });
   it("shows readable device details and confirms revocation for the selected device", async () => {
-    const base = { publicKey: "key", createdAt: "2026-10-16T00:00:00Z", lastSeen: null };
+    const base = { publicKey: "key", signingPublicKey: "signing-key", createdAt: "2026-10-16T00:00:00Z", lastSeen: null };
     fixture.status.backends = [
       { ...base, backendId: "A", label: "MacBook Pro", platform: "darwin", status: "approved" },
       { ...base, backendId: "B", label: "Travel laptop", platform: "win32", status: "approved", lastSeen: "2026-10-15T18:20:00Z" },

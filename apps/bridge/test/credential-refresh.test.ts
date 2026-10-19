@@ -24,9 +24,9 @@ it("commits first use despite a DO reset without leaking credentials to diagnost
     await db.prepare(await readFile(new URL("../migrations/0002_bridge_identity.sql", import.meta.url), "utf8")).run();
     await db.prepare("INSERT INTO user VALUES('test-account')").run();
     const old = `b7_${randomBytes(32).toString("hex")}`, expires = Date.now() + 86400_000;
-    await db.prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at)
-      VALUES('test-account','B',?,'Test','test','approved',?,?,?)`)
-      .bind(randomBytes(32).toString("base64url"), createHash("sha256").update(old).digest("hex"), expires, Date.now()).run();
+    await db.prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at)
+      VALUES('test-account','B',?,?,'Test','test','approved',?,?,?)`)
+      .bind(randomBytes(32).toString("base64url"), randomBytes(32).toString("base64url"), createHash("sha256").update(old).digest("hex"), expires, Date.now()).run();
     const before = await db.prepare("SELECT * FROM bridge_backends").first();
     await db.prepare(await readFile(new URL("../migrations/0006_backend_token_handover.sql", import.meta.url), "utf8")).run();
     expect(await db.prepare("SELECT * FROM bridge_backends").first()).toEqual({ ...before, next_token_hash: null, next_token_expires_at: null });

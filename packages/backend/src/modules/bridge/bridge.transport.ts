@@ -30,6 +30,7 @@ export function createMemoryBridgeHub() {
         async push(stream, records) {
           return records.map((input): BridgePushResult => {
             const envelope = structuredClone(input), h = envelope.header;
+            const publicationId = envelope.auth?.publicationId ?? "";
             if (h.stream !== stream || h.origin !== backendId || (h.owner && h.owner !== backendId)) return { error: "notOwner" };
             const claimed = rowOwners.get(h.rowKey);
             if (claimed && claimed !== backendId) return { error: "notOwner" };
@@ -41,7 +42,7 @@ export function createMemoryBridgeHub() {
               const runId = stream.slice(4);
               if (h.runId !== runId || owners.get(runId) !== backendId || h.owner !== backendId) return { error: "notOwner" };
               const closed = closedRuns.get(runId);
-              if (closed) return { deleted: structuredClone(closed) };
+              if (closed) return { deleted: structuredClone(closed), publicationId };
             } else if (h.runId) {
               if (!h.owner || owners.has(h.runId) && owners.get(h.runId) !== backendId ||
                   runRoots.has(h.runId) && runRoots.get(h.runId) !== h.rowKey) return { error: "notOwner" };
@@ -49,10 +50,10 @@ export function createMemoryBridgeHub() {
             }
             if (h.owner) rowOwners.set(h.rowKey, h.owner);
             const dead = tombstones.get(h.rowKey);
-            if (dead) return { deleted: structuredClone(dead.envelope) };
+            if (dead) return { deleted: structuredClone(dead.envelope), publicationId };
             const key = h.op === "delete" ? h.rowKey : `${stream}:${h.registerKey}`;
             const previous = latest.get(key);
-            if (previous && compareClock(headerClock(h), headerClock(previous.envelope.header)) <= 0) return { seq: previous.seq };
+            if (previous && compareClock(headerClock(h), headerClock(previous.envelope.header)) <= 0) return { seq: previous.seq, publicationId };
             const target = state(stream);
             const record = { seq: ++target.seq, envelope };
             target.log.push(record); latest.set(key, record);
@@ -61,7 +62,7 @@ export function createMemoryBridgeHub() {
               tombstones.set(h.rowKey, record);
               if (h.runId && runRoots.get(h.runId) === h.rowKey) closedRuns.set(h.runId, envelope);
             }
-            return { seq: record.seq };
+            return { seq: record.seq, publicationId };
           });
         },
         async pull(stream, after, limit) {

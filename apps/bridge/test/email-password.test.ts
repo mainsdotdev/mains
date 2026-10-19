@@ -158,7 +158,7 @@ describe("Email/password authentication in the real local Worker", () => {
     }
     expect(token).toBeTruthy();
     const registration = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Origin: new URL(hub.url).origin },
-      body: JSON.stringify({ backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), label: "Password test device", platform: "test" }) });
+      body: JSON.stringify({ backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), signingPublicKey: randomBytes(32).toString("base64url"), label: "Password test device", platform: "test" }) });
     expect(registration.status).toBe(201); expect(await registration.json()).toMatchObject({ accountId: user.id });
   });
 });

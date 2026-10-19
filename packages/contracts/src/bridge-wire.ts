@@ -1,6 +1,6 @@
-import { BRIDGE_PROTOCOL_VERSION, type BridgeEnvelope, type BridgeHeader, type BridgeRpcRequest, type BridgeRpcResponse, type BridgeServerMessage, type BridgeStream } from "./bridge-protocol";
+import { BRIDGE_PROTOCOL_VERSION, type BridgeEnvelope, type BridgeSignedEnvelope, type BridgeHeader, type BridgeRpcRequest, type BridgeRpcResponse, type BridgeServerMessage, type BridgeStream } from "./bridge-protocol";
 import { validateBridgeBlobIdentity } from "./bridge-blobs";
-import { isBridgeVerificationCode } from "./bridge-auth";
+import { bridgeBytes, isBridgeVerificationCode } from "./bridge-auth";
 
 // Leave room for routing columns below the Durable Object SQL row/string limit (2 MB).
 export const BRIDGE_MAX_RECORD_BYTES = 1024 * 1024;
@@ -35,14 +35,22 @@ export function validateBridgeHeader(value: unknown): asserts value is BridgeHea
   }
 }
 
-export function validateEncryptedBridgeEnvelope(value: unknown): asserts value is BridgeEnvelope {
+export function validateBridgeCiphertext(value: unknown): asserts value is BridgeEnvelope {
   if (!object(value)) throw new Error("Invalid Bridge envelope");
   validateBridgeHeader(value.header);
-  if (Object.keys(value).some((key) => key !== "header" && key !== "body") || !object(value.body) ||
+  if (Object.keys(value).some((key) => key !== "header" && key !== "body" && key !== "auth") || !object(value.body) ||
       Object.keys(value.body).length !== 2 || typeof value.body.nonce !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(value.body.nonce) ||
       typeof value.body.payload !== "string" || !/^[A-Za-z0-9_-]{22,}$/.test(value.body.payload) ||
       new TextEncoder().encode(JSON.stringify(value)).length > BRIDGE_MAX_RECORD_BYTES)
     throw new Error("Bridge accepts encrypted envelopes only");
+}
+
+export function validateEncryptedBridgeEnvelope(value: unknown): asserts value is BridgeSignedEnvelope {
+  validateBridgeCiphertext(value);
+  const auth = value.auth;
+  if (!object(auth) || Object.keys(auth).length !== 6 || auth.v !== 1 || auth.epoch !== 1 || !identifier(auth.accountId))
+    throw new Error("Bridge requires a device-signed envelope");
+  bridgeBytes(auth.publicationId, 32); bridgeBytes(auth.signingPublicKey, 32); bridgeBytes(auth.signature, 64);
 }
 
 export function parseBridgeRpcRequest(text: string): BridgeRpcRequest {
@@ -101,7 +109,8 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
     case "ack":
       if (!isBridgeStream(message.stream) || !Array.isArray(message.results) || message.results.length > BRIDGE_MAX_BATCH) throw new Error("Invalid Bridge ACK");
       for (const result of message.results) {
-        if (!object(result) || Object.keys(result).length !== (result.error === "clockSkew" ? 2 : 1)) throw new Error("Invalid Bridge ACK result");
+        if (!object(result) || Object.keys(result).length !== (result.error === "clockSkew" || "seq" in result || "deleted" in result ? 2 : 1)) throw new Error("Invalid Bridge ACK result");
+        if ("seq" in result || "deleted" in result) bridgeBytes(result.publicationId, 32);
         if ("seq" in result) { if (!safeClock(result.seq) || result.seq < 1) throw new Error("Invalid Bridge ACK sequence"); }
         else if ("deleted" in result) {
           validateEncryptedBridgeEnvelope(result.deleted);
@@ -125,7 +134,8 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
     case "changed": if (!isBridgeStream(message.stream)) throw new Error("Invalid Bridge change hint"); break;
     case "approval":
       if (!identifier(message.requestId) || !identifier(message.backendId) || typeof message.publicKey !== "string" ||
-        !/^[A-Za-z0-9_-]{43}$/.test(message.publicKey) || typeof message.label !== "string" || !message.label || message.label.length > 128 ||
+        !/^[A-Za-z0-9_-]{43}$/.test(message.publicKey) || typeof message.signingPublicKey !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(message.signingPublicKey) ||
+        typeof message.label !== "string" || !message.label || message.label.length > 128 ||
         typeof message.platform !== "string" || !message.platform || message.platform.length > 32 || !isBridgeVerificationCode(message.code) ||
         typeof message.expiresAt !== "string" || !Number.isFinite(Date.parse(message.expiresAt))) throw new Error("Invalid Bridge approval");
       break;

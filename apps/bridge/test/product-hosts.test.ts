@@ -16,6 +16,30 @@ const get = (host: Host, id: string) => host.client.call<AtlasPage | null>(CHANN
 const received = (host: Host, id: string) => waitFor(() => get(host, id), (value) => !!value, "Page on other backend");
 
 describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("B8 through two independent backend processes", () => {
+  it.each([false, true])("restores its own signed account objects after re-enrollment with a new random key (remove=%s)", async (remove) => {
+    const fixture = await startLocalBackends({ auth: true }), { a, b } = fixture;
+    try {
+      const account = await signIn(fixture, a); await signIn(fixture, b); await approve(fixture);
+      const collection = await b.client.call<{ id: string; name: string }>(CHANNELS.collections.create, { accountId: "default", name: "Own collection" });
+      const own = await page(b, "Own Page", "Survives a new signing key");
+      await b.client.call(CHANNELS.bridge.syncNow); await received(a, own.item.id); await a.client.call(CHANNELS.bridge.syncNow);
+      const db = await fixture.hub.database();
+      const signingKey = () => db.prepare("SELECT signing_public_key FROM bridge_backends WHERE account_id=? AND backend_id=?")
+        .bind(account.accountId, b.backendId).first<{ signing_public_key: string }>();
+      const before = await signingKey();
+      await b.client.call(CHANNELS.bridge.signOut, remove); await b.stop(); await b.start();
+      if (remove) expect(await get(b, own.item.id)).toBeNull();
+      await signIn(fixture, b); await approve(fixture);
+      expect((await signingKey())?.signing_public_key).not.toBe(before?.signing_public_key);
+      await b.client.call(CHANNELS.bridge.syncNow);
+      expect(await b.client.call(CHANNELS.collections.get, { accountId: "default", id: collection.id })).toMatchObject({ name: collection.name });
+      expect((await get(b, own.item.id))?.revision.id).toBe(own.revision.id);
+      expect((await b.client.call<BridgeStatus>(CHANNELS.bridge.getStatus)).rejectedRecords).toBe(0);
+      await b.stop(); await b.start(); await b.client.call(CHANNELS.bridge.syncNow);
+      expect((await get(b, own.item.id))?.revision.id).toBe(own.revision.id);
+      expect((await b.client.call<BridgeStatus>(CHANNELS.bridge.getStatus)).rejectedRecords).toBe(0);
+    } finally { await fixture.dispose(); }
+  }, 120_000);
   it("does not reactivate an old development configuration after sign-out and restart", async () => {
     const fixture = await startLocalBackends(), { a, b } = fixture;
     try {

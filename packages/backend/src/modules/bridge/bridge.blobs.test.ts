@@ -1,3 +1,4 @@
+import { fixtureSigningCodec } from "../../../test/bridge-signing";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -40,7 +41,7 @@ async function node(account: string, backendId: string, options: { schemaVersion
   const { blobs, dataDir, hub } = await files(account, backendId, { cacheLimitBytes: options.cacheLimitBytes });
   const records = createBridgeBlobRecords({ sqlite, backendId, dataDir, blobs });
   const transport = createBridgeWebSocketTransport({ url: hub.wsUrl, token: () => hub.token(account, backendId) }); cleanup.push(() => transport.close());
-  const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(key).recordKey, codec: options.codec ?? createBridgeSealingCodec(key), transport, blobs: records, experimentalAtlas: true, schemaVersion: options.schemaVersion });
+  const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(key).recordKey, codec: fixtureSigningCodec(account, backendId, options.codec ?? createBridgeSealingCodec(key)), transport, blobs: records, experimentalAtlas: true, schemaVersion: options.schemaVersion });
   cleanup.push(() => engine.stop()); await engine.bootstrap();
   return { sqlite, blobs, dataDir, records, engine, transport };
 }
@@ -63,7 +64,7 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     expect((await hub.quotaSql(account, "SELECT legacy_records FROM blob_gc_state") as { legacy_records: number }[])[0].legacy_records).toBeGreaterThan(0);
     await a.engine.stop();
     a.sqlite.exec("UPDATE bridge_config SET blob_roots_version=0,backfill_done=0,backfill_table=NULL,backfill_pk=NULL");
-    const upgraded = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: deriveBridgeKeys(key).recordKey, codec: sealing, transport: a.transport, blobs: a.records });
+    const upgraded = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: deriveBridgeKeys(key).recordKey, codec: fixtureSigningCodec(account, "A", sealing), transport: a.transport, blobs: a.records });
     cleanup.push(() => upgraded.stop()); await upgraded.bootstrap();
     expect(a.sqlite.prepare("SELECT physical_ms,counter,origin FROM bridge_row_clock WHERE table_name='atlas_items' AND pk='legacy' AND register='content'").get()).toEqual(before);
     await upgraded.push(); await a.transport.compact();
@@ -72,7 +73,7 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     expect((await (await hub.bucket()).list()).objects.some((object) => object.key.startsWith(prefix) && object.key.includes(orphan.blobId))).toBe(false);
     await b.engine.pull(); expect(await fs.readFile(await b.records.resolve("atlas_items", "legacy"))).toEqual(image);
     await upgraded.stop();
-    const restarted = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: deriveBridgeKeys(key).recordKey, codec: sealing, transport: a.transport, blobs: a.records });
+    const restarted = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: deriveBridgeKeys(key).recordKey, codec: fixtureSigningCodec(account, "A", sealing), transport: a.transport, blobs: a.records });
     cleanup.push(() => restarted.stop()); await restarted.bootstrap(); expect(restarted.pending()).toEqual([]);
   });
 
@@ -252,7 +253,7 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     for (let i = 0; i < 3; i++) await b.engine.pull();
     expect(open.mock.calls.length).toBe(0);
     await b.engine.stop();
-    const upgraded = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: deriveBridgeKeys(key).recordKey, codec: createBridgeSealingCodec(key), transport: b.transport, blobs: b.records });
+    const upgraded = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: deriveBridgeKeys(key).recordKey, codec: fixtureSigningCodec(account, "B", createBridgeSealingCodec(key)), transport: b.transport, blobs: b.records });
     cleanup.push(() => upgraded.stop()); await upgraded.retryParked();
     expect((b.sqlite.prepare("SELECT bio FROM accounts WHERE id='default'").get() as { bio: string }).bio === bio).toBe(true);
     expect(b.sqlite.prepare("SELECT count(*) n FROM bridge_parked").get()).toMatchObject({ n: 0 });

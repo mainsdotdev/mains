@@ -36,7 +36,7 @@ export function bindBridgeAccount(sqlite: SQLiteInstance, fingerprint: string, h
     if (!same) {
       // Rows stay local; cloud provenance is meaningful only within the original account.
       if (binding.account_fingerprint || binding.account_id) {
-        for (const table of ["bridge_outbox", "bridge_row_clock", "bridge_cursors", "bridge_parked", "bridge_pending_links", "bridge_id_map", "bridge_aliases", "bridge_tombstones", "bridge_peers", "bridge_atlas_recoveries"])
+        for (const table of ["bridge_publications", "bridge_writer_keys", "bridge_outbox", "bridge_row_clock", "bridge_cursors", "bridge_parked", "bridge_pending_links", "bridge_id_map", "bridge_aliases", "bridge_tombstones", "bridge_peers", "bridge_atlas_recoveries"])
           sqlite.exec(`DELETE FROM ${table}`);
       }
       sqlite.exec("UPDATE bridge_config SET enrollment_staging=1 WHERE id=1");
@@ -118,6 +118,6 @@ export function removeBridgeReplicas(sqlite: SQLiteInstance, backendId: string, 
       sqlite.exec(`DELETE FROM ${table} WHERE EXISTS(SELECT 1 FROM bridge_cleanup c WHERE c.table_name=${table}.table_name AND c.pk=${table}.pk)`);
     sqlite.exec("DELETE FROM bridge_aliases WHERE EXISTS(SELECT 1 FROM bridge_cleanup c WHERE c.table_name=bridge_aliases.table_name AND (c.pk=bridge_aliases.alias_pk OR c.pk=bridge_aliases.canonical_pk))");
     sqlite.prepare("DELETE FROM bridge_id_map WHERE owner_backend_id<>?").run(backendId);
-    sqlite.exec("DELETE FROM bridge_peers; DELETE FROM bridge_cursors; DELETE FROM bridge_parked; DROP TABLE bridge_cleanup; UPDATE bridge_state SET applying=0 WHERE id=1");
+    sqlite.exec("DELETE FROM bridge_publications; DELETE FROM bridge_writer_keys; DELETE FROM bridge_peers; DELETE FROM bridge_cursors; DELETE FROM bridge_parked; DROP TABLE bridge_cleanup; UPDATE bridge_state SET applying=0 WHERE id=1");
   })();
 }

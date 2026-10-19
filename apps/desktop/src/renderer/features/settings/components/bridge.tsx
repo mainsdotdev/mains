@@ -456,7 +456,7 @@ export default function BridgeSettings() {
             <SettingsSection title="Device approval requests">
               {status.approvals.map((request) => (
                 <Approval
-                  key={`${status.backendId}:${status.accountId}:${request.requestId}:${request.publicKey}:${request.code}`}
+                  key={`${status.backendId}:${status.accountId}:${request.requestId}:${request.publicKey}:${request.signingPublicKey}:${request.code}`}
                   request={request}
                   busy={busy}
                   act={act}

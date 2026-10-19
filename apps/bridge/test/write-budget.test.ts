@@ -1,3 +1,4 @@
+import { signFixture } from "./record-signing.mjs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import WebSocket from "ws";
@@ -80,6 +81,7 @@ describe("fair-use write budget accounting in the account hub", () => {
     });
     await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
     return (message: BridgeClientMessage) => new Promise<BridgeServerMessage>((resolve) => {
+      if (message.type === "push") for (const record of message.records) { record.header.origin = backend; signFixture(record, account, backend); }
       const requestId = randomUUID(); pending.set(requestId, resolve); socket.send(JSON.stringify({ requestId, message }));
     });
   }
@@ -93,7 +95,7 @@ describe("fair-use write budget accounting in the account hub", () => {
     // Idempotent retry: same clocks are acknowledged without new accepted records.
     await a({ type: "push", stream: "account", records: [record("one", 1), record("two", 1)] });
     // A refused writer (origin mismatch) and a permanent delete are free.
-    expect(await b({ type: "push", stream: "account", records: [record("four", 1)] })).toMatchObject({ results: [{ error: "notOwner" }] });
+    expect(await b({ type: "push", stream: "account", records: [{ ...record("four", 1), header: { ...record("four", 1).header, owner: "A" } }] })).toMatchObject({ results: [{ error: "notOwner" }] });
     await a({ type: "push", stream: "account", records: [record("three", 2, "delete")] });
     expect(await counted(account)).toEqual([{ period_start: month, records: 3 }]);
     // A newer register version is a new accepted record.

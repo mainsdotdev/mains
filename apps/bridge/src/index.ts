@@ -16,6 +16,7 @@ import { createHubBackup } from "./hub-backup";
 import { createBridgeLimits } from "./limits";
 import { createSqlUsage, type SqlUsageEnv } from "./sql-usage";
 import { reportWriteBudget, subscriptionWriteBudgetPeriod, type WriteBudgetPeriod } from "./write-budget";
+import { verifyBridgePublication } from "./signatures";
 
 interface Env extends DevAuthEnv, BlobEnv, QuotaEnv, SqlUsageEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
@@ -42,6 +43,11 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const response = await handleSignIn(request, env, async (accountId) => {
         await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(accountId)).subscriptionChanged(accountId);
       }); if (response) return response;
+    }
+    if (url.pathname === "/v1/keys/writers" && !env.AUTH_DB && bridgeDevelopmentEnabled(env) && request.method === "GET") {
+      const identity = await authenticate(request, env);
+      if (!identity) return new Response("Unauthorized", { status: 401 });
+      return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).writerKeys(), { headers: { "Cache-Control": "no-store" } });
     }
     if (url.pathname.startsWith("/v1/backends") || url.pathname.startsWith("/v1/keys/") || url.pathname.startsWith("/v1/approvals"))
       return handleDevices(request, env, {
@@ -119,6 +125,7 @@ export class AccountHub extends DurableObject<Env> {
   snapshotBegin() { return this.usage.run("snapshot", () => this.backup.begin()); }
   snapshotPage(token: string, table: string, after: number) { return this.usage.run("snapshot", () => this.backup.page(token, table, after)); }
   snapshotValid(token: string) { return this.usage.run("snapshot", () => this.backup.valid(token)); }
+  writerKeys() { return this.store.writerKeys(); }
   async getSubscription(accountId: string) { return this.subscriptions.status(accountId); }
   /** Internal RPC seam for a future billing event consumer; no HTTP mutation route. */
   async subscriptionChanged(accountId: string) { this.subscriptions.invalidate(accountId); this.quota.invalidateLimits(accountId); }
@@ -183,6 +190,7 @@ export class AccountHub extends DurableObject<Env> {
       const [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server);
       server.serializeAttachment({ ...identity, streams: [] } satisfies Session);
+      this.store.rememberWriter(identity.backendId, identity.signingPublicKey);
       this.store.seen(identity.backendId);
       for (const entry of this.store.presence()) this.send(server, { type: "presence", backendId: entry.backend_id,
         online: this.sockets().some((socket) => this.session(socket).backendId === entry.backend_id), lastSeen: new Date(entry.last_seen).toISOString(),
@@ -205,6 +213,9 @@ export class AccountHub extends DurableObject<Env> {
     try { request = parseBridgeRpcRequest(data); }
     catch { socket.close(1008, "Invalid Bridge request"); return; }
     const { message, requestId } = request;
+    if (message.type === "push" && !await verifyBridgePublication(session, message.records)) {
+      this.send(socket, { requestId, error: { code: "invalidSignature", message: "Bridge device signature is invalid" } }); return;
+    }
     // Maintenance runs on its own alarms; only local development and tests run it on demand.
     if (message.type === "compact" && !bridgeDevelopmentEnabled(this.env)) {
       this.send(socket, { requestId, error: { code: "forbidden", message: "Bridge compaction runs on its own schedule" } }); return;
@@ -221,6 +232,7 @@ export class AccountHub extends DurableObject<Env> {
             let period: WriteBudgetPeriod | undefined;
             const publication = await this.ctx.blockConcurrencyWhile(async () => {
               try {
+                if (socket.readyState !== WebSocket.OPEN || !await this.socketAuth.active(session)) return null;
                 if (message.records.every((record) => record.header.op === "delete")) return this.store.push(session.backendId, message.stream, message.records);
                 const quota = await this.quota.status(session.accountId);
                 period = subscriptionWriteBudgetPeriod(quota.subscription);

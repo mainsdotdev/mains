@@ -1662,6 +1662,15 @@ export const bridgeClock = sqliteTable("bridge_clock", {
   generation: integer("generation").notNull().default(0),
 }, (t) => [check("check_bridge_clock_singleton", sql`${t.id} = 1`)]);
 
+export const bridgePublications = sqliteTable("bridge_publications", {
+  tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(), stream: text("stream").notNull(),
+  image: text("image").notNull(), envelope: text("envelope").notNull(),
+}, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register, t.stream] })]);
+
+export const bridgeWriterKeys = sqliteTable("bridge_writer_keys", {
+  backendId: text("backend_id").notNull(), signingPublicKey: text("signing_public_key").notNull(),
+}, (t) => [primaryKey({ columns: [t.backendId, t.signingPublicKey] })]);
+
 export const bridgeOutbox = sqliteTable("bridge_outbox", {
   tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(),
   op: text("op", { enum: ["upsert", "delete"] }).notNull(),

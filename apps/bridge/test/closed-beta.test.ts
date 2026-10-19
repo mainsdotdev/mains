@@ -1,3 +1,4 @@
+import { signFixture, fixturePublicKey } from "./record-signing.mjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Script } from "node:vm";
 import WebSocket from "ws";
@@ -29,7 +30,7 @@ const nativePath = (args: ReturnType<typeof nativeArgs>) => `/authorize?${new UR
 async function invite(address = email()) { await sql(bridgeBetaInvite(address)); return address; }
 async function row(address: string) { return (await hub.database()).prepare("SELECT * FROM bridge_beta_invites WHERE email=?").bind(address).first(); }
 async function register(browser: Browser) {
-  return request("/v1/backends", browser, { backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), label: "Local beta test", platform: "test" });
+  return request("/v1/backends", browser, { backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), signingPublicKey: randomBytes(32).toString("base64url"), label: "Local beta test", platform: "test" });
 }
 
 it("keeps public login and uninvited accounts free of beta offers and blocks direct enrollment/approval", async () => {
@@ -147,8 +148,8 @@ it("preserves existing subscriptions and legacy account recovery while blocking 
   expect((await register(legacy)).status).toBe(201);
   expect(await db.prepare("SELECT recovery_wrap FROM bridge_accounts WHERE account_id=?").bind(legacy.user.id).first()).toEqual({ recovery_wrap: "encrypted-wrap" });
   const denied = await hub.login(email()), token = `b7_${randomBytes(32).toString("hex")}`;
-  await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,'pending',?,?,?)")
-    .bind(denied.user.id, "pending-old", randomBytes(32).toString("base64url"), "Old pending device", "test", createHash("sha256").update(token).digest("hex"), Date.now() + 60_000, Date.now()).run();
+  await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,?,'pending',?,?,?)")
+    .bind(denied.user.id, "pending-old", randomBytes(32).toString("base64url"), randomBytes(32).toString("base64url"), "Old pending device", "test", createHash("sha256").update(token).digest("hex"), Date.now() + 60_000, Date.now()).run();
   const bootstrap = await fetch(new URL("/v1/keys/bootstrap", hub.url), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: "{}" });
   expect(bootstrap.status).toBe(403);
   expect(await db.prepare("SELECT count(*) n FROM bridge_accounts WHERE account_id=?").bind(denied.user.id).first()).toEqual({ n: 0 });
@@ -166,7 +167,7 @@ it("continues the device-code flow after activation without starting a second pe
   expect(poll.status).toBe(200);
   const token = (await poll.json() as { access_token: string }).access_token;
   const registration = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Origin: origin() },
-    body: JSON.stringify({ backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), label: "Device-code beta test", platform: "node" }) });
+    body: JSON.stringify({ backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), signingPublicKey: randomBytes(32).toString("base64url"), label: "Device-code beta test", platform: "node" }) });
   expect(registration.status).toBe(201);
   expect(await row(browser.user.email)).toEqual(original);
 });
@@ -184,7 +185,7 @@ it("preserves the native state/PKCE callback through activation and connects the
     expect((await fetch((await consent.json() as { redirect: string }).redirect)).status).toBe(200);
     expect(token).toBeTruthy();
     const registration = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Origin: origin() },
-      body: JSON.stringify({ backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), label: "Native beta test", platform: "darwin" }) });
+      body: JSON.stringify({ backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), signingPublicKey: randomBytes(32).toString("base64url"), label: "Native beta test", platform: "darwin" }) });
     expect(registration.status).toBe(201);
     expect(await subscription(browser)).toMatchObject({ source: "beta", status: "active" });
   } finally { listener.close(); }
@@ -196,12 +197,12 @@ it("stops sync writes and old upload capabilities at expiry but preserves downlo
   // Shorten only this disposable test grant to exercise real expiry on a live
   // socket. Production has no client endpoint for changing grant timestamps.
   await db.prepare("UPDATE bridge_beta_invites SET expires_at=? WHERE account_id=?").bind(end, browser.user.id).run();
-  await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,'approved',?,?,?)")
-    .bind(browser.user.id, "A", randomBytes(32).toString("base64url"), "Local beta device", "test", createHash("sha256").update(token).digest("hex"), end + 60_000, Date.now()).run();
+  await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,?,'approved',?,?,?)")
+    .bind(browser.user.id, "A", randomBytes(32).toString("base64url"), fixturePublicKey(browser.user.id, "A"), "Local beta device", "test", createHash("sha256").update(token).digest("hex"), end + 60_000, Date.now()).run();
   const socket = new WebSocket(hub.wsUrl, { headers: { Authorization: `Bearer ${token}` } });
   const pending = new Map<string, (value: unknown) => void>();
   socket.on("message", (bytes) => { const frame = JSON.parse(bytes.toString()) as BridgeRpcResponse; if ("requestId" in frame) { pending.get(frame.requestId)?.("message" in frame ? frame.message : frame); pending.delete(frame.requestId); } });
-  const rpc = (message: BridgeClientMessage) => new Promise<unknown>((resolve) => { const requestId = randomUUID(); pending.set(requestId, resolve); socket.send(JSON.stringify({ requestId, message })); });
+  const rpc = (message: BridgeClientMessage) => new Promise<unknown>((resolve) => { if (message.type === "push") for (const record of message.records) signFixture(record, browser.user.id); const requestId = randomUUID(); pending.set(requestId, resolve); socket.send(JSON.stringify({ requestId, message })); });
   const http = (path: string, body: unknown) => fetch(new URL(path, hub.url), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const one = { blobId: randomBytes(32).toString("base64url"), size: 3 }, two = { ...one, blobId: randomBytes(32).toString("base64url") };
   const sign = async (op: "put" | "get", blob = one) => {

@@ -251,7 +251,7 @@ const api = {
     signIn: (input: BridgeSignInInput) => ipcRenderer.invoke(CHANNELS.bridge.signIn, input),
     signOut: (removeAccountObjects = false) => ipcRenderer.invoke(CHANNELS.bridge.signOut, removeAccountObjects),
     refreshAuth: () => ipcRenderer.invoke(CHANNELS.bridge.refreshAuth),
-    approveBackend: (input: Pick<BridgeApprovalRequest, "requestId" | "backendId" | "publicKey" | "code">) => ipcRenderer.invoke(CHANNELS.bridge.approveBackend, input),
+    approveBackend: (input: Pick<BridgeApprovalRequest, "requestId" | "backendId" | "publicKey" | "signingPublicKey" | "code">) => ipcRenderer.invoke(CHANNELS.bridge.approveBackend, input),
     confirmAccountKey: (fingerprint: string) => ipcRenderer.invoke(CHANNELS.bridge.confirmAccountKey, fingerprint),
     rejectBackend: (requestId: string) => ipcRenderer.invoke(CHANNELS.bridge.rejectBackend, requestId),
     requestApproval: () => ipcRenderer.invoke(CHANNELS.bridge.requestApproval),

@@ -21,7 +21,7 @@ async function node(hub: Hub, id: string, extra: Partial<BridgeEngineOptions> = 
     INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default','${id}');`);
   const transport = extra.transport ?? hub.connect(id);
   const engine = createBridgeEngine({ sqlite: fixture.sqlite, backendId: id, recordKey: bridgeTestRecordKey,
-    codec: bridgeTestCodec, transport, ...extra });
+    transport, ...extra, codec: hub.codec(id, extra.codec ?? bridgeTestCodec) });
   await engine.bootstrap(); return { ...fixture, fixture, engine, id };
 }
 async function on<T>(n: Node, work: (service: typeof atlasService) => T | Promise<T>): Promise<T> {
@@ -74,7 +74,7 @@ describe("Atlas editing between independent migrated backends", () => {
     expect(a.engine.pending().filter((entry) => entry.table_name.startsWith("atlas_"))).toEqual([]);
     await a.engine.stop();
     a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: bridgeTestRecordKey,
-      codec: bridgeTestCodec, transport: hub.connect("A") });
+      codec: hub.codec("A"), transport: hub.connect("A") });
     await a.engine.bootstrap(); await settle(a, b);
     expect((await page(b, original)).revision.id).toBe(original.revision.id);
     expect((await page(b, original)).item.currentRevisionId).toBe(original.revision.id);
@@ -87,7 +87,7 @@ describe("Atlas editing between independent migrated backends", () => {
     expect(b.sqlite.prepare("SELECT 1 FROM bridge_parked WHERE reason='schema' LIMIT 1").get()).toBeTruthy();
     await b.engine.stop();
     b.engine = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: bridgeTestRecordKey,
-      codec: bridgeTestCodec, transport: hub.connect("B") });
+      codec: hub.codec("B"), transport: hub.connect("B") });
     await b.engine.bootstrap(); await settle(a, b);
     expect((await page(b, original)).revision.id).toBe(original.revision.id);
     expect(b.sqlite.prepare("SELECT * FROM bridge_parked").all()).toEqual([]);
@@ -183,7 +183,7 @@ describe("Atlas editing between independent migrated backends", () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
     const base = await create(a); await settle(a, b); await a.engine.stop();
     a.sqlite.exec("UPDATE bridge_config SET blob_roots_version=0,backfill_done=0,backfill_table=NULL,backfill_pk=NULL");
-    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: bridgeTestRecordKey, codec: bridgeTestCodec, transport: hub.connect("A") });
+    a.engine = createBridgeEngine({ sqlite: a.sqlite, backendId: "A", recordKey: bridgeTestRecordKey, codec: hub.codec("A"), transport: hub.connect("A") });
     await a.engine.bootstrap();
     expect(a.engine.pending().some((entry) => entry.table_name === "atlas_page_revisions")).toBe(true);
     await on(b, async (s) => { await s.update({ ...identity(base), trashed: true }); await s.remove(identity(base)); }); await drain(b);
@@ -237,7 +237,7 @@ describe("Atlas editing between independent migrated backends", () => {
     const body = bridgeTestCodec.open(logged.envelope).body as BridgeUpsertBody;
     const changed = bridgeTestCodec.seal({ ...logged.envelope.header, origin: "B", hlc: { physicalMs: Date.now() + 10_000, counter: 0 } },
       { ...body, values: { ...body.values, title: "Rewritten history" } });
-    await hub.connect("B").push("account", [changed]);
+    await hub.connect("B").push("account", [hub.sign(changed)]);
     b.sqlite.exec("INSERT INTO collections(id,account_id,name) VALUES('after','default','After')"); await drain(b);
     await a.engine.pull();
     expect((await page(a, base)).revision.title).toBe("Base"); expect(a.engine.unverified()).toBe(1);

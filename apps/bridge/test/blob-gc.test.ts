@@ -1,3 +1,4 @@
+import { signFixture } from "./record-signing.mjs";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -33,6 +34,7 @@ async function client(account: string, backend = "A") {
   });
   await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
   const rpc = (message: BridgeClientMessage) => new Promise<BridgeServerMessage>((resolve, reject) => {
+    if (message.type === "push") for (const record of message.records) signFixture(record, account);
     const requestId = randomUUID(); pending.set(requestId, { resolve, reject }); socket.send(JSON.stringify({ requestId, message }));
   });
   return {
@@ -98,7 +100,7 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
     const after = await usage(account);
     expect(after.usedBytes).toBe(after.recordBytes + shared.size + 40);
     expect((await fetch(read.chunks[0].url)).status).toBe(404);
-    expect(await a.push([first])).toMatchObject({ results: [{ deleted: deletion(first) }] });
+    expect(await a.push([first])).toMatchObject({ results: [{ deleted: expect.objectContaining({ header: expect.objectContaining({ op: "delete", rowKey: first.header.rowKey }) }) }] });
     await a.push([deletion(second)]); await a.compact(); await elapseGrace(account); await a.compact();
     expect(await usage(account)).toMatchObject({ blobBytes: 0, reservedBytes: 0 });
     expect(await exists(kept.keys)).toEqual([false]);
@@ -207,7 +209,7 @@ describe("R2 collection through the real local Worker/DO/R2 runtime", () => {
     await a.push([legacy]); await elapseGrace(account); await a.compact();
     expect(await exists(unused.keys)).toEqual([true]); // Its liveness is still unknown.
     const upgrade = { ...legacy, header: { ...legacy.header, blobs: [ref] } } as BridgeEnvelope;
-    expect(await b.push([upgrade])).toMatchObject({ results: [{ error: "notOwner" }] });
+    await expect(b.push([upgrade])).rejects.toThrow(/signature/);
     expect(await a.push([{ ...upgrade, header: { ...upgrade.header, hlc: { physicalMs: 0, counter: 0 } } }])).toMatchObject({ results: [{ seq: 1 }] });
     expect(await a.push([upgrade])).toMatchObject({ results: [{ seq: 2 }] });
     await a.compact();

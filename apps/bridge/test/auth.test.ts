@@ -8,7 +8,7 @@ import { bridgeApprovalCode, bridgeBase64, type BridgeAccountKeys, type BridgeAp
 import type { BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
 import { parseBridgeServerFrame } from "@mains/contracts/bridge-wire";
 import type { BridgeServerMessage } from "@mains/contracts/bridge-protocol";
-import { generateBridgeDeviceKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
+import { generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
 import { bridgeRecoveryPublicKey, signBridgeRecovery } from "../../../packages/backend/src/modules/bridge/bridge.recovery";
 import { startBridgeLoopback } from "../../../packages/backend/src/modules/bridge/bridge.login";
 import { createBridgeIdentity } from "../../../packages/backend/src/modules/bridge/bridge.identity";
@@ -31,10 +31,10 @@ async function renew(token: string, successor = `b7_${randomBytes(32).toString("
   return { token: successor, ...receipt };
 }
 async function register(browser: Awaited<ReturnType<typeof login>>, backendId = randomUUID()) {
-  const pair = generateBridgeDeviceKeyPair(), publicKey = bridgeBase64(pair.publicKey);
-  const response = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Cookie: browser.cookie, Origin: new URL(hub.url).origin, "Content-Type": "application/json" }, body: JSON.stringify({ backendId, publicKey, label: backendId, platform: "test" }) });
+  const pair = generateBridgeDeviceKeyPair(), publicKey = bridgeBase64(pair.publicKey), signingPublicKey = bridgeBase64(generateBridgeSigningKeyPair().publicKey);
+  const response = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Cookie: browser.cookie, Origin: new URL(hub.url).origin, "Content-Type": "application/json" }, body: JSON.stringify({ backendId, publicKey, signingPublicKey, label: backendId, platform: "test" }) });
   expect(response.status).toBe(201);
-  return { ...await response.json() as { accountId: string; token: string }, backendId, pair, publicKey, browser };
+  return { ...await response.json() as { accountId: string; token: string }, backendId, pair, publicKey, signingPublicKey, browser };
 }
 type Backend = Awaited<ReturnType<typeof register>>;
 const recoveryWrap = (): BridgeAccountKeys["recovery"] => ({ v: 1, kdf: { name: "argon2id", memoryKiB: 65536, iterations: 3, parallelism: 1, salt: randomBytes(16).toString("base64url") }, nonce: randomBytes(24).toString("base64url"), payload: randomBytes(48).toString("base64url") });
@@ -77,6 +77,31 @@ async function pullSocket(socket: WebSocket) {
 }
 
 describe("Verified sign-in and backend key ceremonies", () => {
+  it("retains approved writer keys after revocation/re-enrollment and prevents assigning old keys to another backend", async () => {
+    const a = await owner(), b = await register(a.browser); await approval(a, b);
+    const pending = await register(a.browser); expect((await rpc("/v1/keys/writers", pending.token)).status).toBe(403);
+    expect((await rpc(`/v1/backends/${b.backendId}`, a.token, undefined, "DELETE")).status).toBe(200);
+    const replacement = await register(a.browser, b.backendId); await approval(a, replacement);
+    expect(await (await rpc("/v1/keys/writers", a.token)).json()).toEqual(expect.arrayContaining([
+      { backendId: b.backendId, signingPublicKey: b.signingPublicKey }, { backendId: b.backendId, signingPublicKey: replacement.signingPublicKey },
+    ]));
+    const reused = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Cookie: a.browser.cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ backendId: randomUUID(), publicKey: b.publicKey, signingPublicKey: b.signingPublicKey, label: "Other", platform: "test" }) });
+    expect(reused.status).toBe(409);
+  });
+  it("requires both public keys at registration and retains the exact signing identity", async () => {
+    const browser = await login(), backendId = randomUUID(), publicKey = bridgeBase64(generateBridgeDeviceKeyPair().publicKey);
+    for (const signingPublicKey of [undefined, "invalid", randomBytes(31).toString("base64url")]) {
+      const response = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Cookie: browser.cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({ backendId, publicKey, signingPublicKey, label: "Device", platform: "test" }) });
+      expect(response.status).toBe(400);
+    }
+    const b = await register(browser, backendId);
+    expect(await (await rpc("/v1/keys/mine", b.token)).json()).toMatchObject({ backend: { publicKey: b.publicKey, signingPublicKey: b.signingPublicKey } });
+    const reused = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Cookie: browser.cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ backendId: randomUUID(), publicKey, signingPublicKey: b.signingPublicKey, label: "Other device", platform: "test" }) });
+    expect(reused.status).toBe(400);
+  });
   it("keeps account login separate from approval; pending tokens cannot use the log, blobs or approve peers", async () => {
     const browser = await login(), b = await register(browser);
     expect((await rpc("/v1/log", b.token)).status).toBe(401);
@@ -104,14 +129,20 @@ describe("Verified sign-in and backend key ceremonies", () => {
   it("binds approval to account, request, recipient public key and a matching code, and rejects replay", async () => {
     const a = await owner(), b = await register(a.browser), outsider = await owner(), request = await requestApproval(b);
     const body = { ...request, wrap: sealBridgeAccountKey(a.key, b.pair.publicKey) };
-    expect(request.code).toBe(await bridgeApprovalCode(b.publicKey));
+    expect(request.code).toBe(await bridgeApprovalCode(b));
     expect(request.code.replaceAll("-", "")).toHaveLength(12);
     expect((await rpc("/v1/keys/wraps", a.token, { ...body, code: "ABC234" })).status).toBe(400);
     expect((await rpc("/v1/keys/wraps", a.token, { ...body, code: "WRONG1" })).status).toBe(400);
     expect((await rpc("/v1/keys/wraps", a.token, { ...body, requestId: randomUUID() })).status).toBe(409);
-    expect((await rpc("/v1/keys/wraps", outsider.token, body)).status).toBe(409);
+    expect((await rpc("/v1/keys/wraps", outsider.token, body)).status).toBe(400);
+    expect((await rpc("/v1/keys/wraps", outsider.token, { ...body,
+      code: await bridgeApprovalCode({ ...b, accountId: outsider.accountId }) })).status).toBe(409);
     const wrongPublicKey = bridgeBase64(generateBridgeDeviceKeyPair().publicKey);
-    expect((await rpc("/v1/keys/wraps", a.token, { ...body, publicKey: wrongPublicKey, code: await bridgeApprovalCode(wrongPublicKey) })).status).toBe(409);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...body, publicKey: wrongPublicKey, code: await bridgeApprovalCode({ ...b, publicKey: wrongPublicKey }) })).status).toBe(409);
+    const wrongSigningPublicKey = bridgeBase64(generateBridgeSigningKeyPair().publicKey);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...body, signingPublicKey: wrongSigningPublicKey })).status).toBe(400);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...body, signingPublicKey: wrongSigningPublicKey,
+      code: await bridgeApprovalCode({ ...b, signingPublicKey: wrongSigningPublicKey }) })).status).toBe(409);
     expect((await rpc("/v1/keys/wraps", a.token, body)).status).toBe(200);
     const mine = await (await rpc("/v1/keys/mine", b.token)).json() as { wrap: BridgeSealedAccountKey };
     expect(openBridgeAccountKey(mine.wrap, b.pair.secretKey)).toEqual(Uint8Array.from(a.key));
@@ -134,14 +165,16 @@ describe("Verified sign-in and backend key ceremonies", () => {
     const a = await owner(), b = await register(a.browser), c = await register(a.browser), db = await hub.database();
     const wrap = sealBridgeAccountKey(a.key, b.pair.publicKey);
     const { challenge } = await (await rpc("/v1/keys/recovery/challenge", b.token, {})).json() as { challenge: string };
-    const signature = signBridgeRecovery(a.key, b.accountId, b.backendId, b.publicKey, challenge, wrap), body = { wrap, signature, challenge };
+    const signature = signBridgeRecovery(a.key, b, challenge, wrap), body = { wrap, signature, challenge };
     expect((await rpc("/v1/keys/recovery/unlock", c.token, body)).status).toBe(403);
     expect((await rpc("/v1/keys/recovery/unlock", b.token, { ...body, wrap: sealBridgeAccountKey(a.key, c.pair.publicKey) })).status).toBe(403);
     expect((await rpc("/v1/keys/recovery/unlock", b.token, { ...body, signature: randomBytes(64).toString("base64url") })).status).toBe(403);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { ...body,
+      signature: signBridgeRecovery(a.key, { ...b, signingPublicKey: c.signingPublicKey }, challenge, wrap) })).status).toBe(403);
     await db.prepare("UPDATE bridge_backends SET challenge_expires_at=0 WHERE account_id=? AND backend_id=?").bind(b.accountId, b.backendId).run();
     expect((await rpc("/v1/keys/recovery/unlock", b.token, body)).status).toBe(403);
     const fresh = await (await rpc("/v1/keys/recovery/challenge", b.token, {})).json() as { challenge: string };
-    const valid = { wrap, challenge: fresh.challenge, signature: signBridgeRecovery(a.key, b.accountId, b.backendId, b.publicKey, fresh.challenge, wrap) };
+    const valid = { wrap, challenge: fresh.challenge, signature: signBridgeRecovery(a.key, b, fresh.challenge, wrap) };
     expect((await rpc("/v1/keys/recovery/unlock", b.token, body)).status).toBe(403);
     expect((await rpc("/v1/keys/recovery/unlock", b.token, valid)).status).toBe(200);
     expect((await rpc("/v1/keys/recovery/unlock", b.token, valid)).status).toBe(409);
@@ -310,7 +343,7 @@ describe("Native browser sign-in with loopback and PKCE", () => {
       const bad = new URL(callback); bad.searchParams.set("state", randomBytes(32).toString("base64url")); expect((await fetch(bad)).status).toBe(400);
       expect((await rpc("/v1/auth/exchange", "", { code: callback.searchParams.get("code"), verifier: randomBytes(32).toString("base64url"), redirectUri: args.redirectUri })).status).toBe(401);
       expect((await fetch(callback)).status).toBe(200); expect(token).toBeTruthy();
-      const registration = await rpc("/v1/backends", token!, { backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), label: "Desktop", platform: "darwin" }); expect(registration.status).toBe(201);
+      const registration = await rpc("/v1/backends", token!, { backendId: randomUUID(), publicKey: randomBytes(32).toString("base64url"), signingPublicKey: randomBytes(32).toString("base64url"), label: "Desktop", platform: "darwin" }); expect(registration.status).toBe(201);
       const saved = await (await hub.database()).prepare("SELECT count(*) AS n FROM bridge_login_codes WHERE user_id=?").bind(browser.user.id).first(); expect(saved!.n).toBe(0);
       expect((await rpc("/v1/auth/exchange", "", { code: callback.searchParams.get("code"), verifier: randomBytes(32).toString("base64url"), redirectUri: args.redirectUri })).status).toBe(401);
     } finally { listener.close(); }
