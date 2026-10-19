@@ -1,5 +1,5 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import type { BridgeRpcRequest, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
+import type { BridgeEnvelope, BridgeRpcRequest, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES, parseBridgeRpcRequest } from "@mains/contracts/bridge-wire";
 import { authenticate, bridgeDevelopmentEnabled, createBridgeSocketAuth, type BridgeIdentity, type DevAuthEnv } from "./auth";
 import { handleSignIn } from "./sign-in";
@@ -17,6 +17,8 @@ import { createBridgeLimits } from "./limits";
 import { createSqlUsage, type SqlUsageEnv } from "./sql-usage";
 import { reportWriteBudget, subscriptionWriteBudgetPeriod, type WriteBudgetPeriod } from "./write-budget";
 import { verifyBridgePublication } from "./signatures";
+import { createHubMembership, type MembershipAppend } from "./membership";
+import { bridgeMember, bridgeWriterKeyAt, validateBridgeFence, validateBridgeMembershipEntry } from "@mains/contracts/bridge-membership";
 
 interface Env extends DevAuthEnv, BlobEnv, QuotaEnv, SqlUsageEnv { ACCOUNT_HUB: DurableObjectNamespace<AccountHub> }
 interface Session extends BridgeIdentity { streams: BridgeStream[] }
@@ -44,16 +46,38 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(accountId)).subscriptionChanged(accountId);
       }); if (response) return response;
     }
-    if (url.pathname === "/v1/keys/writers" && !env.AUTH_DB && bridgeDevelopmentEnabled(env) && request.method === "GET") {
+    if ((url.pathname === "/v1/membership" || url.pathname === "/v1/membership/fence") && !env.AUTH_DB && bridgeDevelopmentEnabled(env)) {
+      // Development tokens have no D1 registration: entries are appended directly, under the same signed rules.
       const identity = await authenticate(request, env);
       if (!identity) return new Response("Unauthorized", { status: 401 });
-      return Response.json(await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId)).writerKeys(), { headers: { "Cache-Control": "no-store" } });
+      const hub = env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(identity.accountId));
+      if (url.pathname === "/v1/membership/fence") {
+        const seq = Number(url.searchParams.get("seq")), after = Number(url.searchParams.get("after") ?? -1);
+        if (request.method !== "GET" || !Number.isSafeInteger(seq) || seq < 1 || !Number.isSafeInteger(after) || after < -1) return Response.json({ error: "Invalid fence cursor" }, { status: 400 });
+        return Response.json({ signatures: await hub.membershipFence(seq, after) }, { headers: { "Cache-Control": "no-store" } });
+      }
+      if (request.method === "GET") {
+        const after = Number(url.searchParams.get("after") ?? -1);
+        if (!Number.isSafeInteger(after) || after < -1) return Response.json({ error: "Invalid membership cursor" }, { status: 400 });
+        return Response.json(await hub.membershipPull(after), { headers: { "Cache-Control": "no-store" } });
+      }
+      if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, POST" } });
+      const body = await request.json().catch(() => null) as { entry?: { accountId?: unknown } } | null;
+      if (body?.entry?.accountId !== identity.accountId) return Response.json({ error: "Membership entry belongs to another account" }, { status: 400 });
+      const result = await hub.membershipAppend(body.entry);
+      return Response.json(result, { status: result.status === "invalid" ? 403 : result.status === "conflict" ? 409 : 200 });
     }
-    if (url.pathname.startsWith("/v1/backends") || url.pathname.startsWith("/v1/keys/") || url.pathname.startsWith("/v1/approvals"))
+    if (url.pathname.startsWith("/v1/backends") || url.pathname.startsWith("/v1/keys/") || url.pathname.startsWith("/v1/approvals") || url.pathname.startsWith("/v1/membership"))
       return handleDevices(request, env, {
         rotated,
         async approval(account, entry) { await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).notifyApproval(entry); },
         async revoked(account, backend) { await env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).revoke(backend); },
+        membership: {
+          pull: (account, after) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).membershipPull(after),
+          state: (account) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).membershipState(),
+          append: (account, entry) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).membershipAppend(entry),
+          fence: (account, seq, after) => env.ACCOUNT_HUB.get(env.ACCOUNT_HUB.idFromName(account)).membershipFence(seq, after),
+        },
       });
     if (url.pathname.startsWith("/v1/blobs/")) return handleBlobs(request, env, {
       rotated,
@@ -108,6 +132,7 @@ export class AccountHub extends DurableObject<Env> {
   private quota: ReturnType<typeof createBlobQuota>;
   private subscriptions: ReturnType<typeof createBridgeSubscriptions>;
   private backup: ReturnType<typeof createHubBackup>;
+  private membership: ReturnType<typeof createHubMembership>;
   private socketAuth: ReturnType<typeof createBridgeSocketAuth>;
   private usage: ReturnType<typeof createSqlUsage>;
   constructor(ctx: DurableObjectState, env: Env) {
@@ -117,15 +142,58 @@ export class AccountHub extends DurableObject<Env> {
       const store = createHubStore(this.usage.storage), subscriptions = createBridgeSubscriptions(env);
       const limits = createBridgeLimits(env, { onCache: (hit) => this.usage.limitsCache(hit) });
       return { store, subscriptions, quota: createBlobQuota(this.usage.storage, env, () => store.recordBytes(), subscriptions, limits),
-        backup: createHubBackup(this.usage.storage) };
+        backup: createHubBackup(this.usage.storage), membership: createHubMembership(this.usage.storage) };
     });
-    this.store = domain.store; this.subscriptions = domain.subscriptions; this.quota = domain.quota; this.backup = domain.backup;
+    this.store = domain.store; this.subscriptions = domain.subscriptions; this.quota = domain.quota; this.backup = domain.backup; this.membership = domain.membership;
     this.socketAuth = createBridgeSocketAuth(env);
+  }
+  private async replayHorizon() {
+    // Pushes without a log never get here: boundToMembership already refused them.
+    const state = await this.membershipState();
+    return state ? { horizon: this.membership.horizon(), head: { seq: state.seq, hash: state.head } } : undefined;
+  }
+  membershipPull(after: number) {
+    if (!Number.isSafeInteger(after) || after < -1) throw new Error("Invalid membership cursor");
+    return this.usage.run("membership", () => this.membership.pull(after));
+  }
+  membershipState() { return this.usage.run("membership", () => this.membership.state()); }
+  /** Only a current member publishes, and each record binds a head of this log at which the session's key
+   * was its backend's (MEMBERSHIP.md §5). A removal therefore fences everything after it. */
+  private async boundToMembership(session: Session, records: BridgeEnvelope[]) {
+    const state = await this.membershipState();
+    return !!state && bridgeMember(state, session.backendId)?.signingPublicKey === session.signingPublicKey &&
+      records.every(({ auth }) => !!auth && state.hashes[auth.membership.seq] === auth.membership.hash &&
+        bridgeWriterKeyAt(state, session.backendId, session.signingPublicKey, auth.membership.seq));
+  }
+  /** Serialized with publications. Expected refusals return a status and never reset the object. */
+  membershipFence(seq: number, after: number): string[] {
+    if (!Number.isSafeInteger(seq) || seq < 1 || !Number.isSafeInteger(after) || after < -1) throw new Error("Invalid fence cursor");
+    return this.usage.run("membership", () => this.membership.fence(seq, after));
+  }
+  membershipAppend(entry: unknown): Promise<MembershipAppend> {
+    return this.usage.run("membership", () => this.ctx.blockConcurrencyWhile(async () => {
+      try { validateBridgeMembershipEntry(entry); }
+      catch (error) { return { status: "invalid" as const, error: error instanceof Error ? error.message : "Invalid Bridge membership entry" }; }
+      // A removal's fence must be exactly the writer's account records stored here, so nobody uploads the
+      // list. Anything published or compacted after the remover's read makes it read again and sign on the
+      // new head, so no device applies a record the fence refuses.
+      let fence: string[] | undefined;
+      if (entry.kind === "remove") {
+        fence = [...new Set(this.store.accountSignatures(entry.body.backendId))].sort();
+        try { await validateBridgeFence(fence, entry.body.account); }
+        catch {
+          const state = await this.membership.state();
+          return { status: "conflict" as const, head: state ? { seq: state.seq, hash: state.head } : null };
+        }
+      }
+      const result = await this.membership.append(entry, fence);
+      if (result.status === "appended") { this.broadcast({ type: "membership", seq: result.head.seq }); await this.schedule(this.membership.nextHorizonAt()); }
+      return result;
+    }));
   }
   snapshotBegin() { return this.usage.run("snapshot", () => this.backup.begin()); }
   snapshotPage(token: string, table: string, after: number) { return this.usage.run("snapshot", () => this.backup.page(token, table, after)); }
   snapshotValid(token: string) { return this.usage.run("snapshot", () => this.backup.valid(token)); }
-  writerKeys() { return this.store.writerKeys(); }
   async getSubscription(accountId: string) { return this.subscriptions.status(accountId); }
   /** Internal RPC seam for a future billing event consumer; no HTTP mutation route. */
   async subscriptionChanged(accountId: string) { this.subscriptions.invalidate(accountId); this.quota.invalidateLimits(accountId); }
@@ -190,7 +258,6 @@ export class AccountHub extends DurableObject<Env> {
       const [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server);
       server.serializeAttachment({ ...identity, streams: [] } satisfies Session);
-      this.store.rememberWriter(identity.backendId, identity.signingPublicKey);
       this.store.seen(identity.backendId);
       for (const entry of this.store.presence()) this.send(server, { type: "presence", backendId: entry.backend_id,
         online: this.sockets().some((socket) => this.session(socket).backendId === entry.backend_id), lastSeen: new Date(entry.last_seen).toISOString(),
@@ -216,6 +283,9 @@ export class AccountHub extends DurableObject<Env> {
     if (message.type === "push" && !await verifyBridgePublication(session, message.records)) {
       this.send(socket, { requestId, error: { code: "invalidSignature", message: "Bridge device signature is invalid" } }); return;
     }
+    if (message.type === "push" && !await this.boundToMembership(session, message.records)) {
+      this.send(socket, { requestId, error: { code: "invalidMembership", message: "Bridge records must bind this account's membership" } }); return;
+    }
     // Maintenance runs on its own alarms; only local development and tests run it on demand.
     if (message.type === "compact" && !bridgeDevelopmentEnabled(this.env)) {
       this.send(socket, { requestId, error: { code: "forbidden", message: "Bridge compaction runs on its own schedule" } }); return;
@@ -233,11 +303,12 @@ export class AccountHub extends DurableObject<Env> {
             const publication = await this.ctx.blockConcurrencyWhile(async () => {
               try {
                 if (socket.readyState !== WebSocket.OPEN || !await this.socketAuth.active(session)) return null;
-                if (message.records.every((record) => record.header.op === "delete")) return this.store.push(session.backendId, message.stream, message.records);
+                const replay = await this.replayHorizon();
+                if (message.records.every((record) => record.header.op === "delete")) return this.store.push(session.backendId, message.stream, message.records, undefined, replay);
                 const quota = await this.quota.status(session.accountId);
                 period = subscriptionWriteBudgetPeriod(quota.subscription);
                 return this.store.push(session.backendId, message.stream, message.records, { ...quota, blobBytes: quota.blobBytes + quota.reservedBytes, canUpload: quota.subscription!.canUpload,
-                  hasBlobs: (blobs) => this.quota.hasBlobs(blobs), periodStart: period.start });
+                  hasBlobs: (blobs) => this.quota.hasBlobs(blobs), periodStart: period.start }, replay);
               } catch { return null; } // A lookup failure denies publication without resetting every socket in the DO.
             });
             if (!publication) throw new Error("Bridge publication unavailable");
@@ -283,8 +354,9 @@ export class AccountHub extends DurableObject<Env> {
     await this.ctx.blockConcurrencyWhile(async () => {
       const { hasMore } = this.store.compact();
       await this.quota.collect();
-      const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry()].filter((value): value is number => value !== null);
-      if (hasMore) deadlines.push(Date.now() + 1000);
+      const receipts = this.store.compactReceipts(this.membership.horizon());
+      const deadlines = [this.store.nextExpiry(), this.quota.nextExpiry(), this.membership.nextHorizonAt()].filter((value): value is number => value !== null);
+      if (hasMore || receipts.hasMore) deadlines.push(Date.now() + 1000);
       if (deadlines.length) await this.schedule(Math.max(Date.now() + 1000, Math.min(...deadlines)));
     });
   }

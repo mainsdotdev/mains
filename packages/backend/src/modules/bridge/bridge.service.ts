@@ -129,7 +129,7 @@ export const bridgeService = {
   getAuthStatus(): BridgeAuthStatus {
     const sqlite = getSqlite(), backendId = getLocalBackendId();
     const current = identity?.status() ?? { state: "signed-out" as const, hubUrl: null, accountId: null, email: null, backendId,
-      label: hostname(), verificationCode: null, accountFingerprint: null, login: null, approvals: [], backends: [], recoveryCodeAvailable: false, error: startupError };
+      label: hostname(), verificationCode: null, joinCodes: [], login: null, approvals: [], backends: [], recoveryCodeAvailable: false, error: startupError };
     const runs = (sqlite.prepare("SELECT count(*) n FROM runs WHERE owner_backend_id=?").get(backendId) as { n: number }).n;
     const pages = (sqlite.prepare("SELECT count(*) n FROM atlas_items WHERE kind='page'").get() as { n: number }).n;
     const history = (sqlite.prepare("SELECT count(*) n FROM bridge_exclusions WHERE reason IN ('history','enrollment')").get() as { n: number }).n;
@@ -150,7 +150,7 @@ export const bridgeService = {
   },
   async refreshAuth() { await identity?.refresh(); return this.getAuthStatus(); },
   async approveBackend(input: Parameters<BridgeIdentityClient["approve"]>[0]) { if (!identity) throw new Error("Sign in first"); await identity.approve(input); },
-  async confirmAccountKey(fingerprint: string) { if (!identity) throw new Error("Sign in first"); await identity.confirmAccountKey(fingerprint); },
+  async confirmAccountKey(joinCode: string) { if (!identity) throw new Error("Sign in first"); await identity.confirmAccountKey(joinCode); },
   async rejectBackend(requestId: string) { if (!identity) throw new Error("Sign in first"); await identity.reject(requestId); },
   async requestApproval() { if (!identity) throw new Error("Sign in first"); await identity.requestApproval(); },
   async revokeBackend(backendId: string) { if (!identity) throw new Error("Sign in first"); await identity.revoke(backendId); },

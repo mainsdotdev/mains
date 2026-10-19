@@ -12,7 +12,10 @@ import { createBridgeBlobs } from "./bridge.blobs";
 import { createBridgeBlobRecords, type BridgeFileTable } from "./bridge.blob-records";
 import { refreshClaudeSessionMirrors } from "./bridge.session-mirror";
 import { createBridgeSigningCodec } from "./bridge.signing";
-import { bridgeBytes } from "@mains/contracts/bridge-auth";
+import { BRIDGE_MEMBERSHIP_HEARTBEAT_MS, bridgeMember } from "@mains/contracts/bridge-membership";
+import { bridgeAccountKeyCommitment } from "./bridge.keys";
+import { bridgeMembershipConflict, createBridgeMembershipView, deviceSigner, signBridgeMembershipEntry } from "./bridge.membership";
+import { bridgeHttp } from "./bridge.login";
 
 export interface BridgeReplicatorOptions {
   onApproval?: (request: import("@mains/contracts/bridge-auth").BridgeApprovalRequest) => void;
@@ -52,7 +55,9 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   let requested = false, failures = 0, subscribed = "";
   // Consecutive write cycles that sent nothing while changes stayed queued, and the outbox they saw.
   let stalls = 0, stalledOutbox = "";
-  let pullAllRequested = true, nextSafetyPullAt = 0;
+  // Membership is re-read at start, after a reconnect or failure (hints may have been missed), on a hint
+  // and with the safety read; a page that binds a newer head also refreshes it first.
+  let pullAllRequested = true, nextSafetyPullAt = 0, membershipStale = true;
   const changedStreams = new Set<BridgeStream>();
   let quota: BridgeQuota | null = null;
   let quotaDirty = true, nextQuotaRefreshAt = 0;
@@ -102,10 +107,11 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     onApproval: options.onApproval,
     onAccessChanged: options.onAccessChanged,
     onChanged: (stream) => { changedStreams.add(stream); quotaDirty = true; requested = true; schedule(0); },
+    onMembership: (seq) => { if (seq > (membership.current()?.seq ?? -1)) { membershipStale = true; requested = true; schedule(0); } },
     onStatusChange(next) {
       if (stopped) return;
       if (next === "offline") {
-        online.clear(); subscribed = ""; pullAllRequested = true; state = "offline";
+        online.clear(); subscribed = ""; pullAllRequested = true; membershipStale = true; state = "offline";
         if (!inFlight && !failures) { requested = true; schedule(1000); }
       }
       else if (next === "connecting") state = "connecting";
@@ -115,26 +121,46 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   });
   const blobs = options.dataDir ? createBridgeBlobs({ dataDir: options.dataDir, accountKey: config.accountKey, url: config.url, token: options.token ?? config.token }) : undefined;
   const files = blobs ? createBridgeBlobRecords({ sqlite, backendId, dataDir: options.dataDir!, blobs }) : undefined;
-  const signedCodec = createBridgeSigningCodec(createBridgeSealingCodec(config.accountKey), config, (writer, key) =>
-    !!sqlite.prepare("SELECT 1 FROM bridge_writer_keys WHERE backend_id=? AND signing_public_key=?").get(writer, key));
-  async function refreshWriters() {
-    const token = options.token ? await options.token() : config.token;
-    const response = await fetch(new URL("/v1/keys/writers", config.url.replace(/^ws/, "http")), { headers: { Authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) throw new Error(`Bridge writer lookup failed (${response.status})`);
-    const entries: unknown = await response.json();
-    if (!Array.isArray(entries) || entries.length > 4096) throw new Error("Invalid Bridge writer directory");
-    for (const entry of entries) {
-      if (!entry || typeof entry.backendId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(entry.backendId)) throw new Error("Invalid Bridge writer identity");
-      bridgeBytes(entry.signingPublicKey, 32);
-    }
-    sqlite.transaction(() => { for (const entry of entries) sqlite.prepare("INSERT OR IGNORE INTO bridge_writer_keys VALUES(?,?)").run(entry.backendId, entry.signingPublicKey); })();
+  // Identity supplies membership verified from its pinned head; a development config verifies the hub's log
+  // from genesis against its own account key.
+  const membership = config.membership ?? createBridgeMembershipView({ hubUrl: config.url.replace(/^ws/, "http"), token: async () => options.token ? options.token() : config.token,
+    accountId: config.accountId, accountKeyCommitment: bridgeAccountKeyCommitment(config.accountKey) });
+  async function refreshMembership() {
+    const state = await membership.refresh();
+    if (!bridgeMember(state, backendId)) throw new Error("This backend was removed from the Bridge account");
+    return state;
   }
+  const membershipSecret = Uint8Array.from(config.signingPrivateKey);
+  let nextHeartbeatAt = 0;
+  /** Keeps the replay horizon moving while membership is quiet (MEMBERSHIP.md §8). The hub's time only
+   * triggers it; a device tries at most once a day whatever the hub reports. Best effort: another member
+   * may get there first, and replication never waits on it. */
+  async function heartbeat() {
+    const state = membership.current(), newest = membership.headAppendedAt(), self = state && bridgeMember(state, backendId);
+    if (!self || newest === null || Date.now() < nextHeartbeatAt || Date.now() - newest < BRIDGE_MEMBERSHIP_HEARTBEAT_MS) return;
+    nextHeartbeatAt = Date.now() + 86_400_000;
+    try {
+      const entry = signBridgeMembershipEntry(state, { kind: "checkpoint", body: { horizon: true } }, deviceSigner(self), membershipSecret);
+      await bridgeHttp(config.url.replace(/^ws/, "http"), "/v1/membership", options.token ? await options.token() : config.token, { entry });
+      await refreshMembership();
+    } catch { /* A concurrent change or an unreachable hub leaves this to the next day or another member. */ }
+  }
+  const signedCodec = createBridgeSigningCodec(createBridgeSealingCodec(config.accountKey), config, membership);
   const engine = createBridgeEngine({ sqlite, backendId, recordKey: deriveBridgeKeys(config.accountKey).recordKey,
     codec: signedCodec, transport, blobs: files,
     async prepareIncoming(envelopes) {
-      if (envelopes.some(({ header, auth }) => auth?.accountId === config.accountId && header.origin !== backendId &&
-          !sqlite.prepare("SELECT 1 FROM bridge_writer_keys WHERE backend_id=? AND signing_public_key=?").get(header.origin, auth.signingPublicKey))) await refreshWriters();
+      // Records bind their writer's head: catch up before a page that binds a newer one, and stop on
+      // another history instead of applying any of it (MEMBERSHIP.md §5).
+      const bound = envelopes.flatMap(({ auth }) => auth?.accountId === config.accountId && Number.isSafeInteger(auth.membership?.seq) && auth.membership.seq >= 0 ? [auth.membership] : []);
+      let state = membership.current();
+      if (!state || bound.some((head) => head.seq > state!.seq)) state = await refreshMembership();
+      for (const head of bound) {
+        if (head.seq > state.seq) throw new Error("Bridge records bind account membership the hub did not provide");
+        if (state.hashes[head.seq] !== head.hash) throw bridgeMembershipConflict(new Error("a record binds a different history"));
+      }
     },
+    // The hub refused records bound below its replay horizon: bind the newest head and sign again once.
+    async membershipStale() { await refreshMembership(); },
     onApplied: (changes) => { quotaDirty = true; options.onApplied?.(changes); },
     stageLocalBeforePull: options.stageLocalBeforePull || !!binding?.enrollment_staging });
   sqlite.prepare("UPDATE bridge_config SET account_fingerprint=? WHERE id=1").run(fingerprint);
@@ -176,13 +202,14 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   async function cycle(refreshUsage = false) {
     requested = false;
     const incoming = new Set(changedStreams); changedStreams.clear();
-    let pullAll = pullAllRequested || !initialized || Date.now() >= nextSafetyPullAt;
+    const safetyDue = Date.now() >= nextSafetyPullAt;
+    let pullAll = pullAllRequested || !initialized || safetyDue;
     pullAllRequested = false;
     try {
       const streams: BridgeStream[] = ["account", ...watchedRuns().map((id): BridgeStream => `run:${id}`)];
       const signature = streams.join(",");
       if (subscribed !== signature) { await transport.subscribe(streams); subscribed = signature; pullAll = true; }
-      if (pullAll || !initialized) await refreshWriters();
+      if (membershipStale || safetyDue) { membershipStale = false; await refreshMembership(); await heartbeat(); }
       if (!initialized) {
         state = "syncing"; notify();
         await engine.bootstrap(); initialized = true;
@@ -219,7 +246,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
         }
       } catch (cause) {
         // Refused writes stay queued; reads continue before the refusal is reported.
-        if (!/quota|rate limit|subscription required|clock is ahead/i.test(String(cause))) throw cause;
+        if (!/quota|rate limit|subscription required|clock is ahead|membership changed/i.test(String(cause))) throw cause;
         writeError = cause;
         const deletions = sqlite.prepare("SELECT DISTINCT stream FROM bridge_outbox WHERE op='delete' AND stream<>'account'").all() as { stream: BridgeStream }[];
         for (const { stream } of deletions) {
@@ -254,7 +281,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       failures++;
       error = cause instanceof Error ? cause.message : "Bridge replication failed";
       state = /connection|timed out/i.test(error) ? "offline" : "error";
-      online.clear(); subscribed = ""; pullAllRequested = true;
+      online.clear(); subscribed = ""; pullAllRequested = true; membershipStale = true;
       for (const stream of incoming) changedStreams.add(stream);
       for (const runId of watchedRuns()) {
         const previous = runStates.get(runId);
@@ -330,7 +357,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
     },
     async stop() {
       stopped = true; if (timer) clearTimeout(timer); timer = undefined;
-      transport.close(); await blobs?.stop(); await inFlight?.catch(() => {}); await engine.stop();
+      transport.close(); await blobs?.stop(); await inFlight?.catch(() => {}); await engine.stop(); membershipSecret.fill(0);
       watchers.clear(); online.clear();
     },
   };

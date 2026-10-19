@@ -9,8 +9,10 @@ is mandatory. The initial D1 identity schema now includes required signing keys;
 use fresh disposable Bridge profiles and D1 stores for this work. No old-vault
 conversion or unsigned-data migration is provided. Stage 2 requires a device
 signature on every record and tombstone, a durable publication journal, and
-publication-bound ACKs. Authenticated membership and revocation key epochs remain
-subsequent stages, required before release.
+publication-bound ACKs. Stage 3 adds the signed, hash-chained membership log,
+join codes, records bound to membership, account-stream removal fences and the
+replay horizon ([Membership and revocation](MEMBERSHIP.md)); run-stream fences
+and revocation key epochs remain, required before release.
 
 Production/staging error tracking, verified backup commands, local restore drills
 and code/data rollback procedures: [Operations runbook](OPERATIONS.md).
@@ -168,8 +170,9 @@ npm run dev:token -- --account demo --backend B --signing-public-key <B-Ed25519-
 ```
 
 Clients send the token in `Authorization: Bearer <token>` during the WebSocket
-handshake. These development JWTs bind `accountId`, backend id and the independent
-Ed25519 signing public key, expire after
+handshake. A token alone can read; publishing also needs the backend's key in the
+account's membership log, which `dev:client` (below) appends. These development
+JWTs bind `accountId`, backend id and the independent Ed25519 signing public key, expire after
 24 hours, and are accepted only with `BRIDGE_DEV_AUTH=true` and a configured
 signing secret. These are development credentials only; normal sign-in and approval are described below. The dev token and the E2EE account key are separate credentials.
 
@@ -214,14 +217,30 @@ A later backend remains **pending** with no log or R2 access until either:
 
 - An approved backend derives the twelve-character (60-bit) public-key code
   locally. Its operator types the code shown on the new backend; only a match
-  approves that exact request and public key. The approving side never displays
-  the expected code. The new backend then requires the account fingerprint from
-  the trusted backend before starting sync. Desktop also posts an OS
-  notification, without the code, when a request arrives.
-- The new backend decrypts the recovery wrap locally and proves possession of
-  the recovered key using a fresh, signed challenge. The proof binds the account,
-  backend, public key and exact device wrap; it cannot be replayed or transferred
-  to another recipient. Other backends can be offline.
+  approves that exact request and public keys. The approving side never displays
+  the expected code. Approval appends a signed membership entry admitting those
+  keys; the new backend then requires that entry's join code from the approving
+  backend before starting sync. Desktop also posts an OS notification, without
+  the code, when a request arrives.
+- The new backend decrypts the recovery wrap locally and signs its own admission
+  with the recovery signing key derived from the same code. The entry binds the
+  account, backend and both public keys and only appends on the current
+  membership head, so it cannot be replayed or transferred to another recipient.
+  Other backends can be offline.
+
+Every account keeps an append-only, hash-chained **membership log** in its
+Durable Object: a genesis entry, then signed admissions, removals and recovery
+rotations. Each entry names its predecessor's hash and sequence; the hub appends
+only on the current head (a moved head is a 409 the client re-signs on) and
+broadcasts the new sequence to open sockets. The hub checks signatures and
+authority, but every backend verifies the whole chain itself. Genesis commits to
+the account key (HKDF-SHA256, `mains.bridge.v3`, `account-commitment`) and to the
+recovery signing key. Only current members may admit or remove members; only the
+recovery key may admit by recovery, and only a member may rotate it. Removal and
+sign-out are signed removals, so a removed backend cannot re-admit itself with
+the account key alone. Verified entries are cached in `bridge/membership.json`;
+the latest verified head is pinned inside the encrypted identity vault. A log
+that rewinds or forks past that pin stops Bridge with a membership conflict.
 
 The hub stores verified-account metadata, hashed 90-day backend credentials,
 public keys, encrypted key wraps and expiring approval requests. Backends renew
@@ -240,22 +259,29 @@ separate profiles for simultaneous Desktop/Server backends. Public status and
 notifications contain no credentials. Recovery values bypass Redux and durable
 command receipts.
 
-Locally generated public signing keys also persist in the encrypted
-`bridge/local-writer-keys.json` (mode 0600), scoped to hub origin, account id and
-backend id. Sign-out retains this public-only history so re-enrollment with a
-fresh signing key can verify this backend's old account records. Neither the
-hub's writer directory nor development JSON can add keys to this local trust.
-Because the history outlives sign-out, content this host cannot open (a reset
-keychain, a moved profile, corruption) never blocks enrollment: it is renamed
-beside the file as `local-writer-keys.json.unreadable-*` and a fresh history
-starts with the current key. It grants no trust; only this backend's older
-records signed with the forgotten keys are set aside on pull. Unavailable
-encryption and file system errors still fail without touching the file.
+Signing keys, this backend's own earlier ones included, come only from the
+verified membership log, where every admission and removal is signed; there is
+no separate writer directory. A re-enrolled backend's old records verify through
+its earlier key's interval in the log. Registration refuses a key the log has
+already admitted, for any backend.
 An enrollment response that substitutes either public key or the backend id is
 rejected and its pending registration is revoked with the issued device token.
 
 Revocation closes open Bridge sockets and blocks later frames and existing blob
 URLs. It cannot remove plaintext already downloaded by the revoked backend.
+Removal is a signed `remove` entry carrying a **fence**: the remover reads the
+whole account stream and commits to the signatures of every record the removed
+backend wrote there; only the entry is sent. The hub derives the same list from the
+records it stores and appends the removal only if it matches, and refuses later
+publications from a backend that is no longer a member. Revoking a backend revokes
+its registration: a registration holding a member's keys needs that signed
+removal, any other one (pending, or re-enrolled with new keys) is revoked by
+credential alone, and old keys no registration holds leave through
+`POST /v1/membership`. After learning of a removal, other backends accept the removed writer's
+account records only if their signatures are in its fence, so a hub cannot later
+insert backdated ones. Its run-stream records are fenced in a later slice.
+Approving a backend that re-enrolled with new keys while its old keys are still in
+the log first removes the old keys the same way.
 Account-key rotation is a later feature. Sign-out revokes this backend before
 removing its keys and replicas; it therefore needs the hub reachable (an already
 revoked credential can be cleared offline). Own chats and account objects stay
@@ -270,7 +296,7 @@ second SQLite owner:
 mains bridge login --hub https://bridge.example.com --data-dir /path/to/profile
 mains bridge status --data-dir /path/to/profile
 mains bridge approve <backend-id> --code <matching-12-character-device-code>
-mains bridge confirm --code <account-fingerprint-from-approved-device>
+mains bridge confirm --code <join-code-from-approving-device>
 mains bridge recover
 mains bridge revoke <backend-id>
 mains bridge recovery --replace
@@ -289,24 +315,30 @@ from the account id, backend id, X25519 public key and Ed25519 signing public ke
 it never displays or validates against the hub's supplied
 `code` field. Codes are twelve base32 characters grouped as `ABCD-EFGH-JKLM`.
 After A approves, B decrypts the offered account key into protected **pending**
-storage. B cannot start replication (including log pulls, blob downloads and
-local-history uploads) until its operator obtains the account fingerprint from
-Settings › Bridge (or `mains bridge status`) on the trusted device and enters it
-on B. B compares the input locally without exposing its pending key's expected
-fingerprint through status, UI or CLI. Likewise, A's Settings and notification
-never show B's expected code; the operator types it from B's screen (or passes
-it to `mains bridge approve --code`). A typed code for an old recipient is
-discarded when a request's public key changes.
+storage, checks it against the genesis commitment and pins the membership entry
+that admitted it. B cannot start replication (including log pulls, blob downloads
+and local-history uploads) until its operator obtains B's join code from
+Settings › Bridge (or the `mains bridge approve` output, or `joinCodes` in
+`mains bridge status`) on A and enters it on B. B compares the input locally
+without exposing its expected join code through status, UI or CLI. Likewise, A's
+Settings and notification never show B's expected device code; the operator
+types it from B's screen (or passes it to `mains bridge approve --code`). A typed
+code for an old recipient is discarded when a request's public key changes.
 
-The account fingerprint is independently derived on each backend using
-HKDF-SHA256 (`mains.bridge.v2`, `account-verification`) and retains 60 bits.
-Only backends with a trusted active key display it; pending backends cannot
-provide their own confirmation value.
+A join code is derived from the account key with HKDF-SHA256 (`mains.bridge.v3`)
+over the account id, B's backend id and the hash of the exact entry that admitted
+B, and retains 60 bits. A hub that offers B a different key or a different
+admission therefore produces a different code. Only ready backends display join
+codes, one per device admitted by approval; pending backends cannot provide their
+own confirmation value.
 Neither a hub-supplied recovery verifier nor an HTTP approval response establishes
 trust. Pending keys stay pending across restarts and cannot be silently replaced
 by a different hub wrap. Recovery instead trusts the key decrypted locally by
-the user-held recovery code. The first backend trusts its locally generated key.
-Previously stored active keys remain pinned and are not replaced by hub data.
+the user-held recovery code, provided the code's signing key is the log's current
+recovery authority (a replaced code is rejected). The first backend trusts its
+locally generated key. Previously stored active keys remain pinned and are not
+replaced by hub data; every activation checks the key against the genesis
+commitment.
 
 Update the hub and both backends together: six-character approval codes are
 rejected, with no automatic downgrade. This changes the approval ceremony and
@@ -406,7 +438,8 @@ original records in eight auth/Bridge tables and all 12 encrypted R2 objects
 matched the pre-release backup. Private receipts are kept under the ignored
 `.wrangler/staging-mail-rollout/` directory. Production was not changed.
 
-`npm test` includes approval/recovery isolation, challenge replay and tampering,
+`npm test` includes approval/recovery isolation, membership log signing, authority
+and compare-and-swap appends,
 bootstrap races, revoked initializer re-enrollment, PKCE/state/redirect checks,
 callback cancellation, credential renewal and immediate socket/R2 revocation.
 `npm run test:hosts` also signs two real backend processes into Better Auth,
@@ -719,7 +752,8 @@ lookup that fails denies publication rather than reusing stale policy. Current
 usage and outstanding reservations are never cached by this policy helper.
 
 Storage counts current encrypted registers, permanent tombstones, a conservative
-256-byte charge per permanent signed-publication replay receipt, stored R2
+256-byte charge per signed-publication replay receipt (kept until the replay
+horizon passes it), stored R2
 chunks and unexpired upload reservations. Retried/duplicate chunks count once.
 Expired reservations reconcile R2 before releasing space, including a crash
 between a PUT and its receipt. Stored chunks remain charged until physically
@@ -937,7 +971,7 @@ timer keeps the DO awake. R2 capabilities and HTTP credentials retain their
 per-request validation. Presence writes are limited to once per 30 seconds per
 backend, with immediate updates on connection and disconnection.
 
-Ready identities and devices waiting for the user's fingerprint confirmation
+Ready identities and devices waiting for the user's join code confirmation
 check every five minutes. An unchanged pending key is never re-written to
 protected storage. Sign-in and pending approval keep their short polling
 interval. WebSocket approval notifications and policy closure (1008) trigger an
@@ -979,7 +1013,10 @@ npm run dev:client -- --database /absolute/profile-B/mains.db --output /absolute
 ```
 
 Both configs use the same demo account and account-key file, with different
-persisted backend ids and JWTs. Start each backend with `MAINS_BRIDGE_CONFIG`
+persisted backend ids and JWTs. With the hub running, each run also admits its
+backend to the account's membership log. The log's authority is derived from the
+account-key file (a `dev-authority` member), so any run with that file can admit
+a backend, and a log created with another key file is refused. Start each backend with `MAINS_BRIDGE_CONFIG`
 set to its own config file. The default lookup is `<userData>/bridge/dev.json`;
 `{"enabled":false}` disables it after restart. Configs and keys are mode 0600;
 the generator refuses to overwrite one. To renew an expired dev token, move the
@@ -1054,19 +1091,36 @@ The hub retains replay receipts through compaction and mirror expiry. Replaying
 an accepted signed publication neither restores expired ciphertext nor refreshes
 run activity. An active source may explicitly publish a new signed envelope with
 the original capture clock to restore an expired mirror. Receipts are charged to
-record quota, so replacements cannot grow an uncharged permanent replay ledger.
+record quota, so replacements cannot grow an uncharged replay ledger.
 They are included in hub backup, restore and account reset.
 
+Receipts do not last forever. Every publication binds a membership head, and the
+**replay horizon** is the newest membership entry the hub appended at least 30 days
+ago. The hub refuses a publication bound below the horizon with `membershipStale`
+(carrying its current head) before any state changes, and its maintenance alarm
+drops the receipts bound there, returning their quota. A device that receives
+`membershipStale` forgets that write's journaled envelope (and a kept tombstone),
+refreshes membership and signs it again on the newest head, once per push. So that
+the horizon keeps moving while membership is quiet, a member appends a
+`checkpoint { horizon: true }` entry once the newest entry is a week old; the hub's
+time only triggers it, and each device tries at most once a day. Approved members
+append it through `POST /v1/membership`, which accepts nothing else.
+
 Receivers verify device signatures before decryption, blob downloads, clock
-advancement or SQL projection. Their current and historical local signing keys
-are pinned from protected local storage; an incoming owner field cannot introduce a locally executable
-root without local row/capture provenance. Peer keys currently come from the
-authenticated hub directory and approved-key history retained across revocation
-and re-enrollment. **That directory is not yet authenticated membership:** a
-compromised hub can still fabricate foreign membership. Signed membership,
-revocation checkpoints and new content-key epochs remain release gates.
-Known peer keys are reused for change hints; directory refreshes occur on full
-pulls and when an incoming record names an unknown peer signing key.
+advancement or SQL projection. Every record signature (`auth` v2) binds the
+writer's membership head `{seq, hash}`. A receiver accepts it only when that head
+is part of the log it verified and the signing key was the origin's at that seq;
+an incoming owner field cannot introduce a locally executable root without local
+row/capture provenance. Before applying a page that binds a newer head, the
+receiver pulls and verifies the log; a binding to another history stops sync with
+a membership conflict and applies nothing. Membership is otherwise re-read at
+start, after reconnects, on the hub's `membership` hint and with the safety read.
+The hub refuses a push bound to a head outside its log or to a seq at which the
+session's key was not the writer's, or from a backend that is no longer a member.
+A removed writer's account records verify only through its removal fence; its
+run-stream records are fenced in a later slice
+([Membership and revocation](MEMBERSHIP.md) slice 3), and that and new
+content-key epochs remain release gates.
 
 A signed writer can still author invalid encrypted bodies. A pulled record
 that fails authentication or validation is therefore never applied and never

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { randomBytes, randomUUID, createHash } from "node:crypto";
+import { randomBytes, randomUUID, createHash, createPrivateKey, sign } from "node:crypto";
 import { mkdtemp, access, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +7,11 @@ import WebSocket from "ws";
 import { bridgeApprovalCode, bridgeBase64, type BridgeAccountKeys, type BridgeApprovalRequest, type BridgeSealedAccountKey } from "@mains/contracts/bridge-auth";
 import type { BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
 import { parseBridgeServerFrame } from "@mains/contracts/bridge-wire";
-import type { BridgeServerMessage } from "@mains/contracts/bridge-protocol";
-import { generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
-import { bridgeRecoveryPublicKey, signBridgeRecovery } from "../../../packages/backend/src/modules/bridge/bridge.recovery";
+import type { BridgeEnvelope, BridgeServerMessage } from "@mains/contracts/bridge-protocol";
+import { bridgeSigningMessage } from "@mains/contracts/bridge-signing";
+import { bridgeFenceRoot, bridgeMembershipEntryHash, currentBridgeMembers, verifyBridgeMembershipLog, type BridgeMember, type BridgeMembershipChange, type BridgeMembershipEntry } from "@mains/contracts/bridge-membership";
+import { bridgeAccountKeyCommitment, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, openBridgeAccountKey, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
+import { deviceSigner, signBridgeMembershipEntry, verifyBridgeSignature } from "../../../packages/backend/src/modules/bridge/bridge.membership";
 import { startBridgeLoopback } from "../../../packages/backend/src/modules/bridge/bridge.login";
 import { createBridgeIdentity } from "../../../packages/backend/src/modules/bridge/bridge.identity";
 import { createNodeBackendRuntime } from "../../../packages/backend/src/runtime/node-backend-runtime";
@@ -31,20 +33,32 @@ async function renew(token: string, successor = `b7_${randomBytes(32).toString("
   return { token: successor, ...receipt };
 }
 async function register(browser: Awaited<ReturnType<typeof login>>, backendId = randomUUID()) {
-  const pair = generateBridgeDeviceKeyPair(), publicKey = bridgeBase64(pair.publicKey), signingPublicKey = bridgeBase64(generateBridgeSigningKeyPair().publicKey);
+  const pair = generateBridgeDeviceKeyPair(), signing = generateBridgeSigningKeyPair(), publicKey = bridgeBase64(pair.publicKey), signingPublicKey = bridgeBase64(signing.publicKey);
   const response = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Cookie: browser.cookie, Origin: new URL(hub.url).origin, "Content-Type": "application/json" }, body: JSON.stringify({ backendId, publicKey, signingPublicKey, label: backendId, platform: "test" }) });
   expect(response.status).toBe(201);
-  return { ...await response.json() as { accountId: string; token: string }, backendId, pair, publicKey, signingPublicKey, browser };
+  const member: BridgeMember = { backendId, publicKey, signingPublicKey };
+  return { ...await response.json() as { accountId: string; token: string }, backendId, pair, publicKey, signingPublicKey, signingSecret: signing.secretKey, member, browser };
 }
 type Backend = Awaited<ReturnType<typeof register>>;
 const recoveryWrap = (): BridgeAccountKeys["recovery"] => ({ v: 1, kdf: { name: "argon2id", memoryKiB: 65536, iterations: 3, parallelism: 1, salt: randomBytes(16).toString("base64url") }, nonce: randomBytes(24).toString("base64url"), payload: randomBytes(48).toString("base64url") });
+async function membership(token: string) {
+  const response = await rpc("/v1/membership", token); expect(response.status).toBe(200);
+  return verifyBridgeMembershipLog((await response.json() as { entries: unknown[] }).entries, verifyBridgeSignature);
+}
+/** The next entry on the hub's current head, signed by `by`. */
+async function entryBy(by: Backend, change: BridgeMembershipChange, token = by.token): Promise<BridgeMembershipEntry> {
+  return signBridgeMembershipEntry(await membership(token), change, deviceSigner(by.member), by.signingSecret);
+}
 function bootstrapBody(backend: Backend, key = randomBytes(32)) {
-  return { key, body: { wrap: sealBridgeAccountKey(key, backend.pair.publicKey), recovery: recoveryWrap(), recoveryPublicKey: bridgeRecoveryPublicKey(key) } };
+  const recovery = generateBridgeSigningKeyPair();
+  const entry = signBridgeMembershipEntry({ accountId: backend.accountId, seq: -1, head: null }, { kind: "genesis", body: { member: backend.member,
+    recoverySigningPublicKey: bridgeBase64(recovery.publicKey), accountKeyCommitment: bridgeAccountKeyCommitment(key) } }, deviceSigner(backend.member), backend.signingSecret);
+  return { key, recovery, body: { wrap: sealBridgeAccountKey(key, backend.pair.publicKey), recovery: recoveryWrap(), entry } };
 }
 async function owner() {
   const a = await register(await login()), material = bootstrapBody(a);
   expect((await rpc("/v1/keys/bootstrap", a.token, material.body)).status).toBe(200);
-  return { ...a, key: material.key };
+  return { ...a, key: material.key, recovery: material.recovery };
 }
 async function requestApproval(b: Backend) {
   const response = await rpc("/v1/approvals", b.token, {}); expect(response.status).toBe(201);
@@ -52,8 +66,47 @@ async function requestApproval(b: Backend) {
 }
 async function approval(a: Backend & { key: Uint8Array }, b: Backend) {
   const request = await requestApproval(b);
-  const body = { ...request, wrap: sealBridgeAccountKey(a.key, b.pair.publicKey) };
+  const body = { ...request, wrap: sealBridgeAccountKey(a.key, b.pair.publicKey), entry: await entryBy(a, { kind: "add", body: { member: b.member, via: "approval" } }) };
   expect((await rpc("/v1/keys/wraps", a.token, body)).status).toBe(200); return body;
+}
+/** A removal of a writer with no account records here: its fence admits nothing. */
+const emptyFence = async () => ({ through: 0, count: 0, root: await bridgeFenceRoot([]) });
+async function revoke(by: Backend, target: Backend) {
+  return rpc(`/v1/backends/${target.backendId}`, by.token, { entry: await entryBy(by, { kind: "remove", body: { backendId: target.backendId, account: await emptyFence() } }) }, "DELETE");
+}
+async function socketRpc(socket: WebSocket, message: unknown): Promise<any> {
+  const requestId = randomUUID();
+  const reply = new Promise<any>((resolve, reject) => {
+    const receive = (data: WebSocket.RawData) => {
+      const frame = parseBridgeServerFrame(data.toString());
+      // Approval notifications also have a requestId; only RPC responses settle this call.
+      if ("type" in frame || frame.requestId !== requestId) return;
+      socket.off("message", receive);
+      if ("error" in frame) reject(new Error(frame.error.message)); else resolve(frame.message);
+    };
+    socket.on("message", receive);
+  });
+  socket.send(JSON.stringify({ requestId, message })); return reply;
+}
+/** A real device publishes `count` account records signed on its current head; returns their signatures. */
+async function publish(by: Backend, count: number) {
+  const state = await membership(by.token), socket = await socketFor(by.token), signatures: string[] = [];
+  const key = createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(by.signingSecret)]), type: "pkcs8", format: "der" });
+  try {
+    for (let start = 0; start < count; start += 100) {
+      const records = Array.from({ length: Math.min(100, count - start) }, (_, index): BridgeEnvelope => {
+        const envelope: BridgeEnvelope = { header: { v: 1, stream: "account", rowKey: randomBytes(16).toString("base64url"), registerKey: randomBytes(16).toString("base64url"), origin: by.backendId,
+          op: "upsert", hlc: { physicalMs: Date.now(), counter: start + index } }, body: { nonce: randomBytes(24).toString("base64url"), payload: randomBytes(32).toString("base64url") } };
+        const auth = { v: 2 as const, accountId: by.accountId, epoch: 1 as const, membership: { seq: state.seq, hash: state.head },
+          publicationId: randomBytes(32).toString("base64url"), signingPublicKey: by.signingPublicKey };
+        const signature = sign(null, bridgeSigningMessage(envelope, auth), key).toString("base64url"); signatures.push(signature);
+        return { ...envelope, auth: { ...auth, signature } };
+      });
+      const ack = await socketRpc(socket, { type: "push", stream: "account", records });
+      expect(ack.results.every((result: { seq?: number }) => typeof result.seq === "number")).toBe(true);
+    }
+  } finally { socket.close(); }
+  return signatures.sort();
 }
 async function socketFor(token: string) {
   const socket = new WebSocket(hub.wsUrl, { headers: { Authorization: `Bearer ${token}` } });
@@ -77,17 +130,70 @@ async function pullSocket(socket: WebSocket) {
 }
 
 describe("Verified sign-in and backend key ceremonies", () => {
-  it("retains approved writer keys after revocation/re-enrollment and prevents assigning old keys to another backend", async () => {
+  it("keeps each admitted key's interval in the membership log through revocation and re-enrollment, and refuses reused keys", async () => {
     const a = await owner(), b = await register(a.browser); await approval(a, b);
-    const pending = await register(a.browser); expect((await rpc("/v1/keys/writers", pending.token)).status).toBe(403);
-    expect((await rpc(`/v1/backends/${b.backendId}`, a.token, undefined, "DELETE")).status).toBe(200);
+    expect((await revoke(a, b)).status).toBe(200);
     const replacement = await register(a.browser, b.backendId); await approval(a, replacement);
-    expect(await (await rpc("/v1/keys/writers", a.token)).json()).toEqual(expect.arrayContaining([
-      { backendId: b.backendId, signingPublicKey: b.signingPublicKey }, { backendId: b.backendId, signingPublicKey: replacement.signingPublicKey },
-    ]));
-    const reused = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Cookie: a.browser.cookie, "Content-Type": "application/json" },
-      body: JSON.stringify({ backendId: randomUUID(), publicKey: b.publicKey, signingPublicKey: b.signingPublicKey, label: "Other", platform: "test" }) });
-    expect(reused.status).toBe(409);
+    expect((await membership(a.token)).keys.filter((key) => key.backendId === b.backendId).map(({ signingPublicKey, until }) => ({ signingPublicKey, removed: until !== null })))
+      .toEqual([{ signingPublicKey: b.signingPublicKey, removed: true }, { signingPublicKey: replacement.signingPublicKey, removed: false }]);
+    // The log never admits a key twice, so registration refuses one it has already seen, for any backend.
+    for (const keys of [{ publicKey: bridgeBase64(generateBridgeDeviceKeyPair().publicKey), signingPublicKey: b.signingPublicKey },
+      { publicKey: b.publicKey, signingPublicKey: bridgeBase64(generateBridgeSigningKeyPair().publicKey) }]) {
+      const reused = await fetch(new URL("/v1/backends", hub.url), { method: "POST", headers: { Cookie: a.browser.cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({ backendId: randomUUID(), ...keys, label: "Other", platform: "test" }) });
+      expect(reused.status).toBe(409);
+    }
+  });
+  it("replaces keys a lapsed backend left in the log without revoking its newer pending registration", async () => {
+    const a = await owner(), b = await register(a.browser); await approval(a, b);
+    // B's credential lapsed before it could sign its own removal; it signs in again with new keys.
+    await (await hub.database()).prepare("UPDATE bridge_backends SET token_expires_at=0 WHERE backend_id=?").bind(b.backendId).run();
+    const next = await register(a.browser, b.backendId), request = await requestApproval(next);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...request, wrap: sealBridgeAccountKey(a.key, next.pair.publicKey),
+      entry: await entryBy(a, { kind: "add", body: { member: next.member, via: "approval" } }) })).status).toBe(403);
+    // The old keys leave the log on their own; no registration holds them any more.
+    expect((await rpc("/v1/membership", a.token, { entry: await entryBy(a, { kind: "remove", body: { backendId: b.backendId, account: await emptyFence() } }) })).status).toBe(200);
+    expect(await (await rpc("/v1/keys/mine", next.token)).json()).toMatchObject({ backend: { status: "pending" }, approval: { status: "pending" } });
+    await approval(a, next);
+    expect(currentBridgeMembers(await membership(a.token)).find((member) => member.backendId === b.backendId)?.signingPublicKey).toBe(next.signingPublicKey);
+  });
+  it("lets only an approved member append a replay-horizon checkpoint through the membership route", async () => {
+    const a = await owner(), b = await register(a.browser), post = (token: string, entry: unknown) => rpc("/v1/membership", token, { entry });
+    expect((await post(b.token, await entryBy(a, { kind: "checkpoint", body: { horizon: true } }, b.token))).status).toBe(403);
+    expect((await post(a.token, await entryBy(a, { kind: "add", body: { member: b.member, via: "approval" } }))).status).toBe(400);
+    expect((await post(a.token, signBridgeMembershipEntry(await membership(a.token), { kind: "checkpoint", body: { horizon: true } },
+      { kind: "recovery", signingPublicKey: bridgeBase64(a.recovery.publicKey) }, a.recovery.secretKey))).status).toBe(400);
+    expect((await post(a.token, await entryBy(a, { kind: "checkpoint", body: { horizon: true } }))).status).toBe(200);
+    expect((await membership(a.token)).seq).toBe(1);
+  });
+  it("removes a backend with hundreds of account records, its removal carrying only the fence's commitment", async () => {
+    const a = await owner(), b = await register(a.browser); await approval(a, b);
+    const signatures = await publish(b, 450), account = { through: 450, count: 450, root: await bridgeFenceRoot(signatures) };
+    const remove = async (fence: typeof account) => rpc(`/v1/backends/${b.backendId}`, a.token, { entry: await entryBy(a, { kind: "remove", body: { backendId: b.backendId, account: fence } }) }, "DELETE");
+    // A fence that misses one of B's records is read again; the hub derives the list from what it stores.
+    expect((await remove({ through: 450, count: 449, root: await bridgeFenceRoot(signatures.slice(1)) })).status).toBe(409);
+    expect((await remove(account)).status).toBe(200);
+    const removal = (await membership(a.token)).seq;
+    expect(await (await rpc(`/v1/membership/fence?seq=${removal}&after=-1`, a.token)).json()).toEqual({ signatures });
+    expect((await rpc("/v1/keys/mine", b.token)).status).toBe(401);
+  });
+  it("revokes a re-enrolled backend's pending registration apart from the old keys still in the log", async () => {
+    const a = await owner(), b = await register(a.browser), c = await register(a.browser); await approval(a, b); await approval(a, c);
+    const lapse = async () => (await hub.database()).prepare("UPDATE bridge_backends SET token_expires_at=0 WHERE backend_id=?").bind(b.backendId).run();
+    await lapse();
+    const next = await register(a.browser, b.backendId); await requestApproval(next);
+    const stillAdmitted = async () => currentBridgeMembers(await membership(a.token)).some((member) => member.signingPublicKey === b.signingPublicKey);
+    // The pending registration cancels itself without a removal it could never sign, and an approver can
+    // revoke one the same way; neither touches the old keys.
+    expect((await rpc(`/v1/backends/${b.backendId}`, next.token, undefined, "DELETE")).status).toBe(200);
+    expect((await rpc("/v1/keys/mine", next.token)).status).toBe(401);
+    const again = await register(a.browser, b.backendId);
+    expect((await rpc(`/v1/backends/${b.backendId}`, a.token, undefined, "DELETE")).status).toBe(200);
+    expect((await rpc("/v1/keys/mine", again.token)).status).toBe(401);
+    expect(await stillAdmitted()).toBe(true);
+    // A member whose registration still holds its keys leaves only with its credential, through DELETE.
+    expect((await rpc("/v1/membership", a.token, { entry: await entryBy(a, { kind: "remove", body: { backendId: c.backendId, account: await emptyFence() } }) })).status).toBe(409);
+    expect((await rpc(`/v1/backends/${c.backendId}`, a.token, undefined, "DELETE")).status).toBe(400);
   });
   it("requires both public keys at registration and retains the exact signing identity", async () => {
     const browser = await login(), backendId = randomUUID(), publicKey = bridgeBase64(generateBridgeDeviceKeyPair().publicKey);
@@ -121,15 +227,20 @@ describe("Verified sign-in and backend key ceremonies", () => {
     const results = await Promise.all([rpc("/v1/keys/bootstrap", a.token, ka.body), rpc("/v1/keys/bootstrap", b.token, kb.body)]);
     expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
     const winner = results[0].status === 200 ? a : b;
-    expect((await rpc(`/v1/backends/${winner.backendId}`, winner.token, undefined, "DELETE")).status).toBe(200);
+    expect((await revoke(winner, winner)).status).toBe(200);
     const replacement = await register(browser, winner.backendId);
     expect((await rpc("/v1/keys/bootstrap", replacement.token, bootstrapBody(replacement).body)).status).toBe(409);
     expect((await rpc("/v1/log", replacement.token)).status).toBe(401);
   });
   it("binds approval to account, request, recipient public key and a matching code, and rejects replay", async () => {
-    const a = await owner(), b = await register(a.browser), outsider = await owner(), request = await requestApproval(b);
-    const body = { ...request, wrap: sealBridgeAccountKey(a.key, b.pair.publicKey) };
+    const a = await owner(), b = await register(a.browser), c = await register(a.browser), outsider = await owner(), request = await requestApproval(b);
+    const body = { ...request, wrap: sealBridgeAccountKey(a.key, b.pair.publicKey), entry: await entryBy(a, { kind: "add", body: { member: b.member, via: "approval" } }) };
     expect(request.code).toBe(await bridgeApprovalCode(b));
+    // The wrap goes only to a member: the addition must be signed by the approving requester, for exactly B.
+    expect((await rpc("/v1/keys/wraps", a.token, { ...body, entry: undefined })).status).toBe(409);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...body, entry: await entryBy(b, { kind: "add", body: { member: b.member, via: "approval" } }, a.token) })).status).toBe(400);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...body, entry: await entryBy(a, { kind: "add", body: { member: c.member, via: "approval" } }) })).status).toBe(400);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...body, entry: { ...body.entry, signature: randomBytes(64).toString("base64url") } })).status).toBe(403);
     expect(request.code.replaceAll("-", "")).toHaveLength(12);
     expect((await rpc("/v1/keys/wraps", a.token, { ...body, code: "ABC234" })).status).toBe(400);
     expect((await rpc("/v1/keys/wraps", a.token, { ...body, code: "WRONG1" })).status).toBe(400);
@@ -161,24 +272,71 @@ describe("Verified sign-in and backend key ceremonies", () => {
     const next = await register(a.browser, b.backendId); expect(next.token).not.toBe(b.token);
     expect((await rpc("/v1/keys/mine", b.token)).status).toBe(401);
   });
-  it("requires a fresh, account- and recipient-bound recovery signature; rejects tampering, expiry and replay", async () => {
-    const a = await owner(), b = await register(a.browser), c = await register(a.browser), db = await hub.database();
-    const wrap = sealBridgeAccountKey(a.key, b.pair.publicKey);
-    const { challenge } = await (await rpc("/v1/keys/recovery/challenge", b.token, {})).json() as { challenge: string };
-    const signature = signBridgeRecovery(a.key, b, challenge, wrap), body = { wrap, signature, challenge };
-    expect((await rpc("/v1/keys/recovery/unlock", c.token, body)).status).toBe(403);
-    expect((await rpc("/v1/keys/recovery/unlock", b.token, { ...body, wrap: sealBridgeAccountKey(a.key, c.pair.publicKey) })).status).toBe(403);
-    expect((await rpc("/v1/keys/recovery/unlock", b.token, { ...body, signature: randomBytes(64).toString("base64url") })).status).toBe(403);
-    expect((await rpc("/v1/keys/recovery/unlock", b.token, { ...body,
-      signature: signBridgeRecovery(a.key, { ...b, signingPublicKey: c.signingPublicKey }, challenge, wrap) })).status).toBe(403);
-    await db.prepare("UPDATE bridge_backends SET challenge_expires_at=0 WHERE account_id=? AND backend_id=?").bind(b.accountId, b.backendId).run();
-    expect((await rpc("/v1/keys/recovery/unlock", b.token, body)).status).toBe(403);
-    const fresh = await (await rpc("/v1/keys/recovery/challenge", b.token, {})).json() as { challenge: string };
-    const valid = { wrap, challenge: fresh.challenge, signature: signBridgeRecovery(a.key, b, fresh.challenge, wrap) };
-    expect((await rpc("/v1/keys/recovery/unlock", b.token, body)).status).toBe(403);
-    expect((await rpc("/v1/keys/recovery/unlock", b.token, valid)).status).toBe(200);
-    expect((await rpc("/v1/keys/recovery/unlock", b.token, valid)).status).toBe(409);
+  it("admits a recovering backend only through an addition of exactly its registration, signed by the recovery authority on the current head", async () => {
+    const a = await owner(), b = await register(a.browser), c = await register(a.browser), d = await register(a.browser);
+    const wrap = sealBridgeAccountKey(a.key, b.pair.publicKey), authority = { kind: "recovery" as const, signingPublicKey: bridgeBase64(a.recovery.publicKey) };
+    const recoveryEntry = async (member: BridgeMember, secret = a.recovery.secretKey, signer: BridgeMembershipEntry["signer"] = authority) =>
+      signBridgeMembershipEntry(await membership(b.token), { kind: "add", body: { member, via: "recovery" } }, signer, secret);
+    const entry = await recoveryEntry(b.member);
+    expect((await rpc("/v1/keys/recovery/unlock", c.token, { wrap, entry })).status).toBe(400);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap, entry: await recoveryEntry(c.member) })).status).toBe(400);
+    const impostor = generateBridgeSigningKeyPair();
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap, entry: await recoveryEntry(b.member, impostor.secretKey, { kind: "recovery", signingPublicKey: bridgeBase64(impostor.publicKey) }) })).status).toBe(403);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap, entry: { ...entry, signature: randomBytes(64).toString("base64url") } })).status).toBe(403);
+    // A member's device key cannot stand in for the recovery authority.
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap, entry: await entryBy(a, { kind: "add", body: { member: b.member, via: "recovery" } }, b.token) })).status).toBe(400);
+    // Signed on a head that has since moved: the proof cannot be replayed into another history.
+    await approval(a, d);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap, entry })).status).toBe(409);
+    const fresh = await recoveryEntry(b.member);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap, entry: fresh })).status).toBe(200);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap, entry: fresh })).status).toBe(409);
     expect((await rpc("/v1/log", b.token)).status).toBe(426);
+    expect(currentBridgeMembers(await membership(a.token)).map((member) => member.backendId)).toEqual([a.backendId, d.backendId, b.backendId]);
+  });
+  it("lets a recovering backend finish without an entry only once the log already admits its exact registration", async () => {
+    const a = await owner(), b = await register(a.browser), wrap = sealBridgeAccountKey(a.key, b.pair.publicKey);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap })).status).toBe(409);
+    const entry = signBridgeMembershipEntry(await membership(b.token), { kind: "add", body: { member: b.member, via: "recovery" } },
+      { kind: "recovery", signingPublicKey: bridgeBase64(a.recovery.publicKey) }, a.recovery.secretKey);
+    // The entry landed but its response was lost before the device wrap was stored.
+    await hub.quotaSql(a.accountId, `INSERT INTO membership(seq,hash,entry,appended_at) VALUES(${entry.seq},'${await bridgeMembershipEntryHash(entry)}','${JSON.stringify(entry)}',${Date.now()})`);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap })).status).toBe(200);
+    expect(openBridgeAccountKey((await (await rpc("/v1/keys/mine", b.token)).json() as { wrap: BridgeSealedAccountKey }).wrap, b.pair.secretKey)).toEqual(Uint8Array.from(a.key));
+  });
+  it("serves the log to pending devices and accepts only a requester's signed, compare-and-swap changes", async () => {
+    const a = await owner(), b = await register(a.browser), c = await register(a.browser);
+    expect(currentBridgeMembers(await membership(b.token)).map((member) => member.backendId)).toEqual([a.backendId]);
+    expect((await rpc("/v1/membership?after=x", b.token)).status).toBe(400);
+    expect(await (await rpc("/v1/membership?after=0", b.token)).json()).toMatchObject({ entries: [], appendedAt: expect.any(Number) });
+    // Genesis must admit exactly the initializing registration.
+    const other = await register(await login()), foreign = bootstrapBody(other);
+    expect((await rpc("/v1/keys/bootstrap", other.token, { ...foreign.body, entry: bootstrapBody(b).body.entry })).status).toBe(400);
+    // Two approvals signed on the same head: only one can extend it.
+    const [rb, rc] = [await requestApproval(b), await requestApproval(c)], head = await membership(a.token);
+    const add = (member: BridgeMember) => signBridgeMembershipEntry(head, { kind: "add", body: { member, via: "approval" } }, deviceSigner(a.member), a.signingSecret);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...rb, wrap: sealBridgeAccountKey(a.key, b.pair.publicKey), entry: add(b.member) })).status).toBe(200);
+    expect((await rpc("/v1/keys/wraps", a.token, { ...rc, wrap: sealBridgeAccountKey(a.key, c.pair.publicKey), entry: add(c.member) })).status).toBe(409);
+    // A lost response is retried with the same entry, or without it once it landed.
+    const retry = { ...rc, wrap: sealBridgeAccountKey(a.key, c.pair.publicKey), entry: await entryBy(a, { kind: "add", body: { member: c.member, via: "approval" } }) };
+    const lost = await rpc("/v1/keys/wraps", a.token, retry); expect(lost.status).toBe(200); await lost.arrayBuffer();
+    expect((await rpc("/v1/keys/wraps", a.token, retry)).status).toBe(409);
+    // A member leaves only through a removal signed by the requesting member.
+    expect((await rpc(`/v1/backends/${b.backendId}`, a.token, undefined, "DELETE")).status).toBe(400);
+    expect((await rpc(`/v1/backends/${b.backendId}`, a.token, { entry: await entryBy(c, { kind: "remove", body: { backendId: b.backendId, account: await emptyFence() } }) }, "DELETE")).status).toBe(400);
+    expect((await revoke(c, b)).status).toBe(200);
+    expect(currentBridgeMembers(await membership(a.token)).map((member) => member.backendId)).toEqual([a.backendId, c.backendId]);
+  });
+  it("rotates the recovery authority only through a member-signed entry; the previous one admits nothing", async () => {
+    const a = await owner(), b = await register(a.browser), next = generateBridgeSigningKeyPair();
+    const rotate = await entryBy(a, { kind: "recovery", body: { recoverySigningPublicKey: bridgeBase64(next.publicKey) } });
+    expect((await rpc("/v1/keys/recovery", a.token, { recovery: recoveryWrap() }, "PUT")).status).toBe(400);
+    expect((await rpc("/v1/keys/recovery", b.token, { recovery: recoveryWrap(), entry: rotate }, "PUT")).status).toBe(403);
+    expect((await rpc("/v1/keys/recovery", a.token, { recovery: recoveryWrap(), entry: rotate }, "PUT")).status).toBe(200);
+    expect(await (await rpc("/v1/keys/recovery", b.token)).json()).toMatchObject({ recoveryPublicKey: bridgeBase64(next.publicKey) });
+    const old = signBridgeMembershipEntry(await membership(b.token), { kind: "add", body: { member: b.member, via: "recovery" } },
+      { kind: "recovery", signingPublicKey: bridgeBase64(a.recovery.publicKey) }, a.recovery.secretKey);
+    expect((await rpc("/v1/keys/recovery/unlock", b.token, { wrap: sealBridgeAccountKey(a.key, b.pair.publicKey), entry: old })).status).toBe(403);
   });
   it("notifies online approvers and revokes open sockets plus previously issued R2 capabilities", async () => {
     const a = await owner(), b = await register(a.browser), socket = await socketFor(a.token);
@@ -199,7 +357,7 @@ describe("Verified sign-in and backend key ceremonies", () => {
         expect((await fetch(put, { method: "PUT", body: bytes })).status).toBe(204);
         const get = await presign("get"); expect((await fetch(get)).status).toBe(200);
         const closed = new Promise<number>((resolve) => bSocket.once("close", resolve));
-        expect((await rpc(`/v1/backends/${b.backendId}`, a.token, undefined, "DELETE")).status).toBe(200);
+        expect((await revoke(a, b)).status).toBe(200);
         expect(await closed).toBe(1008);
         expect((await fetch(get)).status).toBe(403); expect((await fetch(put, { method: "PUT", body: bytes })).status).toBe(403);
         expect((await rpc("/v1/keys/mine", b.token)).status).toBe(401);
@@ -270,7 +428,7 @@ describe("Verified sign-in and backend key ceremonies", () => {
   });
   it("revokes both credentials during a pending handover and never revives the revoked backend", async () => {
     const a = await owner(), next = await renew(a.token);
-    expect((await rpc(`/v1/backends/${a.backendId}`, a.token, undefined, "DELETE")).status).toBe(200);
+    expect((await revoke(a, a)).status).toBe(200);
     expect((await rpc("/v1/keys/mine", a.token)).status).toBe(401);
     expect((await rpc("/v1/keys/mine", next.token)).status).toBe(401);
   });

@@ -43,10 +43,12 @@ export interface BridgeEnvelope {
   auth?: BridgeRecordSignature;
 }
 export interface BridgeRecordSignature {
-  v: 1;
+  v: 2;
   accountId: string;
-  /** Only epoch 1 is admitted until authenticated membership/key rotation ships. */
+  /** Only epoch 1 is admitted until key rotation ships. */
   epoch: 1;
+  /** The writer's verified membership head when it signed (apps/bridge/MEMBERSHIP.md §5). */
+  membership: { seq: number; hash: string };
   publicationId: string;
   signingPublicKey: string;
   signature: string;
@@ -58,7 +60,9 @@ export type BridgePushResult =
   | { deleted: BridgeEnvelope; publicationId: string }
   | { error: "notOwner" | "quotaExceeded" | "rateLimited" | "subscriptionRequired" | "blobMissing" }
   /** Carries the hub's time, so the device can re-stamp what was refused within the hub's bound. */
-  | { error: "clockSkew"; hubMs: number };
+  | { error: "clockSkew"; hubMs: number }
+  /** Bound below the replay horizon: the device signs it again on a newer membership head. */
+  | { error: "membershipStale"; head: { seq: number; hash: string } };
 export type BridgeClientMessage =
   | { type: "hello"; label: string; platform: string }
   | { type: "push"; stream: BridgeStream; records: BridgeEnvelope[] }
@@ -73,6 +77,8 @@ export type BridgeServerMessage =
   | { type: "subscribed"; streams: BridgeStream[] }
   | { type: "compacted" }
   | { type: "changed"; stream: BridgeStream }
+  /** A hint that the account's membership log grew; clients pull and verify it themselves. */
+  | { type: "membership"; seq: number }
   | { type: "presence"; backendId: string; online: boolean; lastSeen: string; label?: string; platform?: string };
 
 export interface BridgeRpcRequest { requestId: string; message: BridgeClientMessage }

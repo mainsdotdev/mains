@@ -29,8 +29,9 @@ export interface BridgeAuthStatus {
   state: "signed-out" | "signing-in" | "needs-approval" | "needs-verification" | "ready" | "revoked" | "error";
   hubUrl: string | null; accountId: string | null; email: string | null;
   backendId: string; label: string; verificationCode: string | null;
-  /** Locally derived from a trusted active key; never expose the pending key's expected answer. */
-  accountFingerprint: string | null;
+  /** Shown only by an active member: the code each device it can see admitted by approval enters to
+   * pin that history. A device waiting for verification never exposes its own expected answer. */
+  joinCodes: BridgeJoinCode[];
   login: { url: string; code: string | null; expiresAt: string } | null;
   approvals: BridgeApprovalRequest[];
   backends: BridgeRegisteredBackend[];
@@ -40,6 +41,7 @@ export interface BridgeAuthStatus {
   logoutPending?: boolean;
   error: string | null;
 }
+export interface BridgeJoinCode { backendId: string; label: string; code: string }
 export interface BridgeAccountKeys {
   recoveryPublicKey: string;
   recovery: BridgeRecoveryWrap;
@@ -95,8 +97,4 @@ export function normalizeBridgeVerificationCode(value: string): string {
   const formatted = `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)}`;
   if (!isBridgeVerificationCode(formatted)) throw new Error("Enter the 12-character verification code");
   return formatted;
-}
-export function bridgeRecoveryMessage(identity: BridgeDeviceIdentity, challenge: string, wrap: BridgeSealedAccountKey): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify([2, "mains.bridge.v2/recovery-approval", ...deviceIdentity(identity), challenge,
-    [wrap.v, wrap.ephemeralPublicKey, wrap.nonce, wrap.payload]]));
 }

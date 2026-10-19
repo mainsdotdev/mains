@@ -28,6 +28,9 @@ export interface BridgeEngineOptions {
   /** Enrollment stages existing UUID data before the first pull; untouched seeds still pull first. */
   stageLocalBeforePull?: boolean;
   prepareIncoming?: (envelopes: BridgeEnvelope[]) => Promise<void>;
+  /** Refreshes membership after the hub refused records bound below its replay horizon, so the next
+   * signature binds a newer head. */
+  membershipStale?: () => Promise<void>;
 }
 const backfillTables = dependencyOrder();
 function dependencyOrder(): string[] {
@@ -236,7 +239,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       return ahead.length;
     })();
   }
-  async function push(stream: BridgeStream, limit: number, deletesOnly = false, rebased = false): Promise<number> {
+  async function push(stream: BridgeStream, limit: number, deletesOnly = false, rebased = false, resigned = false): Promise<number> {
     validateLimit(limit);
     const outgoing = () => sqlite.prepare(`SELECT * FROM bridge_outbox WHERE stream=? AND (?=1 OR substr(table_name,1,6)<>'atlas_') AND (?=0 OR op='delete')
       ORDER BY CASE WHEN op='delete' THEN 0 ELSE 1 END,generation,table_name,pk,register LIMIT ?`).all(stream, Number(store.atlasEnabled), Number(deletesOnly), limit) as OutboxEntry[];
@@ -309,12 +312,20 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       // Attachment metadata has no outbox entry of its own; its reference is ACKed separately.
       if (i >= attachmentCount) sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
     }
-    let rejection: string | undefined, hubMs: number | undefined;
+    let rejection: string | undefined, hubMs: number | undefined, stale = false;
     for (let i = 0; i < results.length; i++) {
       const result = results[i], sent = prepared[i], entry = sent.entry;
       if ("deleted" in result) continue;
       if ("error" in result) {
         if (result.error === "clockSkew") { hubMs ??= result.hubMs; continue; }
+        if (result.error === "membershipStale") {
+          // Forget the exact journaled envelope (and a kept tombstone) so the write is signed again.
+          sqlite.transaction(() => {
+            sqlite.prepare("DELETE FROM bridge_publications WHERE table_name=? AND pk=? AND register=? AND stream=?").run(entry.table_name, entry.pk, entry.register, entry.stream);
+            if (entry.op === "delete") sqlite.prepare("UPDATE bridge_tombstones SET envelope=NULL WHERE table_name=? AND pk=?").run(entry.table_name, entry.pk);
+          })();
+          stale = true; continue;
+        }
         if (result.error === "blobMissing" && options.blobs) await options.blobs.republish(store, sent.clock);
         rejection ??= result.error === "quotaExceeded" ? "Bridge storage quota exceeded; local changes remain queued" :
           result.error === "rateLimited" ? "Bridge write rate limit reached; local changes remain queued" :
@@ -334,7 +345,12 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       })();
       if (options.blobs) await options.blobs.acknowledged(sent.clock);
     }
-    if (hubMs !== undefined && rebaseClocks(hubMs) && !rebased && !rejection && !preparationError) return push(stream, limit, deletesOnly, true);
+    if (stale && !resigned && options.membershipStale && !rejection && !preparationError) {
+      await options.membershipStale();
+      return push(stream, limit, deletesOnly, rebased, true);
+    }
+    if (stale) rejection ??= "Bridge account membership changed; local changes remain queued";
+    if (hubMs !== undefined && rebaseClocks(hubMs) && !rebased && !rejection && !preparationError) return push(stream, limit, deletesOnly, true, resigned);
     if (hubMs !== undefined) rejection ??= "This device's clock is ahead of Bridge; local changes remain queued";
     if (rejection) throw new Error(rejection);
     if (deletionRefused) throw new Error("Bridge returned an invalid deletion; local changes remain queued");

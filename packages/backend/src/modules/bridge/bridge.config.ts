@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fromBase64Url } from "./bridge.encoding";
+import type { BridgeMembershipView } from "./bridge.membership";
 
 /** B4 development setup; production sign-in and protected key storage are B7. */
 export interface BridgeDevConfig {
@@ -11,8 +12,9 @@ export interface BridgeDevConfig {
   label: string;
   accountId: string;
   signingPrivateKey: Uint8Array;
-  /** Protected local history, supplied by identity storage rather than dev.json or the hub. */
-  localSigningPublicKeys?: readonly string[];
+  /** Membership verified from identity's pinned head; never read from dev.json. Without it,
+   * replication verifies the hub's log from genesis against `accountKey`. */
+  membership?: BridgeMembershipView;
 }
 export function parseBridgeDevConfig(value: unknown): BridgeDevConfig | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Bridge development configuration");

@@ -23,6 +23,19 @@ export function bridgeAccountFingerprint(accountKey: Uint8Array): string {
   const bytes = hkdf(sha256, accountKey, utf8("mains.bridge.v2"), utf8("account-verification"), 32);
   try { return formatBridgeVerificationCode(bytes); } finally { bytes.fill(0); }
 }
+/** Pinned in the membership genesis; replaces the recovery key as the account key's verifier. */
+export function bridgeAccountKeyCommitment(accountKey: Uint8Array): string {
+  requireBridgeKey(accountKey);
+  const bytes = hkdf(sha256, accountKey, utf8("mains.bridge.v3"), utf8("account-commitment"), 32);
+  try { return toBase64Url(bytes); } finally { bytes.fill(0); }
+}
+/** Binds the approval comparison to the membership entry that admitted `backendId`, so the new device
+ * pins exactly the history its approver had. Only holders of the account key can derive it. */
+export function bridgeJoinCode(accountKey: Uint8Array, accountId: string, backendId: string, admittedBy: string): string {
+  requireBridgeKey(accountKey);
+  const bytes = hkdf(sha256, accountKey, utf8("mains.bridge.v3"), utf8(JSON.stringify(["join", accountId, backendId, admittedBy])), 32);
+  try { return formatBridgeVerificationCode(bytes); } finally { bytes.fill(0); }
+}
 export function generateBridgeDeviceKeyPair() { return x25519.keygen(); }
 export function generateBridgeSigningKeyPair() { return ed25519.keygen(); }
 export function verifyBridgeDeviceKeyPairs(identity: { publicKey: string; privateKey: string; signingPublicKey: string; signingPrivateKey: string }) {

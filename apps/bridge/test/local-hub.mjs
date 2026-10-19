@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixturePublicKey } from "./record-signing.mjs";
+import { fixtureAccountCommitment, fixtureAccountKey, fixtureEntryHash, fixtureGenesis, fixtureMember, fixtureMembershipEntry, fixturePublicKey, rememberFixtureHead } from "./record-signing.mjs";
 
 /** Starts the same Worker as wrangler dev, on an ephemeral real HTTP/WebSocket listener.
  * @param {{ auth?: boolean, mail?: boolean, github?: boolean, archive?: boolean, truncateRefreshOnce?: boolean, subscriptionInterval?: 'monthly' | 'yearly', environment?: 'local' | 'staging' | 'production', storageLimitBytes?: number, writesPerMinute?: number, maintenance?: { accountId: string, token: string } }} [settings] */
@@ -76,6 +76,63 @@ export async function startLocalBridgeHub(settings = {}) {
       ON CONFLICT(account_id,feature) DO UPDATE SET billing_interval=excluded.billing_interval,status='active',starts_at=excluded.starts_at,expires_at=excluded.expires_at,updated_at=excluded.updated_at`)
       .bind(accountId, interval, Date.now() - 1000, expiresAt, Date.now()).run();
   }
+  /** @param {string} accountId @param {string} backendId @param {string | number} expiresIn */
+  const mint = (accountId, backendId, expiresIn) => new SignJWT({ accountId, signingPublicKey: fixturePublicKey(accountId, backendId) }).setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setSubject(backendId).setIssuer("mains-bridge-dev").setAudience("mains-bridge").setIssuedAt().setExpirationTime(expiresIn).sign(new TextEncoder().encode(secret));
+  /** One admission at a time per account, so concurrent fixtures never race the log's compare-and-swap. */
+  const admissions = new Map();
+  /** What this process last saw of each account's log; a known member needs no request (tokens are minted often).
+   * @type {Map<string, { commitment: string, members: string[], head: { seq: number, hash: string } }>} */
+  const accounts = new Map();
+  /** Development tokens have no enrollment: the fixture appends real signed membership entries instead.
+   * The first backend's genesis commits to `accountKey` (default: a key derived from the account id).
+   * @param {string} accountId @param {string} backendId @param {Uint8Array} [accountKey] @returns {Promise<{ seq: number, hash: string }>} */
+  function admit(accountId, backendId, accountKey) {
+    const known = accounts.get(accountId);
+    if (known?.members.includes(backendId) && (!accountKey || known.commitment === fixtureAccountCommitment(accountKey))) return Promise.resolve(known.head);
+    const run = async () => {
+      // A development hub appends through its real route; a hub with sign-in has no unauthenticated
+      // route, so its fixtures seed the object's log directly (the object still verifies every read).
+      const authorization = { Authorization: `Bearer ${await mint(accountId, backendId, "1h")}` };
+      const storage = settings.auth ? await mf.unsafeGetDurableObjectStorage("bridge-test", "AccountHub", { id: (await mf.getDurableObjectNamespace("ACCOUNT_HUB")).idFromName(accountId).toString() }) : null;
+      /** @type {any[]} */
+      let entries;
+      if (storage) {
+        await storage.exec("CREATE TABLE IF NOT EXISTS membership(seq INTEGER PRIMARY KEY,hash TEXT NOT NULL,entry TEXT NOT NULL,appended_at INTEGER NOT NULL)");
+        entries = [...await storage.exec("SELECT entry FROM membership ORDER BY seq")].map((row) => JSON.parse(String(row.entry)));
+      } else {
+        const response = await fetch(new URL("/v1/membership?after=-1", address), { headers: authorization });
+        if (!response.ok) throw new Error(`Fixture membership read failed (${response.status})`);
+        entries = (await response.json()).entries;
+      }
+      /** @param {any} entry */
+      const append = async (entry) => {
+        if (storage) await storage.exec("INSERT INTO membership(seq,hash,entry,appended_at) VALUES(?,?,?,?)", entry.seq, fixtureEntryHash(entry), JSON.stringify(entry), Date.now());
+        else {
+          const result = await fetch(new URL("/v1/membership", address), { method: "POST", headers: { ...authorization, "Content-Type": "application/json" }, body: JSON.stringify({ entry }) });
+          if (!result.ok) throw new Error(`Fixture membership append failed (${result.status}): ${await result.text()}`);
+        }
+        entries.push(entry);
+      };
+      const key = accountKey ?? (entries.length ? undefined : fixtureAccountKey(accountId));
+      if (!entries.length) await append(fixtureGenesis(accountId, backendId, /** @type {Uint8Array} */ (key)));
+      else if (key && entries[0].body.accountKeyCommitment !== fixtureAccountCommitment(key)) throw new Error("This fixture account already committed to another account key");
+      /** @type {string[]} */
+      const members = [];
+      for (const entry of entries) {
+        if (entry.kind === "genesis" || entry.kind === "add") members.push(entry.body.member.backendId);
+        else if (entry.kind === "remove") members.splice(members.indexOf(entry.body.backendId), 1);
+      }
+      const head = () => ({ seq: entries.length - 1, hash: fixtureEntryHash(entries.at(-1)) });
+      if (!members.includes(backendId)) await append(fixtureMembershipEntry(accountId, head(), "add", { member: fixtureMember(accountId, backendId), via: "approval" }, members[0]));
+      rememberFixtureHead(accountId, head());
+      accounts.set(accountId, { commitment: entries[0].body.accountKeyCommitment, members: [...members, backendId], head: head() });
+      return head();
+    };
+    const next = (admissions.get(accountId) ?? Promise.resolve()).then(run, run);
+    admissions.set(accountId, next.catch(() => {}));
+    return next;
+  }
   return {
     get url() { return address.toString(); },
     get wsUrl() { return new URL("/v1/log", address).toString().replace(/^http/, "ws"); },
@@ -98,10 +155,13 @@ export async function startLocalBridgeHub(settings = {}) {
     mail,
     grantSubscription,
     async database() { return mf.getD1Database("AUTH_DB"); },
-    /** @param {string} accountId @param {string} backendId @param {string | number} [expiresIn] */
+    admit,
+    /** A development token for a fixture backend that is a member of its account.
+     * @param {string} accountId @param {string} backendId @param {string | number} [expiresIn] */
     async token(accountId, backendId, expiresIn = "1h") {
-      return new SignJWT({ accountId, signingPublicKey: fixturePublicKey(accountId, backendId) }).setProtectedHeader({ alg: "HS256", typ: "JWT" }).setSubject(backendId)
-        .setIssuer("mains-bridge-dev").setAudience("mains-bridge").setIssuedAt().setExpirationTime(expiresIn).sign(new TextEncoder().encode(secret));
+      // Only a development hub accepts these tokens; other configurations must still see them refused.
+      if (!settings.auth && (!settings.environment || settings.environment === "local")) await admit(accountId, backendId);
+      return mint(accountId, backendId, expiresIn);
     },
     async restart() { options.port = Number(address.port); await mf.dispose(); mf = new Miniflare(convertV4MiniflareOptions(options)); address = await mf.ready; },
     async suspend() { options.port = Number(address.port); await mf.dispose(); },

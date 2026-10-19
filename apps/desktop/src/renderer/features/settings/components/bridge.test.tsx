@@ -25,33 +25,33 @@ beforeEach(() => {
   fixture.take.mockResolvedValue({ success: true, data: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH" });
   fixture.regenerate.mockResolvedValue({ success: true, data: "JJJJ-KKKK-LLLL-MMMM-NNNN-PPPP-QQQQ-RRRR" });
   fixture.signIn.mockResolvedValue({ success: true }); fixture.signOut.mockResolvedValue({ success: true }); fixture.syncNow.mockImplementation(() => ({ unwrap: () => Promise.resolve(true) }));
-  fixture.status = { state: "ready", backendId: "A", hubUrl: "https://bridge.example", accountId: "account", email: "owner@example.com", label: "A", verificationCode: null, accountFingerprint: "JKLM-NPQR-STUV", login: null,
+  fixture.status = { state: "ready", backendId: "A", hubUrl: "https://bridge.example", accountId: "account", email: "owner@example.com", label: "A", verificationCode: null, joinCodes: [{ backendId: "B", label: "New laptop", code: "JKLM-NPQR-STUV" }], login: null,
     approvals: [{ requestId: "request", backendId: "B", publicKey: "key", signingPublicKey: "signing-key", label: "New laptop", platform: "darwin", code: "ABCD-EFGH-JKLM", expiresAt: "2026-10-15T20:00:00Z" }], backends: [], recoveryCodeAvailable: true, existing: { runs: 2, pages: 3 }, error: null };
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("Bridge key management", () => {
-  it("keeps sync controls hidden until the fingerprint from the approved device is explicitly verified", async () => {
-    fixture.status = { ...fixture.status, state: "needs-verification", accountFingerprint: null, approvals: [] };
+  it("keeps sync controls hidden until the join code from the approving device is explicitly verified", async () => {
+    fixture.status = { ...fixture.status, state: "needs-verification", joinCodes: [], approvals: [] };
     fixture.projects = [{ id: "p", name: "Private project", localOnly: false, workspaces: 1, runs: 1 }];
     render(<BridgeSettings />);
-    expect(screen.getByText("Verify account key")).toBeTruthy();
+    expect(screen.getByText("Verify this device")).toBeTruthy();
     expect(screen.queryByText("Project sync")).toBeNull();
     expect(screen.queryByRole("button", { name: "Sync now" })).toBeNull();
     expect(screen.queryByText("JKLM-NPQR-STUV")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Copy account fingerprint" })).toBeNull();
-    const input = screen.getByRole("textbox", { name: "Fingerprint from approved device" });
+    expect(screen.queryByRole("button", { name: "Copy join code" })).toBeNull();
+    const input = screen.getByRole("textbox", { name: "Join code from the approving device" });
     const button = screen.getByRole("button", { name: "Verify and start sync" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true); expect(fixture.confirmKey).not.toHaveBeenCalled();
     fireEvent.change(input, { target: { value: "ABC234" } });
     expect(button.disabled).toBe(true);
     fireEvent.submit(input.closest("form")!); expect(fixture.confirmKey).not.toHaveBeenCalled();
-    fixture.confirmKey.mockResolvedValueOnce({ success: false, error: "Account fingerprints do not match; do not enable sync" });
+    fixture.confirmKey.mockResolvedValueOnce({ success: false, error: "Join codes do not match; do not enable sync" });
     fireEvent.change(input, { target: { value: "AAAA-BBBB-CCCC" } });
     expect(button.disabled).toBe(false);
     await act(async () => { fireEvent.click(button); });
     expect(fixture.confirmKey).toHaveBeenCalledExactlyOnceWith("AAAA-BBBB-CCCC");
-    expect(screen.getByRole("alert").textContent).toContain("fingerprints do not match");
+    expect(screen.getByRole("alert").textContent).toContain("Join codes do not match");
     expect(fixture.syncNow).not.toHaveBeenCalled();
     fireEvent.change(input, { target: { value: "jklm npqr stuv" } });
     expect(button.disabled).toBe(false);
@@ -59,12 +59,18 @@ describe("Bridge key management", () => {
     expect(fixture.confirmKey).toHaveBeenLastCalledWith("JKLM-NPQR-STUV");
     expect(fixture.confirmKey).toHaveBeenCalledTimes(2);
   });
-  it("never renders the new device's local fingerprint even if an older backend includes it in pending status", () => {
+  it("never renders join codes while this device waits for verification, even if a status includes them", () => {
     fixture.status = { ...fixture.status, state: "needs-verification", approvals: [] };
     render(<BridgeSettings />);
-    expect(screen.getByText("Verify account key")).toBeTruthy();
+    expect(screen.getByText("Verify this device")).toBeTruthy();
     expect(screen.queryByText("JKLM-NPQR-STUV")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Copy account fingerprint" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy join code" })).toBeNull();
+  });
+  it("shows each admitted device's join code by name on a ready device", () => {
+    render(<BridgeSettings />);
+    expect(screen.getByText("Join code for New laptop")).toBeTruthy();
+    expect(screen.getByText("JKLM-NPQR-STUV")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy join code" })).toBeTruthy();
   });
   it.each(["publicKey", "signingPublicKey"] as const)("discards a completed code comparison when the recipient's %s changes", (key) => {
     const view = render(<BridgeSettings />);
@@ -285,7 +291,7 @@ describe("Bridge key management", () => {
   it("copies the verification code without unlocking, confirms disconnect and clears a failed recovery attempt", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
-    fixture.status = { ...fixture.status, state: "needs-approval", verificationCode: "ABCD-EFGH-JKLM", accountFingerprint: null, approvals: [] };
+    fixture.status = { ...fixture.status, state: "needs-approval", verificationCode: "ABCD-EFGH-JKLM", joinCodes: [], approvals: [] };
     render(<BridgeSettings />);
     expect(writeText).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy verification code" })); });

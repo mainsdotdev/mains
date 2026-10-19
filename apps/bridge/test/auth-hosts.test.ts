@@ -5,12 +5,13 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { CHANNELS } from "@mains/contracts/channels";
-import { bridgeBytes, type BridgeAuthStatus } from "@mains/contracts/bridge-auth";
+import { bridgeBase64, bridgeBytes, type BridgeAuthStatus } from "@mains/contracts/bridge-auth";
+import { applyBridgeMembershipEntry } from "@mains/contracts/bridge-membership";
 import type { AtlasPage } from "@mains/contracts/atlas";
 import { startLocalBackends, waitFor } from "./local-backends";
 import { approve, signIn } from "./auth-helpers";
-import { generateBridgeAccountKey, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
-import { bridgeRecoveryPublicKey } from "../../../packages/backend/src/modules/bridge/bridge.recovery";
+import { bridgeAccountKeyCommitment, generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
+import { deviceSigner, signBridgeMembershipEntry, verifyBridgeSignature } from "../../../packages/backend/src/modules/bridge/bridge.membership";
 import { createNodeBackendRuntime } from "../../../packages/backend/src/runtime/node-backend-runtime";
 import { createBridgeIdentityStorage } from "../../../packages/backend/src/modules/bridge/bridge.identity-storage";
 
@@ -37,7 +38,7 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       await a.start();
       const failed = await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
         (value) => !!value.error?.includes("renewal response"), "truncated refresh response");
-      expect(failed).toMatchObject({ state: "ready", accountFingerprint: trusted.accountFingerprint });
+      expect(failed).toMatchObject({ state: "ready" });
       expect((await vault.read())!.token).toBe(before.token);
       expect((await vault.read())!.accountKey).toBe(before.accountKey);
       const proposed = (await vault.read())!.pendingToken;
@@ -53,14 +54,14 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       await waitFor(() => db.prepare("SELECT next_token_hash FROM bridge_backends WHERE account_id=? AND backend_id=?").bind(trusted.accountId, a.backendId).first(),
         (value) => value?.next_token_hash === null, "committed handover");
       expect(renewed!.accountKey).toBe(before.accountKey);
-      expect(await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).toMatchObject({ state: "ready", accountFingerprint: trusted.accountFingerprint });
+      expect(await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).toMatchObject({ state: "ready", error: null });
       const page = await a.client.call<AtlasPage>(CHANNELS.atlas.createPage, { accountId: "default", title: "After token handover", markdown: "No reapproval or new key" });
       await a.client.call(CHANNELS.bridge.syncNow);
       await waitFor(() => b.client.call<AtlasPage | null>(CHANNELS.atlas.get, { accountId: "default", id: page.item.id }),
         (value) => value?.revision.id === page.revision.id, "Page after recovered renewal");
     } finally { await fixture.dispose(); }
   }, 120_000);
-  it("blocks a compromised hub's substituted wrap and verifier before any replication starts", async () => {
+  it("blocks a compromised hub's substituted wrap and forged account history before any replication starts", async () => {
     const fixture = await startLocalBackends({ auth: true }); const { a, b } = fixture;
     try {
       const trusted = await signIn(fixture, a);
@@ -69,27 +70,36 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       expect((await signIn(fixture, b)).state).toBe("needs-approval");
       const local = await b.client.call<AtlasPage>(CHANNELS.atlas.createPage, { accountId: "default", title: "Keep private until verified", markdown: "A forged key must not upload this history" });
       const db = await fixture.hub.database();
-      const row = await db.prepare("SELECT public_key FROM bridge_backends WHERE account_id=? AND backend_id=?")
-        .bind(trusted.accountId, b.backendId).first<{ public_key: string }>();
-      const fake = generateBridgeAccountKey();
+      const row = await db.prepare("SELECT public_key,signing_public_key FROM bridge_backends WHERE account_id=? AND backend_id=?")
+        .bind(trusted.accountId, b.backendId).first<{ public_key: string; signing_public_key: string }>();
+      const fake = generateBridgeAccountKey(), attacker = generateBridgeSigningKeyPair();
       try {
-        // Only the disposable hub's D1 is changed: simulate full hub compromise,
-        // including replacing both values that the old activation check trusted.
+        // Only the disposable hub is changed: simulate full hub compromise. It forges a whole
+        // account history, internally consistent with its own key, and approves B in it.
+        const forger = { backendId: "attacker", publicKey: bridgeBase64(generateBridgeDeviceKeyPair().publicKey), signingPublicKey: bridgeBase64(attacker.publicKey) };
+        const genesis = signBridgeMembershipEntry({ accountId: trusted.accountId!, seq: -1, head: null }, { kind: "genesis", body: { member: forger,
+          recoverySigningPublicKey: bridgeBase64(generateBridgeSigningKeyPair().publicKey), accountKeyCommitment: bridgeAccountKeyCommitment(fake) } }, deviceSigner(forger), attacker.secretKey);
+        const add = signBridgeMembershipEntry(await applyBridgeMembershipEntry(null, genesis, verifyBridgeSignature), { kind: "add", body: {
+          member: { backendId: b.backendId, publicKey: row!.public_key, signingPublicKey: row!.signing_public_key }, via: "approval" } }, deviceSigner(forger), attacker.secretKey);
+        const forged = await applyBridgeMembershipEntry(await applyBridgeMembershipEntry(null, genesis, verifyBridgeSignature), add, verifyBridgeSignature);
+        await fixture.hub.quotaSql(trusted.accountId!, `DELETE FROM membership; INSERT INTO membership(seq,hash,entry,appended_at) VALUES(0,'${forged.hashes[0]}','${JSON.stringify(genesis)}',${Date.now()}),(1,'${forged.hashes[1]}','${JSON.stringify(add)}',${Date.now()})`);
         const wrap = sealBridgeAccountKey(fake, bridgeBytes(row!.public_key, 32));
         await db.batch([
-          db.prepare("UPDATE bridge_accounts SET recovery_public_key=? WHERE account_id=?").bind(bridgeRecoveryPublicKey(fake), trusted.accountId),
           db.prepare("UPDATE bridge_backends SET status='approved' WHERE account_id=? AND backend_id=?").bind(trusted.accountId, b.backendId),
           db.prepare("INSERT INTO bridge_key_wraps(account_id,backend_id,wrap) VALUES(?,?,?)").bind(trusted.accountId, b.backendId, JSON.stringify(wrap)),
         ]);
       } finally { fake.fill(0); }
       const offered = await waitFor(() => b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth), (value) => value.state === "needs-verification", "untrusted candidate");
-      expect(offered.accountFingerprint).toBeNull();
-      expect((await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth)).accountFingerprint).toBe(trusted.accountFingerprint);
-      expect(await b.client.invoke(CHANNELS.bridge.confirmAccountKey, trusted.accountFingerprint)).toMatchObject({ success: false });
+      expect(offered.joinCodes).toEqual([]);
+      // A never approved B and refuses the forged history, so the trusted device shows no code for B.
+      const trustedView = await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth);
+      expect(trustedView.error).toMatch(/membership conflict/i); expect(trustedView.joinCodes).toEqual([]);
+      const guess = "ABCD-EFGH-JKLM";
+      expect(await b.client.invoke(CHANNELS.bridge.confirmAccountKey, guess)).toMatchObject({ success: false });
       expect(await b.client.invoke(CHANNELS.bridge.syncNow)).toMatchObject({ success: false });
       const phone = await b.pair();
       try {
-        expect(await phone.invoke(CHANNELS.bridge.confirmAccountKey, trusted.accountFingerprint)).toMatchObject({ success: false });
+        expect(await phone.invoke(CHANNELS.bridge.confirmAccountKey, guess)).toMatchObject({ success: false });
       } finally { phone.close(); }
       expect((await b.client.call(CHANNELS.bridge.getStatus)).enabled).toBe(false);
       expect(await b.client.call(CHANNELS.atlas.get, { accountId: "default", id: page.item.id })).toBeNull();
@@ -126,19 +136,21 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       expect(request.code).toBe(pending.verificationCode);
       expect(await a.client.invoke(CHANNELS.bridge.approveBackend, { ...request, code: "WRONG1" })).toMatchObject({ success: false });
       expect((await b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth)).state).toBe("needs-approval");
-      expect(await cli(a, ["approve", b.backendId, "--code", request.code])).toContain("Backend approved");
+      const approved = await cli(a, ["approve", b.backendId, "--code", request.code]);
+      expect(approved).toContain("Backend approved");
+      const joinCode = /Join code: ([A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4})/.exec(approved)![1];
       const offered = await waitFor(() => b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth), (value) => value.state === "needs-verification", "account key comparison");
-      expect(offered.accountFingerprint).toBeNull();
-      expect(JSON.parse(await cli(b, ["status"])).accountFingerprint).toBeNull();
+      expect(offered.joinCodes).toEqual([]);
+      expect(JSON.parse(await cli(b, ["status"])).joinCodes).toEqual([]);
       expect((await b.client.call(CHANNELS.bridge.getStatus)).enabled).toBe(false);
       expect(await b.client.call(CHANNELS.atlas.get, { accountId: "default", id: page.item.id })).toBeNull();
       await b.stop(); await b.start();
       expect((await b.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).state).toBe("needs-verification");
       expect((await b.client.call(CHANNELS.bridge.getStatus)).enabled).toBe(false);
-      const wrong = `${owner.accountFingerprint![0] === "A" ? "B" : "A"}${owner.accountFingerprint!.slice(1)}`;
+      const wrong = `${joinCode[0] === "A" ? "B" : "A"}${joinCode.slice(1)}`;
       expect(await b.client.invoke(CHANNELS.bridge.confirmAccountKey, wrong)).toMatchObject({ success: false });
       expect((await b.client.call(CHANNELS.bridge.getStatus)).enabled).toBe(false);
-      expect(await cli(b, ["confirm", "--code", owner.accountFingerprint!])).toContain("Account key verified");
+      expect(await cli(b, ["confirm", "--code", joinCode])).toContain("Device verified");
       await waitFor(() => b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth), (value) => value.state === "ready", "approved B");
       await waitFor(() => b.client.call<AtlasPage | null>(CHANNELS.atlas.get, { accountId: "default", id: page.item.id }), (value) => value?.revision.id === page.revision.id, "decrypted Page on B");
       const file = join(b.dir, "bridge", "identity.json"), stored = await readFile(file, "utf8");

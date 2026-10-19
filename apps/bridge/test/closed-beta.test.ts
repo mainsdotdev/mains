@@ -199,6 +199,7 @@ it("stops sync writes and old upload capabilities at expiry but preserves downlo
   await db.prepare("UPDATE bridge_beta_invites SET expires_at=? WHERE account_id=?").bind(end, browser.user.id).run();
   await db.prepare("INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at) VALUES(?,?,?,?,?,?,'approved',?,?,?)")
     .bind(browser.user.id, "A", randomBytes(32).toString("base64url"), fixturePublicKey(browser.user.id, "A"), "Local beta device", "test", createHash("sha256").update(token).digest("hex"), end + 60_000, Date.now()).run();
+  await hub.admit(browser.user.id, "A");
   const socket = new WebSocket(hub.wsUrl, { headers: { Authorization: `Bearer ${token}` } });
   const pending = new Map<string, (value: unknown) => void>();
   socket.on("message", (bytes) => { const frame = JSON.parse(bytes.toString()) as BridgeRpcResponse; if ("requestId" in frame) { pending.get(frame.requestId)?.("message" in frame ? frame.message : frame); pending.delete(frame.requestId); } });

@@ -14,7 +14,7 @@ export function registerBridgeIpc(): void {
   ipcMain.handle(CHANNELS.bridge.signOut, handle((removeAccountObjects = false) => { if (typeof removeAccountObjects !== "boolean") throw new Error("Choose whether to remove synced items"); return bridgeService.signOut(removeAccountObjects); }));
   ipcMain.handle(CHANNELS.bridge.refreshAuth, handle(() => bridgeService.refreshAuth()));
   ipcMain.handle(CHANNELS.bridge.approveBackend, handle((input: Parameters<typeof bridgeService.approveBackend>[0]) => bridgeService.approveBackend(input)));
-  ipcMain.handle(CHANNELS.bridge.confirmAccountKey, handle((fingerprint: string) => bridgeService.confirmAccountKey(id(fingerprint, "account fingerprint"))));
+  ipcMain.handle(CHANNELS.bridge.confirmAccountKey, handle((joinCode: string) => bridgeService.confirmAccountKey(id(joinCode, "join code"))));
   ipcMain.handle(CHANNELS.bridge.rejectBackend, handle((requestId: string) => bridgeService.rejectBackend(id(requestId, "request id"))));
   ipcMain.handle(CHANNELS.bridge.requestApproval, handle(() => bridgeService.requestApproval()));
   ipcMain.handle(CHANNELS.bridge.revokeBackend, handle((backendId: string) => bridgeService.revokeBackend(id(backendId, "backend id"))));

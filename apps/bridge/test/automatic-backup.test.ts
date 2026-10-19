@@ -102,7 +102,7 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   await restore("initialize", [snapshot]);
   for (const page of capture.pages) await restore("page", [page.table, JSON.parse(source.get(page.path)!)]);
   const expectedRows = capture.pages.reduce((sum, page) => sum + JSON.parse(source.get(page.path)!).rows.length, 0);
-  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 23, rows: expectedRows });
+  expect(await restore("finish", [snapshot])).toMatchObject({ tables: 24, rows: expectedRows });
   const pulled = await restore("pull", ["account", 0]);
   expect(pulled.records).toHaveLength(91); expect(pulled.next).toBe(91);
   expect(pulled.records.at(-1).envelope.header.op).toBe("delete");
@@ -118,7 +118,7 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   const oldRestore = (action: string, args: unknown[]) => call("recovery", { account: "legacy", action, args });
   await oldRestore("initialize", [legacy]);
   for (const page of capture.pages.filter((page) => legacy.tables.includes(page.table))) await oldRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);
-  expect(await oldRestore("finish", [legacy])).toMatchObject({ tables: 20 });
+  expect(await oldRestore("finish", [legacy])).toMatchObject({ tables: 21 });
   expect(await oldRestore("pull", ["account", 0])).toEqual(pulled);
   expect(await oldRestore("push", ["A", "account", [record(4)]])).toMatchObject({ results: [{ deleted: { header: { op: "delete" } } }] });
   const previous: HubSnapshot = { ...snapshot, tables: snapshot.tables.filter((table) => !["blob_uploads", "write_budget"].includes(table)),
@@ -126,7 +126,7 @@ it("exports real paginated hub state without writes; restores tombstones, sequen
   const previousRestore = (action: string, args: unknown[]) => call("recovery", { account: "previous", action, args });
   await previousRestore("initialize", [previous]);
   for (const page of capture.pages.filter((page) => previous.tables.includes(page.table))) await previousRestore("page", [page.table, JSON.parse(source.get(page.path)!)]);
-  expect(await previousRestore("finish", [previous])).toMatchObject({ tables: 21 });
+  expect(await previousRestore("finish", [previous])).toMatchObject({ tables: 22 });
   expect(await previousRestore("pull", ["account", 0])).toEqual(pulled);
   // A write between pages fences the original snapshot instead of creating a
   // mixture that never existed. Unknown table/cursor cannot inject SQL.

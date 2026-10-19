@@ -1667,10 +1667,6 @@ export const bridgePublications = sqliteTable("bridge_publications", {
   image: text("image").notNull(), envelope: text("envelope").notNull(),
 }, (t) => [primaryKey({ columns: [t.tableName, t.pk, t.register, t.stream] })]);
 
-export const bridgeWriterKeys = sqliteTable("bridge_writer_keys", {
-  backendId: text("backend_id").notNull(), signingPublicKey: text("signing_public_key").notNull(),
-}, (t) => [primaryKey({ columns: [t.backendId, t.signingPublicKey] })]);
-
 export const bridgeOutbox = sqliteTable("bridge_outbox", {
   tableName: text("table_name").notNull(), pk: text("pk").notNull(), register: text("register").notNull(),
   op: text("op", { enum: ["upsert", "delete"] }).notNull(),

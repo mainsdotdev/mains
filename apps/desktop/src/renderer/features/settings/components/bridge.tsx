@@ -297,8 +297,8 @@ export default function BridgeSettings() {
               </div>
             )}
             <Muted className="max-w-2xl">
-              After approval, compare the account fingerprint on both devices to
-              start sync. You can also unlock your account with its recovery code.
+              After approval, enter the join code shown on the approving device
+              to start sync. You can also unlock your account with its recovery code.
             </Muted>
             <form
               className="space-y-3"
@@ -355,7 +355,7 @@ export default function BridgeSettings() {
         <BridgeKeyVerification
           key={`${status.backendId}:${status.accountId}`}
           busy={busy}
-          onConfirm={(fingerprint) => act(() => value(appApi.bridge.confirmAccountKey(fingerprint)))}
+          onConfirm={(joinCode) => act(() => value(appApi.bridge.confirmAccountKey(joinCode)))}
         />
       )}
       {status?.state === "ready" && (
@@ -375,19 +375,20 @@ export default function BridgeSettings() {
                 {status.logoutPending ? "Finish disconnecting" : "Disconnect"}
               </Button>
             </SettingsRow>
-            {status.accountFingerprint && (
+            {status.joinCodes.map((join) => (
               <SettingsRow
-                title="Account fingerprint"
-                description="Compare this on the new device before enabling its sync."
+                key={`${status.accountId}:${join.backendId}`}
+                title={`Join code for ${join.label}`}
+                description="Enter this on that device to verify it before its sync starts."
               >
                 <div className="flex items-center gap-3">
                   <Text as="code" className="whitespace-nowrap font-mono tracking-wider select-all">
-                    {status.accountFingerprint}
+                    {join.code}
                   </Text>
-                  <CopyButton text={status.accountFingerprint} tooltip="Copy account fingerprint" copiedTooltip="Copied!" />
+                  <CopyButton text={join.code} tooltip="Copy join code" copiedTooltip="Copied!" />
                 </div>
               </SettingsRow>
-            )}
+            ))}
             {sync?.error && (
               <Text role="alert" tone="danger" className="pb-3">
                 {sync.error}

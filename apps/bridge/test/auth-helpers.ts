@@ -20,9 +20,11 @@ export async function approve(fixture: Fixture) {
   await fixture.a.client.call(CHANNELS.bridge.approveBackend, status.approvals.find((entry) => entry.backendId === fixture.b.backendId));
   const offered = await waitFor(() => fixture.b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth),
     (value) => value.state === "needs-verification", "account key comparison");
-  expect(offered.accountFingerprint).toBeNull();
-  expect(status.accountFingerprint).toBeTruthy();
+  expect(offered.joinCodes).toEqual([]);
+  // The approver shows the code for the entry that admitted B; B pins exactly that history.
+  const join = (await fixture.a.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth)).joinCodes.find((entry) => entry.backendId === fixture.b.backendId);
+  expect(join?.code).toBeTruthy();
   expect((await fixture.b.client.call(CHANNELS.bridge.getStatus)).enabled).toBe(false);
-  await fixture.b.client.call(CHANNELS.bridge.confirmAccountKey, status.accountFingerprint);
+  await fixture.b.client.call(CHANNELS.bridge.confirmAccountKey, join!.code);
   return waitFor(() => fixture.b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth), (value) => value.state === "ready", "approved backend");
 }

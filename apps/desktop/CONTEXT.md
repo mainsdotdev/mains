@@ -172,28 +172,39 @@ load. The 60-bit approval comparison and recovery recipient proof bind account,
 backend and both public keys; either key changing invalidates approval. No
 old-format identity fallback is supported. Stage 2 signs every network record and
 tombstone with the backend's independent key, binding account, fixed epoch 1,
-publication id, full routing header, nonce and ciphertext. A durable publication
+the writer's verified membership head, publication id, full routing header,
+nonce and ciphertext. A durable publication
 journal preserves the exact envelope across lost ACKs/restarts; ACKs bind that id,
 and invalid deleted ACKs preserve local writes. Hub batch verification precedes
 permanent state changes, and receiver verification precedes decryption/clock/SQL.
-Replay receipts survive compaction and expiry and count toward quota. A remote
+Replay receipts survive compaction and expiry and count toward quota until the
+replay horizon (newest membership entry at least 30 days old) passes the head their
+publication bound; the hub then refuses that binding with `membershipStale` and
+drops the receipt, and the engine signs the write again on the newest head. A
+week-quiet log gets a member's `checkpoint { horizon: true }`. A remote
 owner field cannot introduce a locally executable root without local provenance.
-Current and historical self-signing public keys are pinned in protected local
-storage, scoped to hub origin, account and backend, and retained through logout.
-Only locally held key pairs can extend this history; peer directory entries and
-development JSON never do. Re-enrollment with fresh keys therefore preserves
-verification of own account objects. Change hints reuse known peer keys and
-refresh the directory only for unknown peer signers; full pulls also refresh it.
+Every writer key, this backend's own earlier keys included, comes from the
+verified membership log: a record is accepted only if its bound head is in the
+log this device verified and its key was its origin's at that head. Replication
+keeps its own verified copy (`BridgeMembershipView`) and never waits on identity's
+queue; it re-reads the log at start, after reconnects, on `membership` hints and
+with the safety read, and before any page that binds a newer head. A page bound
+to another history stops sync with a membership conflict instead of applying.
+The hub refuses pushes bound to a head outside its log or before the writer's
+admission, and pushes from non-members. A removal carries a **fence**: the
+signatures of every account record the removed writer has, read by the remover
+(`collectBridgeAccountFence`); the view loads each fence before exposing its
+removal, and the codec refuses the removed writer's account records outside it.
 An invalid enrollment response or failed local enrollment save revokes the
 requested pending backend with its issued device credential.
-Peer key discovery still trusts the hub directory; authenticated membership,
-revocation checkpoints and account-content-key rotation remain release gates.
+Run-stream fences (MEMBERSHIP.md slice 3) and account-content-key rotation
+remain release gates.
 
 **Bridge** is account replication between independent Mains backends. **Cloud** is the later hosted agent-execution product; Bridge itself never executes an agent. The shared `bridge` module owns the portable record registry, envelope codec and ownership guards. A **register** is a group of columns with one conflict clock; most rows have one, while Atlas separates content from metadata. Every table names a **primary register**, which carries the fields needed to create its row. An **owner backend** is the backend identified by a backend-owned root's `owner_backend_id`; a **replica** belongs to another backend and is read-only here. Account objects can be edited on every backend.
 
 B1 establishes ownership, the explicit schema registry and the pass-through development envelope. B2 adds explicitly activated SQL capture, durable per-register outbox/clock state, an applier, resumable pulls/backfill and a transport seam tested through a blind in-memory hub over independent databases. A delete is permanent; aliases retain their whole identity set so a local permanent delete covers every known alias. Both pull and verified `deleted` ACKs invoke the same synchronous recovery hook before cascading. B3 adds `apps/bridge`, a Cloudflare Worker with one SQLite Durable Object per account, a reconnectable WebSocket transport and XChaCha20-Poly1305 record sealing. HKDF separates body, opaque record-id and blob-id keys; the complete routing header is authenticated, and device wraps use ephemeral X25519. The real hub rejects plaintext, enforces authenticated writer ownership, compacts registers, retains whole permanent tombstones and reports presence through hibernating sockets. All B2 scenarios also run against this hub with E2EE. Dev JWTs bind account/backend; production sign-in and key ceremonies remain B7. B4 wires `bridgeService` into both host lifecycles. Explicit development config activates a serialized background replicator; absent config leaves capture off. Account roots precede run children, open replica transcripts lease run-stream subscriptions, and offline cursors/outbox retry independently of local execution. `bridge_peers` caches device labels and last-seen times; unavailable presence is unknown. The renderer groups replicas by their owner, reads cached paged history without resolving source filesystem paths, and mounts no composer/provider controller or terminal for them. Relay shows sync state next to existing remote-control connections. The backend-provided `isReplica` determines controls, never a UI connection alias: an iPad/browser attached to A retains control of A’s own runs, while B’s copies stay read-only. Browser clients keep using their chosen backend’s SQLite, without browser SQLite storage. Atlas transfer stays disabled until its B6 revision graph, apart from opt-in core register tests. Listings include replicas, while `ownedHere` predicates limit operational repo queries and `assertOwnedRecord`/`assertOwnedHere` reject mutations before git, filesystem, provider or scheduler effects. The same persisted backend identity is used for pairing and ownership. A seeded Space is identified by its fixed id, never by its editable slug; deleting one archives it, and seed v3 restores a missing legacy seeded id archived. Replica Space names may duplicate, but local creation and renaming validate the final name and slug inside the write transaction. See `docs/design/bridge.md` for the wire, deletion, alias and recovery rules.
 
-Bridge scheduling reacts immediately to local write events and hub change hints. Local writes push without pulling; hints pull account roots and only the affected watched stream, and skip the publishing socket. A five-minute safety pull covers lost hints and is never postponed by publishing; opening a conversation or reconnecting also pulls. Renewing a UI watch lease sends no RPC. A one-second local-only outbox check finds direct SQL writes without waking the hub. A write cycle that sends nothing while changes stay queued backs off from 2 to 60 seconds until a new local write changes the outbox. Protocol ping/pong checks idle connections every 25 seconds with a 10-second deadline, without waking the account DO. Ready identities and devices waiting for local fingerprint confirmation poll every five minutes; unchanged pending keys are not rewritten. Sign-in and pending approval retain their short polling. Approval hints and 1008 closures trigger an HTTP identity recheck even when a previous snapshot is in flight; only confirmed HTTP rejection erases keys. The account DO caches credential-bound WebSocket approval for 30 seconds, invalidates it on revocation and revalidates after hibernation. D1 migration 0006 stages a successor hash without retiring the current credential. The client creates a random successor, saves it encrypted as pending before proposing only its SHA-256 hash, and retries the same proposal after restart. The hub echoes the hash and expiry, never the raw token; a competing proposal is a visible 409 conflict. No server secret derives the successor. Only a validated, durably stored acknowledgement exposes it to replication; first authenticated use commits the handover and invalidates only the predecessor's cache/sockets, with best-effort DO notification. A saved successor can complete after the predecessor expires. New clients require the client-hash-v1 capability before proposing a renewal, and both deploy scripts reject pending or unverified remote D1 migrations. Lost/truncated responses or local storage failure leave the current token and account key intact; token expiry still applies. Presence timestamps are persisted only on connect/disconnect; idle pulls and pings do not write them. Online state comes from live sockets. Initialized quota reads reuse their durable prefix without a no-op UPDATE, and an already armed maintenance alarm is left unchanged.
+Bridge scheduling reacts immediately to local write events and hub change hints. Local writes push without pulling; hints pull account roots and only the affected watched stream, and skip the publishing socket. A five-minute safety pull covers lost hints and is never postponed by publishing; opening a conversation or reconnecting also pulls. Renewing a UI watch lease sends no RPC. A one-second local-only outbox check finds direct SQL writes without waking the hub. A write cycle that sends nothing while changes stay queued backs off from 2 to 60 seconds until a new local write changes the outbox. Protocol ping/pong checks idle connections every 25 seconds with a 10-second deadline, without waking the account DO. Ready identities and devices waiting for local join code confirmation poll every five minutes; unchanged pending keys are not rewritten. Sign-in and pending approval retain their short polling. Approval hints and 1008 closures trigger an HTTP identity recheck even when a previous snapshot is in flight; only confirmed HTTP rejection erases keys. The account DO caches credential-bound WebSocket approval for 30 seconds, invalidates it on revocation and revalidates after hibernation. D1 migration 0006 stages a successor hash without retiring the current credential. The client creates a random successor, saves it encrypted as pending before proposing only its SHA-256 hash, and retries the same proposal after restart. The hub echoes the hash and expiry, never the raw token; a competing proposal is a visible 409 conflict. No server secret derives the successor. Only a validated, durably stored acknowledgement exposes it to replication; first authenticated use commits the handover and invalidates only the predecessor's cache/sockets, with best-effort DO notification. A saved successor can complete after the predecessor expires. New clients require the client-hash-v1 capability before proposing a renewal, and both deploy scripts reject pending or unverified remote D1 migrations. Lost/truncated responses or local storage failure leave the current token and account key intact; token expiry still applies. Presence timestamps are persisted only on connect/disconnect; idle pulls and pings do not write them. Online state comes from live sockets. Initialized quota reads reuse their durable prefix without a no-op UPDATE, and an already armed maintenance alarm is left unchanged.
 
 B5 adds immutable R2 blob chunks, Worker-signed upload/download capabilities and a verified lazy cache under `userData/bridge/blobs`. File ids are account-private HMACs of plaintext hashes; XChaCha20-Poly1305 authenticates each 4 MiB chunk's identity, position and total size. The 50 MiB file limit leaves larger outputs available at their source. Register clocks retain encrypted file manifests through alias merges, rebuilds and retries; metadata edits that do not change file bytes retain their manifest. Turn-end selected outputs are frozen into `bridge/uploads`, referenced from the existing reply anchor and released after ACK. Replica images, attachments, selected document links and collection files resolve on the receiving backend. File Explorer may read exact, verified cache files but cannot write them. The browser still stores no SQLite database of its own. Atlas files use the same lazy cache once B6 enables the Atlas graph.
 B6 enables Atlas replication for explicitly configured Bridge backends and backfills pre-existing Atlas items on upgrade. Record schema version 2 lets earlier receivers park new records until they upgrade. Pages point at immutable revision UUIDs; `parent_revision_id` and `merged_revision_id` form the revision graph. Revision `version` is a database-local ordinal allocated from the maximum for that Page, and the item's ordinal follows its current pointer. Content and metadata retain independent registers, so a stale favourite cannot move the pointer. Non-current graph leaves are conflicts; choosing either version creates a new revision consuming both leaves. History/restore use UUIDs and display time/device; browser editor drafts stay scoped to the connected backend. Before a pulled tombstone or verified deleted ACK cascades, unsent Page revisions become a new “(recovered)” Page with fresh revision/file ids and preserved blob manifests. Recovery receipts avoid duplicate copies when child ACKs precede the Page's tombstone; deleted ACKs are processed before successful child ACKs in the same push. File aliases remain readable from embeds and covers, and canonical file references protect restorable history. Generated-file discovery only walks this backend's execution folders; replicas expose selected outputs through their conversation cache.
@@ -204,18 +215,24 @@ logout without owning SQLite. Desktop uses the system browser with a state/PKCE
 loopback callback; Server uses device-code authorization through `mains bridge`
 or Settings › Bridge. The first backend generates the account key and one-time
 Argon2id recovery code. Later backends need a matching public-key approval or a
-fresh recipient-bound recovery signature before receiving log/blob access.
-Device approval codes are independently derived on backends, with 60 bits shown
-as twelve grouped base32 characters. Hub-provided codes are ignored. The
-approving side never displays the expected code; its operator types the code
-shown on the new backend, which must match the local derivation. A received
-account key stays in protected pending storage until the operator enters the
-account fingerprint from an approved device and the new backend verifies it
-locally. Only trusted active keys expose a fingerprint through status, UI or
-CLI; a pending backend never supplies its own confirmation answer.
-Pending verification never starts replication, survives restart
-and cannot replace an existing trusted key. Recovery pins its locally decrypted
-key directly, independently of later hub wraps. See the untrusted-hub tests in
+recovery-signed admission before receiving log/blob access. Every admission,
+removal and recovery rotation is a signed entry in the account's hash-chained
+**membership log** (`bridge.membership.ts`, `@mains/contracts/bridge-membership`);
+each backend verifies the chain itself, caches it in `bridge/membership.json` and
+pins the verified head in the identity vault, so a rewound or forked log is a
+membership conflict. Device approval codes are independently derived on backends,
+with 60 bits shown as twelve grouped base32 characters. Hub-provided codes are
+ignored. The approving side never displays the expected code; its operator types
+the code shown on the new backend, which must match the local derivation. A
+received account key stays in protected pending storage until the operator enters
+the **join code** that the approving device shows for it; the join code binds the
+account key to the exact entry that admitted the new backend. Only ready backends
+expose join codes through status, UI or CLI; a pending backend never supplies its
+own confirmation answer. Pending verification never starts replication, survives
+restart and cannot replace an existing trusted key. Recovery pins its locally
+decrypted key directly, independently of later hub wraps, and signs with the
+recovery key derived from the code, so a removed backend holding only the account
+key cannot re-admit itself. See the untrusted-hub tests in
 `bridge.identity.test.ts` and the ceremony in `docs/design/bridge.md`.
 `bridge.identity-storage` encrypts the credential and private keys using the
 host secret-storage adapter, never plaintext fallback. Only public identity

@@ -4,31 +4,31 @@ import { Button, Input, Muted, Text } from "@/components/ui";
 import { SettingsSection } from "./settings-layout";
 
 export function BridgeKeyVerification({ busy, onConfirm }: {
-  busy: boolean; onConfirm(fingerprint: string): Promise<void>;
+  busy: boolean; onConfirm(joinCode: string): Promise<void>;
 }) {
   const [input, setInput] = useState("");
   let code: string | null = null;
-  try { code = normalizeBridgeVerificationCode(input); } catch { /* Wait for a complete fingerprint. */ }
+  try { code = normalizeBridgeVerificationCode(input); } catch { /* Wait for a complete code. */ }
   return (
-    <SettingsSection title="Verify account key">
+    <SettingsSection title="Verify this device">
       <div className="space-y-4 py-4">
         <Text className="max-w-2xl">
-          On an approved device, open Settings › Bridge and find its account
-          fingerprint. Enter that fingerprint below to verify this device.
+          On the device that approved this one, open Settings › Bridge and find
+          the join code for this device. Enter it below to verify this device.
         </Text>
         <Muted className="max-w-2xl">
-          Sync stays paused until the account keys match.
+          Sync stays paused until the code matches.
         </Muted>
         <form className="max-w-xl space-y-3" onSubmit={(event) => {
           event.preventDefault();
           if (code && !busy) void onConfirm(code);
         }}>
           <Input
-            aria-label="Fingerprint from approved device"
+            aria-label="Join code from the approving device"
             autoComplete="off"
             autoCapitalize="characters"
             spellCheck={false}
-            placeholder="Enter the fingerprint from your approved device"
+            placeholder="Enter the join code from your approving device"
             value={input}
             disabled={busy}
             onChange={(event) => setInput(event.target.value)}

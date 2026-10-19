@@ -6579,38 +6579,6 @@
       },
       "uniqueConstraints": {},
       "checkConstraints": {}
-    },
-    "bridge_writer_keys": {
-      "name": "bridge_writer_keys",
-      "columns": {
-        "backend_id": {
-          "name": "backend_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "signing_public_key": {
-          "name": "signing_public_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "bridge_writer_keys_backend_id_signing_public_key_pk": {
-          "columns": [
-            "backend_id",
-            "signing_public_key"
-          ],
-          "name": "bridge_writer_keys_backend_id_signing_public_key_pk"
-        }
-      },
-      "uniqueConstraints": {},
-      "checkConstraints": {}
     }
   },
   "views": {},

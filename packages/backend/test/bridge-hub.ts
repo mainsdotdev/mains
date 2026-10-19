@@ -3,7 +3,7 @@ import type { BridgeLogRecord, BridgeStream } from "@mains/contracts/bridge-prot
 import { createMemoryBridgeHub, type BridgeTransport } from "../src/modules/bridge/bridge.transport";
 import { createBridgeWebSocketTransport } from "../src/modules/bridge/bridge.websocket";
 import { bridgePassThroughCodec, createBridgeSealingCodec, type BridgeCodec } from "../src/modules/bridge/bridge.crypto";
-import { fixtureSigningCodec, signFixtureEnvelope } from "./bridge-signing";
+import { fixtureHead, fixtureMembership, fixtureSigningCodec, signFixtureEnvelope } from "./bridge-signing";
 import { deriveBridgeKeys } from "../src/modules/bridge/bridge.keys";
 import { createBridgeBlobs } from "../src/modules/bridge/bridge.blobs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -26,6 +26,8 @@ export interface BridgeTestHub {
 export interface LocalBridgeTestWorker {
   readonly url: string; readonly wsUrl: string;
   token(accountId: string, backendId: string, expiresIn?: string | number): Promise<string>;
+  /** Appends a signed admission for a fixture backend; the first one creates the account's genesis. */
+  admit(accountId: string, backendId: string, accountKey?: Uint8Array): Promise<{ seq: number; hash: string }>;
   restart(): Promise<void>; dispose(): Promise<void>; inspect(accountId: string): Promise<unknown>; evict(accountId: string): Promise<void>;
   quotaSql(accountId: string, query: string): Promise<unknown>;
   bucket(): Promise<{ list(): Promise<{ objects: { key: string }[] }>; get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>; put(key: string, value: Uint8Array): Promise<unknown> }>;
@@ -43,6 +45,8 @@ export async function createBridgeTestHub(): Promise<BridgeTestHub> {
   if (!networkMode) return { ...createMemoryBridgeHub(), sign: (envelope) => envelope, codec: (_backendId, base) => base ?? bridgePassThroughCodec };
   const hub = await (worker ??= startWorker());
   const accountId = randomUUID();
+  // Every backend id these tests replicate as; records bind the head that admitted them all.
+  const membership = await fixtureMembership(hub, accountId, ["A", "B", "C", "T", "O", "N0", "N1", "N2", "inspector", "fixture"]);
   const transports = new Map<string, ReturnType<typeof createBridgeWebSocketTransport>>();
   const connect = (backendId: string) => {
     let transport = transports.get(backendId);
@@ -53,8 +57,8 @@ export async function createBridgeTestHub(): Promise<BridgeTestHub> {
     return transport;
   };
   return {
-    sign: (envelope) => signFixtureEnvelope(accountId, envelope),
-    codec: (backendId, base = bridgeTestCodec) => fixtureSigningCodec(accountId, backendId, base),
+    sign: (envelope) => signFixtureEnvelope(accountId, envelope, fixtureHead(membership)),
+    codec: (backendId, base = bridgeTestCodec) => fixtureSigningCodec(accountId, backendId, base, membership),
     connect,
     async inspect(stream) {
       const result: BridgeLogRecord[] = []; let after = 0;

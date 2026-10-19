@@ -279,6 +279,46 @@ PITR drill, a distributed atomic restore or an independent long-term DO backup.
 Perform a controlled restore exercise in a disposable Cloudflare environment
 before treating full data disaster recovery as a public-service guarantee.
 
+## Pre-release environment reset
+
+Before Bridge is released, an incompatible protocol change (such as the membership
+log) is shipped by emptying the environment instead of migrating it. Every account
+on staging and production is the operator's own; never use this once real users
+exist.
+
+`npm run <env>:reset -- --confirm <worker name>` exports the remote D1 to
+`.wrangler/reset-<env>-<time>/auth-before-reset.sql`, drops every table (Wrangler's
+migration table included) and applies all migrations again. Account ids come from
+D1 (`crypto.randomUUID()` per Better Auth user), so each later sign-in gets a new
+account id, and with it a new Durable Object and R2 prefix. The old objects and
+blobs are unreachable ciphertext; they are left in place and can be deleted later
+from the dashboard. Pre-reset backups cannot be restored into this code (their
+table set no longer matches) and expire under their normal retention.
+
+Order, staging first:
+
+1. Set the repository variable `BRIDGE_BACKUPS_ENABLED=false` so no job reads the
+   environment mid-reset.
+2. Reset and deploy back to back; the deploy gate requires no pending migrations:
+   ```sh
+   npm run staging:reset -- --confirm mains-bridge-staging
+   npm run staging:deploy
+   ```
+3. Re-invite yourself (the beta grant was in D1):
+   `npm run beta -- invite --email YOU --environment staging --remote`.
+4. Update every desktop/server build first. On each device, Bridge starts signed
+   out with a reset notice (the old identity is kept aside as
+   `bridge/identity.json.superseded-*`). Sign in again; the first device creates
+   the new account key and recovery code, the others join by approval.
+5. Grant the period for the new account id (from `mains bridge status`):
+   `npm run subscription -- grant --account NEW_ID --interval monthly --starts-at ISO --remote --config wrangler.staging.jsonc`.
+   The script has no profile option: for production, run it with production
+   credentials (for example `CLOUDFLARE_API_TOKEN` for the production account).
+6. Check sign-in, approval with a join code, removal, recovery and sync on two
+   real devices, then repeat steps 2–5 with `production` (the production commands
+   run `production:check` first).
+7. Set `BRIDGE_BACKUPS_ENABLED=true` again and confirm the next scheduled backup.
+
 ## Payment integration handoff
 
 The existing standard tier has monthly/yearly periods and indexed entitlement

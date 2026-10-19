@@ -59,21 +59,21 @@ describe("Bridge CLI", () => {
       expect(calls).toEqual([{ channel: CHANNELS.bridge.confirmAccountKey, args: ["ABCD-EFGH-JKLM"] }]);
     } finally { for (const socket of server.clients) socket.terminate(); await new Promise<void>((resolve) => server.close(() => resolve())); }
   });
-  it("asks for the approved device's fingerprint without printing the new device's own answer", async () => {
+  it("asks for the approving device's join code without printing any code the status might carry", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise<void>((resolve) => server.once("listening", resolve));
     server.on("connection", (socket) => socket.on("message", (data) => {
       const message = decodeWsMessage(data.toString()); if (message.kind !== "invoke") return;
       socket.send(encodeWsMessage({ kind: "response", id: message.id, result: { success: true,
-        data: { state: "needs-verification", backendId: "B", accountFingerprint: "ABCD-EFGH-JKLM", login: null } } }));
+        data: { state: "needs-verification", backendId: "B", joinCodes: [{ backendId: "B", label: "B", code: "ABCD-EFGH-JKLM" }], login: null } } }));
     }));
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await runBridgeCommand(parseBridgeArguments(["login", "--hub", "https://bridge.example"]),
         { controlUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`, token: "owner-token" });
       const output = log.mock.calls.flat().join("\n");
-      expect(output).toContain("on an approved device");
-      expect(output).toContain("mains bridge confirm --code <fingerprint-from-approved-device>");
+      expect(output).toContain("on the approving device");
+      expect(output).toContain("mains bridge confirm --code <join-code-from-approving-device>");
       expect(output).not.toContain("ABCD-EFGH-JKLM");
     } finally { for (const socket of server.clients) socket.terminate(); await new Promise<void>((resolve) => server.close(() => resolve())); }
   });

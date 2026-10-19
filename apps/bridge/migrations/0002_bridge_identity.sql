@@ -18,8 +18,6 @@ CREATE TABLE bridge_backends (
   token_expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   last_seen INTEGER,
-  recovery_challenge TEXT,
-  challenge_expires_at INTEGER,
   PRIMARY KEY(account_id,backend_id),
   UNIQUE(account_id,signing_public_key)
 );
@@ -29,13 +27,6 @@ CREATE TABLE bridge_key_wraps (
   wrap TEXT NOT NULL,
   PRIMARY KEY(account_id,backend_id),
   FOREIGN KEY(account_id,backend_id) REFERENCES bridge_backends(account_id,backend_id) ON DELETE CASCADE
-);
-CREATE TABLE bridge_writer_keys (
-  account_id TEXT NOT NULL REFERENCES user(id) ON DELETE CASCADE,
-  backend_id TEXT NOT NULL,
-  signing_public_key TEXT NOT NULL,
-  PRIMARY KEY(account_id,backend_id,signing_public_key),
-  UNIQUE(account_id,signing_public_key)
 );
 CREATE TABLE bridge_approvals (
   request_id TEXT NOT NULL UNIQUE,

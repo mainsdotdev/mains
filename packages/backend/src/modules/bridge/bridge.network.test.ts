@@ -1,4 +1,4 @@
-import { fixtureSigningCodec, signFixtureEnvelope } from "../../../test/bridge-signing";
+import { fixtureMembership, fixtureSigningCodec, signFixtureEnvelope } from "../../../test/bridge-signing";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { BridgeHeader } from "@mains/contracts/bridge-protocol";
@@ -14,10 +14,10 @@ const clients: ReturnType<typeof createBridgeWebSocketTransport>[] = [], cleanup
 afterEach(() => { for (const client of clients.splice(0)) client.close(); for (const fn of cleanup.splice(0)) fn(); });
 afterAll(disposeBridgeTestHub);
 async function client(accountId: string, backendId: string, extra: Partial<BridgeWebSocketOptions> = {}) {
-  const hub = await getLocalBridgeTestWorker();
+  const hub = await getLocalBridgeTestWorker(), head = await hub.admit(accountId, backendId);
   const connection = createBridgeWebSocketTransport({ url: hub.wsUrl, token: () => hub.token(accountId, backendId), ...extra });
   const push = connection.push;
-  connection.push = (stream, records) => push(stream, records.map((record) => { if (!record.auth) Object.assign(record, signFixtureEnvelope(accountId, record)); return record; }));
+  connection.push = (stream, records) => push(stream, records.map((record) => { if (!record.auth) Object.assign(record, signFixtureEnvelope(accountId, record, head)); return record; }));
   clients.push(connection); return connection;
 }
 function envelope(id: string, counter = 0, op: "upsert" | "delete" = "upsert", text = "private-marker-şifreli") {
@@ -107,7 +107,8 @@ describe.skipIf(!networkMode)("Bridge real network and encrypted persistence", (
       if (corrupt) for (const record of page.records) { const value = record.envelope.body.payload; record.envelope.body.payload = (value[0] === "A" ? "B" : "A") + value.slice(1); }
       return page;
     } };
-    const engine = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec: fixtureSigningCodec(account, "B", codec), transport }); await engine.bootstrap();
+    const membership = await fixtureMembership(await getLocalBridgeTestWorker(), account, ["A", "B"]);
+    const engine = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec: fixtureSigningCodec(account, "B", codec, membership), transport }); await engine.bootstrap();
     db.exec("INSERT INTO collections(id,account_id,name) VALUES('draft','default','Unsynced draft')");
     await a.push("account", [envelope("draft", 1, "delete")]); corrupt=true;
     await engine.pull();
@@ -115,7 +116,7 @@ describe.skipIf(!networkMode)("Bridge real network and encrypted persistence", (
     expect(engine.unverified()).toBe(1); expect(engine.pending().some((entry) => entry.pk === "draft")).toBe(true);
     // The damaged copy stays set aside; the next engine asks the hub for that record once more.
     corrupt=false; await engine.stop();
-    const restarted = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec: fixtureSigningCodec(account, "B", codec), transport });
+    const restarted = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec: fixtureSigningCodec(account, "B", codec, membership), transport });
     try {
       await restarted.pull();
       expect(db.prepare("SELECT 1 FROM collections WHERE id='draft'").get()).toBeUndefined(); expect(restarted.unverified()).toBe(0);

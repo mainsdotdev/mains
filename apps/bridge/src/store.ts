@@ -31,8 +31,9 @@ export function createHubStore(storage: DurableObjectStorage) {
     CREATE TABLE IF NOT EXISTS write_rate(backend_id TEXT PRIMARY KEY,window INTEGER NOT NULL,count INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS stream_activity(stream TEXT PRIMARY KEY,last_activity INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS write_budget(period_start INTEGER PRIMARY KEY,records INTEGER NOT NULL CHECK(records>=0));`);
-  sql.exec(`CREATE TABLE IF NOT EXISTS writer_keys(backend_id TEXT NOT NULL,signing_public_key TEXT NOT NULL,PRIMARY KEY(backend_id,signing_public_key));
-    CREATE TABLE IF NOT EXISTS publications(publication_id TEXT PRIMARY KEY,signature TEXT NOT NULL,seq INTEGER NOT NULL);`);
+  // Each receipt keeps the membership seq its publication bound, so receipts below the replay horizon can go.
+  sql.exec(`CREATE TABLE IF NOT EXISTS publications(publication_id TEXT PRIMARY KEY,signature TEXT NOT NULL,seq INTEGER NOT NULL,membership_seq INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS publications_membership ON publications(membership_seq);`);
   const first = <T>(query: string, ...args: (string | number | null)[]): T | undefined => sql.exec(query, ...args).toArray()[0] as T | undefined;
   storage.transactionSync(() => {
     sql.exec(`CREATE INDEX IF NOT EXISTS latest_row_key ON latest(json_extract(envelope,'$.header.rowKey'));
@@ -68,8 +69,6 @@ export function createHubStore(storage: DurableObjectStorage) {
   installBlobReferences(storage);
   const compaction = createHubCompaction(storage);
   const api = {
-    rememberWriter(backendId: string, key: string) { sql.exec("INSERT OR IGNORE INTO writer_keys VALUES(?,?)", backendId, key); },
-    writerKeys() { return sql.exec<{ backendId: string; signingPublicKey: string }>("SELECT backend_id AS backendId,signing_public_key AS signingPublicKey FROM writer_keys").toArray(); },
     recordBytes(): number {
       return first<{ bytes: number }>("SELECT bytes FROM record_usage WHERE id=1")!.bytes;
     },
@@ -81,7 +80,7 @@ export function createHubStore(storage: DurableObjectStorage) {
       return true;
     },
     push(backendId: string, stream: BridgeStream, envelopes: BridgeEnvelope[], budget?: { limitBytes: number; blobBytes: number; writesPerMinute: number; canUpload?: boolean;
-      hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean; periodStart?: number }) {
+      hasBlobs?: (blobs: BridgeBlobIdentity[]) => boolean; periodStart?: number }, replay?: { horizon: number; head: { seq: number; hash: string } }) {
       return storage.transactionSync(() => {
         const changed: BridgeLogRecord[] = [];
         const results = envelopes.map((envelope): BridgePushResult => {
@@ -115,6 +114,9 @@ export function createHubStore(storage: DurableObjectStorage) {
           if (deleted) return deadAck(JSON.parse(deleted.envelope));
           // Compaction/idle expiry cannot turn a captured signed publication into new activity.
           if (published) return ack(published.seq);
+          // Below the horizon a receipt may already be gone, so nothing bound there is new any more: the
+          // writer signs it again on a newer head (MEMBERSHIP.md §8).
+          if (replay && auth.membership.seq < replay.horizon) return { error: "membershipStale", head: replay.head };
           const comparison = previousEnvelope && order(envelope, previousEnvelope);
           // Upgrade only the original writer's exact legacy clock. This changes
           // neither LWW order nor application data; a stale image still loses.
@@ -134,7 +136,7 @@ export function createHubStore(storage: DurableObjectStorage) {
           if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
           sql.exec("INSERT INTO streams(stream,seq) VALUES(?,1) ON CONFLICT(stream) DO UPDATE SET seq=seq+1", stream);
           const seq = first<{ seq: number }>("SELECT seq FROM streams WHERE stream=?", stream)!.seq;
-          sql.exec("INSERT INTO publications VALUES(?,?,?)", auth.publicationId, auth.signature, seq);
+          sql.exec("INSERT INTO publications(publication_id,signature,seq,membership_seq) VALUES(?,?,?,?)", auth.publicationId, auth.signature, seq, auth.membership.seq);
           if (h.runId) sql.exec("INSERT INTO stream_activity VALUES(?,?) ON CONFLICT(stream) DO UPDATE SET last_activity=excluded.last_activity", `run:${h.runId}`, Date.now());
           sql.exec("INSERT INTO log(stream,seq,row_key,register_key,op,envelope) VALUES(?,?,?,?,?,?)", stream, seq, h.rowKey, h.registerKey ?? null, h.op, encoded);
           if (h.op === "delete") {
@@ -156,6 +158,16 @@ export function createHubStore(storage: DurableObjectStorage) {
           ON CONFLICT(period_start) DO UPDATE SET records=records+excluded.records RETURNING records`, budget.periodStart, accepted)!.records;
         return { results, changed, periodRecords: { before: after - accepted, after } };
       });
+    },
+    /** Drops receipts bound below the replay horizon, a bounded batch at a time. */
+    compactReceipts(horizon: number, limit = 1000): { hasMore: boolean } {
+      const removed = sql.exec("DELETE FROM publications WHERE rowid IN (SELECT rowid FROM publications WHERE membership_seq<? LIMIT ?) RETURNING 1", horizon, limit).toArray().length;
+      return { hasMore: removed >= limit };
+    },
+    /** Signatures of every account-stream record `backendId` authored that pulls can still return. */
+    accountSignatures(backendId: string): string[] {
+      return sql.exec<{ signature: string }>(`SELECT json_extract(envelope,'$.auth.signature') AS signature FROM log
+        WHERE stream='account' AND json_extract(envelope,'$.header.origin')=?`, backendId).toArray().map((row) => row.signature);
     },
     pull(stream: BridgeStream, after: number, limit: number) {
       // Paginate by bytes as well as record count so a valid push always remains pullable.

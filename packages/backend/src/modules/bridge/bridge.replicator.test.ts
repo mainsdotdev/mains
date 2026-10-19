@@ -4,7 +4,15 @@ import { createTestDb } from "../../../test/setup-db";
 import { disposeBridgeTestHub, getLocalBridgeTestWorker, networkMode } from "../../../test/bridge-hub";
 import { createBridgeReplicator, type BridgeReplicatorOptions } from "./bridge.replicator";
 import { parseBridgeDevConfig } from "./bridge.config";
-import { fixtureSigningKey } from "../../../test/bridge-signing";
+import { fixtureHead, fixtureMembership, fixtureSigningKey, signFixtureEnvelope } from "../../../test/bridge-signing";
+import { bridgeBase64 } from "@mains/contracts/bridge-auth";
+import { BRIDGE_MEMBERSHIP_HEARTBEAT_MS, BRIDGE_REPLAY_HORIZON_MS } from "@mains/contracts/bridge-membership";
+import type { BridgeEnvelope } from "@mains/contracts/bridge-protocol";
+import type { BridgeMembershipEntry } from "@mains/contracts/bridge-membership";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { bridgeRecordKeys, createBridgeSealingCodec } from "./bridge.crypto";
+import { deriveBridgeKeys } from "./bridge.keys";
+import { deviceSigner, pullBridgeAccountFence, signBridgeMembershipEntry } from "./bridge.membership";
 import { toBase64Url } from "./bridge.encoding";
 import * as websocket from "./bridge.websocket";
 import * as engine from "./bridge.engine";
@@ -19,6 +27,8 @@ afterEach(async () => {
 afterAll(disposeBridgeTestHub);
 async function node(account: string, backendId: string, extra: Partial<BridgeReplicatorOptions> = {}) {
   const hub = await getLocalBridgeTestWorker(), fixture = createTestDb(); cleanups.push(fixture.cleanup);
+  // The first backend's genesis commits to this test's account key, which replication verifies.
+  await hub.admit(account, backendId, key);
   fixture.sqlite.prepare("INSERT INTO accounts(id) VALUES('default')").run();
   fixture.sqlite.prepare("INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default',?)").run(backendId);
   fixture.sqlite.exec("INSERT INTO providers(id,kind,display_name) VALUES('claude_code','agent_runtime','Claude')");
@@ -43,6 +53,13 @@ async function flushBackground(predicate: () => boolean) {
   }
   expect(predicate()).toBe(true);
 }
+/** Awaits work that makes real HTTP requests while fake timers are installed: the fetch client only
+ * completes promptly while fake time keeps moving. */
+async function settle<T>(work: Promise<T>): Promise<T> {
+  let done = false; const result = work.finally(() => { done = true; });
+  while (!done) { await vi.advanceTimersByTimeAsync(25); await new Promise<void>((resolve) => setImmediate(resolve)); }
+  return result;
+}
 async function scheduledPair() {
   const account = randomUUID(), a = await node(account, "A"); run(a); await a.replicator.syncNow();
   const createTransport = websocket.createBridgeWebSocketTransport;
@@ -56,6 +73,8 @@ async function scheduledPair() {
     if (options.metadata?.label === "Computer B") receiver = transport;
     return transport;
   });
+  // Admit B on real timers: the fixture's HTTP round trips are not what these tests measure.
+  await (await getLocalBridgeTestWorker()).admit(account, "B", key);
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const b = await node(account, "B", { autoStart: true });
   await b.replicator.syncNow(); b.replicator.watchRun("r", "view"); await b.replicator.syncNow();
@@ -70,7 +89,8 @@ describe("Bridge development configuration", () => {
   it("requires an explicit complete config, keeps dev keys private, and permits disabling it", () => {
     expect(parseBridgeDevConfig(config)).toMatchObject({ backendId: "A", label: "MacBook", accountKey: key });
     expect(parseBridgeDevConfig({ enabled: false })).toBeNull();
-    expect(parseBridgeDevConfig({ ...config, localSigningPublicKeys: ["untrusted"] })).not.toHaveProperty("localSigningPublicKeys");
+    // Membership is verified from the hub's log, never read from the file.
+    expect(parseBridgeDevConfig({ ...config, membership: { current: () => null } })).not.toHaveProperty("membership");
   });
   it.each([{ url: "ws://example.com/v1/log" }, { url: "wss://example.com/v1/log?token=x" }, { accountKey: "secret-marker" }, { backendId: "../A" }, { label: " " }, { token: "" }])("rejects unsafe or malformed configuration without echoing credentials (%j)", (change) => {
     expect(() => parseBridgeDevConfig({ ...config, ...change })).toThrow();
@@ -79,19 +99,97 @@ describe("Bridge development configuration", () => {
 });
 
 describe.skipIf(!networkMode)("Bridge background replication for desktop/server viewers", () => {
-  it("reuses known writer keys for live change hints and refreshes for an unknown writer", async () => {
+  it("applies a removed writer's fenced account records and refuses one a hub inserts after its removal", async () => {
+    const account = randomUUID(), hub = await getLocalBridgeTestWorker();
+    const a = await node(account, "A"), b = await node(account, "B"), c = await node(account, "C");
+    c.sqlite.prepare("INSERT INTO collections(id,account_id,name) VALUES('fenced','default','Before removal')").run();
+    await c.replicator.syncNow(); await b.replicator.syncNow();
+    expect(b.sqlite.prepare("SELECT name FROM collections WHERE id='fenced'").get()).toEqual({ name: "Before removal" });
+    // A removes C with the fence of what its own full read of the account stream returns.
+    const view = await fixtureMembership(hub, account, ["A"], key), before = fixtureHead(view), token = await hub.token(account, "A");
+    const fence = await pullBridgeAccountFence(hub.wsUrl, token, "C");
+    expect(fence.signatures.length).toBeGreaterThan(0);
+    const remover = { backendId: "A", signingPublicKey: bridgeBase64(ed25519.getPublicKey(fixtureSigningKey(account, "A"))) };
+    const entry = signBridgeMembershipEntry(view.current()!, { kind: "remove", body: { backendId: "C", account: fence.account } }, deviceSigner(remover), fixtureSigningKey(account, "A"));
+    const removed = await fetch(new URL("/v1/membership", hub.url), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ entry }) });
+    expect(removed.status).toBe(200);
+    // A hostile hub stores a record C signed afterwards with its old key, bound to a head before its removal.
+    const sealing = createBridgeSealingCodec(key), stored = (await hub.inspect(account) as { envelope: string }[]).map((row) => JSON.parse(row.envelope) as BridgeEnvelope);
+    const original = stored.find((record) => record.header.origin === "C" && sealing.open(record).body.table === "collections")!;
+    const opened = sealing.open(original).body as { values: Record<string, unknown> }, routing = bridgeRecordKeys(deriveBridgeKeys(key).recordKey, "collections", "injected", "row");
+    const injected = signFixtureEnvelope(account, sealing.seal({ ...original.header, rowKey: routing.rowKey, registerKey: routing.registerKey!, hlc: { physicalMs: Date.now(), counter: 0 } } as BridgeEnvelope["header"],
+      { ...opened, pk: "injected", values: { ...opened.values, id: "injected", name: "After removal" } } as never), before);
+    const [{ seq }] = await hub.quotaSql(account, "SELECT seq FROM streams WHERE stream='account'") as { seq: number }[];
+    await hub.quotaSql(account, `INSERT INTO log(stream,seq,row_key,register_key,op,envelope) VALUES('account',${seq + 1},'${routing.rowKey}','${routing.registerKey}','upsert','${JSON.stringify(injected)}')`);
+    await hub.quotaSql(account, `UPDATE streams SET seq=${seq + 1} WHERE stream='account'`);
+    // A device that never saw C's records gets exactly what the fence admits.
+    const d = await node(account, "D"); await d.replicator.syncNow();
+    expect(d.sqlite.prepare("SELECT id FROM collections WHERE id IN ('fenced','injected')").all()).toEqual([{ id: "fenced" }]);
+    expect(d.replicator.getStatus().error).toBeNull();
+    // B learns of the removal from the first record bound after it, before applying anything on that page.
+    a.sqlite.prepare("INSERT INTO collections(id,account_id,name) VALUES('after','default','Bound after removal')").run();
+    await a.replicator.syncNow(); await b.replicator.syncNow();
+    expect(b.sqlite.prepare("SELECT id FROM collections WHERE id IN ('after','injected') ORDER BY id").all()).toEqual([{ id: "after" }]);
+  });
+  it("signs a journaled write again on the current head once the replay horizon passes the head it bound", async () => {
+    const account = randomUUID(), hub = await getLocalBridgeTestWorker(), createTransport = websocket.createBridgeWebSocketTransport;
+    let offline = true;
+    vi.spyOn(websocket, "createBridgeWebSocketTransport").mockImplementation((options) => {
+      const transport = createTransport(options), push = transport.push;
+      if (options.metadata?.label === "Computer A") transport.push = async (...args) => { if (offline) throw new Error("Bridge connection closed"); return push(...args); };
+      return transport;
+    });
+    const a = await node(account, "A"), b = await node(account, "B");
+    a.sqlite.prepare("INSERT INTO collections(id,account_id,name) VALUES('queued','default','Written offline')").run();
+    await expect(a.replicator.syncNow()).rejects.toThrow(/connection/);
+    const journaled = a.sqlite.prepare("SELECT envelope FROM bridge_publications WHERE table_name='collections'").get() as { envelope: string };
+    const bound = (JSON.parse(journaled.envelope) as BridgeEnvelope).auth!.membership.seq;
+    // A long time offline: membership moved on, and the head the write bound is now below the horizon.
+    await hub.admit(account, "C");
+    await hub.quotaSql(account, `UPDATE membership SET appended_at=appended_at-${BRIDGE_REPLAY_HORIZON_MS + 60_000}`);
+    offline = false; await a.replicator.syncNow(); await b.replicator.syncNow();
+    expect(b.sqlite.prepare("SELECT name FROM collections WHERE id='queued'").get()).toEqual({ name: "Written offline" });
+    expect(a.replicator.getStatus()).toMatchObject({ error: null, pendingRecords: 0 });
+    const stored = (await hub.inspect(account) as { envelope: string }[]).map((row) => JSON.parse(row.envelope) as BridgeEnvelope).filter((record) => record.header.origin === "A");
+    expect(Math.min(...stored.map((record) => record.auth!.membership.seq))).toBeGreaterThan(bound);
+  });
+  it("appends one horizon checkpoint once membership has been quiet for a week", async () => {
+    const account = randomUUID(), hub = await getLocalBridgeTestWorker(), a = await node(account, "A"), b = await node(account, "B");
+    const log = async () => (await (await fetch(new URL("/v1/membership?after=-1", hub.url), { headers: { Authorization: `Bearer ${await hub.token(account, "A")}` } })).json()).entries as BridgeMembershipEntry[];
+    await b.replicator.syncNow();
+    expect((await log()).map((entry) => entry.kind)).toEqual(["genesis", "add"]);
+    await hub.quotaSql(account, `UPDATE membership SET appended_at=appended_at-${BRIDGE_MEMBERSHIP_HEARTBEAT_MS + 60_000}`);
+    await a.replicator.syncNow();
+    // B then sees a fresh head and has nothing to add.
+    await b.replicator.syncNow(); await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    const entries = await log();
+    expect(entries.map((entry) => entry.kind)).toEqual(["genesis", "add", "checkpoint"]);
+    expect(entries[2].signer).toMatchObject({ kind: "device", backendId: "A" });
+  });
+  it("stops before applying a page whose records bind another membership history", async () => {
+    const account = randomUUID(), a = await node(account, "A"); run(a, "forked"); await a.replicator.syncNow();
+    const b = await node(account, "B"), hub = await getLocalBridgeTestWorker(), other = "A".repeat(43);
+    for (const table of ["log", "latest"]) await hub.quotaSql(account, `UPDATE ${table} SET envelope=json_set(envelope,'$.auth.membership.hash','${other}')`);
+    await expect(b.replicator.syncNow()).rejects.toThrow(/membership conflict/);
+    expect(b.sqlite.prepare("SELECT 1 FROM runs WHERE id='forked'").get()).toBeUndefined();
+    expect(b.replicator.getStatus().error).toMatch(/membership conflict/);
+  });
+  it("reuses verified membership for live change hints and refreshes it for a writer admitted later", async () => {
     const f = await scheduledPair(), fetches = vi.spyOn(globalThis, "fetch");
-    const directoryCalls = () => fetches.mock.calls.filter(([url, options]) => new URL(String(url)).pathname === "/v1/keys/writers" &&
-      new Headers(options?.headers).get("Authorization") === `Bearer ${f.b.options.config.token}`);
+    const membershipCalls = () => fetches.mock.calls.filter(([url, options]) => new URL(String(url)).pathname === "/v1/membership" &&
+      new Headers(options?.headers).get("Authorization") === `Bearer ${f.b.options.config.token}`).length;
     for (let i = 0; i < 3; i++) {
       f.a.sqlite.prepare("INSERT INTO run_artifacts(run_id,kind,content) VALUES('r','report',?)").run(`Live ${i}`);
       await f.a.replicator.syncNow();
       await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content=?").get(`Live ${i}`));
     }
-    expect(directoryCalls()).toHaveLength(0);
-    const c = await node(f.a.options.config.accountId, "C"); run(c, "new-writer"); await c.replicator.syncNow();
+    expect(membershipCalls()).toBe(0);
+    // C's admission is announced to open sockets, and its records bind the head that admitted it.
+    const c = await settle(node(f.a.options.config.accountId, "C")); run(c, "new-writer"); await settle(c.replicator.syncNow());
     await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM runs WHERE id='new-writer'").get());
-    expect(directoryCalls()).toHaveLength(1);
+    expect(membershipCalls()).toBeGreaterThanOrEqual(1); expect(membershipCalls()).toBeLessThanOrEqual(2);
+    expect(f.b.replicator.getStatus().error).toBeNull();
   });
   it("publishes local writes without re-pulling watched streams or notifying its own socket", async () => {
     const f = await scheduledPair();
@@ -139,20 +237,20 @@ describe.skipIf(!networkMode)("Bridge background replication for desktop/server 
   it("recovers a missed hint at five minutes and discovers local writes with no pull", async () => {
     const f = await scheduledPair(); f.dropHints();
     f.a.sqlite.exec("INSERT INTO run_artifacts(run_id,kind,content) VALUES('r','report','Missed hint')");
-    await f.a.replicator.syncNow();
+    await settle(f.a.replicator.syncNow());
     for (let i = 0; i < 9; i++) { await vi.advanceTimersByTimeAsync(30_000); f.b.replicator.watchRun("r", "view"); }
     await vi.advanceTimersByTimeAsync(29_999);
     expect(f.pulls).not.toHaveBeenCalled();
     expect(f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content='Missed hint'").get()).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     await flushBackground(() => !!f.b.sqlite.prepare("SELECT 1 FROM run_artifacts WHERE content='Missed hint'").get());
-    await f.b.replicator.syncNow(); // Let the fallback cycle finish before the next local write.
+    await settle(f.b.replicator.syncNow()); // Let the fallback cycle finish before the next local write.
     // Direct SQLite writers need no renderer event to enter the durable outbox.
     run(f.b, "local-write"); f.pulls.mockClear();
     await vi.advanceTimersByTimeAsync(1000);
     await flushBackground(() => f.b.replicator.getStatus().pendingRecords === 0);
     expect(f.pulls).not.toHaveBeenCalled();
-    await f.a.replicator.syncNow();
+    await settle(f.a.replicator.syncNow());
     expect(f.a.sqlite.prepare("SELECT owner_backend_id FROM runs WHERE id='local-write'").get()).toEqual({ owner_backend_id: "B" });
   });
   it("reconnects promptly after an idle socket closes instead of waiting for the safety poll", async () => {

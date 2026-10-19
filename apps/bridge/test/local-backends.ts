@@ -140,6 +140,8 @@ export async function startLocalBackends(settings: { auth?: boolean; lan?: boole
     await a.stop(); await b.stop();
     const accountId = randomUUID(), accountKey = randomBytes(32).toString("base64url");
     for (const host of [a, b]) {
+      // Development tokens have no enrollment; A's genesis commits to the shared account key replication verifies.
+      await hub.admit(accountId, host.backendId, Buffer.from(accountKey, "base64url"));
       await mkdir(join(host.dir, "bridge"), { recursive: true });
       await writeFile(host.configFile, JSON.stringify({ version: 1, backendId: host.backendId, url: hub.wsUrl, token: await hub.token(accountId, host.backendId), accountId, signingPrivateKey: fixtureSigningKey(accountId, host.backendId).toString("base64url"), accountKey, label: host.label }), { mode: 0o600, flag: "wx" });
       await host.start();

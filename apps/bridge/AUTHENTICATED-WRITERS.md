@@ -32,7 +32,7 @@ changes. It cannot revoke plaintext or keys already copied by that backend.
    Reject rollback and signer substitution. Define replay/equivocation handling
    that works with lazy streams and compaction. Revocation checkpoints commit
    accepted history, so a removed signer cannot backdate new records into an
-   older epoch.
+   older epoch. Design draft: [Membership and revocation](MEMBERSHIP.md).
 4. **Epoch keys and recovery.** Use a stable record identity/index key and fresh
    random content keys per epoch. Scope new blob encryption/storage to its epoch;
    keep historical keys only for historical reads. Distribute new keys only to
@@ -41,15 +41,13 @@ changes. It cannot revoke plaintext or keys already copied by that backend.
    Journal transitions before network calls and resume the same proposal after
    interruption. Offline retained devices refresh membership before publishing.
 
-Stages 1–2 do **not** yet authenticate membership or rotate keys on revocation.
-Peer writer keys currently come from the hub's authenticated directory and
-approved-key history. The local writer's current and historical public keys
-remain pinned independently in protected local storage, scoped to hub, account
-and backend. Sign-out retains only this public-key history alongside local data;
-no hub response or development JSON can extend that trust.
-A compromised hub can still fabricate foreign membership or deliver new writes
-signed with a revoked key; stage 3 must authenticate membership and accepted-history
-checkpoints before treating those authors as trusted. Do not describe the protocol
+Stage 3 slice 1 authenticates membership: every writer key, the local writer's
+earlier keys included, comes from the signed, hash-chained log
+([Membership and revocation](MEMBERSHIP.md)), and every record binds the writer's
+head. Slice 2 fences a removed writer's account stream to the records its remover
+saw. Keys are not yet rotated on revocation, and a compromised hub can still
+deliver run-stream records a removed writer bound before its removal until slice 3
+fences those too. Do not describe the protocol
 as hardened or release it until all
 stages and their adversarial regression tests are complete. Compromised delivery
 can still withhold messages; signed state does not guarantee availability or
@@ -66,7 +64,9 @@ Stage 2 uses a fixed epoch 1 and mandatory Ed25519 envelope signatures. The
 random 256-bit publication id is signed and journaled with the exact nonce and
 ciphertext. Both success and deleted ACKs bind it; invalid deletions cannot retire
 the write. Hub replay receipts survive retention/compaction and each carries a
-256-byte quota charge. Their checkpoint-based compaction belongs to stage 3.
+256-byte quota charge until the replay horizon (stage 3, slice 4) passes the
+membership head its publication bound; the hub then refuses that binding and drops
+the receipt.
 Unsigned network envelopes have no compatibility path. The encryption-only codec
 and plaintext in-memory codec remain low-level test primitives; runtime replication
 always composes the device-signature codec around encryption.
@@ -82,12 +82,12 @@ binding, complete-batch rejection, token-only tombstones/clock changes, replay
 after expiry/restart, mismatched ACKs, lost ACK/restart persistence, and incoming
 locally owned run/pulse roots without local provenance.
 
-Stage 2 review fixes preserve local public signing-key provenance through
-sign-out, restart and re-enrollment with fresh random keys. Both logout options
+Own records keep verifying through sign-out, restart and re-enrollment with fresh
+random keys, because each earlier key keeps its interval in the membership log. Both logout options
 must restore/retain own collections and Atlas records without parked rejections.
 Historical self-signatures still cannot introduce executable roots without local
-provenance. Live hints reuse known peer keys and fetch the directory on an unknown
-signer. Rejected registration responses revoke the requested pending backend with
+provenance. Live hints reuse the verified membership and refresh it only for a
+record bound to a newer head. Rejected registration responses revoke the requested pending backend with
 its issued credential, including when local enrollment persistence fails.
 
 ## Required verification

@@ -3,7 +3,7 @@ import type { BridgeDiagnosticsEnv } from "./observability";
 
 export interface SqlUsageEnv extends BridgeDiagnosticsEnv { BRIDGE_SQL_USAGE_SAMPLE_RATE?: string }
 export type SqlUsageOperation = "initialize" | "connect" | "disconnect" | "hello" | "push" | "pull" | "subscribe" | "compact" |
-  "quota" | "reserve" | "put" | "protectRead" | "snapshot" | "checkpoint";
+  "quota" | "reserve" | "put" | "protectRead" | "snapshot" | "checkpoint" | "membership";
 export interface SqlUsageEvent {
   event: "bridge.sql_usage"; hubId: string; environment: string; operation: SqlUsageOperation;
   rowsRead: number; rowsWritten: number; queries: number; durationMs: number;

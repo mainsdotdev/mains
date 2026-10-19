@@ -15,6 +15,7 @@ export interface BridgeWebSocketOptions {
   onStatusChange?: (status: "connecting" | "connected" | "offline") => void;
   onPresence?: (presence: Extract<BridgeServerMessage, { type: "presence" }>) => void;
   onChanged?: (stream: BridgeStream) => void;
+  onMembership?: (seq: number) => void;
   /** Policy closure is a hint to recheck HTTP identity, never proof of revocation. */
   onAccessChanged?: () => void;
 }
@@ -81,6 +82,7 @@ export function createBridgeWebSocketTransport(options: BridgeWebSocketOptions) 
         if (value.type === "presence") options.onPresence?.(value);
         else if (value.type === "changed") options.onChanged?.(value.stream);
         else if (value.type === "approval") options.onApproval?.(value);
+        else if (value.type === "membership") options.onMembership?.(value.seq);
       } catch (error) { console.error("Bridge transport listener failed", error); }
     }
   }

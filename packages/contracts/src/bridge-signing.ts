@@ -10,6 +10,6 @@ export function bridgeHeaderFields(header: BridgeHeader): unknown[] {
 
 /** Signature input is independent of JSON property order and contains no plaintext. */
 export function bridgeSigningMessage(envelope: BridgeEnvelope, auth: Omit<BridgeRecordSignature, "signature">): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify([1, "mains.bridge.v1/signed-record", auth.accountId, auth.epoch,
+  return new TextEncoder().encode(JSON.stringify([2, "mains.bridge.v2/signed-record", auth.accountId, auth.epoch, auth.membership.seq, auth.membership.hash,
     auth.publicationId, auth.signingPublicKey, bridgeHeaderFields(envelope.header), envelope.body.nonce, envelope.body.payload]));
 }

@@ -90,7 +90,7 @@ export async function runBridgeCommand(options: ReturnType<typeof parseBridgeArg
     if (options.action === "sync") { await client.call(CHANNELS.bridge.syncNow); console.log("Sync complete."); return; }
     if (options.action === "confirm") {
       await client.call(CHANNELS.bridge.confirmAccountKey, options.code);
-      console.log("Account key verified. Sync is enabled."); return;
+      console.log("Device verified. Sync is enabled."); return;
     }
     if (options.action === "logout") { await client.call(CHANNELS.bridge.signOut, options.removeSynced); console.log("Signed out of Bridge. Stored keys and replicas removed."); return; }
     if (options.action === "recover") { const code = await readRecoveryCode(); await client.call(CHANNELS.bridge.enterRecoveryCode, code); console.log("Recovery complete. Sync is enabled."); return; }
@@ -100,11 +100,12 @@ export async function runBridgeCommand(options: ReturnType<typeof parseBridgeArg
       const status = await client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth);
       const request = status.approvals.find((entry) => entry.backendId === options.positional[0]);
       if (!request) throw new Error("No pending approval exists for that backend");
-      if (options.action === "approve") await client.call(CHANNELS.bridge.approveBackend, { ...request, code: options.code });
-      else await client.call(CHANNELS.bridge.rejectBackend, request.requestId);
-      console.log(options.action === "approve"
-        ? `Backend approved. Trusted account fingerprint: ${status.accountFingerprint}. On the new device, enter it with mains bridge confirm --code <fingerprint-from-approved-device> before syncing.`
-        : "Request declined."); return;
+      if (options.action === "reject") { await client.call(CHANNELS.bridge.rejectBackend, request.requestId); console.log("Request declined."); return; }
+      await client.call(CHANNELS.bridge.approveBackend, { ...request, code: options.code });
+      // The join code binds the new device to the membership entry that just admitted it.
+      const join = (await client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth)).joinCodes.find((entry) => entry.backendId === request.backendId);
+      if (!join) throw new Error("The approval did not reach the account membership; check mains bridge status");
+      console.log(`Backend approved. Join code: ${join.code}. On the new device, enter it with mains bridge confirm --code <join-code-from-approving-device> before syncing.`); return;
     }
     await client.call(CHANNELS.bridge.signIn, { hubUrl: options.hubUrl, label: options.label, includeExisting: options.includeExisting, flow: "device" });
     let status = await client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus);
@@ -117,8 +118,8 @@ export async function runBridgeCommand(options: ReturnType<typeof parseBridgeArg
       console.log("Signed in. Sync is enabled.");
       const recovery = await client.call<string | null>(CHANNELS.bridge.takeRecoveryCode);
       if (recovery) console.log(`Save this recovery code now; it is shown once:\n${recovery}`);
-    } else if (status.state === "needs-approval") console.log(`Compare code ${status.verificationCode} on an approved backend, then approve ${status.backendId}.\nAfter approval, get the account fingerprint on an approved device and run mains bridge confirm --code <fingerprint-from-approved-device>.\nOr run mains bridge recover and enter your recovery code.`);
-    else if (status.state === "needs-verification") console.log("Sync is paused. Get the account fingerprint from Settings > Bridge or mains bridge status on an approved device, then run mains bridge confirm --code <fingerprint-from-approved-device>.");
+    } else if (status.state === "needs-approval") console.log(`Compare code ${status.verificationCode} on an approved backend, then approve ${status.backendId}.\nAfter approval, get this device's join code from the approving device and run mains bridge confirm --code <join-code-from-approving-device>.\nOr run mains bridge recover and enter your recovery code.`);
+    else if (status.state === "needs-verification") console.log("Sync is paused. Get this device's join code from Settings > Bridge or mains bridge status on the approving device, then run mains bridge confirm --code <join-code-from-approving-device>.");
     else throw new Error(status.error ?? "Bridge sign-in failed");
   } finally { client.close(); }
 }

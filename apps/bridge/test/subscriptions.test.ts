@@ -21,6 +21,7 @@ async function backend(hub: Hub, email = `${randomUUID()}@example.test`, backend
   await (await hub.database()).prepare(`INSERT INTO bridge_backends(account_id,backend_id,public_key,signing_public_key,label,platform,status,token_hash,token_expires_at,created_at)
     VALUES(?,?,?,?,?,?,'approved',?,?,?)`).bind(browser.user.id, backendId, randomBytes(32).toString("base64url"), fixturePublicKey(browser.user.id, backendId), backendId, "test",
     createHash("sha256").update(token).digest("hex"), Date.now() + 3_600_000, Date.now()).run();
+  await hub.admit(browser.user.id, backendId);
   return { ...browser, token, accountId: browser.user.id as string, backendId };
 }
 type Backend = Awaited<ReturnType<typeof backend>>;

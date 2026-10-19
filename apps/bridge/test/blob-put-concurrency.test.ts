@@ -35,7 +35,7 @@ async function fixture(storageLimit = 1000) {
       async revoke(){this.approval.active=false;return true}
       async publish(){return this.ctx.blockConcurrencyWhile(async()=>{
         const quota=await this.quota.status('fixture');
-        return this.store.push('A','account',[{header:{v:1,stream:'account',rowKey:'unrelated',registerKey:'unrelated-row',origin:'A',op:'upsert',hlc:{physicalMs:1,counter:0},blobs:[]},body:{nonce:null,payload:'opaque'},auth:{publicationId:'fixture-publication',signature:'fixture-signature'}}],{...quota,blobBytes:quota.blobBytes+quota.reservedBytes});
+        return this.store.push('A','account',[{header:{v:1,stream:'account',rowKey:'unrelated',registerKey:'unrelated-row',origin:'A',op:'upsert',hlc:{physicalMs:1,counter:0},blobs:[]},body:{nonce:null,payload:'opaque'},auth:{publicationId:'fixture-publication',signature:'fixture-signature',membership:{seq:0,hash:'fixture-head'}}}],{...quota,blobBytes:quota.blobBytes+quota.reservedBytes});
       })}
     }
     export default {async fetch(request,env){const {op,args=[]}=await request.json();return Response.json(await env.PROBE.getByName('fixture')[op](...args))}};

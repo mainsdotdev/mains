@@ -48,9 +48,10 @@ export function validateBridgeCiphertext(value: unknown): asserts value is Bridg
 export function validateEncryptedBridgeEnvelope(value: unknown): asserts value is BridgeSignedEnvelope {
   validateBridgeCiphertext(value);
   const auth = value.auth;
-  if (!object(auth) || Object.keys(auth).length !== 6 || auth.v !== 1 || auth.epoch !== 1 || !identifier(auth.accountId))
+  if (!object(auth) || Object.keys(auth).length !== 7 || auth.v !== 2 || auth.epoch !== 1 || !identifier(auth.accountId) ||
+      !object(auth.membership) || Object.keys(auth.membership).length !== 2 || !Number.isSafeInteger(auth.membership.seq) || auth.membership.seq < 0)
     throw new Error("Bridge requires a device-signed envelope");
-  bridgeBytes(auth.publicationId, 32); bridgeBytes(auth.signingPublicKey, 32); bridgeBytes(auth.signature, 64);
+  bridgeBytes(auth.membership.hash, 32); bridgeBytes(auth.publicationId, 32); bridgeBytes(auth.signingPublicKey, 32); bridgeBytes(auth.signature, 64);
 }
 
 export function parseBridgeRpcRequest(text: string): BridgeRpcRequest {
@@ -97,7 +98,7 @@ export function parseBridgeServerFrame(text: string): BridgeRpcResponse | Bridge
     validateServerMessage(frame.message);
   } else {
     validateServerMessage(frame);
-    if (frame.type !== "presence" && frame.type !== "changed" && frame.type !== "approval") throw new Error("Uncorrelated Bridge response");
+    if (frame.type !== "presence" && frame.type !== "changed" && frame.type !== "approval" && frame.type !== "membership") throw new Error("Uncorrelated Bridge response");
   }
   return frame as unknown as BridgeRpcResponse | BridgeServerMessage;
 }
@@ -109,13 +110,18 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
     case "ack":
       if (!isBridgeStream(message.stream) || !Array.isArray(message.results) || message.results.length > BRIDGE_MAX_BATCH) throw new Error("Invalid Bridge ACK");
       for (const result of message.results) {
-        if (!object(result) || Object.keys(result).length !== (result.error === "clockSkew" || "seq" in result || "deleted" in result ? 2 : 1)) throw new Error("Invalid Bridge ACK result");
+        if (!object(result) || Object.keys(result).length !== (result.error === "clockSkew" || result.error === "membershipStale" || "seq" in result || "deleted" in result ? 2 : 1))
+          throw new Error("Invalid Bridge ACK result");
         if ("seq" in result || "deleted" in result) bridgeBytes(result.publicationId, 32);
         if ("seq" in result) { if (!safeClock(result.seq) || result.seq < 1) throw new Error("Invalid Bridge ACK sequence"); }
         else if ("deleted" in result) {
           validateEncryptedBridgeEnvelope(result.deleted);
           if (result.deleted.header.op !== "delete") throw new Error("Invalid Bridge deleted ACK");
         } else if (result.error === "clockSkew") { if (!safeClock(result.hubMs)) throw new Error("Invalid Bridge ACK error"); }
+        else if (result.error === "membershipStale") {
+          if (!object(result.head) || Object.keys(result.head).length !== 2 || !safeClock(result.head.seq)) throw new Error("Invalid Bridge ACK error");
+          bridgeBytes(result.head.hash, 32);
+        }
         else if (!["notOwner", "quotaExceeded", "rateLimited", "subscriptionRequired", "blobMissing"].includes(result.error)) throw new Error("Invalid Bridge ACK error");
       }
       break;
@@ -132,6 +138,7 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
       break;
     case "compacted": break;
     case "changed": if (!isBridgeStream(message.stream)) throw new Error("Invalid Bridge change hint"); break;
+    case "membership": if (!safeClock(message.seq)) throw new Error("Invalid Bridge membership hint"); break;
     case "approval":
       if (!identifier(message.requestId) || !identifier(message.backendId) || typeof message.publicKey !== "string" ||
         !/^[A-Za-z0-9_-]{43}$/.test(message.publicKey) || typeof message.signingPublicKey !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(message.signingPublicKey) ||
