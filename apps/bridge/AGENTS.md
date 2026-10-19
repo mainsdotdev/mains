@@ -31,6 +31,10 @@ profile to Electron with `MAINS_DEV_USER_DATA`. Never bypass ownership locks.
   Reconcile interrupted intents before releasing reservations after restart.
   Reads and tombstones stay available; rejected writes remain queued on backends.
   D1 plan overrides require migration 0003. Keep quota responses content-free.
+- Tombstones bypass quota and subscription, not every bound: keep the push-time
+  size cap (`BRIDGE_MAX_DELETE_BYTES`) and their separate per-backend rate bucket.
+  Refuse records clocked beyond `BRIDGE_MAX_CLOCK_SKEW_MS` with `clockSkew` and the hub's
+  time; clients re-stamp their refused clocks at that bound rather than wait.
 - The monthly fair-use write budget (`write_budget`, `BRIDGE_RECORDS_PER_MONTH`)
   is monitoring only: count accepted upserts once per publication, log
   `bridge.write_budget` at 80%/100%, and never refuse writes or expose it in plans.

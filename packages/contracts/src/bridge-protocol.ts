@@ -16,6 +16,9 @@ interface BridgeHeaderBase {
   retention?: "30d-idle";
 }
 export const BRIDGE_IDLE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** The hub refuses (`clockSkew`) a record clocked further ahead of its own time. A far-future
+ * clock would win every later write of its register and pull every replica's clock forward. */
+export const BRIDGE_MAX_CLOCK_SKEW_MS = 10 * 60 * 1000;
 export type BridgeHeader = BridgeHeaderBase & (
   | { op: "upsert"; registerKey: string; /** Authenticated, account-private liveness roots; absent on legacy records. */ blobs?: BridgeBlobIdentity[] }
   | { op: "delete"; registerKey?: never; blobs?: never }
@@ -41,7 +44,9 @@ export interface BridgeLogRecord { seq: number; envelope: BridgeEnvelope }
 export type BridgePushResult =
   | { seq: number }
   | { deleted: BridgeEnvelope }
-  | { error: "notOwner" | "quotaExceeded" | "rateLimited" | "subscriptionRequired" | "blobMissing" };
+  | { error: "notOwner" | "quotaExceeded" | "rateLimited" | "subscriptionRequired" | "blobMissing" }
+  /** Carries the hub's time, so the device can re-stamp what was refused within the hub's bound. */
+  | { error: "clockSkew"; hubMs: number };
 export type BridgeClientMessage =
   | { type: "hello"; label: string; platform: string }
   | { type: "push"; stream: BridgeStream; records: BridgeEnvelope[] }

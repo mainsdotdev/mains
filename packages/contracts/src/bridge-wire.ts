@@ -4,6 +4,8 @@ import { isBridgeVerificationCode } from "./bridge-auth";
 
 // Leave room for routing columns below the Durable Object SQL row/string limit (2 MB).
 export const BRIDGE_MAX_RECORD_BYTES = 1024 * 1024;
+/** A tombstone seals only `{table, pk}` (well under 1.5 KiB) and is kept forever, outside quota. */
+export const BRIDGE_MAX_DELETE_BYTES = 4 * 1024;
 export const BRIDGE_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 export const BRIDGE_MAX_BATCH = 100;
 export const BRIDGE_MAX_SUBSCRIPTIONS = 128;
@@ -55,7 +57,11 @@ export function parseBridgeRpcRequest(text: string): BridgeRpcRequest {
       break;
     case "push":
       if (!isBridgeStream(message.stream) || !Array.isArray(message.records) || message.records.length > BRIDGE_MAX_BATCH) throw new Error("Invalid Bridge push");
-      message.records.forEach(validateEncryptedBridgeEnvelope); break;
+      message.records.forEach(validateEncryptedBridgeEnvelope);
+      // New pushes only: tombstones already in a log stay pullable whatever their size.
+      if (message.records.some((record: BridgeEnvelope) => record.header.op === "delete" && new TextEncoder().encode(JSON.stringify(record)).length > BRIDGE_MAX_DELETE_BYTES))
+        throw new Error("Bridge deletion is too large");
+      break;
     case "pull":
       if (!isBridgeStream(message.stream) || !safeClock(message.after) || !Number.isSafeInteger(message.limit) || message.limit < 1 || message.limit > 1000) throw new Error("Invalid Bridge pull");
       break;
@@ -95,12 +101,13 @@ function validateServerMessage(message: unknown): asserts message is BridgeServe
     case "ack":
       if (!isBridgeStream(message.stream) || !Array.isArray(message.results) || message.results.length > BRIDGE_MAX_BATCH) throw new Error("Invalid Bridge ACK");
       for (const result of message.results) {
-        if (!object(result) || Object.keys(result).length !== 1) throw new Error("Invalid Bridge ACK result");
+        if (!object(result) || Object.keys(result).length !== (result.error === "clockSkew" ? 2 : 1)) throw new Error("Invalid Bridge ACK result");
         if ("seq" in result) { if (!safeClock(result.seq) || result.seq < 1) throw new Error("Invalid Bridge ACK sequence"); }
         else if ("deleted" in result) {
           validateEncryptedBridgeEnvelope(result.deleted);
           if (result.deleted.header.op !== "delete") throw new Error("Invalid Bridge deleted ACK");
-        } else if (!["notOwner", "quotaExceeded", "rateLimited", "subscriptionRequired", "blobMissing"].includes(result.error)) throw new Error("Invalid Bridge ACK error");
+        } else if (result.error === "clockSkew") { if (!safeClock(result.hubMs)) throw new Error("Invalid Bridge ACK error"); }
+        else if (!["notOwner", "quotaExceeded", "rateLimited", "subscriptionRequired", "blobMissing"].includes(result.error)) throw new Error("Invalid Bridge ACK error");
       }
       break;
     case "records":

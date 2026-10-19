@@ -230,7 +230,7 @@ describe("Atlas editing between independent migrated backends", () => {
     }
   });
 
-  it("rejects rewriting an existing revision identity without changing the graph or pull cursor", async () => {
+  it("sets aside a rewrite of an existing revision identity without changing the graph or stopping the stream", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
     const base = await create(a); await settle(a, b);
     const logged = (await hub.inspect("account")).find((record) => bridgeTestCodec.open(record.envelope).body.pk === base.revision.id)!;
@@ -238,10 +238,10 @@ describe("Atlas editing between independent migrated backends", () => {
     const changed = bridgeTestCodec.seal({ ...logged.envelope.header, origin: "B", hlc: { physicalMs: Date.now() + 10_000, counter: 0 } },
       { ...body, values: { ...body.values, title: "Rewritten history" } });
     await hub.connect("B").push("account", [changed]);
-    const before = a.sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream='account'").get();
-    await expect(a.engine.pull()).rejects.toThrow(/immutable/);
-    expect(a.sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream='account'").get()).toEqual(before);
-    expect((await page(a, base)).revision.title).toBe("Base");
+    b.sqlite.exec("INSERT INTO collections(id,account_id,name) VALUES('after','default','After')"); await drain(b);
+    await a.engine.pull();
+    expect((await page(a, base)).revision.title).toBe("Base"); expect(a.engine.unverified()).toBe(1);
+    expect(a.sqlite.prepare("SELECT name FROM collections WHERE id='after'").get()).toEqual({ name: "After" });
   });
 
   it("fences a file delete immediately while retaining its row for a later Page recovery", async () => {

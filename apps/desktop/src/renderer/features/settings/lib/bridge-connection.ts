@@ -9,12 +9,16 @@ export function bridgeConnectionDescription(status: BridgeStatus | undefined): s
   const lastSync = date && Number.isFinite(date.getTime())
     ? `Last synced ${date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
     : null;
+  const rejected = status.rejectedRecords ?? 0;
+  const skipped = rejected > 0
+    ? ` · ${rejected} change${rejected === 1 ? "" : "s"} from another device couldn't be applied and ${rejected === 1 ? "was" : "were"} skipped`
+    : "";
   switch (status.state) {
-    case "connected": return pending ?? lastSync ?? "No pending changes";
-    case "syncing": return pending ? `Syncing · ${pending}` : "Syncing…";
+    case "connected": return (pending ?? lastSync ?? "No pending changes") + skipped;
+    case "syncing": return (pending ? `Syncing · ${pending}` : "Syncing…") + skipped;
     case "offline": return `Offline · ${pending ?? lastSync ?? "Reconnecting automatically"}`;
     case "error": return `Sync paused · ${pending ?? lastSync ?? "Your local data is kept"}`;
-    case "read-only": return `Read only · ${pending ?? "New uploads are paused"}`;
+    case "read-only": return `Read only · ${pending ?? "New uploads are paused"}` + skipped;
     case "disabled": return "Sync is not enabled";
     default: return "Connecting to Bridge…";
   }

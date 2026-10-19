@@ -1,10 +1,10 @@
-import type { BridgeLogRecord, BridgeStream } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeLogRecord, type BridgeStream } from "@mains/contracts/bridge-protocol";
 import { CHANNELS } from "@mains/contracts/channels";
 import type { SQLiteInstance } from "../../db/types";
 import { emit } from "../../ipc-kit/event-bus";
 import { installBridgeCapture, portablePkSql } from "./bridge.capture";
 import { bridgePassThroughCodec, type BridgeCodec } from "./bridge.crypto";
-import { applyBridgeBatch, applyDeletedAck, verifyEnvelope, type AppliedChange } from "./bridge.applier";
+import { applyBridgeBatch, applyDeletedAck, isRejectedRecord, openPulledRecord, RECHECK_REASON, UNVERIFIED_REASON, verifyEnvelope, type AppliedChange } from "./bridge.applier";
 import { definition, getClock, isAtlas, quote, syncedTables } from "./bridge.sql";
 import { captureExisting, outboxInScope, prepareRecord, type BridgeRecoveryContext, type BridgeStore, type OutboxEntry, type PreparedRecord } from "./bridge.store";
 import type { BridgeTransport } from "./bridge.transport";
@@ -61,7 +61,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
   })();
   let stopped = false;
   let queue: Promise<unknown> = Promise.resolve();
-  let parkedCheckedAt: string | undefined;
+  let parkedCheckedAt: string | undefined, unverifiedChecked = false;
   const parkedState = () => JSON.stringify([
     (sqlite.prepare("SELECT total_changes() n").get() as { n: number }).n,
     sqlite.pragma("data_version", { simple: true }), sqlite.pragma("schema_version", { simple: true }),
@@ -134,8 +134,9 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     }
     const values = new Map<string, string>();
     for (const record of records) {
-      const { body, header } = verifyEnvelope(store, record.envelope);
-      if (header.stream !== stream) throw new Error("Bridge pull contains a different stream");
+      const { opened } = openPulledRecord(store, stream, record.envelope);
+      if (!opened) continue; // applyBridgeBatch sets it aside.
+      const { body } = opened;
       if (options.blobs && "schemaVersion" in body && body.schemaVersion <= store.schemaVersion && BRIDGE_TABLES[body.table] && BRIDGE_TABLES[body.table].class !== "local") {
         for (const [key, value] of await options.blobs.values.restore(body, values)) values.set(key, value);
       }
@@ -153,7 +154,7 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     if (!options.blobs) { parkedCheckedAt = parkedState(); return; }
     let previous = -1;
     for (;;) {
-      const pending = sqlite.prepare("SELECT stream,seq,envelope FROM bridge_parked ORDER BY seq").all() as { stream: BridgeStream; seq: number; envelope: string }[];
+      const pending = sqlite.prepare("SELECT stream,seq,envelope FROM bridge_parked WHERE reason<>? ORDER BY seq").all(UNVERIFIED_REASON) as { stream: BridgeStream; seq: number; envelope: string }[];
       if (!pending.length || pending.length === previous) break;
       previous = pending.length;
       for (const entry of pending) {
@@ -163,8 +164,26 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     }
     parkedCheckedAt = parkedState();
   }
+  /** Once per engine, a set-aside record rejoins the parked queue when an update now accepts it,
+   * or when the hub serves a copy that verifies (the earlier one may have been damaged on the way). */
+  async function recheckUnverified() {
+    if (unverifiedChecked) return;
+    unverifiedChecked = true;
+    const rows = sqlite.prepare("SELECT stream,seq,envelope FROM bridge_parked WHERE reason=? ORDER BY seq LIMIT 100").all(UNVERIFIED_REASON) as { stream: BridgeStream; seq: number; envelope: string }[];
+    for (const row of rows) {
+      let envelope = JSON.parse(row.envelope);
+      if (!openPulledRecord(store, row.stream, envelope).opened) {
+        // A refused deleted ACK has no log position (seq 0) to fetch again.
+        const fresh = row.seq > 0 ? (await transport.pull(row.stream, row.seq - 1, 1).catch(() => null))?.records[0] : undefined;
+        if (fresh?.seq !== row.seq || !openPulledRecord(store, row.stream, fresh.envelope).opened) continue;
+        envelope = fresh.envelope;
+      }
+      sqlite.prepare("UPDATE bridge_parked SET reason=?,envelope=? WHERE stream=? AND seq=?").run(RECHECK_REASON, JSON.stringify(envelope), row.stream, row.seq);
+    }
+  }
   async function pull(stream: BridgeStream, full: boolean, limit: number): Promise<number> {
     validateLimit(limit);
+    await recheckUnverified();
     let after = full ? 0 : (sqlite.prepare("SELECT seq FROM bridge_cursors WHERE stream=?").get(stream) as { seq: number } | undefined)?.seq ?? 0;
     let count = 0, requestLimit = limit;
     for (;;) {
@@ -173,10 +192,12 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
           !Number.isSafeInteger(record.seq) || record.seq <= (index ? page.records[index - 1].seq : after) || record.seq > page.next) || page.hasMore && page.next === after)
         throw new Error("Invalid Bridge pull page");
       // Authenticate the entire page before downloading bytes or mutating SQL.
+      // A record that fails is set aside by the apply below, not retried forever.
       let restoredBytes = 0;
       for (const record of page.records) {
-        const { body, header } = verifyEnvelope(store, record.envelope);
-        if (header.stream !== stream) throw new Error("Bridge pull contains a different stream");
+        const { opened } = openPulledRecord(store, stream, record.envelope);
+        if (!opened) continue;
+        const { body } = opened;
         if ("schemaVersion" in body && body.schemaVersion <= store.schemaVersion) restoredBytes += valueBlobBytes(body);
       }
       // A register is bounded to 50 MiB; avoid multiplying that by a large page.
@@ -186,7 +207,27 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       if (!page.hasMore) { await retryParked(); return count; }
     }
   }
-  async function push(stream: BridgeStream, limit: number, deletesOnly = false): Promise<number> {
+  /** The hub refused edits stamped while this device's clock ran ahead, so no replica holds a clock of
+   * ours beyond its bound. Re-stamp them there in their original order: above every clock the hub has
+   * accepted, which they already outranked here, and accepted however wrong this clock still is. */
+  function rebaseClocks(hubMs: number): number {
+    const bound = hubMs + BRIDGE_MAX_CLOCK_SKEW_MS;
+    return sqlite.transaction(() => {
+      const ahead = sqlite.prepare("SELECT table_name,pk,register FROM bridge_row_clock WHERE origin=? AND physical_ms>? ORDER BY physical_ms,counter")
+        .all(backendId, bound) as { table_name: string; pk: string; register: string }[];
+      ahead.forEach((row, counter) => {
+        sqlite.prepare("UPDATE bridge_row_clock SET physical_ms=?,counter=? WHERE table_name=? AND pk=? AND register=?").run(bound, counter, row.table_name, row.pk, row.register);
+        // A sealed deletion carries its clock, so it is sealed again.
+        if (row.register === "__delete__") sqlite.prepare("UPDATE bridge_tombstones SET envelope=NULL WHERE table_name=? AND pk=? AND json_extract(envelope,'$.header.origin')=?")
+          .run(row.table_name, row.pk, backendId);
+      });
+      const top = sqlite.prepare("SELECT physical_ms,counter FROM bridge_row_clock ORDER BY physical_ms DESC,counter DESC LIMIT 1").get() as { physical_ms: number; counter: number } | undefined;
+      const next = top && top.physical_ms >= bound ? top : { physical_ms: bound, counter: 0 };
+      sqlite.prepare("UPDATE bridge_clock SET physical_ms=?,counter=? WHERE id=1 AND physical_ms>?").run(next.physical_ms, next.counter, bound);
+      return ahead.length;
+    })();
+  }
+  async function push(stream: BridgeStream, limit: number, deletesOnly = false, rebased = false): Promise<number> {
     validateLimit(limit);
     const outgoing = () => sqlite.prepare(`SELECT * FROM bridge_outbox WHERE stream=? AND (?=1 OR substr(table_name,1,6)<>'atlas_') AND (?=0 OR op='delete')
       ORDER BY CASE WHEN op='delete' THEN 0 ELSE 1 END,generation,table_name,pk,register LIMIT ?`).all(stream, Number(store.atlasEnabled), Number(deletesOnly), limit) as OutboxEntry[];
@@ -240,14 +281,24 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     // to the hub, then reject their Page pointer as deleted. Recover before any
     // accepted child is marked synced; otherwise its offline content disappears.
     for (let i = 0; i < results.length; i++) {
-      const result = results[i];
-      if ("deleted" in result) announce(applyDeletedAck(store, prepared[i], result.deleted));
+      const result = results[i], { entry } = prepared[i];
+      if (!("deleted" in result)) continue;
+      try { announce(applyDeletedAck(store, prepared[i], result.deleted)); }
+      catch (error) {
+        if (!isRejectedRecord(error)) throw error;
+        console.warn(`[bridge] Refused the deletion returned for ${entry.table_name} ${entry.pk}: ${error.message}`);
+      }
+      // The hub answers every retry of this write with the same deletion. Whether it applied
+      // here or was refused, resending it cannot help and would hold back the whole stream.
+      // Attachment metadata has no outbox entry of its own; its reference is ACKed separately.
+      if (i >= attachmentCount) sqlite.prepare("DELETE FROM bridge_outbox WHERE table_name=? AND pk=? AND register=? AND generation=?").run(entry.table_name, entry.pk, entry.register, entry.generation);
     }
-    let rejection: string | undefined;
+    let rejection: string | undefined, hubMs: number | undefined;
     for (let i = 0; i < results.length; i++) {
       const result = results[i], sent = prepared[i], entry = sent.entry;
       if ("deleted" in result) continue;
       if ("error" in result) {
+        if (result.error === "clockSkew") { hubMs ??= result.hubMs; continue; }
         if (result.error === "blobMissing" && options.blobs) await options.blobs.republish(store, sent.clock);
         rejection ??= result.error === "quotaExceeded" ? "Bridge storage quota exceeded; local changes remain queued" :
           result.error === "rateLimited" ? "Bridge write rate limit reached; local changes remain queued" :
@@ -265,6 +316,8 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
       })();
       if (options.blobs) await options.blobs.acknowledged(sent.clock);
     }
+    if (hubMs !== undefined && rebaseClocks(hubMs) && !rebased && !rejection && !preparationError) return push(stream, limit, deletesOnly, true);
+    if (hubMs !== undefined) rejection ??= "This device's clock is ahead of Bridge; local changes remain queued";
     if (rejection) throw new Error(rejection);
     if (preparationError) throw preparationError;
     return prepared.length - attachmentCount;
@@ -296,6 +349,8 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     fullPull(stream: BridgeStream = "account", limit = 100) { return serial(() => pull(stream, true, limit)); },
     retryParked() { return serial(() => retryParked(true)); },
     pending() { return sqlite.prepare("SELECT * FROM bridge_outbox ORDER BY generation").all() as OutboxEntry[]; },
+    /** Pulled records set aside because this device could not verify or apply them. */
+    unverified() { return (sqlite.prepare("SELECT count(*) AS n FROM bridge_parked WHERE reason=?").get(UNVERIFIED_REASON) as { n: number }).n; },
     async stop() { await queue; stopped = true; },
   };
 }

@@ -94,7 +94,7 @@ describe.skipIf(!networkMode)("Bridge real network and encrypted persistence", (
     expect([...first.records, ...second.records].map((entry) => entry.envelope.header.rowKey)).toEqual(records.map((entry) => entry.header.rowKey));
     expect(() => envelope("oversized", 0, "upsert", "x".repeat(800_000))).toThrow(/encrypted/);
   });
-  it("does not apply tampered ciphertext or tombstones, advance a cursor, or erase a local draft", async () => {
+  it("never applies tampered ciphertext or erases a local draft, and fetches the genuine record again on the next engine", async () => {
     const account = randomUUID(), a = await client(account, "A"), b = await client(account, "B");
     const fixture = createTestDb(); cleanup.push(fixture.cleanup); const db = fixture.sqlite;
     db.exec("INSERT INTO accounts(id) VALUES('default'); INSERT INTO app_settings(id,account_id,backend_id) VALUES('default','default','B')");
@@ -106,11 +106,16 @@ describe.skipIf(!networkMode)("Bridge real network and encrypted persistence", (
     } };
     const engine = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec, transport }); await engine.bootstrap();
     db.exec("INSERT INTO collections(id,account_id,name) VALUES('draft','default','Unsynced draft')");
-    const before = db.prepare("SELECT * FROM bridge_cursors").all();
     await a.push("account", [envelope("draft", 1, "delete")]); corrupt=true;
-    await expect(engine.pull()).rejects.toThrow(/authentication/);
+    await engine.pull();
     expect(db.prepare("SELECT name FROM collections WHERE id='draft'").get()).toEqual({ name: "Unsynced draft" });
-    expect(db.prepare("SELECT * FROM bridge_cursors").all()).toEqual(before); expect(engine.pending().some((entry) => entry.pk === "draft")).toBe(true);
-    corrupt=false; await engine.pull(); expect(db.prepare("SELECT 1 FROM collections WHERE id='draft'").get()).toBeUndefined();
+    expect(engine.unverified()).toBe(1); expect(engine.pending().some((entry) => entry.pk === "draft")).toBe(true);
+    // The damaged copy stays set aside; the next engine asks the hub for that record once more.
+    corrupt=false; await engine.stop();
+    const restarted = createBridgeEngine({ sqlite: db, backendId: "B", recordKey: keys.recordKey, codec, transport });
+    try {
+      await restarted.pull();
+      expect(db.prepare("SELECT 1 FROM collections WHERE id='draft'").get()).toBeUndefined(); expect(restarted.unverified()).toBe(0);
+    } finally { await restarted.stop(); }
   });
 });

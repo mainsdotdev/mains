@@ -47,6 +47,27 @@ export function verifyEnvelope(store: BridgeStore, envelope: BridgeEnvelope) {
   return opened;
 }
 
+/** Parked records this device could not authenticate, validate or apply. They are never applied
+ * or retried with dependencies; each engine re-checks them once (a newer version may accept). */
+export const UNVERIFIED_REASON = "unverified";
+/** An unverified record that opens again; the next batch applies it or sets it aside again. */
+export const RECHECK_REASON = "recheck";
+/** A verified record this replica refuses. Unlike a local failure, retrying the same bytes cannot help. */
+export class BridgeRecordRejected extends Error {}
+/** Constraint and type errors are as deterministic for a record as the checks above. */
+export function isRejectedRecord(error: unknown): error is Error {
+  return error instanceof BridgeRecordRejected || error instanceof Error && /^SQLITE_(CONSTRAINT|MISMATCH)/.test(String((error as { code?: unknown }).code ?? ""));
+}
+/** One record that cannot be opened must not stop every later record of its stream. */
+export function openPulledRecord(store: BridgeStore, stream: BridgeStream, envelope: BridgeEnvelope):
+  { opened: ReturnType<typeof verifyEnvelope>; error?: undefined } | { opened?: undefined; error: string } {
+  try {
+    const opened = verifyEnvelope(store, envelope);
+    if (opened.header.stream !== stream) throw new Error("Bridge pull contains a different stream");
+    return { opened };
+  } catch (error) { return { error: error instanceof Error ? error.message : "Invalid Bridge record" }; }
+}
+
 function advanceClock(store: BridgeStore, envelope: BridgeEnvelope) {
   const h = envelope.header.hlc;
   store.sqlite.prepare(`UPDATE bridge_clock SET counter=CASE WHEN physical_ms=? THEN max(counter,?) WHEN physical_ms<? THEN ? ELSE counter END,
@@ -176,25 +197,25 @@ function materialize(store: BridgeStore, table: string, pk: string, owner: strin
   const existing = readRow(store, table, pk, owner);
   if (def.ownerRoot) {
     if (def.ownerRoot === table) {
-      if (values.owner_backend_id !== owner || existing?.owner_backend_id && existing.owner_backend_id !== owner) throw new Error("Bridge root ownership collision");
+      if (values.owner_backend_id !== owner || existing?.owner_backend_id && existing.owner_backend_id !== owner) throw new BridgeRecordRejected("Bridge root ownership collision");
     } else if (existing) {
       const key = physicalPk(store, table, pk, owner)!;
       const where = rowWhere(def, String(key));
       const actual = store.sqlite.prepare(`SELECT ${ownerSql(table, "r")} AS owner FROM ${quote(table)} r WHERE ${where.sql}`).get(...where.args) as { owner: string | null };
-      if (actual.owner && actual.owner !== owner) throw new Error("Bridge child ownership collision");
+      if (actual.owner && actual.owner !== owner) throw new BridgeRecordRejected("Bridge child ownership collision");
     }
     // Before inserting a child, verify the authenticated owner against its actual parent.
     for (const [column, ref] of Object.entries(def.references)) {
       if (!values[column] || !BRIDGE_TABLES[ref.table]?.ownerRoot || ref.class === "optional") continue;
       const parent = store.sqlite.prepare(`SELECT ${ownerSql(ref.table, "p")} AS owner FROM ${quote(ref.table)} p WHERE id=?`).get(values[column]) as { owner: string | null } | undefined;
       // Immutable attachment metadata can precede its first run reference in this batch.
-      if (parent && parent.owner !== owner && !(ref.table === "run_attachments" && parent.owner === null)) throw new Error("Bridge parent ownership collision");
+      if (parent && parent.owner !== owner && !(ref.table === "run_attachments" && parent.owner === null)) throw new BridgeRecordRejected("Bridge parent ownership collision");
     }
   }
   if (table === "atlas_page_revisions" && !existing) {
     for (const column of ["parent_revision_id", "merged_revision_id"]) if (values[column]) {
       const parent = store.sqlite.prepare("SELECT item_id FROM atlas_page_revisions WHERE id=?").get(values[column]) as { item_id: string } | undefined;
-      if (parent?.item_id !== values.item_id) throw new Error("Atlas revision parent belongs to a different Page");
+      if (parent?.item_id !== values.item_id) throw new BridgeRecordRejected("Atlas revision parent belongs to a different Page");
     }
     values.version = (store.sqlite.prepare("SELECT coalesce(max(version),0)+1 AS version FROM atlas_page_revisions WHERE item_id=?").get(values.item_id) as { version: number }).version;
   }
@@ -202,7 +223,7 @@ function materialize(store: BridgeStore, table: string, pk: string, owner: strin
     const current = values.current_revision_id
       ? store.sqlite.prepare("SELECT version,item_id FROM atlas_page_revisions WHERE id=?").get(values.current_revision_id) as { version: number; item_id: string } | undefined
       : undefined;
-    if (current && current.item_id !== pk) throw new Error("Atlas revision belongs to a different Page");
+    if (current && current.item_id !== pk) throw new BridgeRecordRejected("Atlas revision belongs to a different Page");
     values.version = current?.version ?? 0;
     values.updated_at = Math.floor(Date.now() / 1000);
   }
@@ -231,14 +252,14 @@ function applyUpsert(store: BridgeStore, record: BridgeLogRecord, body: BridgeUp
     if (deleted(store.sqlite, "runs", header.runId!)) return "ignored";
     const run = readRow(store, "runs", header.runId!);
     if (!run) return "parent:runs";
-    if (run.owner_backend_id !== header.owner) throw new Error("Bridge stream owner does not match its run");
+    if (run.owner_backend_id !== header.owner) throw new BridgeRecordRejected("Bridge stream owner does not match its run");
   }
   const existing = getClock(store.sqlite, body.table, body.pk, body.register);
   if (body.table === "atlas_page_revisions" && existing) {
     const previous = portableValues(store, body.table, existing).values;
     for (const column of definition(body.table).registers.row) {
       if (column !== "source_run_id" && previous[column] !== body.values[column])
-        throw new Error("Atlas revision identity is immutable");
+        throw new BridgeRecordRejected("Atlas revision identity is immutable");
     }
   }
   if (existing && compareClock(headerClock(header), clockOf(existing)) <= 0) {
@@ -311,11 +332,11 @@ function applyDelete(store: BridgeStore, envelope: BridgeEnvelope, recovered: Re
     return "parent";
   }
   const wasDeleted = deleted(store.sqlite, table, pk);
-  if (row && def.ownerRoot === table && row.owner_backend_id !== header.owner) throw new Error("Bridge delete owner collision");
+  if (row && def.ownerRoot === table && row.owner_backend_id !== header.owner) throw new BridgeRecordRejected("Bridge delete owner collision");
   if (row && def.ownerRoot && def.ownerRoot !== table) {
     const where = rowWhere(def, String(physicalPk(store, table, canonical, header.owner ?? header.origin)));
     const actual = store.sqlite.prepare(`SELECT ${ownerSql(table, "r")} AS owner FROM ${quote(table)} r WHERE ${where.sql}`).get(...where.args) as { owner: string | null };
-    if (actual.owner !== header.owner) throw new Error("Bridge delete owner collision");
+    if (actual.owner !== header.owner) throw new BridgeRecordRejected("Bridge delete owner collision");
   }
   if (row && !wasDeleted) store.recover?.({ sqlite: store.sqlite, table, pk: canonical, row,
     captureAfterDelete(recoveredTable, recoveredPk, blobRefsJson) { definition(recoveredTable); recovered.push({ table: recoveredTable, pk: recoveredPk, blobRefsJson }); },
@@ -367,9 +388,10 @@ function fillLinks(store: BridgeStore) {
     const current = bestClock(store, link.table_name, link.pk, link.register);
     const stale = !current || compareClock(clockOf(current), { physicalMs: link.physical_ms, counter: link.counter, origin: link.origin }) !== 0;
     const parent = readRow(store, link.parent_table, link.parent_pk, link.owner);
-    if (!stale && parent && !deleted(store.sqlite, link.parent_table, link.parent_pk)) {
-      if (link.table_name === "atlas_items" && link.column_name === "current_revision_id" && parent.item_id !== link.pk)
-        throw new Error("Atlas revision belongs to a different Page");
+    // A pointer to another Page's revision is never filled; the optional reference stays empty.
+    const foreign = !!parent && link.table_name === "atlas_items" && link.column_name === "current_revision_id" && parent.item_id !== link.pk;
+    if (foreign) console.warn(`[bridge] Ignored Atlas revision ${link.parent_pk}: it belongs to a different Page`);
+    if (!stale && parent && !foreign && !deleted(store.sqlite, link.parent_table, link.parent_pk)) {
       const where = rowWhere(definition(link.table_name), String(physicalPk(store, link.table_name, link.pk, link.owner)));
       store.sqlite.prepare(`UPDATE ${quote(link.table_name)} SET ${quote(link.column_name)}=? WHERE ${where.sql}`).run(physicalPk(store, link.parent_table, link.parent_pk, link.owner), ...where.args);
     }
@@ -398,23 +420,49 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
       store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)").run(stream, record.seq, encoded, reason);
       remember(encoded, record.envelope, opened);
     };
+    // Kept for a later re-check, without its dependencies being retried.
+    const setAside = (recordStream: BridgeStream, seq: number, envelope: BridgeEnvelope, reason: string) => {
+      store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)")
+        .run(recordStream, seq, JSON.stringify(envelope), UNVERIFIED_REASON);
+      console.warn(`[bridge] Set aside ${recordStream} record ${seq}: ${reason}`);
+    };
+    // A verified record can still be one this replica refuses. Only that record is undone and set
+    // aside; a local failure (recovery, I/O) still rolls back the whole batch to be retried.
+    const guarded = (work: () => Outcome): Outcome | Error => {
+      const changeCount = changes.length, recoveredCount = recovered.length;
+      store.sqlite.exec("SAVEPOINT bridge_apply_guard");
+      try {
+        const outcome = work();
+        store.sqlite.exec("RELEASE bridge_apply_guard");
+        return outcome;
+      } catch (error) {
+        store.sqlite.exec("ROLLBACK TO bridge_apply_guard; RELEASE bridge_apply_guard");
+        if (!isRejectedRecord(error)) throw error;
+        changes.length = changeCount; recovered.length = recoveredCount;
+        return error;
+      }
+    };
     store.sqlite.pragma("defer_foreign_keys = ON");
     store.sqlite.prepare("UPDATE bridge_state SET applying=1 WHERE id=1").run();
     for (const record of records) {
-      const opened = verifyEnvelope(store, record.envelope);
-      if (opened.header.stream !== stream) throw new Error("Bridge pull contains a different stream");
+      const checked = openPulledRecord(store, stream, record.envelope);
+      // Its unauthenticated clock never advances ours.
+      if (!checked.opened) { setAside(stream, record.seq, record.envelope, checked.error); continue; }
+      const opened = checked.opened;
       advanceClock(store, record.envelope);
       if (opened.header.op === "delete") {
         const reason = !BRIDGE_TABLES[opened.body.table] ? "schema" : isAtlas(opened.body.table) && !store.atlasEnabled ? "disabled" : undefined;
         if (reason) park(record, opened, reason);
         else {
-          const outcome = applyDelete(store, record.envelope, recovered, changes);
-          if (outcome !== "applied") park(record, opened, outcome);
+          const outcome = guarded(() => applyDelete(store, record.envelope, recovered, changes));
+          if (outcome instanceof Error) setAside(stream, record.seq, record.envelope, outcome.message);
+          else if (outcome !== "applied") park(record, opened, outcome);
         }
       }
       else {
-        const outcome = attemptUpsert(store, record, opened.body as BridgeUpsertBody);
-        if (outcome !== "applied" && outcome !== "ignored") park(record, opened, outcome);
+        const outcome = guarded(() => attemptUpsert(store, record, opened.body as BridgeUpsertBody));
+        if (outcome instanceof Error) setAside(stream, record.seq, record.envelope, outcome.message);
+        else if (outcome !== "applied" && outcome !== "ignored") park(record, opened, outcome);
         else if (outcome === "applied") changes.push({ table: opened.body.table, pk: opened.body.pk, op: "upsert", ...(opened.header.runId ? { runId: opened.header.runId } : {}) });
       }
     }
@@ -422,18 +470,27 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
     let progress = true;
     while (progress) {
       progress = false;
-      const parked = store.sqlite.prepare("SELECT * FROM bridge_parked ORDER BY seq").all() as { stream: BridgeStream; seq: number; envelope: string }[];
+      const parked = store.sqlite.prepare("SELECT * FROM bridge_parked WHERE reason<>? ORDER BY seq").all(UNVERIFIED_REASON) as { stream: BridgeStream; seq: number; envelope: string; reason: string }[];
       for (const entry of parked) {
         const cached = verified.get(entry.envelope);
         const envelope: BridgeEnvelope = cached?.envelope ?? JSON.parse(entry.envelope);
-        const opened = cached?.opened ?? verifyEnvelope(store, envelope), { body, header } = opened;
+        const checked = cached ?? openPulledRecord(store, entry.stream, envelope);
+        if (!checked.opened) { setAside(entry.stream, entry.seq, envelope, checked.error); continue; }
+        const opened = checked.opened, { body, header } = opened;
         remember(entry.envelope, envelope, opened);
-        let outcome: Outcome;
+        // A re-checked record was never opened before, so its clock was skipped.
+        if (entry.reason === RECHECK_REASON) advanceClock(store, envelope);
+        let outcome: Outcome | Error;
         if (header.op === "delete") {
           if (!BRIDGE_TABLES[body.table] || isAtlas(body.table) && !store.atlasEnabled) continue;
-          outcome = applyDelete(store, envelope, recovered, changes);
-        } else outcome = attemptUpsert(store, { seq: entry.seq, envelope }, body as BridgeUpsertBody);
-        if (outcome === "applied" || outcome === "ignored") {
+          outcome = guarded(() => applyDelete(store, envelope, recovered, changes));
+        } else outcome = guarded(() => attemptUpsert(store, { seq: entry.seq, envelope }, body as BridgeUpsertBody));
+        if (outcome instanceof Error) {
+          setAside(entry.stream, entry.seq, envelope, outcome.message);
+          if (verified.delete(entry.envelope)) cachedChars -= entry.envelope.length;
+        } else if (outcome !== "applied" && outcome !== "ignored") {
+          if (entry.reason === RECHECK_REASON) store.sqlite.prepare("UPDATE bridge_parked SET reason=? WHERE stream=? AND seq=?").run(outcome, entry.stream, entry.seq);
+        } else {
           store.sqlite.prepare("DELETE FROM bridge_parked WHERE stream=? AND seq=?").run(entry.stream, entry.seq);
           if (verified.delete(entry.envelope)) cachedChars -= entry.envelope.length;
           progress = true;
@@ -453,10 +510,14 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
   return changes;
 }
 
+/** Throws BridgeRecordRejected for a tombstone this device cannot authenticate or match to the write. */
 export function applyDeletedAck(store: BridgeStore, sent: PreparedRecord, tombstone: BridgeEnvelope): AppliedChange[] {
-  const { header, body } = verifyEnvelope(store, tombstone), expected = sent.envelope.header;
+  let opened: ReturnType<typeof verifyEnvelope>;
+  try { opened = verifyEnvelope(store, tombstone); }
+  catch (error) { throw new BridgeRecordRejected(error instanceof Error ? error.message : "Invalid Bridge deleted ACK"); }
+  const { header, body } = opened, expected = sent.envelope.header;
   if (header.op !== "delete" || header.rowKey !== expected.rowKey && !(expected.runId && body.table === "runs" && body.pk === expected.runId && header.runId === expected.runId && header.owner === expected.owner))
-    throw new Error("Bridge deleted ACK does not identify the sent row or its run");
+    throw new BridgeRecordRejected("Bridge deleted ACK does not identify the sent row or its run");
   const changes = applyBridgeBatch(store, header.stream, [{ seq: 0, envelope: tombstone }]);
   if (body.table === "runs" && header.runId === body.pk) {
     store.sqlite.transaction(() => {

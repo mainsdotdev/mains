@@ -21,6 +21,8 @@ export interface BridgeStatus {
   lastSyncedAt: string | null;
   error: string | null;
   pendingRecords: number;
+  /** Synced changes this backend could not verify or apply; set aside instead of stopping sync. Absent on older backends. */
+  rejectedRecords?: number;
   backends: BridgeBackendInfo[];
   runs: BridgeRunState[];
   quota?: BridgeQuota | null;

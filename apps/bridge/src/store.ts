@@ -1,10 +1,13 @@
-import type { BridgeEnvelope, BridgeLogRecord, BridgePushResult, BridgeStream } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeEnvelope, type BridgeLogRecord, type BridgePushResult, type BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES } from "@mains/contracts/bridge-wire";
 import type { BridgeBlobIdentity } from "@mains/contracts/bridge-blobs";
 import { installBlobReferences } from "./blob-gc";
 import { createHubCompaction } from "./compaction";
 
 type LogRow = { seq: number; envelope: string };
+/** Tombstones are permanent and stay available outside quota and subscription, so they get
+ * their own per-backend budget: generous for bulk cleanup, but no longer unlimited. */
+export const BRIDGE_DELETES_PER_MINUTE = 600;
 const order = (a: BridgeEnvelope, b: BridgeEnvelope) => a.header.hlc.physicalMs - b.header.hlc.physicalMs || a.header.hlc.counter - b.header.hlc.counter ||
   (a.header.origin < b.header.origin ? -1 : a.header.origin > b.header.origin ? 1 : 0);
 
@@ -70,6 +73,13 @@ export function createHubStore(storage: DurableObjectStorage) {
           if (h.stream !== stream || h.origin !== backendId || h.owner && h.owner !== backendId) return { error: "notOwner" };
           const owner = first<{ owner: string }>("SELECT owner FROM row_owners WHERE row_key=?", h.rowKey);
           if (owner && owner.owner !== backendId) return { error: "notOwner" };
+          const previous = h.op === "upsert" ? first<LogRow>("SELECT seq,envelope FROM latest WHERE stream=? AND register_key=?", stream, h.registerKey) : undefined;
+          const previousEnvelope: BridgeEnvelope | undefined = previous && JSON.parse(previous.envelope);
+          // Both keys derive from the same table and pk, so a register belongs to one row:
+          // another row key here can only be replacing a value its writer does not own.
+          if (previousEnvelope && previousEnvelope.header.rowKey !== h.rowKey) return { error: "notOwner" };
+          const hubMs = Date.now();
+          if (h.hlc.physicalMs > hubMs + BRIDGE_MAX_CLOCK_SKEW_MS) return { error: "clockSkew", hubMs };
           if (stream !== "account") {
             const run = first<{ owner: string; tombstone: string | null }>("SELECT owner,tombstone FROM runs WHERE run_id=?", stream.slice(4));
             if (h.runId !== stream.slice(4) || !run || run.owner !== backendId || h.owner !== backendId) return { error: "notOwner" };
@@ -81,8 +91,6 @@ export function createHubStore(storage: DurableObjectStorage) {
           }
           const deleted = first<LogRow>("SELECT seq,envelope FROM deleted WHERE row_key=?", h.rowKey);
           if (deleted) return { deleted: JSON.parse(deleted.envelope) };
-          const previous = h.op === "upsert" ? first<LogRow>("SELECT seq,envelope FROM latest WHERE stream=? AND register_key=?", stream, h.registerKey) : undefined;
-          const previousEnvelope: BridgeEnvelope | undefined = previous && JSON.parse(previous.envelope);
           const comparison = previousEnvelope && order(envelope, previousEnvelope);
           // Upgrade only the original writer's exact legacy clock. This changes
           // neither LWW order nor application data; a stale image still loses.
@@ -96,6 +104,8 @@ export function createHubStore(storage: DurableObjectStorage) {
             if (delta > 0 && api.recordBytes() + budget.blobBytes + delta > budget.limitBytes) return { error: "quotaExceeded" };
             if (!api.takeWrite(backendId, budget.writesPerMinute)) return { error: "rateLimited" };
           }
+          // Backend ids never contain ':', so this bucket cannot collide with the upsert one.
+          if (h.op === "delete" && !api.takeWrite(`${backendId}:delete`, BRIDGE_DELETES_PER_MINUTE)) return { error: "rateLimited" };
           if (stream === "account" && h.runId) sql.exec("INSERT OR IGNORE INTO runs(run_id,owner,root_key) VALUES(?,?,?)", h.runId, backendId, h.rowKey);
           if (h.owner) sql.exec("INSERT OR IGNORE INTO row_owners(row_key,owner) VALUES(?,?)", h.rowKey, h.owner);
           sql.exec("INSERT INTO streams(stream,seq) VALUES(?,1) ON CONFLICT(stream) DO UPDATE SET seq=seq+1", stream);

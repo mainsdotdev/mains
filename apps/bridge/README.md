@@ -698,6 +698,20 @@ deleted by blob collection. Record replacements and deletes reclaim their supers
 logical register bytes. Reads and tombstones remain available at quota/rate
 limits. Failed writes stay in the local outbox and retry after capacity returns.
 
+Because tombstones are permanent and bypass quota and subscription checks, they
+have their own bounds: a pushed deletion larger than 4 KiB closes the socket
+before any of its batch commits (an honest one seals only `{table, pk}`), and
+each backend may add **600 new tombstones per minute** in a bucket separate from
+upserts (`rateLimited`, retried from the outbox). Re-sent tombstones are still
+acknowledged. Every record clocked more than 10 minutes ahead of the hub is
+refused with `clockSkew`: such a clock would win every later write of its
+register and pull every replica's clock forward. The refusal carries the hub's
+time. No replica holds a refused clock, so the device re-stamps every clock of
+its own beyond that bound at the bound itself, in the original order, and sends
+them once more. They still outrank every clock the hub accepted, as they already
+did on that device, and a clock that ran ahead (or still does) costs one refused
+round trip instead of a lockout until real time catches up.
+
 Record, stored-chunk and reserved-byte totals are persistent SQLite counters,
 updated by triggers in the same transaction as their source rows. Existing
 Durable Objects initialize these totals and indexes once; hibernation/restart
@@ -984,6 +998,30 @@ Independent PyNaCl/libsodium known answers live under
 `packages/backend/test/fixtures/bridge`. Only routing metadata (stream, clocks,
 opaque ids, origin/owner and sizes) is visible to the hub. File bytes use the
 encrypted B5 blob transport; the Atlas revision graph remains B6.
+
+The hub cannot open what it stores, so a holder of one device credential could
+publish a well-formed record that no device can authenticate. A pulled record
+that fails authentication or validation is therefore never applied and never
+stops its stream: it is kept in `bridge_parked` as `unverified`, its clock is
+ignored, and the cursor moves on. A record that authenticates but that this
+replica refuses (an ownership collision, a rewritten immutable revision, a
+SQLite constraint) is undone and set aside the same way; a local failure, such
+as recovery or I/O, still rolls back the whole batch to be retried. Each engine
+re-checks up to 100 such records once, fetching that sequence again from the
+hub, so a newer client version or an undamaged copy still applies. Settings ›
+Bridge reports how many were skipped.
+
+The same credential can make the hub answer every later write of a row with a
+tombstone. A write answered with a deletion leaves the outbox whether that
+deletion applies or is refused, so it cannot hold back the rest of its stream or
+the run streams queued behind the account stream. The local row is kept; a
+genuine tombstone still arrives through the log.
+
+For the same reason the hub refuses (`notOwner`) an upsert whose register key
+currently holds a value of another row key. Both keys are HMACs of the same table
+and primary key, so honest writers always agree; the check stops a credential
+holder from replacing, and through compaction erasing, a register of a row it
+does not own.
 
 ## File transfer (B5)
 

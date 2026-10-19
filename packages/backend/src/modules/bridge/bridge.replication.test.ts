@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import type { BridgeEnvelope, BridgeUpsertBody } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_MAX_CLOCK_SKEW_MS, type BridgeEnvelope, type BridgeUpsertBody } from "@mains/contracts/bridge-protocol";
 import { createTestDb } from "../../../test/setup-db";
 import { createBridgeEngine, type BridgeEngineOptions } from "./bridge.engine";
 import { createBridgeTestHub, bridgeTestCodec, bridgeTestRecordKey, closeBridgeTestConnections, disposeBridgeTestHub } from "../../../test/bridge-hub";
@@ -140,6 +140,89 @@ describe("Bridge product retention and scope across independent databases", () =
 
 // All integration scenarios below use separately migrated SQLite handles with FK checks ON.
 describe("Bridge transfer between independent SQLite databases", () => {
+  it("sets aside a record it cannot verify, keeps applying the stream, and re-checks it once per engine", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    const spaceRecord = async (id: string) => (await hub.inspect("account")).find((record) => {
+      try { const body = bodyOf(record.envelope); return body.table === "spaces" && body.pk === id; } catch { return false; }
+    })!;
+    space(a, "before"); await drain(a);
+    // A leaked device token alone can publish a well-formed record that no device can open.
+    const forged = structuredClone((await spaceRecord("before")).envelope);
+    forged.header.rowKey = "x".repeat(22); forged.header.registerKey = "y".repeat(22);
+    expect(await hub.connect("A").push("account", [forged])).toEqual([{ seq: expect.any(Number) }]);
+    space(a, "after"); await drain(a);
+    await b.engine.pull();
+    expect([row(b, "spaces", "before")?.name, row(b, "spaces", "after")?.name]).toEqual(["before", "after"]);
+    expect(b.engine.unverified()).toBe(1);
+    await b.engine.pull();
+    expect(b.engine.unverified()).toBe(1);
+
+    // An earlier version set aside a record this one accepts: the next engine applies it once.
+    space(a, "later"); await drain(a);
+    const later = await spaceRecord("later");
+    b.sqlite.prepare("INSERT INTO bridge_parked(stream,seq,envelope,reason) VALUES('account',?,?,'unverified')").run(later.seq, JSON.stringify(later.envelope));
+    b.sqlite.prepare("UPDATE bridge_cursors SET seq=? WHERE stream='account'").run(later.seq);
+    b.sqlite.exec("UPDATE bridge_clock SET physical_ms=0,counter=0 WHERE id=1");
+    await b.engine.stop();
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: b.transport, experimentalAtlas: true });
+    cleanups.push(() => void restarted.stop());
+    await restarted.pull();
+    expect(row(b, "spaces", "later")?.name).toBe("later");
+    expect(restarted.unverified()).toBe(1);
+    // Its clock was skipped while it could not be opened; applying it advances ours.
+    expect(b.sqlite.prepare("SELECT physical_ms FROM bridge_clock WHERE id=1").get()).toEqual({ physical_ms: later.envelope.header.hlc.physicalMs });
+  });
+  it("sets aside a verified record this replica refuses, keeps applying the stream, and re-checks it once per engine", async () => {
+    let refuse = true;
+    // A replica-side constraint the sender did not have: the row it describes cannot be stored here.
+    const open = (envelope: BridgeEnvelope) => {
+      const opened = bridgeTestCodec.open(envelope);
+      return refuse && "values" in opened.body && opened.body.pk === "refused" ? { ...opened, body: { ...opened.body, values: { ...opened.body.values, name: null } } } : opened;
+    };
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B", { codec: { ...bridgeTestCodec, open } });
+    collection(a, "refused"); collection(a, "after"); await drain(a);
+    await b.engine.pull();
+    expect(row(b, "collections", "refused")).toBeUndefined(); expect(row(b, "collections", "after")?.name).toBe("after");
+    expect(b.engine.unverified()).toBe(1); expect(b.sqlite.prepare("SELECT applying FROM bridge_state").get()).toEqual({ applying: 0 });
+    refuse = false; await b.engine.stop();
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: { ...bridgeTestCodec, open }, transport: b.transport, experimentalAtlas: true });
+    cleanups.push(() => void restarted.stop());
+    await restarted.pull();
+    expect(row(b, "collections", "refused")?.name).toBe("refused"); expect(restarted.unverified()).toBe(0);
+  });
+  it("keeps publishing a stream after the hub answers one write with a deletion no device can verify", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    collection(a, "c"); await settle(a, b);
+    const upsert = (await hub.inspect("account")).find((record) => {
+      try { const body = bodyOf(record.envelope); return body.table === "collections" && body.pk === "c"; } catch { return false; }
+    })!.envelope;
+    // A leaked device token alone can make the hub tombstone a row and return that tombstone to every later write.
+    const { registerKey: _registerKey, blobs: _blobs, ...header } = upsert.header;
+    const forged = { header: { ...header, op: "delete" }, body: upsert.body } as BridgeEnvelope;
+    expect(await hub.connect("A").push("account", [forged])).toEqual([{ seq: expect.any(Number) }]);
+    await b.engine.pull(); expect(b.engine.unverified()).toBe(1);
+    b.sqlite.exec("UPDATE collections SET name='edited' WHERE id='c'"); collection(b, "next");
+    await drain(b);
+    expect(row(b, "collections", "c")?.name).toBe("edited"); expect(b.engine.pending()).toEqual([]);
+    await a.engine.pull();
+    expect(row(a, "collections", "next")).toBeTruthy(); expect(row(a, "collections", "c")?.name).toBe("c");
+  });
+  it("re-stamps edits made while this device's clock ran ahead, so they publish without carrying that clock to the hub", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    space(a, "s"); collection(a, "gone"); await settle(a, b);
+    // A day ahead: an upsert, a new row and a deletion are all stamped beyond the hub's bound.
+    a.sqlite.prepare("UPDATE bridge_clock SET physical_ms=?,counter=0").run(Date.now() + 24 * 60 * 60 * 1000);
+    a.sqlite.exec("UPDATE spaces SET name='ahead' WHERE id='s'"); collection(a, "new"); a.sqlite.exec("DELETE FROM collections WHERE id='gone'");
+    // A later edit elsewhere is accepted first, and loses here to the clock that ran ahead.
+    b.sqlite.exec("UPDATE spaces SET name='remote' WHERE id='s'"); await drain(b);
+    await a.engine.pull(); expect(row(a, "spaces", "s")?.name).toBe("ahead");
+    await a.engine.push(); expect(a.engine.pending()).toEqual([]);
+    await b.engine.pull();
+    expect(row(b, "spaces", "s")?.name).toBe("ahead"); expect(row(b, "collections", "new")).toBeTruthy(); expect(row(b, "collections", "gone")).toBeUndefined();
+    const bound = Date.now() + BRIDGE_MAX_CLOCK_SKEW_MS, clock = (n: Node) => (n.sqlite.prepare("SELECT physical_ms FROM bridge_clock WHERE id=1").get() as { physical_ms: number }).physical_ms;
+    for (const record of await hub.inspect("account")) expect(record.envelope.header.hlc.physicalMs).toBeLessThanOrEqual(bound);
+    expect(clock(a)).toBeLessThanOrEqual(bound); expect(clock(b)).toBeLessThanOrEqual(bound);
+  });
   it("preserves SQLite JSON1 text through trigger capture, encryption and independent database apply", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
     run(a, "json-run"); await settle(a, b);
@@ -430,10 +513,10 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
 
   it.each(orders)("merges equal content into the same survivor in arrival order %s %s %s", async (...order) => {
     const hub = await createBridgeTestHub(), target = await node(hub, "T"); collection(target, "c"); await drain(target);
-    const records: BridgeEnvelope[] = [];
+    const records: BridgeEnvelope[] = [], clock = Date.now() + 60_000;
     for (let index = 0; index < 3; index++) {
       const n = await node(await createBridgeTestHub(), `N${index}`); collection(n, "c");
-      n.sqlite.prepare("UPDATE bridge_clock SET physical_ms=?,counter=0").run(2_000_000_000_000 + index);
+      n.sqlite.prepare("UPDATE bridge_clock SET physical_ms=?,counter=0").run(clock + index);
       source(n, ["c-src", "b-src", "a-src"][index], "c"); await drain(n);
       records.push((await n.hub.inspect("account")).find((entry) => bodyOf(entry.envelope).table === "collection_sources")!.envelope);
     }
@@ -485,6 +568,18 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
     const c = await node(hub, "C"); expect(row(c, "runs", "r")).toBeUndefined();
   });
 
+  it("keeps an owned register out of another backend's reach, so the owner's value survives compaction", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    project(a, "p"); await settle(a, b);
+    const owned = (await hub.inspect("account")).find((r) => bodyOf(r.envelope).table === "projects")!.envelope;
+    // The project's register key under a row key B could own, far ahead of A's clock.
+    const forged = structuredClone(owned); forged.header.origin = "B"; forged.header.owner = "B"; forged.header.rowKey = "x".repeat(22);
+    forged.header.hlc = { physicalMs: Number.MAX_SAFE_INTEGER, counter: 0 };
+    expect(await hub.connect("B").push("account", [forged])).toEqual([{ error: "notOwner" }]);
+    await hub.compact(); const c = await node(hub, "C"); await pullAll(c);
+    expect(row(c, "projects", "p")).toMatchObject({ owner_backend_id: "A" }); expect(c.engine.unverified()).toBe(0);
+  });
+
   it("protects fixed identities and supports explicitly disabling Atlas capture", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A", { experimentalAtlas: false }); space(a, "claude");
     expect(() => a.sqlite.exec("DELETE FROM spaces WHERE id='claude'")).toThrow(/archived/);
@@ -522,7 +617,7 @@ describe("Bridge parking, deterministic merges and durable recovery", () => {
 });
 
 describe("Bridge verification and interrupted transfers", () => {
-  it.each(["different row", "upsert", "stripped body", "changed routing key"])("rejects a bogus deleted ACK (%s) without losing the local row or outbox", async (variant) => {
+  it.each(["different row", "upsert", "stripped body", "changed routing key"])("refuses a bogus deleted ACK (%s) without losing the local row, and takes the genuine tombstone from the log", async (variant) => {
     const hub = await createBridgeTestHub(), raw = hub.connect("B"); let forged: BridgeEnvelope | undefined;
     const transport: BridgeTransport = { ...raw, async push(stream, records) { return forged ? records.map(() => ({ deleted: forged! })) : raw.push(stream, records); } };
     const a = await node(hub, "A"), b = await node(hub, "B", { transport }); collection(a, "c"); collection(a, "other"); await settle(a, b);
@@ -535,20 +630,24 @@ describe("Bridge verification and interrupted transfers", () => {
     if (variant === "stripped body") forged.body.payload = "{}";
     if (variant === "changed routing key") forged.header.rowKey = "tampered";
     b.sqlite.exec("UPDATE collections SET name='offline draft' WHERE id='c'");
-    await expect(b.engine.push()).rejects.toThrow(/Bridge/);
-    expect(row(b, "collections", "c")?.name).toBe("offline draft"); expect(b.engine.pending().some((entry) => entry.pk === "c")).toBe(true);
+    // Every retry would receive the same answer, so the write leaves the outbox instead of blocking it.
+    await b.engine.push();
+    expect(row(b, "collections", "c")?.name).toBe("offline draft"); expect(b.engine.pending().some((entry) => entry.pk === "c")).toBe(false);
     expect(b.sqlite.prepare("SELECT applying FROM bridge_state").get()).toEqual({ applying: 0 });
-    forged = undefined; await drain(b); expect(row(b, "collections", "c")).toBeUndefined();
+    forged = undefined; await b.engine.pull(); expect(row(b, "collections", "c")).toBeUndefined();
   });
 
-  it("passes every remote deletion through the supplied codec before any mutation", async () => {
+  it("never applies a remote deletion its codec rejects, and re-checks it on the next engine", async () => {
     const hub = await createBridgeTestHub(), a = await node(hub, "A"); let rejectDelete = false;
     const open = vi.fn((envelope: BridgeEnvelope) => { if (rejectDelete && envelope.header.op === "delete") throw new Error("authentication failed"); return bridgeTestCodec.open(envelope); });
     const b = await node(hub, "B", { codec: { ...bridgeTestCodec, open } }); collection(a, "c"); await settle(a, b);
     a.sqlite.exec("DELETE FROM collections WHERE id='c'"); await drain(a);
-    const before = b.sqlite.prepare("SELECT * FROM bridge_cursors").all(); rejectDelete = true;
-    await expect(b.engine.pull()).rejects.toThrow("authentication failed"); expect(row(b, "collections", "c")).toBeTruthy(); expect(b.sqlite.prepare("SELECT * FROM bridge_cursors").all()).toEqual(before);
-    rejectDelete = false; await b.engine.pull(); expect(row(b, "collections", "c")).toBeUndefined();
+    rejectDelete = true;
+    await b.engine.pull(); expect(row(b, "collections", "c")).toBeTruthy(); expect(b.engine.unverified()).toBe(1);
+    rejectDelete = false; await b.engine.stop();
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: { ...bridgeTestCodec, open }, transport: b.transport, experimentalAtlas: true });
+    cleanups.push(() => void restarted.stop());
+    await restarted.pull(); expect(row(b, "collections", "c")).toBeUndefined(); expect(restarted.unverified()).toBe(0);
     expect(open.mock.calls.filter(([e]) => e.header.op === "delete").length).toBeGreaterThan(1);
   });
 

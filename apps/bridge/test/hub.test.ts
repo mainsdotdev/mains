@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import WebSocket from "ws";
 import type { BridgeClientMessage, BridgeEnvelope, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
-import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_IDLE_RETENTION_MS, BRIDGE_MAX_CLOCK_SKEW_MS } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_MAX_DELETE_BYTES } from "@mains/contracts/bridge-wire";
 import { startLocalBridgeHub } from "./local-hub.mjs";
 
 let hub: Awaited<ReturnType<typeof startLocalBridgeHub>>;
@@ -99,6 +100,20 @@ describe("Cloudflare SQLite Bridge hub", () => {
     expect((await log(a, "run:run-id")).records).toEqual([]);
     expect(await a.rpc({ type: "push", stream: "run:run-id", records: [child] })).toMatchObject({ type: "ack", results: [{ deleted: tombstone }] });
   });
+  it("binds each register to its row, so another backend cannot replace or erase an owned value", async () => {
+    const account = randomUUID(), a = await connect(account), b = await connect(account, "B");
+    const owned = record("owned-project", 1, "upsert", "row", "account", "A");
+    await a.rpc({ type: "push", stream: "account", records: [owned] });
+    // The owner's register key under an unowned row key, with a clock far ahead of the owner's.
+    const forged = structuredClone(owned);
+    forged.header.rowKey = opaque("unowned-row"); forged.header.origin = "B"; forged.header.owner = "B";
+    forged.header.hlc = { physicalMs: Number.MAX_SAFE_INTEGER, counter: 0 };
+    expect(await b.rpc({ type: "push", stream: "account", records: [forged] })).toMatchObject({ type: "ack", results: [{ error: "notOwner" }] });
+    const newer = record("owned-project", 2, "upsert", "row", "account", "A");
+    expect(await a.rpc({ type: "push", stream: "account", records: [newer] })).toMatchObject({ type: "ack", results: [{ seq: 2 }] });
+    await a.rpc({ type: "compact" });
+    expect((await log(a)).records.map((r) => r.envelope)).toEqual([newer]);
+  });
   it("rejects a malformed encrypted batch before committing its valid prefix", async () => {
     const account = randomUUID(), client = await connect(account), valid = record("valid-prefix", 1), bad = record("bad", 2);
     bad.body.nonce = null;
@@ -112,5 +127,30 @@ describe("Cloudflare SQLite Bridge hub", () => {
     const second = await connect(account), oversized = new Promise<number>((resolve) => second.socket.once("close", resolve));
     second.socket.send("x".repeat(16 * 1024 * 1024 + 1)); expect(await oversized).toBe(1009);
     expect((await log(await connect(account))).records).toEqual([]);
+  });
+  it("refuses an oversized tombstone before committing its batch, while upserts keep the record limit", async () => {
+    const account = randomUUID(), client = await connect(account), small = record("small", 1, "delete"), large = record("large", 2, "delete");
+    large.body.payload = randomBytes(BRIDGE_MAX_DELETE_BYTES).toString("base64url");
+    const closed = new Promise<number>((resolve) => client.socket.once("close", resolve));
+    client.socket.send(JSON.stringify({ requestId: randomUUID(), message: { type: "push", stream: "account", records: [small, large] } }));
+    expect(await closed).toBe(1008); expect((await log(await connect(account))).records).toEqual([]);
+    const upsert = record("large-upsert", 3); upsert.body.payload = randomBytes(BRIDGE_MAX_DELETE_BYTES).toString("base64url");
+    expect(await (await connect(account)).rpc({ type: "push", stream: "account", records: [upsert] })).toMatchObject({ results: [{ seq: 1 }] });
+  });
+  it("gives tombstones their own per-backend rate limit, apart from upserts", async () => {
+    const account = randomUUID(), client = await connect(account);
+    expect(await client.rpc({ type: "push", stream: "account", records: [record("first", 1, "delete")] })).toMatchObject({ results: [{ seq: 1 }] });
+    await hub.quotaSql(account, "UPDATE write_rate SET count=1000000 WHERE backend_id='A:delete'");
+    expect(await client.rpc({ type: "push", stream: "account", records: [record("limited", 2, "delete")] })).toMatchObject({ results: [{ error: "rateLimited" }] });
+    // An existing tombstone is still acknowledged, and upserts keep their own budget.
+    expect(await client.rpc({ type: "push", stream: "account", records: [record("first", 1, "delete")] })).toMatchObject({ results: [{ deleted: expect.anything() }] });
+    expect(await client.rpc({ type: "push", stream: "account", records: [record("upsert", 3)] })).toMatchObject({ results: [{ seq: 2 }] });
+  });
+  it("refuses a record clocked further ahead of the hub than the allowed skew", async () => {
+    const account = randomUUID(), client = await connect(account), ahead = Date.now() + BRIDGE_MAX_CLOCK_SKEW_MS + 60_000;
+    const near = record("near", Date.now() + 60_000);
+    expect(await client.rpc({ type: "push", stream: "account", records: [record("ahead", ahead), near, record("ahead-delete", ahead, "delete")] }))
+      .toMatchObject({ results: [{ error: "clockSkew", hubMs: expect.any(Number) }, { seq: 1 }, { error: "clockSkew", hubMs: expect.any(Number) }] });
+    expect((await log(client)).records.map((entry) => entry.envelope)).toEqual([near]);
   });
 });

@@ -197,7 +197,8 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
           else { stalls++; stalledOutbox = outboxSignature(); }
         }
       } catch (cause) {
-        if (!/quota|rate limit|subscription required/i.test(String(cause))) throw cause;
+        // Refused writes stay queued; reads continue before the refusal is reported.
+        if (!/quota|rate limit|subscription required|clock is ahead/i.test(String(cause))) throw cause;
         writeError = cause;
         const deletions = sqlite.prepare("SELECT DISTINCT stream FROM bridge_outbox WHERE op='delete' AND stream<>'account'").all() as { stream: BridgeStream }[];
         for (const { stream } of deletions) {
@@ -304,7 +305,7 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
       const current = quota?.subscription;
       const displayQuota = current?.canUpload && current.expiresAt && Date.parse(current.expiresAt) <= Date.now()
         ? { ...quota!, subscription: { ...current, status: "expired" as const, canUpload: false } } : quota;
-      return { enabled: true, state: state === "connected" && readOnly() ? "read-only" : state, backendId, label: config.label, lastSyncedAt, error, pendingRecords: pending(), backends: [...backends.values()], runs: [...runStates.values()], quota: displayQuota };
+      return { enabled: true, state: state === "connected" && readOnly() ? "read-only" : state, backendId, label: config.label, lastSyncedAt, error, pendingRecords: pending(), rejectedRecords: engine.unverified(), backends: [...backends.values()], runs: [...runStates.values()], quota: displayQuota };
     },
     async stop() {
       stopped = true; if (timer) clearTimeout(timer); timer = undefined;

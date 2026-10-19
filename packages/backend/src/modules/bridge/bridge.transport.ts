@@ -1,6 +1,6 @@
 import type { BridgeEnvelope, BridgeLogRecord, BridgePushResult, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { compareClock, headerClock } from "./bridge.clock";
-import { BRIDGE_IDLE_RETENTION_MS } from "@mains/contracts/bridge-protocol";
+import { BRIDGE_IDLE_RETENTION_MS, BRIDGE_MAX_CLOCK_SKEW_MS } from "@mains/contracts/bridge-protocol";
 
 export interface BridgePullPage { records: BridgeLogRecord[]; next: number; hasMore: boolean }
 /** B3's network adapter implements this same seam; no SQLite or codec on the hub. */
@@ -33,6 +33,10 @@ export function createMemoryBridgeHub() {
             if (h.stream !== stream || h.origin !== backendId || (h.owner && h.owner !== backendId)) return { error: "notOwner" };
             const claimed = rowOwners.get(h.rowKey);
             if (claimed && claimed !== backendId) return { error: "notOwner" };
+            const bound = h.op === "upsert" ? latest.get(`${stream}:${h.registerKey}`) : undefined;
+            if (bound && bound.envelope.header.rowKey !== h.rowKey) return { error: "notOwner" };
+            const hubMs = Date.now();
+            if (h.hlc.physicalMs > hubMs + BRIDGE_MAX_CLOCK_SKEW_MS) return { error: "clockSkew", hubMs };
             if (stream !== "account") {
               const runId = stream.slice(4);
               if (h.runId !== runId || owners.get(runId) !== backendId || h.owner !== backendId) return { error: "notOwner" };
