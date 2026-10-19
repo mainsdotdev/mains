@@ -320,6 +320,22 @@ describe("Atlas file lifecycle", { timeout: 15000 }, () => {
     expect(atlasService.list({ accountId: "default" })).toHaveLength(1);
     expect(await atlasService.isStoredFile(fs.realpathSync(saved.path!))).toBe(true);
   });
+  it("deletes a removed item's own folder but never follows a synced id outside the Atlas folder", async () => {
+    const saved = await atlasService.saveFile({ accountId: "default", runId: "conversation", path: output() });
+    const folder = path.dirname(saved.path!);
+    await atlasService.update({ accountId: "default", id: saved.id, trashed: true });
+    await atlasService.remove({ accountId: "default", id: saved.id });
+    expect(fs.existsSync(folder)).toBe(false);
+
+    // Another device chose this id; it resolves to a folder beside the profile's Atlas files.
+    const outside = path.join(directory, "outside");
+    fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, "keep.txt"), "not Atlas data");
+    db.insert(atlasItems).values({ id: "../../outside", accountId: "default", kind: "image", title: "Photo.png",
+      storageKey: "crafted/Photo.png", trashedAt: new Date() }).run();
+    await atlasService.remove({ accountId: "default", id: "../../outside" });
+    expect(fs.readFileSync(path.join(outside, "keep.txt"), "utf8")).toBe("not Atlas data");
+    expect(atlasService.get({ accountId: "default", id: "../../outside" })).toBeNull();
+  });
   it("enforces account ownership, output provenance and symlink boundaries", async () => {
     const file = output();
     createAccount(db, { id: "other" });

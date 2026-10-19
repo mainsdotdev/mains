@@ -25,6 +25,11 @@ export function storagePath(key: string): string {
   if (!/^[\w-]+\/[^/\\]+$/.test(key) || [".", ".."].includes(path.basename(key))) throw new Error("Invalid Atlas file key");
   return path.join(atlasRoot(), key);
 }
+/** Folders exist only for this device's random item ids. An id synced from
+ * another device must never select a path outside the Atlas folder. */
+function itemDirectory(id: string): string | null {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(id) ? path.join(atlasRoot(), id) : null;
+}
 function within(root: string, child: string) {
   const relative = path.relative(root, child);
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
@@ -92,7 +97,8 @@ export async function imageContentHash(real: string, stats: Stats): Promise<stri
 }
 export async function writeFile(id: string, name: string, bytes: Buffer) {
   if (bytes.length > MAX_FILE_BYTES) throw new Error("File exceeds the 100 MB Atlas limit");
-  const directory = path.join(atlasRoot(), id);
+  const directory = itemDirectory(id);
+  if (!directory) throw new Error("Invalid Atlas item id");
   const temporary = path.join(atlasRoot(), `.pending-${randomUUID()}`);
   await fs.mkdir(temporary, { recursive: true });
   try {
@@ -103,7 +109,9 @@ export async function writeFile(id: string, name: string, bytes: Buffer) {
   } finally { await fs.rm(temporary, { recursive: true, force: true }); }
 }
 export async function removeFiles(id: string) {
-  const directory = path.join(atlasRoot(), id);
+  // No folder of ours can have any other id, so there is nothing to remove.
+  const directory = itemDirectory(id);
+  if (!directory) return;
   for (const file of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
     if (file.isFile()) await removeImagePreviews(path.join(directory, file.name)).catch(() => {});
   }
