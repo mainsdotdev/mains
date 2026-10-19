@@ -18,5 +18,7 @@ export function desktopUserDataPath(options: {
     throw new Error(options.requestedPath !== undefined
       ? "--user-data-dir must be an absolute directory"
       : "MAINS_DEV_USER_DATA must be an absolute directory");
-  return requested ?? path.join(options.appData, "mains");
+  // Development keeps its own profile, so its Bridge identity, files and
+  // single-instance lock never collide with the installed app's.
+  return requested ?? path.join(options.appData, options.isPackaged ? "mains" : "Mains-dev");
 }

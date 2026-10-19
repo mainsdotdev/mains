@@ -60,7 +60,9 @@ disposable directory before `npm start`. Unpackaged Electron then isolates both
 Chromium state and `mains.db` there, before acquiring its instance/database locks.
 For a packaged app, launch its executable with `--user-data-dir=/absolute/path`
 to select an isolated profile before those same locks. Without an explicit path,
-the existing canonical `mains` profile is preserved.
+unpackaged Electron uses its own `Mains-dev` profile (with `.data/mains.db`) and the
+packaged app keeps the canonical `mains` profile, so their Bridge identities, files
+and instance locks never collide.
 Do not redirect HOME or use the installed app's profile for replica tests. Bridge
 starts after Bridge sign-in and key approval, or with an explicit
 `<userData>/bridge/dev.json` / `MAINS_BRIDGE_CONFIG`;

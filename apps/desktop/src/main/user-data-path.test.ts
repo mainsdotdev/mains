@@ -20,6 +20,10 @@ describe("desktop profile isolation", () => {
     expect(() => desktopUserDataPath({ ...defaults, requestedPath })).toThrow(/absolute directory/);
   });
 
+  it("gives development its own default profile, apart from the installed app's", () => {
+    expect(desktopUserDataPath({ ...defaults, isPackaged: false })).toBe(path.join(appData, "Mains-dev"));
+  });
+
   it("preserves development profile selection and explicit command-line precedence", () => {
     expect(desktopUserDataPath({ ...defaults, isPackaged: false, devPath: profile })).toBe(profile);
     expect(() => desktopUserDataPath({ ...defaults, isPackaged: false, devPath: "relative" })).toThrow(/absolute directory/);

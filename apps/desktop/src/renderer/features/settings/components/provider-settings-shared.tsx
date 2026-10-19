@@ -1,13 +1,16 @@
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { AsciiSpinner, Button, Text, UsageTicks, toast } from "@/components/ui";
+import { AsciiSpinner, Button, CopyButton, Text, UsageTicks, toast } from "@/components/ui";
 import {
   SettingsPageShell,
   SettingsSection,
   SettingsRow,
+  SettingsDivider,
 } from "./settings-layout";
 import {
   useArchiveSpaceMutation,
+  useDetectInstalledClisQuery,
+  useGetProviderAccountInfoQuery,
   useGetProviderByIdQuery,
   useGetSpacesQuery,
   useSetActiveSpaceMutation,
@@ -16,6 +19,7 @@ import {
   useUpdateProviderCliMutation,
 } from "@/lib/redux/api";
 import type { AccountInfo } from "@/lib/redux/api/providersApi";
+import { getProviderVariantById } from "@/lib/provider-variants";
 import { getSpaceDefaultRoute } from "@/lib/route-utils";
 import { extractErrorMessage } from "@/lib/extract-error-message";
 
@@ -94,10 +98,36 @@ export function useProviderSettings<TConfig extends object = Record<string, unkn
 }
 
 /**
+ * Whether this backend has the provider's CLI, from the same probe onboarding
+ * uses. `installed` stays undefined until the probe answers (or if it fails),
+ * so callers keep their ordinary UI rather than claiming the CLI is missing.
+ * `recheck` re-probes and re-reads the account, which reports the version.
+ */
+export function useProviderCliInstallation(providerId: string) {
+  const variant = getProviderVariantById(providerId);
+  const detected = useDetectInstalledClisQuery(undefined, {
+    refetchOnMountOrArgChange: true,
+  });
+  const account = useGetProviderAccountInfoQuery(providerId);
+  return {
+    installed: variant && detected.data ? detected.data[variant.variant] : undefined,
+    installCommand: variant?.installCommand ?? null,
+    setupGuideUrl: variant?.setupGuideUrl,
+    label: variant?.label,
+    isChecking: detected.isFetching || account.isFetching,
+    recheck: () => {
+      void detected.refetch();
+      void account.refetch();
+    },
+  };
+}
+
+/**
  * CLI version + self-update section shared by every provider page.
  * Owns the update mutation and result message; per-provider bits come in as
  * props. Extra provider-specific rows (e.g. Cursor's outdated notice) render
- * below the update row via `children`.
+ * below the update row via `children`. A missing CLI replaces all of that with
+ * how to install it (or, for a bundled runtime, how to restore it).
  */
 export function ProviderCliSection({
   providerId,
@@ -119,6 +149,7 @@ export function ProviderCliSection({
   const [updateCli, { isLoading: isUpdatingCli }] =
     useUpdateProviderCliMutation();
   const [updateResult, setUpdateResult] = useState<string | null>(null);
+  const installation = useProviderCliInstallation(providerId);
 
   const handleUpdateCli = async () => {
     setUpdateResult(null);
@@ -127,10 +158,71 @@ export function ProviderCliSection({
       setUpdateResult(
         res.success ? `${shortName} CLI updated.` : res.output || "Update failed.",
       );
-    } catch {
-      setUpdateResult("Update failed.");
+    } catch (error) {
+      setUpdateResult(extractErrorMessage(error, "Update failed."));
     }
   };
+
+  if (installation.installed === false) {
+    const { installCommand, setupGuideUrl, isChecking, recheck } = installation;
+    return (
+      <SettingsSection title="CLI">
+        <SettingsRow
+          title={cliName}
+          description={
+            installCommand
+              ? "Not installed. Install it in your terminal, then recheck."
+              : `${shortName} is included with Mains but missing from this installation. Reinstall Mains, then recheck.`
+          }
+        >
+          <div className="flex items-center gap-3">
+            <Text as="span" size="xs" tone="subtle">
+              Not installed
+            </Text>
+            <Button variant={buttonVariant} onClick={recheck} disabled={isChecking}>
+              {isChecking ? "Checking…" : "Recheck"}
+            </Button>
+          </div>
+        </SettingsRow>
+        {installCommand && (
+          <>
+            <SettingsDivider />
+            <SettingsRow
+              title="Install"
+              description={
+                setupGuideUrl ? (
+                  <>
+                    Run this in your terminal.{" "}
+                    <a
+                      href={setupGuideUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300 underline"
+                    >
+                      Open setup guide
+                    </a>
+                  </>
+                ) : (
+                  "Run this in your terminal."
+                )
+              }
+            >
+              <div className="flex w-fit max-w-full items-center gap-2 rounded-xl glass-input py-1 pr-1 pl-3">
+                <Text as="code" size="s" className="min-w-0 truncate font-mono select-all">
+                  {installCommand}
+                </Text>
+                <CopyButton
+                  text={installCommand}
+                  tooltip="Copy install command"
+                  copiedTooltip="Copied!"
+                />
+              </div>
+            </SettingsRow>
+          </>
+        )}
+      </SettingsSection>
+    );
+  }
 
   return (
     <SettingsSection title="CLI">
@@ -175,14 +267,18 @@ export function ProviderCliSection({
 /**
  * Account section shared by the provider pages. The page decides which
  * account type counts as "signed in" for its provider and passes the resolved
- * row content; this component owns the skeleton / API-key / signed-out states.
+ * row content; this component owns the skeleton / API-key / signed-out /
+ * missing-CLI states. A missing CLI can't sign in, so its row says to install
+ * it rather than repeating the provider's sign-in instructions.
  */
 export function ProviderAccountSection({
+  providerId,
   isLoading,
   signedIn,
   isApiKey = false,
   notSignedInDescription,
 }: {
+  providerId: string;
   isLoading: boolean;
   /** Resolved row content when the provider-specific account type matched. */
   signedIn: { title: string; description: string; plan: string } | null;
@@ -190,9 +286,23 @@ export function ProviderAccountSection({
   isApiKey?: boolean;
   notSignedInDescription: string;
 }) {
+  const { installed, installCommand, label } = useProviderCliInstallation(providerId);
   return (
     <SettingsSection title="Account">
-      {isLoading ? (
+      {installed === false ? (
+        <SettingsRow
+          title="Not signed in"
+          description={
+            installCommand
+              ? `Install the ${label} CLI below, then sign in.`
+              : `Reinstall Mains to restore ${label}, then sign in.`
+          }
+        >
+          <Text as="span" size="xs" tone="subtle">
+            No account
+          </Text>
+        </SettingsRow>
+      ) : isLoading ? (
         <div className="flex items-center justify-between py-4">
           <div className="flex flex-col gap-1.5">
             <div className="h-4 w-40 rounded bg-primary-200/50 dark:bg-primary-700/30 animate-pulse" />

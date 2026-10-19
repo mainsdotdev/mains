@@ -84,7 +84,7 @@ export {
 
 /** App-server schema version this driver is developed and tested against. */
 /** TODO: Move from here */
-export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.162.1";
+export const CODEX_APP_SERVER_PROTOCOL_VERSION = "0.163.0";
 /** Oldest CLI whose app-server contract Mains accepts. */
 export const CODEX_MIN_CLI_VERSION = "0.153.0";
 
@@ -592,8 +592,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
   }
 
   /** Read the installed Codex CLI version (e.g. "0.153.0" from "codex-cli 0.153.0"). */
-  function getCodexVersion(): Promise<string | null> {
-    codexVersionPromise ??= (async () => {
+  async function getCodexVersion(): Promise<string | null> {
+    const pending = (codexVersionPromise ??= (async () => {
       try {
         const { stdout } = await runCodexCli(["--version"], 8000);
         const match = stdout.trim().match(/(\d+\.\d+\.\d+[^\s]*)/);
@@ -601,8 +601,11 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
       } catch {
         return null;
       }
-    })();
-    return codexVersionPromise;
+    })());
+    const version = await pending;
+    // A CLI missing now may be installed while Mains runs: probe again next time.
+    if (version === null && codexVersionPromise === pending) codexVersionPromise = null;
+    return version;
   }
 
   function ensureCompatibleCodexVersion(): Promise<void> {
@@ -612,6 +615,8 @@ export function createCodexDriver(config: CodexAdapterConfig): ProviderDriver {
         logWarn(
           "Could not determine the Codex CLI version; app-server compatibility is unverified.",
         );
+        // Verify once a version can be read instead of skipping it for good.
+        codexCompatibilityPromise = null;
         return;
       }
 

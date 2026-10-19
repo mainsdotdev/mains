@@ -48,6 +48,7 @@ describe("ReplicaWorkspaceRow", () => {
 
     rerender(<ReplicaWorkspaceRow workspace={worktree} projectName="docs" backend={backend} layout="project" isActive={false} onClick={() => {}} />);
     expect(mark()?.classList.contains("text-success")).toBe(false);
-    expect(mark()?.classList.contains("text-primary-500")).toBe(true);
+    expect(mark()?.classList.contains("text-primary-400")).toBe(true);
+    expect(mark()?.classList.contains("dark:text-primary-600")).toBe(true);
   });
 });

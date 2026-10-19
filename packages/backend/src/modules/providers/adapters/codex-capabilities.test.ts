@@ -198,7 +198,7 @@ describe("Codex capabilities", () => {
       }),
     ]);
     await expect(capabilities.listRealtimeVoices()).resolves.toEqual({
-      voices: ["cove", "maple", "juniper"], defaultVoice: "cove",
+      voices: ["cove", "maple", "juniper", "aube", "rio", "viola"], defaultVoice: "cove",
     });
     const voiceRequests = readProtocolLog(logPath).filter(
       (message) => String(message.method).startsWith("thread/realtime/"),
@@ -248,6 +248,64 @@ describe("Codex capabilities", () => {
       cwds: [tempDir],
       forceReload: true,
     });
+  });
+
+  it.each([
+    {
+      name: "v3 voices without merging older families",
+      voices: {
+        v1: ["cove", "maple"], v2: ["marin"], defaultV1: "cove", defaultV2: "marin",
+        v3: ["cove", "aube", "rio", "viola", "rio"],
+      },
+      expected: { voices: ["cove", "aube", "rio", "viola"], defaultVoice: "cove" },
+    },
+    {
+      name: "v1 voices from older servers without a v3 catalog",
+      voices: { v1: ["cove", "maple"], v2: ["marin"], defaultV1: "cove", defaultV2: "marin" },
+      expected: { voices: ["cove", "maple"], defaultVoice: "cove" },
+    },
+    {
+      name: "v1 voices when the v3 catalog is empty",
+      voices: { v1: ["cove", "maple"], v3: [], defaultV1: "cove" },
+      expected: { voices: ["cove", "maple"], defaultVoice: "cove" },
+    },
+    {
+      name: "the first available voice when the default is outside the v3 catalog",
+      voices: { v1: ["cove"], v3: ["aube", "rio"], defaultV1: "cove" },
+      expected: { voices: ["aube", "rio"], defaultVoice: "aube" },
+    },
+  ])("selects $name through the real transport", async ({ voices, expected }) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-voices-"));
+    tempDirs.push(dir);
+    const server = await startServer(path.join(dir, "protocol.jsonl"), {
+      MAINS_CODEX_FIXTURE_VOICES: JSON.stringify(voices),
+    });
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server,
+      getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.163.0", channel: null, outdated: false, compatibility: "supported" }),
+    });
+
+    await expect(capabilities.listRealtimeVoices()).resolves.toEqual(expected);
+  });
+
+  it.each([
+    { name: "empty catalogs", voices: { v1: [], v3: [], defaultV1: "cove" } },
+    { name: "non-string v3 voices", voices: { v1: ["cove"], v3: ["aube", 42], defaultV1: "cove" } },
+    { name: "empty v3 voice identifiers", voices: { v1: ["cove"], v3: [""], defaultV1: "cove" } },
+  ])("rejects $name through the real transport", async ({ voices }) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mains-codex-voices-"));
+    tempDirs.push(dir);
+    const server = await startServer(path.join(dir, "protocol.jsonl"), {
+      MAINS_CODEX_FIXTURE_VOICES: JSON.stringify(voices),
+    });
+    const capabilities = createCodexCapabilities({
+      ensureServer: async () => server,
+      getRunningServer: () => server,
+      getCliHealth: async () => ({ version: "0.163.0", channel: null, outdated: false, compatibility: "supported" }),
+    });
+
+    await expect(capabilities.listRealtimeVoices()).rejects.toThrow("Codex returned an invalid voice list.");
   });
 
   it("deduplicates plugin catalogs, preserves remote references, and invalidates after mutations", async () => {

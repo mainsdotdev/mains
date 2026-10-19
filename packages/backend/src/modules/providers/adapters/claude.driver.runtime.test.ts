@@ -472,7 +472,7 @@ esac
 
   it("honors an explicit executable for detection, queries, auth and self-update", async () => {
     const driver = createClaudeDriver({ binary: configured });
-    expect(detectInstalledClis(configured)).toMatchObject({ claude: true, claudeSource: "configured" });
+    expect(detectInstalledClis({ claude: configured })).toMatchObject({ claude: true, claudeSource: "configured" });
     await driver.listModels!();
     expect(sdk.query).toHaveBeenCalledWith(expect.objectContaining({
       options: expect.objectContaining({ pathToClaudeCodeExecutable: configured }),

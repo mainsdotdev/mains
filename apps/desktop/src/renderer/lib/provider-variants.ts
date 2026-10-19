@@ -81,6 +81,14 @@ export interface ProviderVariantDescriptor {
    * Runs in the in-app terminal — the login flows are interactive.
    */
   authLoginCommand: string;
+  /**
+   * Terminal command that installs this variant's CLI, or null when Mains
+   * bundles the runtime and nothing needs installing (a missing bundled
+   * runtime means a damaged Mains installation).
+   */
+  installCommand: string | null;
+  /** Setup guide offered beside the install and sign-in steps. */
+  setupGuideUrl: string;
 
   // ── capability flags (drive UI gates and behavior) ──
   supportsUltracode: boolean;
@@ -124,6 +132,8 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     thinkingCoupledToEffort: false,
     fastMode: { kind: "boolean", key: "fastMode" },
     authLoginCommand: "claude auth login",
+    installCommand: null,
+    setupGuideUrl: "https://docs.anthropic.com/en/docs/claude-code",
     supportsUltracode: true,
     supportsPlanMode: false,
     supportsGoalMode: false,
@@ -150,6 +160,8 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     thinkingCoupledToEffort: true,
     fastMode: { kind: "boolean", key: "fastMode" },
     authLoginCommand: "copilot login",
+    installCommand: null,
+    setupGuideUrl: "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli",
     supportsUltracode: false,
     supportsPlanMode: false,
     supportsGoalMode: false,
@@ -176,6 +188,8 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     thinkingCoupledToEffort: true,
     fastMode: { kind: "serviceTier", key: "serviceTier", on: "fast", match: ["fast", "priority"] },
     authLoginCommand: "codex login",
+    installCommand: "npm install -g @openai/codex",
+    setupGuideUrl: "https://developers.openai.com/codex/cli",
     supportsUltracode: false,
     supportsPlanMode: true,
     supportsGoalMode: true,
@@ -202,6 +216,8 @@ export const PROVIDER_VARIANTS: Record<ProviderVariant, ProviderVariantDescripto
     thinkingCoupledToEffort: false,
     fastMode: { kind: "boolean", key: "fastMode" },
     authLoginCommand: "agent login",
+    installCommand: "curl https://cursor.com/install -fsS | bash",
+    setupGuideUrl: "https://docs.cursor.com/en/cli/overview",
     supportsUltracode: false,
     supportsPlanMode: false,
     supportsGoalMode: false,
