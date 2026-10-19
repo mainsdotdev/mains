@@ -147,28 +147,46 @@ describe("Dock icons", () => {
   });
 
   it("includes every logo layer referenced by the Icon Composer sources", () => {
-    for (const id of APP_ICON_IDS) {
+    const assets = [
+      ...APP_ICON_IDS.map((id) => appIconAssetPath(id)),
+      appIconAssetPath("mains-default", "light", true),
+    ];
+    for (const asset of assets) {
       const source = path.join(process.cwd(), "src/renderer/public",
-        appIconAssetPath(id).replace(/\.png$/, ".icon"));
+        asset.replace(/\.png$/, ".icon"));
       const document = JSON.parse(fs.readFileSync(path.join(source, "icon.json"), "utf8")) as {
         groups: { layers: { "image-name"?: string }[] }[];
       };
       for (const group of document.groups) {
         for (const layer of group.layers) {
           const name = layer["image-name"];
-          if (name) expect(fs.existsSync(path.join(source, "Assets", name)), `${id}: ${name}`).toBe(true);
+          if (name) expect(fs.existsSync(path.join(source, "Assets", name)), `${asset}: ${name}`).toBe(true);
         }
       }
     }
   });
 
-  it("uses a PNG for Default in development", () => {
+  it.each([
+    ["", "mains-staging.png"],
+    ["Dark", "mains-staging-dark.png"],
+  ])("uses the staging PNG for Default in development with the Mac's %j appearance", (style, filename) => {
     mocks.app.isPackaged = false;
+    mocks.systemPreferences.getUserDefault.mockReturnValue(style);
+    applySavedDockIcon();
+    const iconPath = path.join(process.cwd(), "src/renderer/public/icons", filename);
+    expect(fs.existsSync(iconPath)).toBe(true);
+    expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(iconPath);
+    expect(mocks.app.dock.setIcon).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a custom icon choice in development", () => {
+    mocks.app.isPackaged = false;
+    saveIcon("mains-bridge");
     applySavedDockIcon();
     expect(mocks.nativeImage.createFromPath).toHaveBeenCalledWith(
-      path.join(process.cwd(), "src/renderer/public/icons/mains-default.png"),
+      path.join(process.cwd(), "src/renderer/public/icons/bridge.png"),
     );
-    expect(mocks.app.dock.setIcon).toHaveBeenCalledOnce();
+    expect(getSavedDockIcon()).toBe("mains-bridge");
   });
 
   it.each([

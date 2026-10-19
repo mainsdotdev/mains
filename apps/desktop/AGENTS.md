@@ -372,6 +372,13 @@ The four agent UIs share the single `/code` route and are distinguished by a **p
 - To add an icon: drop the component in `components/ui/icons/` and register it in `iconRegistry`
 
 **App Icon Generation** (macOS)
+
+`npm run icons:generate` renders light/dark PNGs from the Icon Composer sources in
+`src/renderer/public/icons/` and regenerates the packaged default PNG/ICNS.
+The development app's Default choice uses `mains-staging.icon`, including its
+real `construction-grid.svg` layer; the packaged app uses `mains-default.icon`.
+Regenerate the PNGs after editing an Icon Composer source.
+
 ```bash
 # From src/renderer/public/ — regenerate iconset from icon.png (must be 1024x1024+)
 sips -z 16 16 icon.png --out icon.iconset/icon_16x16.png

@@ -21,7 +21,13 @@ export function isAppIconId(value: unknown): value is AppIconId {
   return typeof value === "string" && APP_ICON_ID_SET.has(value);
 }
 
-export function appIconAssetPath(id: AppIconId, appearance: AppIconAppearance = "light"): string {
-  const name = APP_ICON_ASSET_NAMES[id];
+export function appIconAssetPath(
+  id: AppIconId,
+  appearance: AppIconAppearance = "light",
+  isDevelopment = false,
+): string {
+  const name = isDevelopment && id === DEFAULT_APP_ICON_ID
+    ? "mains-staging"
+    : APP_ICON_ASSET_NAMES[id];
   return `icons/${name}${appearance === "dark" ? "-dark" : ""}.png`;
 }

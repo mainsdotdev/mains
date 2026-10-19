@@ -65,7 +65,7 @@ export function AppIconPicker() {
         className="relative flex size-14 shrink-0 items-center justify-center rounded-2xl disabled:opacity-100 enabled:hover:opacity-80 focus-visible:ring-2 focus-visible:ring-accent"
       >
         <img
-          src={`./${appIconAssetPath(id)}`}
+          src={`./${appIconAssetPath(id, "light", import.meta.env.DEV)}`}
           alt=""
           draggable={false}
           className="size-12 object-contain"
