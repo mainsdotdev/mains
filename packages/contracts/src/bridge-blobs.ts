@@ -25,6 +25,7 @@ export interface BridgeBlobRef extends BridgeBlobIdentity {
   sourcePath?: string;
 }
 export interface BridgeBlobPresignRequest { blobs: BridgeBlobIdentity[]; op: "put" | "get" }
+/** `exists` is checked for uploads only, so that stored chunks are skipped; downloads always receive false. */
 export interface BridgeBlobChunkUrl { index: number; url: string; exists: boolean }
 export interface BridgeBlobPresignResult { blobs: Array<BridgeBlobIdentity & { chunks: BridgeBlobChunkUrl[] }> }
 export function validateBridgeBlobIdentity(value: unknown): asserts value is BridgeBlobIdentity {

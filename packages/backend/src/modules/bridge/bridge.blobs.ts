@@ -107,7 +107,8 @@ export function createBridgeBlobs(options: BridgeBlobsOptions) {
     if (!response.ok) {
       if (response.status === 403 && (await response.text()).includes("Bridge subscription required")) throw new Error("Bridge subscription required; local files remain queued");
       throw new Error(response.status === 413 ? "Bridge storage quota exceeded; local files remain queued" :
-      response.status === 429 ? "Bridge write rate limit reached; local files remain queued" : `Bridge blob authorization failed (${response.status})`);
+      response.status === 429 ? (op === "get" ? "Bridge download rate limit reached; try again shortly" : "Bridge write rate limit reached; local files remain queued") :
+      `Bridge blob authorization failed (${response.status})`);
     }
     const body = await response.json() as BridgeBlobPresignResult;
     const blob = body.blobs?.[0];

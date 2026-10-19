@@ -66,7 +66,8 @@ export async function handleBlobs(request: Request, env: BlobEnv, quota: {
           .setProtectedHeader({ alg: "HS256", typ: "JWT" }).setAudience(audience).setIssuer(audience)
           .setIssuedAt().setExpirationTime(expires).sign(signingKey(env));
         const signed = new URL("/v1/blobs/chunk", url); signed.searchParams.set("cap", token);
-        chunks.push({ index, url: signed.toString(), exists: !!await env.BLOBS.head(key) });
+        // Only uploads skip stored chunks; a download learns of a missing one from its GET.
+        chunks.push({ index, url: signed.toString(), exists: input.op === "put" && !!await env.BLOBS.head(key) });
       }
       blobs.push({ blobId: blob.blobId, size: blob.size, chunks });
     }

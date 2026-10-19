@@ -173,6 +173,18 @@ describe("Verified sign-in and backend key ceremonies", () => {
       } finally { bSocket.terminate(); }
     } finally { socket.terminate(); }
   });
+  it("leaves compaction to the hub's own schedule outside local development", async () => {
+    const a = await owner(), socket = await socketFor(a.token), requestId = randomUUID();
+    try {
+      const reply = new Promise<ReturnType<typeof parseBridgeServerFrame>>((resolve) => socket.on("message", (data) => {
+        const frame = parseBridgeServerFrame(data.toString());
+        if ("requestId" in frame && frame.requestId === requestId) resolve(frame);
+      }));
+      socket.send(JSON.stringify({ requestId, message: { type: "compact" } }));
+      expect(await reply).toMatchObject({ requestId, error: { code: "forbidden" } });
+      await pullSocket(socket);
+    } finally { socket.terminate(); }
+  });
   it("keeps the old credential and its socket until the replacement is first used", async () => {
     const a = await owner(), socket = await socketFor(a.token);
     let closed: number | null = null; socket.once("close", (code) => { closed = code; });

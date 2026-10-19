@@ -4,6 +4,7 @@ import WebSocket from "ws";
 import type { BridgeClientMessage, BridgeEnvelope, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_IDLE_RETENTION_MS, BRIDGE_MAX_CLOCK_SKEW_MS } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_DELETE_BYTES } from "@mains/contracts/bridge-wire";
+import type { BridgeBlobPresignResult } from "@mains/contracts/bridge-blobs";
 import { startLocalBridgeHub } from "./local-hub.mjs";
 
 let hub: Awaited<ReturnType<typeof startLocalBridgeHub>>;
@@ -145,6 +146,21 @@ describe("Cloudflare SQLite Bridge hub", () => {
     // An existing tombstone is still acknowledged, and upserts keep their own budget.
     expect(await client.rpc({ type: "push", stream: "account", records: [record("first", 1, "delete")] })).toMatchObject({ results: [{ deleted: expect.anything() }] });
     expect(await client.rpc({ type: "push", stream: "account", records: [record("upsert", 3)] })).toMatchObject({ results: [{ seq: 2 }] });
+  });
+  it("budgets download capabilities per backend and checks stored chunks for uploads only", async () => {
+    const account = randomUUID(), token = await hub.token(account, "A"), blob = { blobId: randomBytes(32).toString("base64url"), size: 3 };
+    const presign = async (op: "get" | "put") => {
+      const response = await fetch(new URL("/v1/blobs/presign", hub.url), { method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ op, blobs: [blob] }) });
+      return { status: response.status, chunk: response.ok ? (await response.json() as BridgeBlobPresignResult).blobs[0].chunks[0] : undefined };
+    };
+    const upload = await presign("put");
+    expect((await fetch(upload.chunk!.url, { method: "PUT", body: randomBytes(43) })).status).toBe(204);
+    expect((await presign("put")).chunk).toMatchObject({ exists: true });
+    expect((await presign("get")).chunk).toMatchObject({ exists: false });
+    await hub.quotaSql(account, "UPDATE write_rate SET count=1000000 WHERE backend_id='A:read'");
+    expect((await presign("get")).status).toBe(429);
+    expect((await presign("put")).status).toBe(200);
   });
   it("refuses a record clocked further ahead of the hub than the allowed skew", async () => {
     const account = randomUUID(), client = await connect(account), ahead = Date.now() + BRIDGE_MAX_CLOCK_SKEW_MS + 60_000;

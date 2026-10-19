@@ -165,21 +165,28 @@ export function createBridgeEngine(options: BridgeEngineOptions) {
     parkedCheckedAt = parkedState();
   }
   /** Once per engine, a set-aside record rejoins the parked queue when an update now accepts it,
-   * or when the hub serves a copy that verifies (the earlier one may have been damaged on the way). */
+   * or when the hub serves a copy that verifies (the earlier one may have been damaged on the way,
+   * or kept as its header only). A record the hub no longer serves was superseded and is dropped. */
   async function recheckUnverified() {
     if (unverifiedChecked) return;
-    unverifiedChecked = true;
     const rows = sqlite.prepare("SELECT stream,seq,envelope FROM bridge_parked WHERE reason=? ORDER BY seq LIMIT 100").all(UNVERIFIED_REASON) as { stream: BridgeStream; seq: number; envelope: string }[];
     for (const row of rows) {
       let envelope = JSON.parse(row.envelope);
       if (!openPulledRecord(store, row.stream, envelope).opened) {
         // A refused deleted ACK has no log position (seq 0) to fetch again.
-        const fresh = row.seq > 0 ? (await transport.pull(row.stream, row.seq - 1, 1).catch(() => null))?.records[0] : undefined;
-        if (fresh?.seq !== row.seq || !openPulledRecord(store, row.stream, fresh.envelope).opened) continue;
+        if (row.seq < 1) continue;
+        // Offline: a later pull of this engine checks again.
+        const page = await transport.pull(row.stream, row.seq - 1, 1).catch(() => null);
+        if (!page) return;
+        const fresh = page.records[0];
+        // Compaction keeps every register's latest record and every tombstone.
+        if (fresh?.seq !== row.seq) { sqlite.prepare("DELETE FROM bridge_parked WHERE stream=? AND seq=? AND reason=?").run(row.stream, row.seq, UNVERIFIED_REASON); continue; }
+        if (!openPulledRecord(store, row.stream, fresh.envelope).opened) continue;
         envelope = fresh.envelope;
       }
       sqlite.prepare("UPDATE bridge_parked SET reason=?,envelope=? WHERE stream=? AND seq=?").run(RECHECK_REASON, JSON.stringify(envelope), row.stream, row.seq);
     }
+    unverifiedChecked = true;
   }
   async function pull(stream: BridgeStream, full: boolean, limit: number): Promise<number> {
     validateLimit(limit);

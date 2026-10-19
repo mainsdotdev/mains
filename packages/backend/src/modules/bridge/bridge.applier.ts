@@ -52,6 +52,9 @@ export function verifyEnvelope(store: BridgeStore, envelope: BridgeEnvelope) {
 export const UNVERIFIED_REASON = "unverified";
 /** An unverified record that opens again; the next batch applies it or sets it aside again. */
 export const RECHECK_REASON = "recheck";
+/** A leaked device token can publish unverifiable records at the hub's write rate. A larger one
+ * keeps only its header, since the re-check fetches it again, and the set-aside total is capped. */
+const SET_ASIDE_ENVELOPE_CHARS = 16 * 1024, SET_ASIDE_LIMIT = 1000;
 /** A verified record this replica refuses. Unlike a local failure, retrying the same bytes cannot help. */
 export class BridgeRecordRejected extends Error {}
 /** Constraint and type errors are as deterministic for a record as the checks above. */
@@ -422,8 +425,13 @@ export function applyBridgeBatch(store: BridgeStore, stream: BridgeStream, recor
     };
     // Kept for a later re-check, without its dependencies being retried.
     const setAside = (recordStream: BridgeStream, seq: number, envelope: BridgeEnvelope, reason: string) => {
-      store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)")
-        .run(recordStream, seq, JSON.stringify(envelope), UNVERIFIED_REASON);
+      const kept = !!store.sqlite.prepare("SELECT 1 FROM bridge_parked WHERE stream=? AND seq=?").get(recordStream, seq);
+      if (!kept && (store.sqlite.prepare("SELECT count(*) AS n FROM bridge_parked WHERE reason=?").get(UNVERIFIED_REASON) as { n: number }).n >= SET_ASIDE_LIMIT) {
+        console.warn(`[bridge] Skipped ${recordStream} record ${seq}: ${reason}`); return;
+      }
+      let encoded = JSON.stringify(envelope);
+      if (encoded.length > SET_ASIDE_ENVELOPE_CHARS) encoded = JSON.stringify({ header: envelope.header, body: { nonce: null, payload: "" } });
+      store.sqlite.prepare("INSERT OR REPLACE INTO bridge_parked(stream,seq,envelope,reason) VALUES(?,?,?,?)").run(recordStream, seq, encoded, UNVERIFIED_REASON);
       console.warn(`[bridge] Set aside ${recordStream} record ${seq}: ${reason}`);
     };
     // A verified record can still be one this replica refuses. Only that record is undone and set

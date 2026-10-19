@@ -27,7 +27,7 @@ describe("Private R2 blob capabilities", () => {
     expect((await fetch(signed.chunks[0].url, { method: "PUT", body: bytes })).status).toBe(204);
     expect((await fetch(signed.chunks[0].url)).status).toBe(403); // A PUT capability cannot read.
     expect((await fetch(signed.chunks[0].url, { method: "PUT", body: randomBytes(bytes.length) })).status).toBe(204);
-    const read = (await presign(account, ref, "get")).chunks[0]; expect(read.exists).toBe(true);
+    const read = (await presign(account, ref, "get")).chunks[0]; expect(read.exists).toBe(false); // Only uploads check stored chunks.
     expect(Buffer.from(await (await fetch(read.url)).arrayBuffer())).toEqual(bytes);
     expect((await fetch(read.url, { method: "PUT", body: bytes })).status).toBe(403);
     const other = (await presign(randomUUID(), ref, "get")).chunks[0]; expect(other.exists).toBe(false); expect((await fetch(other.url)).status).toBe(404);

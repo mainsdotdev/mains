@@ -712,6 +712,12 @@ them once more. They still outrank every clock the hub accepted, as they already
 did on that device, and a clock that ran ahead (or still does) costs one refused
 round trip instead of a lockout until real time catches up.
 
+Download capabilities are budgeted too: each backend may request **1200 per
+minute** in its own bucket (HTTP 429). Honest clients cache what they download,
+so the budget only bounds a looping or leaked client. Only uploads check which
+chunks are already stored (an R2 HEAD per chunk); a download learns of a missing
+chunk from its GET.
+
 Record, stored-chunk and reserved-byte totals are persistent SQLite counters,
 updated by triggers in the same transaction as their source rows. Existing
 Durable Objects initialize these totals and indexes once; hibernation/restart
@@ -978,7 +984,8 @@ record is capped at 1 MiB, below the Durable Object SQL row limit; frames are
 capped at 16 MiB. Oversized records fail before sending and stay in the outbox.
 Compaction keeps the latest ciphertext per register and every whole delete envelope;
 deleting a run closes its stream. A persisted alarm schedules compaction after
-new writes. The `compact` RPC also makes local maintenance/tests deterministic.
+new writes. Local development and tests may also run it on demand through the
+`compact` RPC; staging and production refuse it (`forbidden`).
 An indexed, durable `compaction_jobs` queue tracks superseded registers, closed
 runs and mirror-retention deadlines. Each pass discovers/removes at most 128
 source rows and handles at most 16 jobs; remaining due work resumes on an alarm
@@ -1007,9 +1014,11 @@ ignored, and the cursor moves on. A record that authenticates but that this
 replica refuses (an ownership collision, a rewritten immutable revision, a
 SQLite constraint) is undone and set aside the same way; a local failure, such
 as recovery or I/O, still rolls back the whole batch to be retried. Each engine
-re-checks up to 100 such records once, fetching that sequence again from the
-hub, so a newer client version or an undamaged copy still applies. Settings ›
-Bridge reports how many were skipped.
+re-checks up to 100 such records once the hub answers, fetching that sequence
+again, so a newer client version or an undamaged copy still applies; one the hub
+no longer serves was superseded and is dropped. Since a leaked token can publish
+such records at the write rate, one larger than 16 KiB keeps only its header and
+at most 1000 are kept. Settings › Bridge reports how many were skipped.
 
 The same credential can make the hub answer every later write of a row with a
 tombstone. A write answered with a deletion leaves the outbox whether that

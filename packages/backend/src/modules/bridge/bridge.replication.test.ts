@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -171,6 +172,51 @@ describe("Bridge transfer between independent SQLite databases", () => {
     expect(restarted.unverified()).toBe(1);
     // Its clock was skipped while it could not be opened; applying it advances ours.
     expect(b.sqlite.prepare("SELECT physical_ms FROM bridge_clock WHERE id=1").get()).toEqual({ physical_ms: later.envelope.header.hlc.physicalMs });
+  });
+  it("keeps only the header of a large record it cannot verify, caps how many it keeps, and drops one the hub no longer serves", async () => {
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), b = await node(hub, "B");
+    collection(a, "c"); await drain(a);
+    const genuine = (await hub.inspect("account")).find((record) => bodyOf(record.envelope).table === "collections")!.envelope;
+    const forge = (counter: number, bytes: number) => {
+      const forged = structuredClone(genuine);
+      forged.header.rowKey = "x".repeat(22); forged.header.registerKey = "y".repeat(22); forged.header.hlc = { ...forged.header.hlc, counter };
+      forged.body.payload = randomBytes(bytes).toString("base64url"); return forged;
+    };
+    const kept = () => b.sqlite.prepare("SELECT seq,length(envelope) AS chars FROM bridge_parked WHERE reason='unverified' AND stream='account' ORDER BY seq").all() as { seq: number; chars: number }[];
+    await hub.connect("A").push("account", [forge(1, 64 * 1024)]); await b.engine.pull();
+    const [large] = kept(); expect(kept()).toHaveLength(1); expect(large.chars).toBeLessThan(1024);
+    // A replacement supersedes it, so compaction removes it and the next engine drops it.
+    await hub.connect("A").push("account", [forge(2, 64)]); await hub.compact(); await b.engine.pull();
+    expect(kept()).toHaveLength(2);
+    await b.engine.stop();
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport: b.transport, experimentalAtlas: true });
+    cleanups.push(() => void restarted.stop());
+    await restarted.pull();
+    expect(kept().map((entry) => entry.seq)).toEqual([large.seq + 1]);
+    // At the cap a further one is skipped rather than stored.
+    const fill = b.sqlite.prepare("INSERT INTO bridge_parked(stream,seq,envelope,reason) VALUES('run:filler',?,'{}','unverified')");
+    b.sqlite.transaction(() => { for (let seq = 1; seq < 1000; seq++) fill.run(seq); })();
+    await hub.connect("A").push("account", [forge(3, 64)]); await restarted.pull();
+    expect(restarted.unverified()).toBe(1000); expect(kept().some((entry) => entry.seq === large.seq + 2)).toBe(false);
+  });
+  it("re-checks a set-aside record once the hub answers, even when the engine starts offline", async () => {
+    let offline = false;
+    const hub = await createBridgeTestHub(), a = await node(hub, "A"), raw = hub.connect("B");
+    const transport: BridgeTransport = { ...raw, pull: (...args) => offline ? Promise.reject(new Error("Bridge connection closed")) : raw.pull(...args) };
+    const b = await node(hub, "B", { transport });
+    space(a, "damaged"); await drain(a);
+    const record = (await hub.inspect("account")).find((entry) => { const body = bodyOf(entry.envelope); return body.table === "spaces" && body.pk === "damaged"; })!;
+    // Its copy was damaged on the way, so it was set aside past the cursor.
+    const damaged = structuredClone(record.envelope), payload = damaged.body.payload;
+    damaged.body.payload = (payload[0] === "A" ? "B" : "A") + payload.slice(1);
+    b.sqlite.prepare("INSERT INTO bridge_parked(stream,seq,envelope,reason) VALUES('account',?,?,'unverified')").run(record.seq, JSON.stringify(damaged));
+    b.sqlite.prepare("UPDATE bridge_cursors SET seq=? WHERE stream='account'").run(record.seq);
+    await b.engine.stop(); offline = true;
+    const restarted = createBridgeEngine({ sqlite: b.sqlite, backendId: "B", recordKey: key, codec: bridgeTestCodec, transport, experimentalAtlas: true });
+    cleanups.push(() => void restarted.stop());
+    await expect(restarted.pull()).rejects.toThrow(/connection/);
+    offline = false; await restarted.pull();
+    expect(row(b, "spaces", "damaged")?.name).toBe("damaged"); expect(restarted.unverified()).toBe(0);
   });
   it("sets aside a verified record this replica refuses, keeps applying the stream, and re-checks it once per engine", async () => {
     let refuse = true;

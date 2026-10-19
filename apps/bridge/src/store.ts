@@ -8,6 +8,9 @@ type LogRow = { seq: number; envelope: string };
 /** Tombstones are permanent and stay available outside quota and subscription, so they get
  * their own per-backend budget: generous for bulk cleanup, but no longer unlimited. */
 export const BRIDGE_DELETES_PER_MINUTE = 600;
+/** Download capabilities protect blobs from collection and are free for honest clients, which
+ * cache what they download; the budget bounds a looping or leaked client instead. */
+export const BRIDGE_READS_PER_MINUTE = 1200;
 const order = (a: BridgeEnvelope, b: BridgeEnvelope) => a.header.hlc.physicalMs - b.header.hlc.physicalMs || a.header.hlc.counter - b.header.hlc.counter ||
   (a.header.origin < b.header.origin ? -1 : a.header.origin > b.header.origin ? 1 : 0);
 

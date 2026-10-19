@@ -1,11 +1,11 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type { BridgeRpcRequest, BridgeRpcResponse, BridgeServerMessage, BridgeStream } from "@mains/contracts/bridge-protocol";
 import { BRIDGE_MAX_FRAME_BYTES, parseBridgeRpcRequest } from "@mains/contracts/bridge-wire";
-import { authenticate, createBridgeSocketAuth, type BridgeIdentity, type DevAuthEnv } from "./auth";
+import { authenticate, bridgeDevelopmentEnabled, createBridgeSocketAuth, type BridgeIdentity, type DevAuthEnv } from "./auth";
 import { handleSignIn } from "./sign-in";
 import { handleDevices } from "./devices";
 import type { BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
-import { createHubStore } from "./store";
+import { BRIDGE_READS_PER_MINUTE, createHubStore } from "./store";
 import { handleBlobs, type BlobEnv } from "./blobs";
 import { createBlobQuota, BridgeQuotaError, type BlobReservation, type QuotaEnv } from "./quota";
 import { createBridgeSubscriptions } from "./subscriptions";
@@ -168,7 +168,11 @@ export class AccountHub extends DurableObject<Env> {
   }
   async protectBlobReads(identity: BridgeIdentity, blobs: BridgeBlobIdentity[], expires: number) {
     return this.usage.run("protectRead", () => this.ctx.blockConcurrencyWhile(async () => {
-      try { await this.quota.protectReads(identity, blobs, expires); return { status: 200, error: null }; }
+      try {
+        // Backend ids never contain ':', so this bucket cannot collide with the write ones.
+        if (!this.store.takeWrite(`${identity.backendId}:read`, BRIDGE_READS_PER_MINUTE)) return { status: 429, error: "Bridge download rate limit reached" };
+        await this.quota.protectReads(identity, blobs, expires); return { status: 200, error: null };
+      }
       catch (error) { if (error instanceof BridgeQuotaError) return { status: error.status, error: error.message }; throw error; }
     }));
   }
@@ -201,6 +205,10 @@ export class AccountHub extends DurableObject<Env> {
     try { request = parseBridgeRpcRequest(data); }
     catch { socket.close(1008, "Invalid Bridge request"); return; }
     const { message, requestId } = request;
+    // Maintenance runs on its own alarms; only local development and tests run it on demand.
+    if (message.type === "compact" && !bridgeDevelopmentEnabled(this.env)) {
+      this.send(socket, { requestId, error: { code: "forbidden", message: "Bridge compaction runs on its own schedule" } }); return;
+    }
     try {
       await this.usage.run(message.type, async () => {
         let response: BridgeServerMessage;
