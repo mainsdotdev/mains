@@ -76,9 +76,12 @@ export async function startLocalBridgeHub(settings = {}) {
       ON CONFLICT(account_id,feature) DO UPDATE SET billing_interval=excluded.billing_interval,status='active',starts_at=excluded.starts_at,expires_at=excluded.expires_at,updated_at=excluded.updated_at`)
       .bind(accountId, interval, Date.now() - 1000, expiresAt, Date.now()).run();
   }
+  /** The hub refuses an `iat` later than its own, real clock, and fake timers can run this process's clock
+   * ahead of it; `performance` is never faked here. */
+  const issuedAt = () => Math.floor(Math.min(Date.now(), performance.timeOrigin + performance.now()) / 1000);
   /** @param {string} accountId @param {string} backendId @param {string | number} expiresIn */
   const mint = (accountId, backendId, expiresIn) => new SignJWT({ accountId, signingPublicKey: fixturePublicKey(accountId, backendId) }).setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setSubject(backendId).setIssuer("mains-bridge-dev").setAudience("mains-bridge").setIssuedAt().setExpirationTime(expiresIn).sign(new TextEncoder().encode(secret));
+    .setSubject(backendId).setIssuer("mains-bridge-dev").setAudience("mains-bridge").setIssuedAt(issuedAt()).setExpirationTime(expiresIn).sign(new TextEncoder().encode(secret));
   /** One admission at a time per account, so concurrent fixtures never race the log's compare-and-swap. */
   const admissions = new Map();
   /** What this process last saw of each account's log; a known member needs no request (tokens are minted often).

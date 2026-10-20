@@ -394,10 +394,11 @@ describe.skipIf(!networkMode)("Bridge encrypted files through real R2 and two SQ
     await expect(b.blobs.resolve(ref)).rejects.toThrow("interrupted"); vi.restoreAllMocks();
     let resumedGets = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => { if (String(url).includes("/chunk?") && !init?.method) resumedGets++; return real(url, init); });
-    expect(await fs.readFile(await b.blobs.resolve(ref))).toEqual(bytes); expect(resumedGets).toBe(1); vi.restoreAllMocks();
+    // Buffer.equals: a structural toEqual walks all 4 MiB byte by byte, which takes seconds.
+    expect((await fs.readFile(await b.blobs.resolve(ref))).equals(bytes)).toBe(true); expect(resumedGets).toBe(1); vi.restoreAllMocks();
     const restarted = await files(account, "B", { dataDir: b.dataDir });
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
-    expect(await fs.readFile(await restarted.blobs.resolve(ref))).toEqual(bytes);
+    expect((await fs.readFile(await restarted.blobs.resolve(ref))).equals(bytes)).toBe(true);
   });
   it("freezes selected turn outputs before the original changes and releases the upload snapshot after ACK", async () => {
     const account = randomUUID(), a = await node(account, "A"), b = await node(account, "B");
