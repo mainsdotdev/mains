@@ -1,5 +1,4 @@
 import { Fragment, useId, useRef, useState } from "react";
-import { normalizeBridgeVerificationCode, type BridgeApprovalRequest } from "@mains/contracts/bridge-auth";
 import type { ServiceResponse } from "@mains/contracts/service-response";
 import {
   Button,
@@ -30,6 +29,7 @@ import { BridgeSubscriptionSection } from "./bridge-subscription";
 import { BridgeDeviceRow } from "./bridge-device-row";
 import { BridgeSignInSection } from "./bridge-sign-in";
 import { BridgeKeyVerification } from "./bridge-key-verification";
+import { BridgeDeviceSetup } from "./bridge-device-setup";
 import { bridgeConnectionDescription } from "../lib/bridge-connection";
 
 async function value<T>(promise: Promise<ServiceResponse<T>>): Promise<T> {
@@ -80,80 +80,6 @@ function CheckboxField({
 function storageSize(bytes: number) {
   const unit = bytes >= 1024 ** 3 ? "GiB" : "MiB";
   return `${(bytes / (unit === "GiB" ? 1024 ** 3 : 1024 ** 2)).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}`;
-}
-
-function Approval({
-  request,
-  busy,
-  act,
-}: {
-  request: BridgeApprovalRequest;
-  busy: boolean;
-  act: (action: () => Promise<unknown>) => Promise<void>;
-}) {
-  const [input, setInput] = useState("");
-  let code: string | null = null;
-  try { code = normalizeBridgeVerificationCode(input); } catch { /* Wait for a complete code. */ }
-  // The expected code is never displayed: typing it from the new device's
-  // screen is the comparison. The backend checks the typed code again.
-  const matches = code !== null && code === request.code;
-  const approve = () => {
-    if (code && matches && !busy) void act(() => value(appApi.bridge.approveBackend({ ...request, code })));
-  };
-  return (
-    <div className="space-y-3 py-4">
-      <div className="space-y-1">
-        <Text>{request.label}</Text>
-        <Muted size="xs">
-          {request.platform} · Expires{" "}
-          {new Date(request.expiresAt).toLocaleTimeString()}
-        </Muted>
-      </div>
-      <form
-        className="max-w-xl space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          approve();
-        }}
-      >
-        <Muted className="max-w-2xl">
-          Enter the code shown on the new device to approve it.
-        </Muted>
-        <Input
-          aria-label="Code shown on the new device"
-          autoComplete="off"
-          autoCapitalize="characters"
-          spellCheck={false}
-          placeholder="Enter the code from the new device"
-          value={input}
-          disabled={busy}
-          onChange={(event) => setInput(event.target.value)}
-        />
-        {code && !matches && (
-          <Text role="alert" tone="danger">
-            This code does not match. Check it again, and decline the request
-            if the new device shows a different code.
-          </Text>
-        )}
-      </form>
-      <div className="flex flex-wrap gap-2">
-        <Button variant="primary" disabled={busy || !matches} onClick={approve}>
-          Approve device
-        </Button>
-        <Button
-          variant="secondary"
-          disabled={busy}
-          onClick={() =>
-            void act(() =>
-              value(appApi.bridge.rejectBackend(request.requestId)),
-            )
-          }
-        >
-          Decline
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 export default function BridgeSettings() {
@@ -280,9 +206,10 @@ export default function BridgeSettings() {
       {status?.state === "needs-approval" && (
         <SettingsSection title={`Approve ${deviceLabel}`}>
           <div className="space-y-4 py-4">
+            <Muted size="xs">Step 1 of 2</Muted>
             <Text className="max-w-2xl">
-              On an approved device, open Settings › Bridge and compare this
-              code before approving {status.label}.
+              On an approved device, open Settings › Bridge › Device setup.
+              Enter this code there to approve {status.label}.
             </Text>
             {status.verificationCode && (
               <div className="flex w-fit items-center gap-3 rounded-xl glass-input px-3 py-2">
@@ -297,7 +224,7 @@ export default function BridgeSettings() {
               </div>
             )}
             <Muted className="max-w-2xl">
-              After approval, enter the join code shown on the approving device
+              After approval, enter the join code shown in Step 2 on that device
               to start sync. You can also unlock your account with its recovery code.
             </Muted>
             <form
@@ -322,7 +249,7 @@ export default function BridgeSettings() {
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="submit"
-                  variant="primary"
+                  variant="secondary"
                   disabled={busy || !recoveryInput.trim()}
                 >
                   Use recovery code
@@ -375,20 +302,6 @@ export default function BridgeSettings() {
                 {status.logoutPending ? "Finish disconnecting" : "Disconnect"}
               </Button>
             </SettingsRow>
-            {status.joinCodes.map((join) => (
-              <SettingsRow
-                key={`${status.accountId}:${join.backendId}`}
-                title={`Join code for ${join.label}`}
-                description="Enter this on that device to verify it before its sync starts."
-              >
-                <div className="flex items-center gap-3">
-                  <Text as="code" className="whitespace-nowrap font-mono tracking-wider select-all">
-                    {join.code}
-                  </Text>
-                  <CopyButton text={join.code} tooltip="Copy join code" copiedTooltip="Copied!" />
-                </div>
-              </SettingsRow>
-            ))}
             {sync?.error && (
               <Text role="alert" tone="danger" className="pb-3">
                 {sync.error}
@@ -453,54 +366,34 @@ export default function BridgeSettings() {
               </SettingsRow>
             </SettingsSection>
           )}
-          {status.approvals.length > 0 && (
-            <SettingsSection title="Device approval requests">
-              {status.approvals.map((request) => (
-                <Approval
-                  key={`${status.backendId}:${status.accountId}:${request.requestId}:${request.publicKey}:${request.signingPublicKey}:${request.code}`}
-                  request={request}
-                  busy={busy}
-                  act={act}
-                />
-              ))}
-            </SettingsSection>
-          )}
+          <BridgeDeviceSetup status={status} busy={busy} act={act} />
           <SettingsSection title="Recovery code">
             <div className="space-y-4 py-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-6">
-                <div className="min-w-0 flex-1 space-y-3">
-                  <Muted>
-                    Save this code in your password manager. You’ll need it if you
-                    lose access to every approved device.
-                  </Muted>
-                  {!visibleRecoveryCode && status.recoveryCodeAvailable && (
-                    <Button
-                      variant="primary"
-                      disabled={busy}
-                      className="whitespace-nowrap"
-                      onClick={() =>
-                        void act(async () =>
-                          showRecoveryCode(
-                            await value<string | null>(
-                              appApi.bridge.takeRecoveryCode(),
-                            ),
-                          ),
-                        )
-                      }
-                    >
-                      Show setup code
-                    </Button>
-                  )}
-                </div>
+                <Muted className="min-w-0 flex-1">
+                  Save this code in your password manager. You’ll need it if you
+                  lose access to every approved device.
+                </Muted>
                 <Button
-                  variant="secondary"
+                  variant={!visibleRecoveryCode && status.recoveryCodeAvailable ? "primary" : "secondary"}
                   disabled={busy}
                   className="self-end whitespace-nowrap md:w-48 md:shrink-0 md:self-auto"
-                  onClick={visibleRecoveryCode
-                    ? () => setRecoveryCode(null)
-                    : () => setConfirm({ kind: "recovery" })}
+                  onClick={() => {
+                    if (visibleRecoveryCode) setRecoveryCode(null);
+                    else if (status.recoveryCodeAvailable)
+                      void act(async () =>
+                        showRecoveryCode(
+                          await value<string | null>(appApi.bridge.takeRecoveryCode()),
+                        ),
+                      );
+                    else setConfirm({ kind: "recovery" });
+                  }}
                 >
-                  {visibleRecoveryCode ? "I saved it — hide code" : "New recovery code"}
+                  {visibleRecoveryCode
+                    ? "I saved it — hide code"
+                    : status.recoveryCodeAvailable
+                      ? "Show setup code"
+                      : "New recovery code"}
                 </Button>
               </div>
               {visibleRecoveryCode && (
@@ -526,7 +419,7 @@ export default function BridgeSettings() {
           </SettingsSection>
           <SettingsSection title="Devices">
             <ul aria-label="Bridge devices" className="divide-y divide-primary-200/60 dark:divide-primary-800/20">
-              {status.backends.map((backend) => (
+              {status.backends.filter((backend) => backend.status !== "revoked").map((backend) => (
                 <BridgeDeviceRow
                   key={backend.backendId}
                   device={backend}

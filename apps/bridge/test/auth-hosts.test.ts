@@ -8,6 +8,7 @@ import { CHANNELS } from "@mains/contracts/channels";
 import { bridgeBase64, bridgeBytes, type BridgeAuthStatus } from "@mains/contracts/bridge-auth";
 import { applyBridgeMembershipEntry } from "@mains/contracts/bridge-membership";
 import type { AtlasPage } from "@mains/contracts/atlas";
+import type { BridgeStatus } from "@mains/contracts/bridge";
 import { startLocalBackends, waitFor } from "./local-backends";
 import { approve, signIn } from "./auth-helpers";
 import { bridgeAccountKeyCommitment, generateBridgeAccountKey, generateBridgeDeviceKeyPair, generateBridgeSigningKeyPair, sealBridgeAccountKey } from "../../../packages/backend/src/modules/bridge/bridge.keys";
@@ -32,6 +33,8 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
     try {
       const trusted = await signIn(fixture, a); await signIn(fixture, b); await approve(fixture);
       await a.stop(); // Edit only the stopped disposable profile, never a live database or user profile.
+      // Keep peer presence from retrying the one-shot renewal fault before it is inspected.
+      await b.stop();
       const storage = createNodeBackendRuntime({ dataDir: a.dir, appVersion: "test" }).secretStorage;
       const vault = createBridgeIdentityStorage(a.dir, storage), before = (await vault.read())!;
       await vault.write({ ...before, expiresAt: Date.now() + 86400_000 });
@@ -55,6 +58,7 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
         (value) => value?.next_token_hash === null, "committed handover");
       expect(renewed!.accountKey).toBe(before.accountKey);
       expect(await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).toMatchObject({ state: "ready", error: null });
+      await b.start();
       const page = await a.client.call<AtlasPage>(CHANNELS.atlas.createPage, { accountId: "default", title: "After token handover", markdown: "No reapproval or new key" });
       await a.client.call(CHANNELS.bridge.syncNow);
       await waitFor(() => b.client.call<AtlasPage | null>(CHANNELS.atlas.get, { accountId: "default", id: page.item.id }),
@@ -155,6 +159,8 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       expect((await b.client.call(CHANNELS.bridge.getStatus)).enabled).toBe(false);
       expect(await cli(b, ["confirm", "--code", joinCode])).toContain("Device verified");
       await waitFor(() => b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth), (value) => value.state === "ready", "approved B");
+      await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
+        (value) => !value.joinCodes.some((entry) => entry.backendId === b.backendId), "completed join code removed on A", 5000);
       await waitFor(() => b.client.call<AtlasPage | null>(CHANNELS.atlas.get, { accountId: "default", id: page.item.id }), (value) => value?.revision.id === page.revision.id, "decrypted Page on B");
       const file = join(b.dir, "bridge", "identity.json"), stored = await readFile(file, "utf8");
       expect(stored).not.toContain("b7_"); expect(stored).not.toContain(recovery); expect(stored).not.toContain("privateKey");
@@ -162,12 +168,81 @@ describe.skipIf(process.env.MAINS_BRIDGE_HOST_TESTS !== "1")("Bridge identity th
       await b.stop(); await b.start();
       expect((await b.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).state).toBe("ready");
       expect((await b.client.call<AtlasPage>(CHANNELS.atlas.get, { accountId: "default", id: page.item.id })).revision.markdown).toContain("Private content");
+      await a.stop(); await a.start();
+      expect((await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).joinCodes).toEqual([]);
       await a.client.call(CHANNELS.bridge.revokeBackend, b.backendId);
       await waitFor(() => b.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus), (value) => value.state === "revoked", "revocation notification");
       expect(await b.client.invoke(CHANNELS.bridge.syncNow)).toMatchObject({ success: false });
     } finally { await fixture.dispose(); }
   }, 120_000);
 
+  it("updates a peer's self-disconnect without revoking a temporarily offline device", async () => {
+    const fixture = await startLocalBackends({ auth: true }); const { a, b } = fixture;
+    try {
+      await signIn(fixture, a); await signIn(fixture, b); await approve(fixture);
+      await waitFor(() => a.client.call<BridgeStatus>(CHANNELS.bridge.getStatus),
+        (value) => value.backends.some((entry) => entry.backendId === b.backendId && entry.online === true), "B online on A");
+      await b.stop();
+      await waitFor(() => a.client.call<BridgeStatus>(CHANNELS.bridge.getStatus),
+        (value) => value.backends.some((entry) => entry.backendId === b.backendId && entry.online === false), "B offline on A");
+      expect((await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth)).backends.find((entry) => entry.backendId === b.backendId)?.status).toBe("approved");
+      await b.start();
+      await waitFor(() => a.client.call<BridgeStatus>(CHANNELS.bridge.getStatus),
+        (value) => value.backends.some((entry) => entry.backendId === b.backendId && entry.online === true), "B reconnected on A");
+      await b.client.call(CHANNELS.bridge.signOut);
+      const updated = await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
+        (value) => value.backends.some((entry) => entry.backendId === b.backendId && entry.status === "revoked"),
+        "self-disconnect reflected on A without manual refresh", 5000);
+      expect(updated.state).toBe("ready");
+      expect(updated.joinCodes.some((entry) => entry.backendId === b.backendId)).toBe(false);
+      expect((await b.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).state).toBe("signed-out");
+    } finally { await fixture.dispose(); }
+  }, 120_000);
+  it("keeps a new join code visible when the same backend enrolls again after an earlier connection", async () => {
+    const fixture = await startLocalBackends({ auth: true }); const { a, b } = fixture;
+    try {
+      await signIn(fixture, a); await signIn(fixture, b); await approve(fixture);
+      await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
+        (value) => value.joinCodes.length === 0, "first verification completed");
+      await b.client.call(CHANNELS.bridge.signOut);
+      expect((await signIn(fixture, b)).state).toBe("needs-approval");
+      const pending = await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
+        (value) => value.approvals.some((entry) => entry.backendId === b.backendId), "new approval request");
+      await a.client.call(CHANNELS.bridge.approveBackend, pending.approvals.find((entry) => entry.backendId === b.backendId));
+      const join = (await a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).joinCodes.find((entry) => entry.backendId === b.backendId);
+      expect(join?.code).toBeTruthy();
+      await waitFor(() => b.client.call<BridgeAuthStatus>(CHANNELS.bridge.refreshAuth),
+        (value) => value.state === "needs-verification", "new key awaiting verification");
+      await b.client.call(CHANNELS.bridge.confirmAccountKey, join!.code);
+      await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
+        (value) => value.joinCodes.length === 0, "new verification completed");
+    } finally { await fixture.dispose(); }
+  }, 120_000);
+  it("clears the approval request on online A when B joins with a recovery code", async () => {
+    const fixture = await startLocalBackends({ auth: true }); const { a, b } = fixture;
+    try {
+      expect((await signIn(fixture, a)).state).toBe("ready");
+      const recovery = await a.client.call<string>(CHANNELS.bridge.takeRecoveryCode);
+      expect(recovery).toBeTruthy();
+      expect((await signIn(fixture, b)).state).toBe("needs-approval");
+      const pending = await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
+        (value) => value.approvals.some((entry) => entry.backendId === b.backendId), "approval request on A");
+      expect(pending.backends.find((entry) => entry.backendId === b.backendId)?.status).toBe("pending");
+      await b.client.call(CHANNELS.bridge.enterRecoveryCode, recovery);
+      expect((await b.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus)).state).toBe("ready");
+      const db = await fixture.hub.database();
+      expect(await db.prepare(`SELECT b.status AS backend_status,r.status AS approval_status FROM bridge_backends b
+        JOIN bridge_approvals r ON r.account_id=b.account_id AND r.backend_id=b.backend_id
+        WHERE b.account_id=? AND b.backend_id=?`).bind(pending.accountId, b.backendId).first())
+        .toEqual({ backend_status: "approved", approval_status: "approved" });
+      const updated = await waitFor(() => a.client.call<BridgeAuthStatus>(CHANNELS.bridge.getAuthStatus),
+        (value) => !value.approvals.some((entry) => entry.backendId === b.backendId)
+          && value.backends.some((entry) => entry.backendId === b.backendId && entry.status === "approved"),
+        "recovery completion on A without manually refreshing or declining", 5000);
+      expect(updated.state).toBe("ready");
+      expect(updated.error).toBeNull();
+    } finally { await fixture.dispose(); }
+  }, 120_000);
   it("joins B with the recovery code while A is offline and rejects a wrong code", async () => {
     const fixture = await startLocalBackends({ auth: true }); const { a, b } = fixture;
     try {

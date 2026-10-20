@@ -36,7 +36,9 @@ describe("Resend authentication mail delivery", () => {
     // The branded HTML carries the same link, escaped, on its button and as visible text.
     const href = message.url.replace(/&/g, "&amp;");
     expect(body.html.split(`href="${href}"`)).toHaveLength(3);
-    expect(body.html).toContain(`>${href}</a>`);
+    // People read a short link with the real host; the href carries the one-time token.
+    expect(body.html).toContain(">bridge.example.com/api/auth/verify\u2026</a>");
+    expect(body.html).not.toContain(`>${href}</a>`);
     for (const part of [">Mains</p>", ">Bridge</p>", 'alt="Mains"', `expires in ${expiry}`, "prefers-color-scheme: dark",
       'href="https://docs.mains.dev"', 'href="https://mains.dev/changelog"', 'href="https://mains.dev/support"']) expect(body.html).toContain(part);
     expectSelfContained(body.html);

@@ -122,6 +122,13 @@ function content(message: BridgeMail): Content {
   };
 }
 
+/** The link as people read it: host and path, with "…" for the one-time query it carries. The href keeps
+ * the whole link, and showing its real host keeps the address checkable. */
+function shortLink(url: string): string {
+  const parsed = new URL(url), path = parsed.pathname === "/" ? "" : parsed.pathname;
+  return `${parsed.host}${path}${parsed.search || parsed.hash ? "\u2026" : ""}`;
+}
+
 function html(value: Content): string {
   const url = escape(value.action.url);
   return `<!doctype html>
@@ -149,7 +156,7 @@ function html(value: Content): string {
 ${value.body ?? ""}<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px"><tr><td style="border-radius:12px;background:${color.action}">
 <a href="${url}" class="action" style="display:inline-block;padding:12px 20px;border-radius:12px;background:${color.action};font:500 14px/20px ${font};color:${color.onAction};text-decoration:none">${escape(value.action.label)}</a>
 </td></tr></table>
-<p style="margin:0 0 24px;font-size:12px;color:${color.muted}" class="muted">Or open this link: <a href="${url}" class="link" style="color:${color.action};word-break:break-all">${url}</a></p>
+<p style="margin:0 0 24px;font-size:12px;color:${color.muted}" class="muted">Or open this link: <a href="${url}" class="link" style="color:${color.action};word-break:break-all">${escape(shortLink(value.action.url))}</a></p>
 <p style="margin:0;padding-top:20px;border-top:1px solid ${color.rim};font-size:12px;color:${color.muted}" class="muted rule">${escape(value.note)}</p>
 </td></tr></table>
 <p style="margin:28px 0 8px;font:13px/1.5 ${font};color:${color.muted}" class="muted">${footerLinks

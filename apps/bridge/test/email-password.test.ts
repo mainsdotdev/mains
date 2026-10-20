@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { Script } from "node:vm";
 import { BRIDGE_AUTH_CLIENT_ID } from "@mains/contracts/bridge-auth";
@@ -51,9 +51,8 @@ describe("Email/password authentication in the real local Worker", () => {
     await hub.deliveredMail(user.email, "verify-email");
     const failed = await post("sign-in/email", { email: user.email, password });
     expect(failed.status).toBe(403); expect(cookies(failed)).not.toContain("session_token");
-    // Only sign-up sends verification mail; a password attempt never sends another.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(hub.mail.filter((mail) => mail.to === user.email)).toHaveLength(1);
+    // A password attempt before verification sends the link again.
+    await vi.waitFor(() => expect(hub.mail.filter((mail) => mail.to === user.email && mail.kind === "verify-email")).toHaveLength(2));
     const db = await hub.database();
     const credential = await db.prepare("SELECT password FROM account WHERE userId=? AND providerId='credential'").bind(user.id).first<{ password: string }>();
     expect(credential?.password).toBeTruthy(); expect(credential!.password).not.toContain(password);

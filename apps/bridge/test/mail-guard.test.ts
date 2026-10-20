@@ -18,22 +18,12 @@ function link(hub: Hub, email: string) {
 }
 const sent = (hub: Hub, email: string) => hub.mail.filter((mail) => mail.to === email).length;
 async function sql(hub: Hub, statement: { sql: string; params: (string | number)[] }) { await (await hub.database()).prepare(statement.sql).bind(...statement.params).run(); }
-async function user(hub: Hub, email: string) {
-  const id = randomUUID();
-  await (await hub.database()).prepare("INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES(?,?,?,1,?,?)").bind(id, "Owner", email, Date.now(), Date.now()).run();
-  return id;
-}
 
-it("emails only addresses that can use Bridge, and answers every address alike", async () => guarded(async (hub) => {
-  const stranger = address(), invited = address(), revoked = address(), owner = address(), subscriber = address();
-  await sql(hub, bridgeBetaInvite(invited)); await sql(hub, bridgeBetaInvite(revoked)); await sql(hub, bridgeBetaRevoke(revoked));
-  // A Bridge account keeps recovery mail after its invitation ends; a paid entitlement needs no invitation.
-  const ownerId = await user(hub, owner);
-  await (await hub.database()).prepare("INSERT INTO bridge_accounts(account_id,initializer_backend_id,initializer_token_hash,recovery_wrap,recovery_public_key,created_at) VALUES(?,?,?,?,?,?)")
-    .bind(ownerId, "initializer", "token-hash", "opaque-wrap", "opaque-key", Date.now()).run();
-  await hub.grantSubscription(await user(hub, subscriber), "monthly");
-  for (const email of [stranger, invited, revoked, owner, subscriber]) expect((await link(hub, email)).status).toBe(200);
-  expect([stranger, invited, revoked, owner, subscriber].map((email) => sent(hub, email))).toEqual([0, 1, 0, 1, 1]);
+it("emails any address, invited or not: Bridge access is gated after sign-in", async () => guarded(async (hub) => {
+  const stranger = address(), revoked = address();
+  await sql(hub, bridgeBetaInvite(revoked)); await sql(hub, bridgeBetaRevoke(revoked));
+  for (const email of [stranger, revoked]) expect((await link(hub, email)).status).toBe(200);
+  expect([stranger, revoked].map((email) => sent(hub, email))).toEqual([1, 1]);
 }));
 
 it("sends an address at most three emails an hour, without a different answer", async () => guarded(async (hub) => {

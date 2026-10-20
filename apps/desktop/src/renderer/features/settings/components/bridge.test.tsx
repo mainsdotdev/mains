@@ -25,7 +25,7 @@ beforeEach(() => {
   fixture.take.mockResolvedValue({ success: true, data: "AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH" });
   fixture.regenerate.mockResolvedValue({ success: true, data: "JJJJ-KKKK-LLLL-MMMM-NNNN-PPPP-QQQQ-RRRR" });
   fixture.signIn.mockResolvedValue({ success: true }); fixture.signOut.mockResolvedValue({ success: true }); fixture.syncNow.mockImplementation(() => ({ unwrap: () => Promise.resolve(true) }));
-  fixture.status = { state: "ready", backendId: "A", hubUrl: "https://bridge.example", accountId: "account", email: "owner@example.com", label: "A", verificationCode: null, joinCodes: [{ backendId: "B", label: "New laptop", code: "JKLM-NPQR-STUV" }], login: null,
+  fixture.status = { state: "ready", backendId: "A", hubUrl: "https://bridge.example", accountId: "account", email: "owner@example.com", label: "A", verificationCode: null, joinCodes: [], login: null,
     approvals: [{ requestId: "request", backendId: "B", publicKey: "key", signingPublicKey: "signing-key", label: "New laptop", platform: "darwin", code: "ABCD-EFGH-JKLM", expiresAt: "2026-10-15T20:00:00Z" }], backends: [], recoveryCodeAvailable: true, existing: { runs: 2, pages: 3 }, error: null };
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -60,17 +60,40 @@ describe("Bridge key management", () => {
     expect(fixture.confirmKey).toHaveBeenCalledTimes(2);
   });
   it("never renders join codes while this device waits for verification, even if a status includes them", () => {
-    fixture.status = { ...fixture.status, state: "needs-verification", approvals: [] };
+    fixture.status = { ...fixture.status, state: "needs-verification", approvals: [], joinCodes: [{ backendId: "B", label: "New laptop", code: "JKLM-NPQR-STUV" }] };
     render(<BridgeSettings />);
     expect(screen.getByText("Verify this device")).toBeTruthy();
     expect(screen.queryByText("JKLM-NPQR-STUV")).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy join code" })).toBeNull();
   });
-  it("shows each admitted device's join code by name on a ready device", () => {
+  it("shows the join code as the second step in the device setup card", () => {
+    fixture.status = { ...fixture.status, approvals: [], joinCodes: [{ backendId: "B", label: "New laptop", code: "JKLM-NPQR-STUV" }] };
     render(<BridgeSettings />);
-    expect(screen.getByText("Join code for New laptop")).toBeTruthy();
-    expect(screen.getByText("JKLM-NPQR-STUV")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Copy join code" })).toBeTruthy();
+    const card = within(screen.getByRole("region", { name: "Set up New laptop" }));
+    expect(screen.getByText("Device setup")).toBeTruthy();
+    expect(card.getByText("Step 2 of 2 · Finish on the new device")).toBeTruthy();
+    expect(card.getByText("JKLM-NPQR-STUV")).toBeTruthy();
+    expect(card.getByRole("button", { name: "Copy join code" })).toBeTruthy();
+  });
+  it("replaces approval with the join code in the same card, then removes the completed setup", async () => {
+    const view = render(<BridgeSettings />);
+    const card = screen.getByRole("region", { name: "Set up New laptop" });
+    expect(within(card).getByText("Step 1 of 2 · Approve device")).toBeTruthy();
+    fireEvent.change(within(card).getByRole("textbox", { name: "Code shown on the new device" }), { target: { value: "ABCD-EFGH-JKLM" } });
+    fixture.approve.mockImplementationOnce(async () => {
+      fixture.status = { ...fixture.status, approvals: [], joinCodes: [{ backendId: "B", label: "New laptop", code: "JKLM-NPQR-STUV" }] };
+      return { success: true };
+    });
+    await act(async () => { fireEvent.click(within(card).getByRole("button", { name: "Approve device" })); });
+    expect(screen.getByRole("region", { name: "Set up New laptop" })).toBe(card);
+    expect(within(card).getByText("JKLM-NPQR-STUV")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "Approve device" })).toBeNull();
+    expect(screen.queryByText("Join code for New laptop")).toBeNull();
+    fixture.status = { ...fixture.status, joinCodes: [] };
+    view.rerender(<BridgeSettings />);
+    expect(screen.queryByRole("region", { name: "Set up New laptop" })).toBeNull();
+    expect(screen.queryByText("JKLM-NPQR-STUV")).toBeNull();
+    expect(screen.queryByText("Device setup")).toBeNull();
   });
   it.each(["publicKey", "signingPublicKey"] as const)("discards a completed code comparison when the recipient's %s changes", (key) => {
     const view = render(<BridgeSettings />);
@@ -160,19 +183,26 @@ describe("Bridge key management", () => {
     ];
     render(<BridgeSettings />);
     const rows = within(screen.getByRole("list", { name: "Bridge devices" })).getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
     expect(within(rows[0]).getByText("macOS · Approved")).toBeTruthy();
     expect(within(rows[0]).getByText("Connected device")).toBeTruthy();
     expect(within(rows[0]).queryByRole("button", { name: "Revoke access" })).toBeNull();
     expect(within(rows[1]).getByText(/^Windows · Approved · Last seen /)).toBeTruthy();
     expect(within(rows[2]).getByText("Linux · Waiting for approval")).toBeTruthy();
-    expect(within(rows[3]).getByText("macOS · Access revoked")).toBeTruthy();
-    expect(within(rows[3]).queryByRole("button", { name: "Revoke access" })).toBeNull();
+    expect(screen.queryByText("Old computer")).toBeNull();
     fireEvent.click(within(rows[1]).getByRole("button", { name: "Revoke access" }));
     expect(fixture.revoke).not.toHaveBeenCalled();
     const dialog = within(screen.getByRole("dialog"));
     expect(dialog.getByText(/Travel laptop will lose sync access/)).toBeTruthy();
+    fixture.revoke.mockImplementationOnce(async () => {
+      fixture.status = { ...fixture.status, backends: fixture.status.backends.map((device) =>
+        device.backendId === "B" ? { ...device, status: "revoked" } : device) };
+      return { success: true };
+    });
     await act(async () => { fireEvent.click(dialog.getByRole("button", { name: "Revoke access" })); });
     expect(fixture.revoke).toHaveBeenCalledExactlyOnceWith("B");
+    expect(screen.queryByText("Travel laptop")).toBeNull();
+    expect(within(screen.getByRole("list", { name: "Bridge devices" })).getAllByRole("listitem")).toHaveLength(2);
   });
   it("offers monthly/yearly choices without granting rights and refreshes the server-backed status", async () => {
     fixture.sync = { state: "read-only", pendingRecords: 3, error: null, quota: {
@@ -263,6 +293,11 @@ describe("Bridge key management", () => {
     render(<BridgeSettings />);
     expect(fixture.take).not.toHaveBeenCalled(); expect(fixture.regenerate).not.toHaveBeenCalled();
     if (flow === "setup") {
+      expect(screen.queryByRole("button", { name: "New recovery code" })).toBeNull();
+      fixture.take.mockImplementationOnce(async () => {
+        fixture.status = { ...fixture.status, recoveryCodeAvailable: false };
+        return { success: true, data: code };
+      });
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show setup code" })); });
     } else {
       fireEvent.click(screen.getByRole("button", { name: "New recovery code" }));

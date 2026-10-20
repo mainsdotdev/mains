@@ -171,6 +171,7 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
     if (!saved?.accountKey || !membership || next.state.accountId !== saved.accountId || next.state.seq <= membership.state.seq ||
         next.state.hashes[membership.state.seq] !== membership.state.head) return;
     await pinMembership(next.state, next.entries);
+    notify();
   }
   function config(): BridgeDevConfig {
     if (!saved?.accountKey || !membership) throw new Error("Backend approval is required");
@@ -461,9 +462,15 @@ export function createBridgeIdentity(options: BridgeIdentityOptions) {
       } catch (failure) { stopLogin?.(); stopLogin = undefined; state = "error"; error = failure instanceof Error ? failure.message : "Sign-in failed"; notify(); throw failure; }
     }); },
     status(): Omit<BridgeAuthStatus, "existing"> {
+      // A signed removal takes effect before the hub's registration snapshot
+      // catches up. Presence alone never changes an approved device's access.
+      const devices = membership ? backends.map((backend) =>
+        backend.status === "approved" && !sameMember(bridgeMember(membership!.state, backend.backendId), backend)
+          ? { ...backend, status: "revoked" as const }
+          : backend) : backends;
       return { state, hubUrl: hub, accountId: saved?.accountId ?? null, email: saved?.email ?? null, backendId: options.backendId,
         label, verificationCode: state === "needs-approval" ? code : null,
-        joinCodes: state === "ready" ? joinCodes : [], login, approvals: requests, backends, recoveryCodeAvailable: recoveryCode !== null, error };
+        joinCodes: state === "ready" ? joinCodes : [], login, approvals: requests, backends: devices, recoveryCodeAvailable: recoveryCode !== null, error };
     },
     token(): string { if (!saved?.accountKey || state === "revoked") throw new Error("Bridge backend approval is required"); return saved.token; },
     refresh,

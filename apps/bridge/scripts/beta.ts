@@ -55,7 +55,11 @@ if (mutation) console.log("Changes reach connected devices within 60 seconds; ex
 if (command === "invite" && !remote) console.log("Local invitations are not emailed.");
 if (command === "invite" && target && !flags.has("--no-mail")) {
   // The Worker sends it, so the mail provider's key stays there; the call needs this profile's Cloudflare login.
-  const result: { sent: boolean; reason?: string } = await withRemoteBindings(target, false, (env) => env.OPS.sendBetaInvite(email, flags.has("--resend")));
+  // Copy the RPC result while the remote binding is open; it cannot be read after the proxy is disposed.
+  const result: { sent: boolean; reason?: string } = await withRemoteBindings(target, false, async (env) => {
+    const value = await env.OPS.sendBetaInvite(email, flags.has("--resend"));
+    return { sent: value.sent === true, ...(typeof value.reason === "string" ? { reason: value.reason } : {}) };
+  });
   console.log(result.sent ? `Invitation emailed to ${email}.` : {
     "already-sent": "The invitation email was sent before; add --resend to send it again.",
     "not-invited": "No email: this invitation is already active or revoked.",

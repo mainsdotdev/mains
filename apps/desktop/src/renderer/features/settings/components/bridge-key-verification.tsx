@@ -12,9 +12,10 @@ export function BridgeKeyVerification({ busy, onConfirm }: {
   return (
     <SettingsSection title="Verify this device">
       <div className="space-y-4 py-4">
+        <Muted size="xs">Step 2 of 2</Muted>
         <Text className="max-w-2xl">
-          On the device that approved this one, open Settings › Bridge and find
-          the join code for this device. Enter it below to verify this device.
+          On the device that approved this one, open Settings › Bridge › Device setup.
+          Enter the join code shown in Step 2 for this device.
         </Text>
         <Muted className="max-w-2xl">
           Sync stays paused until the code matches.

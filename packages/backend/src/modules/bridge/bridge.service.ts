@@ -133,7 +133,14 @@ export const bridgeService = {
     const runs = (sqlite.prepare("SELECT count(*) n FROM runs WHERE owner_backend_id=?").get(backendId) as { n: number }).n;
     const pages = (sqlite.prepare("SELECT count(*) n FROM atlas_items WHERE kind='page'").get() as { n: number }).n;
     const history = (sqlite.prepare("SELECT count(*) n FROM bridge_exclusions WHERE reason IN ('history','enrollment')").get() as { n: number }).n;
-    return { ...current, localHistory: history, logoutPending: !!logoutState()?.logout_pending, existing: { runs, pages }, ...(startupError ? { error: startupError } : {}) };
+    // A pending verification never starts replication. Once this registration has
+    // connected, its join code is no longer needed. Earlier enrollments do not count.
+    const connected = sqlite.prepare("SELECT 1 FROM bridge_peers WHERE backend_id=? AND last_seen_ms>=?");
+    const joinCodes = current.joinCodes.filter((join) => {
+      const backend = current.backends.find((entry) => entry.backendId === join.backendId);
+      return backend?.status === "approved" && !connected.get(join.backendId, Date.parse(backend.createdAt));
+    });
+    return { ...current, joinCodes, localHistory: history, logoutPending: !!logoutState()?.logout_pending, existing: { runs, pages }, ...(startupError ? { error: startupError } : {}) };
   },
   async signIn(input: BridgeSignInInput) {
     await starting;

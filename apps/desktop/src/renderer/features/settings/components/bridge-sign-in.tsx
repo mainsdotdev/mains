@@ -62,7 +62,7 @@ export function BridgeSignInSection({
   return (
     <SettingsSection title="Account">
       <SettingsRow title="Not connected" description="Sign in to sync Atlas and chats across your devices.">
-        <Button variant="primary" onClick={open}>Sign in</Button>
+        <Button variant="submit" onClick={open}>Sign in</Button>
       </SettingsRow>
       <Modal
         isOpen={isOpen}
@@ -135,7 +135,7 @@ export function BridgeSignInSection({
             )}
           </div>
           <div className="flex justify-end">
-            <Button type="submit" variant="primary" disabled={busy || !hubUrl.trim()} isLoading={busy}>
+            <Button type="submit" variant="submit" disabled={busy || !hubUrl.trim()} isLoading={busy}>
               Sign in
             </Button>
           </div>

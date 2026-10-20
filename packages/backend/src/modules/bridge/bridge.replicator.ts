@@ -94,11 +94,15 @@ export function createBridgeReplicator(options: BridgeReplicatorOptions) {
   };
 
   function presence(value: Extract<BridgeServerMessage, { type: "presence" }>) {
+    const peerJoined = value.online && value.backendId !== backendId && online.get(value.backendId) !== true;
     const previous = sqlite.prepare("SELECT label,platform FROM bridge_peers WHERE backend_id=?").get(value.backendId) as { label: string; platform: string | null } | undefined;
     sqlite.prepare(`INSERT INTO bridge_peers(backend_id,label,platform,last_seen_ms) VALUES(?,?,?,?)
       ON CONFLICT(backend_id) DO UPDATE SET label=excluded.label,platform=excluded.platform,last_seen_ms=max(coalesce(last_seen_ms,0),excluded.last_seen_ms)`)
       .run(value.backendId, value.label ?? previous?.label ?? `Device ${value.backendId.slice(0, 8)}`, value.platform ?? previous?.platform ?? null, Date.parse(value.lastSeen));
     online.set(value.backendId, value.online); notify();
+    // Recovery admits a peer without another approval event. Presence is a hint
+    // to re-read device/approval state from HTTP, never proof of admission.
+    if (peerJoined) options.onAccessChanged?.();
   }
   const transport = createBridgeWebSocketTransport({
     url: config.url, token: options.token ?? config.token, metadata: { label: config.label, platform: process.platform },

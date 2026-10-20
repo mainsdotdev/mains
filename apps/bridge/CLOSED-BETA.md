@@ -38,16 +38,16 @@ Resend's free tier allows 100 emails a day across staging and production togethe
 so every account email (sign-in link, verification, password reset, invitation)
 passes one policy in `src/auth-mail.ts`:
 
-- Only an address that can use Bridge receives mail: an invitation that was not
-  revoked, or a user with a Bridge account or an entitlement. Any other address is
-  skipped silently, so the public forms answer every address alike.
-- An address receives at most 3 emails an hour; further requests are skipped the
-  same way.
+- Any address can sign up and sign in by email; Bridge access is gated after
+  sign-in, by invitation. A sign-up appears in the `user` table, where the operator
+  picks whom to invite.
+- An address receives at most 3 emails an hour; further requests are skipped
+  silently.
 - Each hub sends at most 10 emails a UTC day. Past that, every request, for any
   address, is refused with "Email is paused for today", and the sign-in-link form
   shows it. GitHub sign-in needs no email and keeps working.
-- Verification mail goes out once, at sign-up, not again on each password attempt.
-  Someone who missed it uses **Email me a sign-in link**, which verifies too.
+- Verification mail goes out at sign-up and again when an unverified address tries
+  its password. The limits above bound how often.
 
 `BRIDGE_MAIL_POLICY=unrestricted` lifts all of this for tests and local development
 only; `production:check` refuses it in either deployed configuration.

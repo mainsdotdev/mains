@@ -34,10 +34,9 @@ export class BridgeMailLimitError extends Error {
   constructor() { super("Email is paused for today. Continue with GitHub or try again tomorrow."); }
 }
 const digest = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))), (b) => b.toString(16).padStart(2, "0")).join("");
-/** Every account email goes through here. During the closed beta only an address that can use Bridge
- * receives mail: an invitation that was not revoked, or a user with a Bridge account or an entitlement.
- * Other addresses, and an address past its hourly allowance, are skipped silently, so the public forms
- * never reveal which addresses are known. The daily limit applies to every request alike, before any of that. */
+/** Every account email goes through here. Signing up and signing in work for any address; Bridge access is
+ * gated after sign-in, by invitation. An address past its hourly allowance is skipped silently, and once the
+ * day's limit is reached every request is refused alike. */
 export async function deliverBridgeMail(env: BridgeMailEnv, message: BridgeMail, now = Date.now()): Promise<"sent" | "skipped"> {
   if (env.BRIDGE_MAIL_POLICY === "unrestricted") { await sendBridgeMail(env, message); return "sent"; }
   const db = env.AUTH_DB;
@@ -47,10 +46,6 @@ export async function deliverBridgeMail(env: BridgeMailEnv, message: BridgeMail,
   const today = await db.prepare("SELECT count FROM bridge_limits WHERE id=? AND expires_at>=?").bind(day, now).first<{ count: number }>();
   if ((today?.count ?? 0) >= BRIDGE_MAIL_DAILY_LIMIT) throw new BridgeMailLimitError();
   const to = message.to.trim().toLowerCase();
-  const allowed = await db.prepare(`SELECT 1 FROM bridge_beta_invites WHERE email=?1 AND status<>'revoked'
-    UNION ALL SELECT 1 FROM user u WHERE lower(u.email)=?1 AND (EXISTS(SELECT 1 FROM bridge_accounts WHERE account_id=u.id)
-      OR EXISTS(SELECT 1 FROM account_entitlements WHERE account_id=u.id)) LIMIT 1`).bind(to).first();
-  if (!allowed) return "skipped";
   if (await countUse(db, `mail:to:${await digest(to)}`, now + 3_600_000, now) > BRIDGE_MAIL_PER_ADDRESS_HOURLY) return "skipped";
   // Two requests can both pass the check above; the counter itself is exact.
   if (await countUse(db, day, endOfDay, now) > BRIDGE_MAIL_DAILY_LIMIT) return "skipped";

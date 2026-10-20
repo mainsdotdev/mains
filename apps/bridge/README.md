@@ -386,7 +386,7 @@ binding; Workers `waitUntil` keeps background account emails alive. Local tests
 replace only delivery and consume real Better Auth links. Password registration
 is disabled when no mail service is configured; no migration or existing account
 reset is needed to enable it. During the closed beta, every account email is
-limited to Bridge-eligible addresses, 3 an hour per address and 10 a day per hub
+limited to 3 an hour per address and 10 a day per hub
 ([Closed beta access](CLOSED-BETA.md#account-email)). Each email is HTML in the
 sign-in pages' look (`src/mail-template.ts`): the Mains logo, attached inline (CID)
 rather than loaded, above the card, and the site's links below it. The same content
@@ -1063,8 +1063,7 @@ Disconnected RPCs reject and leave the engine's outbox and cursor available for
 retry. Reconnect refreshes the token through the caller's token provider and
 restores subscriptions. `bridge:getStatus`, `bridge:syncNow`, `bridge:watchRun`
 and `bridge:unwatchRun` expose lifecycle to the renderer; status and applied-table
-events refresh the existing lists and paged transcript. The Relay page shows
-device sync alongside existing remote control. Keys and tokens never reach the UI.
+events refresh the existing lists and paged transcript. Keys and tokens never reach the UI.
 
 Wire frames correlate RPCs as `{requestId, message}` and return either the same
 id with `message` or `error`. Pushes are bounded by count and bytes. An encrypted

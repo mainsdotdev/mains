@@ -35,10 +35,10 @@ function createAuth(env: AuthEnv, baseURL: string) {
       minPasswordLength: 12, maxPasswordLength: 128, resetPasswordTokenExpiresIn: 900, revokeSessionsOnPasswordReset: true,
       sendResetPassword: ({ user, url }) => mail({ to: user.email, url, kind: "reset-password" }),
     },
-    // Verification mail goes out once, at sign-up. A missed link is replaced by an email sign-in link,
-    // which verifies the address too, rather than by another mail on every password attempt.
+    // A password attempt with an unverified address sends the link again, for instance once its owner is
+    // invited after signing up; the mail policy bounds how often an address receives it.
     emailVerification: {
-      sendOnSignUp: true, sendOnSignIn: false, autoSignInAfterVerification: false, expiresIn: 3600,
+      sendOnSignUp: true, sendOnSignIn: true, autoSignInAfterVerification: false, expiresIn: 3600,
       sendVerificationEmail: ({ user, url }) => mail({ to: user.email, url, kind: "verify-email" }),
     },
     session: { expiresIn: 60 * 60 * 24, cookieCache: { enabled: false } },

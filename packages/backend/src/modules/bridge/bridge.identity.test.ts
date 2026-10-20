@@ -341,10 +341,11 @@ async function fixture(accountKey: Uint8Array | null = null, options: { recovery
     return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
   }));
   const activatedKeys: string[] = [];
+  const changed = vi.fn();
   const ready = vi.fn(async (config: { accountKey: Uint8Array }) => { activatedKeys.push(bridgeBase64(config.accountKey)); });
   function makeClient() {
     const client = createBridgeIdentity({ backendId: saved.backendId, dataDir: dir, storage, kind: "node", ready,
-      openExternal: async () => {}, changed() {}, approval() {}, revoked: async () => {}, accountFence });
+      openExternal: async () => {}, changed, approval() {}, revoked: async () => {}, accountFence });
     clients.push(client); return client;
   }
   const client = makeClient(); await client.start(); await client.refresh();
@@ -363,7 +364,7 @@ async function fixture(accountKey: Uint8Array | null = null, options: { recovery
     state.mine.backend.status = "approved"; state.mine.wrap = sealBridgeAccountKey(key, pair.publicKey);
   }
   const admittedJoinCode = async (key = trueKey) => joinCode(key, await log.hashOf(admitted()!.seq));
-  return { state, client, makeClient, ready, activatedKeys, vault, saved, pair, offer, forge, admittedJoinCode, dir, storage, log, approver, local, trueKey, authority };
+  return { state, client, makeClient, ready, changed, activatedKeys, vault, saved, pair, offer, forge, admittedJoinCode, dir, storage, log, approver, local, trueKey, authority };
 }
 function approval(publicKey: string, code = deviceCode(publicKey)): BridgeApprovalRequest {
   return { requestId: "request", backendId: "new-device", publicKey, signingPublicKey: approvalSigningKey, code, label: "New device", platform: "test", expiresAt: new Date(Date.now() + 600_000).toISOString() };
@@ -662,6 +663,23 @@ describe("Bridge membership on an active backend", () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("offline"); }));
     const restarted = f.makeClient(); await restarted.start();
     expect(restarted.status().state).toBe("ready"); expect(f.ready).toHaveBeenCalledTimes(2);
+  });
+  it("publishes a peer's verified removal even while its registration still reports approved", async () => {
+    const f = await fixture(generateBridgeAccountKey()), other = testDevice("other");
+    await f.log.append({ kind: "add", body: { member: other.member, via: "approval" } }, f.approver.signer, f.approver.secret);
+    f.state.backends = [{ ...other.member, label: "Other", status: "approved" }];
+    await f.client.refresh();
+    expect(f.client.status().backends[0].status).toBe("approved");
+    f.changed.mockClear();
+    const view = (f.ready.mock.calls[0][0] as unknown as { membership: BridgeMembershipView }).membership;
+    await f.log.append({ kind: "remove", body: { backendId: "other", account: noRecords } }, other.signer, other.secret);
+    await view.refresh();
+    await vi.waitFor(() => {
+      expect(f.client.status().backends[0].status).toBe("revoked");
+      expect(f.changed).toHaveBeenCalled();
+    });
+    expect(f.state.backends[0].status).toBe("approved");
+    expect(f.client.status().state).toBe("ready");
   });
   it("removes members, and itself on sign-out, only through signed removals", async () => {
     const f = await fixture(generateBridgeAccountKey()), other = testDevice("other");
