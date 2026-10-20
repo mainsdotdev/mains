@@ -378,3 +378,9 @@ retries the push once. The replicator appends the heartbeat when a refresh repor
 the newest entry a week old (the hub's time, an unauthenticated hint), at most once
 a day per device; a concurrent append simply loses the compare-and-swap. Members
 append it through `POST /v1/membership`, restricted to `checkpoint`.
+
+**Slice 3 deferred (2026-10-20).** Not urgent: only a compromised hub can deliver a
+removed writer's run-stream records, and only into that writer's own runs. It
+remains a release gate. When picked up, a quick first step is option C (§6):
+after learning of a removal, refuse the removed writer's run records not already
+applied, at the cost of its unopened transcripts. Option B (decision 1) follows.
