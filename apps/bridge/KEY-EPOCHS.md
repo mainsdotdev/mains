@@ -1,8 +1,17 @@
 # Bridge key epochs (stage 4 design)
 
-Status: **draft**; the decisions in §12 need confirmation before implementation.
+Status: **draft, deferred (2026-10-20)**; the decisions in §12 need confirmation before implementation.
 It details stage 4 of [Authenticated writers](AUTHENTICATED-WRITERS.md) on top of
 [Membership and revocation](MEMBERSHIP.md). Bridge has not shipped.
+
+> **Deferred.** Not urgent: an honest hub already refuses a removed device, so the
+> gap needs a compromised hub or leaked hub data as well. It remains a release
+> gate. When picked up, consider a reduced first version before this full design:
+> the remover rotates the key right after a removal and wraps it to the remaining
+> members in the existing D1 wraps table (with an epoch column), records carry
+> their epoch, and the recovery code is regenerated with every rotation instead of
+> adding a recovery encryption key. Key packages in the Durable Object, hub epoch
+> enforcement and file-specific rules come later.
 
 ## 1. What stage 3 leaves open
 
