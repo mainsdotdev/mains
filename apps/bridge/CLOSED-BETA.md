@@ -27,9 +27,9 @@ The user starts from Settings → Bridge → Sign in. After sign-in:
 Activation is idempotent. Repeated clicks, login retries, a second device or
 re-inviting an activated account never restart or extend its period. No payment
 provider, automatic renewal or public waitlist exists. A remote invite emails the
-selected person once: plain steps (install Mains, sign in with this exact address,
-choose **Activate beta**) and no link that signs in, so no shareable invite code or
-secret exists. A GitHub account must expose that same verified email to the
+selected person once: the steps (install Mains, sign in with this exact address,
+choose **Activate beta**) and a link to mains.dev, but no link that signs in, so no
+shareable invite code or secret exists. A GitHub account must expose that same verified email to the
 authentication provider. Plus aliases and dots are not collapsed.
 
 ## Account email

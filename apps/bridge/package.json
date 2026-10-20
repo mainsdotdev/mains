@@ -20,6 +20,7 @@
     "production:purge": "npm run production:check && tsx scripts/purge-orphan-hubs.ts production",
     "subscription": "tsx scripts/subscription.ts",
     "beta": "tsx scripts/beta.ts",
+    "mail:preview": "tsx scripts/mail-preview.ts",
     "ops": "tsx scripts/operations.ts",
     "backup": "tsx scripts/automatic-backup.ts",
     "dev:setup": "tsx scripts/dev-setup.ts",

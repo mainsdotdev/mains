@@ -387,7 +387,11 @@ replace only delivery and consume real Better Auth links. Password registration
 is disabled when no mail service is configured; no migration or existing account
 reset is needed to enable it. During the closed beta, every account email is
 limited to Bridge-eligible addresses, 3 an hour per address and 10 a day per hub
-([Closed beta access](CLOSED-BETA.md#account-email)).
+([Closed beta access](CLOSED-BETA.md#account-email)). Each email is HTML in the
+sign-in pages' look (`src/mail-template.ts`): the Mains logo, attached inline (CID)
+rather than loaded, above the card, and the site's links below it. The same content
+goes as plain text; nothing loads remotely and every link is also shown as text. `npm run mail:preview` writes
+all four to `.wrangler/mail-preview/` for viewing in a browser.
 Choose the OAuth and mail methods you configure; unavailable buttons are hidden.
 Disable `BRIDGE_DEV_AUTH` on a normal hub. No production deployment or provider
 credentials are required for the automated tests.

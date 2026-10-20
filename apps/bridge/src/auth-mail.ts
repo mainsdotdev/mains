@@ -1,4 +1,5 @@
 import { countUse, type CountingDatabase } from "./limit-count";
+import { renderBridgeMail, type BridgeMail } from "./mail-template";
 
 export interface BridgeMailEnv {
   RESEND_API_KEY?: string;
@@ -8,41 +9,20 @@ export interface BridgeMailEnv {
   /** "unrestricted" lifts the closed-beta mail policy for tests and local development only. */
   BRIDGE_MAIL_POLICY?: string;
 }
-export type BridgeMailKind = "sign-in" | "verify-email" | "reset-password" | "beta-invite";
-export type BridgeMail = { kind: Exclude<BridgeMailKind, "beta-invite">; to: string; url: string } | { kind: "beta-invite"; to: string };
+export { MAINS_DOWNLOAD_URL, type BridgeMail, type BridgeMailKind } from "./mail-template";
 export function bridgeMailConfigured(env: BridgeMailEnv): boolean {
   return !!env.AUTH_MAILER || !!env.RESEND_API_KEY && !!env.MAIL_FROM;
 }
-const links = {
-  "sign-in": { subject: "Sign in to Mains Bridge", instruction: "Sign in to Mains Bridge", expiry: "five minutes" },
-  "verify-email": { subject: "Verify your Mains email", instruction: "Verify your email address", expiry: "one hour" },
-  "reset-password": { subject: "Reset your Mains password", instruction: "Set your Mains sign-in password", expiry: "15 minutes" },
-};
-export const MAINS_DOWNLOAD_URL = "https://mains.dev";
-function compose(message: BridgeMail): { subject: string; text: string } {
-  // The invitation carries no link that signs in: sign-in always starts in the app.
-  if (message.kind === "beta-invite") return { subject: "You're invited to the Mains Bridge beta", text: [
-    "You're invited to the Mains Bridge beta. Bridge keeps your Mains chats and Atlas in sync across your devices, encrypted end to end.",
-    "",
-    `1. Install or update Mains: ${MAINS_DOWNLOAD_URL}`,
-    `2. Open Settings > Bridge and sign in with this email address (${message.to}), or with a GitHub account that uses it.`,
-    "3. Choose Activate beta in the sign-in window.",
-    "",
-    "Your 30 days start when you activate. Includes 1 GiB of storage. No payment required.",
-    "If you did not expect this invitation, you can ignore this email.",
-  ].join("\n") };
-  const copy = links[message.kind];
-  return { subject: copy.subject, text: `${copy.instruction}: ${message.url}\nThis link expires in ${copy.expiry}. If you did not request it, you can ignore this email.` };
-}
 export async function sendBridgeMail(env: BridgeMailEnv, message: BridgeMail): Promise<void> {
-  const { subject, text } = compose(message);
+  // HTML in the sign-in pages' look, with the same content as plain text for clients that prefer it.
+  const { subject, text, html, attachments } = renderBridgeMail(message);
   let response: Response;
   if (env.AUTH_MAILER) response = await env.AUTH_MAILER.fetch("https://bridge-mail.internal/send", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...message, subject, text }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...message, subject, text, html, attachments }),
   });
   else if (env.RESEND_API_KEY && env.MAIL_FROM) response = await fetch("https://api.resend.com/emails", {
     method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: env.MAIL_FROM, to: [message.to], subject, text }),
+    body: JSON.stringify({ from: env.MAIL_FROM, to: [message.to], subject, text, html, attachments }),
   });
   else throw new Error("Email sign-in is not configured");
   if (!response.ok) throw new Error("Could not send the account email");
